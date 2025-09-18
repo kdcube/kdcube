@@ -249,17 +249,21 @@ class ContextTools:
     @kernel_function(
         name="fetch_working_set",
         description=(
-                "Return a working set for EDIT turns from OUTPUT_DIR/context.json. "
-                "Picks the newest prior run with a non-empty project_canvas, "
-                "and reconciles citations across turns to a canonical source list."
+            "Retrieve the latest project state for editing workflows. "
+            "Gets the most recent project canvas, citations, and media from prior runs. "
+            "Use this at the start of edit/update requests to build upon existing work."
         )
     )
     async def fetch_working_set(
             self,
-            select: str = "latest",
-            goal_kind: str = "",
-            query: str = ""
-    ) -> Dict[str, Any]:
+            select: Annotated[str, "Selection method: 'latest' (most recent with content)", {"enum": ["latest"]}] = "latest",
+    ) -> Annotated[dict, "dict with {existing_project_canvas: str, existing_project_log: str, existing_sources: [{sid,title,url,text}]}. Use existing_project_canvas as base content to edit."]:
+    # ) -> Annotated[dict, "dict with {project_canvas: str, project_log_md: str, sources: [{sid,title,url,text}], media: []}. Use canvas_md as base content to edit."]:
+
+
+        goal_kind: Annotated[str, "Optional filter by project type (unused currently)"] = "",
+        query: Annotated[str, "Optional search query for specific content (unused currently)"] = ""
+
         ctx = _read_context()
         hist: List[Dict[str, Any]] = ctx.get("program_history") or []
 
@@ -269,22 +273,22 @@ class ContextTools:
         exec_id, inner = _latest_with_canvas(hist)
         reused = bool(exec_id and inner)
 
-        canvas_md = ""
-        project_log_md = ""
+        project_canvas = ""
+        project_log = ""
         media = []
 
         if reused:
             pc = inner.get("project_canvas") or {}
             pl = inner.get("project_log") or {}
 
-            canvas_md = (pc.get("text") or "").strip()
-            project_log_md = (pl.get("text") or "").strip()
+            project_canvas = (pc.get("text") or "").strip()
+            project_log = (pl.get("text") or "").strip()
 
             # Rewrite [[S:n]] tokens in the latest texts to the canonical SIDs (if we have a map)
             sid_map = sid_maps.get(exec_id, {})
             if sid_map:
-                canvas_md = _rewrite_tokens_to_global(canvas_md, sid_map)
-                project_log_md = _rewrite_tokens_to_global(project_log_md, sid_map)
+                project_canvas = _rewrite_tokens_to_global(project_canvas, sid_map)
+                project_log = _rewrite_tokens_to_global(project_log, sid_map)
 
             # Keep whatever media you store (unchanged)
             media = (inner.get("media") or {}).get("items") or []
@@ -293,80 +297,96 @@ class ContextTools:
         sources = canonical_sources
 
         return {
-            "reused": reused,
-            "selection": {"exec_id": exec_id or "", "select": select},
-            "canvas_md": canvas_md,
-            "project_log_md": project_log_md,
-            "sources": sources,   # ← global, deduped, contiguous SIDs
-            "media": media,
+            # "reused": reused,
+            "existing_selection": {"exec_id": exec_id or "", "select": select},
+            "existing_project_canvas": project_canvas,
+            "existing_project_log": project_log,
+            "existing_sources": sources,   # ← global, deduped, contiguous SIDs
+            "existing_media": media,
         }
 
     @kernel_function(
         name="merge_sources",
-        description="Merge prior and new sources: dedupe by URL, keep prior SIDs, assign fresh SIDs for truly new URLs. Returns JSON array."
+        description=(
+                "Combine multiple citation source collections into a unified, deduplicated list. "
+                "Pass all source collections in a single JSON array. REQUIRED when using multiple source tools."
+        )
     )
     async def merge_sources(
             self,
-            prior_json: Annotated[str, "JSON array (or object) of prior sources"],
-            new_json: Annotated[str, "JSON array (or object) of new sources"],
-    ) -> Annotated[str, "JSON array of canonical sources: [{sid,title,url,text}]"]:
-        prior = _as_rows(prior_json)
-        new   = _as_rows(new_json)
+            source_collections: Annotated[str, "JSON array containing multiple source collections: [[sources1], [sources2], [sources3], ...]"],
+    ) -> Annotated[str, "JSON array of unified sources: [{sid:int, title:str, url:str, text:str}]"]:
+        """Merge multiple source collections, deduplicating by URL and preserving/assigning SIDs."""
 
-        # index by normalized URL
-        by_url: Dict[str, Dict[str,Any]] = {}
-        used_sids: Dict[int,str] = {}  # sid -> url
+        try:
+            collections = json.loads(source_collections)
+            if not isinstance(collections, list):
+                collections = [collections]  # Handle single collection case
+        except:
+            return "[]"
 
-        for r in prior:
-            u = _norm_url(r.get("url",""))
-            if not u: continue
-            sid = int(r.get("sid") or 0) or None
-            if sid is not None:
-                used_sids[sid] = u
-            by_url[u] = {"sid": sid, "title": r.get("title",""), "url": u, "text": r.get("text","")}
+        all_sources = []
+        for collection in collections:
+            all_sources.extend(_as_rows(collection))
 
-        max_sid_val = max(_max_sid(prior), _max_sid(new))
+        if not all_sources:
+            return "[]"
 
-        for r in new:
-            u = _norm_url(r.get("url",""))
-            if not u: continue
-            if u in by_url:
-                # keep prior SID; optionally update title/text if new has more
-                old = by_url[u]
-                if (len(r.get("title","")) > len(old.get("title",""))):
-                    old["title"] = r.get("title","")
-                if (len(r.get("text","")) > len(old.get("text",""))):
-                    old["text"] = r.get("text","")
+        # Deduplicate and assign SIDs
+        by_url = {}
+        max_sid = 0
+
+        for source in all_sources:
+            url = _norm_url(source.get("url", ""))
+            if not url:
                 continue
 
-            cand_sid = r.get("sid")
-            if isinstance(cand_sid, int) and cand_sid > 0 and cand_sid not in used_sids:
-                sid = cand_sid
+            if url in by_url:
+                # Keep first occurrence, update if new has more content
+                existing = by_url[url]
+                if len(source.get("title", "")) > len(existing.get("title", "")):
+                    existing["title"] = source.get("title", "")
+                if len(source.get("text", "")) > len(existing.get("text", "")):
+                    existing["text"] = source.get("text", "")
+                continue
+
+            # Assign SID: use existing if valid, otherwise assign new
+            sid = source.get("sid")
+            if not isinstance(sid, int) or sid <= 0:
+                max_sid += 1
+                sid = max_sid
             else:
-                max_sid_val += 1
-                sid = max_sid_val
+                max_sid = max(max_sid, sid)
 
-            used_sids[sid] = u
-            by_url[u] = {"sid": sid, "title": r.get("title",""), "url": u, "text": r.get("text","")}
+            by_url[url] = {
+                "sid": sid,
+                "title": source.get("title", ""),
+                "url": url,
+                "text": source.get("text", "")
+            }
 
-        merged = sorted(by_url.values(), key=lambda x: int(x["sid"]))
+        merged = sorted(by_url.values(), key=lambda x: x["sid"])
         return json.dumps(merged, ensure_ascii=False)
 
     # @kernel_function(
     #     name="reconcile_citations",
-    #     description="Ensure every [[S:n]] in canvas has a source. Drops unreferenced sources. Returns JSON {canvas_md, sources, warnings}."
+    #     description=(
+    #         "Validate that all [[S:n]] citation tokens in content have corresponding sources. "
+    #         "Optionally removes unused sources to keep the source list clean. "
+    #         "Use before final output to ensure citation integrity."
+    #     )
     # )
     async def reconcile_citations(
             self,
-            canvas_md: Annotated[str, "Markdown with [[S:n]] tokens"],
-            sources_json: Annotated[str, "JSON array/object of sources"],
-            drop_unreferenced: Annotated[bool, "If true, remove sources not used in canvas."] = True,
-    ) -> Annotated[str, "JSON object: {canvas_md, sources, warnings[]}"]:
+            project_canvas: Annotated[str, "Markdown content containing [[S:n]] citation tokens"],
+            sources_json: Annotated[str, "JSON array of available sources"],
+            drop_unreferenced: Annotated[bool, "Remove sources not cited in the content"] = True,
+    ) -> Annotated[str, "JSON object: {project_canvas:str, sources:[...], warnings:[str]}. Use sources for final file generation."]:
         rows = _as_rows(sources_json)
         # index by sid
         by_sid = {int(r["sid"]): r for r in rows if r.get("sid") is not None}
 
-        used = set(_sids_in_text(canvas_md))
+        used = set(_sids_in_text(project_canvas))
         warnings = []
 
         # check for missing SIDs in sources
@@ -378,7 +398,7 @@ class ContextTools:
         keep_sids = used if drop_unreferenced else set(by_sid.keys())
         pruned = [by_sid[s] for s in sorted(keep_sids) if s in by_sid]
 
-        ret = {"canvas_md": canvas_md, "sources": pruned, "warnings": warnings}
+        ret = {"project_canvas": project_canvas, "sources": pruned, "warnings": warnings}
         return json.dumps(ret, ensure_ascii=False)
 
 kernel = sk.Kernel()

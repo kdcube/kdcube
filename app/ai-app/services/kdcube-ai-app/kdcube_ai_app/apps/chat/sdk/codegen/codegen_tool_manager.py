@@ -1063,6 +1063,7 @@ class CodegenToolManager:
             except Exception:
                 pass
 
+            contract_out = solvability.get("output_contract_dyn") if isinstance(solvability, dict) else {}
             context = {
                 "request_id": request_id,
                 "program_history": program_history or [],
@@ -1083,12 +1084,23 @@ class CodegenToolManager:
             self.write_runtime_inputs(
                 output_dir=outdir,
                 context=context,
-                task={**current_task_spec, "adapters_spec": adapters}
+                task={
+                    **current_task_spec,
+                    "adapters_spec": adapters,
+                    "contract": {
+                        "out": contract_out
+                    }
+                }
             )
 
             # run + collect
             run_res = await self.run_main_py_package(workdir=workdir,
-                                                     output_dir=outdir, files={}, timeout_s=timeout_s)
+                                                     output_dir=outdir,
+                                                     files={},
+                                                     timeout_s=timeout_s,
+                                                     globals={
+                                                         "CONTRACT": contract_out
+                                                     })
             collected = self.collect_outputs(output_dir=outdir, outputs=outputs)
 
             round_rec = {
@@ -1164,23 +1176,35 @@ class CodegenToolManager:
     def _tool_modules_tuple_list(self) -> List[Tuple[str, object]]:
         return [(m["name"], m["mod"]) for m in self._modules]
 
-    async def run_solver_snippet(self, *, code: str, output_dir: pathlib.Path, timeout_s: int = 90) -> Dict[str, Any]:
+    async def run_solver_snippet(self, *,
+                                 code: str,
+                                 output_dir: pathlib.Path,
+                                 globals: Optional[Dict[str, Any]] = None,
+                                 timeout_s: int = 90) -> Dict[str, Any]:
         return await self.runtime.run_snippet(
             code=code,
             output_dir=output_dir,
-            tool_modules=self._tool_modules_tuple_list(),  # <-- ALL modules injected
+            tool_modules=self._tool_modules_tuple_list(),
+            globals=globals,
             timeout_s=timeout_s,
         )
 
-    async def run_main_py_package(self, *, workdir: pathlib.Path, output_dir: pathlib.Path, files: Dict[str, str], timeout_s: int = 90) -> Dict[str, Any]:
+    async def run_main_py_package(self, *,
+                                  workdir: pathlib.Path,
+                                  output_dir: pathlib.Path,
+                                  files: Dict[str, str],
+                                  globals: Optional[Dict[str, Any]] = None,
+                                  timeout_s: int = 90) -> Dict[str, Any]:
         for rel, content in (files or {}).items():
             p = workdir / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
+
         return await self.runtime.run_main_py(
             workdir=workdir,
             output_dir=output_dir,
             tool_modules=self._tool_modules_tuple_list(),  # <-- ALL modules injected
+            globals=globals or {},
             timeout_s=timeout_s,
         )
 
