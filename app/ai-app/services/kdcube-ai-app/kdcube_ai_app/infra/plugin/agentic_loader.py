@@ -241,7 +241,8 @@ def get_workflow_instance(
         spec: AgenticBundleSpec,
         config: Any,
         *,
-        communicator: Optional[Any] = None,        # ← NEW optional unified communicator
+        communicator: Optional[Any] = None,        # ← optional unified communicator
+        pg_pool: Optional[Any] = None,             # ← optional DB pools
 ) -> Tuple[Any, Optional[Callable[[str], Any]], types.ModuleType]:
     """
     Load the bundle at 'spec', discover decorated symbols, instantiate a workflow,
@@ -275,7 +276,8 @@ def get_workflow_instance(
     # instantiate
     extra_kwargs = {
         "communicator": communicator,
-        "comm": communicator,   # many bundles prefer 'comm'
+        "comm": communicator,
+        "pg_pool": pg_pool
     }
 
     if chosen_kind == "factory":
