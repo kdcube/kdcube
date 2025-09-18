@@ -36,7 +36,8 @@ from kdcube_ai_app.infra.gateway.config import get_gateway_config
 # Import our simplified components
 from kdcube_ai_app.apps.chat.api.resolvers import (
     get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency,
-    get_orchestrator, INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, auth_without_pressure, get_tenant, _announce_startup
+    get_orchestrator, INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, auth_without_pressure, get_tenant, _announce_startup,
+    get_pg_pool
 )
 from kdcube_ai_app.auth.sessions import UserType, UserSession
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
@@ -85,6 +86,7 @@ async def lifespan(app: FastAPI):
         service_health_checker
 
     app.state.chat_comm = ChatRelayCommunicator(redis_url=REDIS_URL, channel="chat.events")
+    app.state.pg_pool = await get_pg_pool()
 
     port = CHAT_APP_PORT
     process_id = os.getpid()
@@ -117,7 +119,8 @@ async def lifespan(app: FastAPI):
             workflow, create_initial_state_fn, _ = get_workflow_instance(
                 type("Spec", (), spec),
                 wf_config,
-                communicator=comm,  # << pass through
+                communicator=comm,
+                pg_pool=app.state.pg_pool
             )
 
         # set workflow state (no emits here; processor already announced start)

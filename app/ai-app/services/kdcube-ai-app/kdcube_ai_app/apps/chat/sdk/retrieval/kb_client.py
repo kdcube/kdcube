@@ -2,7 +2,7 @@
 # Copyright (c) 2025 Elena Viter
 
 # chat/sdk/retrieval/kb_client.py
-import asyncpg
+import asyncpg, json
 from typing import List, Dict, Any, Optional
 
 from kdcube_ai_app.infra.embedding.embedding import convert_embedding_to_string
@@ -14,9 +14,10 @@ class KBClient:
       - <SCHEMA>.retrieval_segment with (search_vector TSVECTOR, embedding VECTOR(1536))
       - <SCHEMA>.datasource for expiration
     """
-    def __init__(self):
+    def __init__(self,
+                 pool: Optional[asyncpg.Pool] = None):
 
-        self._pool: asyncpg.Pool | None = None
+        self._pool: Optional[asyncpg.Pool] = pool
         self._settings = get_settings()
 
         tenant = self._settings.TENANT.replace("-", "_").replace(" ", "_")
@@ -33,12 +34,17 @@ class KBClient:
         # ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         # ctx.check_hostname = False
         # ctx.verify_mode = ssl.CERT_NONE
+        async def _init_conn(conn: asyncpg.Connection):
+            # Encode/decode json & jsonb as Python dicts automatically
+            await conn.set_type_codec('json',  encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
+            await conn.set_type_codec('jsonb', encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
 
-        self._pool = await asyncpg.create_pool(
-            host=self._settings.PGHOST, port=self._settings.PGPORT,
-            user=self._settings.PGUSER, password=self._settings.PGPASSWORD, database=self._settings.PGDATABASE,
-            ssl=self._settings.PGSSL,
-        )
+        if not self._pool:
+            self._pool = await asyncpg.create_pool(
+                host=self._settings.PGHOST, port=self._settings.PGPORT,
+                user=self._settings.PGUSER, password=self._settings.PGPASSWORD, database=self._settings.PGDATABASE,
+                ssl=self._settings.PGSSL,
+            )
 
     async def close(self):
         if self._pool: await self._pool.close()

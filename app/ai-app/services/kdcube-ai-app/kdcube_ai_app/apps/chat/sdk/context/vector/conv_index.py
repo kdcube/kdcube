@@ -35,8 +35,9 @@ def _safe_json_loads(value: Any) -> Any:
     return value
 
 class ConvIndex:
-    def __init__(self):
-        self._pool: Optional[asyncpg.Pool] = None
+    def __init__(self,
+                 pool: Optional[asyncpg.Pool] = None):
+        self._pool: Optional[asyncpg.Pool] = pool
         self._settings = get_settings()
 
         tenant = self._settings.TENANT.replace("-", "_").replace(" ", "_")
@@ -49,14 +50,15 @@ class ConvIndex:
         self.schema: str = schema_name
 
     async def init(self):
-        self._pool = await asyncpg.create_pool(
-            host=self._settings.PGHOST,
-            port=self._settings.PGPORT,
-            user=self._settings.PGUSER,
-            password=self._settings.PGPASSWORD,
-            database=self._settings.PGDATABASE,
-            ssl=self._settings.PGSSL,
-        )
+        if not self._pool:
+            self._pool = await asyncpg.create_pool(
+                host=self._settings.PGHOST,
+                port=self._settings.PGPORT,
+                user=self._settings.PGUSER,
+                password=self._settings.PGPASSWORD,
+                database=self._settings.PGDATABASE,
+                ssl=self._settings.PGSSL,
+            )
 
     async def close(self):
         if self._pool:

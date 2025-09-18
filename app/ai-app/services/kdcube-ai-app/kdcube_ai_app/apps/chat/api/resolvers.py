@@ -10,6 +10,7 @@ import logging
 
 from starlette.requests import Request
 
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 # Import centralized configuration
 from kdcube_ai_app.infra.gateway.config import (
     GatewayConfigFactory,
@@ -56,14 +57,9 @@ def get_tenant_dep(request: Request) -> str:
         return request.path_params.get("tenant", TENANT_ID)
     return TENANT_ID
 
-
 # Your existing storage, orchestrator, and model configurations
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.infra.orchestration.orchestration import IOrchestrator, OrchestratorFactory
-from kdcube_ai_app.infra.llm.util import get_service_key_fn
-from kdcube_ai_app.infra.llm.llm_data_model import AIProvider, ModelRecord, AIProviderName
-
-from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
 
 # Storage setup (your existing logic)
 STORAGE_KWARGS = {}
@@ -276,6 +272,7 @@ def update_gateway_config(**kwargs):
 _auth_manager = None
 _gateway = None
 _fastapi_adapter = None
+_pg_pool = None
 
 def get_auth_manager():
     """Get singleton auth manager"""
@@ -485,3 +482,23 @@ def _announce_startup():
     except Exception:
         # be resilient; never crash on printing
         pass
+
+async def get_pg_pool():
+    _settings = get_settings()
+    global _pg_pool
+
+    import asyncpg, json
+    async def _init_conn(conn: asyncpg.Connection):
+        # Encode/decode json & jsonb as Python dicts automatically
+        await conn.set_type_codec('json',  encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
+        await conn.set_type_codec('jsonb', encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
+
+    _pg_pool = await asyncpg.create_pool(
+        host=_settings.PGHOST,
+        port=_settings.PGPORT,
+        user=_settings.PGUSER,
+        password=_settings.PGPASSWORD,
+        database=_settings.PGDATABASE,
+        ssl=_settings.PGSSL,
+        init=_init_conn,
+    )
