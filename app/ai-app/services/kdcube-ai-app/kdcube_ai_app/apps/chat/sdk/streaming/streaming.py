@@ -111,13 +111,25 @@ def _find_earliest(buf: str, start_hint: int, patterns: List[Tuple[re.Pattern, s
     m, name = min(found, key=lambda t: t[0].start())
     return m, name
 
+# Enhanced patterns and buffer management for closing marker detection
+CLOSING_MARKER_PATTERNS = [
+    re.compile(PARA_USER_CLOSE, re.I),
+    re.compile(PARA_INT_CLOSE, re.I),
+    re.compile(PARA_JSON_CLOSE, re.I),
+    # Also catch any stray opening markers that appear in user content
+    re.compile(PARA_INT_OPEN, re.I),
+    re.compile(PARA_USER_OPEN, re.I),
+    re.compile(PARA_JSON_OPEN, re.I),
+]
+
+# Increase holdback to be more conservative with closing markers
+CLOSING_MARKER_HOLDBACK = 50  # Hold back more aggressively in user mode
+
 
 class _SectionsStreamParser:
     """
-    Parser that consumes streamed text and segments into:
-      - internal (captured only)
-      - user (streamed via on_user)
-      - json tail (accumulated)
+    Enhanced parser that prevents streaming of closing markers by using
+    aggressive buffering and pre-scanning in user mode.
     """
 
     def __init__(self, on_user: Callable[[str, bool], Any]):
@@ -128,10 +140,69 @@ class _SectionsStreamParser:
         self.user_parts: List[str] = []
         self.json_tail: str = ""
         self._on_user = on_user
+        self._user_buffer = ""  # Special buffer for user content to prevent marker leakage
 
     def _safe_window_end(self) -> int:
         # Everything before this index is safe to emit (no risk of cutting a marker)
         return max(self.emit_from, len(self.buf) - HOLDBACK)
+
+    def _safe_user_window_end(self) -> int:
+        # More conservative window for user mode to prevent closing marker leakage
+        return max(self.emit_from, len(self.buf) - CLOSING_MARKER_HOLDBACK)
+
+    def _contains_closing_marker(self, text: str) -> bool:
+        """Check if text contains any closing markers."""
+        for pattern in CLOSING_MARKER_PATTERNS:
+            if pattern.search(text):
+                return True
+        return False
+
+    def _extract_safe_user_content(self, text: str) -> Tuple[str, str]:
+        """
+        Extract content that's safe to emit, stopping before any closing marker.
+        Returns (safe_content, remaining_text).
+        """
+        # Find the earliest closing marker
+        earliest_match = None
+        earliest_pos = len(text)
+
+        for pattern in CLOSING_MARKER_PATTERNS:
+            match = pattern.search(text)
+            if match and match.start() < earliest_pos:
+                earliest_match = match
+                earliest_pos = match.start()
+
+        if earliest_match:
+            # Extract content before the marker
+            safe_content = text[:earliest_pos]
+            remaining = text[earliest_pos:]
+            return safe_content, remaining
+        else:
+            return text, ""
+
+    async def _flush_user_buffer(self, final: bool = False):
+        """Flush accumulated user content, checking for closing markers."""
+        if not self._user_buffer:
+            return
+
+        if final:
+            # At end of stream, emit everything after stripping markers
+            cleaned = _strip_service_markers_from_user(self._user_buffer)
+            if cleaned:
+                await self._on_user(cleaned, False)
+                self.user_parts.append(cleaned)
+            self._user_buffer = ""
+        else:
+            # Extract safe content that doesn't contain closing markers
+            safe_content, remaining = self._extract_safe_user_content(self._user_buffer)
+
+            if safe_content:
+                cleaned = _strip_service_markers_from_user(safe_content)
+                if cleaned:
+                    await self._on_user(cleaned, False)
+                    self.user_parts.append(cleaned)
+
+            self._user_buffer = remaining
 
     async def feed(self, piece: str, prev_len_hint: Optional[int] = None):
         """Feed a new streamed piece."""
@@ -177,26 +248,31 @@ class _SectionsStreamParser:
                 break
 
             if self.mode == "user":
+                # Check for JSON transition
                 m, _ = _find_earliest(self.buf, prev_len, [(JSON_RE, "json")])
                 if m and m.start() >= self.emit_from:
+                    # Add remaining content to user buffer before transitioning
                     chunk = self.buf[self.emit_from : m.start()]
                     if chunk:
-                        # Sanitize service tokens out of user-visible stream
-                        await self._on_user(_strip_service_markers_from_user(chunk), False)
-                        self.user_parts.append(_strip_service_markers_from_user(chunk))
+                        self._user_buffer += chunk
+
+                    # Flush user buffer and transition to JSON
+                    await self._flush_user_buffer(final=True)
                     self.emit_from = _skip_ws(self.buf, m.end())
                     self.json_tail = self.buf[self.emit_from :]
                     self.mode = "json"
                     break
 
-                # Stream safe user chunk
-                safe_end = self._safe_window_end()
+                # Accumulate user content in buffer with conservative windowing
+                safe_end = self._safe_user_window_end()
                 if safe_end > self.emit_from:
                     chunk = self.buf[self.emit_from : safe_end]
                     if chunk:
-                        await self._on_user(_strip_service_markers_from_user(chunk), False)
-                        self.user_parts.append(_strip_service_markers_from_user(chunk))
-                    self.emit_from = safe_end
+                        self._user_buffer += chunk
+                        self.emit_from = safe_end
+
+                        # Try to flush safe content from buffer
+                        await self._flush_user_buffer(final=False)
                 break
 
             if self.mode == "json":
@@ -209,12 +285,12 @@ class _SectionsStreamParser:
         """Flush any remaining content at end-of-stream."""
         if self.mode == "internal" and self.emit_from < len(self.buf):
             self.internal_parts.append(self.buf[self.emit_from :])
-        elif self.mode == "user" and self.emit_from < len(self.buf):
-            chunk = self.buf[self.emit_from :]
-            if chunk:
-                sanitized = _strip_service_markers_from_user(chunk)
-                await self._on_user(sanitized, False)
-                self.user_parts.append(sanitized)
+        elif self.mode == "user":
+            # Add any remaining buffer content
+            if self.emit_from < len(self.buf):
+                self._user_buffer += self.buf[self.emit_from :]
+            # Flush user buffer with final=True to strip markers
+            await self._flush_user_buffer(final=True)
 
     # Convenience results
     @property
