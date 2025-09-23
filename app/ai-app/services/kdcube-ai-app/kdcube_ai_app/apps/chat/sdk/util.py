@@ -230,7 +230,8 @@ def ensure_event_markdown(evt: Dict[str, Any]) -> Dict[str, Any]:
 
         # raw block
         lines.append("```json")
-        lines.append(_truncate(json.dumps(data, ensure_ascii=False, indent=2), 1200))
+        # lines.append(_truncate(json.dumps(data, ensure_ascii=False, indent=2), 1200))
+        lines.append(json.dumps(data, ensure_ascii=False, indent=2))
         lines.append("```")
 
     elif isinstance(data, list):
@@ -263,6 +264,10 @@ def _to_json_safe(x):
     if isinstance(x, _dt.date):
         return x.isoformat()
     return x
+
+def _jd(obj):
+    # dumps with datetime-safe coercion
+    return json.dumps(_to_json_safe(obj), ensure_ascii=False)
 
 # -----------------------------
 # Utilities

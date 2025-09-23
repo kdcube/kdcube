@@ -53,7 +53,7 @@ class ContextRAGClient:
     async def search(
             self,
             *,
-            query: Optional[str],
+            query: Optional[str] = None,
             embedding: Optional[Sequence[float]] = None,
             kinds: Optional[Sequence[str]] = None,
             scope: str = "track",
@@ -68,6 +68,10 @@ class ContextRAGClient:
             roles: tuple[str,...] = ("artifact","assistant","user"),
             with_payload: bool = False,
             sort: str = "hybrid",
+            any_tags: Optional[Sequence[str]] = None,
+            all_tags: Optional[Sequence[str]] = None,
+            not_tags: Optional[Sequence[str]] = None,
+            timestamp_filters: Optional[List[Dict[str, Any]]] = None,
     ) -> dict:
         """
         Semantic/Hybrid search (needs embedding unless provided).
@@ -78,9 +82,9 @@ class ContextRAGClient:
         qvec = list(embedding) if embedding is not None else None
         if qvec is None and query:
             [qvec] = await self.model_service.embed_texts([query])
-        if qvec is None:
-            # If caller truly wants recency-only, use .recent() instead of .search().
-            raise ValueError("search() needs either 'embedding' or 'query' to create one. For recency, call recent().")
+        # if qvec is None:
+        #     # If caller truly wants recency-only, use .recent() instead of .search().
+        #     raise ValueError("search() needs either 'embedding' or 'query' to create one. For recency, call recent().")
 
         rows = await self.idx.search_context(
             user_id=user,
@@ -95,6 +99,10 @@ class ContextRAGClient:
             half_life_days=half_life_days,
             include_deps=include_deps,
             sort=sort,
+            timestamp_filters=timestamp_filters,
+            any_tags=any_tags,
+            all_tags=all_tags,
+            not_tags=not_tags,
         )
 
         items = []
@@ -146,8 +154,9 @@ class ContextRAGClient:
         ctx_loaded = self._load_ctx(ctx)
         user, conv, track = self._scope_from_ctx(ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id)
         any_tags = list(any_tags or [])
+
         if kinds:
-            any_tags += list(kinds)
+            all_tags = list(all_tags or [])
             all_tags += list(kinds)
         rows = await self.idx.fetch_recent(
             user_id=user,
@@ -184,42 +193,6 @@ class ContextRAGClient:
     async def pull_text_artifact(self, *, artifact_uri: str) -> dict:
         doc = self.store.get_message(artifact_uri)
         return doc.get("payload") or {}
-
-    async def decide_reuse(
-            self,
-            *,
-            goal_kind: str,
-            query: str,
-            threshold: float = 0.78,
-            days: int = 180,
-            scope: str = "track",
-            ctx: Optional[dict] = None
-    ) -> dict:
-        kinds = (goal_kind,)
-        res = await self.search(query=query, kinds=kinds, scope=scope, days=days, top_k=5, include_deps=True, ctx=ctx)
-        items = res.get("items") or []
-        if not items:
-            return {"reuse": False, "search": res}
-
-        top = items[0]
-        sim = float(top.get("sim") or 0.0)
-        rec = float(top.get("rec") or 0.0)
-        ok = (sim >= threshold) or (sim >= (threshold - 0.05) and rec >= 0.60)
-
-        reason = f"sim={sim:.2f}, rec={rec:.2f}, goal_kind={goal_kind}"
-        out = {"reuse": bool(ok), "search": res}
-        if ok:
-            out["candidate"] = {
-                "message_id": top["message_id"],
-                "id": top["id"],
-                "score": float(top.get("score") or 0.0),
-                "sim": sim,
-                "rec": rec,
-                "reason": reason
-            }
-        else:
-            out["reason"] = reason
-        return out
 
     async def save_turn_log_as_artifact(
             self,
@@ -313,7 +286,6 @@ class ContextRAGClient:
         def first(results: dict) -> Optional[dict]:
             arr = next(iter(results.get("items") or []), None)
             return arr
-            # return arr.get("payload") if arr else None
 
         return {
             "user": first(u),
@@ -347,4 +319,122 @@ class ContextRAGClient:
             tags=["kind:turn.log.reaction", f"turn:{turn_id}", f"track:{track_id}"],
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
         )
+
+
+    async def save_artifact(
+            self,
+            *,
+            kind: str,
+            tenant: str, project: str, user_id: str,
+            conversation_id: str, user_type: str,
+            turn_id: str, track_id: Optional[str],
+            content: dict,
+            content_str: Optional[str] = None,
+            extra_tags: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
+        """Writes markdown to store (assistant artifact) + indexes it."""
+
+        artifact_tag = f"artifact:{kind}" if not kind.startswith("artifact:") else kind
+        tags = [f"turn:{turn_id}", artifact_tag] + ([f"track:{track_id}"] if track_id else [])
+        if not content_str:
+            content_str = json.dumps(content) if isinstance(content, dict) else str(content)
+        if extra_tags:
+            tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
+        s3_uri, message_id, rn = self.store.put_message(
+            tenant=tenant, project=project, user=user_id, fingerprint=None,
+            conversation_id=conversation_id, role="artifact", text=content_str,
+            payload=content,
+            meta={"kind": kind, "turn_id": turn_id, "track_id": track_id},
+            embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
+        )
+        await self.idx.add_message(
+            user_id=user_id, conversation_id=conversation_id, role="artifact",
+            text=content_str, s3_uri=s3_uri, ts=datetime.datetime.utcnow().isoformat()+"Z",
+            tags=tags,
+            ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
+        )
+        return {"s3_uri": s3_uri, "message_id": message_id, "rn": rn}
+
+    async def _find_latest_artifact_by_tags(
+            self, *, kind: str, user_id: str, conversation_id: str, all_tags: list[str]
+    ) -> Optional[dict]:
+        """
+        Find the latest *index row* for an artifact of `kind` that contains ALL `all_tags`.
+        Returns a slim row dict (id, message_id, role, text, s3_uri, ts, tags, track_id).
+        """
+        artifact_tag = f"artifact:{kind}" if not kind.startswith("artifact:") else kind
+        # ensure the kind tag is in all_tags
+        tags = list(dict.fromkeys(list(all_tags or []) + [artifact_tag]))
+
+        res = await self.idx.fetch_recent(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            roles=("artifact",),
+            all_tags=tags,       # ALL tags must be present
+            limit=1,
+            days=365
+        )
+        return (res[0] if res else None)
+
+    async def upsert_artifact(
+            self,
+            *,
+            kind: str,
+            tenant: str, project: str, user_id: str,
+            conversation_id: str, user_type: str,
+            turn_id: str, track_id: Optional[str],
+            content: dict,
+            unique_tags: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Idempotent write of a single logical artifact (e.g., a memory bucket) identified
+        by its unique_tags (e.g., ["mem:bucket:<id>"]). If an index row exists, update
+        that row (text, s3_uri, tags, ts) in place; otherwise create a fresh artifact.
+
+        Returns: {"mode": "update"|"insert", "id": <conv_messages.id>, "message_id": "...", "s3_uri": "..."}
+        """
+        # 1) find the existing row
+        artifact_tag = f"artifact:{kind}" if not kind.startswith("artifact:") else kind
+        all_tags = [artifact_tag] + list(unique_tags or [])
+        existing = await self._find_latest_artifact_by_tags(
+            kind=kind, user_id=user_id, conversation_id=conversation_id, all_tags=all_tags
+        )
+
+        # Normalize payload string (what we also index as text)
+        content_str = json.dumps(content, ensure_ascii=False)
+
+        if not existing:
+            # No prior row -> normal create
+            saved = await self.save_artifact(
+                kind=kind,
+                tenant=tenant, project=project, user_id=user_id, conversation_id=conversation_id,
+                user_type=user_type, turn_id=turn_id, track_id=track_id,
+                content=content, content_str=content_str, extra_tags=unique_tags,
+            )
+            return {"mode": "insert", **saved}
+
+        #  Write a new message blob and then point the index row at it
+        s3_uri, message_id, rn = self.store.put_message(
+            tenant=tenant, project=project, user=user_id, fingerprint=None,
+            conversation_id=conversation_id, role="artifact", text=content_str,
+            payload=content,
+            meta={"kind": kind, "turn_id": turn_id, "track_id": track_id},
+            embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
+        )
+
+        # 3) update the existing index row in place
+        #    merge/normalize tags (keep artifact kind + unique tags)
+        # bump ts to now
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        tags = list(dict.fromkeys((existing.get("tags") or []) +
+                                  [artifact_tag, f"turn:{turn_id}"] +
+                                  list(unique_tags or [])))
+        await self.idx.update_message(
+            id=int(existing["id"]),
+            text=content_str,
+            tags=tags,
+            s3_uri=s3_uri,
+            ts=now_iso,
+        )
+        return {"mode": "update", "id": int(existing["id"]), "message_id": existing.get("message_id"), "s3_uri": s3_uri}
 

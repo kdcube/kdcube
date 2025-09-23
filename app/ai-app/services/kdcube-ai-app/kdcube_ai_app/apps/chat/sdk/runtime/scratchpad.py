@@ -93,12 +93,14 @@ class TurnScratchpad:
         self.context_log_history = None
 
         self.solver_result_interpretation_instruction = ""
+        self.past_turn_interpretation_instruction = ""
+
         self.turn_artifact = None
         self.context_stack = []
         self.turn_stack = []
 
         # exact-reference
-        self.exact_turn_ids: List[str] = []
+        self.relevant_turn_ids: List[str] = []
 
         # current turn
         self.proposed_facts: List[Dict[str, Any]] = []
@@ -148,8 +150,8 @@ class TurnScratchpad:
     def add_exception(self, *, rule_key: str, value: Any, scope: str = "conversation", reason: str = "turn-exception"):
         self.exceptions.append({"rule_key": rule_key, "value": value, "scope": scope, "reason": reason})
 
-    def add_artifact(self, *, kind: str, title: str, content: str):
-        self.short_artifacts.append({"kind": kind, "title": title, "content": content})
+    def add_artifact(self, *, kind: str, title: str, content: str, structured_content: dict = None):
+        self.short_artifacts.append({"kind": kind, "title": title, "content": content, **{"structured_content": structured_content if structured_content else {}}})
 
 LogArea = Literal["objective", "user", "attachments", "solver", "answer", "note", "summary"]
 LogLevel = Literal["info", "warn", "error"]
@@ -214,20 +216,32 @@ class TurnLog(BaseModel):
 
     def turn_summary(self, turn_summary: dict, **kw):
         order = ["objective", "prefs", "assumptions", "done", "not_done", "risks", "notes"]
+        turn_summary_entries = []
         def process_o(o):
             if o in turn_summary and turn_summary[o]:
                 if o == "objective" and not self.objective_entry:
                     self.objective(turn_summary[o])
+                    turn_summary_entries.append(f"• objective: {turn_summary[o]} ")
                 elif o == "done":
-                    self.solver("done: " + "; ".join(map(str, turn_summary[o][:6])))
+                    done = "; ".join(map(str, turn_summary[o][:6]))
+                    self.solver("done: " + done)
+                    turn_summary_entries.append(f"• done: {done} ")
                 elif o == "not_done":
-                    self.solver("open: " + "; ".join(map(str, turn_summary[o][:6])))
+                    open = "; ".join(map(str, turn_summary[o][:6]))
+                    self.solver("open: " + open)
+                    turn_summary_entries.append(f"• open: {open} ")
                 elif o == "assumptions":
-                    self.note("assumptions: " + "; ".join(map(str, turn_summary[o][:6])))
+                    assumptions = "; ".join(map(str, turn_summary[o][:6]))
+                    self.note("assumptions: " + assumptions)
+                    turn_summary_entries.append(f"• assumptions: {assumptions} ")
                 elif o == "risks":
+                    risks = "; ".join(map(str, turn_summary[o][:6]))
                     self.note("risks: " + "; ".join(map(str, turn_summary[o][:6])))
+                    turn_summary_entries.append(f"• risks: {risks} ")
                 elif o == "notes":
-                    self.answer(turn_summary[o])
+                    notes = turn_summary[o]
+                    self.answer(notes)
+                    turn_summary_entries.append(f"• notes: {notes} ")
                 elif o == "prefs":
                     turn_prefs = turn_summary[o]
                     try:
@@ -237,13 +251,17 @@ class TurnLog(BaseModel):
                         for e in (turn_prefs.get("exceptions") or [])[:3]:
                             compact_prefs.append(f"EXC[{e.get('rule_key')}]: {e.get('value')}")
                         if compact_prefs:
-                            self.note("prefs: " + "; ".join(compact_prefs))
+                            cp =  "; ".join(compact_prefs)
+                            self.note("prefs: " + cp)
+                            turn_summary_entries.append(f"• prefs: {cp}")
                     except Exception:
                         pass
         try:
             if isinstance(turn_summary, dict):
                 for o in order:
                     process_o(o)
+            if turn_summary_entries:
+                self.add("summary", "".join(turn_summary_entries))
         except Exception:
             pass
 

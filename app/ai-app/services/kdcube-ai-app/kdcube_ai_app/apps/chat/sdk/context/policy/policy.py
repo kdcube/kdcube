@@ -81,6 +81,8 @@ def _decay_score(conf: float, created_at: int, hl_days: float = 30.0) -> float:
     age_days = max(0.0, (time.time() - created_at) / 86400.0)
     return float(conf) * (0.5 ** (age_days / hl_days))
 
+# chat/sdk/context/policy/policy.py
+
 class PolicyResult(TypedDict):
     do: Dict[str, Any]
     avoid: Dict[str, Any]
@@ -89,6 +91,7 @@ class PolicyResult(TypedDict):
     kept: int
     dropped: int
     reasons: List[str]
+    facts: List[Dict[str, Any]]  # neutral facts, passthrough
 
 def _kind(item: Item) -> Tuple[str, str]:
     if item.desired is None:
@@ -218,6 +221,7 @@ def evaluate_policy(raw: Dict[str, Any], *, half_life_days: float = 30.0) -> Pol
         kept=kept,
         dropped=dropped,
         reasons=reasons,
+        facts=list(raw.get("facts") or [])
     )
 
 def _filter_llm_prefs(d: dict, policy_for_key) -> dict:

@@ -9,9 +9,9 @@ import asyncpg
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Sequence, Union, Callable, Iterable
 
+
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.embedding.embedding import convert_embedding_to_string
-
 
 def _coerce_ts(ts: Union[str, datetime]) -> datetime:
     """Ensure ts is a timezone-aware datetime."""
@@ -22,6 +22,10 @@ def _coerce_ts(ts: Union[str, datetime]) -> datetime:
         s = ts.replace("Z", "+00:00") if ts.endswith("Z") else ts
         return datetime.fromisoformat(s)  # raises if invalid; that’s good
     raise TypeError("ts must be a datetime or ISO8601 string")
+
+def _normalize_ts_for_sql(ts: Union[str, datetime]) -> str:
+    dt = _coerce_ts(ts)  # already tz-aware
+    return dt.isoformat()
 
 def _safe_json_loads(value: Any) -> Any:
     """Safely deserialize JSON value, returning original if not JSON string."""
@@ -373,7 +377,7 @@ class ConvIndex:
             user_id: str,
             conversation_id: Optional[str],
             track_id: Optional[str],
-            query_embedding: List[float],
+            query_embedding: Optional[List[float]],   # <-- now optional
             top_k: int = 12,
             days: int = 90,
             scope: str = "track",  # 'track' | 'conversation' | 'user'
@@ -386,17 +390,30 @@ class ConvIndex:
             half_life_days: float = 7.0,
             include_deps: bool = True,
             sort: str = "hybrid",  # 'hybrid' | 'semantic' | 'recency'
+            timestamp_filters: Optional[List[Dict[str, Any]]] = None,   # [{'op': '>=', 'value': iso/datetime}, ...]
     ) -> List[Dict[str, Any]]:
         if kinds:
             any_tags = (list(any_tags or []) + list(kinds))
-        args: List[Any] = [user_id, list(roles), str(days), convert_embedding_to_string(query_embedding)]
+
+        # start args without the embedding; add it only if present
+        args: List[Any] = [user_id, list(roles), str(days)]
         where = [
             "m.user_id = $1",
             "m.role = ANY($2)",
             "m.ts >= now() - ($3::text || ' days')::interval",
             "m.ts + (m.ttl_days || ' days')::interval >= now()",
-            "m.embedding IS NOT NULL",
         ]
+
+        # semantic similarity: only when an embedding is provided
+        if query_embedding is not None:
+            args.append(convert_embedding_to_string(query_embedding))
+            # index of the just-appended vector param
+            sim_sql = f"1 - (m.embedding <=> ${len(args)}::vector) AS sim"
+            where.append("m.embedding IS NOT NULL")
+        else:
+            # no embedding -> neutral sim
+            sim_sql = "0.0::float AS sim"
+
         # scope
         if scope == "track" and track_id:
             args.append(track_id)
@@ -407,6 +424,7 @@ class ConvIndex:
         elif scope == "conversation" and conversation_id:
             args.append(conversation_id)
             where.append(f"m.conversation_id = ${len(args)}")
+
         # tags
         if any_tags:
             args.append(list(any_tags))
@@ -417,20 +435,36 @@ class ConvIndex:
         if not_tags:
             args.append(list(not_tags))
             where.append(f"NOT (m.tags && ${len(args)})")
+
         # text match (optional)
         if text_query:
             args.append(f"%{text_query}%")
             where.append(f"m.text ILIKE ${len(args)}")
 
-        # scoring + optional deps
+        # timestamp filters (push to SQL)
+        valid_ops = {"<", "<=", "=", ">=", ">", "<>"}
+        for tf in (timestamp_filters or []):
+            op = str(tf.get("op", "")).strip()
+            if op not in valid_ops:
+                continue
+            val = _normalize_ts_for_sql(tf.get("value") or datetime.utcnow())
+            args.append(val)
+            where.append(f"m.ts {op} ${len(args)}::timestamptz")
+
+        # half-life param
         args.append(max(0.1, float(half_life_days)))
         half_life_days_s = f"${len(args)}::float"
 
-        order_by = {
-            "semantic": "sim DESC, m.ts DESC",
-            "recency": "m.ts DESC",
-            "hybrid": f"(0.70*sim + 0.25*exp(-ln(2) * age_sec / ({half_life_days_s}*24*3600.0)) + 0.05*rboost) DESC, m.ts DESC",
-        }.get(sort, "m.ts DESC")
+        # ordering
+        if sort == "semantic" and query_embedding is None:
+            # no embedding -> semantic sort meaningless; fall back to recency
+            order_by = "m.ts DESC"
+        else:
+            order_by = {
+                "semantic": "sim DESC, m.ts DESC",
+                "recency": "m.ts DESC",
+                "hybrid": f"(0.70*sim + 0.25*exp(-ln(2) * age_sec / ({half_life_days_s}*24*3600.0)) + 0.05*rboost) DESC, m.ts DESC",
+            }.get(sort, "m.ts DESC")
 
         deps_select, deps_join = "", ""
         if include_deps:
@@ -455,7 +489,7 @@ class ConvIndex:
         q = f"""
           WITH base AS (
             SELECT m.*,
-                   1 - (m.embedding <=> $4::vector) AS sim,
+                   {sim_sql},
                    EXTRACT(EPOCH FROM (now() - m.ts)) AS age_sec,
                    CASE m.role WHEN 'artifact' THEN 1.10 WHEN 'assistant' THEN 1.00 ELSE 0.98 END AS rboost
             FROM {self.schema}.conv_messages m
@@ -470,6 +504,7 @@ class ConvIndex:
           ORDER BY {order_by}
           LIMIT {int(top_k)}
         """
+
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, *args)
         return [dict(r) for r in rows]
@@ -667,7 +702,12 @@ class ConvIndex:
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, user_id, conversation_id)
         # newest-first already enforced in SQL
-        return [dict(r) for r in rows]
+        rows = [dict(r) for r in rows]
+        for r in rows:
+            ts = r.get("ts")
+            if hasattr(ts, "isoformat"):
+                r["ts"] = ts.isoformat()
+        return rows
 
     async def insert_turn_prefs(
             self, *, user_id: str, conversation_id: str, turn_id: str,
@@ -860,6 +900,59 @@ class ConvIndex:
         async with self._pool.acquire() as con:
             rows = await con.fetch(q, user_id, conversation_id)
         return [r["text"] for r in rows]
+
+    async def update_message(
+            self,
+            *,
+            id: Optional[int] = None,
+            message_id: Optional[str] = None,
+            text: Optional[str] = None,
+            tags: Optional[List[str]] = None,
+            s3_uri: Optional[str] = None,
+            ts: Optional[Union[str, datetime]] = None,
+    ) -> int:
+        """
+        In-place UPDATE of a single row in conv_messages. Use either (id) or (message_id).
+        Only the provided fields are updated. Returns the number of affected rows (0 or 1).
+
+        NOTE: This updates the INDEX record (conv_messages). If you also want to replace
+        the stored payload/blob, write a new blob via ConversationStore first,
+        then set s3_uri/text here to point this index row at the new content.
+        """
+        if not id and not message_id:
+            raise ValueError("update_message requires either id or message_id")
+        sets, args = [], []
+        if text is not None:
+            sets.append(f"text = ${len(args)+1}")
+            args.append(text)
+        if tags is not None:
+            sets.append(f"tags = ${len(args)+1}")
+            args.append(list(tags))
+        if s3_uri is not None:
+            sets.append(f"s3_uri = ${len(args)+1}")
+            args.append(s3_uri)
+        if ts is not None:
+            sets.append(f"ts = ${len(args)+1}::timestamptz")
+            args.append(_normalize_ts_for_sql(ts))
+        if not sets:
+            return 0  # nothing to do
+
+        where = ""
+        if id:
+            where = f"id = ${len(args)+1}"
+            args.append(int(id))
+        else:
+            where = f"message_id = ${len(args)+1}"
+            args.append(str(message_id))
+
+        q = f"UPDATE {self.schema}.conv_messages SET {', '.join(sets)} WHERE {where}"
+        async with self._pool.acquire() as con:
+            res = await con.execute(q, *args)
+        # res format: 'UPDATE <n>'
+        try:
+            return int(res.split()[-1])
+        except Exception:
+            return 0
 
 """
         if tags_mode == "all":
