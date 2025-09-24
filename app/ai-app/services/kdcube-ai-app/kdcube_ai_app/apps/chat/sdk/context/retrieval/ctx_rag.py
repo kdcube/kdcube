@@ -283,6 +283,14 @@ class ContextRAGClient:
             user_id=user_id, conversation_id=conversation_id, track_id=track_id,
             roles=("artifact",), all_tags=[f"turn:{turn_id}"], with_payload=with_payload
         )
+
+        # 7) turn log
+        turn_log = await self.recent(
+            kinds=("artifact:turn.log",),
+            scope=scope, days=days, limit=3, ctx=ctx,
+            user_id=user_id, conversation_id=conversation_id, track_id=track_id,
+            roles=("artifact",), all_tags=[f"turn:{turn_id}"], with_payload=with_payload
+        )
         def first(results: dict) -> Optional[dict]:
             arr = next(iter(results.get("items") or []), None)
             return arr
@@ -293,7 +301,8 @@ class ContextRAGClient:
             "presentation": first(prez),
             "deliverables": first(dels),
             "citables": first(citables),
-            "solver_failure": first(solver_failure)
+            "solver_failure": first(solver_failure),
+            "turn_log": first(turn_log),
         }
 
     async def append_reaction_to_turn_log(self, *,
