@@ -18,13 +18,14 @@ ProcessingStage = Literal[
     "extraction",
     "segmentation",
     "metadata",
+    "enrichment",
     "summarization",
     "embedding",
     "tf-idf",
     "search_indexing",
-    "usage" # TODO: remove this from here
+    "usage"
 ]
-VALID_STAGES = ["raw", "extraction", "segmentation", "metadata", "summarization", "embedding", "tf-idf", "search_indexing", "usage"]
+VALID_STAGES = ["raw", "extraction", "segmentation", "enrichment", "metadata", "summarization", "embedding", "tf-idf", "search_indexing", "usage"]
 
 
 class KnowledgeBaseStorage:
@@ -43,11 +44,22 @@ class KnowledgeBaseStorage:
     #                          RESOURCE ID AND PATH GENERATION
     # ================================================================================
 
-    def generate_resource_id(self, source_type: str, source_name: str) -> str:
-        """Generate a resource ID from source type and name."""
-        # Sanitize source name for filesystem/S3 safety
-        safe_name = source_name.replace("/", "_").replace("\\", "_").replace(":", "_").replace("?", "_").replace("&", "_").replace("=", "_")
-        return f"{source_type}|{safe_name}"
+    # in kdcube_ai_app/apps/knowledge_base/storage.py (class KnowledgeBaseStorage)
+
+    def generate_resource_id(self, source_type: str, source_name: str, provider: Optional[str] = None) -> str:
+        """Generate a provider-namespaced resource ID from source type and name.
+           Backwards-compatible: if provider is None, keep old format."""
+        def _sanitize(s: str) -> str:
+            return (s or "").replace("/", "_").replace("\\", "_").replace(":", "_") \
+                            .replace("?", "_").replace("&", "_").replace("=", "_") \
+                            .replace("|", "_").strip()
+
+        safe_type = _sanitize(source_type)
+        safe_name = _sanitize(source_name)
+        if provider:
+            safe_provider = _sanitize(provider)
+            return f"{safe_provider}|{safe_type}|{safe_name}"
+        return f"{safe_type}|{safe_name}"
 
     def get_resource_base_path(self, resource_id: str) -> str:
         """Get the base path for a resource (always in data/raw)."""

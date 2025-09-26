@@ -9,9 +9,7 @@ Removes all unnecessary complexity and focuses on what's needed for backtracking
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 
-from kdcube_ai_app.apps.knowledge_base.db.data_models import HybridSearchParams
-from kdcube_ai_app.apps.knowledge_base.db.kb_db_connector import NavigationSearchResult
-
+from kdcube_ai_app.apps.knowledge_base.db.data_models import HybridSearchParams, NavigationSearchResult
 
 @dataclass
 class SearchResult:

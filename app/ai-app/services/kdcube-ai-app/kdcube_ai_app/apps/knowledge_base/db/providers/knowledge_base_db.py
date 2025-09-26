@@ -169,14 +169,14 @@ class KnowledgeBaseDB:
             datasource_data["version"],
             datasource_data["rn"],
             datasource_data.get("source_type"),
-            datasource_data.get("provider"),  # NEW
+            datasource_data.get("provider"),
             datasource_data["title"],
             datasource_data["uri"],
             datasource_data.get("system_uri"),
             Json(datasource_data.get("metadata", {})),
             datasource_data.get("status", "pending"),
             datasource_data.get("segment_count", 0),
-            datasource_data.get("expiration")  # NEW
+            datasource_data.get("expiration")
         )
 
         with conn.cursor() as cur:
@@ -911,16 +911,33 @@ class KnowledgeBaseDB:
             return results
 
     @transactional
-    def content_hash_exists(self, hash_value:str, conn=None) -> bool:
+    def content_hash_exists(self, hash_value: str, conn=None) -> Optional[str]:
+        """
+        Return the `name` from <schema>.content_hash where value = hash_value.
+        None if no match.
+        """
         sql = f"""
-                SELECT EXISTS(
-                    SELECT 1 FROM {self.schema}.content_hash 
-                    WHERE value = %s
-                )
-            """
+            SELECT name
+            FROM {self.schema}.content_hash
+            WHERE value = %s
+            LIMIT 1
+        """
         with conn.cursor() as cur:
             cur.execute(sql, (hash_value,))
-            return cur.fetchone()[0]
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    # @transactional
+    # def content_hash_exists(self, hash_value:str, conn=None) -> Optional[str]:
+    #     sql = f"""
+    #             SELECT EXISTS(
+    #                 SELECT 1 FROM {self.schema}.content_hash
+    #                 WHERE value = %s
+    #             )
+    #         """
+    #     with conn.cursor() as cur:
+    #         cur.execute(sql, (hash_value,))
+    #         return cur.fetchone()[0]
 
     def _row_to_content_hash(self, row_dict: Dict[str, Any]) -> ContentHash:
         """Convert database row to ContentHash object."""

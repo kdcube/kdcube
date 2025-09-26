@@ -4,39 +4,13 @@
 """
 Search indexing module for loading processed segments into search database.
 """
-import logging
 from typing import Dict, Any, Optional
 from datetime import datetime
-
 from kdcube_ai_app.apps.knowledge_base.modules.base import ProcessingModule
 from kdcube_ai_app.apps.knowledge_base.db.kb_db_connector import KnowledgeBaseConnector
 
-
 class SearchIndexingModule(ProcessingModule):
-    """
-    Module responsible for loading processed segments into the search database.
-
-    This module takes the processed segments from the segmentation pipeline
-    and loads them into PostgreSQL using the KnowledgeBaseConnector for
-    search and retrieval operations.
-    """
-
-    def __init__(self,
-                 storage,
-                 project: str,
-                 tenant: str,
-                 pipeline,
-                 db_connector: Optional[KnowledgeBaseConnector] = None,
-                 **kwargs):
-        """
-        Initialize the search indexing module.
-
-        Args:
-            storage: Knowledge base storage backend
-            project: Project name
-            pipeline: Processing pipeline instance
-            db_connector: Optional pre-configured database connector
-        """
+    def __init__(self, storage, project, tenant, pipeline, db_connector: Optional[KnowledgeBaseConnector] = None, **kwargs):
         super().__init__(storage, project, tenant, pipeline)
         self.db_connector = db_connector
 
@@ -44,41 +18,17 @@ class SearchIndexingModule(ProcessingModule):
     def stage_name(self) -> str:
         return "search_indexing"
 
-    async def process(self,
-                      resource_id: str,
-                      version: str,
-                      force_reprocess: bool = False,
-                      **kwargs) -> Dict[str, Any]:
-        """
-        Load processed segments into the search database.
-
-        Args:
-            resource_id: Resource identifier
-            version: Resource version
-            force_reprocess: Whether to force reprocessing
-            **kwargs: Additional arguments including 'kb' (KnowledgeBase instance)
-
-        Returns:
-            Processing results with statistics
-        """
-        # Check if search indexing already completed
+    async def process(self, resource_id: str, version: str, force_reprocess: bool = False, **kwargs) -> Dict[str, Any]:
         if not force_reprocess and self.is_processed(resource_id, version):
             self.logger.info(f"Search indexing already completed for {resource_id} v{version}, skipping")
             return self.get_results(resource_id, version) or {}
 
         self.logger.info(f"Starting search indexing for {resource_id} v{version}")
-
-        # Get the KnowledgeBase instance - required for the connector
         kb = kwargs.get("kb")
         if not kb:
-            raise ValueError(
-                "KnowledgeBase instance ('kb') must be provided in kwargs for search indexing. "
-                "This should be passed automatically by the KB.process_resource() method."
-            )
+            raise ValueError("KnowledgeBase instance ('kb') must be provided for search indexing.")
 
-        # Get or create database connector
         connector = self._get_or_create_connector(kb, kwargs)
-
         try:
             # Verify prerequisites are met
             self._verify_prerequisites(resource_id, version)
@@ -86,7 +36,6 @@ class SearchIndexingModule(ProcessingModule):
             # Load complete resource into search database
             load_result = connector.load_complete_resource(kb, resource_id, version)
 
-            # Create comprehensive results
             results = {
                 "resource_id": resource_id,
                 "version": version,
@@ -96,11 +45,7 @@ class SearchIndexingModule(ProcessingModule):
                 "indexing_timestamp": datetime.now().isoformat(),
                 "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}"
             }
-
-            # Save results for future reference
             self.save_results(resource_id, version, results)
-
-            # Log successful operation
             segments_loaded = load_result.get("segments_result", {}).get("segments_upserted", 0)
             self.log_operation("search_indexing_complete", resource_id, {
                 "version": version,

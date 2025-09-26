@@ -5,6 +5,9 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Union, Any, List, Literal
 
+import hashlib, os, re
+from urllib.parse import urlparse, urlunparse
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -20,13 +23,49 @@ from kdcube_ai_app.tools.reflection import fully_qualified_typename
 import logging
 logger = logging.getLogger("DatasourceDataModel")
 
+class IngestModifiers(BaseModel):
+    # Dedupe
+    dedupe: Literal["content", "resource", "none"] = "content"
+    compute_hash: bool = True
+
+    # URL handling
+    canonicalize_url: bool = True
+    filename_strategy: Literal["deterministic", "from_url", "provided"] = "deterministic"
+    provided_filename: Optional[str] = None
+
+    # Content source
+    content_source: Literal["auto", "element", "fetch"] = "auto"
+
+    # MIME
+    primary_mime_override: Optional[str] = None
+
+    # Readiness policies:
+    # new            -> always create a new version (default)
+    # reuse_ready    -> if an existing version has required stages ready, just return it (no writes)
+    # overwrite_latest -> delete latest version if exists, then create new one
+    # probe_only     -> only check readiness; never write; return existing if ready, else None
+    version_policy: Literal["new", "reuse_ready", "overwrite_latest", "probe_only"] = "new"
+
+    # Stages to check for readiness (when version_policy in {"reuse_ready","probe_only"})
+    ready_stages: Optional[List[Literal[
+        "extraction","segmentation","enrichment","embedding","search_indexing","metadata"
+    ]]] = None
+
+    # If True -> all listed stages must be ready; if False -> any is enough
+    require_all_ready: bool = True
+
 class BaseDataElement(BaseModel, ABC):
 
     """Base class for all data elements with common functionality."""
     mime: Optional[str] = None
     parser_name: Optional[str] = None
     path: Optional[str] = None # system (raw) file path
+    title: Optional[str] = None
     content: Optional[Union[str, bytes]] = None
+    provider: Optional[str] = None
+    ingest: Optional[IngestModifiers] = None
+
+    metadata: Optional[dict] = None
 
     def __init__(self, /, **data: Any):
         super().__init__(**data)
@@ -126,7 +165,8 @@ class BaseDataElement(BaseModel, ABC):
                     "type": "pdf",
                     "parser": fully_qualified_typename(self.pdf_extractor),
                     "mime": self.mime,
-                    "source_path": self.path
+                    "source_path": self.path,
+                    "provider": getattr(self, "provider", None)
                 })
 
             return results
@@ -161,7 +201,8 @@ class BaseDataElement(BaseModel, ABC):
                 "parser": fully_qualified_typename(parser),
                 "mime": self.mime,
                 "source_path": self.path,
-                "title": extract_title_from_html(content_str)
+                "title": extract_title_from_html(content_str),
+                "provider": getattr(self, "provider", None)
             }
 
             return [DataSourceExtractionResult(content=markdown, metadata=metadata)]
@@ -186,7 +227,8 @@ class BaseDataElement(BaseModel, ABC):
                 "type": "text",
                 "parser": None,
                 "mime": self.mime,
-                "source_path": self.path
+                "source_path": self.path,
+                "provider": getattr(self, "provider", None)
             }
 
             return [DataSourceExtractionResult(content=content_str, metadata=metadata)]
@@ -468,3 +510,42 @@ class URLCrawlerSource(BaseDataSource):
 
     def to_url(self) -> str:
         return f"crawler://{self.start_url}"
+
+def canonicalize_url(url: str) -> str:
+    p = urlparse(url)
+    scheme = (p.scheme or "https").lower()
+    host = (p.hostname or "").lower()
+    # Drop default ports
+    if p.port and not ((scheme == "http" and p.port == 80) or (scheme == "https" and p.port == 443)):
+        host = f"{host}:{p.port}"
+    path = p.path or "/"
+    if path != "/" and path.endswith("/"):
+        path = path.rstrip("/")
+    return urlunparse((scheme, host, path, "", p.query, ""))
+
+def source_name_from_url(url: str) -> str:
+    cu = canonicalize_url(url)
+    p = urlparse(cu)
+    base = f"{p.hostname}{p.path}".lower()
+    base = re.sub(r"[^a-z0-9._/\-]+", "-", base).strip("-")
+    short = hashlib.sha1(cu.encode("utf-8")).hexdigest()[:8]
+    return f"{base}--{short}"
+
+def ext_for_mime(mime: str, default: str = ".bin") -> str:
+    import mimetypes
+    if not mime:
+        return default
+    guess = mimetypes.guess_extension(mime)
+    return guess or (".html" if mime == "text/html" else default)
+
+def deterministic_url_filename(url: str, mime: str, default_ext: str = ".html") -> str:
+    cu = canonicalize_url(url)
+    p = urlparse(cu)
+    tail = (p.path.split("/")[-1] or "index").lower()
+    tail = re.sub(r"[^a-z0-9._\-]+", "-", tail).strip("-") or "index"
+    host = re.sub(r"[^a-z0-9._\-]+", "-", (p.hostname or "site").lower())
+    short = hashlib.sha1(cu.encode("utf-8")).hexdigest()[:8]
+    _, ext = os.path.splitext(tail)
+    ext = ext or ext_for_mime(mime, default_ext)
+    base = tail if tail != "index" else f"{host}--{tail}"
+    return f"{base}--{short}{ext}"

@@ -572,7 +572,7 @@ class KnowledgeBaseSearch:
         else:
             return self.advanced_hybrid_search(params)
 
-    def hybrid_pipeline_search(self, params: HybridSearchParams) -> List[Dict[str, Any]]:
+    def hybrid_pipeline_search_(self, params: HybridSearchParams) -> List[Dict[str, Any]]:
         """
         Two-stage retrieval with correct boolean logic:
           - Facets (providers, resource_ids, include_expired, entity_filters group) always AND
@@ -769,6 +769,253 @@ class KnowledgeBaseSearch:
         thresh = params.min_similarity or 0.0
         filtered = [r for r in sem_rows if float(r.get('semantic_score', 0.0)) >= thresh]
         filtered.sort(key=lambda r: (r['semantic_score'], r['has_embedding'], r['created_at']), reverse=True)
+        top_sem = filtered[: params.top_n]
+        if not top_sem:
+            return []
+
+        # -------- Stage 4: optional cross-encoder rerank --------
+        from kdcube_ai_app.infra.rerank.rerank import cross_encoder_rerank
+        reranked = cross_encoder_rerank(raw_query or q_norm, top_sem, 'content')
+
+        if params.rerank_threshold is not None and len(reranked) > (params.rerank_top_k or params.top_n) * 2:
+            reranked = [r for r in reranked if r.get("rerank_score", 0.0) >= params.rerank_threshold]
+
+        return reranked[: (params.rerank_top_k or params.top_n)]
+
+    def hybrid_pipeline_search(self, params: HybridSearchParams) -> List[Dict[str, Any]]:
+        """
+        Two-stage retrieval (BM25 + ANN), then semantic scoring and optional rerank.
+        NO early joins: Stage 1 & 2 hit retrieval_segment only.
+        Stage 3 joins datasource ONLY for the candidate set (id ANY (...)) and applies provider/expiry facets there.
+        """
+        import unicodedata, re, json
+
+        # -------- helpers --------
+        def normalize_query(q: str) -> str:
+            nfkd = unicodedata.normalize('NFKD', q or "")
+            cleaned = re.sub(r'[^0-9A-Za-z\s]', ' ', nfkd)
+            return cleaned.lower().strip()
+
+        def build_entity_group(entity_filters, use_and: bool, param_sink: list) -> str:
+            if not entity_filters:
+                return ""
+            parts = []
+            for ent in entity_filters:
+                parts.append("entities @> %s")
+                param_sink.append(json.dumps([{"key": ent.key, "value": ent.value}]))
+            joiner = " AND " if use_and else " OR "
+            return "(" + joiner.join(parts) + ")"
+
+        rs = f"{self.schema}.retrieval_segment"     # base table only (no join)
+        ds = f"{self.schema}.datasource"
+
+        # -------- Stage 0: tokens --------
+        raw_query = params.query or ""
+        q_norm = normalize_query(raw_query)
+        terms = [t for t in q_norm.split() if len(t) > 3]
+        prefix_tsquery = ' & '.join(f"{t}:*" for t in terms) if terms else ""
+
+        # -------- FACETS used in Stage 1/2 (join-free) --------
+        # Keep only facets that live on retrieval_segment to avoid join:
+        rs_facet_clauses, rs_facet_params = [], []
+
+        # resource_ids (on rs)
+        if params.resource_ids:
+            ph = ",".join(["%s"] * len(params.resource_ids))
+            rs_facet_clauses.append(f"resource_id IN ({ph})")
+            rs_facet_params.extend(params.resource_ids)
+
+        # entities (on rs)
+        entities_match_all = getattr(params, "entities_match_all", params.match_all)
+        ent_group = build_entity_group(getattr(params, "entity_filters", None),
+                                       bool(entities_match_all), rs_facet_params)
+        if ent_group:
+            rs_facet_clauses.append(ent_group)
+
+        # tags (on rs) — but they’re part of recall below to match your logic
+        # provider + include_expired will be applied LATER in Stage 3 (post-candidates)
+
+        rs_facets_sql = " AND ".join(rs_facet_clauses) if rs_facet_clauses else ""
+
+        # -------- RECALL (query + tags) by match_all --------
+        recall_clauses, recall_params = [], []
+
+        if prefix_tsquery:
+            recall_clauses.append("search_vector @@ to_tsquery('english', %s)")
+            recall_params.append(prefix_tsquery)
+
+        if getattr(params, "tags", None):
+            if params.match_all:
+                recall_clauses.append("tags @> %s")
+            else:
+                recall_clauses.append("tags && %s")
+            recall_params.append(params.tags)
+
+        if recall_clauses:
+            recall_joiner = " AND " if params.match_all else " OR "
+            recall_sql = "(" + recall_joiner.join(recall_clauses) + ")"
+        else:
+            recall_sql = ""
+
+        # -------- Stage 1: BM25/prefix (rs only) --------
+        where_parts = []
+        if rs_facets_sql:
+            where_parts.append(f"({rs_facets_sql})")
+        if recall_sql:
+            where_parts.append(recall_sql)
+        bm25_where = " AND ".join(where_parts) if where_parts else "TRUE"
+
+        if prefix_tsquery:
+            bm25_order = "ts_rank_cd(search_vector, to_tsquery('english', %s), 32) DESC"
+            order_params = [prefix_tsquery]
+        else:
+            bm25_order = "created_at DESC"
+            order_params = []
+
+        bm25_k = getattr(params, "bm25_k", 100)
+        bm25_sql = f"""
+            SELECT id AS segment_id
+            FROM {rs}
+            WHERE {bm25_where}
+            ORDER BY {bm25_order}
+            LIMIT %s
+        """
+        bm25_params = tuple(rs_facet_params + recall_params + order_params + [bm25_k])
+        bm25_rows = self.dbmgr.execute_sql(bm25_sql, data=bm25_params, as_dict=True)
+        bm25_ids = [r['segment_id'] for r in bm25_rows]
+
+        # -------- Stage 2: ANN fallback (rs only) --------
+        if params.embedding is None:
+            return []
+
+        embedding_str = to_pgvector_str(params.embedding)
+        fallback_k = getattr(params, 'fallback_k', params.top_n)
+
+        ann_where_parts, ann_params = ["embedding IS NOT NULL"], []
+        if rs_facets_sql:
+            ann_where_parts.append(f"({rs_facets_sql})")
+            ann_params.extend(rs_facet_params)
+        ann_where = " AND ".join(ann_where_parts)
+
+        ann_sql = f"""
+            SELECT id AS segment_id
+            FROM {rs}
+            WHERE {ann_where}
+            ORDER BY embedding <=> %s
+            LIMIT %s
+        """
+        ann_params = tuple(ann_params + [embedding_str, fallback_k])
+        ann_rows = self.dbmgr.execute_sql(ann_sql, data=ann_params, as_dict=True)
+        ann_ids = [r['segment_id'] for r in ann_rows]
+
+        # -------- Stage 3: semantic scoring on union + JOIN datasource (POST-filter) --------
+        candidate_ids = list(dict.fromkeys(bm25_ids + ann_ids))
+        if not candidate_ids:
+            return []
+
+        # Build POST-filters on ds (provider/expiry/etc.) AFTER candidates are known.
+        ds_filters, ds_params = [], []
+
+        # ---------- provider facet
+        if getattr(params, "providers", None):
+            ph = ",".join(["%s"] * len(params.providers))
+            ds_filters.append(f"ds.provider IN ({ph})")
+            ds_params.extend(params.providers)
+
+        # ---------- expiry facet
+        if not getattr(params, "include_expired", True):
+            ds_filters.append("(ds.expiration IS NULL OR ds.expiration > now())")
+
+        # ---------- publication time filters ----------
+        # JSON path: ds.metadata->'metadata'->>'published_time_iso'
+        pub_expr = "(ds.metadata->'metadata'->>'published_time_iso')::timestamptz"
+
+        if getattr(params, "published_on", None):
+            # Inclusive day range: [00:00, 23:59:59]
+            ds_filters.append(f"{pub_expr}::date = %s::date")
+            ds_params.append(str(params.published_on))
+
+        if getattr(params, "published_after", None):
+            ds_filters.append(f"{pub_expr} >= %s")
+            ds_params.append(str(params.published_after))
+
+        if getattr(params, "published_before", None):
+            ds_filters.append(f"{pub_expr} <= %s")
+            ds_params.append(str(params.published_before))
+
+        # ---------- modified time filters ----------
+        mod_expr = "(ds.metadata->'metadata'->>'modified_time_iso')::timestamptz"
+
+        if getattr(params, "modified_on", None):
+            ds_filters.append(f"{mod_expr}::date = %s::date")
+            ds_params.append(str(params.modified_on))
+
+        if getattr(params, "modified_after", None):
+            ds_filters.append(f"{mod_expr} >= %s")
+            ds_params.append(str(params.modified_after))
+
+        if getattr(params, "modified_before", None):
+            ds_filters.append(f"{mod_expr} <= %s")
+            ds_params.append(str(params.modified_before))
+
+        ds_filter_sql = (" AND " + " AND ".join(ds_filters)) if ds_filters else ""
+
+        semantic_sql = f"""
+            SELECT
+              rs.id            AS segment_id,
+              rs.resource_id,
+              rs.version,
+              rs.provider,            -- rs.provider (kept for compatibility)
+              rs.content,
+              rs.title,
+              rs.lineage,
+              rs.entities,
+              rs.extensions,
+              rs.tags,
+              rs.created_at,
+              (1.0 - (rs.embedding <=> %s)) AS semantic_score,
+              CASE WHEN rs.embedding IS NOT NULL THEN 1.0 ELSE 0.0 END AS has_embedding,
+              -- server-side datasource JSON (joined only on candidate set)
+              jsonb_build_object(
+                'id', rs.resource_id,
+                'version', rs.version,
+                'rn', ds.rn,
+                'provider', ds.provider,
+                'title', ds.title,
+                'uri', ds.uri,
+                'system_uri', ds.system_uri,
+                'metadata', ds.metadata,
+                'active', (ds.expiration IS NULL OR ds.expiration > now()),
+                'published_time_iso', ds.metadata->'metadata'->>'published_time_iso',
+                'modified_time_iso',  ds.metadata->'metadata'->>'modified_time_iso'
+              ) AS datasource
+            FROM {rs} rs
+            JOIN {ds} ds
+              ON ds.id = rs.resource_id
+             AND ds.version = rs.version
+            WHERE rs.id = ANY(%s)
+            {ds_filter_sql}
+        """
+        sem_rows = self.dbmgr.execute_sql(
+            semantic_sql,
+            data=(embedding_str, candidate_ids, *ds_params),
+            as_dict=True
+        )
+
+        for r in sem_rows:
+            r['published_ts'] = ((r['datasource'].get('metadata') or {}).get('metadata') or {}).get('published_time_iso')
+        # When sorting:
+        def as_ts(v):  # robust None→min
+            from datetime import datetime
+            try:
+                return datetime.fromisoformat(v.replace('Z','+00:00')) if v else datetime.min
+            except Exception:
+                return datetime.min
+
+        thresh = params.min_similarity or 0.0
+        filtered = [r for r in sem_rows if float(r.get('semantic_score', 0.0)) >= thresh]
+        # filtered.sort(key=lambda r: (r['semantic_score'], r['has_embedding'], r['created_at']), reverse=True)
+        filtered.sort(key=lambda r: (r['semantic_score'], r['has_embedding'], as_ts(r.get('published_ts'))), reverse=True)
         top_sem = filtered[: params.top_n]
         if not top_sem:
             return []

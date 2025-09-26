@@ -15,26 +15,24 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, Field
 
 from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import SegmentType
-from kdcube_ai_app.apps.knowledge_base.db.kb_db_connector import create_kb_connector, NavigationSearchResult
-from kdcube_ai_app.apps.knowledge_base.search import SimpleKnowledgeBaseSearch, \
-    SearchResult
+from kdcube_ai_app.apps.knowledge_base.db.kb_db_connector import create_kb_connector
+from kdcube_ai_app.apps.knowledge_base.search import SimpleKnowledgeBaseSearch
+from kdcube_ai_app.apps.knowledge_base.db.data_models import NavigationSearchResult
 from kdcube_ai_app.infra.llm.llm_data_model import ModelRecord
 from kdcube_ai_app.storage.storage import IStorageBackend, create_storage_backend
-from kdcube_ai_app.apps.knowledge_base.storage import KnowledgeBaseStorage, KnowledgeBaseCollaborativeStorage
-from kdcube_ai_app.tools.fetch import (
-    ContentFetcher
-)
-from kdcube_ai_app.tools.datasource import URLDataElement, FileDataElement, \
-    RawTextDataElement, DataElement, create_data_element
-from kdcube_ai_app.tools.content_type import (fetch_url_with_content_type,
-                                              guess_mime_from_url, is_text_mime_type)
+from kdcube_ai_app.apps.knowledge_base.storage import KnowledgeBaseCollaborativeStorage
+
+from kdcube_ai_app.tools.datasource import (URLDataElement, FileDataElement,
+    RawTextDataElement, DataElement, create_data_element, IngestModifiers,
+                                            canonicalize_url, source_name_from_url)
+from kdcube_ai_app.tools.content_type import is_text_mime_type
 from kdcube_ai_app.tools.parser import MarkdownParser
 from kdcube_ai_app.apps.knowledge_base.modules.base import ModuleFactory
 from kdcube_ai_app.apps.knowledge_base.index.content_index import FSContentIndexManager, DBContentIndexManager
 
 logger = logging.getLogger("KnowledgeBase.Core")
 
-
+rm_excluded_fields = {'content_hash', 'ef_uri', 'extraction_info', 'status'}
 class ResourceMetadata(BaseModel):
     """Metadata for a knowledge base resource."""
     id: str = Field(..., description="Resource ID")
@@ -54,7 +52,15 @@ class ResourceMetadata(BaseModel):
     extraction_info: Optional[Dict[str, Any]] = Field(
         None, description="Extraction metadata if available"
     )
+    description: Optional[str] = Field(None, description="Description")
+    title: Optional[str] = Field(None, description="Title")
+    summary: Optional[str] = Field(None, description="Summary")
     status: Optional[str] = Field(None, description="resource status. Usually for transmission needs.")
+    provider: Optional[str] = Field(None, description="Optional provider info")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Extra info")
+    expiration: Optional[str] = Field(None, description="Expiration timestamp")
+    def light(self):
+        return self.model_dump(exclude=rm_excluded_fields)
 
 
 def _extract_filesystem_path(uri: str) -> str:
@@ -154,15 +160,42 @@ class KnowledgeBase:
             )
         return self._search_component
 
+    def _find_ready_version(self, resource_id: str,
+                            stages: Optional[list[str]],
+                            require_all: bool) -> Optional[str]:
+        """Return latest version that satisfies readiness criteria, or None."""
+        if not self.storage.resource_exists(resource_id):
+            return None
+
+        versions = self.storage.list_versions(resource_id) or []
+        # latest first, numeric-safe
+        versions_sorted = sorted(versions, key=lambda v: int(v) if str(v).isdigit() else v, reverse=True)
+
+        for v in versions_sorted:
+            status = self.pipeline.get_processing_status(resource_id, v) or {}
+            if not stages:  # no stages specified: any existing version counts
+                return v
+            flags = [bool(status.get(s)) for s in stages]
+            if (all(flags) if require_all else any(flags)):
+                return v
+        return None
+
     def add_resource(self, data_element: Union[Dict[str, Any], DataElement]) -> ResourceMetadata:
-        """Add resource by fetching and storing content with content-based deduplication."""
         if isinstance(data_element, dict):
             data_element = create_data_element(**data_element)
 
-        # Generate resource ID
+        ingest = data_element.ingest or IngestModifiers()  # defaults = legacy behavior
+
+        # --- Build source_type and source_id (with optional URL canonicalization) ---
         source_type = data_element.type
+        provider = getattr(data_element, "provider", None)
+
         if source_type == "url":
-            source_id = urlparse(data_element.url).netloc + urlparse(data_element.url).path
+
+            url = data_element.url
+            url_for_id = canonicalize_url(url) if ingest.canonicalize_url else url
+            source_id = source_name_from_url(url_for_id) if ingest.canonicalize_url else \
+                        (urlparse(url).netloc + urlparse(url).path)
         elif source_type == "file":
             source_id = data_element.filename
         elif source_type == "raw_text":
@@ -170,118 +203,124 @@ class KnowledgeBase:
         else:
             source_id = str(data_element)
 
-        resource_id = self.storage.generate_resource_id(source_type, source_id)
+        # Prefer provider-aware ID when available
+        resource_id = self.storage.generate_resource_id(source_type, source_id, provider=provider)
 
-        # Get content and detect content type for URLs
-        content_type = None
+        policy = ingest.version_policy
+        stages = ingest.ready_stages or []
+        require_all = ingest.require_all_ready
+
+        if policy in ("probe_only", "reuse_ready"):
+            ready_version = self._find_ready_version(resource_id, stages, require_all)
+            if ready_version:
+                md = self.storage.get_version_metadata(resource_id, ready_version)
+                if md:
+                    md["status"] = "probe_ready" if policy == "probe_only" else "reused_ready"
+                    return ResourceMetadata(**md)
+            if policy == "probe_only":
+                # Explicitly return None to signal "no ready version"
+                return None
+
+        if policy == "overwrite_latest" and self.storage.resource_exists(resource_id):
+            latest_v = self.storage.get_latest_version(resource_id)
+            if latest_v:
+                self.delete_resource_version(resource_id, latest_v)
+
+        # --- Resolve primary content bytes (element vs fetch) ---
+        content_type_detected = None
         actual_filename = None
 
-        if not data_element.content:
-            # For URLs, we need to fetch and detect content type
-            if source_type == "url":
-                content_bytes, content_type, actual_filename = fetch_url_with_content_type(data_element.url)
-                data_element.content = content_bytes
-            else:
-                # Fetch from source using existing method
-                data_element.content = ContentFetcher.fetch(data_element)
+        def _fetch_if_needed():
+            from kdcube_ai_app.tools.content_type import fetch_url_with_content_type
+            return fetch_url_with_content_type(data_element.url)
 
-        if not data_element.content:
-            raise ValueError(f"No content loaded from source: {data_element}")
+        content_bytes = None
 
-        if isinstance(data_element.content, str):
-            data_element.content = data_element.content.encode('utf-8')
+        if ingest.content_source == "element":
+            if data_element.content is None:
+                raise ValueError("ingest.content_source='element' but element.content is None")
+            content_bytes = data_element.content.encode("utf-8") if isinstance(data_element.content, str) else data_element.content
 
-        content_bytes = data_element.content
+        elif ingest.content_source == "fetch":
+            if source_type != "url":
+                raise ValueError("ingest.content_source='fetch' is only valid for URL elements")
+            content_bytes, content_type_detected, actual_filename = _fetch_if_needed()
+
+        else:  # "auto"
+            if data_element.content is not None:
+                content_bytes = data_element.content.encode("utf-8") if isinstance(data_element.content, str) else data_element.content
+            elif source_type == "url":
+                content_bytes, content_type_detected, actual_filename = _fetch_if_needed()
+
         if not content_bytes:
             raise ValueError(f"No content loaded from source: {data_element}")
 
-        # Compute content hash
-        content_hash = self.storage.compute_content_hash(content_bytes)
+        # --- MIME selection (ingest override > element.mime > detected > guess/fallback) ---
+        mime = ingest.primary_mime_override or data_element.mime or content_type_detected or \
+               ( "text/html" if source_type == "url" else "application/octet-stream" )
 
-        # Check for content-based duplicates
-        existing_resource_with_same_content = self.content_index.check_content_exists(content_hash)
-        if existing_resource_with_same_content:
-            logger.info(f"Content already exists in resource {existing_resource_with_same_content}, returning existing metadata")
-            existing_duplicate_metadata = self.storage.get_resource_metadata(existing_resource_with_same_content)
-            if existing_duplicate_metadata:
-                existing_duplicate_metadata["status"] = "duplicate"
-                return ResourceMetadata(**existing_duplicate_metadata)
+        # --- Dedupe & hash policy ---
+        # Defaults: dedupe='content', compute_hash=True (legacy)
+        compute_hash = (ingest.dedupe == "content") and ingest.compute_hash
+        content_hash = self.storage.compute_content_hash(content_bytes) if compute_hash else None
 
-        # Check if content unchanged for existing resource
-        existing_metadata = self.storage.get_resource_metadata(resource_id)
-        if existing_metadata:
-            latest_version = existing_metadata["version"]
-            latest_version_metadata = self.storage.get_version_metadata(resource_id, latest_version)
+        if ingest.dedupe == "content" and content_hash:
+            existing = self.content_index.check_content_exists(content_hash)
+            if existing:
+                logger.info(f"Content already exists in resource {existing}, returning existing metadata")
+                existing_md = self.storage.get_resource_metadata(existing)
+                if existing_md:
+                    existing_md["status"] = "duplicate"
+                    return ResourceMetadata(**existing_md)
 
-            if latest_version_metadata and latest_version_metadata.get("content_hash") == content_hash:
-                logger.info(f"Resource {resource_id} content unchanged, skipping update")
+        if ingest.dedupe == "resource":
+            existing_metadata = self.storage.get_resource_metadata(resource_id)
+            if existing_metadata:
+                logger.info(f"Resource {resource_id} exists and dedupe=resource -> returning existing metadata")
                 existing_metadata["status"] = "unchanged"
+                if data_element.title:
+                    existing_metadata["title"] = data_element.title
+                if data_element.metadata:
+                    existing_metadata["metadata"] = data_element.metadata
                 return ResourceMetadata(**existing_metadata)
 
-        #Determine filename
-        def get_ext():
-            if source_type == "url":
-                # First try to get extension from detected filename
-                if actual_filename:
-                    _, ext = os.path.splitext(actual_filename)
-                    if ext:
-                        return ext
+        # --- Version/lock ---
+        version, lock_id = self.storage.allocate_resource_version(resource_id)
+        if not version or not lock_id:
+            raise Exception("Failed to assign version safely")
 
-                # Then try to get from URL path
-                parsed_url = urlparse(data_element.url)
-                path = parsed_url.path
-                if path:
-                    _, ext = os.path.splitext(path)
-                    if ext:
-                        return ext
-
-                # Finally try to guess from content type
-                if content_type:
-                    ext = mimetypes.guess_extension(content_type)
-                    if ext:
-                        return ext
-
-                # Default fallback
-                return ".html"
-            elif source_type == "file":
-                name_and_ext = os.path.splitext(data_element.filename)
-                return name_and_ext[1] if name_and_ext and len(name_and_ext) > 1 else ".bin"
-            elif source_type == "raw_text":
-                return ".txt"
-            else:
-                return ".bin"
-
-        version = None
-        lock_id = None
-
-        # Get next version with race condition protection
         try:
-            version, lock_id = self.storage.allocate_resource_version(resource_id)
-            logger.info(f"Allocated version {version} for {resource_id}")
-            # Save content
-            filename = getattr(data_element, "filename", None) or f"{resource_id}{get_ext()}"
+            # --- Filename policy ---
+            from kdcube_ai_app.tools.datasource import deterministic_url_filename, ext_for_mime
+            if ingest.filename_strategy == "provided" and ingest.provided_filename:
+                filename = ingest.provided_filename
+            elif source_type == "url":
+                # deterministic per-URL (host/path + short hash + proper ext)
+                filename = deterministic_url_filename(
+                    data_element.url if not ingest.canonicalize_url else canonicalize_url(data_element.url),
+                    mime,
+                    default_ext=".html"
+                )
+            elif source_type == "file":
+                filename = getattr(data_element, "filename", None) or f"{resource_id}{ext_for_mime(mime)}"
+            else:  # raw_text or other
+                filename = f"{resource_id}{ext_for_mime(mime, default='.txt')}"
+
+            # --- Save content ---
             content_path = self.storage.save_version_content(resource_id, version, filename, content_bytes)
 
-            # Create or update resource metadata with proper MIME type detection
-            if source_type == "url":
-                uri = data_element.url
-                name = actual_filename or urlparse(data_element.url).netloc
-                # Use detected content type or fallback
-                mime = content_type or guess_mime_from_url(data_element.url) or "application/octet-stream"
-            elif source_type == "file":
-                uri = f"file://{data_element.path}"
-                name = data_element.filename
-                mime = data_element.mime
-            elif source_type == "raw_text":
-                uri = f"raw_text://{data_element.name}"
-                name = data_element.name
-                mime = "text/plain"
-            else:
-                uri = str(data_element)
-                name = resource_id
-                mime = "application/octet-stream"
+            # --- Build version metadata (note: may omit content_hash) ---
+            uri = (
+                data_element.url if source_type == "url"
+                else (f"file://{data_element.path}" if source_type == "file"
+                      else f"raw_text://{getattr(data_element,'name', 'raw_text')}")
+            )
+            name = (
+                (actual_filename or urlparse(data_element.url).netloc) if source_type == "url"
+                else (data_element.filename if source_type == "file"
+                      else getattr(data_element, "name", resource_id))
+            )
 
-            size_bytes = len(content_bytes)
             resource_metadata = ResourceMetadata(
                 id=resource_id,
                 source_id=source_id,
@@ -290,11 +329,14 @@ class KnowledgeBase:
                 name=name,
                 mime=mime,
                 version=version,
-                content_hash=content_hash,
+                content_hash=content_hash,             # may be None under your policy
                 filename=filename,
                 rn=f"ef:{self.tenant}:{self.project}:knowledge_base:raw:{resource_id}:{version}",
                 ef_uri=self.storage.get_resource_full_path(resource_id=resource_id, version=version, filename=filename),
-                size_bytes=size_bytes,
+                size_bytes=len(content_bytes),
+                provider=provider,
+                title=data_element.title,
+                metadata=data_element.metadata
             )
 
             try:
@@ -308,42 +350,39 @@ class KnowledgeBase:
                     pass
                 raise
 
-            # Update resource metadata (latest version info)
+            # --- Update latest resource metadata ---
             metadata_updated = self.storage.update_resource_metadata(
-                resource_id=resource_id,
-                version=version,
-                lock_id=lock_id,
-                metadata=resource_metadata.dict()
+                resource_id=resource_id, version=version, lock_id=lock_id, metadata=resource_metadata.dict()
             )
             if metadata_updated:
                 logger.info(f"Updated resource metadata for {resource_id} v{version}")
             else:
                 logger.info(f"Skipped metadata update for {resource_id} v{version} - higher version in flight")
 
-            # Index this resource content
-            try:
-                success = self.storage.index_resource_content(content_hash, resource_id)
-                if not success:
-                    logger.warning(f"Failed to add content index mapping for {resource_id}")
-            except Exception as e:
-                logger.error(f"Error adding content index mapping: {e}")
-                # Don't fail the entire operation for this
+            # --- Map content hash if we actually computed one ---
+            if content_hash:
+                try:
+                    success = self.storage.index_resource_content(content_hash, resource_id)
+                    if not success:
+                        logger.warning(f"Failed to add content index mapping for {resource_id}")
+                except Exception as e:
+                    logger.error(f"Error adding content index mapping: {e}")
+                    # Don't fail the entire operation for this
 
-            # Log operation
+            # --- Log + return ---
             self.storage.log_operation("add_resource", resource_id, {
                 "source_type": source_type,
                 "version": version,
                 "content_hash": content_hash,
-                "size_bytes": size_bytes,
-                "mime_type": mime
+                "size_bytes": len(content_bytes),
+                "mime_type": mime,
+                "dedupe_policy": ingest.dedupe,
             })
-
-            logger.info(f"Added resource {resource_id} version {version} with MIME type {mime}")
             return resource_metadata
-
         except Exception as e:
             logger.error(f"Failed to get safe version for {resource_id}: {e}")
             raise Exception("Failed to assign version safely")
+
         finally:
             # CRITICAL: Always release lock, even on failure
             if version and lock_id:

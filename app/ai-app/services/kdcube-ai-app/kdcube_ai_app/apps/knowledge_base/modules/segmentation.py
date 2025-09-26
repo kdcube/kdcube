@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
+# kdcube_ai_app/apps/knowledge_base/modules/segmentation.py
 """
 Segmentation module
 """
@@ -14,7 +15,7 @@ from kdcube_ai_app.apps.knowledge_base.modules.base import ProcessingModule
 from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import SegmentType, ProcessingMode, BaseSegment, \
     CompoundSegment
 from kdcube_ai_app.apps.knowledge_base.storage import KnowledgeBaseStorage
-from kdcube_ai_app.tools.parser import MarkdownParser
+from kdcube_ai_app.tools.parser import MarkdownParser, SimpleHtmlParser
 
 
 class SmartHierarchyReconstructor:
@@ -546,63 +547,67 @@ class ContextualRetrievalSegmenter:
         return "\n\n".join(parts)
 
     def create_retrieval_groups(self, base_segments: List['BaseSegment']) -> List[List['BaseSegment']]:
-        """
-        Group base segments for retrieval with strict boundary enforcement.
-        """
         if not base_segments:
             return []
 
-        groups = []
+        groups: List[List['BaseSegment']] = []
+        n = len(base_segments)
         i = 0
+        last_end = -1  # exclusive index where previous group ended
 
-        while i < len(base_segments):
-            current_group = []
+        while i < n:
+            current_group: List['BaseSegment'] = []
             current_tokens = 0
-
-            # Build group until we hit constraints
             j = i
-            while j < len(base_segments):
+
+            # build the group
+            while j < n:
                 segment = base_segments[j]
                 segment_tokens = self._count_tokens(segment.text)
 
-                # STRICT BOUNDARY CHECK: Never cross major sections
+                # never cross major sections
                 if current_group and not self._belongs_to_same_major_section(current_group[-1], segment):
-                    print(f"  🛑 Boundary violation detected at segment {j}")
-                    print(f"     Last: {self._extract_section_number(current_group[-1].heading or current_group[-1].subheading or '')}")
-                    print(f"     New: {self._extract_section_number(segment.heading or segment.subheading or '')}")
                     break
 
-                # Token limit check
                 would_exceed = current_tokens + segment_tokens > self.max_tokens
                 has_minimum = current_tokens >= self.min_tokens
-
                 if would_exceed and has_minimum:
-                    print(f"  📏 Token limit reached at segment {j} ({current_tokens + segment_tokens} tokens)")
                     break
 
                 current_group.append(segment)
                 current_tokens += segment_tokens
                 j += 1
 
-                # Early break if we have good size and hit a natural boundary
+                # early natural break at section boundary once we have enough
                 if (current_tokens >= self.min_tokens and
-                        j < len(base_segments) and
+                        j < n and
                         not self._belongs_to_same_major_section(segment, base_segments[j])):
-                    print(f"  ✂️ Natural break at segment {j}")
                     break
 
-            # Save the group
-            if current_group:
-                groups.append(current_group)
-                print(f"  ✅ Created group with {len(current_group)} segments, {current_tokens} tokens")
+            # nothing added => stop
+            if not current_group:
+                break
 
-            # Calculate overlap for next iteration
-            if len(current_group) > 1:
-                # Keep some segments for overlap
+            # If this group doesn't extend coverage past the previous group's end,
+            # it's pure overlap (redundant). Skip and stop.
+            if j <= last_end:
+                i = j
+                break
+
+            # accept the group
+            groups.append(current_group)
+            last_end = j  # remember end (exclusive)
+
+            # If we are at the end, don't start an overlap-only tail group
+            if j >= n:
+                i = j
+                break
+
+            # Calculate overlap for the NEXT group only if there are elements left
+            if len(current_group) > 1 and self.overlap > 0:
                 overlap_tokens = min(self.overlap, current_tokens // 2)
                 segments_to_keep = 0
                 overlap_accumulated = 0
-
                 for k in range(len(current_group) - 1, -1, -1):
                     seg_tokens = self._count_tokens(current_group[k].text)
                     if overlap_accumulated + seg_tokens <= overlap_tokens:
@@ -611,50 +616,55 @@ class ContextualRetrievalSegmenter:
                     else:
                         break
 
-                i = max(j - segments_to_keep, i + 1)  # Ensure progress
+                # start next window with some tail carried over, but only if there’s room
+                next_i = max(j - segments_to_keep, i + 1)
+                if next_i >= n:
+                    i = n
+                else:
+                    i = next_i
             else:
                 i = j
 
         return groups
 
-    def create_retrieval_segments(self, base_segments: List['BaseSegment']) -> List[Dict[str, Any]]:
-        """
-        Create properly structured retrieval segments with parent context.
-        """
-        print(f"Creating retrieval segments from {len(base_segments)} base segments...")
+        def create_retrieval_segments(self, base_segments: List['BaseSegment']) -> List[Dict[str, Any]]:
+            """
+            Create properly structured retrieval segments with parent context.
+            """
+            print(f"Creating retrieval segments from {len(base_segments)} base segments...")
 
-        groups = self.create_retrieval_groups(base_segments)
-        retrieval_segments = []
+            groups = self.create_retrieval_groups(base_segments)
+            retrieval_segments = []
 
-        for i, group in enumerate(groups):
-            print(f"\nProcessing group {i+1}:")
+            for i, group in enumerate(groups):
+                print(f"\nProcessing group {i+1}:")
 
-            # Debug: show what's in this group
-            for j, seg in enumerate(group):
-                section_num = self._extract_section_number(seg.heading or seg.subheading or "")
-                print(f"  Segment {j+1}: {section_num} - {seg.heading or seg.subheading}")
+                # Debug: show what's in this group
+                for j, seg in enumerate(group):
+                    section_num = self._extract_section_number(seg.heading or seg.subheading or "")
+                    print(f"  Segment {j+1}: {section_num} - {seg.heading or seg.subheading}")
 
-            # Reconstruct with proper context
-            reconstructed_text = self._reconstruct_with_context(group)
+                # Reconstruct with proper context
+                reconstructed_text = self._reconstruct_with_context(group)
 
-            # Create retrieval segment
-            segment_id = str(uuid.uuid4())
-            segment = {
-                "segment_id": segment_id,
-                "text": reconstructed_text,
-                "metadata": {
-                    "heading": group[0].heading,
-                    "subheading": group[0].subheading,
-                    "base_segment_count": len(group),
-                    "token_count": self._count_tokens(reconstructed_text),
-                    "base_segment_guids": [seg.guid for seg in group]
+                # Create retrieval segment
+                segment_id = str(uuid.uuid4())
+                segment = {
+                    "segment_id": segment_id,
+                    "text": reconstructed_text,
+                    "metadata": {
+                        "heading": group[0].heading,
+                        "subheading": group[0].subheading,
+                        "base_segment_count": len(group),
+                        "token_count": self._count_tokens(reconstructed_text),
+                        "base_segment_guids": [seg.guid for seg in group]
+                    }
                 }
-            }
 
-            retrieval_segments.append(segment)
-            print(f"  📄 Final segment: {self._count_tokens(reconstructed_text)} tokens")
+                retrieval_segments.append(segment)
+                print(f"  📄 Final segment: {self._count_tokens(reconstructed_text)} tokens")
 
-        return retrieval_segments
+            return retrieval_segments
 
 class SegmentationModule(ProcessingModule):
     """Enhanced segmentation module with comprehensive structural fixes."""
@@ -696,18 +706,254 @@ class SegmentationModule(ProcessingModule):
         match = re.match(r'^(\d+(?:\.\d+)*)', heading.strip())
         return match.group(1) if match else None
 
-    async def process(self, resource_id: str, version: str, force_reprocess: bool = False, **kwargs) -> Dict[str, Any]:
-        """Create base and compound segments."""
+    def _ensure_markdown(self, text: str,
+                         content_filename: str,
+                         source_url: str | None = None,
+                         page_title: str | None = None) -> str:
+        """If content is HTML, convert to Markdown; otherwise return as-is."""
+        if content_filename.lower().endswith(".html"):
+            parser = SimpleHtmlParser()
+            # The second arg is a display path/source path; we don't need a base URL here.
+            return parser.parse(text, source_url or "", title=page_title)
+        return text
 
-        if not force_reprocess and self.is_processed(resource_id, version):
-            return self.get_results(resource_id, version) or {}
+    def unstructured_by_title_strategy(self, resource_id, version, **kwargs):
+        try:
+            from unstructured.partition.html import partition_html
+            from unstructured.chunking.title import chunk_by_title
+            # only needed if you later rehydrate from JSON on disk
+            try:
+                from unstructured.staging.base import elements_from_dicts
+            except Exception:
+                elements_from_dicts = None
+        except Exception as e:
+            raise RuntimeError(f"unstructured package not available: {e}")
 
-        # Get extraction results
+        # 1) load HTML from extraction stage
         extraction_results = self._get_extraction_results(resource_id, version)
         if not extraction_results:
             raise ValueError(f"No extraction results found for {resource_id} v{version}")
 
+        first = extraction_results[0]
+        content_file = first.get("content_file") or "extraction_0.html"
+        html = self.storage.get_stage_content("extraction", resource_id, version, content_file, as_text=True)
+        if not html or not html.strip():
+            raise ValueError(f"Extraction content '{content_file}' is empty for {resource_id} v{version}")
+
+        # 2) partition then chunk by title
+        elements = partition_html(text=html, infer_table_structure=True, strategy="fast")
+
+        # persist partition artifacts (optional)
+        elements_dicts = [el.to_dict() for el in elements]
+        self.storage.save_stage_content(
+            self.stage_name, resource_id, version, "unstructured_elements.json",
+            json.dumps(elements_dicts, indent=2),
+        )
+
+        max_characters = kwargs.get("max_characters", 2048)
+        combine_text_under_n_chars = kwargs.get("combine_text_under_n_chars", 256)
+        new_after_n_chars = kwargs.get("new_after_n_chars", 1800)
+
+        # IMPORTANT: feed actual Element instances into chunk_by_title
+        chunks = chunk_by_title(
+            elements,
+            max_characters=max_characters,
+            combine_text_under_n_chars=combine_text_under_n_chars,
+            new_after_n_chars=new_after_n_chars,
+        )
+
+        # 3) persist lightweight chunk metadata
+        chunks_meta = []
+        for idx, ch in enumerate(chunks):
+            meta = ch.metadata.to_dict() if hasattr(ch, "metadata") and hasattr(ch.metadata, "to_dict") else {}
+            chunks_meta.append({
+                "index": idx,
+                "text_preview": (getattr(ch, "text", "") or "")[:200],
+                "metadata": meta,
+            })
+        self.storage.save_stage_content(
+            self.stage_name, resource_id, version, "unstructured_chunks.json",
+            json.dumps(chunks_meta, indent=2),
+        )
+
+        # 4) build base + retrieval segments (unchanged except: use `content_file` rn)
+        from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import BaseSegment, CompoundSegment, SegmentType
+
+        base_segments: List[BaseSegment] = []
+        extracted_rn = f"ef:{self.tenant}:{self.project}:knowledge_base:extraction:{resource_id}:{version}:{content_file}"
+        page_title = (first.get("metadata") or {}).get("title") or (first.get("metadata") or {}).get("page_title") or ""
+
+        for i, ch in enumerate(chunks):
+            text = getattr(ch, "text", "") or ""
+            meta = ch.metadata.to_dict() if hasattr(ch, "metadata") and hasattr(ch.metadata, "to_dict") else {}
+            is_table = "text_as_html" in meta
+            title = meta.get("category") or meta.get("section_title") or page_title or ""
+
+            guid = str(uuid.uuid4())
+            rn = f"ef:{self.tenant}:{self.project}:knowledge_base:segmentation:base:{resource_id}:{version}:segment:{guid}"
+
+            seg = BaseSegment(
+                guid=guid,
+                heading=title,
+                subheading="",
+                text=text,
+                start_line_num=0,
+                end_line_num=max(0, text.count("\n")),
+                start_position=0,
+                end_position=len(text.split("\n")[-1]) if "\n" in text else len(text),
+                rn=rn,
+                extracted_data_rns=[extracted_rn],
+                heading_level=1,
+                subheading_level=None,
+                segment_order=i,
+            )
+            segd = seg.to_dict()
+            segd.setdefault("metadata", {})
+            segd["metadata"].update({"is_table": bool(is_table), "text_as_html": meta.get("text_as_html")})
+            base_segments.append(BaseSegment.from_dict(segd))
+
+        base_payload = [s.to_dict() for s in base_segments]
+        self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json",
+                                        json.dumps(base_payload, indent=2))
+
+        retrieval_segments: List[CompoundSegment] = []
+        for s in base_segments:
+            cguid = str(uuid.uuid4())
+            crn = f"ef:{self.tenant}:{self.project}:knowledge_base:segmentation:retrieval:{resource_id}:{version}:segment:{cguid}"
+            retrieval_segments.append(CompoundSegment(
+                guid=cguid,
+                heading=s.heading,
+                subheading=s.subheading or "",
+                base_segment_guids=[s.guid],
+                rn=crn,
+            ))
+
+        retr_json = [c.to_dict() for c in retrieval_segments]
+        self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json",
+                                        json.dumps(retr_json, indent=2), subfolder=SegmentType.RETRIEVAL.value)
+        self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json",
+                                        json.dumps(retr_json, indent=2), subfolder=SegmentType.CONTINUOUS.value)
+
+        results = {
+            "resource_id": resource_id,
+            "version": version,
+            "processing_mode": self.processing_mode.value,
+            "base_segments_count": len(base_segments),
+            "compound_segments": {
+                SegmentType.RETRIEVAL.value: len(retrieval_segments),
+                SegmentType.CONTINUOUS.value: len(retrieval_segments),
+            },
+            "timestamp": datetime.now().isoformat(),
+            "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}",
+            "strategy": "unstructured_by_title",
+        }
+        self.save_results(resource_id, version, results)
+        return results
+
+
+    async def process(self, resource_id: str, version: str, force_reprocess: bool = False, **kwargs) -> Dict[str, Any]:
+        """Create base and compound segments. Supports strategy='single_chunk' to make one big segment per article."""
+        if not force_reprocess and self.is_processed(resource_id, version):
+            return self.get_results(resource_id, version) or {}
+
+        strategy = kwargs.get("strategy")  # None | 'single_chunk'
+
+        extraction_results = self._get_extraction_results(resource_id, version)
+        if not extraction_results:
+            raise ValueError(f"No extraction results found for {resource_id} v{version}")
+        kb = kwargs.get("kb")
+
         data_source = kwargs.get("data_source")
+        if not data_source:
+            data_element = kwargs.get("data_element")
+            if data_element:
+                data_source = data_element.to_data_source()
+
+        all_base_segments = []
+
+        resource_metadata = kb.get_resource(resource_id)
+
+        if strategy == "single_chunk":
+            # Concatenate all extraction markdown into one base segment
+            from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import BaseSegment, SegmentType
+            import uuid, json
+            from datetime import datetime
+
+            # Read content from the first extraction (or concatenate if many)
+            md_parts = []
+            first_meta = None
+            first_content_file = None
+
+            for ex in extraction_results:
+                content_file = ex.get("content_file", f"extraction_{ex['index']}.md")
+                raw = self.storage.get_stage_content("extraction", resource_id, version, content_file, as_text=True)
+                if raw is None:
+                    continue
+                md = self._ensure_markdown(raw, content_file, page_title=resource_metadata.title)   # <-- ensure MD
+                md_parts.append(md)
+                first_content_file = first_content_file or content_file
+                first_meta = first_meta or ex.get("metadata", {})
+
+            md_content = "\n\n".join(md_parts).strip()
+            title = (first_meta or {}).get("title") or (first_meta or {}).get("page_title") or ""
+
+            guid = str(uuid.uuid4())
+            rn = f"ef:{self.tenant}:{self.project}:knowledge_base:segmentation:base:{resource_id}:{version}:segment:{guid}"
+            extracted_data_rns = [f"ef:{self.tenant}:{self.project}:knowledge_base:extraction:{resource_id}:{version}:{extraction_results[0].get('content_file', 'extraction_0.md')}"]
+
+            base_segment = BaseSegment(
+                guid=guid,
+                heading=title,
+                subheading="",
+                text=md_content,
+                start_line_num=0,
+                end_line_num=md_content.count('\n'),
+                start_position=0,
+                end_position=len(md_content.split('\n')[-1]) if '\n' in md_content else len(md_content),
+                rn=rn,
+                extracted_data_rns=extracted_data_rns,
+                heading_level=1,
+                subheading_level=None,
+                segment_order=0
+            )
+            all_base_segments = [base_segment]
+
+            # Save base
+            base_data = [s.to_dict() for s in all_base_segments]
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(base_data, indent=2))
+
+            # Make one compound segment for both types
+            from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import CompoundSegment
+            comp_guid = str(uuid.uuid4())
+            comp_rn = f"ef:{self.tenant}:{self.project}:knowledge_base:segmentation:retrieval:{resource_id}:{version}:segment:{comp_guid}"
+            compound = CompoundSegment(
+                guid=comp_guid,
+                heading=title,
+                subheading="",
+                base_segment_guids=[guid],
+                rn=comp_rn
+            )
+
+            comp_json = [compound.to_dict()]
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_json, indent=2), subfolder=SegmentType.RETRIEVAL.value)
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_json, indent=2), subfolder=SegmentType.CONTINUOUS.value)
+
+            results = {
+                "resource_id": resource_id,
+                "version": version,
+                "processing_mode": self.processing_mode.value,
+                "base_segments_count": 1,
+                "compound_segments": {SegmentType.RETRIEVAL.value: 1, SegmentType.CONTINUOUS.value: 1},
+                "timestamp": datetime.now().isoformat(),
+                "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}"
+            }
+            self.save_results(resource_id, version, results)
+            return results
+        elif strategy == "unstructured_by_title":
+            return self.unstructured_by_title_strategy(resource_id, version, **kwargs)
+
+        # Default path: original behavior
+        data_source = data_source or kwargs.get("data_source")
         if not data_source:
             data_element = kwargs.get("data_element")
             if data_element:
@@ -715,24 +961,24 @@ class SegmentationModule(ProcessingModule):
             else:
                 raise ValueError("data_source or data_element required")
 
-        # Create base segments
-        all_base_segments = []
-
+        # Create base segments with the improved parser as before
         for extraction_result in extraction_results:
             content_file = extraction_result.get("content_file", f"extraction_{extraction_result['index']}.md")
-            content = self.storage.get_stage_content("extraction", resource_id, version, content_file, as_text=True)
-
-            if content:
-                base_segments = self.parser.create_base_segments(content, data_source, resource_id, version)
-                all_base_segments.extend(base_segments)
+            raw = self.storage.get_stage_content("extraction", resource_id, version, content_file, as_text=True)
+            if not raw:
+                continue
+            md_content = self._ensure_markdown(raw, content_file, page_title=resource_metadata.title)   # <-- ensure MD even if .html slipped in
+            base_segments = self.parser.create_base_segments(md_content, data_source, resource_id, version)
+            all_base_segments.extend(base_segments)
 
         # Save base segments
+        import json
         base_data = [seg.to_dict() for seg in all_base_segments]
         self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(base_data, indent=2))
 
-        # Create compound segments
+        # Compound segments (original logic)
+        from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import SegmentType
         compound_results = {}
-
         if self.processing_mode == ProcessingMode.FULL_INDEXING:
             enabled_types = [SegmentType.CONTINUOUS, SegmentType.RETRIEVAL]
         else:
@@ -740,25 +986,16 @@ class SegmentationModule(ProcessingModule):
 
         for segment_type in enabled_types:
             compound_segments = self._create_compound_segments(all_base_segments, resource_id, version, segment_type)
-
-            # Validate retrieval segments
             if segment_type == SegmentType.RETRIEVAL:
                 base_lookup = {seg.guid: seg for seg in all_base_segments}
                 validation_issues = self.validate_retrieval_segments(compound_segments, base_lookup)
                 if validation_issues:
                     self.logger.warning(f"Validation issues found in retrieval segments: {validation_issues}")
-
-            # Save compound segments
-            compound_data = [seg.to_dict() for seg in compound_segments]
-            subfolder = segment_type.value
-            self.storage.save_stage_content(
-                self.stage_name, resource_id, version, "segments.json",
-                json.dumps(compound_data, indent=2), subfolder=subfolder
-            )
-
+            comp_data = [seg.to_dict() for seg in compound_segments]
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_data, indent=2), subfolder=segment_type.value)
             compound_results[segment_type.value] = len(compound_segments)
 
-        # Save metadata
+        from datetime import datetime
         results = {
             "resource_id": resource_id,
             "version": version,
@@ -768,7 +1005,6 @@ class SegmentationModule(ProcessingModule):
             "timestamp": datetime.now().isoformat(),
             "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}"
         }
-
         self.save_results(resource_id, version, results)
         return results
 

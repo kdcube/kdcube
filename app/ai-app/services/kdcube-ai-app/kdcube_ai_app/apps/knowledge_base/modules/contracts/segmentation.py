@@ -37,6 +37,7 @@ class BaseSegment:
 
     # Store position in document structure
     segment_order: int = 0                     # Order in the original document
+    metadata: Optional[Dict[str, Any]] = None  # Additional metadata if needed
 
     def to_dict(self) -> Dict[str, Any]:
         return {

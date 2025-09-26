@@ -5,7 +5,8 @@
 from abc import ABC, abstractmethod
 from bs4 import BeautifulSoup
 
-from dataclasses import dataclass
+from urllib.parse import urljoin
+from bs4 import BeautifulSoup, NavigableString
 
 from typing import List, Dict, Any
 import logging
@@ -20,45 +21,102 @@ class WebPageParser(ABC):
     """Interface for HTML parsers."""
 
     @abstractmethod
-    def parse(self, html: str, url: str) -> str:
+    def parse(self, html: str, url: str, title: str|None = None) -> str:
         """Parse HTML to markdown."""
         pass
 
 
 class SimpleHtmlParser(WebPageParser):
-    """Basic HTML to markdown parser using BeautifulSoup."""
+    """Basic HTML → Markdown with link/image preservation and H1 fallback."""
 
-    def parse(self, html: str, url: str) -> str:
-        """Parse HTML to markdown using BeautifulSoup."""
-        soup = BeautifulSoup(html, 'html.parser')
+    def parse(self, html: str, url: str, title: str | None = None) -> str:
+        soup = BeautifulSoup(html or "", "html.parser")
 
-        # Extract title
-        title = soup.title.text if soup.title else "Untitled"
+        # ---- title resolution: prefer <title>, else provided 'title', else first <h1>, else 'Untitled'
+        h1 = soup.find("h1")
+        resolved_title = (
+                (soup.title.string.strip() if soup.title and soup.title.string else None)
+                or (title.strip() if title else None)
+                or (h1.get_text(strip=True) if h1 else None)
+                or "Untitled"
+        )
 
-        # Start with the title
-        markdown = f"# {title}\n\n"
+        md_lines = [f"# {resolved_title}", ""]
 
-        # Extract headings and paragraphs
-        for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p']):
-            tag_name = element.name
+        def _resolve_href(href: str | None) -> str | None:
+            if not href: return None
+            try: return urljoin(url or "", href)
+            except Exception: return href
 
-            if tag_name.startswith('h'):
-                # Add the appropriate number of # for the heading level
-                level = int(tag_name[1])
-                markdown += f"{'#' * level} {element.text.strip()}\n\n"
-            elif tag_name == 'p':
-                markdown += f"{element.text.strip()}\n\n"
+        def _inline_md(node) -> str:
+            if isinstance(node, NavigableString):
+                return str(node)
+            if not hasattr(node, "name"):
+                return ""
 
-        # Add source URL at the end
-        markdown += f"\n\nSource: {url}"
+            name = node.name.lower()
 
-        return markdown
+            # inline conversions
+            if name == "a":
+                text = "".join(_inline_md(c) for c in node.contents).strip() or node.get("href", "").strip()
+                href = _resolve_href(node.get("href"))
+                return f"[{text}]({href})" if href else text
+            if name in ("strong", "b"):
+                return f"**{''.join(_inline_md(c) for c in node.contents)}**"
+            if name in ("em", "i"):
+                return f"*{''.join(_inline_md(c) for c in node.contents)}*"
+            if name == "code":
+                return f"`{''.join(_inline_md(c) for c in node.contents)}`"
+            if name == "br":
+                return "  \n"  # Markdown line break
+            if name == "img":
+                alt = (node.get("alt") or "").strip()
+                src = _resolve_href(node.get("src"))
+                return f"![{alt}]({src})" if src else ""
+
+            # generic: concatenate children
+            return "".join(_inline_md(c) for c in node.contents)
+
+        # block-level traversal (headings, paragraphs, lists, blockquotes)
+        for el in soup.find_all(["h1","h2","h3","h4","h5","h6","p","ul","ol","blockquote"]):
+            tag = el.name.lower()
+
+            if tag.startswith("h"):
+                level = int(tag[1])
+                text = _inline_md(el).strip()
+                if text:
+                    md_lines.append(f"{'#' * level} {text}")
+                    md_lines.append("")
+            elif tag == "p":
+                text = _inline_md(el).strip()
+                if text:
+                    md_lines.append(text)
+                    md_lines.append("")
+            elif tag in ("ul", "ol"):
+                ordered = (tag == "ol")
+                for i, li in enumerate(el.find_all("li", recursive=False), start=1):
+                    li_text = _inline_md(li).strip()
+                    if not li_text: continue
+                    bullet = f"{i}." if ordered else "-"
+                    md_lines.append(f"{bullet} {li_text}")
+                md_lines.append("")
+            elif tag == "blockquote":
+                q = _inline_md(el).strip()
+                if q:
+                    md_lines.append("\n".join([f"> {line}" for line in q.splitlines()]))
+                    md_lines.append("")
+
+        # optional: source URL footer (kept)
+        if url:
+            md_lines.append(f"\nSource: {url}")
+
+        return "\n".join(md_lines).rstrip() + "\n"
 
 
 class RawTextWebParser(WebPageParser):
     """Parser that returns HTML content as-is without processing."""
 
-    def parse(self, html: str, url: str) -> str:
+    def parse(self, html: str, url: str, title: str|None = None) -> str:
         """Return HTML content without modification."""
         return html
 
@@ -66,7 +124,7 @@ class RawTextWebParser(WebPageParser):
 class MediumHtmlParser(WebPageParser):
     """HTML parser optimized for Medium articles."""
 
-    def parse(self, html: str, url: str) -> str:
+    def parse(self, html: str, url: str, title: str|None = None) -> str:
         """Parse HTML from Medium to markdown."""
         soup = BeautifulSoup(html, 'html.parser')
 

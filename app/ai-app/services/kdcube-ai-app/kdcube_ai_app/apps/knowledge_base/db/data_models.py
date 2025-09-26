@@ -133,6 +133,18 @@ class HybridSearchParams(BaseModel):
 
     include_expired: bool = True
 
+    published_after: Optional[Union[str, datetime]] = None
+    published_before: Optional[Union[str, datetime]] = None
+    published_on: Optional[Union[str, datetime]] = None   # exact day
+
+    # Update time filters (datasource.metadata.metadata.modified_time_iso)
+    modified_after: Optional[Union[str, datetime]] = None
+    modified_before: Optional[Union[str, datetime]] = None
+    modified_on: Optional[Union[str, datetime]] = None
+
+    # reranking
+    should_rerank: bool = False
+
 
 class SegmentProcessingData(BaseModel):
     """
@@ -217,3 +229,61 @@ class ContentHash(BaseModel):
     type: str
     provider: Optional[str]
     creation_time: datetime
+
+# --- New typed models ---
+
+class DataSourceRef(BaseModel):
+    id: str
+    version: int
+    provider: Optional[str] = None
+    title: Optional[str] = None
+    uri: Optional[str] = None
+    system_uri: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class BacktrackNavItem(BaseModel):
+    start_line: int = 0
+    end_line: int = 0
+    start_pos: int = 0
+    end_pos: int = 0
+    citations: List[str] = Field(default_factory=list)
+    heading: str = ""
+    subheading: str = ""
+
+
+class BacktrackRawStage(BaseModel):
+    rn: Optional[str] = None
+    citations: List[str] = Field(default_factory=list)
+
+
+class BacktrackExtractionStage(BaseModel):
+    rn: Optional[str] = None
+    related_rns: List[str] = Field(default_factory=list)
+
+
+class BacktrackSegmentationStage(BaseModel):
+    rn: Optional[str] = None
+    navigation: List[BacktrackNavItem] = Field(default_factory=list)
+
+
+class BacktrackEnrichmentStage(BaseModel):
+    rn: Optional[str] = None
+
+
+class Backtrack(BaseModel):
+    raw: BacktrackRawStage = Field(default_factory=BacktrackRawStage)
+    extraction: BacktrackExtractionStage = Field(default_factory=BacktrackExtractionStage)
+    segmentation: BacktrackSegmentationStage = Field(default_factory=BacktrackSegmentationStage)
+    enrichment: BacktrackEnrichmentStage = Field(default_factory=BacktrackEnrichmentStage)
+    datasource: DataSourceRef = Field(default_factory=DataSourceRef)
+
+
+class NavigationSearchResult(BaseModel):
+    """Final search hit for UI/agents. Backtrack is typed, not a dict."""
+    query: str
+    relevance_score: float
+    heading: str
+    subheading: str
+    content: str
+    backtrack: Optional[Any] = None

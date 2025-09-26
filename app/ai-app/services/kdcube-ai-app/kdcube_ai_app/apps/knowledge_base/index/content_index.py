@@ -27,7 +27,7 @@ except ImportError:
 
 class IContentIndexManager(metaclass=ABCMeta):
     @abstractmethod
-    def check_content_exists(self, content_hash: str) -> bool:
+    def check_content_exists(self, content_hash: str) -> Optional[str]:
         """
         Check if content hash exists and return the resource_id if found.
 
@@ -99,7 +99,7 @@ class DBContentIndexManager(IContentIndexManager):
         self.db_connector = db_connector
         self.logger = logging.getLogger(__name__)
 
-    def check_content_exists(self, content_hash: str) -> bool:
+    def check_content_exists(self, content_hash: str) -> Optional[str]:
         self.logger.debug("Checking content hash %s", content_hash)
         return self.db_connector.content_hash_exists(content_hash)
 

@@ -1,56 +1,39 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Elena Viter
-
-# kdcube_ai_app/apps/knowledge_base/modules/segment_enrichment_unified.py
-
+# kdcube_ai_app/apps/knowledge_base/modules/enrichment.py
 from __future__ import annotations
-
 import json
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
-from dataclasses import asdict
-
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from kdcube_ai_app.apps.knowledge_base.modules.base import ProcessingModule
 from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import SegmentType
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, ConfigRequest, create_workflow_config
 
+class SegmentMetadata(BaseModel):
+    summary: str = Field(description="1-2 sentence summary.")
+    keywords: List[str] = Field(description="5-7 key topics.")
+    hypothetical_questions: List[str] = Field(description="3-5 questions the chunk could answer.")
+    table_summary: Optional[str] = Field(default=None, description="Only if the chunk is a table.")
 
-class ChunkMetadata(BaseModel):
-    summary: str = Field(description="A concise 1-2 sentence summary of the chunk.")
-    keywords: List[str] = Field(description="A list of 5-7 key topics or entities mentioned.")
-    hypothetical_questions: List[str] = Field(description="A list of 3-5 questions this chunk could answer.")
-    table_summary: Optional[str] = Field(default=None, description="If the chunk is a table, a natural language summary of its key insights.")
 
-
-def create_embedding_text(meta: ChunkMetadata, content: str) -> str:
+def create_embedding_text(meta: SegmentMetadata, content: str) -> str:
     kws = ", ".join(meta.keywords or [])
-    body = content[:1000]
-    return f"Summary: {meta.summary}\nKeywords: {kws}\nContent: {body}\n"
+    return f"Summary: {meta.summary}\nKeywords: {kws}\nContent: {content[:1000]}\n"
 
-
-def _build_prompt(chunk_text: str, is_table: bool) -> Tuple[str, str]:
+def _build_prompt(chunk_text: str, is_table: bool = False, is_image: bool = False) -> Tuple[str, str]:
     sys = (
-        "You are an expert analyst. Produce strictly valid JSON with fields: "
-        "summary, keywords (5-7 strings), hypothetical_questions (3-5 strings), table_summary (optional). "
-        "Do not include commentary. No markdown fences."
+        "You are an expert in data documenting and indexing. Return STRICT JSON with this json schema: "
+        f"{SegmentMetadata.model_json_schema()}"
+        "No commentary. No markdown fences."
     )
-    table_note = (
-        "This chunk is a TABLE. Your summary should describe main data points and trends.\n"
-        if is_table else ""
-    )
-    usr = f"{table_note}Chunk:\n---\n{chunk_text[:3000]}\n---\nReturn ONLY JSON."
+    image = "This chunk is a DIAGRAM or an IMAGE. Summarize infographics.\n" if is_table else ""
+    table = "This chunk is a TABLE. Summarize insights.\n" if is_table else ""
+
+    usr = f"{table}{image}Chunk:\n---\n{chunk_text[:3000]}\n---\nReturn ONLY JSON."
     return sys, usr
 
-
 class EnrichmentModule(ProcessingModule):
-    """
-    Stage 'enrichment': LLM-enrich retrieval segments.
-    Outputs per-segment JSON, per-segment embedding text, and writes an 'enriched' retrieval set.
-    """
-
     @property
     def stage_name(self) -> str:
         return "enrichment"
@@ -60,117 +43,81 @@ class EnrichmentModule(ProcessingModule):
             self.logger.info(f"Enrichment already exists for {resource_id} v{version}, skipping")
             return self.get_results(resource_id, version) or {}
 
-        # model_service can be passed in; else build minimal one from keys
-        model_service: Optional[ModelServiceBase] = kwargs.get("model_service")
-        if not model_service:
+        # model service
+        ms: Optional[ModelServiceBase] = kwargs.get("model_service")
+        role = kwargs.get("role_name") or "segment_enrichment"
+        if not ms:
             req = ConfigRequest(
                 openai_api_key=kwargs.get("openai_api_key"),
                 claude_api_key=kwargs.get("claude_api_key"),
-                selected_model=kwargs.get("selected_model") or "gpt-4o-mini",
-                role_models={
-                    "segment_enrichment": kwargs.get("segment_enrichment_role", {"provider": "anthropic", "model": "claude-3-7-sonnet-20250219"})
-                }
+                selected_model=kwargs.get("selected_model") or "claude-3-7-sonnet-20250219",
+                role_models={role: kwargs.get("segment_enrichment_role",
+                                              {"provider": "anthropic", "model": "claude-3-7-sonnet-20250219"})},
             )
-            cfg = create_workflow_config(req)
-            model_service = ModelServiceBase(config=cfg)
+            ms = ModelServiceBase(create_workflow_config(req))
 
-        role_name = kwargs.get("role_name") or "segment_enrichment"
+        segmentation_module = self.pipeline.get_module("segmentation")
+        all_segments = segmentation_module.get_segments_by_type(resource_id, version, SegmentType.RETRIEVAL)
+        print(json.dumps(all_segments, indent=2))
 
-        # grab retrieval segments (default set)
-        retr = self._read_retrieval_segments(resource_id, version)
-        if not retr:
-            raise ValueError("No retrieval segments found")
-
-        enriched_records = []
-        total = 0
         ok = 0
+        total = len(all_segments)
+        for segment in all_segments:
 
-        # map base guid -> metadata (to check is_table/text_as_html)
-        base = self._read_base_segments(resource_id, version)
-        base_lut: Dict[str, Dict[str, Any]] = {b.get("guid"): b for b in base}
+            segment_id = segment["segment_id"]
+            content = segment["text"]
+            if content.startswith("# Untitled"):
+                content = content[len("# Untitled"):].lstrip()
+            heading = (segment.get("metadata") or {}).get("heading", "").strip()
+            subheading = (segment.get("metadata") or {}).get("subheading", "").strip()
+            title = heading or subheading or ""
+            if not content.startswith(f"# {title}"):
+                content = f"# {title}\n\n{content}"
+            is_table = segment.get("metadata", {}).get("is_table", False)
 
-        enriched_retrieval_segments = []
+            sys, usr = _build_prompt(content, is_table)
+            client = ms.get_client(role)
+            cfg = ms.describe_client(client, role=role)
+            # client = ms.get_client(role, temperature=0.0)
+            async def on_delta(*_a, **_k):
+                self.logger.debug(f"Delta: {_a} {_k}")
 
-        for i, comp in enumerate(retr):
-            total += 1
-            bguids = comp.get("base_segment_guids") or []
-            bseg = base_lut.get(bguids[0]) if bguids else None
-            if not bseg:
-                continue
+            res = await ms.stream_model_text_tracked(role="segment_enrichment",
+                                                     client=client,
+                                                     messages=[SystemMessage(content=sys), HumanMessage(content=usr)],
+                                                     temperature=0.0,
+                                                     client_cfg=cfg,
+                                                     on_delta=on_delta)
+            raw = res.get("text") or ""
 
-            text = bseg.get("text") or ""
-            meta = (bseg.get("metadata") or {})
-            is_table = bool(meta.get("is_table"))
-            html = meta.get("text_as_html")
-            content_for_llm = html if (is_table and isinstance(html, str) and html.strip()) else text
-
-            sys, usr = _build_prompt(content_for_llm, is_table)
-
-            # stream to the model; we ignore deltas, we want the final text and parse as JSON
-            client = model_service.get_client(role_name, temperature=0.0)
-            messages = [SystemMessage(content=sys), HumanMessage(content=usr)]
-            result = await model_service.stream_model_text_tracked(client, messages, on_delta=lambda *_a, **_k: None)
-
-            raw = result.get("text") or ""
-            parsed: Optional[ChunkMetadata] = None
-            parse_err = None
-
-            # strict parse with Pydantic; if fails, call the built-in FormatFixer once
+            parsed = None
             try:
-                data = json.loads(raw)
-                parsed = ChunkMetadata.model_validate(data)
-            except Exception as e:
-                parse_err = str(e)
-                fix = await model_service.format_fixer.fix_format(
-                    raw_output=raw,
-                    expected_format="ChunkMetadata",
-                    input_data=usr,
-                    system_prompt=sys
-                )
+                parsed = SegmentMetadata.model_validate_json(raw)
+            except Exception:
+                fix = await ms.format_fixer.fix_format(raw_output=raw, expected_format="ChunkMetadata", input_data=usr, system_prompt=sys)
                 if fix.get("success"):
                     try:
-                        parsed = ChunkMetadata.model_validate(fix["data"])
-                    except Exception as ee:
-                        parse_err = f"after fix: {ee}"
+                        parsed = SegmentMetadata.model_validate(fix["data"])
+                    except Exception:
+                        parsed = None
 
-            if not parsed:
-                # record failure, keep going
-                rec = {
-                    "segment_id": comp.get("guid"),
-                    "success": False,
-                    "error": parse_err or "unknown parse error",
-                    "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}:segment:{comp.get('guid')}"
-                }
-                enriched_records.append(rec)
-                self._save_enrichment_record(resource_id, version, comp.get("guid"), rec)
-                continue
-
-            ok += 1
-
-            # compose embedding text and retrieval doc body
-            emb_text = create_embedding_text(parsed, content_for_llm)
-            retrieval_doc = self._compose_retrieval_doc(parsed, is_table, content_for_llm)
-
-            rec = {
-                "segment_id": comp.get("guid"),
-                "success": True,
-                "metadata": parsed.model_dump(),
-                "is_table": is_table,
-                "embedding_text": emb_text,
-                "retrieval_doc": retrieval_doc,
-                "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}:segment:{comp.get('guid')}"
+            payload = {
+                "segment_id": segment_id,
+                "success": bool(parsed),
+                "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}:segment:{segment_id}"
             }
-            enriched_records.append(rec)
-            self._save_enrichment_record(resource_id, version, comp.get("guid"), rec)
+            if parsed:
+                ok += 1
+                payload.update({
+                    "metadata": parsed.model_dump(),
+                    "is_table": is_table,
+                    "embedding_text": create_embedding_text(parsed, content),
+                    "retrieval_doc": self._compose_retrieval_doc(parsed, is_table, content),
+                })
+            else:
+                payload["error"] = "Could not parse model output into ChunkMetadata"
 
-            # also prepare an enriched retrieval segment that replaces its text with retrieval_doc
-            comp_enriched = dict(comp)
-            comp_enriched["enriched"] = True
-            comp_enriched["text"] = retrieval_doc
-            enriched_retrieval_segments.append(comp_enriched)
-
-        # write an alternate retrieval set for the segmentator: segmentation/retrieval_enriched/segments.json
-        self._write_enriched_retrieval(resource_id, version, enriched_retrieval_segments)
+            self._save_json(self.stage_name, resource_id, version, f"segment_{segment_id}_enrichment.json", payload)
 
         summary = {
             "resource_id": resource_id,
@@ -178,41 +125,36 @@ class EnrichmentModule(ProcessingModule):
             "segments_total": total,
             "segments_enriched": ok,
             "segments_failed": total - ok,
-            "role": role_name,
             "timestamp": datetime.now().isoformat(),
             "rn": f"ef:{self.tenant}:{self.project}:knowledge_base:{self.stage_name}:{resource_id}:{version}"
         }
         self.save_results(resource_id, version, summary)
         return summary
 
-    def _read_base_segments(self, resource_id: str, version: str) -> List[Dict[str, Any]]:
-        content = self.storage.get_stage_content("segmentation", resource_id, version, "segments.json", as_text=True)
-        return json.loads(content) if content else []
 
-    def _read_retrieval_segments(self, resource_id: str, version: str) -> List[Dict[str, Any]]:
-        content = self.storage.get_stage_content("segmentation", resource_id, version, "segments.json",
-                                                 subfolder=SegmentType.RETRIEVAL.value, as_text=True)
-        return json.loads(content) if content else []
-
-    def _save_enrichment_record(self, resource_id: str, version: str, seg_id: str, payload: Dict[str, Any]) -> None:
-        self.storage.save_stage_content(self.stage_name, resource_id, version,
-                                        f"segment_{seg_id}_enrichment.json", json.dumps(payload, indent=2))
-
-    def _write_enriched_retrieval(self, resource_id: str, version: str, segments: List[Dict[str, Any]]) -> None:
-        content = json.dumps(segments, indent=2)
-        # keep enriched set under segmentation so downstream loaders can prefer it transparently
-        self.storage.save_stage_content("segmentation", resource_id, version, "segments.json",
-                                        content, subfolder=f"{SegmentType.RETRIEVAL.value}_enriched")
-
-    def _compose_retrieval_doc(self, meta: ChunkMetadata, is_table: bool, content: str) -> str:
+    def _compose_retrieval_doc(self,
+                               meta: SegmentMetadata,
+                               is_table: bool,
+                               content: str,
+                               content_max_sym: int = -1) -> str:
+        # lines = [
+        #     f"Summary: {meta.summary}",
+        #     "Keywords: " + ", ".join(meta.keywords or [])
+        # ]
         lines = []
-        lines.append(f"Summary: {meta.summary}")
-        if meta.keywords:
-            lines.append("Keywords: " + ", ".join(meta.keywords))
         if is_table and meta.table_summary:
             lines.append(f"Table summary: {meta.table_summary}")
-        # include a trimmed body for recall; keep it modest to avoid overshadowing summary
-        body = content[:1200]
-        lines.append("Content:")
-        lines.append(body)
+            lines.append("Content:")
+        # Handle None or negative values to mean "no truncation"
+        if content_max_sym is None or content_max_sym < 0:
+            lines.append(content)
+        else:
+            lines.append(content[:content_max_sym])
         return "\n".join(lines)
+
+    def _read_json(self, stage: str, rid: str, ver: str, name: str, subfolder: Optional[str] = None):
+        s = self.storage.get_stage_content(stage, rid, ver, name, subfolder=subfolder, as_text=True)
+        return json.loads(s) if s else None
+
+    def _save_json(self, stage: str, rid: str, ver: str, name: str, obj: Dict[str, Any], subfolder: Optional[str] = None):
+        self.storage.save_stage_content(stage, rid, ver, name, json.dumps(obj, indent=2), subfolder=subfolder)

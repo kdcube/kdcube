@@ -214,6 +214,7 @@ class ModuleFactory:
         from kdcube_ai_app.apps.knowledge_base.modules.summarization import SummarizationModule
         from kdcube_ai_app.apps.knowledge_base.modules.embedding import EmbeddingModule
         from kdcube_ai_app.apps.knowledge_base.modules.search_indexing import SearchIndexingModule
+        from kdcube_ai_app.apps.knowledge_base.modules.enrichment import EnrichmentModule
 
         pipeline = ProcessingPipeline(storage, project)
 
@@ -245,6 +246,8 @@ class ModuleFactory:
         # Register modules in processing order
         pipeline.register_module(ExtractionModule(storage, project, tenant, pipeline), 0)
         pipeline.register_module(SegmentationModule(storage, project, tenant, pipeline, **config.get("segmentation", {})), 1)
+        pipeline.register_module(EnrichmentModule(storage, project, tenant, pipeline), 2)
+
         pipeline.register_module(MetadataModule(storage, project, tenant, pipeline, **config.get("metadata", {})), 2)
 
         # pipeline.register_module(SummarizationModule(storage, project, tenant, pipeline), 3)

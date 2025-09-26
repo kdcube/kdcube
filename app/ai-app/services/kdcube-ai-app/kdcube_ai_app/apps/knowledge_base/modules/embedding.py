@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# knowledge_base/modules/embedding.py
+# kdcube_ai_app/apps/knowledge_base/modules/embedding.py
 """
 Improved Embedding processing module with async parallelization and batch processing.
 """
@@ -66,6 +66,17 @@ class AsyncSegmentEmbeddingProcessor:
 
         # Thread pool for CPU-intensive operations
         self.thread_pool = ThreadPoolExecutor(max_workers=self.max_workers)
+
+    def _get_embedding_payload_for_segment(self, resource_id, version, segment_guid, default_text, use_enriched):
+        if not use_enriched:
+            return default_text
+        try:
+            c = self.storage.get_stage_content("enrichment", resource_id, version, f"segment_{segment_guid}_enrichment.json", as_text=True)
+            if not c: return default_text
+            rec = json.loads(c)
+            return rec.get("embedding_text") or default_text
+        except Exception:
+            return default_text
 
     def _get_processed_segment_ids(self, resource_id: str, version: str, segment_type: SegmentType, embedding_size: int) -> Set[str]:
         """Get set of segment IDs that already have embeddings successfully computed."""

@@ -2,7 +2,10 @@
 # Copyright (c) 2025 Elena Viter
 
 import traceback
-import faiss
+try:
+    import faiss
+except Exception as e:
+    traceback.print_exc()
 
 from fastapi import Depends
 from pydantic import BaseModel, Field
@@ -12,7 +15,7 @@ import re
 from kdcube_ai_app.apps.knowledge_base.api.resolvers import (get_project, get_faiss_index, get_faiss_cache,
                                                              get_kb_read_dep, get_kb_admin_dep,
                                                              get_kb_read_with_acct_dep)
-from kdcube_ai_app.apps.knowledge_base.db.kb_db_connector import NavigationSearchResult
+from kdcube_ai_app.apps.knowledge_base.db.data_models import NavigationSearchResult
 from kdcube_ai_app.apps.knowledge_base.search import SearchResult
 
 """

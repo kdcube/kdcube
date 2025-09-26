@@ -17,7 +17,7 @@ from kdcube_ai_app.apps.knowledge_base.api.resolvers import (get_project,
                                                              get_kb_read_with_acct_dep, get_tenant)
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.tools.content_type import get_mime_type_enhanced, is_text_mime_type
-from kdcube_ai_app.tools.datasource import URLDataElement, FileDataElement
+from kdcube_ai_app.tools.datasource import URLDataElement, FileDataElement, IngestModifiers
 
 """
 Registry API
@@ -70,7 +70,14 @@ class KBUploadResponse(BaseModel):
 
 class KBAddURLRequest(BaseModel):
     url: str
-    name: Optional[str] = None
+    parser_type: Optional[str] = "simple"
+    provider: Optional[str] = None
+    # Optional denoised content — if present, we'll store exactly this
+    content: Optional[str] = None
+    mime: Optional[str] = None
+
+    # Pass-through ingest modifiers
+    ingest: Optional[IngestModifiers] = None
 
 
 class RNContentRequest(BaseModel):
@@ -518,37 +525,59 @@ async def delete_kb_resource(resource_id: str,
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/{project}/add-url")
-async def add_url_to_kb(request: KBAddURLRequest,
-                        project: str = Depends(get_project),
-                        session=Depends(get_kb_read_with_acct_dep())):
-    """Add a URL to the knowledge base - requires KB write access."""
-    # TODO: should be tenant-aware
+async def add_url_to_kb(
+        request: KBAddURLRequest,
+        project: str = Depends(get_project),
+        session=Depends(get_kb_read_with_acct_dep()),
+):
     kb = get_kb(project=project)
+
     try:
-        # Create URLDataElement with enhanced metadata
+        # Default ingest if not provided
+        ingest = request.ingest or IngestModifiers()
+
+        # If caller supplied denoised content, prefer it and set sensible defaults
+        use_content = request.content is not None
         element = URLDataElement(
             url=request.url,
-            parser_type="simple"
+            parser_type=request.parser_type or "simple",
+            provider=request.provider,
+            mime=(request.mime or ("text/html" if use_content else None)),
+            content=(request.content if use_content else None),
+            ingest=(
+                ingest if ingest else IngestModifiers()
+            ),
         )
 
-        # Add resource to KB
-        resource_metadata = kb.add_resource(element)
+        md = kb.add_resource(element)
 
-        # Update MIME type for URL resources to ensure proper handling
-        if resource_metadata.mime == "application/octet-stream":
-            # Update the resource metadata to have a better MIME type for URLs
-            updated_metadata = resource_metadata.model_dump()
-            updated_metadata["mime"] = "text/html"  # URLs typically fetch HTML content
-            kb.storage.save_resource_metadata(resource_metadata.id, updated_metadata)
+        # Probe path: md can be None if version_policy == "probe_only" and nothing ready
+        if md is None:
+            return KBUploadResponse(
+                success=False,
+                resource_id=None,
+                resource_metadata=None,
+                message="No existing version satisfies requested stage readiness.",
+                user_session_id=session.session_id,
+            )
 
-        logger.info(f"Added URL resource to KB: {resource_metadata.id}; user: {session.username}")
+        # Normalize MIME for URL fallback
+        if md.mime == "application/octet-stream" and (request.mime or use_content):
+            updated = md.model_dump()
+            updated["mime"] = request.mime or "text/html"
+            kb.storage.save_resource_metadata(md.id, updated)
+            md = kb.get_resource(md.id)
 
         return KBUploadResponse(
             success=True,
-            resource_id=resource_metadata.id,
-            resource_metadata=resource_metadata.model_dump(),
-            message=f"URL added to knowledge base as resource {resource_metadata.id}",
-            user_session_id=session.session_id
+            resource_id=md.id,
+            resource_metadata=md.model_dump(),
+            message=(
+                "URL added (new version)"
+                if md.status is None
+                else f"URL {('ready' if md.status in ('probe_ready','reused_ready') else md.status)}"
+            ),
+            user_session_id=session.session_id,
         )
 
     except Exception as e:

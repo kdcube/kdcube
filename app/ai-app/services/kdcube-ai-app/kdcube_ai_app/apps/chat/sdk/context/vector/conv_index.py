@@ -199,7 +199,7 @@ class ConvIndex:
         ]
         if any_tags:
             args.append(any_tags)
-            clauses.append(f"tags && ${len(args)}")
+            clauses.append(f"tags && ${len(args)}::text[] ")
         if all_tags:
             args.append(all_tags)
             clauses.append(f"tags @> ${len(args)}::text[]")

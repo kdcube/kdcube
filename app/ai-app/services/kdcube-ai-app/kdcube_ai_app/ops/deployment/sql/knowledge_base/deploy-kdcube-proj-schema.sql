@@ -196,24 +196,24 @@ $$ LANGUAGE plpgsql;
 
 -- Function to extract entity values for indexing (schema-specific function name)
 CREATE OR REPLACE FUNCTION <SCHEMA>.extract_entity_values_<SCHEMA>(entities_json JSONB)
-    RETURNS JSONB AS
-$$
+    RETURNS JSONB
+AS $$
 BEGIN
-    RETURN (
-        SELECT jsonb_agg(item->>'value')
-        FROM jsonb_array_elements(entities_json) item
-    );
+  RETURN (
+    SELECT jsonb_agg(item->>'value')
+    FROM jsonb_array_elements(entities_json) item
+  );
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$ LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE;
 
 -- Function to check if datasource is expired
 CREATE OR REPLACE FUNCTION <SCHEMA>.is_datasource_expired_<SCHEMA>(expiration_ts TIMESTAMPTZ)
-    RETURNS BOOLEAN AS
-$$
+    RETURNS BOOLEAN
+AS $$
 BEGIN
-    RETURN expiration_ts IS NOT NULL AND expiration_ts <= now();
+  RETURN expiration_ts IS NOT NULL AND expiration_ts <= now();
 END;
-$$ LANGUAGE plpgsql IMMUTABLE;
+$$ LANGUAGE plpgsql STABLE STRICT PARALLEL SAFE;
 
 -- NEW: Function to clean up expired datasources and segments
 CREATE OR REPLACE FUNCTION <SCHEMA>.cleanup_expired_data_<SCHEMA>()
@@ -246,6 +246,31 @@ BEGIN
     RETURN QUERY SELECT ds_count, seg_count;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ✅ index on ISO text (immutable expression)
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ds_pub_text
+  ON <SCHEMA>.datasource ((metadata->'metadata'->>'published_time_iso'))
+  WHERE (metadata->'metadata'->>'published_time_iso') IS NOT NULL
+    AND metadata->'metadata'->>'published_time_iso' <> '';
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ds_mod_text
+  ON <SCHEMA>.datasource ((metadata->'metadata'->>'modified_time_iso'))
+  WHERE (metadata->'metadata'->>'modified_time_iso') IS NOT NULL
+    AND metadata->'metadata'->>'modified_time_iso' <> '';
+
+-- ✅ combined with provider (still TEXT, still immutable)
+-- only if you filter on these often
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_rs_ext_provider
+  ON <SCHEMA>.retrieval_segment ( ( (extensions->'datasource'->>'provider') ) );
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_rs_ext_pub
+  ON <SCHEMA>.retrieval_segment ( ( NULLIF(extensions->'datasource'->>'published_time_iso','') ) );
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_rs_ext_mod
+  ON <SCHEMA>.retrieval_segment ( ( NULLIF(extensions->'datasource'->>'modified_time_iso','') ) );
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_rs_ext_exp
+  ON <SCHEMA>.retrieval_segment ( ( NULLIF(extensions->'datasource'->>'expiration','') ) );
 
 -------------------------------------------------------------------------------
 -- 6) Trigger (with clean IF NOT EXISTS logic)
@@ -347,10 +372,4 @@ CREATE OR REPLACE VIEW <SCHEMA>.expired_datasources AS
 SELECT *
 FROM <SCHEMA>.datasource
 WHERE expiration IS NOT NULL AND expiration <= now();
-
--- View for segments from active datasources
-CREATE OR REPLACE VIEW <SCHEMA>.active_retrieval_segments AS
-SELECT rs.*
-FROM <SCHEMA>.retrieval_segment rs
-JOIN <SCHEMA>.active_datasources ads ON ads.id = rs.resource_id AND ads.version = rs.version;
 

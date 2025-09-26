@@ -7,7 +7,7 @@ kb_connector.py
 Final KnowledgeBaseConnector implementation using the actual KnowledgeBaseDB and KnowledgeBaseSearch.
 """
 
-import os
+import json
 import logging
 import traceback
 from datetime import datetime
@@ -27,22 +27,11 @@ from kdcube_ai_app.infra.llm.llm_data_model import ModelRecord
 
 # Import data models
 from kdcube_ai_app.apps.knowledge_base.db.data_models import (
-    DataSource, EntityItem, SearchResult, HybridSearchParams, ContentHash
+    DataSource, EntityItem, NavigationSearchResult, HybridSearchParams, ContentHash
 )
 from kdcube_ai_app.infra.embedding.embedding import get_embedding
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class NavigationSearchResult:
-    """Search result with proper backtrack navigation format."""
-    query: str
-    relevance_score: float
-    heading: str
-    subheading: str
-    backtrack: Dict[str, Any]
-    content: str
 
 
 class KnowledgeBaseConnector:
@@ -106,19 +95,13 @@ class KnowledgeBaseConnector:
         datasource_data = {
             "id": resource_metadata.id,
             "version": int(version),
+            "provider": resource_metadata.provider,
             "rn": resource_metadata.rn,
             "source_type": resource_metadata.source_type,
-            "title": resource_metadata.name,
+            "title": resource_metadata.title,
             "uri": resource_metadata.uri,
             "system_uri": resource_metadata.ef_uri,
-            "metadata": {
-                "mime": resource_metadata.mime,
-                "encoding": getattr(resource_metadata, "encoding", "utf-8"),
-                "size_bytes": resource_metadata.size_bytes,
-                "content_hash": resource_metadata.content_hash,
-                "timestamp": resource_metadata.timestamp,
-                "extraction_info": getattr(resource_metadata, "extraction_info", None)
-            },
+            "metadata": resource_metadata.light(),
             "status": "completed",
             "segment_count": 0  # Will be updated when segments are loaded
         }
@@ -235,6 +218,7 @@ class KnowledgeBaseConnector:
         # Get resource metadata for RNs
         resource_metadata = kb.get_resource(resource_id)
         raw_rn = resource_metadata.rn if resource_metadata else f"ef:{self.tenant}:{self.project_name}:knowledge_base:raw:{resource_id}:{version}"
+        provider = resource_metadata.provider if resource_metadata else "provider_unknown"
 
         # Get extraction RNs
         extraction_module = kb.get_extraction_module()
@@ -247,101 +231,137 @@ class KnowledgeBaseConnector:
         enhanced_segments = []
 
         for segment in segments:
-            segment_id = segment.get("segment_id") or segment.get("id")
+            # robust id resolution
+            segment_id = (segment.get("segment_id")
+                          or segment.get("id"))
             if not segment_id:
                 continue
 
-            # Get segment metadata
-            segment_metadata = segment.get("metadata", {})
-            base_guids = segment_metadata.get("base_segment_guids", [])
+            # Get segment metadata and base lineage
+            segment_metadata = segment.get("metadata", {}) or {}
+            base_guids = segment_metadata.get("base_segment_guids", []) or []
 
-            # Get base segments for this retrieval segment
             segment_base_segments = []
             extraction_rns = set()
 
-            # Get metadata and embedding records
+            # Get metadata, enrichment, embedding records
             metadata_record = all_metadata_records.get(segment_id, {})
             embedding_record = all_embedding_records.get(segment_id, {})
 
             for guid in base_guids:
                 if guid in base_lookup:
                     base_seg = base_lookup[guid]
-                    base_segment_extraction_rns = base_seg.get('extracted_data_rns', [])
+                    base_segment_extraction_rns = base_seg.get('extracted_data_rns', []) or []
                     extraction_rns.update(base_segment_extraction_rns)
                     segment_base_segments.append({
                         "guid": base_seg['guid'],
-                        "text": base_seg['text'],
+                        # "text": base_seg['text'],
                         "start_line_num": base_seg['start_line_num'],
                         "end_line_num": base_seg['end_line_num'],
                         "start_position": base_seg['start_position'],
                         "end_position": base_seg['end_position'],
                         "rn": base_seg['rn'],
-                        "extracted_data_rns": base_segment_extraction_rns,
-                        # Note: heading/subheading from base segments still available for navigation
+                        # "extracted_data_rns": base_segment_extraction_rns,
                         "heading": base_seg.get('heading', ''),
-                        "subheading": base_seg.get('subheading', '')
+                        "subheading": base_seg.get('subheading', ''),
                     })
+
             extraction_rns = list(extraction_rns)
 
-            # Build complete lineage with namespaced structure
             lineage = {
                 "resource_id": resource_id,
                 "version": version,
-                "raw": {
-                    "rn": raw_rn
-                },
-                "extraction": {
-                    "related_rns": extraction_rns,
-                    "rn": md_extraction_rn
-                },
+                "provider": provider,
+                "raw": { "rn": raw_rn },
+                "extraction": { "related_rns": extraction_rns, "rn": md_extraction_rn },
                 "segmentation": {
                     "rn": segment.get("rn"),
-                    "segment_id": segment_id,
-                    "base_segments": segment_base_segments,
+                    # "segment_id": segment_id,
+                    # "base_segments": segment_base_segments
                 },
-                # Namespaced metadata and embedding (not composite names)
-
-                "embedding": {
-                    "rn": embedding_record["rn"]
-                    # f"ef:{self.tenant}:{self.project_name}:knowledge_base:embedding:retrieval:{resource_id}:{version}:segment:{segment_id}"
-                }
+                "embedding": { "rn": embedding_record.get("rn") }
             }
             if metadata_record:
-                lineage["metadata"] = {
-                    "rn": metadata_record.get("rn")
-                    # f"ef:{self.tenant}:{self.project_name}:knowledge_base:metadata:retrieval:{resource_id}:{version}:segment:{segment_id}"
+                lineage["metadata"] = { "rn": metadata_record.get("rn") }
+
+            # -------- Apply enrichment if available --------
+            # Start from original retrieval text
+            content = segment.get("text", "") or ""
+            segment_meta = segment.get("metadata") or {}
+            title = segment_meta.get("heading") or ""
+            if not title or title == "Untitled":
+                title = segment_meta.get("subheading", "") or "" # if not title: title = segment.get("metadata", {}) or {}.get("subheading", "") or ""
+
+            extensions = {}
+
+            enrichment = self._read_segment_enrichment(kb, resource_id, version, segment_id)
+
+            enrichment_used = False
+            enrichment_rn = None
+            connector_summary = segment.get("summary", "") or ""
+
+            if enrichment and enrichment.get("success"):
+                enrichment_rn = enrichment.get("rn")
+                enriched_text = enrichment.get("retrieval_doc") or content
+                title = enrichment.get("title") or title
+                if enriched_text:
+                    content = enriched_text
+
+                md = enrichment.get("metadata") or {}
+                connector_summary = md.get("summary", "") or connector_summary
+
+                extensions["enrichment"] = {
+                    "rn": enrichment.get("rn"),
+                    **{"metadata": enrichment.get("metadata") or {}},
+                    "is_table": enrichment.get("is_table", False),
+                    "is_image": enrichment.get("is_image", False),
                 }
+                enrichment_used = True
+            else:
+                extensions["enrichment"] = {}
+            extensions["datasource"] = {
+                "rn": resource_metadata.rn if resource_metadata else None,
+                "title": resource_metadata.title if resource_metadata else None,
+                "uri": resource_metadata.uri if resource_metadata else None,
+                "provider": provider,
+                "expiration": resource_metadata.expiration if resource_metadata else None,
+                # "metadata": resource_metadata.light() if resource_metadata else {},
+                "source_type": resource_metadata.source_type if resource_metadata else None,
+                "mime": resource_metadata.mime if resource_metadata else None,
+                "published_time_iso": (resource_metadata.metadata or {}).get("published_time_iso") if resource_metadata else None,
+                "modified_time_iso": (resource_metadata.metadata or {}).get("modified_time_iso") if resource_metadata else None,
+            }
 
-            # Get embedding
-            # embedding_vector = all_embeddings.get(segment_id)
-            # embedding_text = None
-            # if embedding_vector:
-            #     embedding_text = ','.join(map(str, embedding_vector))
+            if enrichment_used and enrichment_rn:
+                lineage["enrichment"] = {"rn": enrichment_rn}
 
+            # Entities from metadata stage, as you already do
             entities = metadata_record.get("entities", [])
             if not isinstance(entities, list):
                 entities = []
-
-            # Build enhanced segment record
-            content = segment.get("text", "")
 
             enhanced_segment = {
                 "id": segment_id,
                 "version": int(version),
                 "resource_id": resource_id,
                 "rn": segment.get("rn"),
-                "title": content,
-                "content": content,
-                "summary": segment.get("summary", ""),
-                "entities": entities,  # From metadata
-                "tags": [],  # Empty for now
+                "title": title,
+                "content": content,                     # <- GLUED TEXT
+                "summary": connector_summary,           # <- prefer enrichment summary
+                "entities": entities,
+                "tags": [],
                 "word_count": len(content.split()) if content else 0,
-                "sentence_count": content.count('.') + content.count('!') + content.count('?') if content else 0,
+                "sentence_count": (content.count('.') + content.count('!') + content.count('?')) if content else 0,
                 "processed_at": metadata_record.get("processed_at"),
-                "embedding": embedding_record.get("embedding"),  # Use text if no vector
-                "lineage": lineage,  # Complete lineage for search navigation
-                "extensions": {}  # Extensions field for arbitrary data
+                "embedding": embedding_record.get("embedding"),
+                "lineage": lineage,
+                "extensions": extensions,                # <- enrichment stored here
+                "provider": provider
             }
+
+            # (optional) add enrichment RN to lineage if you want to navigate to it later
+            if "enrichment" in extensions:
+                lineage["enrichment"] = { "rn": extensions["enrichment"]["rn"] }
 
             enhanced_segments.append(enhanced_segment)
 
@@ -570,12 +590,13 @@ class KnowledgeBaseConnector:
             Properly formatted backtrack dict matching expected format
         """
         lineage = search_result.get("lineage", {})
-        query_lower = query.lower()
+        query_lower = (query or "").lower()
 
         # Extract lineage components (now namespaced)
         raw_info = lineage.get("raw", {})
         extraction_info = lineage.get("extraction", {})
         segmentation_info = lineage.get("segmentation", {})
+        enrichment_info = lineage.get("enrichment", {})
         base_segments = segmentation_info.get("base_segments", [])
 
         # Build navigation from base segments
@@ -586,7 +607,7 @@ class KnowledgeBaseConnector:
             # Check if query matches this base segment
             base_text = base_seg.get("text", "")
             base_citations = []
-            if query_lower in base_text.lower():
+            if query_lower and query_lower in base_text.lower():
                 base_citations.append(query)
                 raw_citations.append(query)
 
@@ -596,7 +617,7 @@ class KnowledgeBaseConnector:
                 "start_pos": base_seg.get("start_position", 0),
                 "end_pos": base_seg.get("end_position", 0),
                 "citations": base_citations,
-                "text": base_text,
+                # "text": base_text,
                 # Base segments still have heading/subheading for navigation
                 "heading": base_seg.get("heading", ""),
                 "subheading": base_seg.get("subheading", "")
@@ -616,10 +637,43 @@ class KnowledgeBaseConnector:
             "segmentation": {
                 "rn": segmentation_info.get("rn", ""),
                 "navigation": navigation
+            },
+            "enrichment": {
+                "rn": enrichment_info.get("rn", ""),
             }
         }
 
+        ds_meta = search_result.get("datasource") or {}
+        backtrack["datasource"] = ds_meta
+
         return backtrack
+
+    def _read_segment_enrichment(self,
+                                 kb: 'KnowledgeBase',
+                                 resource_id: str,
+                                 version: str,
+                                 retrieval_segment_id: str) -> Optional[dict]:
+        """
+        Load enrichment payload for a retrieval segment if it exists.
+        Ensures 'rn' is present (generates one if missing).
+        """
+        try:
+            txt = kb.storage.get_stage_content(
+                "enrichment",
+                resource_id,
+                version,
+                f"segment_{retrieval_segment_id}_enrichment.json",
+                as_text=True
+            )
+            if not txt:
+                return None
+            data = json.loads(txt)
+
+            return data
+        except Exception:
+            logger.debug("No enrichment for segment %s (resource=%s v=%s)",
+                         retrieval_segment_id, resource_id, version)
+            return None
 
     def load_complete_resource(self,
                                kb: 'KnowledgeBase',
@@ -679,7 +733,7 @@ class KnowledgeBaseConnector:
         """
         return self.kb_db.get_resources_with_indexed_segments()
 
-    def content_hash_exists(self, hash_value: str) -> bool:
+    def content_hash_exists(self, hash_value: str) -> Optional[str]:
         return self.kb_db.content_hash_exists(hash_value)
 
     def get_object_hash(self, object_name: str) -> List[ContentHash]:
