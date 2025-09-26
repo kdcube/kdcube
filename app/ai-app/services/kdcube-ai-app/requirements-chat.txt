@@ -44,6 +44,3 @@ python-docx
 python-pptx
 chardet
 orjson
-
-
-sentence-transformers==5.1.0
