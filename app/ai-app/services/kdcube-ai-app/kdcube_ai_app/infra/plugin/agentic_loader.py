@@ -243,6 +243,7 @@ def get_workflow_instance(
         *,
         communicator: Optional[Any] = None,        # ← optional unified communicator
         pg_pool: Optional[Any] = None,             # ← optional DB pools
+        redis: Optional[Any] = None,               # ← optional DB pools
 ) -> Tuple[Any, Optional[Callable[[str], Any]], types.ModuleType]:
     """
     Load the bundle at 'spec', discover decorated symbols, instantiate a workflow,
@@ -277,7 +278,8 @@ def get_workflow_instance(
     extra_kwargs = {
         "communicator": communicator,
         "comm": communicator,
-        "pg_pool": pg_pool
+        "pg_pool": pg_pool,
+        "redis": redis,
     }
 
     if chosen_kind == "factory":

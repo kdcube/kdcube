@@ -121,7 +121,8 @@ async def lifespan(app: FastAPI):
                 type("Spec", (), spec),
                 wf_config,
                 communicator=comm,
-                pg_pool=app.state.pg_pool
+                pg_pool=app.state.pg_pool,
+                redis=app.state.middleware.redis
             )
 
         # set workflow state (no emits here; processor already announced start)
