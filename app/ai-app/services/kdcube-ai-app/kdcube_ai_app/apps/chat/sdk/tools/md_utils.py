@@ -245,43 +245,91 @@ def _append_sources_section(md: str, by_id: dict[int, dict], order: list[int]) -
         lines.append(f"{sid}. [{title}]({url})")
     return md + "\n".join(lines) + "\n"
 
-def replace_citation_tokens_streaming(text: str, citation_map: Dict[int, Dict]) -> str:
+CITE_TOKEN_RE = re.compile(r"\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
+def replace_citation_tokens_streaming(text: str, citation_map: Dict) -> str:
     if not citation_map:
         return text
 
-    pat = re.compile(r"\[\[S:([0-9,\s\-]+)]]")
-
-    def _replace_one(m: re.Match) -> str:
-        ids_str = m.group(1)
-        ids = []
-
-        parts = ids_str.split(",")
-        for part in parts:
-            part = part.strip()
-            if "-" in part:
+    def _expand_ids(ids_str: str):
+        out = []
+        for part in ids_str.split(","):
+            p = part.strip()
+            if not p:
+                continue
+            if "-" in p:
                 try:
-                    start, end = part.split("-", 1)
-                    start_num = int(start.strip())
-                    end_num = int(end.strip())
-                    ids.extend(range(start_num, end_num + 1))
+                    a, b = [int(x.strip()) for x in p.split("-", 1)]
+                    if a <= b:
+                        out.extend(range(a, b + 1))
+                    else:
+                        out.extend(range(b, a + 1))
                 except ValueError:
-                    continue
-            elif part.isdigit():
-                ids.append(int(part))
+                    pass
+            else:
+                if p.isdigit():
+                    out.append(int(p))
+        # in-order dedupe
+        seen = set()
+        uniq = []
+        for i in out:
+            if i not in seen:
+                seen.add(i)
+                uniq.append(i)
+        return uniq
 
-        pieces = []
+    def _sub(m: re.Match) -> str:
+        ids = _expand_ids(m.group(1))
+        links = []
         for i in ids:
-            meta = citation_map.get(i)
-            if not meta:
+            rec = citation_map.get(i) or citation_map.get(str(i))
+            if not rec:
                 continue
-            url = meta.get("url") or ""
-            title = (meta.get("title") or url or "").replace('"', "'")
-            if not url:
-                continue
-            pieces.append(f"[{title}]({url})")
-        return " " + " ".join(pieces) if pieces else ""
+            url = (rec.get("url") or "").strip()
+            title = (rec.get("title") or url or f"Source {i}").replace('"', "'")
+            if url:
+                links.append(f"[{title}]({url})")
+        # If nothing resolved, leave the original token (debuggability > silent drop)
+        return " ".join(links) if links else m.group(0)
 
-    return pat.sub(_replace_one, text)
+    return CITE_TOKEN_RE.sub(_sub, text)
+
+# def replace_citation_tokens_streaming(text: str, citation_map: Dict[int, Dict]) -> str:
+#     if not citation_map:
+#         return text
+#
+#     pat = re.compile(r"\[\[S:([0-9,\s\-]+)]]")
+#
+#     def _replace_one(m: re.Match) -> str:
+#         ids_str = m.group(1)
+#         ids = []
+#
+#         parts = ids_str.split(",")
+#         for part in parts:
+#             part = part.strip()
+#             if "-" in part:
+#                 try:
+#                     start, end = part.split("-", 1)
+#                     start_num = int(start.strip())
+#                     end_num = int(end.strip())
+#                     ids.extend(range(start_num, end_num + 1))
+#                 except ValueError:
+#                     continue
+#             elif part.isdigit():
+#                 ids.append(int(part))
+#
+#         pieces = []
+#         for i in ids:
+#             meta = citation_map.get(i)
+#             if not meta:
+#                 continue
+#             url = meta.get("url") or ""
+#             title = (meta.get("title") or url or "").replace('"', "'")
+#             if not url:
+#                 continue
+#             pieces.append(f"[{title}]({url})")
+#         return " " + " ".join(pieces) if pieces else ""
+#
+#     return pat.sub(_replace_one, text)
 
 def has_incomplete_citation_token(text: str) -> bool:
     """Check if text ends with an incomplete citation token that might be cut off"""

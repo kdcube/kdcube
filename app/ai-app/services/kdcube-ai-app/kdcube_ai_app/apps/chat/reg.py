@@ -11,6 +11,8 @@ MODEL_CONFIGS = {
         "model_name": "o3-mini",
         "provider": "openai",
         "has_classifier": True,
+        "temperature": False,
+        "tools": False,
         "description": "GPT-o3 Mini"
     },
     "gpt-4.1-nano": {
@@ -100,10 +102,12 @@ EMBEDDERS = {
 
 
 _SEEDED_FALSE = [
-    (re.compile(r"^o3", re.I), {"temperature": False, "top_p": False}),  # o3, o3-mini, etc.
-    (re.compile(r"^o4", re.I), {"temperature": False, "top_p": False}),  # o4-* reasoning models
-    (re.compile(r"^gpt-5", re.I), {"temperature": False, "top_p": False}),  # o4-* reasoning models
+    (re.compile(r"^o3", re.I), {"temperature": False, "top_p": False, "tools": False}),  # o3, o3-mini, etc.
+    (re.compile(r"^o4", re.I), {"temperature": False, "top_p": False, "tools": False, "reasoning": True}),  # o4-* reasoning models
+    (re.compile(r"^gpt-5", re.I), {"temperature": False, "top_p": False, "tools": True, "reasoning": True}),  # o4-* reasoning models
+    (re.compile(r"^gpt-4o", re.I), {"temperature": True, "top_p": False, "tools": True}),
 ]
+
 
 # Sparse learned overrides: only set keys we actually learned.
 _dynamic_caps: dict[str, dict[str, bool]] = {}

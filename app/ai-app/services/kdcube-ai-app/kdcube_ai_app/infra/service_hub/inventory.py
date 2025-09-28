@@ -13,11 +13,11 @@ from uuid import uuid4
 import aiohttp
 import requests
 import time
-from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict
+from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict, Union
 
 from pydantic import BaseModel, Field
 from langchain_core.embeddings import Embeddings
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage
+from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, AIMessageChunk
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS, model_caps
@@ -55,7 +55,11 @@ def make_chat_openai(*, model: str, api_key: str,
         "model": model,
         "api_key": api_key,
         "stream_usage": stream_usage,
-        **extra_kwargs,  # your other stable args
+        # ↓↓↓ important for built-in tools & annotations
+        "output_version": "responses/v1",   # format blocks/annotations nicely
+        "use_responses_api": True,          # routes when tools are present
+
+        **extra_kwargs,
     }
 
     # Only include temperature if supported AND provided
@@ -196,7 +200,7 @@ class Config:
         self.format_fixer_model = "claude-3-haiku-20240307"
         self.format_fix_enabled = True
 
-        self.default_llm_model = MODEL_CONFIGS.get(default_llm_model or "o3-mini")
+        self.default_llm_model = MODEL_CONFIGS.get(default_llm_model) or  MODEL_CONFIGS.get("o3-mini")
         # role map (filled later; defaults below)
         self.role_models: Dict[str, Dict[str, str]] = role_models or self.default_role_map()
 
@@ -848,6 +852,7 @@ class ModelServiceBase:
                     "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                     "provider_message_id": None, "model_name": model_name}
 
+
     # ---------- streaming (kept, but slimmer) ----------
     async def stream_model_text(
             self,
@@ -858,10 +863,13 @@ class ModelServiceBase:
             max_tokens: int = 1200,
             client_cfg: ClientConfigHint | None = None,
             role: Optional[str] = None,
+            tools: Optional[list] = None,
+            tool_choice: Optional[Union[str, dict]] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         cfg = client_cfg or (self.router.describe(role) if role else self.describe_client(client))
         provider_name, model_name = cfg.provider, cfg.model_name
 
+        index = -1
         # Anthropic streaming
         if provider_name == "anthropic":
             import anthropic
@@ -885,9 +893,11 @@ class ModelServiceBase:
                     max_tokens=max_tokens,
                     temperature=temperature,
             ) as stream:
+                index += 1
                 async for text in stream.text_stream:
                     if text:
-                        yield {"delta": text}
+                        # yield {"event": "text.delta", "text": text, "delta": text, "index": index}
+                        yield {"event": "text.delta", "text": text, "index": index}
 
                 usage = {}
                 final_obj = None
@@ -907,26 +917,137 @@ class ModelServiceBase:
                         }
                         usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
 
-                yield {"final": True, "usage": _norm_usage_dict(usage), "model_name": model_name}
+                yield {"event": "final", "usage": _norm_usage_dict(usage), "model_name": model_name, "index": index}
             return
 
         # OpenAI streaming
-        from langchain_core.messages import AIMessageChunk
         if isinstance(client, ChatOpenAI):
-            usage = {}
-            async for chunk in client.astream(messages, stream_usage=True):
-                piece = chunk.content if isinstance(chunk, AIMessageChunk) else getattr(chunk, "content", "")
-                if piece:
-                    yield {"delta": piece}
-                u = getattr(chunk, "usage_metadata", None) or (getattr(chunk, "response_metadata", {}) or {}).get("usage")
-                if u:
-                    input_tokens  = u.get("input_tokens",  u.get("prompt_tokens",  0)) or 0
-                    output_tokens = u.get("output_tokens", u.get("completion_tokens", 0)) or 0
-                    usage = {"input_tokens": input_tokens, "output_tokens": output_tokens,
-                             "total_tokens": input_tokens + output_tokens}
-            if not usage:
-                usage = _approx_tokens_by_chars("".join((getattr(m, "content", "") or "") for m in messages))
-            yield {"final": True, "usage": usage, "model_name": model_name}
+            model_limitations = model_caps(model_name)
+            tools_support = model_limitations.get("tools", False)
+            reasoning_support = model_limitations.get("reasoning", False)
+
+            stream_kwargs = {
+                "temperature": temperature,
+                "max_output_tokens": max_tokens,
+                "extra_body": {
+                    "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                },
+            }
+            if tools and tools_support:
+                stream_kwargs["tools"] = tools
+                if tool_choice is not None:
+                    stream_kwargs["tool_choice"] = tool_choice
+                stream_kwargs["parallel_tool_calls"] = False
+                web_search_tool = next((t for t in (tools or []) if t.get("type") == "web_search"), None)
+                if web_search_tool:
+                   stream_kwargs["extra_body"]["include"] = ["web_search_call.action.sources"]
+            if reasoning_support:
+                stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
+
+            usage, seen_citation_urls = {}, set()
+            source_registry: dict[str, dict] = {}
+            def _norm_url(u: str) -> str:
+                # simple normalization: strip whitespace + trailing slash
+                # (you can expand this: lowercase host, drop utm_* params, etc.)
+                if not u: return u
+                u = u.strip()
+                if u.endswith("/"): u = u[:-1]
+                return u
+
+            async for chunk in client.astream(messages, **stream_kwargs):
+                from langchain_core.messages import AIMessageChunk
+                index += 1
+                if not isinstance(chunk, AIMessageChunk):
+                    txt = getattr(chunk, "content", "") or getattr(chunk, "text", "")
+                    if txt:
+                        yield {"delta": txt, "index": index}
+                        yield {"event": "text.delta", "text": txt, "stage": -1}
+                    continue
+                yield {"all_event": chunk, "index": index}  # for debugging
+
+                if getattr(chunk, "usage_metadata", None):
+                    um = chunk.usage_metadata or {}
+                    usage = {
+                        "input_tokens": um.get("input_tokens", 0) or 0,
+                        "output_tokens": um.get("output_tokens", 0) or 0,
+                        "input_tokens_details": um.get("input_token_details", {}), # {'cache_read': 233344}
+                        "output_tokens_details": um.get("output_token_details", {}), # {'reasoning': 1344}
+                    }
+                    usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+
+                blocks = chunk.content if isinstance(chunk.content, list) else [{"type": "text", "text": chunk.content}]
+                for b in blocks:
+                    btype = b.get("type")
+                    bid = b.get("index")  # 'stage' number. it's when agentic models / tools nodes interleave
+
+                    # 1) Handle annotations
+                    anns = b.get("annotations") or []
+                    for ann in anns:
+                        if ann.get("type") == "url_citation":
+                            url = _norm_url(ann.get("url"))
+                            if not url:
+                                continue
+                            # mark as used in registry
+                            rec = source_registry.get(url) or {
+                                "url": url,
+                                "title": ann.get("title"),
+                                "first_seen_stage": bid,
+                                "tool_ids": set(),
+                                "ranks": [],
+                                "used_in_output": False,
+                                "citations": [],
+                            }
+                            rec["used_in_output"] = True
+                            rec["citations"].append({"start": ann.get("start_index"), "end": ann.get("end_index")})
+                            if not rec.get("title") and ann.get("title"):
+                                rec["title"] = ann["title"]
+                            source_registry[url] = rec
+
+                            # your existing outward-facing event (optional dedupe)
+                            if url not in seen_citation_urls:
+                                seen_citation_urls.add(url)
+                                yield {
+                                    "event": "citation",
+                                    "title": ann.get("title"),
+                                    "url": url,
+                                    "start": ann.get("start_index"),
+                                    "end": ann.get("end_index"),
+                                    "index": index,
+                                    "stage": bid,
+                                }
+                    # 2) text / output_text deltas
+                    if btype in ("output_text", "text"):
+                        delta = b.get("text") or ""
+                        if delta:
+                            yield {"event": "text.delta", "text": delta, "index": index, "stage": bid}
+                    # 3) Handle reasoning
+                    if btype == "reasoning":
+                        # Ignore encrypted_content; only summaries are visible
+                        for si in b.get("summary") or []:
+                            if si:
+                                order_in_group = 0
+                                if isinstance(si, dict):
+                                    s = si.get("text") or si.get("summary_text") or ""
+                                    order_in_group = si.get("index")
+                                else: s = si
+                                yield {"event": "thinking.delta", "text": s, "stage": bid, "index": index, "group_index": order_in_group}
+                    # 4) Handle tool calls
+                    if btype == "web_search_call":
+                        action = b.get("action") or {}
+                        status = b.get("status")       # "in_progress" | "searching" | "completed"
+                        evt = {
+                            "event": "tool.search",
+                            "id": b.get("id"), # fingerprint of this tool execution. # "stage": bid
+                            "status": status,
+                            "query": action.get("query"),
+                            "sources": action.get("sources"),
+                            "index": index
+                        }
+                        yield evt
+
+            # 5) Finish (emit both rich and legacy finals)
+            index += 1
+            yield {"event": "final", "usage": usage, "model_name": model_name, "index": index}
             return
 
         # Custom endpoint streaming
@@ -940,7 +1061,7 @@ class ModelServiceBase:
         text = res.get("text", "") or ""
         for i in range(0, len(text), 30):
             yield {"delta": text[i:i+30]}
-        yield {"final": True, "usage": res.get("usage", {}), "model_name": res.get("model_name", model_name)}
+        yield {"event": "final", "usage": res.get("usage", {}), "model_name": res.get("model_name", model_name)}
 
     @track_llm(
         provider_extractor=ms_provider_extractor,
@@ -954,12 +1075,17 @@ class ModelServiceBase:
             messages: List[BaseMessage],
             *,
             on_delta: Callable[[str], Awaitable[None]],
+            on_thinking: Optional[Callable[[Any], Awaitable[None]]] = None,
+            on_tool_result_event: Optional[Callable[[Any], Awaitable[None]]] = None,
+            on_event: Optional[Callable[[dict], Awaitable[None]]] = None,
             temperature: float = 0.3,
             max_tokens: int = 1200,
             client_cfg: ClientConfigHint | None = None,
             role: Optional[str] = None,
             on_complete: Optional[Callable[[dict], Awaitable[None]]] = None,
-            debug: bool = True
+            debug: bool = True,
+            tools: Optional[list] = None,
+            tool_choice: Optional[Union[str, dict]] = None,
     ) -> Dict[str, Any]:
         # dedicated streaming logger (new instance as requested)
         slog = AgentLogger("StreamTracker", self.config.log_level)
@@ -989,31 +1115,124 @@ class ModelServiceBase:
         usage_out: Dict[str, Any] = {}
         chunk_count = 0
 
+        # Aggregations
+        citations: list[dict] = []
+        seen_cite_urls: set[str] = set()
+
+        tool_calls_by_id: dict[str, dict] = {}
+        tool_calls_list: list[dict] = []
+
+        thoughts_grouped: list[str] = []
+        _current_thought_parts: list[str] = []
+
+        agentic_stage = -1
+        def _flush_thought_group():
+            nonlocal _current_thought_parts, thoughts_grouped
+            if _current_thought_parts:
+                thoughts_grouped.append("".join(_current_thought_parts))
+                _current_thought_parts = []
+
         try:
             async for ev in self.stream_model_text(
-                    client,
-                    messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    client_cfg=cfg,
-                    role=role
+                client,
+                messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                client_cfg=cfg,
+                role=role,
+                tools=tools,
+                tool_choice=tool_choice,
             ):
-                if "delta" in ev and ev["delta"]:
-                    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-                    # CRITICAL: forward the delta to the caller (3-section parser)
+                if on_event and "all_event" in ev:
+                    await on_event(ev["all_event"].model_dump())
+
+                # ---- Structured events ----
+                etype = ev.get("event")
+                if etype == "text.delta":
                     try:
-                        await on_delta(ev["delta"])
+                        # await on_delta(ev["delta"])
+                        await on_delta(ev["text"])
                     except Exception as cb_err:
                         slog.log_error(cb_err, "on_delta_callback_failed")
-                    # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-                    final_chunks.append(ev["delta"])
+                    final_chunks.append(ev["text"])
                     chunk_count += 1
-                if ev.get("usage"):
-                    usage_out = ev["usage"]
-                if ev.get("final"):
-                    usage_out = ev.get("usage") or usage_out or {}
-                    break
+                    # non-thinking event: close any open thought cluster
+                    _flush_thought_group()
+                    continue
+
+                if etype == "thinking.delta":
+                    txt = ev.get("text") or ""
+                    _stage = ev.get("stage")
+                    if _stage is not None and _stage != agentic_stage:
+                        _flush_thought_group()
+                        agentic_stage = _stage
+                    if txt:
+                        _current_thought_parts.append(txt)
+                        if on_thinking:
+                            try:
+                                await on_thinking(ev)
+                            except Exception as cb_err:
+                                slog.log_error(cb_err, "on_thinking_callback_failed")
+                    # thinking continues; do not flush yet
+                    continue
+
+                if etype == "tool.search":
+                    # update by id (if present), else append as-is
+                    # we want to group by id, but also keep arrival order
+                    tid = ev.get("id") or f"search_{len(tool_calls_list)+1}"
+                    _stage = ev.get("stage")
+                    if _stage is not None and _stage != agentic_stage:
+                        _flush_thought_group()
+                        agentic_stage = _stage
+                    call = tool_calls_by_id.get(tid) or {}
+                    call["id"] = tid
+                    if ev.get("query"): call["query"] = ev.get("query")
+                    call["status"] = ev.get("status") or call.get("status")
+                    if ev.get("sources"): call["sources"] = ev.get("sources")
+
+                    # coalesce updates for same id
+                    tool_calls_by_id[tid] = call
+                    tool_calls_list.append(call)
+                    # _flush_thought_group()  # tools break thought grouping
+
+                    if on_tool_result_event:
+                        try:
+                            await on_tool_result_event({"type": "tool.search", **call})
+                        except Exception as cb_err:
+                            slog.log_error(cb_err, "on_event_callback_failed")
+                    continue
+
+                if etype == "citation":
+                    url = ev.get("url")
+                    if url and url not in seen_cite_urls:
+                        seen_cite_urls.add(url)
+                        citations.append({
+                            "title": ev.get("title"),
+                            "url": url,
+                            "start": ev.get("start"),
+                            "end": ev.get("end"),
+                        })
+                    # citations don't break thinking, but you can choose to:
+                    # _flush_thought_group()
+                    if on_event:
+                        try:
+                            await on_event({"type": "citation", **ev})
+                        except Exception as cb_err:
+                            slog.log_error(cb_err, "on_event_callback_failed")
+                    continue
+
+                if etype == "final":
+                    usage_out = ev.get("usage") or usage_out
+                    # will also receive the legacy {final: True} below; just keep the latest usage
+                    _flush_thought_group()
+                    continue
+
+                # any other event: fan out (optional)
+                if etype and on_event:
+                    try:
+                        await on_event(ev)
+                    except Exception as cb_err:
+                        slog.log_error(cb_err, "on_event_callback_failed")
 
             full_text = "".join(final_chunks)
             slog.log_step(
@@ -1026,6 +1245,9 @@ class ModelServiceBase:
                     "provider": cfg.provider,
                     "model": cfg.model_name,
                     "role": role,
+                    "thought_groups": len(thoughts_grouped),
+                    "tool_events": len(tool_calls_list),
+                    "citations": len(citations),
                 },
             )
 
@@ -1034,37 +1256,35 @@ class ModelServiceBase:
                 "usage": _norm_usage_dict(usage_out),
                 "provider_message_id": None,
                 "model_name": cfg.model_name,
+                "thoughts": thoughts_grouped,          # <- list[str], grouped
+                "tool_calls": tool_calls_list,         # <- list[dict] in arrival order
+                "citations": citations,                # <- list[dict]
             }
 
             if on_complete:
                 try:
                     await on_complete(ret)
-                    slog.log_step(
-                        "on_complete_called",
-                        {
-                            "status": "ok",
-                            "final_text_len": len(full_text),
-                            "provider": cfg.provider,
-                            "model": cfg.model_name,
-                            "role": role,
-                        },
-                    )
+                    slog.log_step("on_complete_called", {"status": "ok", "final_text_len": len(full_text)})
                 except Exception as e:
                     slog.log_error(e, "on_complete_failed")
 
-            slog.finish_operation(True, "stream_model_text_tracked_complete", provider=cfg.provider, model=cfg.model_name, role=role)
+            slog.finish_operation(True, "stream_model_text_tracked_complete",
+                                  provider=cfg.provider, model=cfg.model_name, role=role)
             return ret
 
         except Exception as e:
             slog.log_error(e, "stream_loop_failed")
-            slog.finish_operation(False, "stream_model_text_tracked_failed", provider=cfg.provider, model=cfg.model_name, role=role)
+            slog.finish_operation(False, "stream_model_text_tracked_failed",
+                                  provider=cfg.provider, model=cfg.model_name, role=role)
             return {
                 "text": f"Model call failed: {e}",
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 "provider_message_id": None,
                 "model_name": cfg.model_name,
+                "thoughts": [],
+                "tool_calls": [],
+                "citations": [],
             }
-
 # =========================
 # Custom endpoint client (unchanged API)
 # =========================
@@ -1156,9 +1376,9 @@ class CustomModelClient:
                             elif "response" in evt: yield {"delta": evt["response"]}
                             if evt.get("final"):
                                 usage = evt.get("usage") or {}
-                                yield {"final": True, "usage": _norm_usage_dict(usage), "model_name": self.model_name}
+                                yield {"event": "final", "usage": _norm_usage_dict(usage), "model_name": self.model_name}
                                 return
-                    yield {"final": True, "usage": {}, "model_name": self.model_name}
+                    yield {"event": "final", "usage": {}, "model_name": self.model_name}
                     return
 
                 text_buffer = []
@@ -1173,7 +1393,7 @@ class CustomModelClient:
                         elif "response" in obj: yield {"delta": obj["response"]}
                         if obj.get("final"):
                             usage = obj.get("usage") or {}
-                            yield {"final": True, "usage": _norm_usage_dict(usage), "model_name": self.model_name}
+                            yield {"event": "final", "usage": _norm_usage_dict(usage), "model_name": self.model_name}
                             return
                 try:
                     full = await resp.json()
@@ -1181,12 +1401,12 @@ class CustomModelClient:
                     if out:
                         for i in range(0, len(out), 30): yield {"delta": out[i:i+30]}
                     usage = full.get("usage") or {}
-                    yield {"final": True, "usage": _norm_usage_dict(usage), "model_name": self.model_name}
+                    yield {"event": "final", "usage": _norm_usage_dict(usage), "model_name": self.model_name}
                 except Exception:
                     out = "".join(text_buffer)
                     if out:
                         for i in range(0, len(out), 30): yield {"delta": out[i:i+30]}
-                    yield {"final": True, "usage": {}, "model_name": self.model_name}
+                    yield {"event": "final", "usage": {}, "model_name": self.model_name}
 
 # =========================
 # Embeddings
