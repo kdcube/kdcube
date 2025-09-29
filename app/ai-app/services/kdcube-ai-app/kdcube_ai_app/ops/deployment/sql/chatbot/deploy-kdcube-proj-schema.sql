@@ -11,6 +11,7 @@ CREATE SCHEMA IF NOT EXISTS <SCHEMA>;
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_messages (
                                                       id               BIGSERIAL PRIMARY KEY,
                                                       user_id          TEXT NOT NULL,
+                                                      bundle_id        TEXT,
                                                       conversation_id  TEXT NOT NULL,
                                                       message_id       TEXT,                           -- ConversationStore id; present for artifacts
                                                       role             TEXT NOT NULL,                  -- 'user' | 'assistant' | 'artifact'
@@ -21,14 +22,26 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_messages (
     user_type        TEXT NOT NULL DEFAULT 'anonymous',
     tags             TEXT[] NOT NULL DEFAULT '{}',
     embedding        VECTOR(1536),
-    track_id         TEXT
+    track_id         TEXT,
+    turn_id          TEXT
     );
 
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_conversation_ts
   ON <SCHEMA>.conv_messages (user_id, conversation_id, ts DESC);
 
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_conv_track_ts
-  ON <SCHEMA>.conv_messages (user_id, conversation_id, track_id, ts DESC);
+-- CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_conv_track_ts
+--   ON <SCHEMA>.conv_messages (user_id, conversation_id, track_id, ts DESC);
+
+-- 0.2) Helpful indexes
+CREATE INDEX IF NOT EXISTS conv_messages_bundle_id_idx
+  ON <SCHEMA>.conv_messages (bundle_id);
+
+-- If you often combine with user & conversation scope:
+CREATE INDEX IF NOT EXISTS conv_messages_user_conv_bundle_ts_idx
+  ON <SCHEMA>.conv_messages (user_id, conversation_id, bundle_id, ts DESC);
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_conv_turn
+  ON <SCHEMA>.conv_messages (user_id, conversation_id, turn_id);
 
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_type_ts
   ON <SCHEMA>.conv_messages (user_type, ts DESC);

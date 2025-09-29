@@ -80,6 +80,7 @@ class ConversationStore:
         turn_id: str,
         role: str,
         text: str,
+        bundle_id: str|None = None,
         payload: Any | None = None,
         meta: Dict | None = None,
         embedding: List[float] | None = None,
@@ -110,6 +111,7 @@ class ConversationStore:
             "user_id": user_or_fp,   # stable owner id used in RN
             "conversation_id": conversation_id,
             "turn_id": turn_id,
+            "bundle_id": bundle_id,
             "role": role,
             "text": text,
             "timestamp": msg_ts + "Z",

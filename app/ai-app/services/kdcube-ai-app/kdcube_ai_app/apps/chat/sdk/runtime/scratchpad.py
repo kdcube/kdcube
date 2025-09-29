@@ -103,6 +103,20 @@ class TurnScratchpad:
         # exact-reference
         self.relevant_turn_ids: List[str] = []
 
+        # ticket flow
+        self.open_ticket: Optional[dict] = None
+        self.ticket_answer_text: Optional[str] = None
+        self.ticket_resolved: bool = False
+        self.ticket_resolved_with_answer: bool = False
+        self.history_depth_bonus: int = 0
+
+        self.objective = None
+
+        self.conversation_title = None
+        self.is_new_conversation = False
+        self.active_set = None    # last known active set (reconciled)
+        self.active_set_trimmed = None # minified version of active set (for LLMs)
+
         # current turn
         self.proposed_facts: List[Dict[str, Any]] = []
         self.exceptions: List[Dict[str, Any]] = []

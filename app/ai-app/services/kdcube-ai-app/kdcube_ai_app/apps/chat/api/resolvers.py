@@ -7,10 +7,14 @@ Simplified resolvers module with clean separation of concerns
 """
 import os
 import logging
+from typing import Tuple, Optional
 
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
+from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
+from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 # Import centralized configuration
 from kdcube_ai_app.infra.gateway.config import (
     GatewayConfigFactory,
@@ -272,7 +276,11 @@ def update_gateway_config(**kwargs):
 _auth_manager = None
 _gateway = None
 _fastapi_adapter = None
-_pg_pool = None
+_pg_pool: Optional = None
+
+_conv_index: Optional[ConvIndex] = None
+_conv_store: Optional[ConversationStore] = None
+_conv_browser: Optional[ContextRAGClient] = None
 
 def get_auth_manager():
     """Get singleton auth manager"""
@@ -487,6 +495,9 @@ async def get_pg_pool():
     _settings = get_settings()
     global _pg_pool
 
+    if _pg_pool is not None:
+        return _pg_pool
+
     import asyncpg, json
     async def _init_conn(conn: asyncpg.Connection):
         # Encode/decode json & jsonb as Python dicts automatically
@@ -503,3 +514,26 @@ async def get_pg_pool():
         init=_init_conn,
     )
     return _pg_pool
+
+async def get_conversation_system(pg_pool) -> Tuple[ContextRAGClient, ConvIndex, ConversationStore]:
+
+    _settings = get_settings()
+    global _conv_index
+    global _conv_store
+    global _conv_browser
+
+    if _conv_browser is not None:
+        return _conv_browser, _conv_index, _conv_store
+
+    if not pg_pool:
+        raise Exception("[Conversation Browser]. PG pool not found")
+
+    _conv_index = ConvIndex(pool=pg_pool)
+    await _conv_index.init()
+
+    _conv_store = ConversationStore(_settings.STORAGE_PATH)
+    _conv_browser = ContextRAGClient(conv_idx=_conv_index,
+                                  store=_conv_store,
+                                  model_service=None)
+    return _conv_browser, _conv_index, _conv_store
+

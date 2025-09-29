@@ -102,14 +102,17 @@ class ConvIndex:
             user_type: str = "anonymous",
             embedding: Optional[List[float]] = None,
             message_id: Optional[str] = None,
-            track_id: Optional[str] = None,  # NEW
+            track_id: Optional[str] = None,
+            turn_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
     ) -> int:
         ts_dt = _coerce_ts(ts)
         async with self._pool.acquire() as con:
             q = f"""
                 INSERT INTO {self.schema}.conv_messages
-                    (user_id, conversation_id, message_id, role, text, s3_uri, ts, ttl_days, user_type, tags, embedding, track_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12)
+                  (user_id, conversation_id, message_id, role, text, s3_uri, ts,
+                   ttl_days, user_type, tags, embedding, track_id, turn_id, bundle_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,$13,$14)
                 RETURNING id
             """
             rec = await con.fetchrow(
@@ -126,6 +129,8 @@ class ConvIndex:
                 (tags or []),
                 convert_embedding_to_string(embedding) if embedding else None,
                 track_id,
+                turn_id,
+                bundle_id,
             )
             return int(rec["id"])
 
@@ -138,7 +143,8 @@ class ConvIndex:
             top_k: int = 8,
             days: int = 90,
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
-            track_id: Optional[str] = None,  # NEW
+            track_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         args = [user_id, conversation_id, list(roles), str(days), convert_embedding_to_string(query_embedding)]
         where = [
@@ -152,9 +158,12 @@ class ConvIndex:
         if track_id:
             args.append(track_id)
             where.append(f"track_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"bundle_id = ${len(args)}")
 
         q = f"""
-            SELECT id, message_id, role, text, s3_uri, ts, tags, track_id,
+            SELECT id, message_id, role, text, s3_uri, ts, tags, track_id, turn_id, bundle_id,
                    1 - (embedding <=> $5::vector) AS score
             FROM {self.schema}.conv_messages
             WHERE {' AND '.join(where)}
@@ -176,7 +185,8 @@ class ConvIndex:
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
             any_tags: Optional[List[str]] = None,
             all_tags: Optional[List[str]] = None,
-            track_id: Optional[str] = None,  # NEW
+            track_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Optional server-side tag filtering flavor. Most callers should prefer search_recent
@@ -206,9 +216,12 @@ class ConvIndex:
         if track_id:
             args.append(track_id)
             clauses.append(f"track_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id)
+            clauses.append(f"bundle_id = ${len(args)}")
 
         q = f"""
-            SELECT id, message_id, role, text, s3_uri, ts, tags, track_id,
+            SELECT id, message_id, role, text, s3_uri, ts, tags, track_id, turn_id, bundle_id,
                    1 - (embedding <=> $5::vector) AS score
             FROM {self.schema}.conv_messages
             WHERE {' AND '.join(clauses)}
@@ -263,11 +276,11 @@ class ConvIndex:
         )
         SELECT
           h.id AS hit_id, h.role AS hit_role, h.text AS hit_text, h.s3_uri AS hit_s3_uri,
-          h.ts AS hit_ts, h.tags AS hit_tags, h.track_id AS hit_track_id, h.score AS hit_score,
-
-          u.id AS user_id_msg, u.text AS user_text, u.s3_uri AS user_s3_uri, u.ts AS user_ts,
-          a.id AS assistant_id_msg, a.text AS assistant_text, a.s3_uri AS assistant_s3_uri, a.ts AS assistant_ts
-
+          h.ts AS hit_ts, h.tags AS hit_tags, h.track_id AS hit_track_id, h.turn_id AS hit_turn_id, h.score AS hit_score,
+        
+          u.id AS user_id_msg, u.text AS user_text, u.s3_uri AS user_s3_uri, u.ts AS user_ts, u.turn_id AS user_turn_id,
+          a.id AS assistant_id_msg, a.text AS assistant_text, a.s3_uri AS assistant_s3_uri, a.ts AS assistant_ts, a.turn_id AS assistant_turn_id
+        
         FROM hits h
         LEFT JOIN LATERAL (
           SELECT u.*
@@ -356,6 +369,9 @@ class ConvIndex:
                     user_type=user_type,
                     tags=meta.get("tags") or [],
                     embedding=emb,
+                    track_id=meta.get("track_id"),
+                    turn_id=meta.get("turn_id"),
+                    bundle_id=meta.get("bundle_id"),
                 )
                 n += 1
             except Exception:
@@ -377,7 +393,8 @@ class ConvIndex:
             user_id: str,
             conversation_id: Optional[str],
             track_id: Optional[str],
-            query_embedding: Optional[List[float]],   # <-- now optional
+            turn_id: Optional[str] = None,
+            query_embedding: Optional[List[float]] = None,   # <-- now optional
             top_k: int = 12,
             days: int = 90,
             scope: str = "track",  # 'track' | 'conversation' | 'user'
@@ -391,6 +408,7 @@ class ConvIndex:
             include_deps: bool = True,
             sort: str = "hybrid",  # 'hybrid' | 'semantic' | 'recency'
             timestamp_filters: Optional[List[Dict[str, Any]]] = None,   # [{'op': '>=', 'value': iso/datetime}, ...]
+            bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         if kinds:
             any_tags = (list(any_tags or []) + list(kinds))
@@ -421,20 +439,30 @@ class ConvIndex:
             if conversation_id:
                 args.append(conversation_id)
                 where.append(f"m.conversation_id = ${len(args)}")
+            if turn_id is not None:
+                args.append(turn_id)
+                where.append(f"m.turn_id = ${len(args)}")
         elif scope == "conversation" and conversation_id:
             args.append(conversation_id)
             where.append(f"m.conversation_id = ${len(args)}")
+            if turn_id is not None:
+                args.append(turn_id)
+                where.append(f"m.turn_id = ${len(args)}")
+
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"m.bundle_id = ${len(args)}")
 
         # tags
         if any_tags:
             args.append(list(any_tags))
-            where.append(f"m.tags && ${len(args)}")
+            where.append(f"m.tags && ${len(args)}::text[]")
         if all_tags:
             args.append(list(all_tags))
             where.append(f"m.tags @> ${len(args)}::text[]")
         if not_tags:
             args.append(list(not_tags))
-            where.append(f"NOT (m.tags && ${len(args)})")
+            where.append(f"NOT (m.tags && ${len(args)}::text[])")
 
         # text match (optional)
         if text_query:
@@ -496,7 +524,7 @@ class ConvIndex:
             FROM {self.schema}.conv_messages m
             WHERE {' AND '.join(where)}
           )
-          SELECT m.id, m.message_id, m.role, m.text, m.s3_uri, m.ts, m.tags, m.track_id,
+          SELECT m.id, m.message_id, m.role, m.text, m.s3_uri, m.ts, m.tags, m.track_id, m.turn_id, m.bundle_id,
                  m.sim, m.age_sec, m.rboost,
                  (0.70*m.sim + 0.25*exp(-ln(2) * m.age_sec / ({half_life_days_s}*24*3600.0)) + 0.05*m.rboost) AS score
                  {deps_select}
@@ -522,6 +550,7 @@ class ConvIndex:
             not_tags: Optional[Sequence[str]] = None,
             limit: int = 30,
             days: int = 30,
+            bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         args: List[Any] = [user_id, list(roles), str(days)]
         where = [
@@ -539,6 +568,8 @@ class ConvIndex:
         elif conversation_id:
             args.append(conversation_id)
             where.append(f"conversation_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id); where.append(f"bundle_id = ${len(args)}")
         if any_tags:
             args.append(list(any_tags))
             where.append(f"tags && ${len(args)}::text[]")
@@ -550,7 +581,7 @@ class ConvIndex:
             where.append(f"NOT (tags && ${len(args)}::text[])")
 
         q = f"""
-          SELECT id, message_id, role, text, s3_uri, ts, tags, track_id
+          SELECT id, message_id, role, text, s3_uri, ts, tags, track_id, turn_id, bundle_id
           FROM {self.schema}.conv_messages
           WHERE {' AND '.join(where)}
           ORDER BY ts DESC
@@ -567,6 +598,7 @@ class ConvIndex:
             conversation_id: str,
             query_embedding: List[float],
             track_id: Optional[str],
+            turn_id: Optional[str] = None,
             recent_limit: int = 30,  # deterministic
             recent_days: int = 30,
             semantic_top_k: int = 12,  # add older-but-relevant
@@ -591,6 +623,7 @@ class ConvIndex:
             user_id=user_id,
             conversation_id=conversation_id,
             track_id=track_id,
+            turn_id=turn_id,
             query_embedding=query_embedding,
             top_k=semantic_top_k,
             days=semantic_days,
@@ -615,6 +648,7 @@ class ConvIndex:
             mention_emb: Optional[List[float]],
             prefer_kinds: Sequence[str] = ("codegen.out.inline", "codegen.program.presentation", "codegen.out.file"),
             window_limit: int = 40,
+            turn_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         # 1) Look in recent window for deliverables
         recent = await self.fetch_recent(
@@ -639,6 +673,7 @@ class ConvIndex:
                 user_id=user_id,
                 conversation_id=conversation_id,
                 track_id=track_id,
+                turn_id=turn_id,
                 query_embedding=mention_emb,
                 top_k=8,
                 days=365,
@@ -911,19 +946,14 @@ class ConvIndex:
             tags: Optional[List[str]] = None,
             s3_uri: Optional[str] = None,
             ts: Optional[Union[str, datetime]] = None,
+            turn_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
     ) -> int:
-        """
-        In-place UPDATE of a single row in conv_messages. Use either (id) or (message_id).
-        Only the provided fields are updated. Returns the number of affected rows (0 or 1).
-
-        NOTE: This updates the INDEX record (conv_messages). If you also want to replace
-        the stored payload/blob, write a new blob via ConversationStore first,
-        then set s3_uri/text here to point this index row at the new content.
-        """
-        ts_dt = _coerce_ts(ts)
         if not id and not message_id:
             raise ValueError("update_message requires either id or message_id")
+
         sets, args = [], []
+
         if text is not None:
             sets.append(f"text = ${len(args)+1}")
             args.append(text)
@@ -934,12 +964,17 @@ class ConvIndex:
             sets.append(f"s3_uri = ${len(args)+1}")
             args.append(s3_uri)
         if ts is not None:
+            ts_dt = _coerce_ts(ts)  # moved inside the guard
             sets.append(f"ts = ${len(args)+1}::timestamptz")
             args.append(ts_dt)
+        if turn_id is not None:
+            sets.append(f"turn_id = ${len(args)+1}")
+            args.append(turn_id)
+        if bundle_id is not None:
+            sets.append(f"bundle_id = ${len(args)+1}"); args.append(bundle_id)
         if not sets:
-            return 0  # nothing to do
+            return 0
 
-        where = ""
         if id:
             where = f"id = ${len(args)+1}"
             args.append(int(id))
@@ -950,11 +985,225 @@ class ConvIndex:
         q = f"UPDATE {self.schema}.conv_messages SET {', '.join(sets)} WHERE {where}"
         async with self._pool.acquire() as con:
             res = await con.execute(q, *args)
-        # res format: 'UPDATE <n>'
         try:
             return int(res.split()[-1])
         except Exception:
             return 0
+
+    async def count_turns(
+            self,
+            *,
+            user_id: str,
+            conversation_id: str,
+            days: int = 365,                 # configurable window; mirrors other APIs
+            track_id: Optional[str] = None,  # optional scope-narrowing
+            bundle_id: Optional[str] = None,
+    ) -> int:
+        """
+        Return the number of unique (non-NULL) turn_id values for the given conversation,
+        respecting TTL and a recency window.
+        """
+        args = [user_id, conversation_id, str(days)]
+        where = [
+            "user_id = $1",
+            "conversation_id = $2",
+            "ts >= now() - ($3::text || ' days')::interval",
+            "ts + (ttl_days || ' days')::interval >= now()",
+            "turn_id IS NOT NULL"
+        ]
+        if track_id:
+            args.append(track_id)
+            where.append(f"track_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id); where.append(f"bundle_id = ${len(args)}")
+
+        q = f"""
+            SELECT COALESCE(COUNT(DISTINCT turn_id), 0) AS n
+            FROM {self.schema}.conv_messages
+            WHERE {' AND '.join(where)}
+        """
+        async with self._pool.acquire() as con:
+            row = await con.fetchrow(q, *args)
+        return int(row["n"] or 0)
+
+    async def get_conversation_turn_ids_from_tags(
+            self,
+            *,
+            user_id: str,
+            conversation_id: str,
+            days: int = 365,
+            track_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
+            turn_ids: Optional[Sequence[str]] = None,
+
+    ) -> List[Dict[str, Any]]:
+        """
+        Return occurrences of turn tags ('turn:<id>') for the given user & conversation,
+        ordered oldest→newest, preserving duplicates. Each item includes:
+          - turn_id: the extracted turn id
+          - ts:     timestamp of the message where the tag was found (ISO8601 str)
+          - tags:   full tags array from that message
+        TTL is respected and a recency window can be applied via `days`.
+        """
+        args: List[Any] = [user_id, conversation_id, str(days)]
+        where = [
+            "m.user_id = $1",
+            "m.conversation_id = $2",
+            "m.ts >= now() - ($3::text || ' days')::interval",
+            "m.ts + (m.ttl_days || ' days')::interval >= now()",
+        ]
+        if track_id:
+            args.append(track_id)
+            where.append(f"m.track_id = ${len(args)}")
+
+        if bundle_id:
+            args.append(bundle_id); where.append(f"m.bundle_id = ${len(args)}")
+
+        turn_ids_cond = "TRUE"
+        if turn_ids:
+            args.append(list(turn_ids))
+            turn_ids_cond = f"split_part(t.tag, ':', 2) = ANY(${len(args)}::text[])"
+
+        q = f"""
+            WITH exploded AS (
+              SELECT
+                m.ts,
+                m.message_id AS mid,
+                m.s3_uri     AS s3_uri,
+                m.tags       AS tags,
+                m.bundle_id  AS bundle_id,
+                t.tag        AS tag,
+                array_position(m.tags, t.tag) AS tag_idx
+              FROM {self.schema}.conv_messages m
+              JOIN LATERAL unnest(m.tags) AS t(tag) ON TRUE
+              WHERE {' AND '.join(where)}
+                AND t.tag LIKE 'turn:%'
+                AND {turn_ids_cond}
+            )
+            SELECT substring(tag FROM '^turn:(.+)$') AS turn_id,
+                   ts, tags, mid, s3_uri, bundle_id
+            FROM exploded
+            ORDER BY ts ASC, mid ASC, tag_idx ASC
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            tid = r["turn_id"]
+            if not tid:
+                continue
+            ts = r["ts"]
+            out.append({
+                "turn_id": tid,
+                "ts": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+                "tags": list(r.get("tags") or []),
+                "mid": r.get("mid"),
+                "s3_uri": r.get("s3_uri"),
+                "bundle_id": r.get("bundle_id"),
+            })
+        return out
+
+    async def list_user_conversations(
+            self,
+            *,
+            user_id: str,
+            since: Optional[Union[str, datetime]] = None,
+            limit: Optional[int] = None,
+            days: int = 365,
+            include_conv_start_text: bool = False,
+            bundle_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        List conversations for a user, filtered server-side:
+          - last_activity_at: MAX(ts) across messages (TTL respected),
+            additionally constrained by `since` (if provided) and the rolling `days` window
+          - started_at: MIN(ts) among conv-start fingerprint rows (TTL + days window)
+          - conv_start_text: optional small JSON text blob of the latest conv-start
+        Ordered by last_activity_at DESC. Applies LIMIT if given.
+        """
+        # $1=user_id, $2=days
+        args: List[Any] = [user_id, str(days)]
+
+        extra = []
+        if bundle_id:
+            args.append(bundle_id)
+            extra.append(f"AND m.bundle_id = ${len(args)}")
+
+        since_cond = "TRUE"
+        if since is not None:
+            dt = _coerce_ts(since)
+            args.append(dt)  # $3
+            since_cond = f"m.ts >= ${len(args)}::timestamptz"
+
+        limit_sql = f"LIMIT {int(limit)}" if (limit and limit > 0) else ""
+
+        conv_text_col = "NULL::text AS conv_start_text"
+        join_conv_text = ""
+        if include_conv_start_text:
+            conv_text_col = "st.conv_start_text"
+            join_conv_text = f"""
+            LEFT JOIN LATERAL (
+              SELECT s.text AS conv_start_text
+              FROM {self.schema}.conv_messages s
+              WHERE s.user_id = $1
+                AND s.conversation_id = r.conversation_id
+                AND s.ts + (s.ttl_days || ' days')::interval >= now()
+                AND s.ts >= now() - ($2::text || ' days')::interval
+                {'AND s.bundle_id = $3' if bundle_id else ''}
+                AND s.tags @> ARRAY['conv.start','artifact:turn.fingerprint.v1']::text[]
+              ORDER BY s.ts DESC
+              LIMIT 1
+            ) st ON TRUE
+            """
+
+        q = f"""
+          WITH recent AS (
+            SELECT m.conversation_id, MAX(m.ts) AS last_activity_at
+            FROM {self.schema}.conv_messages m
+            WHERE m.user_id = $1
+              AND m.ts + (m.ttl_days || ' days')::interval >= now()
+              AND m.ts >= now() - ($2::text || ' days')::interval
+              {' '.join(extra)}
+              AND {since_cond}
+            GROUP BY m.conversation_id
+          ),
+          starts AS (
+            SELECT m.conversation_id, MIN(m.ts) AS started_at
+            FROM {self.schema}.conv_messages m
+            WHERE m.user_id = $1
+              AND m.ts + (m.ttl_days || ' days')::interval >= now()
+              AND m.ts >= now() - ($2::text || ' days')::interval
+              {' '.join(extra)}
+              AND m.tags @> ARRAY['conv.start','artifact:turn.fingerprint.v1']::text[]
+            GROUP BY m.conversation_id
+          )
+          SELECT
+            r.conversation_id,
+            r.last_activity_at,
+            s.started_at,
+            {conv_text_col}
+          FROM recent r
+          LEFT JOIN starts s ON s.conversation_id = r.conversation_id
+          {join_conv_text}
+          ORDER BY r.last_activity_at DESC
+          {limit_sql}
+        """
+
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+
+        out: List[Dict[str, Any]] = []
+        for r in rows:
+            la = r["last_activity_at"]
+            sa = r["started_at"]
+            out.append({
+                "conversation_id": r["conversation_id"],
+                "last_activity_at": la.isoformat() if hasattr(la, "isoformat") else la,
+                "started_at": sa.isoformat() if (sa and hasattr(sa, "isoformat")) else sa,
+                **({"conv_start_text": r.get("conv_start_text")} if include_conv_start_text else {}),
+            })
+        return out
 
 """
         if tags_mode == "all":

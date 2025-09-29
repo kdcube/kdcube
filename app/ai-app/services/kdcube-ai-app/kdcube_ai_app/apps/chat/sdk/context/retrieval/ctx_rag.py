@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import datetime
 import pathlib, json
-from typing import Optional, Sequence, List, Dict, Any
+from typing import Optional, Sequence, List, Dict, Any, Union
 
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnLog
@@ -42,11 +42,13 @@ class ContextRAGClient:
         context_snapshot = context.to_dict()
         return context_snapshot
 
-    def _scope_from_ctx(self, ctx: dict, *, user_id=None, conversation_id=None, track_id=None) -> tuple[str,str,str]:
+    def _scope_from_ctx(self, ctx: dict, *,
+                        user_id=None, conversation_id=None, track_id=None, turn_id=None, bundle_id=None) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
         user = user_id or ctx.get("user_id")
         conv = conversation_id or ctx.get("conversation_id")
         track = track_id or ctx.get("track_id")
-        return user, conv, track
+        bundle = bundle_id or ctx.get("bundle_id")
+        return user, conv, track, bundle
 
     # ---------- public API ----------
 
@@ -65,6 +67,7 @@ class ContextRAGClient:
             user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
             track_id: Optional[str] = None,
+            turn_id: Optional[str] = None,
             roles: tuple[str,...] = ("artifact","assistant","user"),
             with_payload: bool = False,
             sort: str = "hybrid",
@@ -72,15 +75,19 @@ class ContextRAGClient:
             all_tags: Optional[Sequence[str]] = None,
             not_tags: Optional[Sequence[str]] = None,
             timestamp_filters: Optional[List[Dict[str, Any]]] = None,
+            bundle_id: Optional[str] = None,
     ) -> dict:
         """
         Semantic/Hybrid search (needs embedding unless provided).
         """
         ctx_loaded = self._load_ctx(ctx)
-        user, conv, track = self._scope_from_ctx(ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id)
+        user, conv, track, bundle = self._scope_from_ctx(
+            ctx_loaded, user_id=user_id, conversation_id=conversation_id,
+            track_id=track_id, turn_id=turn_id, bundle_id=bundle_id
+        )
 
         qvec = list(embedding) if embedding is not None else None
-        if qvec is None and query:
+        if qvec is None and query and self.model_service:
             [qvec] = await self.model_service.embed_texts([query])
         # if qvec is None:
         #     # If caller truly wants recency-only, use .recent() instead of .search().
@@ -90,6 +97,7 @@ class ContextRAGClient:
             user_id=user,
             conversation_id=(conv or None),
             track_id=(track or None),
+            turn_id=turn_id,
             query_embedding=qvec,
             top_k=top_k,
             days=days,
@@ -103,6 +111,7 @@ class ContextRAGClient:
             any_tags=any_tags,
             all_tags=all_tags,
             not_tags=not_tags,
+            bundle_id=bundle,
         )
 
         items = []
@@ -118,14 +127,15 @@ class ContextRAGClient:
                 "sim": float(r.get("sim") or 0.0),
                 "rec": float(r.get("rec") or 0.0),
                 "track_id": r.get("track_id"),
+                "turn_id": r.get("turn_id"),
+                "bundle_id": r.get("bundle_id"),
                 "s3_uri": r.get("s3_uri"),
             }
             if include_deps and "deps" in r:
                 item["deps"] = r["deps"]
-            if with_payload:
+            if with_payload and r.get("s3_uri"):
                 try:
-                    doc = self.store.get_message(r["s3_uri"])
-                    item["payload"] = doc
+                    item["payload"] = self.store.get_message(r["s3_uri"])
                 except Exception:
                     pass
             items.append(item)
@@ -147,17 +157,21 @@ class ContextRAGClient:
             all_tags: Optional[Sequence[str]] = None,
             not_tags: Optional[Sequence[str]] = None,
             with_payload: bool = False,
+            bundle_id: Optional[str] = None,
     ) -> dict:
         """
         Pure-recency fetch (no embeddings). Fast path for "last N in track".
         """
         ctx_loaded = self._load_ctx(ctx)
-        user, conv, track = self._scope_from_ctx(ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id)
+        user, conv, track, bundle = self._scope_from_ctx(
+            ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id, bundle_id=bundle_id
+        )
         any_tags = list(any_tags or [])
 
         if kinds:
             all_tags = list(all_tags or [])
             all_tags += list(kinds)
+
         rows = await self.idx.fetch_recent(
             user_id=user,
             conversation_id=(conv or None),
@@ -167,7 +181,8 @@ class ContextRAGClient:
             all_tags=list(all_tags or []) or None,
             not_tags=list(not_tags or []) or None,
             limit=limit,
-            days=days
+            days=days,
+            bundle_id=bundle,
         )
         items = []
         for r in rows:
@@ -179,12 +194,13 @@ class ContextRAGClient:
                 "ts": r["ts"].isoformat() if hasattr(r["ts"], "isoformat") else r["ts"],
                 "tags": list(r.get("tags") or []),
                 "track_id": r.get("track_id"),
+                "turn_id": r.get("turn_id"),
+                "bundle_id": r.get("bundle_id"),
                 "s3_uri": r.get("s3_uri"),
             }
-            if with_payload:
+            if with_payload and r.get("s3_uri"):
                 try:
-                    doc = self.store.get_message(r["s3_uri"])
-                    item["payload"] = doc
+                    item["payload"] = self.store.get_message(r["s3_uri"])
                 except Exception:
                     pass
             items.append(item)
@@ -200,6 +216,7 @@ class ContextRAGClient:
             tenant: str, project: str, user: str,
             conversation_id: str, user_type: str,
             turn_id: str, track_id: Optional[str],
+            bundle_id: str,
             log: TurnLog,
             extra_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
@@ -212,13 +229,18 @@ class ContextRAGClient:
             tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
         s3_uri, message_id, rn = self.store.put_message(
             tenant=tenant, project=project, user=user, fingerprint=None,
-            conversation_id=conversation_id, role="artifact", text=md,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+            role="artifact", text=md,
             payload=payload,
             meta={"kind": "turn.log", "turn_id": turn_id, "track_id": track_id},
             embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
         )
         await self.idx.add_message(
-            user_id=user, conversation_id=conversation_id, role="artifact",
+            user_id=user, conversation_id=conversation_id,
+            turn_id=turn_id,
+            bundle_id=bundle_id,
+            role="artifact",
             text=md, s3_uri=s3_uri, ts=log.started_at_iso,
             tags=tags,
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
@@ -309,13 +331,16 @@ class ContextRAGClient:
                                           turn_id: str, reaction: str,
                                           tenant: str, project: str, user: str,
                                           fingerprint: Optional[str],
-                                          user_type: str, conversation_id: str, track_id: str):
+                                          user_type: str, conversation_id: str, track_id: str,
+                                          bundle_id: str):
 
         payload = {"reaction": {"text": reaction, "ts": datetime.datetime.utcnow().isoformat()+"Z"}}
         # persist as a small artifact tied to the same turn (don’t overwrite)
         s3_uri, message_id, rn = self.store.put_message(
             tenant=tenant, project=project, user=user,
-            conversation_id=conversation_id, role="artifact",
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+            role="artifact",
             text=f"[turn.log.reaction]\n{reaction}",
             payload=payload,
             meta={"kind": "turn.log.reaction", "turn_id": turn_id, "track_id": track_id},
@@ -323,7 +348,9 @@ class ContextRAGClient:
             fingerprint=fingerprint
         )
         await self.idx.add_message(
-            user_id=user, conversation_id=conversation_id, role="artifact",
+            user_id=user, conversation_id=conversation_id, turn_id=turn_id,
+            bundle_id=bundle_id,
+            role="artifact",
             text=f"[turn.log.reaction] {reaction}", s3_uri=s3_uri, ts=payload["reaction"]["ts"],
             tags=["kind:turn.log.reaction", f"turn:{turn_id}", f"track:{track_id}"],
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
@@ -339,7 +366,8 @@ class ContextRAGClient:
             turn_id: str, track_id: Optional[str],
             content: dict,
             content_str: Optional[str] = None,
-            extra_tags: Optional[List[str]] = None
+            extra_tags: Optional[List[str]] = None,
+            bundle_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Writes markdown to store (assistant artifact) + indexes it."""
 
@@ -351,13 +379,16 @@ class ContextRAGClient:
             tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
         s3_uri, message_id, rn = self.store.put_message(
             tenant=tenant, project=project, user=user_id, fingerprint=None,
-            conversation_id=conversation_id, role="artifact", text=content_str,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+            role="artifact", text=content_str,
             payload=content,
             meta={"kind": kind, "turn_id": turn_id, "track_id": track_id},
             embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
         )
         await self.idx.add_message(
-            user_id=user_id, conversation_id=conversation_id, role="artifact",
+            user_id=user_id, conversation_id=conversation_id, turn_id=turn_id,
+            bundle_id=bundle_id, role="artifact",
             text=content_str, s3_uri=s3_uri, ts=datetime.datetime.utcnow().isoformat()+"Z",
             tags=tags,
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
@@ -392,6 +423,7 @@ class ContextRAGClient:
             tenant: str, project: str, user_id: str,
             conversation_id: str, user_type: str,
             turn_id: str, track_id: Optional[str],
+            bundle_id: str,
             content: dict,
             unique_tags: List[str],
     ) -> Dict[str, Any]:
@@ -417,7 +449,7 @@ class ContextRAGClient:
             saved = await self.save_artifact(
                 kind=kind,
                 tenant=tenant, project=project, user_id=user_id, conversation_id=conversation_id,
-                user_type=user_type, turn_id=turn_id, track_id=track_id,
+                user_type=user_type, turn_id=turn_id, track_id=track_id, bundle_id=bundle_id,
                 content=content, content_str=content_str, extra_tags=unique_tags,
             )
             return {"mode": "insert", **saved}
@@ -425,7 +457,8 @@ class ContextRAGClient:
         #  Write a new message blob and then point the index row at it
         s3_uri, message_id, rn = self.store.put_message(
             tenant=tenant, project=project, user=user_id, fingerprint=None,
-            conversation_id=conversation_id, role="artifact", text=content_str,
+            conversation_id=conversation_id, bundle_id=bundle_id,
+            role="artifact", text=content_str,
             payload=content,
             meta={"kind": kind, "turn_id": turn_id, "track_id": track_id},
             embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
@@ -447,3 +480,210 @@ class ContextRAGClient:
         )
         return {"mode": "update", "id": int(existing["id"]), "message_id": existing.get("message_id"), "s3_uri": s3_uri}
 
+
+    async def list_conversations_(self, user_id: str):
+
+        FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
+        CONV_START_FPS_TAG = "conv.start"
+
+        conversation_id = None
+        data = await self.search(kinds=[FINGERPRINT_KIND],
+                                       user_id=user_id,
+                                       conversation_id=conversation_id,
+                                       all_tags=[CONV_START_FPS_TAG],
+                                       )
+
+    async def list_conversations(
+            self,
+            user_id: str,
+            *,
+            last_n: Optional[int] = None,
+            started_after: Optional[Union[str, datetime]] = None,
+            days: int = 365,
+            include_titles: bool = True,
+            bundle_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        List conversations for a user.
+
+        Filters:
+          - started_after: only conversations with any activity on/after this timestamp
+          - last_n: return only the newest N conversations by last activity
+
+        Returns:
+          {
+            "user_id": ...,
+            "items": [
+              {
+                "conversation_id": "...",
+                "started_at": "<ISO8601 or null>",
+                "last_activity_at": "<ISO8601>",
+                ["title": "..."]
+              }, ...
+            ]
+          }
+        """
+        rows = await self.idx.list_user_conversations(
+            user_id=user_id,
+            since=started_after,
+            limit=last_n,
+            days=days,
+            include_conv_start_text=include_titles,
+            bundle_id=bundle_id,
+        )
+
+        items: List[Dict[str, Any]] = []
+        for r in rows:
+            item = {
+                "conversation_id": r["conversation_id"],
+                "started_at": r.get("started_at"),
+                "last_activity_at": r.get("last_activity_at"),
+            }
+            if include_titles:
+                title = None
+                txt = r.get("conv_start_text")
+                if txt:
+                    # conv.start fingerprint is small JSON; try to parse title from text
+                    try:
+                        parsed = json.loads(txt)
+                        if isinstance(parsed, dict):
+                            v = parsed.get("conversation_title")
+                            title = str(v).strip() if v is not None else None
+                    except Exception:
+                        pass
+                if title:
+                    item["title"] = title
+            items.append(item)
+
+        return {"user_id": user_id, "items": items}
+
+    async def get_conversation_details(
+        self, user_id: str, conversation_id: str, *, bundle_id: Optional[str] = None
+    ):
+        """
+        Reconstructed from conv timeseries
+        :param user_id:
+        :param conversation_id:
+        :return:
+        """
+
+        FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
+        CONV_START_FPS_TAG = "conv.start"
+
+        # 1) Find the conv.start fingerprint within this conversation (it is small and is stored as is in the index)
+        data = await self.search(kinds=[FINGERPRINT_KIND],
+                                 user_id=user_id,
+                                 scope="conversation",
+                                 top_k=1,
+                                 conversation_id=conversation_id,
+                                 all_tags=[CONV_START_FPS_TAG],
+                                 bundle_id=bundle_id,
+                                 )
+        conv_start = next(iter(data.get("items") or []), None) if data else None
+        try:
+            conv_start_text = conv_start.get("text")
+            conv_start = json.loads(conv_start_text)
+            # 2) Extract the conversation title from the conv.start fingerprint
+            conversation_title = conv_start.get("conversation_title") if conv_start else None
+        except Exception as ex:
+            conversation_title = None
+        ui_artifacts_tags = ["artifact:codegen.program.citables", "artifact:codegen.program.files",
+                             "chat:user", "chat:assistant",
+                             "chat:thinking"]
+
+        # 3) Get raw turn-tag occurrences (chronological, duplicates preserved)
+        occurrences = await self.idx.get_conversation_turn_ids_from_tags(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id
+        )
+        # 4) Aggregate to first/last timestamps per turn_id, preserving first-seen order
+        turns_map: Dict[str, Dict[str, str|List]] = {}
+        order: List[str] = []
+        started_at = None
+        last_activity_at = None
+
+        for occ in occurrences:
+
+            tid = occ.get("turn_id")
+            ts = occ.get("ts")
+            if not tid or not ts:
+                continue
+            if not started_at:
+                started_at = ts
+
+            tags = occ.get("tags") or []
+            hit = next((t for t in tags if t in ui_artifacts_tags), None)
+            turn_ui_artifacts = turns_map.get(tid, {}).get("artifacts", [])
+            if hit:
+                turn_ui_artifacts.append({"message_id": occ.get("mid"), "type": hit})
+            if tid not in turns_map:
+                turns_map[tid] = {"turn_id": tid, "ts_first": ts, "ts_last": ts, "artifacts": turn_ui_artifacts}
+                order.append(tid)
+            else:
+                # update last-seen timestamp
+                turns_map[tid]["ts_last"] = ts
+                last_activity_at = ts
+
+        turns = [turns_map[tid] for tid in order]
+        return {
+            "user_id": user_id,
+            "conversation_id": conversation_id,
+            "conversation_title": conversation_title,
+            "started_at": started_at,
+            "last_activity_at": last_activity_at,
+            "turns": turns
+        }
+
+    UI_ARTIFACT_TAGS = {
+        "artifact:codegen.program.citables",
+        "artifact:codegen.program.files",
+        "chat:user", "chat:assistant", "chat:thinking",
+    }
+
+    async def fetch_conversation_artifacts(
+        self,
+        *,
+        user_id: str,
+        conversation_id: str,
+        turn_ids: Optional[List[str]] = None,
+        materialize: bool = False,
+        days: int = 365,
+        bundle_id: Optional[str] = None,                         # NEW
+    ) -> Dict[str, Any]:
+        occ = await self.idx.get_conversation_turn_ids_from_tags(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            days=days,
+            bundle_id=bundle_id,                                  # NEW
+            turn_ids=turn_ids or None,
+        )
+        turns_map: Dict[str, Dict[str, Any]] = {}
+        order: List[str] = []
+        for r in occ:
+            tid = r["turn_id"]
+            tags = set(r.get("tags") or [])
+            tag_hits = self.UI_ARTIFACT_TAGS & tags
+            if not tag_hits:
+                continue
+            tag_type = next(iter(tag_hits))
+            if tid not in turns_map:
+                turns_map[tid] = {"turn_id": tid, "artifacts": []}
+                order.append(tid)
+            item = {
+                "message_id": r.get("mid"),
+                "type": tag_type,
+                "ts": r.get("ts"),
+                "s3_uri": r.get("s3_uri"),
+                "bundle_id": r.get("bundle_id"),                  # NEW (echo if useful to UI)
+            }
+            if materialize and r.get("s3_uri"):
+                try:
+                    item["data"] = self.store.get_message(r["s3_uri"])
+                    if "embedding" in item["data"]:
+                        del item["data"]["embedding"]
+                except Exception:
+                    item["data"] = None
+            turns_map[tid]["artifacts"].append(item)
+
+        return {"user_id": user_id, "conversation_id": conversation_id, "turns": [turns_map[tid] for tid in order]}
