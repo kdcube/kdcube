@@ -925,14 +925,16 @@ class ModelServiceBase:
             model_limitations = model_caps(model_name)
             tools_support = model_limitations.get("tools", False)
             reasoning_support = model_limitations.get("reasoning", False)
+            temperature_supported = model_limitations.get("temperature", False)
 
             stream_kwargs = {
-                "temperature": temperature,
                 "max_output_tokens": max_tokens,
                 "extra_body": {
                     "text": {"format": {"type": "text"}, "verbosity": "medium"},
                 },
             }
+            if temperature_supported:
+                stream_kwargs["temperature"] = temperature
             if tools and tools_support:
                 stream_kwargs["tools"] = tools
                 if tool_choice is not None:
