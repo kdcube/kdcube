@@ -57,6 +57,7 @@ import {copyMarkdownToClipboard} from "../../Clipboard.ts";
 import {getFileIcon} from "../../FileIcons.tsx";
 import {markdownComponents, markdownComponentsTight, rehypePlugins, remarkPlugins} from "./markdownRenderUtils.tsx";
 import {selectFileAdvanced} from "../../shared.ts";
+import {useWordStreamEffect} from "../../WordStreamingEffects.tsx";
 
 interface ChatInterfaceProps {
     lockMessage?: string;
@@ -273,6 +274,13 @@ const AssistantMessage = (
 ) => {
     const mdRed = useRef<HTMLDivElement>(null);
 
+
+    const streamedText = useWordStreamEffect(
+        message?.text ?? "",
+        50,
+        2
+    );
+
     const [tab, setTab] = useState<AssistantMessageTab>("message")
     const isPressed = (tabName: AssistantMessageTab) => tab === tabName
 
@@ -311,7 +319,7 @@ const AssistantMessage = (
                 linkTarget="_blank"
                 skipHtml={false}
             >
-                {message.text}
+                {message.isGreeting ? message.text : streamedText}
             </ReactMarkdown>
             <div
                 className="flex flex-row space-x-2 w-full justify-start transition-all duration-300 ease-out"
@@ -326,7 +334,7 @@ const AssistantMessage = (
             </div>
 
         </div>)
-    }, [message, files])
+    }, [message, files, streamedText])
 
     const [expandedSteps, setExpandedSteps] = useState<Map<number, boolean>>(new Map())
 
@@ -392,7 +400,8 @@ const AssistantMessage = (
                 <Fragment key={`source_${key}`}>
                     {source.links.map((link, i) => {
                         return (
-                            <a key={`source_link_${key}_${i}`} href={link.url} target="_blank" className="p-0.5 flex-1 rounded-sm border-1 border-gray-200 text-gray-800 cursor-pointer">
+                            <a key={`source_link_${key}_${i}`} href={link.url} target="_blank"
+                               className="p-0.5 flex-1 rounded-sm border-1 border-gray-200 text-gray-800 cursor-pointer">
                                 <div className="w-full p-1 flex flex-row items-center">
                                     <LinkIcon size={28} className="mx-2"/>
                                     <div className="flex-1 min-w-0 hover:underline">
@@ -469,7 +478,9 @@ const AssistantMessage = (
                                       onClick={() => setTab("sources")}>
                             <div className="inline-flex items-center mr-1"><ScrollText size={18}
                                                                                        className="mx-0.5"/>
-                                Sources{sources.length > 0 ? ` (${sources.reduce((previousValue, currentValue) => {return previousValue + currentValue.links.length}, 0)})` : ""}
+                                Sources{sources.length > 0 ? ` (${sources.reduce((previousValue, currentValue) => {
+                                    return previousValue + currentValue.links.length
+                                }, 0)})` : ""}
                             </div>
                         </SunkenButton>
                     </div>)}
@@ -595,22 +606,9 @@ const ChatInterface = ({
         });
     };
 
-    const getTurnIdFromChatLogItem = (item: ChatLogItem) => {
-        if (item instanceof ChatMessage) {
-            return item.metadata?.turn_id
-        } else if (item instanceof AssistantThinkingItem) {
-            return item.turn_id
-        } else if (item instanceof StepDerivedItem) {
-            return item.turnId
-        } else if (item instanceof AssistantChatStep) {
-            return item.turn_id
-        }
-        return null;
-    }
-
     const turnGroups = useMemo(() => {
         return chatLogItems?.reduce((acc, item) => {
-            const turnId = getTurnIdFromChatLogItem(item);
+            const turnId = item.getTurnId();
 
             if (turnId) {
                 if (acc.has(turnId)) {
@@ -632,7 +630,7 @@ const ChatInterface = ({
         }).sort((a, b) => {
             return a.timestamp.getTime() - b.timestamp.getTime()
         }).reduce((acc, item) => {
-            const turnId = getTurnIdFromChatLogItem(item);
+            const turnId = item.getTurnId();
             if (turnId && !acc.includes(turnId)) {
                 acc.push(turnId);
             }
@@ -663,10 +661,11 @@ const ChatInterface = ({
                 children.push(<UserMessage key={message.id} message={message}/>)
             } else if (message instanceof AssistantChatMessage) {
                 const msgIndex = assistantMessages.indexOf(message);
-                const startTime = msgIndex > 0 ? assistantMessages[msgIndex - 1].timestamp.getTime() : 0;
-                const stopTime = message.timestamp.getTime();
+                const startTime = message.timestamp.getTime();
+                const stopTime = msgIndex === assistantMessages.length - 1 ? Infinity : assistantMessages[msgIndex + 1].timestamp.getTime();
                 const msgItems = assistantItems.filter((item) => {
                     const time = item.timestamp.getTime();
+                    // console.debug(startTime, ">=", item.timestamp.getTime(), "<=", stopTime, time >= startTime && time <= stopTime, item);
                     return time >= startTime && time <= stopTime;
                 })
                 children.push(<AssistantMessage key={message.id} message={message} showMetadata={false}
@@ -675,7 +674,8 @@ const ChatInterface = ({
         }
 
         if (assistantMessages.length == 0) {
-            children.push(<AssistantMessage showMetadata={false} items={assistantItems}/>)
+            children.push(<AssistantMessage key={"placeholder_assistant_message"} showMetadata={false}
+                                            items={assistantItems}/>)
         }
 
         return (

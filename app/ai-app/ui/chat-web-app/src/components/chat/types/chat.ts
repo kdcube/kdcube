@@ -54,8 +54,8 @@ interface StepData {
     [key: string]: unknown;
 }
 
-interface ChatMessageMetadata {
-    turn_id?: string;
+export interface WithTurnID {
+    getTurnId(): string | null | undefined;
 }
 
 export interface ChatMessageData {
@@ -69,7 +69,12 @@ export interface ChatMessageData {
     metadata?: ChatMessageMetadata
 }
 
-export class ChatMessage {
+/** minimal metadata used by grouping code */
+interface ChatMessageMetadata {
+    turn_id?: string;
+}
+
+export class ChatMessage implements WithTurnID {
     id: number;
     text: string;
     timestamp: Date;
@@ -82,6 +87,15 @@ export class ChatMessage {
         this.timestamp = timestamp;
         this.metadata = metadata;
     }
+
+    getTurnId(): string | null | undefined {
+        return this.metadata?.turn_id
+    }
+
+    getPrettyID(): string {
+        return `chat-message-${this.id}`;
+    }
+
 }
 
 export class UserChatMessage extends ChatMessage {
@@ -90,6 +104,10 @@ export class UserChatMessage extends ChatMessage {
     constructor(id: number, text: string, timestamp: Date, metadata?: ChatMessageMetadata, attachments?: File[]) {
         super(id, text, timestamp, metadata);
         this.attachments = attachments;
+    }
+
+    getPrettyID(): string {
+        return `user-message-${this.id}`;
     }
 }
 
@@ -102,6 +120,17 @@ export class AssistantChatMessage extends ChatMessage {
         this.isGreeting = isGreeting;
         this.isError = isError;
     }
+
+    getPrettyID(): string {
+        return `assistant-message-${this.id}`;
+    }
+}
+
+export interface AssistantAnswerEvent {
+    text: string;
+    index: number;
+    completed: boolean;
+    timestamp: Date;
 }
 
 interface ChatMessageInput {
@@ -128,11 +157,11 @@ export const createAssistantChatStep = (input: StepUpdate): AssistantChatStep =>
     return new AssistantChatStep(step, status, timestamp, error, data, title, markdown, agent, turn_id);
 };
 
-type AssistantChatStepStatus = 'started' | 'completed' | 'error'
+type AssistantChatStepStatus = 'started' | 'completed' | 'error' | 'running'
 
-export class AssistantChatStep {
+export class AssistantChatStep implements WithTurnID {
     step: string;
-    title?: string;
+    title?: string | null;
     status: AssistantChatStepStatus;
     timestamp: Date;
     error?: string;
@@ -147,7 +176,7 @@ export class AssistantChatStep {
         timestamp: Date,
         error?: string,
         data?: StepData,
-        title?: string,
+        title?: string | null,
         markdown?: string,
         agent?: string,
         turn_id?: string,
@@ -166,6 +195,10 @@ export class AssistantChatStep {
     getMarkdown() {
         return this.markdown || this.data?.markdown || '';
     }
+
+    getTurnId(): string | null | undefined {
+        return this.turn_id;
+    }
 }
 
 /** Per-agent timing info */
@@ -175,11 +208,19 @@ export interface AgentTiming {
     active: boolean; // ← not used for display; keeps internal state
 }
 
+export interface AssistantThinkingEvent {
+    index: number;
+    timestamp: Date;
+    completed: boolean;
+    agent: string;
+    text: string;
+}
+
 /** Thinking holder that supports multiple agent rows + per-agent timings */
-export class AssistantThinkingItem {
+export class AssistantThinkingItem implements WithTurnID {
     id: number;
     timestamp: Date;
-    turn_id?: string;
+    turn_id: string;
     active: boolean;
     endedAt?: Date;
     /** Map of agent -> markdown text */
@@ -190,7 +231,7 @@ export class AssistantThinkingItem {
     constructor(
         id: number,
         timestamp: Date,
-        turn_id?: string,
+        turn_id: string,
         active: boolean = true,
         endedAt?: Date,
         agents?: Record<string, string>,
@@ -204,30 +245,21 @@ export class AssistantThinkingItem {
         this.agents = agents ?? {};
         this.agentTimes = agentTimes ?? {};
     }
+
+    getTurnId(): string | null | undefined {
+        return this.turn_id
+    }
 }
 
-export const createAssistantThinkingItem = (input: {
-    id: number;
-    timestamp: Date;
-    turn_id?: string;
-    initialAgents?: Record<string, string>;
-    initialAgentTimes?: Record<string, AgentTiming>;
-}): AssistantThinkingItem =>
-    new AssistantThinkingItem(
-        input.id,
-        input.timestamp,
-        input.turn_id,
-        true,
-        undefined,
-        input.initialAgents,
-        input.initialAgentTimes
-    );
-
-export class StepDerivedItem {
+export class StepDerivedItem implements WithTurnID {
     turnId?: string;
 
     constructor(turnId?: string) {
         this.turnId = turnId;
+    }
+
+    getTurnId(): string | null | undefined {
+        return this.turnId;
     }
 }
 
@@ -249,7 +281,7 @@ export class DownloadItem extends StepDerivedItem {
 
 export const createDownloadItem = (input: StepUpdate): DownloadItem => {
     const {data, turn_id, timestamp} = input;
-    return new DownloadItem(data.filename, data?.rn, timestamp, data?.mime, turn_id)
+    return new DownloadItem(data?.filename as string, data?.rn, timestamp, data?.mime, turn_id)
 };
 
 export class RichLink {
@@ -284,8 +316,12 @@ export const createSourceLinks = (input: StepUpdate): SourceLinks => {
     }), timestamp, turn_id)
 };
 
-export type MessageLogItem = UserChatMessage | AssistantChatMessage
-export type AssistantLogItem = AssistantChatStep | AssistantThinkingItem | DownloadItem | SourceLinks
+export type ChatLogItem =
+    UserChatMessage
+    | AssistantChatMessage
+    | AssistantChatStep
+    | AssistantThinkingItem
+    | DownloadItem
+    | SourceLinks;
 
-export type ChatLogItem = MessageLogItem | AssistantLogItem;
 

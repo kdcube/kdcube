@@ -33,7 +33,6 @@ import {
     getResourceByRN,
     getSuggestedQuestions,
     SocketChatOptions,
-    UIMessage,
     UseSocketChatReturn,
     WireChatMessage,
 } from "./ChatService";
@@ -45,18 +44,19 @@ import {
     getKBAPIBaseAddress,
     getWorkingScope,
     showExampleAssistantFileSteps,
-    showExampleAssistantMessage,
     showExampleAssistantSourceSteps
 } from "../../AppConfig";
 
 import {
+    AgentTiming,
+    AssistantAnswerEvent,
+    AssistantChatMessage,
+    AssistantThinkingEvent,
     AssistantThinkingItem,
     BundleInfo,
     ChatLogItem,
-    ChatMessageData,
+    ChatMessage,
     createAssistantChatStep,
-    createAssistantThinkingItem,
-    createChatMessage,
     createDownloadItem,
     createSourceLinks,
     DownloadItem,
@@ -64,6 +64,7 @@ import {
     ModelInfo,
     RichLink,
     StepUpdate,
+    UserChatMessage,
 } from "./types/chat";
 import ChatInterface, {ChatInterfaceContext, ChatInterfaceContextValue} from "./ChatInterface/ChatInterface.tsx";
 
@@ -73,11 +74,7 @@ import {ConfigProvider, useConfigProvider} from "./ChatConfigProvider.tsx";
 import KBPanel from "../kb/KBPanel.tsx";
 import {SystemMonitorPanel} from "../monitoring/monitoring.tsx";
 import EnhancedKBSearchResults from "./SearchResults.tsx";
-import {
-    getExampleAssistantFileSteps,
-    getExampleAssistantMessage,
-    getExampleAssistantSourceSteps
-} from "./ChatInterface/debug.ts";
+import {getExampleAssistantFileSteps, getExampleAssistantSourceSteps} from "./ChatInterface/debug.ts";
 
 /* ============================
    Local Socket.IO hook (v1)
@@ -216,47 +213,14 @@ const SingleChatApp: React.FC = () => {
             reconnectionAttempts: Infinity
         });
 
-    // Client turn id (temporary until server echoes it back)
-    const activeTurnIdRef = useRef<string | null>(null);
-
-    // Messages state — greeting pinned to epoch so it’s always the first item.
-    const [messages, setMessages] = useState<ChatMessageData[]>([
-        {
-            id: 1,
-            sender: "assistant",
-            text: "Hello! I'm your AI assistant application and currently under active development.",
-            timestamp: new Date(0),
-            isGreeting: true,
-            metadata: {
-                turn_id: "greeting_0"
-            },
-        }
-    ])
-
-    // Streaming control
-    const streamingMsgIdRef = useRef<number | null>(null);
-    const deltaBufferRef = useRef<string>('');
-    const flushTimerRef = useRef<number | null>(null);
-    const sawFirstDeltaRef = useRef(false);
-
-    const [isProcessing, setIsProcessing] = useState<boolean>(false);
-
     // Panels and header meta (decoupled)
     const [showConfig, setShowConfig] = useState<boolean>(() => config.show_config);
     const [showKB, setShowKB] = useState<boolean>(false);
     const [showKbResults, setShowKbResults] = useState<boolean>(false);
     const [showSystemMonitor, setShowSystemMonitor] = useState<boolean>(false);
 
-    const [currentSteps, setCurrentSteps] = useState<StepUpdate[]>([]);
     const [kbSearchHistory, setKbSearchHistory] = useState<any[]>([]);
     const [newKbSearchCount, setNewKbSearchCount] = useState<number>(0);
-    const [followUpQuestion, setFollowUpQuestion] = useState<string[]>([]);
-
-    // Thinking (per-turn container, per-agent rows)
-    const thinkingItemIdRef = useRef<number | null>(null);
-    const thinkingBufferRef = useRef<Record<string, string>>({});
-    const thinkingFlushTimerRef = useRef<Record<string, number | null>>({});
-    const [thinkingItems, setThinkingItems] = useState<AssistantThinkingItem[]>([]);
 
     const [headerModel, setHeaderModel] = useState<ModelInfo | undefined>();
     const [headerEmbedder, setHeaderEmbedder] = useState<EmbedderInfo | undefined>();
@@ -288,20 +252,6 @@ const SingleChatApp: React.FC = () => {
         setNewKbSearchCount(0);
     }, []);
     const handleCloseKbResults = useCallback(() => setShowKbResults(false), []);
-
-    // Cleanup flush timer
-    useEffect(() => {
-        return () => {
-            if (flushTimerRef.current != null) {
-                window.clearTimeout(flushTimerRef.current);
-                flushTimerRef.current = null;
-            }
-            Object.values(thinkingFlushTimerRef.current || {}).forEach((t) => {
-                if (t != null) window.clearTimeout(t as any);
-            });
-            thinkingFlushTimerRef.current = {};
-        }
-    }, []);
 
     // Connect Socket.IO
     const didConnectRef = useRef(false);
@@ -370,186 +320,176 @@ const SingleChatApp: React.FC = () => {
         }
     }, [disconnectSocket, authContext]);
 
-    /* ===== helpers ===== */
-
-    // When answer streaming begins or complete/error, end the global thinking (header).
-    // Do NOT force per-agent end times unless we received completed: true for that agent.
-    const deactivateThinking = (turnId?: string, ts?: string) => {
-        const ended = new Date(Date.parse(ts || new Date().toISOString()));
-        setThinkingItems((prev) =>
-            prev.map((it) => {
-                if (it.id !== thinkingItemIdRef.current) return it;
-
-                // Mark the overall thinking item as inactive and set its overall endedAt.
-                // Keep per-agent endedAt untouched unless it was already set by completed: true.
-                const agentTimes = {...(it.agentTimes || {})};
-                Object.keys(agentTimes).forEach((k) => {
-                    const rec = agentTimes[k];
-                    if (rec.active) {
-                        agentTimes[k] = {...rec, active: false}; // ← leave rec.endedAt as-is (possibly undefined)
-                    }
-                });
-
-                return new AssistantThinkingItem(
-                    it.id,
-                    it.timestamp,
-                    it.turn_id ?? turnId,
-                    false,
-                    it.endedAt ?? ended,
-                    {...(it.agents || {})},
-                    agentTimes
-                );
-            })
-        );
-    };
-
-    const flushBuffered = useCallback(() => {
-        if (!deltaBufferRef.current) return;
-        const chunk = deltaBufferRef.current;
-        deltaBufferRef.current = "";
-        setMessages((prev) => {
-            const msgId = streamingMsgIdRef.current;
-            if (msgId == null) return prev;
-            const idx = prev.findIndex((m) => m.id === msgId);
-            if (idx === -1) return prev;
-            const updated = [...prev];
-            const current = updated[idx];
-            const safeText = typeof current.text === "string" ? current.text : "";
-            updated[idx] = {...current, text: safeText + chunk};
-            return updated;
-        });
-        flushTimerRef.current = null;
-    }, []);
-
-    const flushThinkingBuffered = (agent: string) => {
-        const chunk = thinkingBufferRef.current[agent];
-        if (!chunk || thinkingItemIdRef.current == null) return;
-        thinkingBufferRef.current[agent] = "";
-        setThinkingItems((prev) =>
-            prev.map((it) => {
-                if (it.id !== thinkingItemIdRef.current) return it;
-                const nextAgents = {...(it.agents || {})};
-                nextAgents[agent] = (nextAgents[agent] || "") + chunk;
-                return new AssistantThinkingItem(
-                    it.id,
-                    it.timestamp,
-                    it.turn_id,
-                    it.active,
-                    it.endedAt,
-                    nextAgents,
-                    {...(it.agentTimes || {})}
-                );
-            })
-        );
-        if (thinkingFlushTimerRef.current[agent] != null) {
-            window.clearTimeout(thinkingFlushTimerRef.current[agent] as any);
+    const [userMessages, setUserMessages] = useState<Map<string, UserChatMessage>>(new Map([['_greeting_0', new AssistantChatMessage(
+        0,
+        "Hello! I'm your AI assistant application and currently under active development.",
+        new Date(),
+        {
+            turn_id: '_greeting_0'
         }
-        thinkingFlushTimerRef.current[agent] = null;
-    };
+    )]]))
 
-    const upsertThinkingItem = (agent?: string, turnId?: string, ts?: string) => {
-        const agentKey = agent || "agent";
-        if (thinkingItemIdRef.current == null) {
-            const id = Date.now();
-            thinkingItemIdRef.current = id;
-            const startedAt = new Date(Date.parse(ts || new Date().toISOString()));
-            setThinkingItems((prev) => {
-                if (prev.some((p) => p.id === id)) return prev;
-                return [
-                    ...prev,
-                    createAssistantThinkingItem({
-                        id,
-                        timestamp: startedAt,
+    const updatedTurns = useRef<string[]>([])
+
+    const [lastTurnID, setLastTurnID] = useState<string | null>(null);
+    const [isProcessing, setIsProcessing] = useState<boolean>(false);
+
+    const [thinkingItemEvents, setThinkingItemEvents] = useState<Map<string, AssistantThinkingEvent[]>>(new Map())
+    const [assistantAnswerEvents, setAssistantAnswerEvents] = useState<Map<string, AssistantAnswerEvent[]>>(new Map());
+    const [finalAssistantAnswers, setFinalAssistantAnswers] = useState<Map<string, string>>(new Map());
+    const [assistantErrors, setAssistantErrors] = useState<Map<string, string>>(new Map());
+
+    const thinkingItemsMap = useRef<Map<string, AssistantThinkingItem>>(new Map())
+    const assistantThinkingItems = useMemo(() => {
+        const result = new Map(thinkingItemsMap.current)
+        for (const turnId of updatedTurns.current) {
+            let item: AssistantThinkingItem
+            const turnThinkingEvents = thinkingItemEvents.get(turnId)
+            if (!turnThinkingEvents || !turnThinkingEvents.length)
+                continue
+
+            const completionEvent = turnThinkingEvents.find(val => val.completed)
+            const completed = !!completionEvent
+            const completedAt = completionEvent?.timestamp
+
+            const agents: Record<string, string> = {}
+            const agentTimes: Record<string, AgentTiming> = {}
+
+            turnThinkingEvents.forEach(val => {
+                agents[val.agent] = (agents[val.agent] ?? "") + val.text
+                let timings = agentTimes[val.agent]
+                if (timings) {
+                    timings.active = !val.completed
+                    timings.startedAt = val.timestamp
+                } else {
+                    timings = {
+                        startedAt: val.timestamp,
+                        active: !val.completed,
+                        endedAt: val.completed ? val.timestamp : undefined,
+                    }
+                }
+                agentTimes[val.agent] = timings;
+            })
+
+            if (result.has(turnId)) {
+                const prevItem = result.get(turnId) as AssistantThinkingItem;
+                item = new AssistantThinkingItem(
+                    prevItem.id,
+                    prevItem.timestamp,
+                    prevItem.turn_id,
+                    !completed,
+                    completedAt,
+                    agents,
+                    agentTimes,
+                )
+            } else {
+                if (completed) {
+                    console.warn("AssistantThinkingItem completed without prior delta(s). Turn", turnId)
+                }
+                const timestamp = Math.min(...turnThinkingEvents.map((val) => val.timestamp.getTime()))
+                item = new AssistantThinkingItem(
+                    timestamp,
+                    new Date(timestamp),
+                    turnId,
+                    !completed,
+                    completedAt,
+                    agents,
+                    agentTimes,
+                )
+            }
+            result.set(turnId, item);
+        }
+        thinkingItemsMap.current = result
+        return result;
+    }, [thinkingItemEvents]);
+
+    const [currentSteps, setCurrentSteps] = useState<StepUpdate[]>([]);
+
+    const assistantMessagesMap = useRef<Map<string, AssistantChatMessage>>(new Map())
+    const assistantMessages = useMemo(() => {
+        const result = new Map(assistantMessagesMap.current);
+        for (const turnId of updatedTurns.current) {
+            const answerEvents = assistantAnswerEvents.get(turnId)
+            const thinkingEvents = thinkingItemEvents.get(turnId)
+            const finalAnswer = finalAssistantAnswers.get(turnId)
+            const assistantError = assistantErrors.get(turnId)
+            const turnSteps = currentSteps.filter(item => item.turn_id === turnId)
+
+            if ((!answerEvents || answerEvents.length === 0)
+                && (!thinkingEvents || thinkingEvents.length === 0)
+                && (!turnSteps || turnSteps.length === 0)
+                && finalAnswer === undefined
+                && assistantError === undefined
+            ) {
+                console.debug("No data assistant data for turn", turnId)
+                continue
+            }
+
+            const hasError = assistantError !== undefined
+            const answer = hasError
+                ? `Sorry, I have encountered an error: ${assistantError}`
+                : finalAnswer ?? answerEvents?.map(item => item.text).join("") ?? ""
+
+            let item: AssistantChatMessage
+            const tsCandidates: number[] = [];
+            if (thinkingEvents && thinkingEvents.length > 0) {
+                tsCandidates.push(...thinkingEvents.map(item => item.timestamp.getTime()))
+            }
+            if (answerEvents && answerEvents.length > 0) {
+                tsCandidates.push(...answerEvents.map(item => item.timestamp.getTime()))
+            }
+            if (turnSteps && turnSteps.length > 0) {
+                tsCandidates.push(...turnSteps.map(item => item.timestamp.getTime()))
+            }
+            const timestamp = Math.min(...tsCandidates)
+            if (result.has(turnId)) {
+                const msg = result.get(turnId) as AssistantChatMessage
+                item = new AssistantChatMessage(
+                    timestamp,
+                    answer,
+                    new Date(timestamp),
+                    msg.metadata,
+                    hasError,
+                    msg.isGreeting
+                )
+            } else {
+                item = new AssistantChatMessage(
+                    timestamp,
+                    answer,
+                    new Date(timestamp),
+                    {
                         turn_id: turnId,
-                        initialAgents: agent ? {[agentKey]: ""} : {},
-                        initialAgentTimes: agent ? {[agentKey]: {startedAt, active: true}} : {},
-                    }),
-                ];
-            });
-        } else if (agentKey) {
-            // ensure the agent row exists and timing is initialized on FIRST chunk
-            const startedAt = new Date(Date.parse(ts || new Date().toISOString()));
-            setThinkingItems((prev) =>
-                prev.map((it) => {
-                    if (it.id !== thinkingItemIdRef.current) return it;
-                    const nextAgents = {...(it.agents || {})};
-                    const nextTimes = {...(it.agentTimes || {})};
-                    if (!Object.prototype.hasOwnProperty.call(nextAgents, agentKey)) {
-                        nextAgents[agentKey] = "";
-                    }
-                    if (!Object.prototype.hasOwnProperty.call(nextTimes, agentKey)) {
-                        nextTimes[agentKey] = {startedAt, active: true};
-                    }
-                    return new AssistantThinkingItem(
-                        it.id,
-                        it.timestamp,
-                        it.turn_id,
-                        it.active,
-                        it.endedAt,
-                        nextAgents,
-                        nextTimes
-                    );
-                })
-            );
+                    },
+                    hasError
+                )
+            }
+            result.set(turnId, item);
         }
-    };
+        assistantMessagesMap.current = result
+        return result;
+    }, [assistantAnswerEvents, thinkingItemEvents, finalAssistantAnswers, assistantErrors, currentSteps]);
 
-    const reconcileTurnId = useCallback((serverTurnId?: string) => {
-        if (!serverTurnId) return;
-        const prevId = activeTurnIdRef.current;
-        if (!prevId || prevId === serverTurnId) {
-            activeTurnIdRef.current = serverTurnId;
-            return;
-        }
-        setMessages((prev) => prev.map((m) => (m.metadata?.turn_id === prevId ? {
-            ...m,
-            metadata: {...(m.metadata || {}), turn_id: serverTurnId}
-        } : m)));
-        setCurrentSteps((prev) => prev.map((s) => (s.turn_id === prevId ? {...s, turn_id: serverTurnId} : s)));
-        setThinkingItems((prev) =>
-            prev.map((t) =>
-                t.turn_id === prevId
-                    ? new AssistantThinkingItem(
-                        t.id,
-                        t.timestamp,
-                        serverTurnId,
-                        t.active,
-                        t.endedAt,
-                        {...(t.agents || {})},
-                        {...(t.agentTimes || {})}
-                    )
-                    : t
-            )
-        );
-        activeTurnIdRef.current = serverTurnId;
-    }, []);
+    useEffect(() => {
+        updatedTurns.current = []
+    }, [assistantAnswerEvents, thinkingItemEvents, finalAssistantAnswers, assistantErrors, currentSteps]);
 
-    /* =========================
-       Socket event handlers (v1)
-       ========================= */
+
+    const [followUpQuestion, setFollowUpQuestion] = useState<string[]>([]);
+
+    const chatMessages = useMemo<ChatMessage[]>(() => {
+        return [...userMessages.values(), ...assistantMessages.values()].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime())
+    }, [userMessages, assistantMessages]);
 
     const chatEventHandlers: ChatEventHandlers = useMemo(
         () => ({
             onConnect: () => {
             },
             onSessionInfo: (info) => {
-                console.log("Server session:", info.session_id, info.user_type);
+                console.info("Server session:", info.session_id, info.user_type);
             },
             onDisconnect: (reason: string) => {
-                console.log("Disconnected:", reason);
+                console.warn("Disconnected:", reason);
                 setIsProcessing(false);
-                if (flushTimerRef.current) {
-                    window.clearTimeout(flushTimerRef.current);
-                    flushTimerRef.current = null;
-                }
-                Object.values(thinkingFlushTimerRef.current || {}).forEach((t) => {
-                    if (t != null) window.clearTimeout(t as any);
-                });
-                thinkingFlushTimerRef.current = {};
-                thinkingBufferRef.current = {};
-                deltaBufferRef.current = "";
-                streamingMsgIdRef.current = null;
-                sawFirstDeltaRef.current = false;
             },
             onConnectError: (error: Error) => {
                 console.error("Connect error:", error);
@@ -572,135 +512,87 @@ const SingleChatApp: React.FC = () => {
                 }
             },
 
-                onChatStart: (env: ChatStartEnvelope) => {
-                console.log("chat.start:", env);
-                const turnId = env.conversation?.turn_id;
-                if (turnId) reconcileTurnId(turnId);
-                sawFirstDeltaRef.current = false;
-                deltaBufferRef.current = "";
+            onChatStart: (env: ChatStartEnvelope) => {
+                console.debug("chat.start:", env);
+                const turnId = env.conversation.turn_id;
+                if (lastTurnID === turnId) {
+                    console.warn("Turn already started", lastTurnID);
+                    return;
 
-                // reset thinking buffers every new turn
-                thinkingItemIdRef.current = null;
-                thinkingBufferRef.current = {};
-                Object.values(thinkingFlushTimerRef.current || {}).forEach((t) => {
-                    if (t != null) clearTimeout(t as any);
-                });
-                thinkingFlushTimerRef.current = {};
+                }
+                setLastTurnID(lastTurnID);
             },
 
             onChatDelta: (env: ChatDeltaEnvelope) => {
-                // strict v1 fields
-                const turnId = env.conversation?.turn_id ?? activeTurnIdRef.current ?? undefined;
-                if (env.conversation?.turn_id) reconcileTurnId(env.conversation.turn_id);
-
+                console.debug("chat.delta", env);
+                const turnId = env.conversation.turn_id;
                 const marker = env.delta?.marker ?? "answer";
-                const chunkText = env.delta?.text ?? "";
-                const ts = env.timestamp ?? new Date().toISOString();
-                const agent = (env.event?.agent ?? "").toString();
-                const completed = (env.delta as any)?.completed === true; // ← your server flag
+                const ts = new Date(Date.parse(env.timestamp));
+                const chunkText = env.delta.text;
 
-                if (!sawFirstDeltaRef.current) {
-                    sawFirstDeltaRef.current = true;
-                    setIsProcessing(false);
+                if (!env.event.agent) {
+                    console.warn("Event has no agent", env)
                 }
+
+                const agent = env.event?.agent ?? "unknown_agent";
+                const completed = !!env.delta.completed;
 
                 if (marker === "thinking") {
-                    const agentKey = agent || "agent";
-                    upsertThinkingItem(agentKey, turnId, ts);
-
-                    // buffer per agent
-                    thinkingBufferRef.current[agentKey] = (thinkingBufferRef.current[agentKey] || "") + chunkText;
-
-                    // schedule per-agent flush
-                    if (thinkingFlushTimerRef.current[agentKey] == null) {
-                        thinkingFlushTimerRef.current[agentKey] = window.setTimeout(() => {
-                            flushThinkingBuffered(agentKey);
-                        }, 24) as unknown as number;
-                    }
-
-                    // If this chunk marks agent completion, stamp endedAt (single shot) and inactivate that agent.
-                    if (completed) {
-                        const endedAt = new Date(Date.parse(ts || new Date().toISOString()));
-                        setThinkingItems((prev) =>
-                            prev.map((it) => {
-                                if (it.id !== thinkingItemIdRef.current) return it;
-                                const nextTimes = {...(it.agentTimes || {})};
-                                const rec = nextTimes[agentKey] || {startedAt: endedAt, active: false};
-                                // Only set endedAt once
-                                nextTimes[agentKey] = rec.endedAt
-                                    ? {...rec, active: false}
-                                    : {...rec, endedAt, active: false};
-                                return new AssistantThinkingItem(
-                                    it.id,
-                                    it.timestamp,
-                                    it.turn_id ?? turnId,
-                                    it.active,
-                                    it.endedAt,
-                                    {...(it.agents || {})},
-                                    nextTimes
-                                );
-                            })
-                        );
-                    }
-                    return;
+                    setThinkingItemEvents(prevState => {
+                        const newVal = new Map(prevState);
+                        const events = [...newVal.get(turnId) ?? []]
+                        events.push({
+                            index: env.delta.index,
+                            timestamp: ts,
+                            completed: completed,
+                            agent: agent,
+                            text: chunkText
+                        })
+                        newVal.set(turnId, events.sort((a, b) => a.index - b.index))
+                        return newVal;
+                    })
+                } else if (marker === "answer") {
+                    setAssistantAnswerEvents(prevState => {
+                        const newVal = new Map(prevState)
+                        const events = [...newVal.get(turnId) ?? []]
+                        events.push({
+                            text: chunkText,
+                            index: env.delta.index,
+                            completed: completed,
+                            timestamp: ts
+                        })
+                        newVal.set(turnId, events.sort((a, b) => a.index - b.index));
+                        return newVal;
+                    })
                 }
 
-                // answer streaming — finalize overall thinking (per the global header)
-                deactivateThinking(turnId, ts);
-
-                if (streamingMsgIdRef.current == null) {
-                    console.log("streaming")
-                    setMessages((prev) => {
-                        const last = prev[prev.length - 1];
-                        if (last && last.sender === "assistant" && (last.text ?? "") === "" && !last.isError) {
-                            streamingMsgIdRef.current = last.id;
-                            return prev;
-                        }
-                        const id = Date.now();
-                        streamingMsgIdRef.current = id;
-                        return [
-                            ...prev,
-                            {
-                                id,
-                                sender: "assistant",
-                                text: "",
-                                timestamp: new Date(Date.parse(ts || new Date().toISOString())),
-                                metadata: {turn_id: turnId || undefined},
-                            },
-                        ];
-                    });
-                }
-
-                deltaBufferRef.current += chunkText;
-                if (flushTimerRef.current == null) {
-                    flushTimerRef.current = window.setTimeout(() => {
-                        flushBuffered();
-                    }, 24) as unknown as number;
-                }
+                updatedTurns.current.push(turnId);
             },
 
             onChatStep: (env: ChatStepEnvelope) => {
-                // console.log("chat.step:", env);
-                const serverTid = env.conversation?.turn_id;
-                if (serverTid) reconcileTurnId(serverTid);
-
-                const stepUpdate: StepUpdate = {
-                    step: env.event?.step,
-                    status: env.event?.status as any,
-                    title: env.event?.title,
-                    timestamp: new Date(Date.parse(env.timestamp || new Date().toISOString())),
-                    elapsed_time: (env as any).elapsed_time, // optional, not in v1 spec
-                    error: env.data?.error,
-                    data: env.data,
-                    markdown: (env.event as any)?.markdown,
-                    agent: (env.event as any)?.agent,
-                    turn_id: serverTid ?? activeTurnIdRef.current ?? undefined,
-                };
+                console.debug("chat.step", env)
+                const turnId = env.conversation?.turn_id;
 
                 setCurrentSteps((prev) => {
+                    const stepId = env.event.step
+
                     const existing = prev.find(
-                        (s) => s.step === stepUpdate.step && s.turn_id === stepUpdate.turn_id
+                        (s) => s.step === stepId && s.turn_id === turnId
                     );
+
+                    const stepUpdate: StepUpdate = {
+                        step: env.event?.step,
+                        status: env.event?.status as any,
+                        title: env.event?.title,
+                        timestamp: existing ? existing.timestamp : new Date(Date.parse(env.timestamp || new Date().toISOString())),
+                        elapsed_time: (env as any).elapsed_time, // optional, not in v1 spec
+                        error: env.data?.error,
+                        data: env.data,
+                        markdown: (env.event as any)?.markdown,
+                        agent: (env.event as any)?.agent,
+                        turn_id: turnId,
+                    };
+
                     return existing
                         ? prev.map((s) =>
                             s.step === stepUpdate.step && s.turn_id === stepUpdate.turn_id ? stepUpdate : s
@@ -709,179 +601,108 @@ const SingleChatApp: React.FC = () => {
                 });
 
                 if (env.event?.step === "followups" && env.event?.status === "completed") {
-                    setFollowUpQuestion(env.data?.items || []);
+                    setFollowUpQuestion(env.data?.items as [] || []);
                 }
+
+                updatedTurns.current.push(turnId);
             },
 
             onChatComplete: (env: ChatCompleteEnvelope) => {
-                console.log("chat.complete:", env);
-                if (flushTimerRef.current != null) {
-                    window.clearTimeout(flushTimerRef.current);
-                    flushTimerRef.current = null;
-                }
-                if (deltaBufferRef.current) flushBuffered();
-
-                const serverTid = env.conversation?.turn_id;
-                if (serverTid) reconcileTurnId(serverTid);
-
+                console.debug("chat.complete", env);
+                const turnId = env.conversation.turn_id;
                 const finalText = env.data?.final_answer ?? "";
-                const ts = env.timestamp ?? new Date().toISOString();
-
-                const msgId = streamingMsgIdRef.current;
-                setMessages((prev) => {
-                    if (msgId != null) {
-                        const idx = prev.findIndex((m) => m.id === msgId);
-                        if (idx !== -1) {
-                            const updated = [...prev];
-                            const current = updated[idx];
-                            updated[idx] = {
-                                ...current,
-                                text: finalText,
-                                timestamp: new Date(Date.parse(ts)),
-                                metadata: {
-                                    ...(current.metadata || {}),
-                                    turn_id: serverTid ?? current.metadata?.turn_id,
-                                },
-                            };
-                            return updated;
-                        }
-                    }
-                    return [
-                        ...prev,
-                        {
-                            id: Date.now() + 1,
-                            sender: "assistant",
-                            text: finalText,
-                            timestamp: new Date(Date.parse(ts)),
-                            metadata: {
-                                turn_id: serverTid ?? activeTurnIdRef.current ?? undefined,
-                            },
-                        },
-                    ];
-                });
-
-                // finalize global thinking (do not force per-agent endedAt)
-                deactivateThinking(serverTid, ts);
-
-                streamingMsgIdRef.current = null;
-                deltaBufferRef.current = "";
-                sawFirstDeltaRef.current = false;
-                setIsProcessing(false);
+                setFinalAssistantAnswers(prevState => {
+                    const newVal = new Map(prevState)
+                    newVal.set(turnId, finalText)
+                    return newVal
+                })
+                setIsProcessing(false)
+                updatedTurns.current.push(turnId);
             },
 
             onChatError: (env: ChatErrorEnvelope) => {
-                console.log("chat.error:", env);
-                if (flushTimerRef.current != null) {
-                    window.clearTimeout(flushTimerRef.current);
-                    flushTimerRef.current = null;
-                }
-                const ts = env.timestamp ?? new Date().toISOString();
-                deactivateThinking(env.conversation?.turn_id, ts);
-
-                deltaBufferRef.current = "";
-                streamingMsgIdRef.current = null;
-                sawFirstDeltaRef.current = false;
-
+                console.debug("chat.error", env);
+                const turnId = env.conversation.turn_id;
                 const errText = env.data?.error ? String(env.data.error) : "Unknown error";
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        id: Date.now() + 1,
-                        sender: "assistant",
-                        text: `I encountered an error: ${errText}`,
-                        timestamp: new Date(Date.parse(ts)),
-                        isError: true,
-                        metadata: {turn_id: env.conversation?.turn_id ?? activeTurnIdRef.current ?? undefined},
-                    },
-                ]);
-                setIsProcessing(false);
+                setAssistantErrors(prevState => {
+                    const newVal = new Map(prevState)
+                    newVal.set(turnId, errText)
+                    return newVal
+                })
+                setIsProcessing(false)
+                updatedTurns.current.push(turnId)
             },
         }),
-        [flushBuffered, reconcileTurnId]
+        []
     );
-
-    /* ========================
-       Send message (with turn)
-       ======================== */
 
     const sendMessage = useCallback(
         async (message: string, attachments?: File[]): Promise<void> => {
             if ((!message.trim() && !attachments?.length) || isProcessing) return;
 
-            const clientTurnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            activeTurnIdRef.current = clientTurnId;
+            const turnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-            const userMessage: ChatMessageData = {
-                id: Date.now(),
-                sender: "user",
-                text: message.trim(),
-                timestamp: new Date(),
-                metadata: {turn_id: clientTurnId},
-                attachments: attachments
-            };
-            setMessages((prev) => [...prev, userMessage]);
+            const timestamp = new Date();
+            const newMessage = new UserChatMessage(
+                timestamp.getTime(),
+                message.trim(),
+                timestamp,
+                {turn_id: turnId},
+                attachments
+            )
+            setUserMessages(prevState => {
+                const newVal = new Map(prevState)
+                newVal.set(turnId, newMessage)
+                return newVal
+            })
             setIsProcessing(true);
             setFollowUpQuestion([]);
 
-            const toWire = (msgs: UIMessage[]): WireChatMessage[] =>
-                msgs
-                    .filter((m) => m.sender === "user" || m.sender === "assistant")
-                    .map((m) => ({
-                        role: m.sender,
-                        content: m.text,
-                        timestamp: m.timestamp.toISOString(),
-                        id: (m as any).id
-                    }));
+            const toWire = (msgs: ChatMessage[]): WireChatMessage[] => {
+                return msgs.filter(m => m instanceof UserChatMessage || m instanceof AssistantChatMessage)
+                    .map(m => {
+                        return {
+                            role: (m instanceof UserChatMessage ? "user" : "assistant"),
+                            content: m.text,
+                            timestamp: m.timestamp.toISOString(),
+                            id: m.id,
+                        }
+                    })
+            }
 
             try {
-                const history = toWire(messages);
+                const history = toWire(chatMessages);
                 const payload: ChatRequest = {
-                    message: userMessage.text,
+                    message: newMessage.text,
                     chat_history: history,
                     project,
                     tenant,
-                    turn_id: clientTurnId,
-                    bundle_id: headerBundle?.id
+                    turn_id: turnId,
                 };
                 sendSocketMessage(payload, attachments);
             } catch (error) {
                 console.error("Error sending message via socket:", error);
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        id: Date.now() + 1,
-                        sender: "assistant",
-                        text: `I couldn't send your message: ${(error as Error).message}`,
-                        timestamp: new Date(),
-                        isError: true,
-                        metadata: {turn_id: clientTurnId},
-                    },
-                ]);
+                setAssistantErrors(prevState => {
+                    const newVal = new Map(prevState)
+                    newVal.set(turnId, `I was unable to send your message: ${(error as Error).message}`)
+                    return newVal
+                })
                 setIsProcessing(false);
             }
         },
-        [isProcessing, sendSocketMessage, messages, project, tenant, headerBundle]
+        [isProcessing, sendSocketMessage, project, tenant, chatMessages]
     );
 
-    /* ===========================
-       Grouping for ChatInterface
-       =========================== */
-
-    // UI helpers
     const hideKB = () => setShowKB(false);
     const toggleSystemMonitor = () => setShowSystemMonitor(prev => !prev);
 
     const chatLogItems = useMemo(() => {
-        const items :ChatLogItem[] = [];
+        const items: ChatLogItem[] = [];
         const addItem = (item: ChatLogItem) => {
             items.push(item);
         }
 
-        const chatMessages = showExampleAssistantMessage() ? [...messages, getExampleAssistantMessage()] : messages;
-
-        chatMessages.forEach((msg) => {
-            addItem(createChatMessage(msg))
-        })
+        chatMessages.forEach(addItem)
 
         const steps = [...currentSteps]
         if (showExampleAssistantFileSteps()) {
@@ -894,6 +715,7 @@ const SingleChatApp: React.FC = () => {
         steps.forEach((s) => {
             addItem(createAssistantChatStep(s))
         })
+
         steps.forEach((s) => {
             if (s.step === "file" && s.status === "completed" && !!s.data?.rn && !!s.data?.filename) {
 
@@ -903,9 +725,17 @@ const SingleChatApp: React.FC = () => {
             }
         })
 
-        thinkingItems.forEach((s) => {addItem(s)})
-        return items;
-    }, [messages, currentSteps, thinkingItems])
+        for (const item of assistantThinkingItems.values()) {
+            addItem(item)
+        }
+
+        items.forEach((s) => {
+            if (!s.getTurnId()) {
+                console.warn("Item has no turnId", s)
+            }
+        })
+        return items.sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    }, [currentSteps, assistantThinkingItems, chatMessages])
 
         const renderFullHeader = () => {
         return (

@@ -24,6 +24,12 @@ export function getChatServiceSingleton(opts: SocketChatOptions): SocketChatServ
 
 export type V1Status = "started" | "running" | "completed" | "error" | "skipped";
 
+export interface ConversationInfo {
+    session_id: string;
+    conversation_id: string;
+    turn_id: string;
+}
+
 export interface V1BaseEnvelope {
     type: "chat.start" | "chat.step" | "chat.delta" | "chat.complete" | "chat.error";
     timestamp: string; // ISO-8601
@@ -33,33 +39,34 @@ export interface V1BaseEnvelope {
         project?: string | null;
         user?: string | null;
     };
-    conversation: {
-        session_id: string;
-        conversation_id: string;
-        turn_id: string;
-    };
+    conversation: ConversationInfo;
     event: {
         agent?: string | null;
         step: string;
         status: V1Status;
         title?: string | null;
     };
-    data?: Record<string, any>;
+    data?: Record<string, unknown>;
 }
 
 export interface ChatStartEnvelope extends V1BaseEnvelope {
     type: "chat.start";
-    data: { message: string; queue_stats?: Record<string, any> };
+    data: { message: string; queue_stats?: Record<string, unknown> };
 }
 
 export interface ChatStepEnvelope extends V1BaseEnvelope {
     type: "chat.step";
-    data: Record<string, any>;
+    data: Record<string, unknown>;
 }
 
 export interface ChatDeltaEnvelope extends V1BaseEnvelope {
     type: "chat.delta";
-    delta: { text: string; marker: "thinking" | "answer" | string; index: number };
+    delta: {
+        text: string;
+        marker: "thinking" | "answer" | string;
+        index: number,
+        completed?: boolean;
+    };
 }
 
 export interface ChatCompleteEnvelope extends V1BaseEnvelope {
@@ -90,15 +97,6 @@ export interface ChatMessage {
 }
 
 export type WireChatMessage = ChatMessage;
-
-export type UIMessage = {
-    id: number;
-    sender: "user" | "assistant";
-    text: string;
-    timestamp: Date;
-    isError?: boolean;
-    metadata?: any;
-};
 
 export interface ChatRequest {
     message: string;
