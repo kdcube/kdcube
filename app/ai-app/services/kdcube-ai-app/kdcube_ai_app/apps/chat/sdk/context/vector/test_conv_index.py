@@ -1,9 +1,11 @@
 from typing import List, Dict, Any
 
+from kdcube_ai_app.apps.chat.sdk.codegen.project_retrieval import _materialize_glue_canvas, _pick_project_log_slot
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_citation_item
 
 
 async def get_pg_pool(_settings):
@@ -52,14 +54,27 @@ async def _build_program_history_from_turn_ids(
         user_env = mat.get("user") or {}
         solver_failure_env = mat.get("solver_failure") or {}
         citables_env = mat.get("citables") or {}
+        files_env = mat.get("files") or {}
 
         prez = ((prez_env or {}).get("payload") or {}).get("payload") or {}
         dels = ((dels_env or {}).get("payload") or {}).get("payload") or {}
         citables = ((citables_env or {}).get("payload") or {}).get("payload") or {}
         assistant = ((((assistant_env or {}).get("payload") or {}).get("payload") or {})).get("completion") or ""
         user = (((user_env or {}).get("payload") or {}).get("payload") or {}).get("prompt") or ""
-
+        # files = list((((files_env or {}).get("payload") or {}).get("payload") or {}).get("files_by_slot", {}).values())
+        # files = [file for slot_files in files for file in slot_files.get("files")]
+        files = (((files_env or {}).get("payload") or {}).get("payload") or {}).get("files_by_slot", {})
         d_items = list((dels or {}).get("items") or [])
+        for de in d_items:
+            de = de or {}
+            artifact = de.get("value") or {}
+            if artifact.get("type") == "file":
+                slot_name = de.get("slot") or "default"
+                file = files.get(slot_name) or {}
+                artifact["path"] = file.get("path") or ""
+                artifact["filename"] = file.get("filename")
+                print()
+
         cite_items =  list((citables or {}).get("items") or [])
         round_reason = (dels or {}).get("round_reasoning") or ""
 
@@ -77,10 +92,16 @@ async def _build_program_history_from_turn_ids(
 
         # Extract canvas/log from deliverables items
         # canvas = _pick_canvas_slot(d_items) or {}
-        # project_log = _pick_project_log_slot(d_items) or {}
+        project_log = _pick_project_log_slot(d_items) or {}
 
-        _norm_citation = lambda x: x
-        canvas, project_log = {}, {}
+        materialized_canvas = {}
+        try:
+            glue = project_log.get("value","") if project_log else ""
+            mat = _materialize_glue_canvas(glue, d_items)
+            if mat and mat != glue:
+                materialized_canvas = {"format": "markdown", "text": mat}
+        except Exception as ex:
+            materialized_canvas = {}
 
         exec_id = codegen_run_id
         if exec_id in seen_runs:
@@ -93,16 +114,18 @@ async def _build_program_history_from_turn_ids(
 
         ret = {
             **({"program_presentation": pres_md} if pres_md else {}),
-            **({"project_canvas": {"format": canvas.get("format","markdown"), "text": canvas.get("value","")}} if canvas else {}),
+            # **({"project_canvas": {"format": canvas.get("format","markdown"), "text": canvas.get("value","")}} if canvas else {}),
             **({"project_log": {"format": project_log.get("format","markdown"), "text": project_log.get("value","")}} if project_log else {}),
+            **({"project_log_materialized": materialized_canvas} if materialized_canvas else {}),
             **({"solver_failure": solver_failure_md} if solver_failure_md else {}),
-            **({"web_links_citations": {"items": [_norm_citation(c) for c in cites["items"] if _norm_citation(c)]}}),
+            **({"web_links_citations": {"items": [normalize_citation_item(c) for c in cites["items"] if normalize_citation_item(c)]}}),
             **{"media": []},
             "ts": ts_val,
             **({"codegen_run_id": codegen_run_id} if codegen_run_id else {}),
             **({"round_reasoning": round_reason} if round_reason else {}),
             "assistant": assistant,
             "user": user,
+            "deliverables": d_items if d_items else []
         }
         out.append({exec_id: ret})
 
@@ -135,7 +158,8 @@ async def main():
     # mat = await ctx_client.materialize_turn(
     #     turn_id=tid, scope=scope, days=days, with_payload=True
     # )
-    conversation_id = "e2298386-90fa-4a3e-9dde-ec5f040539d8"
+    conversation_id = "5c0a6bb8-2fcd-4b40-ab10-a78991d1d77c"
+    tid = "turn_1759582866288_mf8fjk"
     pro = await _build_program_history_from_turn_ids(ctx_client, user_id=user_id, conversation_id=conversation_id, turn_ids=[tid], scope=scope, days=days)
     conversation_id = "01c414d5-ef92-402a-ae1b-77d493961329"
 

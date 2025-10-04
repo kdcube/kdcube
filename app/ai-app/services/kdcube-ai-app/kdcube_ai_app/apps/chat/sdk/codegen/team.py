@@ -176,6 +176,7 @@ async def solver_codegen_stream(
         "## Runtime Contract\n"
         "- A global `OUTPUT_DIR` is injected at runtime. Do **not** redefine it.\n"
         "- Write **all** files into `OUTPUT_DIR`.\n"
+        "- You never write files directly, only via the generic_tools.write_* tools! Files you write directly will be lost\n"
         "\n"
         "## Persistence (required)\n"
         "- Finish by writing the final result: `await agent_io_tools.save_ret(data=json.dumps(result))`.\n"

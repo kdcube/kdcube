@@ -13,6 +13,7 @@ import re
 
 from pptx import Presentation
 from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
+import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _CIT_RE  = re.compile(r"\[\[S:(\d+)\]\]")  # [[S:3]]
@@ -115,7 +116,7 @@ def _add_content_slide(prs: Presentation, title: str, body_lines: List[str],
         tokens: List[Dict[str, str]] = []
         while line:
             lnk = _LINK_RE.search(line)
-            cit = _CIT_RE.search(line)
+            cit = _CIT_RE.search(line) if resolve_citations else None
 
             # choose earliest
             candidates = [(lnk, "link"), (cit, "cit")]
@@ -130,8 +131,11 @@ def _add_content_slide(prs: Presentation, title: str, body_lines: List[str],
                 tokens.append({"type": "link", "text": m0.group(1), "url": m0.group(2)})
             else:
                 sid = int(m0.group(1))
-                url = (sources_map.get(sid) or {}).get("url", "")
-                tokens.append({"type": "link", "text": f"[{sid}]", "url": url or ""})
+                source = sources_map.get(sid, {})
+                url = source.get("url", "")
+                # Use title if available, otherwise just [n]
+                link_text = source.get("title", f"[{sid}]")
+                tokens.append({"type": "link", "text": link_text, "url": url or ""})
             line = line[m0.end():]
 
         # emit runs
@@ -166,14 +170,17 @@ def _add_content_slide(prs: Presentation, title: str, body_lines: List[str],
         else:
             add_paragraph(ln.strip())
 
-def _add_sources_slide(prs: Presentation, sources_map: Dict[int, Dict[str, str]]) -> None:
+def _add_sources_slide(prs: Presentation, sources_map: Dict[int, Dict[str, str]], order: List[int]) -> None:
     layout = prs.slide_layouts[1]
     slide = prs.slides.add_slide(layout)
     slide.shapes.title.text = "Sources"
     tf = slide.shapes.placeholders[1].text_frame
     tf.clear()
 
-    for sid in sorted(sources_map.keys()):
+    # Use the order from normalization to display sources in the right sequence
+    for sid in order:
+        if sid not in sources_map:
+            continue
         info = sources_map[sid]
         title = info.get("title") or info.get("url") or f"Source {sid}"
         url = info.get("url", "")
@@ -206,24 +213,12 @@ def render_pptx(
     outfile = outdir / basename
     _ensure_parent(outfile)
 
-    # Build sources map: {sid:int -> {"title":..., "url":..., "text":...}}
+    # Normalize sources using the same method as write_pdf
     sources_map: Dict[int, Dict[str, str]] = {}
+    order: List[int] = []
+
     if sources:
-        try:
-            arr = json.loads(sources)
-            if isinstance(arr, list):
-                for row in arr:
-                    try:
-                        sid = int(row.get("sid"))
-                    except Exception:
-                        continue
-                    sources_map[sid] = {
-                        "title": row.get("title") or "",
-                        "url": row.get("url") or row.get("href") or "",
-                        "text": row.get("text") or row.get("body") or "",
-                    }
-        except Exception:
-            pass
+        sources_map, order = md_utils._normalize_sources(sources)
 
     # Minimal markdown -> slides
     sections = _split_markdown_sections(content_md or "")
@@ -243,7 +238,7 @@ def render_pptx(
 
     # Sources slide
     if include_sources_slide and sources_map:
-        _add_sources_slide(prs, sources_map)
+        _add_sources_slide(prs, sources_map, order)
 
     prs.save(str(outfile))
     return basename

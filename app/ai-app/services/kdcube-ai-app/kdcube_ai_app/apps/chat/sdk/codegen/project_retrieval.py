@@ -52,16 +52,6 @@ def _is_markdown_from_format_or_text(fmt: Optional[str], mime: Optional[str], tx
         return True
     return _looks_like_markdown(txt)
 
-def _pick_canvas_slot(d_items: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-
-    matches = [ d for d in d_items if d.get("slot") in CANVAS_SLOTS ]
-    for m in matches:
-        artifact = m.get("value") or {}
-        output = artifact.get("output") or {}
-        txt = output.get("text") or ""
-        fmt = artifact.get("format") or "markdown"
-        return { "slot": m, "format": fmt or "markdown", "value": txt }
-
 def _pick_project_log_slot(d_items: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
     matches = [ d for d in d_items if d.get("slot") in PROJECT_LOG_SLOTS ]
@@ -143,9 +133,7 @@ async def _build_program_history_from_turn_ids(self, *,
             if artifact.get("type") == "file":
                 slot_name = de.get("slot") or "default"
                 file = files.get(slot_name) or {}
-                output = artifact.setdefault("output", {})
-                # output["path"] = file.get("path", output.get("path", ""))
-                artifact["path"] = file.get("path", output.get("path", ""))
+                artifact["path"] = file.get("path") or ""
                 artifact["filename"] = file.get("filename")
                 print()
 
@@ -725,9 +713,10 @@ async def _rehost_previous_files(prev_files: list[dict], workdir: pathlib.Path) 
     for file in prev_files:
         try:
             artifact = file.get("value") or {}
-            output = artifact.get("output") or {}
+            # output = artifact.get("output") or {}
             mime = artifact.get("mime") or ""
-            src_path = output.get("path") or ""
+            # src_path = output.get("path") or ""
+            src_path = artifact.get("path") or ""
             if not src_path:
                 # Nothing to rehost; pass through
                 out.append({**artifact, "rehosted": False})
@@ -747,7 +736,7 @@ async def _rehost_previous_files(prev_files: list[dict], workdir: pathlib.Path) 
                 target = _unique_target(files_dir, basename)
                 target.write_text(content, encoding="utf-8")
                 artifact["source_path"] = src_path
-                output["path"] = str(target)
+                artifact["path"] = str(target)
                 artifact["rehosted"] = True
             else:
                 # Not a text mime: leave as-is (we're not handling binary copy here)
@@ -778,9 +767,10 @@ def _materialize_glue_canvas(glue_md: str, d_items: list[dict]) -> str:
         description = slot.get("description") or ""
         slot_name = slot.get("slot") or ""
         artifact = slot.get("value") or {}
-        output = artifact.get("output") or {}
+        # output = artifact.get("output") or {}
+        # text = output.get("text") or ""  # snippet = text[:2000] + ("…" if len(text) > 2000 else "")
+        text = artifact.get("text") or ""
         slot_type = artifact.get("type") or "inline"
-        text = output.get("text") or ""  # snippet = text[:2000] + ("…" if len(text) > 2000 else "")
         lines += [f"### `{slot_name} ({slot_type})`", f"#### Description: {description}", text, ""]
     return "\n".join(lines).strip()
 
