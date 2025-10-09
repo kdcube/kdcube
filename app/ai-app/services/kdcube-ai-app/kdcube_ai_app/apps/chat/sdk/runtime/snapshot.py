@@ -141,6 +141,16 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
     # integrations_spec = IntegrationsSpec(ctx_client=(integrations or {}).get("ctx_client"))
     integrations_spec = IntegrationsSpec()
 
+    from kdcube_ai_app.apps.chat.sdk.runtime import run_ctx as _run_ctx
+    from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx as _comm_ctx
+    from kdcube_ai_app.infra import accounting as _acct
+
+    contextvars = {
+        "run_ctx": _run_ctx.snapshot_ctxvars(),
+        "comm_ctx": _comm_ctx.snapshot_ctxvars(),
+        "accounting": _acct.snapshot_ctxvars(),
+    }
+    accounting_storage = { "storage_path": os.environ.get("KDCUBE_STORAGE_PATH") }
     config_spec = _config_to_model_config_spec(svc.config)
     spec = PortableSpec(
         model_config=config_spec,
@@ -148,5 +158,7 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
         integrations=integrations_spec,
         cv_snapshot=snapshot_all_contextvars(),
         env_passthrough=env_passthrough,
+        contextvars=contextvars,
+        accounting_storage=accounting_storage
     )
     return spec

@@ -663,6 +663,36 @@ def _new_context_with(**fields) -> AccountingContext:
     ctx.update(**fields)
     return ctx
 
+# ---------- portable snapshot/restore for Accounting ----------
+def snapshot_ctxvars() -> dict:
+    """
+    Returns a JSON-friendly snapshot of accounting context & a storage marker.
+    We DO NOT serialize the storage backend instance. The parent process that
+    builds PORTABLE_SPEC should also include a storage config/factory id if needed.
+    """
+    ctx = _get_context()
+    return {
+        "context": ctx.to_dict(),
+        "enrichment": dict(ctx.event_enrichment or {}),
+        # Optional marker only; child side should init its own storage backend
+        "storage_present": _get_storage() is not None,
+    }
+
+def restore_ctxvars(payload: dict, *, storage_backend=None, enabled: bool = True) -> None:
+    """
+    Re-create a fresh AccountingContext in the child and set it into _context_var.
+    Optionally (re-)init storage using storage_backend supplied by bootstrap.
+    """
+    try:
+        AccountingSystem.init_storage(storage_backend, enabled)  # storage_backend may be None
+    except Exception:
+        pass
+
+    context = _new_context_with(**(payload.get("context") or {}))
+    context.event_enrichment = dict(payload.get("enrichment") or {})
+    _set_context(context)  # push the newly created context into the ContextVar
+
+
 # ================================
 # EXPORT API
 # ================================

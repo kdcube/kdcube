@@ -44,3 +44,15 @@ async def error(message: str, data: Dict[str, Any] | None = None) -> None:
     if comm is None:
         return
     await comm.error(message=message, data=data or {})
+
+# We rebuild the communicator from PORTABLE_SPEC in the child, so we do NOT
+# serialize the COMM_CV object itself (not JSON-safe). Keep tiny helpers:
+
+def snapshot_ctxvars() -> dict:
+    # marker only; actual communicator is rebuilt from spec
+    return {"COMM_PRESENT": COMM_CV.get() is not None}
+
+def restore_ctxvars(payload: dict) -> None:
+    # no-op: communicator is reconstructed by bootstrap and set via set_comm(...)
+    return
+

@@ -48,6 +48,8 @@ class PortableSpec:
     integrations: Optional[IntegrationsSpec] = None
     cv_snapshot: Optional[dict] = None
     env_passthrough: Dict[str, str] = field(default_factory=dict)  # minimal set of env you want copied
+    contextvars: Optional[dict] = None  # snapshot of other contextvars you want restored
+    accounting_storage: Optional[Dict[str, Any]] = None
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False)
