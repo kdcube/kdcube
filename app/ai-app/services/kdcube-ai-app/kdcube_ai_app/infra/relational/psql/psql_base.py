@@ -6,15 +6,19 @@
 import os
 import urllib
 import psycopg2
-from psycopg2.extras import execute_values
+from psycopg2.extras import execute_values, register_default_json, register_default_jsonb
+import json
 
 from typing import Union, List, Optional, Dict
+
+# Decode json/jsonb to Python dicts globally
+register_default_json(loads=json.loads)
+register_default_jsonb(loads=json.loads)
 
 
 class PostgreSqlDbMgr:
     def __init__(self, connection_params: Optional[Dict[str, str]] = None):
-        if not connection_params:
-            connection_params = {}
+        connection_params = connection_params or {}
         self.host = connection_params.get("host") or os.environ.get("POSTGRES_HOST")
         self.port = connection_params.get("port") or os.environ.get("POSTGRES_PORT")
         self.database = connection_params.get("database") or os.environ.get("POSTGRES_DATABASE")
@@ -22,14 +26,25 @@ class PostgreSqlDbMgr:
         self.username = connection_params.get("username") or os.environ.get("POSTGRES_USER")
         self.password = connection_params.get("password") or os.environ.get("POSTGRES_PASSWORD")
 
-        self.ssl = os.environ.get("POSTGRES_SSL", "false").lower() == "true"
-        if self.port:
-            self.database_url = f"postgresql://{self.username}:{self.password}@{self.host}:{self.port}/{self.database}"
-        else:
-            self.database_url = f"postgresql://{self.username}:{self.password}@{self.host}/{self.database}"
+        # Optional tuning knobs via env
+        self.ssl = (os.environ.get("POSTGRES_SSL", "false").lower() == "true")
+        self.appname = connection_params.get("application_name") or os.environ.get("POSTGRES_APPNAME", "kdcube-psql")
+        self.statement_timeout_ms = int(os.environ.get("POSTGRES_STATEMENT_TIMEOUT_MS", "60000"))  # 60s
+        self.search_path = connection_params.get("search_path") or os.environ.get("POSTGRES_SEARCH_PATH")  # optional
 
-        if self.ssl:
-            self.database_url += "?sslmode=require"
+        # Build -c GUCs applied at session start
+        opts = [
+            "-c TimeZone=UTC",
+            "-c datestyle=ISO, YMD",
+            "-c intervalstyle=iso_8601",
+            f"-c application_name={self.appname}",
+            f"-c statement_timeout={self.statement_timeout_ms}",
+            "-c extra_float_digits=3",
+        ]
+        if self.search_path:  # only if you truly need it; you already fully-qualify schema in SQL
+            opts.append(f"-c search_path={self.search_path}")
+
+        self._options = " ".join(opts)
 
     def get_connection(self):
         return psycopg2.connect(
@@ -38,7 +53,8 @@ class PostgreSqlDbMgr:
             password=self.password,
             host=self.host,
             port=self.port,
-            sslmode="require" if self.ssl else "disable"
+            sslmode=("require" if self.ssl else "disable"),
+            options=self._options,
         )
 
     def execute_sql_string(self, sql: str):

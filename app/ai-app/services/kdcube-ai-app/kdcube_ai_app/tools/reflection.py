@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# tools/reflection.py
+
 def get_fully_qualified_type(obj):
     t = type(obj)
     return f"{t.__module__}.{t.__qualname__}"

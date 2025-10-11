@@ -16,7 +16,7 @@ from kdcube_ai_app.infra.relational.psql.utilities import (
 from kdcube_ai_app.apps.knowledge_base.db.data_models import (
     EntityItem, HybridSearchParams
 )
-
+import kdcube_ai_app.apps.utils.sql_dt_utils as dt_utils
 
 class KnowledgeBaseSearch:
     """
@@ -928,35 +928,55 @@ class KnowledgeBaseSearch:
 
         # ---------- publication time filters ----------
         # JSON path: ds.metadata->'metadata'->>'published_time_iso'
-        pub_expr = "(ds.metadata->'metadata'->>'published_time_iso')::timestamptz"
+        # pub_expr = "(ds.metadata->'metadata'->>'published_time_iso')::timestamptz"
+        pub_expr = "ds.published_at"
+        mod_expr = "ds.modified_at"
 
-        if getattr(params, "published_on", None):
-            # Inclusive day range: [00:00, 23:59:59]
-            ds_filters.append(f"{pub_expr}::date = %s::date")
-            ds_params.append(str(params.published_on))
+        pub_clauses, pub_vals = dt_utils.build_temporal_filters(
+            col_expr=pub_expr, mode="timestamptz",
+            on=params.published_on, after=params.published_after, before=params.published_before
+        )
 
-        if getattr(params, "published_after", None):
-            ds_filters.append(f"{pub_expr} >= %s")
-            ds_params.append(str(params.published_after))
-
-        if getattr(params, "published_before", None):
-            ds_filters.append(f"{pub_expr} <= %s")
-            ds_params.append(str(params.published_before))
+        # if getattr(params, "published_on", None):
+        #     # Inclusive day range: [00:00, 23:59:59]
+        #     ds_filters.append(f"{pub_expr}::date = %s::date")
+        #     ds_params.append(str(params.published_on))
+        #
+        # if getattr(params, "published_after", None):
+        #     ds_filters.append(f"{pub_expr} >= %s")
+        #     ds_params.append(str(params.published_after))
+        #
+        # if getattr(params, "published_before", None):
+        #     ds_filters.append(f"{pub_expr} <= %s")
+        #     ds_params.append(str(params.published_before))
 
         # ---------- modified time filters ----------
-        mod_expr = "(ds.metadata->'metadata'->>'modified_time_iso')::timestamptz"
+        # mod_expr = "(ds.metadata->'metadata'->>'modified_time_iso')::timestamptz"
 
-        if getattr(params, "modified_on", None):
-            ds_filters.append(f"{mod_expr}::date = %s::date")
-            ds_params.append(str(params.modified_on))
+        mod_clauses, mod_vals = dt_utils.build_temporal_filters(
+            col_expr=mod_expr, mode="timestamptz",
+            on=params.modified_on,  after=params.modified_after,  before=params.modified_before
+        )
 
-        if getattr(params, "modified_after", None):
-            ds_filters.append(f"{mod_expr} >= %s")
-            ds_params.append(str(params.modified_after))
+        if pub_clauses:
+            ds_filters.extend(pub_clauses)
+            ds_params.extend(pub_vals)
 
-        if getattr(params, "modified_before", None):
-            ds_filters.append(f"{mod_expr} <= %s")
-            ds_params.append(str(params.modified_before))
+        if mod_clauses:
+            ds_filters.extend(mod_clauses)
+            ds_params.extend(mod_vals)
+        # if getattr(params, "modified_on", None):
+        #     ds_filters.append(f"{mod_expr}::date = %s::date")
+        #     ds_params.append(str(params.modified_on))
+        #
+        # if getattr(params, "modified_after", None):
+        #     ds_filters.append(f"{mod_expr} >= %s")
+        #     ds_params.append(str(params.modified_after))
+        #
+        # if getattr(params, "modified_before", None):
+        #     ds_filters.append(f"{mod_expr} <= %s")
+        #     ds_params.append(str(params.modified_before))
+
 
         ds_filter_sql = (" AND " + " AND ".join(ds_filters)) if ds_filters else ""
 
@@ -973,6 +993,9 @@ class KnowledgeBaseSearch:
               rs.extensions,
               rs.tags,
               rs.created_at,
+              ds.event_ts,
+              ds.published_at,
+              ds.modified_at,
               (1.0 - (rs.embedding <=> %s)) AS semantic_score,
               CASE WHEN rs.embedding IS NOT NULL THEN 1.0 ELSE 0.0 END AS has_embedding,
               -- server-side datasource JSON (joined only on candidate set)
@@ -986,8 +1009,11 @@ class KnowledgeBaseSearch:
                 'system_uri', ds.system_uri,
                 'metadata', ds.metadata,
                 'active', (ds.expiration IS NULL OR ds.expiration > now()),
-                'published_time_iso', ds.metadata->'metadata'->>'published_time_iso',
-                'modified_time_iso',  ds.metadata->'metadata'->>'modified_time_iso'
+--                 'published_time_iso', ds.metadata->'metadata'->>'published_time_iso',
+--                 'modified_time_iso',  ds.metadata->'metadata'->>'modified_time_iso'
+                'published_at', to_char((ds.published_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                'modified_at',  to_char((ds.modified_at  AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+                'event_ts',     to_char((ds.event_ts     AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
               ) AS datasource
             FROM {rs} rs
             JOIN {ds} ds
@@ -1002,20 +1028,39 @@ class KnowledgeBaseSearch:
             as_dict=True
         )
 
-        for r in sem_rows:
-            r['published_ts'] = ((r['datasource'].get('metadata') or {}).get('metadata') or {}).get('published_time_iso')
-        # When sorting:
-        def as_ts(v):  # robust None→min
-            from datetime import datetime
+        # for r in sem_rows:
+        #     r['published_ts'] = ((r['datasource'].get('metadata') or {}).get('metadata') or {}).get('published_time_iso')
+        # Sorting by event_ts (fallback created_at)
+        # def as_ts(v):  # robust None→min
+        #     from datetime import datetime
+        #     try:
+        #         return datetime.fromisoformat(v.replace('Z','+00:00')) if v else datetime.min
+        #     except Exception:
+        #         return datetime.min
+        def as_ts_safe(v):
+            from datetime import datetime, timezone
+            if not v:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            if hasattr(v, "tzinfo"):
+                return v
             try:
-                return datetime.fromisoformat(v.replace('Z','+00:00')) if v else datetime.min
+                # handle strings from jsonb_build_object (if any)
+                return datetime.fromisoformat(str(v).replace('Z', '+00:00'))
             except Exception:
-                return datetime.min
+                return datetime.min.replace(tzinfo=timezone.utc)
 
         thresh = params.min_similarity or 0.0
         filtered = [r for r in sem_rows if float(r.get('semantic_score', 0.0)) >= thresh]
-        # filtered.sort(key=lambda r: (r['semantic_score'], r['has_embedding'], r['created_at']), reverse=True)
-        filtered.sort(key=lambda r: (r['semantic_score'], r['has_embedding'], as_ts(r.get('published_ts'))), reverse=True)
+        # filtered.sort(key=lambda r: (r['semantic_score'], r['has_embedding'], as_ts(r.get('published_ts'))), reverse=True)
+
+        filtered.sort(
+            key=lambda r: (
+                float(r.get('semantic_score', 0.0)),
+                float(r.get('has_embedding', 0.0)),
+                as_ts_safe(r.get('event_ts')) if r.get('event_ts') else as_ts_safe(r.get('created_at'))
+            ),
+            reverse=True
+        )
         top_sem = filtered[: params.top_n]
         if not top_sem:
             return []

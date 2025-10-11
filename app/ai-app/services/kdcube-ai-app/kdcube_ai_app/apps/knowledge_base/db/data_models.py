@@ -33,6 +33,11 @@ class DataSource(BaseModel):
 
     # Temporal
     created_at: Optional[datetime] = None
+    published_at: Optional[datetime] = None
+    modified_at: Optional[datetime] = None
+    event_ts: Optional[datetime] = None
+    expiration: Optional[datetime] = None
+
 
 
 class EntityItem(BaseModel):

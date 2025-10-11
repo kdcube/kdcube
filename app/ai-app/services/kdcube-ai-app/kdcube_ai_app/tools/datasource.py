@@ -21,7 +21,7 @@ from kdcube_ai_app.tools.processing import record_timing, \
     DataSourceExtractionResult
 from kdcube_ai_app.tools.content_type import is_text_mime_type, is_html_mime_type, \
     extract_title_from_html
-from kdcube_ai_app.tools.extract import PDFExtractor
+
 from kdcube_ai_app.tools.reflection import fully_qualified_typename
 
 import logging
@@ -92,6 +92,7 @@ class BaseDataElement(BaseModel, ABC):
     @property
     def pdf_extractor(self):
         """Lazy load PDF extractor."""
+        from kdcube_ai_app.tools.extract import PDFExtractor
         if self._pdf_extractor is None:
             self._pdf_extractor = PDFExtractor()
         return self._pdf_extractor

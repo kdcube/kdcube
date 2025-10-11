@@ -138,11 +138,11 @@ def patch_placeholders(clauses: Iterable[str], start_index: int) -> tuple[List[s
     Returns (patched_clauses, last_index).
     """
     idx = start_index
-    out: List[str] = []
-    for c in clauses:
-        s = c
-        while "$%s" in s:
+    patched: list[str] = []
+    for clause in clauses:
+        # replace one placeholder at a time so each gets a unique index
+        while "$%s" in clause:
             idx += 1
-            s = s.replace("$%s", f"${idx}", 1)
-        out.append(s)
-    return out, idx
+            clause = clause.replace("$%s", f"${idx}", 1)
+        patched.append(clause)
+    return patched, idx

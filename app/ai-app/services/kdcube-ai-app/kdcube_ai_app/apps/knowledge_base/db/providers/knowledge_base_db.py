@@ -46,7 +46,10 @@ def _row_to_datasource(row_dict: Dict[str, Any]) -> DataSource:
         status=row_dict.get("status", "pending"),
         segment_count=row_dict.get("segment_count", 0),
         created_at=row_dict.get("created_at"),
-        source_type=row_dict.get("source_type")
+        source_type=row_dict.get("source_type"),
+        published_at=row_dict.get("published_at"),
+        modified_at=row_dict.get("modified_at"),
+        event_ts=row_dict.get("event_ts"),
     )
 
 
@@ -66,7 +69,6 @@ def _row_to_retrieval_segment(row_dict: Dict[str, Any]) -> RetrievalSegment:
         tags=row_dict.get("tags", []),
         word_count=row_dict.get("word_count"),
         sentence_count=row_dict.get("sentence_count"),
-        model_used=row_dict.get("model_used"),
         processed_at=row_dict.get("processed_at"),
         embedding=parse_embedding(row_dict.get("embedding")) if row_dict.get("embedding") else None,
         created_at=row_dict.get("created_at"),
@@ -104,10 +106,13 @@ class KnowledgeBaseDB:
         """Create a new datasource."""
         sql = f"""
         INSERT INTO {self.schema}.datasource (
-            id, version, rn, title, uri, source_type, provider, system_uri, 
-            metadata, status, segment_count, expiration, created_at
+            id, version, rn, title, uri, source_type, provider, system_uri,
+            metadata, status, segment_count, expiration, created_at,
+            published_at, modified_at, event_ts
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s,
+                %s, %s, %s)
         RETURNING *
         """
 
@@ -127,7 +132,10 @@ class KnowledgeBaseDB:
             datasource.status,
             datasource.segment_count,
             datasource.expiration,
-            datasource.created_at
+            datasource.created_at,
+            datasource.published_at,
+            datasource.modified_at,
+            datasource.event_ts
         )
 
         with conn.cursor() as cur:
@@ -147,27 +155,45 @@ class KnowledgeBaseDB:
         """
         sql = f"""
         INSERT INTO {self.schema}.datasource (
-            id, version, rn, source_type, provider, title, uri, system_uri, 
-            metadata, status, segment_count, expiration
+            id, version, rn, source_type, provider, title, uri, system_uri,
+            metadata, status, segment_count, expiration, created_at,
+            published_at, modified_at, event_ts
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,  %s,
+                %s, %s, %s)
         ON CONFLICT (id, version) DO UPDATE SET
-            source_type = EXCLUDED.source_type,
-            provider = EXCLUDED.provider,
-            title = EXCLUDED.title,
-            uri = EXCLUDED.uri,
-            system_uri = EXCLUDED.system_uri,
-            metadata = EXCLUDED.metadata,
-            status = EXCLUDED.status,
+            source_type   = EXCLUDED.source_type,
+            provider      = EXCLUDED.provider,
+            title         = EXCLUDED.title,
+            uri           = EXCLUDED.uri,
+            system_uri    = EXCLUDED.system_uri,
+            metadata      = EXCLUDED.metadata,
+            status        = EXCLUDED.status,
             segment_count = EXCLUDED.segment_count,
-            expiration = EXCLUDED.expiration
+            expiration    = EXCLUDED.expiration,
+            published_at  = COALESCE(EXCLUDED.published_at,  {self.schema}.datasource.published_at),
+            modified_at   = COALESCE(EXCLUDED.modified_at,   {self.schema}.datasource.modified_at),
+            event_ts      = COALESCE(EXCLUDED.event_ts,
+                                     COALESCE(EXCLUDED.modified_at, EXCLUDED.published_at, {self.schema}.datasource.created_at))
         RETURNING *, (xmax = 0) AS inserted
         """
+
+        created_at = datasource_data.get("created_at") or datetime.utcnow()
+        published_at = datasource_data.get("published_at")
+        modified_at  = datasource_data.get("modified_at")
+        # Compute event_ts on INSERT to mirror your UPDATE rule
+        event_ts = (
+            datasource_data.get("event_ts")
+            or modified_at
+            or published_at
+            or created_at
+        )
 
         data = (
             datasource_data["id"],
             datasource_data["version"],
-            datasource_data["rn"],
+            datasource_data.get("rn"),
             datasource_data.get("source_type"),
             datasource_data.get("provider"),
             datasource_data["title"],
@@ -176,7 +202,11 @@ class KnowledgeBaseDB:
             Json(datasource_data.get("metadata", {})),
             datasource_data.get("status", "pending"),
             datasource_data.get("segment_count", 0),
-            datasource_data.get("expiration")
+            datasource_data.get("expiration"),
+            created_at,
+            published_at,
+            modified_at,
+            event_ts,
         )
 
         with conn.cursor() as cur:
@@ -481,7 +511,7 @@ class KnowledgeBaseDB:
                     # Inherit provider from datasource if not specified
                     provider = segment_data.get("provider") or datasource.provider
 
-                    embedding_str = segment_data.get("embedding")
+                    embedding_str = convert_embedding_to_string(segment_data.get("embedding")) if segment_data.get("embedding") else None
 
                     row_data = (
                         segment_data["id"],
@@ -790,7 +820,7 @@ class KnowledgeBaseDB:
 
                 # Provider distribution - NEW
                 cur.execute(f"SELECT provider, COUNT(*) FROM {self.schema}.datasource GROUP BY provider")
-                stats["datasources_by_provider"] = dict(cur.fetchalls())
+                stats["datasources_by_provider"] = dict(cur.fetchall())
 
                 # Source type distribution
                 cur.execute(f"SELECT source_type, COUNT(*) FROM {self.schema}.datasource GROUP BY source_type")
@@ -989,36 +1019,37 @@ class KnowledgeBaseDB:
             return self._row_to_content_hash(row_dict)
 
     @transactional
-    def add_content_hash(self, object_name: str, hash_value:str,
-                         hash_type:str = "SHA-256", creation_time:Optional[datetime]=None,
-                         conn=None):
-        sql = f"""
-            INSERT INTO {self.schema}.content_hash (
-                name, value, type, creation_time
-            )
-            VALUES (%s, %s, %s, COALESCE(%s, now()))
-            ON CONFLICT (value) DO NOTHING
-            RETURNING *, (xmax = 0) AS inserted
-        """
-
-        data = (
-            object_name,
-            hash_value,
-            hash_type,
-            creation_time
-        )
-
+    def add_content_hash(self,
+                         object_name: str,
+                         hash_value: str,
+                         hash_type: str = "SHA-256",
+                         creation_time: Optional[datetime] = None,
+                         conn=None) -> Dict[str, bool]:
+        # Fast precheck
         with conn.cursor() as cur:
-            cur.execute(sql, data)
+            cur.execute(
+                f"SELECT 1 FROM {self.schema}.content_hash WHERE value = %s LIMIT 1",
+                (hash_value,)
+            )
+            if cur.fetchone():
+                return {"inserted": False, "already_exists": True}
+
+            # Race-safe insert
+            sql = f"""
+                INSERT INTO {self.schema}.content_hash (name, value, type, creation_time)
+                VALUES (%s, %s, %s, COALESCE(%s, now()))
+                ON CONFLICT (value) DO NOTHING
+                RETURNING id
+            """
+            cur.execute(sql, (object_name, hash_value, hash_type, creation_time))
             row = cur.fetchone()
-            colnames = [desc[0] for desc in cur.description]
-            row_dict = dict(zip(colnames, row))
-
-            exists = True if row_dict.get("inserted") else False
-
-            return {
-                "exists": exists,
-            }
+            # exists - already_exists
+            if row:
+                # We inserted it
+                return {"inserted": True, "exists": False}
+            else:
+                # Lost a race; someone else inserted between SELECT and INSERT
+                return {"inserted": False, "exists": True}
 
     @transactional
     def remove_content_hash(self, hash_value: str, conn=None) -> bool:
