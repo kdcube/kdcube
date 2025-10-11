@@ -116,6 +116,32 @@ def _extract_solver_json_from_round(r0: Dict[str, Any]) -> Optional[Dict[str, An
             return data
     return None
 
+# --- helper: write a synthetic result.json when codegen produced no runnable code
+def _write_codegen_failure_result(
+        result_path: pathlib.Path,
+        *,
+        objective: str,
+        reason: str,
+        details: Dict[str, Any] | None = None,
+        contract_out: Dict[str, Any] | None = None,
+) -> None:
+    payload = {
+        "ok": False,
+        "out": [],
+        "contract": contract_out or {},
+        "error": {
+            "where": "codegen",
+            "error": reason,  # e.g., "codegen_no_main_py" or "codegen_no_files"
+            "description": "Code generation did not produce runnable code.",
+            "details": details or {},
+        },
+    }
+    try:
+        result_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # Best-effort: don't crash the orchestrator while trying to surface the failure
+        pass
+
 def analyze_execution(rounds,
                       plan: SolutionPlan,
                       scratchpad: TurnScratchpad,
@@ -475,7 +501,7 @@ class CodegenToolManager:
             except Exception:
                 pass
 
-            self._modules.append({"name": mod_name, "mod": mod, "alias": alias, "use_sk": spec.use_sk})
+            self._modules.append({"name": mod_name, "mod": mod, "alias": alias, "use_sk": spec.use_sk, "file": getattr(mod, "__file__", None),})
             self.tools_info.extend(self._introspect_module(mod, mod_name, alias, spec.use_sk))
 
         self._by_id = {e["id"]: e for e in self.tools_info}              # qualified id -> entry
@@ -492,7 +518,12 @@ class CodegenToolManager:
                 p = (pathlib.Path.cwd() / p).resolve()
             if not p.exists():
                 raise RuntimeError(f"Tools module not found: {ref} -> {p}")
-            mod_name = p.stem
+
+            # --- NEW: unique module name to avoid collisions ---
+            import hashlib
+            digest = hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:8]
+            mod_name = f"dyn_{p.stem}_{digest}"
+
             spec = importlib.util.spec_from_file_location(mod_name, str(p))
             if not spec or not spec.loader:
                 raise RuntimeError(f"Cannot load tools module from path: {p}")
@@ -500,9 +531,11 @@ class CodegenToolManager:
             sys.modules[mod_name] = mod
             spec.loader.exec_module(mod)  # type: ignore
             return mod_name, mod
-        # dotted path
+
+        # dotted import – keep as-is
         mod = importlib.import_module(ref)
         return mod.__name__, mod
+
 
     # -------- module introspection --------
     def _introspect_module(self, mod, mod_name: str, alias: str, use_sk: bool) -> List[Dict[str, Any]]:
@@ -721,6 +754,11 @@ class CodegenToolManager:
         if "plugin_alias" not in entry: entry["plugin_alias"] = alias
         return entry
 
+    def _build_tool_alias_maps(self):
+        alias_to_dyn = {m["alias"]: m["name"] for m in self._modules}
+        alias_to_file = {m["alias"]: m.get("file") for m in self._modules}
+        return alias_to_dyn, alias_to_file
+
     # -------- catalogs / adapters --------
 
     def _filter_entries(self, allowed_plugins: Optional[List[str]] = None, allowed_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
@@ -884,7 +922,7 @@ class CodegenToolManager:
             # is_spec_domain=ctx.get("is_spec_domain"),
             topics=ctx.get("topics") or [],
             on_thinking_delta=self._mk_thinking_streamer("solvability"),
-            max_tokens=2000,
+            max_tokens=2500,
         )
         logging_helpers.log_agent_packet(self.AGENT_NAME, "solvability", out)
         # return out.get("agent_response") or {"error": "no response from solvability"}
@@ -904,8 +942,8 @@ class CodegenToolManager:
 
         cbyid = {c["id"]: c for c in (tr.get("candidates") or [])}
         tools: List[PlannedTool] = []
-        if sv.get("solvable") and sv.get("tools_to_use"):
-            for tid in sv.get("tools_to_use"):
+        if sv.get("solvable") and sv.get("selected_tools"):
+            for tid in sv.get("selected_tools"):
                 if tid in cbyid:
                     c = cbyid[tid]
                     tools.append(PlannedTool(
@@ -1095,7 +1133,7 @@ class CodegenToolManager:
                 topics=topics,
                 prefs_hint=prefs_hint or {},
                 extra_task_hint=extra_task_hint,
-                constraints={"prefer_direct_tools_exec": True, "minimize_logic": True, "concise": True, "line_budget": 80},
+                constraints={"prefer_direct_tools_exec": True, "minimize_logic": True, "concise": True, "line_budget": 100},
                 max_rounds=1,
                 program_history=program_history,
                 current_turn=current_turn,
@@ -1340,34 +1378,72 @@ class CodegenToolManager:
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(content, encoding="utf-8")
 
-            # derive brief + latest materials from history
-            latest_presentation = ""
-            latest_solver_failure = ""
-            latest_turn_log = ""
-            prev_user_text = ""
-            prev_assistant_text = ""
+            # --- detect non-runnable codegen output and fail fast with a synthetic result
+            missing_files_reason = None
+            if not files_map:
+                missing_files_reason = "codegen_no_files"
+            elif "main.py" not in files_map:
+                # You can get fancier by parsing entrypoint, but the runtime uses main.py specifically
+                missing_files_reason = "codegen_no_main_py"
 
-            # try:
-                # if program_history:
-                    # 2) Reconcile & get canonical sources (and rewritten tokens in-place)
-                    # rec = project_retrieval.reconcile_citations_for_context(program_history, max_sources=60, rewrite_tokens_in_place=True)
-                    # canonical_sources = rec["canonical_sources"]   # ← pass this to context.json["sources"]
+            if missing_files_reason:
+                self.log.log(f"[solver.codegen] {missing_files_reason}; skipping runtime execution", level="ERROR")
+                scratch_details = {
+                    "entrypoint": entrypoint,
+                    "received_files": sorted(list(files_map.keys())),
+                    "notes": notes,
+                }
 
-                    # 3) Choose the "current" editable (usually newest run)
-                    # latest = next(iter(program_history[0].values()), {}) if program_history else {}
-                    # canvas_md = (latest.get("project_canvas") or {}).get("text") or (latest.get("project_canvas") or {}).get("value") or ""
+                # Ensure result.json exists so downstream (collect_outputs/analyze_execution) proceeds normally
+                try:
+                    _write_codegen_failure_result(
+                        (outdir / "result.json"),
+                        objective=user_text,
+                        reason=missing_files_reason,
+                        details=scratch_details,
+                        contract_out=solvability.get("output_contract_dyn") if isinstance(solvability, dict) else {},
+                    )
+                except Exception:
+                    pass
 
-                    # exec_id, inner = next(iter(program_history[0].items()))
-                    # latest_presentation = inner.get("program_presentation") if isinstance(inner.get("program_presentation"), str) else ""
-                    # latest_solver_failure = inner.get("solver_failure") if isinstance(inner.get("solver_failure"), str) else ""
-                    # latest_turn_log = ((inner.get("project_log") or {}).get("text") or "")
+                # Build a "skipped" run result so the round record is consistent
+                run_res = {
+                    "status": "skipped",
+                    "error": missing_files_reason,
+                    "workdir": str(workdir),
+                    "outdir": str(outdir),
+                }
 
-                    # newest prior messages (use the same newest history record)
-                    # prev_user_text = (inner.get("user") or "") or ""
-                    # prev_assistant_text = (inner.get("assistant") or "") or ""
+                # Collect the synthetic result.json
+                collected = self.collect_outputs(output_dir=outdir, outputs=outputs)
 
-            # except Exception:
-            #     pass
+                round_rec = {
+                    "entrypoint": entrypoint,
+                    "files": [{"path": p, "size": len(c or "")} for p, c in files_map.items()],
+                    "run": run_res,
+                    "notes": current_task_spec["notes"],
+                    "outputs": collected,
+                    "internal_thinking": internal_thinking,
+                    "result_interpretation_instruction": result_interpretation_instruction,
+                    "inputs": {
+                        "constraints": constraints,
+                        "objective": user_text,
+                        "topics": topics,
+                        "tools_selected": current_task_spec["tools_selected"],
+                        "policy_summary": policy_summary,
+                    },
+                    "workdir": str(workdir),
+                    "outdir": str(outdir),
+                    "run_id": run_id,
+                }
+                # Inline preview if the model wrote a file with main-ish code under another name (optional)
+                main_src = files_map.get("main.py")
+                if main_src and len(main_src) <= 8000:
+                    round_rec["main_preview"] = main_src
+
+                rounds.append(round_rec)
+                # Stop chaining further rounds because we had nothing runnable
+                break
 
             for turn in program_history:
                 turn_program = next(iter(turn.values()), {})
@@ -1383,10 +1459,6 @@ class CodegenToolManager:
                 "request_id": request_id,
                 "program_history": program_history or [],
                 "program_playbook": program_playbook,
-                # "program_history_brief": project_retrieval._history_digest(program_history, limit=3),
-                # "latest_program_presentation": latest_presentation,
-                # "latest_solver_failure": latest_solver_failure,
-                # "latest_turn_log": latest_turn_log,
                 "topics": topics,
                 "prefs_hint": prefs_hint or {},
                 "policy_summary": policy_summary,
@@ -1398,8 +1470,6 @@ class CodegenToolManager:
                 # Conversation slice for this run (minimal, last-only)
                 "current_turn": current_turn if current_turn else {},
                 "current_user": (current_turn or {}).get("user"),
-                # "previous_user": {"text": prev_user_text},
-                # "previous_assistant": {"text": prev_assistant_text}
             }
             # write runtime inputs
             self.write_runtime_inputs(
@@ -1416,9 +1486,10 @@ class CodegenToolManager:
             spec = build_portable_spec(
                 svc=self.svc,
                 chat_comm=self.comm,
-                # integrations={"ctx_client": self.context_rag_client},
             )
 
+            alias_to_dyn, alias_to_file = self._build_tool_alias_maps()
+            self.log.log(f"[solver.codegen]. Writing program to workdir {workdir}", level="INFO")
             run_res = await self.run_main_py_package(
                 workdir=workdir,
                 output_dir=outdir,
@@ -1428,24 +1499,11 @@ class CodegenToolManager:
                     "CONTRACT": contract_out,
                     "COMM_SPEC": self.comm._export_comm_spec_for_runtime(),
                     "PORTABLE_SPEC_JSON": spec.to_json(),
-                    "TOOL_ALIAS_MAP": alias_map,
+                    "TOOL_ALIAS_MAP": alias_to_dyn,
+                    "TOOL_MODULE_FILES": alias_to_file
                 },
             )
 
-            # # run + collect
-            # spec = build_portable_spec(
-            #     model_config_request=config_request,
-            #     chat_comm=self.comm,                  # your ChatCommunicator, or None
-            #     integrations={"ctx_client": self.context_rag_client},  # optional
-            # )
-            # run_res = await self.run_main_py_package(workdir=workdir,
-            #                                          output_dir=outdir,
-            #                                          files={},
-            #                                          timeout_s=timeout_s,
-            #                                          globals={
-            #                                              "CONTRACT": contract_out,
-            #                                              "COMM_SPEC": self.comm._export_comm_spec_for_runtime(),
-            #                                          })
             if run_res.get("error") == "timeout":
                 # Attach a small synthetic result so downstream shows a clear failure
                 timeout_reason = f"Solver runtime exceeded {timeout_s}s and was terminated."
@@ -1545,13 +1603,22 @@ class CodegenToolManager:
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(content, encoding="utf-8")
 
-        return await self.runtime.run_main_py(
+        # return await self.runtime.run_main_py(
+        #     workdir=workdir,
+        #     output_dir=output_dir,
+        #     tool_modules=self._tool_modules_tuple_list(),  # <-- ALL modules injected
+        #     globals=globals or {},
+        #     timeout_s=timeout_s,
+        # )
+
+        run_res = await self.runtime.run_main_py_subprocess(
             workdir=workdir,
             output_dir=output_dir,
-            tool_modules=self._tool_modules_tuple_list(),  # <-- ALL modules injected
+            tool_modules=self._tool_modules_tuple_list(),
             globals=globals or {},
             timeout_s=timeout_s,
         )
+        return run_res
 
     def collect_outputs(self, *, output_dir: pathlib.Path, outputs: List[Dict[str, Any]]) -> Dict[str, Any]:
         out: Dict[str, Any] = {"items": []}

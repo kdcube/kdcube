@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 import json
 
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
-from kdcube_ai_app.apps.chat.sdk.streaming.streaming import _add_3section_protocol, _stream_agent_sections_to_json
+from kdcube_ai_app.apps.chat.sdk.streaming.streaming import _stream_agent_two_sections_to_json as _stream_agent_sections_to_json
+from kdcube_ai_app.apps.chat.sdk.streaming.streaming import _add_3section_protocol, \
+    _add_2section_protocol
+
 
 def _today_str() -> str:
     return datetime.now(timezone.utc).date().isoformat()
@@ -87,7 +90,7 @@ async def solver_codegen_stream(
     today = _today_str()
 
     # pull optional decision & constraints coming from the planner/ToolManager
-    decision = (solvability or {})  # may include tools_to_use, reasoning, output_contract_dyn
+    decision = (solvability or {})  # may include selected_tools, reasoning, output_contract_dyn
     constraints = (task or {}).get("constraints") or {}
 
     # reasonable defaults
@@ -300,7 +303,8 @@ async def solver_codegen_stream(
         "\n"
         "## Style & behavior\n"
         "- Linear and concise. No prints. Keep the code within the line budget.\n"
-        "- USER-FACING status (if any) must be short and provider-agnostic.\n"
+        #"- USER-FACING status (if any) must be short and provider-agnostic.\n"
+        "- THINKING part must be provider-agnostic, we show it to a user.\n"
     )
     sys += (
         f"• Keep main.py ≤ {line_budget} lines.\n"
@@ -308,16 +312,18 @@ async def solver_codegen_stream(
     )
 
     # ---------- Strict 3-section protocol ----------
-    sys = _add_3section_protocol(
-        sys,
-        "{"
-        "  \"entrypoint\": \"python main.py\","
-        "  \"files\": [ {\"path\": \"main.py\", \"content\": \"...\"} ],"
-        "  \"outputs\": [ {\"filename\": \"result.json\", \"kind\": \"json\", \"key\": \"worker_output\"} ],"
-        "  \"notes\": \"<=40 words\","
-        "  \"result_interpretation_instruction\": \"<=120 words, tool-agnostic, concise\""
-        "}"
-    )
+    json_shape_hint = ("{"
+    "  \"entrypoint\": \"python main.py\","
+    "  \"files\": [ {\"path\": \"main.py\", \"content\": \"...\"} ],"
+    "  \"outputs\": [ {\"filename\": \"result.json\", \"kind\": \"json\", \"key\": \"worker_output\"} ],"
+    "  \"notes\": \"<=40 words\","
+    "  \"result_interpretation_instruction\": \"<=120 words, tool-agnostic, concise\""
+    "}")
+    # sys = _add_3section_protocol(
+    #     sys,
+    #     json_shape_hint
+    # )
+    sys = _add_2section_protocol(sys, json_shape_hint=json_shape_hint)
 
     # ---------- Message: task + adapters with DOCS ----------
     adapters_for_llm = _adapters_public_view(adapters)
@@ -368,295 +374,11 @@ async def solver_codegen_stream(
         sys_prompt=sys,
         user_msg=msg,
         schema_model=SolverCodegenOut,
-        on_thinking_delta=on_thinking_delta,
+        # on_thinking_delta=on_thinking_delta,
+        on_progress_delta=on_thinking_delta,
         ctx=ctx,
         max_tokens=6000,
     )
-
-# async def solver_codegen_stream(
-#         svc: ModelServiceBase,
-#         *,
-#         task: Dict[str, Any],
-#         adapters: List[Dict[str, Any]],
-#         solvability: Optional[Dict[str, Any]] = None,
-#         on_thinking_delta=None,
-#         ctx: Optional[str] = "solver_codegen",
-# ) -> Dict[str, Any]:
-#     """
-#     Generates a self-contained Python 3.11 program that:
-#       - imports & calls ONLY the adapters we provide (your real libs) WITHIN documented usage
-#       - reads INPUTS from OUTPUT_DIR/context.json and OUTPUT_DIR/task.json if present
-#       - writes results to OUTPUT_DIR/<files specified in outputs[]>
-#       - prints nothing (silent), robust error handling
-#     """
-#
-#     today = _today_str()
-#
-#     # pull optional decision & constraints coming from the planner/ToolManager
-#     decision = (solvability or {})  # may include tools_to_use, reasoning, output_contract_dyn
-#     constraints = (task or {}).get("constraints") or {}
-#
-#     # reasonable defaults
-#     line_budget = int(constraints.get("line_budget", 80))
-#     prefer_single_call = bool(constraints.get("prefer_single_call", True) or constraints.get("prefer_direct_tools_exec", False))
-#     minimize_logic = bool(constraints.get("minimize_logic", True))
-#     concise = bool(constraints.get("concise", True))
-#
-#     # ---------- System prompt (authoritative; no ambiguity) ----------
-#     sys = (
-#         "# Codegen — single Python program\n"
-#         "\n"
-#         "## Authoritative inputs for **this** run\n"
-#         "- The **dynamic output contract** `output_contract_dyn` is provided **in THIS prompt**. Treat it as the single source of truth.\n"
-#         "- output_contract_dyn contract is SOLELY a dict: slot_name → {\"type\":\"inline\"|\"file\", \"description\":str, ...} (never actual content)\n"
-#         "\n"
-#         "## When to read context/chat\n"
-#         "- Call `ctx_tools.fetch_working_set(select=\"latest\")` at the START of any edit/update/extend turn, OR whenever you need the full current user message.\n"
-#         "- Use `ws['existing_project_log']` as the previous working log and `ws['existing_sources']` as `prior_sources`.\n"
-#         "- Chat slice (use minimal excerpts only):\n"
-#         "  • `ws['current_user']['text']` — this turn's user message\n"
-#         "  • `ws.get('previous_user', {}).get('text')` — relevant prior user message (if any)\n"
-#         "  • `ws.get('previous_assistant', {}).get('text')` — relevant prior assistant reply (if any)\n"
-#         "- Do not restate the user request. Read `ws['current_user']['text']` when needed for downstream extraction/analysis.\n"
-#         "- Only extract minimal spans necessary; never dump full messages into logs/files.\n"
-#         "- Never log full user or assistant text; store offsets/keys instead.\n"
-#         "- Previous solver deliverables (slots): `ws['previous_deliverables'][<slot_name>].text` for slot text representation.\n"
-#         "\n"
-#         "## Language & syntax\n"
-#         "- Python 3.11. Use `True/False/None`. Build JSON with `json.dumps(...)`.\n"
-#         "\n"
-#         "## Imports & calls (hard rules)\n"
-#         "- Paste adapter imports **exactly** as provided; do not alter module paths or aliases.\n"
-#         "- Call functions exactly per the provided `call_template`.\n"
-#         "- Import the infra wrapper: `from io_tools import tools as agent_io_tools`.\n"
-#         "- **Wrap EVERY adapter call with the wrapper** (logging + indexing):\n"
-#         "  ```python\n"
-#         "  res = await agent_io_tools.tool_call(\n"
-#         "      fn=<alias>.<fn>,\n"
-#         "      params_json=json.dumps({<kwargs>}),\n"
-#         "      call_reason=\"<5–12 words why this call is needed>\",\n"
-#         "      tool_id=\"<qualified id exactly as in ADAPTERS list>\"\n"
-#         "  )\n"
-#         "  ```\n"
-#         "\n"
-#         "## Runtime contract\n"
-#         "- A global `OUTPUT_DIR` is injected at runtime. Do **not** redefine it.\n"
-#         "- Write **all** files into `OUTPUT_DIR`.\n"
-#         "\n"
-#         "## Persistence (required)\n"
-#         "- Finish by writing the final result: `await agent_io_tools.save_ret(data=json.dumps(result))`.\n"
-#         "- On success include: `ok=true`, `objective` and `out_dyn` (filled **exactly** per output_contract_dyn).\n"
-#         "\n"
-#         "## Slot contract fulfillment\n"
-#         "- Use exactly the slot names from `output_contract_dyn` as keys in `out_dyn`.\n"
-#         "- For INLINE slots: produce `{\"type\":\"inline\", \"format\": <from contract>, \"description\":\"...\", \"value\": <text or json>}`.\n"
-#         "- For FILE slots: produce `{\"type\":\"file\", \"path\":\"<OUTPUT_DIR-relative>\", \"mime\":\"<from contract>\", \"description\":\"...\", \"text\":\"<faithful textual surrogate>\"}`.\n"
-#         "\n"
-#         "**Rules:**\n"
-#         "- TEXT REPRESENTATION (TEXT SURROGATE) IS MANDATORY FOR EVERY SLOT. ★\n"
-#         "  • Inline: the `value` string/JSON is the text.\n"
-#         "  • File:   `text` MUST be present. Always. ★\n"
-#         "- How to set FILE `text`: ★\n"
-#         "  • If you rendered the file from text (e.g., Markdown → PDF, PPTX from outline), assign that exact source text to the file’s `text`.\n"
-#         "  • If the file is textual (CSV/JSON/Markdown), read and assign the full textual content to `text`.\n"
-#         "  • If the file is binary (image/diagram/etc.), write a dense surrogate (caption + structure/sections/labels; include OCR if available). Avoid vague blurbs.\n"
-#         "- No shadow inline slots: Do NOT create a separate inline slot just to hold the file’s text unless the contract explicitly includes it. ★\n"
-#         #"- `resource_id` for each artifact equals the slot name (infra prefixes with `slot:`).\n"
-#         #"- All paths in `out_dyn` are `OUTPUT_DIR`-relative.\n"
-#         "- `resource_id` equals the slot name (infra prefixes with `slot:`). Store OUTPUT_DIR-relative paths.\n"
-#         "\n"
-#         "## Content generation rules (CRITICAL)\n"
-#         "- You MUST use tools to generate ALL content dynamically - never pre-write content\n"
-#         "- You can only write instructions/prompts for LLM tools - never write the final content yourself\n"
-#         "- Let the tools generate the actual content based on your instructions\n"
-#         "- Use tools in this typical flow:\n"
-#         "  1) Search/gather information (relevant search tool(s))\n"
-#         "  2) Generate/structure content (llm tools)\n"
-#         "  3) Edit/assemble one or more slot texts with tool-generated content\n"
-#         "  4) Generate files only if contract output_contract_dyn requires them\n"
-#         "\n"
-#         "## Required tool flow (guidance)\n"
-#         "- search/gather → process/generate → structure/edit → output\n"
-#         "  ✓ Use search tools to find information\n"
-#         "  ✓ Use summarize_llm to create structure/structured explanation\n"
-#         "  ✓ Use edit_text_llm to refine/format\n"
-#         "  ✗ Don't use calc for trivial arithmetic\n"
-#         "  ✗ Don't pre-write explanations directly into out_dyn\n"
-#         "\n"
-#         "## Mandatory slot: project_log (SEMANTIC STORY)\n"
-#         "\n"
-#         "Live Semantic narrative of THIS run. Do NOT embed any slot values or previews (no excerpts, no \"Text repr\"). Values live in slots. Tool calls are captured elsewhere.\n"
-#         "\n"
-#         "### Structure\n"
-#         "```markdown\n"
-#         "# Project Log\n"
-#         "## Objective\n"
-#         "<1 sentence>\n"
-#         "## Status\n"
-#         "<'In progress' | 'Completed' | 'Failed: reason'>\n"
-#         "## Story\n"
-#         "<Dense narrative. Past tense. What happened and why.>\n"
-#         "## Produced Slots\n"
-#         "### slot_name (inline|file)\n"
-#         "<Contract description>\n"
-#         "**Format/Mime:** ...\n"
-#         "**Filename:** <if file>\n"
-#         "```\n"
-#         "\n"
-#         "### Implementation\n"
-#         "```python\n"
-#         "story = []\n"
-#         "story.append(\"Fetching prior work from context.\")\n"
-#         "ws = ctx_tools.fetch_working_set(select=\"latest\")\n"
-#         "story.append(f\"Loaded `{slot}` from previous run.\")\n"
-#         "\n"
-#         "story.append(\"Searching for Q4 market data.\")\n"
-#         "sources = await tool_call(...)\n"
-#         "story.append(f\"Found {len(sources)} sources.\")\n"
-#         "\n"
-#         "story.append(\"Generating risk assessment.\")\n"
-#         "analysis = await tool_call(...)\n"
-#         "story.append(\"Slot `risk_analysis` ready.\")\n"
-#         "\n"
-#         "try:\n"
-#         "    pdf = await tool_call(...)\n"
-#         "    story.append(\"Slot `report_pdf` ready - file: q4_report.pdf\")\n"
-#         "    status = \"Completed\"\n"
-#         "except Exception as e:\n"
-#         "    story.append(f\"PDF failed: {str(e)[:50]}\")\n"
-#         "    status = \"Partial: PDF failed\"\n"
-#         "\n"
-#         "# Build slots section (metadata only)\n"
-#         "slots_md = \"\"\n"
-#         "for name, data in out_dyn.items():\n"
-#         "    if name == \"project_log\": continue\n"
-#         "    slots_md += f\"\\n### {name} ({data['type']})\\n{data['description']}\\n\"\n"
-#         "    slots_md += f\"**Format:** {data['format']}\\n\" if data['type']=='inline' else f\"**Mime:** {data['mime']}\\n**Filename:** {data['path']}\\n\"\n"
-#         "\n"
-#         "log = f\"\"\"# Project Log\\n\\n## Objective\\n{objective}\\n\\n## Status\\n{status}\\n\\n## Story\\n{' '.join(story)}\\n\\n## Produced Slots\\n{slots_md}\"\"\"\n"
-#         "\n"
-#         "out_dyn[\"project_log\"] = {\"type\":\"inline\", \"format\":\"markdown\", \"description\":\"Semantic story\", \"value\":log.strip()}\n"
-#         "```\n"
-#         "\n"
-#         "### Rules\n"
-#         "1. Write as you go - past tense, dense prose\n"
-#         "2. Say WHY: 'need current data', 'building on prior work'\n"
-#         "3. Say WHAT: 'Slot X ready' or 'Slot X failed: reason'\n"
-#         "4. Keep ≤500 words total\n"
-#         "\n"
-#         "## Reference pipeline\n"
-#         "\n"
-#         "1) **Editing or fresh start:**\n"
-#         "   - If editing, `ws = ctx_tools.fetch_working_set(select=\"latest\")` then start from `ws['existing_deliverables'][<slot_name>].text` and treat `ws['existing_sources']` as prior_sources.\n"
-#         "   - Alternatively, the previous work can be found in `(ws['previous_assistant'] or {}).get('text')`.\n"
-#         "   - If not editing, start fresh.\n"
-#         "\n"
-#         "2) **Source management rules:**\n"
-#         "   - When multiple source tools are used, ALWAYS call `ctx_tools.merge_sources`.\n"
-#         "   - Pattern: `unified_sources = ctx_tools.merge_sources(source_collections=json.dumps([sources1, sources2, sources3]))`.\n"
-#         "\n"
-#         "3) **LLM tool usage:**\n"
-#         "   - Prepare GUIDANCE for LLM tools defining what to do with current inputs.\n"
-#         "   - GUIDANCE can come from another llm tool or you write it based on current purpose.\n"
-#         "   - Example call:\n"
-#         "     ```python\n"
-#         "     edited = generic_tools.edit_text_llm(\n"
-#         "         text=existing_slot_text + GUIDANCE,\n"
-#         "         instruction='Apply GUIDANCE; keep structure; no invented facts; add [[S:n]] only on NEW/CHANGED claims; REMOVE GUIDANCE block.',\n"
-#         "         keep_formatting=True,\n"
-#         "         sources_json=json.dumps(unified_sources),\n"
-#         "         cite_sources=True,\n"
-#         "         forbid_new_facts_without_sources=True\n"
-#         "     )\n"
-#         "     ```\n"
-#         "\n"
-#         "4) **Rendering files:**\n"
-#         "- Pass the SAME `unified_sources` to renderers (e.g., write_pdf) with `resolve_citations=True` when applicable.\n"
-#         "- After rendering, set the file slot’s `text` to the exact input text used for rendering (or to the file’s full textual content if it is a textual format). ★\n"
-#         "# Example (assign text to file slot; no extra inline slot)\n"
-#         "pdf_path = f\"{OUTPUT_DIR}/briefing.pdf\"\n"
-#         "await agent_io_tools.tool_call(\n"
-#         "  fn=generic_tools.write_pdf,\n"
-#         "  params_json=json.dumps({\"path\": pdf_path, \"content_md\": briefing_md, \"title\": \"Briefing\"}),\n"
-#         "  call_reason=\"Render briefing as PDF\",\n"
-#         "  tool_id=\"generic_tools.write_pdf\"\n"
-#         ")\n"
-#         "out_dyn[\"pdf_file\"] = {\n"
-#         "  \"type\": \"file\", \"path\": \"briefing.pdf\", \"mime\": \"application/pdf\",\n"
-#         "  \"description\": \"Stakeholder briefing PDF\",\n"
-#         "  \"text\": briefing_md  # the exact source text used to render ★\n"
-#         "}\n"
-#         "\n"
-#         "5) **Fill all slots:**\n"
-#         "   - Fill all slots exactly per output_contract_dyn contract.\n"
-#         "   - Example: `out_dyn[\"project_log\"] = {\"type\":\"inline\", \"format\":\"markdown\", \"description\":\"Semantic story for this run\", \"value\": project_log_md}`\n"
-#         "\n"
-#         "## File/path rules\n"
-#         "- All files must physically live in `OUTPUT_DIR`.\n"
-#         "- Store `OUTPUT_DIR`-relative paths in `out_dyn` (e.g., `\"rust_advances.pdf\"`).\n"
-#         "\n"
-#         "## Error handling\n"
-#         "- A runtime helper `fail(...)` is injected into your program and available globally.\n"
-#         "- Managed errors: call `await fail(\"<short description>\", where=\"<stage>\", details=\"<why>\")` and return immediately.\n"
-#         "- Unhandled exceptions: wrap `main()` in try/except; in except, call `await fail(\"Unhandled exception\", where=\"main\", error=str(e), details=type(e).__name__, managed=False)`.\n"
-#         "- The helper writes a normalized failure envelope to `result.json` (including `contract`, `objective`, and optional `out_dyn`).\n"
-#         "\n"
-#         "## Async\n"
-#         "- If any adapter is async, implement `async def main()` and run with `asyncio.run(main())`.\n"
-#         "\n"
-#         "## Style & behavior\n"
-#         "- Linear and concise. No prints.\n"
-#         "- USER-FACING STATUS: two short lines (objective; plan). Do **not** name tools/providers/models.\n"
-#         "\n"
-#     )
-#     sys += (
-#         f"• Keep main.py ≤ {line_budget} lines.\n"
-#         f"Assume today={today} (UTC).\n"
-#     )
-#
-#     # ---------- Strict 3-section protocol ----------
-#     sys = _add_3section_protocol(
-#         sys,
-#         "{"
-#         "  \"entrypoint\": \"python main.py\","
-#         "  \"files\": [ {\"path\": \"main.py\", \"content\": \"...\"} ],"
-#         "  \"outputs\": [ {\"filename\": \"result.json\", \"kind\": \"json\", \"key\": \"worker_output\"} ],"
-#         "  \"notes\": \"<=40 words\","
-#         "  \"result_interpretation_instruction\": \"<=120 words, tool-agnostic, concise\""
-#         "}"
-#     )
-#
-#     # ---------- Message: task + adapters with DOCS ----------
-#     adapters_for_llm = _adapters_public_view(adapters)
-#
-#     contract_dyn = (decision or {}).get("output_contract_dyn") or {}
-#
-#     msg = (
-#         "TASK (objective + constraints for this program):\n"
-#         f"{json.dumps(task or {}, ensure_ascii=False, indent=2)}\n\n"
-#         "SOLVABILITY / DECISION (read-only hints):\n"
-#         f"{json.dumps(decision or {}, ensure_ascii=False, indent=2)}\n\n"
-#         "DYNAMIC OUTPUT CONTRACT YOU MUST FULFILL - output_contract_dyn (slot → description):\n"
-#         f"{json.dumps(contract_dyn, ensure_ascii=False, indent=2)}\n\n"
-#         "ADAPTERS — imports, call templates, is_async:\n"
-#         f"{json.dumps([{k: v for k,v in a.items() if k in ('id','import','call_template','is_async')} for a in adapters_for_llm], ensure_ascii=False, indent=2)}\n\n"
-#         "TOOL DOCS (purpose/args/returns/constraints/examples):\n"
-#         f"{json.dumps([{ 'id': a['id'], 'doc': a.get('doc', {}) } for a in adapters_for_llm], ensure_ascii=False, indent=2)}\n\n"
-#         "Produce the three sections as instructed."
-#     )
-#
-#     # ---------- Stream ----------
-#     return await _stream_agent_sections_to_json(
-#         svc,
-#         client_name="solver_codegen",
-#         client_role="solver_codegen",
-#         sys_prompt=sys,
-#         user_msg=msg,
-#         schema_model=SolverCodegenOut,
-#         on_thinking_delta=on_thinking_delta,
-#         ctx=ctx,
-#         max_tokens=6000,
-#     )
 
 # ====================== TOOL ROUTER (topic- & domain-aware) ======================
 class ToolCandidate(BaseModel):
@@ -745,8 +467,9 @@ async def tool_router_stream(
     "OUTPUT FORMAT:\n"
     "• Return up to 5 candidates with reasons and minimal parameters.\n"
     "\n"
-    "INTERNAL THINKING (STATUS): tiny.\n"
-    "USER-FACING (STATUS): 2 short lines (focus; minimal plan). No tool/provider/model names.\n"
+    "THINKING PART: No tool/provider/model names revealed - we show thinking to a customer.\n"
+    # "INTERNAL THINKING (STATUS): tiny.\n"
+    # "USER-FACING (STATUS): 2 short lines (focus; minimal plan). No tool/provider/model names.\n"
 )
     ToolRouterOut.model_json_schema()
     sys += (
@@ -755,12 +478,16 @@ async def tool_router_stream(
         "Prefer selecting tools that can EDIT or UPDATE existing deliverables when appropriate (e.g., LLM editor, file writer), "
         "instead of rebuilding everything from scratch. Only applicable if the new request applies to a past program in the context.\n"
     )
-    sys = _add_3section_protocol(
-        sys,
-        "{ \"candidates\": ["
-        "  {\"name\": \"<tool_id>\", \"reason\": \"...\", \"confidence\": 0..1, \"parameters\": {\"a\": \"hello\"}}"
-        "], \"notes\": \"(<=25 words)\" }"
-    )
+    json_shape_hint = ("{ \"candidates\": ["
+                       "  {\"name\": \"<tool_id>\", \"reason\": \"...\", \"confidence\": 0..1, \"parameters\": {\"a\": \"hello\"}}"
+                       "], \"notes\": \"(<=25 words)\" }"
+                       )
+    # sys = _add_3section_protocol(
+    #     sys,
+    #     json_shape_hint=json_shape_hint
+    # )
+
+    sys = _add_2section_protocol(sys, json_shape_hint=json_shape_hint)
 
     catalog_str = ""
     if tool_catalog:
@@ -785,7 +512,8 @@ async def tool_router_stream(
     out = await _stream_agent_sections_to_json(
         svc, client_name="tool_router", client_role="tool_router",
         sys_prompt=sys, user_msg=msg, schema_model=ToolRouterOut,
-        on_thinking_delta=on_thinking_delta,
+        # on_thinking_delta=on_thinking_delta,
+        on_progress_delta=on_thinking_delta,
         max_tokens=max_tokens
     )
     out = out or {}
@@ -815,7 +543,7 @@ class SolvabilityOut(BaseModel):
     solvable: bool
     confidence: float = Field(0.5, ge=0.0, le=1.0)
     reasoning: str = ""
-    tools_to_use: List[str] = Field(default_factory=list)
+    selected_tools: List[str] = Field(default_factory=list)
     clarifying_questions: List[str] = Field(default_factory=list)
 
     solver_mode: Literal["direct_tools_exec","codegen","llm_only"] = "llm_only"
@@ -928,7 +656,7 @@ async def assess_solvability_stream(
         
         "## Instruction for downstream agent\n"
         "`instructions_for_downstream` must include the instruction for downstream agent.\n"
-        " If mode == 'llm_only', describe why the solution cannot be solved by solver (no such tools or not enough data, or the solution cannot be solved completely) so the llm decide how to answer to a user w/o solver, including the confessing the uncertainty\n"
+        " If mode == 'llm_only', describe why the solution cannot be solved by solver (no such tools or not enough data, or the solution cannot be solved completely) so the final downstream llm decide how to answer to a user w/o solver, including the confessing the uncertainty\n"
         " If the mode == 'direct_tools_exec', this message also will be shown to the final answer generator so that it will know how to interpret the solver results (produced by selected tool).\n"
         " If the mode == 'codegen', this instruction will be shared to codegen LLM so that it produces the code which solves the task.\n"
         "\n"
@@ -939,26 +667,29 @@ async def assess_solvability_stream(
     sys += (
         f"Assume today={today} (UTC).\n"
         "\n"
-        "INTERNAL THINKING: very concise.\n"
-        "USER-FACING STATUS: two short lines (assessment; next action). No tool/provider names.\n"
+        "INTERNAL THINKING: VERY concise and condensed. No real tool/provider names mentions. No any lengthy reasoning allowed.\n"
+        # "USER-FACING STATUS: two short lines (assessment; next action). No tool/provider names.\n"
     )
-    sys = _add_3section_protocol(
-        sys,
-        "{"
-        "  \"solvable\": bool,"
-        "  \"confidence\": 0..1,"
-        "  \"reasoning\": \"(<=25 words)\","
-        "  \"tools_to_use\": [\"<tool_id>\"],"
-        "  \"context_use\": bool,"
-        "  \"clarifying_questions\": [\"...\",\"...\"],"
-        "  \"solver_mode\": \"direct_tools_exec\"|\"codegen\"|\"llm_only\","
-        "  \"instructions_for_downstream\": \"(<=45 words)\","
-        "  \"output_contract_dyn\": {"
-        "      \"<slot>\": {\"type\":\"inline\",\"description\":\"...\",\"format\":\"markdown\"},"
-        "      \"<slot2>\": {\"type\":\"file\",\"description\":\"...\",\"mime\":\"application/pdf\",\"filename_hint\":\"report.pdf\"}"
-        "  }"
-        "}"
-    )
+    json_shape_hint = ("{"
+                       "  \"solvable\": bool,"
+                       "  \"confidence\": 0..1,"
+                       "  \"reasoning\": \"(<=25 words)\","
+                       "  \"selected_tools\": [\"<tool_id>\"],"
+                       "  \"context_use\": bool,"
+                       "  \"clarifying_questions\": [\"...\",\"...\"],"
+                       "  \"solver_mode\": \"direct_tools_exec\"|\"codegen\"|\"llm_only\","
+                       "  \"instructions_for_downstream\": \"(<=45 words)\","
+                       "  \"output_contract_dyn\": {"
+                       "      \"<slot>\": {\"type\":\"inline\",\"description\":\"...\",\"format\":\"markdown\"},"
+                       "      \"<slot2>\": {\"type\":\"file\",\"description\":\"...\",\"mime\":\"application/pdf\",\"filename_hint\":\"report.pdf\"}"
+                       "  }"
+                       "}"
+                       )
+    # sys = _add_3section_protocol(
+    #     sys,
+    #     json_shape_hint
+    # )
+    sys = _add_2section_protocol(sys, json_shape_hint=json_shape_hint)
     topic_line = f"Topics: {', '.join(topics[:6])}" if topics else ""
     # domain_line = f"is_spec_domain={is_spec_domain!s}"
     msg = (
@@ -979,9 +710,10 @@ async def assess_solvability_stream(
         sys_prompt=sys,
         user_msg=msg,
         schema_model=SolvabilityOut,
-        on_thinking_delta=on_thinking_delta,
+        # on_thinking_delta=on_thinking_delta,
+        on_progress_delta=on_thinking_delta,
         ctx="solvability",
-        max_tokens=max_tokens
+        max_tokens=max_tokens,
     )
     out = out or {}
     agent_response = out.setdefault("agent_response", {})
@@ -989,7 +721,7 @@ async def assess_solvability_stream(
     internal_thinking = out.get("internal_thinking")
     error = elog.get("error")
 
-    agent_response_tools_to_use = agent_response.get("tools_to_use") or []
+    agent_response_tools_to_use = agent_response.get("selected_tools") or []
     __service = {
         "internal_thinking": internal_thinking,
         "raw_data": elog.get("raw_data")
@@ -1002,7 +734,7 @@ async def assess_solvability_stream(
     # constrain to provided candidates
     cand_names = {c.get("name") for c in (candidates or []) if c.get("name")}
     tools = [t for t in agent_response_tools_to_use if t in cand_names]
-    agent_response["tools_to_use"] = tools
+    agent_response["selected_tools"] = tools
 
     if (agent_response.get("solver_mode") == "direct_tools_exec"
             and len(tools) > 1):
