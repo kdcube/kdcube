@@ -80,19 +80,21 @@ def _format_assistant_internal_block(title: str, items: list[dict]) -> str:
     return "\n".join(out)
 
 def _messages_with_context(
-        system_text: str,
+        system_message: str|SystemMessage,
         prior_pairs: list[dict],
         current_user_text: str,
         current_context_items: list[dict],
         turn_artifact: dict
 ) -> list:
     """
-    Build:
+    Build message history with clear attribution and proper formatting.
+
+    Structure:
       [SystemMessage(main_sys),
        (for each prior pair)
-          HumanMessage(<prior user + prior artifacts>),
-          AIMessage(<assistant-internal ctx + assistant-internal artifacts + answer>),
-       HumanMessage(<current user + current ctx> [+ separate TURN SOLUTION / FAILURE block])]
+          HumanMessage(<prior user + timestamp>),
+          AIMessage(<internal context + internal artifacts + user-facing deliverables + answer>),
+       HumanMessage(<current user + current context + turn artifact>)]
     """
     def _turn_artifact_heading(ta: Optional[dict]) -> Tuple[str, Optional[str]]:
         if not ta:
@@ -100,18 +102,80 @@ def _messages_with_context(
         txt = ta.get("text")
         meta = ta.get("meta") or {}
         kind = meta.get("kind") or ""
-        # we only care about heading/type; content is handled below
         if isinstance(txt, str):
             if "[codegen.program.presentation]" in txt.lower() or kind == "codegen.program.presentation":
-                return "TURN SOLUTION — Program Presentation (THIS TURN)", "presentation"
+                return "Solver Program Presentation (THIS TURN)", "presentation"
             elif "[solver.failure]" in txt.lower() or kind == "solver.failure":
-                return "TURN SOLUTION FAILURE — Execution failed (THIS TURN)", "failure"
+                return "Solver Failure (THIS TURN)", "failure"
         return "", None
 
-    def _format_ctx_block(title: str, items: list[dict]) -> str:
-        return _format_context_block(title, items) if items else ""
+    def _format_context_block(title: str, items: list[dict]) -> str:
+        if not items:
+            return ""
 
-    msgs = [SystemMessage(content=system_text)]
+        parts = [f"### {title}"]
+        parts.append("_This section contains internal context; **not** authored by the user._")
+        parts.append("")
+
+        for item in items:
+            content = item.get("content") or ""
+            if content:
+                parts.append(content)
+                parts.append("")
+
+        return "\n".join(parts)
+
+    def _format_assistant_internal_block(title: str, items: list[dict]) -> str:
+        """Format artifacts that are INTERNAL to assistant (not shown to user)."""
+        if not items:
+            return ""
+
+        parts = [f"### {title}"]
+        parts.append("_Internal working materials (not shown to user):_")
+        parts.append("")
+
+        for item in items:
+            item_title = item.get("title") or ""
+            content = item.get("content") or ""
+            kind = item.get("kind") or ""
+
+            # Format based on kind
+            if kind == "project.log":
+                parts.append(f"**{item_title}**")
+                parts.append(content)
+                parts.append("")
+            elif kind == "codegen.program.presentation":
+                # This is the solver's internal digest
+                parts.append(f"**{item_title}**")
+                parts.append("_Solver's summary of what was produced:_")
+                parts.append(content)
+                parts.append("")
+            else:
+                if item_title:
+                    parts.append(f"**{item_title}**")
+                parts.append(content)
+                parts.append("")
+
+        return "\n".join(parts)
+
+    def _format_user_facing_deliverables(items: list[dict]) -> str:
+        """Format deliverables that were SHOWN to the user."""
+        if not items:
+            return ""
+
+        parts = [f"### Deliverables Provided to User"]
+        parts.append("_These materials were delivered to the user in this turn:_")
+        parts.append("")
+
+        for item in items:
+            content = item.get("content") or ""
+            if content:
+                parts.append(content)
+                parts.append("")
+
+        return "\n".join(parts)
+
+    msgs = [SystemMessage(content=system_message) if isinstance(system_message, str) else system_message]
 
     # 1) Prior (materialized) turns — chronological
     for p in prior_pairs or []:
@@ -120,71 +184,74 @@ def _messages_with_context(
         arts = p.get("artifacts") or []
         compressed_log = p.get("compressed_log") or None
 
-        # Pull ctx.used bullets (assistant internal thinking) if available
+        # Extract timestamps
+        ts_u = _iso(u.get("ts"))
+        ts_turn = _iso(a.get("ts") or u.get("ts"))
+
+        # Separate artifacts by visibility
+        internal_artifacts = []  # program presentation, project_log
+        user_facing_deliverables = []  # actual deliverables shown to user
+
+        for art in arts:
+            kind = art.get("kind") or ""
+            # Internal: program presentation (digest), project log (working draft)
+            if kind in ("project.log", "codegen.program.presentation"):
+                internal_artifacts.append(art)
+            # User-facing: deliverables (files, documents)
+            elif kind in ("deliverables.list", "deliverable.full"):
+                user_facing_deliverables.append(art)
+            # Solver failure is internal too
+            elif kind == "solver.failure":
+                internal_artifacts.append(art)
+            else:
+                # Default: treat as user-facing if unsure
+                user_facing_deliverables.append(art)
+
+        # === HUMAN (prior user) ===
+        u_text = (u.get("text") or "").strip()
+        u_payload = f"[{ts_u}]\n{u_text}"
+        msgs.append(HumanMessage(content=u_payload))
+
+        # === ASSISTANT (prior assistant) ===
+        assistant_parts: List[str] = []
+
+        # A) Internal thinking (ctx.used from turn log)
         turn_ctx = ""
-        summary_content = ""
         if compressed_log:
             try:
-                turn_ctx = compressed_log.ctx_used_bullets  # a single string (bulleted)
-                summary_content = (compressed_log.summary_content or "").strip()
+                turn_ctx = compressed_log.ctx_used_bullets or ""
             except Exception:
                 turn_ctx = ""
 
-        ts_u = _iso(u.get("ts"))
-
-        # prefer assistant turn timestamp; fall back to user-side if missing
-        ts_turn = _iso(a.get("ts") or u.get("ts"))
-
-        # Attach the turn timestamp to each artifact’s title and meta (no IDs)
-        arts_with_ts = []
-        for art in arts:
-            art2 = dict(art) if isinstance(art, dict) else {"type": "text", "content": str(art)}
-            # carry over or synthesize a human title; then append ISO ts
-            base_title = (art2.get("title") or _source_title(art2)).strip()
-            titled = f"{base_title} — [{ts_turn}]" if ts_turn else base_title
-            art2["title"] = titled
-            # stash ts in meta for downstream consumers
-            meta = dict(art2.get("meta") or {})
-            if ts_turn:
-                meta["turn_ts"] = ts_turn
-            art2["meta"] = meta
-            arts_with_ts.append(art2)
-
-        # HUMAN (prior user)
-        u_text = (u.get("text") or "").strip()
-        ctx_block = _format_ctx_block("Context — not authored by the user", items=[])  # no user-facing artifacts here
-        u_payload = (f"[{ts_u}]\n{u_text}" + (f"\n\n{ctx_block}" if ctx_block else "")).strip()
-        msgs.append(HumanMessage(content=u_payload))
-
-        # ASSISTANT (prior assistant) — prepend internal ctx + internal artifacts, then answer
-        assistant_parts: List[str] = []
-
-        # Assistant internal thinking (ctx.used)
         if turn_ctx:
-            assistant_parts.append("Previously in this thread…")
-            assistant_parts.append(turn_ctx)  # already bulleted string
-        if summary_content:
-            assistant_parts.append("Summary of this turn:")
-            assistant_parts.append(summary_content)
+            assistant_parts.append("**Context used in this turn:**")
+            assistant_parts.append(turn_ctx)
+            assistant_parts.append("")
 
-        # Assistant internal artifacts BEFORE the answer
-        if arts_with_ts:
-            block = _format_assistant_internal_block("Assistant internal artifacts", arts_with_ts)
+        # B) Internal artifacts (program presentation, project log)
+        if internal_artifacts:
+            block = _format_assistant_internal_block(
+                "Internal Working Materials",
+                internal_artifacts
+            )
             if block:
-                assistant_parts.append("<artifacts>")
                 assistant_parts.append(block)
-                assistant_parts.append("</artifacts>")
 
-        # The actual assistant text
+        # C) User-facing deliverables (what was actually shown to user)
+        if user_facing_deliverables:
+            block = _format_user_facing_deliverables(user_facing_deliverables)
+            if block:
+                assistant_parts.append(block)
+
+        # D) The actual assistant answer
         a_text = (a.get("text") or "").strip()
-        assistant_parts.append("answer")
-        assistant_parts.append("<answer>")
-        assistant_parts.append(a_text if a_text else "(no assistant answer recorded for this turn)")
-        assistant_parts.append("</answer>")
+        if a_text:
+            assistant_parts.append("**Answer (shown to user):**")
+            assistant_parts.append(a_text)
 
-        msgs.append(AIMessage(content="\n\n".join([s for s in assistant_parts if s.strip()])))
+        msgs.append(AIMessage(content="\n".join([s for s in assistant_parts if s])))
 
-    # ✅ 2) Current turn - REORGANIZED for clarity
+    # === 2) Current turn ===
     ta_heading, ta_type = _turn_artifact_heading(turn_artifact)
 
     # Get current timestamp
@@ -193,15 +260,14 @@ def _messages_with_context(
     except Exception:
         ts_current = ""
 
-    # Build payload in LOGICAL order
     payload_parts: List[str] = []
 
-    # A) User message with timestamp (like prior turns)
+    # A) User message with timestamp
     payload_parts.append(f"[{ts_current}]")
     payload_parts.append(current_user_text.strip())
-    payload_parts.append("")  # blank line
+    payload_parts.append("")
 
-    # B) Split context items into current turn vs earlier turns
+    # B) Current turn context (turn log, memories)
     current_turn_items = []
     earlier_items = []
 
@@ -209,16 +275,17 @@ def _messages_with_context(
         txt = (item.get("text") or item.get("content") or "").strip()
         if not txt:
             continue
-        # Items with [turn_log], [objective], [note] are current turn
+
+        # Items with turn-specific markers are current
         if any(marker in txt for marker in ["[turn_log]", "[objective]", "[note]", "[ctx.used]", "[solver"]):
             current_turn_items.append(item)
-        # Items with [EARLIER TURNS] or turn_id are earlier context
+        # Items with historical markers are earlier context
         elif "[EARLIER TURNS" in txt or "turn_id]" in txt:
             earlier_items.append(item)
         else:
-            current_turn_items.append(item)  # default to current
+            current_turn_items.append(item)
 
-    # C) Show current turn context first
+    # Show current turn context
     if current_turn_items:
         ctx_block = _format_context_block(
             "Context — not authored by the user",
@@ -228,36 +295,33 @@ def _messages_with_context(
             payload_parts.append(ctx_block)
             payload_parts.append("")
 
-    # D) Then the solution/failure artifact (the actual content)
+    # C) Turn solution/failure artifact (the actual solver output)
     if ta_type and turn_artifact:
         ta_text = (turn_artifact.get("text") or "").strip()
         if ta_text:
-            # Title with timestamp
-            artifact_title = f"{ta_heading} — [{ts_current}]" if ts_current else ta_heading
-
-            # Format as context block but with special heading
             if ta_type == "presentation":
                 intro = (
-                    "### TURN SOLUTION — Program Presentation (generated this turn)\n"
-                    "_This block is system-provided context related to this message; **not** authored by the user._\n"
-                    "_Use this as the primary answer. If incomplete, present the partial result and request clarification._"
+                    f"### {ta_heading}\n"
+                    "_This is the solver's internal digest of work done this turn. **Not** authored by the user._\n"
+                    "_Use this to understand what was produced. The actual deliverables are what the user receives. You can treat it as a primary answer. If incomplete, present the partial result and request clarification.__"
                 )
             else:  # failure
                 intro = (
-                    "### TURN SOLUTION FAILURE — Execution Failed (generated this turn)\n"
-                    "_This block is system-provided context related to this message; **not** authored by the user._\n"
-                    "_The solver could not complete the request. Use this to inform the user about limitations and suggest next steps._"
+                    f"### {ta_heading}\n"
+                    "_The solver encountered an error. **Not** authored by the user._\n"
+                    "_Use this to inform the user about limitations and suggest next steps._"
                 )
 
             payload_parts.append(intro)
+            payload_parts.append("")
             payload_parts.append("[solver.failure]" if ta_type == "failure" else "[codegen.program.presentation]")
             payload_parts.append(ta_text)
             payload_parts.append("")
 
-    # E) Earlier context goes last (lower priority)
+    # D) Earlier context (lower priority)
     if earlier_items:
         earlier_block = _format_context_block(
-            "Context — not authored by the user",
+            "Earlier Context — not authored by the user",
             earlier_items
         )
         if earlier_block:
@@ -265,5 +329,5 @@ def _messages_with_context(
             payload_parts.append("")
             payload_parts.append(earlier_block)
 
-    msgs.append(HumanMessage(content="\n".join([p for p in payload_parts if p is not None])))
+    msgs.append(HumanMessage(content="\n".join([p for p in payload_parts if p])))
     return msgs

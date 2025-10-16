@@ -68,6 +68,104 @@ def make_chat_openai(*, model: str, api_key: str,
 
     return ChatOpenAI(**params)
 
+# Add to inventory.py or a separate utils module
+
+from langchain_core.messages import SystemMessage
+from typing import List, Union
+
+def create_cached_system_message(content: Union[str, List[dict]], cache_last: bool = False) -> SystemMessage:
+    """
+    Create a SystemMessage with caching enabled for Anthropic.
+
+    Args:
+        content: Either a string (entire message cached) or list of dicts with text/cache info
+        cache_last: If True and content is string, mark it for caching
+
+    Examples:
+        # Cache entire system message:
+        msg = create_cached_system_message("You are a helpful assistant.", cache_last=True)
+
+        # Cache specific parts:
+        msg = create_cached_system_message([
+            {"text": "You are a helpful assistant.", "cache": False},
+            {"text": "Very long context here...", "cache": True},  # This part cached
+            {"text": "Final instructions.", "cache": False}
+        ])
+    """
+    if isinstance(content, str):
+        if cache_last:
+            # Mark for caching via additional_kwargs
+            return SystemMessage(
+                content=content,
+                additional_kwargs={"cache_control": {"type": "ephemeral"}}
+            )
+        return SystemMessage(content=content)
+
+    # Multi-part system message with selective caching
+    # Store structure in additional_kwargs for Anthropic conversion
+    return SystemMessage(
+        content="",  # Will be ignored; blocks used instead
+        additional_kwargs={
+            "message_blocks": [
+                {
+                    "type": "text",
+                    "text": block["text"],
+                    **({"cache_control": {"type": "ephemeral"}} if block.get("cache") else {})
+                }
+                for block in content
+            ]
+        }
+    )
+
+def _extract_system_prompt_text(system_prompt: Union[str, SystemMessage]) -> str:
+    """
+    Extract text from system prompt, handling both string and SystemMessage types.
+    For SystemMessage with message_blocks (cached messages), concatenates all text parts.
+    """
+    if isinstance(system_prompt, str):
+        return system_prompt
+
+    if isinstance(system_prompt, SystemMessage):
+        # Check for multi-part Anthropic blocks (cached messages)
+        anthro_blocks = (system_prompt.additional_kwargs or {}).get("message_blocks")
+        if anthro_blocks:
+            # Concatenate all text blocks
+            return "\n\n".join(
+                block.get("text", "")
+                for block in anthro_blocks
+                if block.get("type") == "text"
+            )
+
+        # Simple SystemMessage - just return content
+        return system_prompt.content or ""
+
+    # Fallback for any other type
+    return str(system_prompt)
+
+def _normalize_message_for_openai(msg: BaseMessage) -> BaseMessage:
+    """
+    Convert Anthropic-style block messages to regular messages for OpenAI.
+    Concatenates all text blocks into the content field.
+    """
+    if not isinstance(msg, SystemMessage):
+        return msg
+
+    # Check for message_blocks (Anthropic-specific structure)
+    blocks = (msg.additional_kwargs or {}).get("message_blocks")
+    if not blocks:
+        # Already a normal message, return as-is
+        return msg
+
+    # Concatenate all text blocks
+    full_text = "\n\n".join(
+        block.get("text", "")
+        for block in blocks
+        if block.get("type") == "text"
+    )
+
+    # Return a new SystemMessage with full text (cache hints removed)
+    return SystemMessage(content=full_text)
+
 # =========================
 # Logging
 # =========================
@@ -489,40 +587,65 @@ class FormatFixerService:
             self.claude_client = None
             self.logger.log_error(ImportError("anthropic package not available"), "Claude client initialization")
 
-    async def fix_format(self, raw_output: str, expected_format: str, input_data: str, system_prompt: str) -> Dict[str, Any]:
-        self.logger.start_operation("format_fixing",
-                                    raw_output_length=len(raw_output),
-                                    expected_format=expected_format,
-                                    input_data_length=len(input_data),
-                                    model=self.config.format_fixer_model,
-                                    provider="anthropic"
-                                    )
+    async def fix_format(
+        self,
+        raw_output: str,
+        expected_format: str,
+        input_data: str,
+        system_prompt: Union[str, SystemMessage]
+    ) -> Dict[str, Any]:
+        """
+        Fix malformed JSON output to match expected format.
+
+        Args:
+            raw_output: The malformed JSON string to fix
+            expected_format: Description of expected format (e.g., schema name)
+            input_data: Original user input/message
+            system_prompt: Original system prompt (string or SystemMessage)
+        """
+        # Extract text from system prompt (handles both types)
+        system_prompt_text = self._extract_system_prompt_text(system_prompt)
+
+        self.logger.start_operation(
+            "format_fixing",
+            raw_output_length=len(raw_output),
+            expected_format=expected_format,
+            input_data_length=len(input_data),
+            system_prompt_length=len(system_prompt_text),
+            model=self.config.format_fixer_model,
+            provider="anthropic"
+        )
+
         if not self.claude_client:
             msg = "Claude client not available"
             self.logger.log_error(Exception(msg), "Client unavailable")
             self.logger.finish_operation(False, msg)
             return {"success": False, "error": msg, "raw": raw_output}
+
         try:
             fix_prompt = f"""You are a JSON format fixer. You receive malformed JSON output and need to fix it to match the expected format.
 
-Original system prompt: {system_prompt}
+Original system prompt: {system_prompt_text}
 Original input: {input_data}
 Expected format: {expected_format}
 Malformed output: {raw_output}
 
 Please fix the JSON to match the expected format. Return only the fixed JSON, no additional text."""
+
             self.logger.log_step("sending_fix_request", {
                 "model": self.config.format_fixer_model,
                 "fix_prompt_length": len(fix_prompt),
-                # "raw_output_preview": raw_output[:200] + "..." if len(raw_output) > 200 else raw_output
                 "raw_output": raw_output
             })
+
             response = self.claude_client.messages.create(
                 model=self.config.format_fixer_model,
                 max_tokens=1000,
                 messages=[{"role": "user", "content": fix_prompt}]
             )
+
             fixed_content = response.content[0].text
+
             try:
                 parsed = json.loads(fixed_content)
                 self.logger.log_step("fix_validation_successful", {"parsed_type": type(parsed).__name__})
@@ -532,6 +655,7 @@ Please fix the JSON to match the expected format. Return only the fixed JSON, no
                 self.logger.log_error(e, "Fixed content still not valid JSON")
                 self.logger.finish_operation(False, "Fixed content still invalid")
                 return {"success": False, "error": "Fixed content is still not valid JSON", "raw": fixed_content}
+
         except Exception as e:
             self.logger.log_error(e, "Format fixing failed")
             self.logger.finish_operation(False, f"Format fixing failed: {str(e)}")
@@ -779,7 +903,12 @@ class ModelServiceBase:
     def _freeform_usage_extractor(result, *_a, **_kw) -> ServiceUsage:
         try:
             u = _norm_usage_dict(result.get("usage") or {})
-            return ServiceUsage(input_tokens=u["prompt_tokens"], output_tokens=u["completion_tokens"], total_tokens=u["total_tokens"], requests=1)
+            return ServiceUsage(input_tokens=u["prompt_tokens"],
+                                output_tokens=u["completion_tokens"],
+                                total_tokens=u["total_tokens"],
+                                cache_creation_tokens=u.get("cache_creation_input_tokens") or 0,
+                                cache_read_tokens=u.get("cache_read_input_tokens") or 0,
+                                requests=1)
         except Exception:
             return ServiceUsage(requests=1)
 
@@ -871,24 +1000,52 @@ class ModelServiceBase:
 
         index = -1
         # Anthropic streaming
-        if provider_name == "anthropic":
+        if provider_name == "anthropic" and hasattr(client, "messages"):
             import anthropic
             async_client = getattr(self.router, "_mk_anthropic_async")()
-            sys_prompt = None
+
+            # --- Enhanced conversion with cache support ---
+            sys_blocks = []  # system as list of content blocks
             convo = []
+
             for m in messages:
                 if isinstance(m, SystemMessage):
-                    sys_prompt = (sys_prompt + "\n" + m.content) if sys_prompt else m.content
+                    # Check for Anthropic-specific block structure
+                    message_blocks = (m.additional_kwargs or {}).get("message_blocks")
+
+                    if message_blocks:
+                        # Multi-part system message with selective caching
+                        sys_blocks.extend(message_blocks)
+                    else:
+                        # Single system message - check for cache_control
+                        cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
+                        block = {"type": "text", "text": m.content}
+                        if cache_ctrl:
+                            block["cache_control"] = cache_ctrl
+                        sys_blocks.append(block)
+
                 elif isinstance(m, HumanMessage):
-                    convo.append({"role": "user", "content": m.content})
+                    cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
+                    msg_block = {"role": "user", "content": m.content}
+                    # Anthropic allows cache_control on message content too
+                    if cache_ctrl:
+                        msg_block["content"] = [
+                            {"type": "text", "text": m.content, "cache_control": cache_ctrl}
+                        ]
+                    convo.append(msg_block)
+
                 elif isinstance(m, AIMessage):
                     convo.append({"role": "assistant", "content": m.content})
                 else:
                     convo.append({"role": "user", "content": str(getattr(m, "content", ""))})
 
+            # Build final system parameter
+            # If we have blocks, use them; otherwise None
+            final_system = sys_blocks if sys_blocks else None
+
             async with async_client.messages.stream(
                     model=model_name,
-                    system=sys_prompt,
+                    system=final_system,
                     messages=convo,
                     max_tokens=max_tokens,
                     temperature=temperature,
@@ -911,9 +1068,15 @@ class ModelServiceBase:
                 if final_obj is not None:
                     u = getattr(final_obj, "usage", None)
                     if u:
+                        cache_creation = getattr(u, "cache_creation", None)
+                        if cache_creation:
+                            cache_creation = cache_creation.model_dump()
                         usage = {
                             "input_tokens":  getattr(u, "input_tokens", 0) or 0,
                             "output_tokens": getattr(u, "output_tokens", 0) or 0,
+                            "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                            "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
+                            **{"cache_creation": cache_creation if cache_creation else {}}
                         }
                         usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
 
@@ -922,6 +1085,10 @@ class ModelServiceBase:
 
         # OpenAI streaming
         if isinstance(client, ChatOpenAI):
+
+            # ✅ Convert block-based messages to regular messages
+            normalized_messages = [_normalize_message_for_openai(message) for message in messages]
+
             model_limitations = model_caps(model_name)
             tools_support = model_limitations.get("tools", False)
             reasoning_support = model_limitations.get("reasoning", False)
@@ -956,7 +1123,7 @@ class ModelServiceBase:
                 if u.endswith("/"): u = u[:-1]
                 return u
 
-            async for chunk in client.astream(messages, **stream_kwargs):
+            async for chunk in client.astream(normalized_messages, **stream_kwargs):
                 from langchain_core.messages import AIMessageChunk
                 index += 1
                 if not isinstance(chunk, AIMessageChunk):
@@ -972,8 +1139,9 @@ class ModelServiceBase:
                     usage = {
                         "input_tokens": um.get("input_tokens", 0) or 0,
                         "output_tokens": um.get("output_tokens", 0) or 0,
-                        "input_tokens_details": um.get("input_token_details", {}), # {'cache_read': 233344}
-                        "output_tokens_details": um.get("output_token_details", {}), # {'reasoning': 1344}
+                        "cache_read_input_tokens": (um.get("input_token_details") or {}).get("cache_read"),
+                        "input_tokens_details": (um.get("input_token_details") or {}).get("cache_read"), # {'cache_read': 233344}
+                        "output_tokens_details": (um.get("output_token_details") or {}).get("cache_read_input_tokens"), # {'reasoning': 1344}
                     }
                     usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
 

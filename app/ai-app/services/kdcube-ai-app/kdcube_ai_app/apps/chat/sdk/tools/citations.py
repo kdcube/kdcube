@@ -332,7 +332,7 @@ def build_citation_map_from_sources(sources_json: Optional[str]) -> Dict[int, Di
         out[sid] = {
             "title": (row.get("title") or "").strip(),
             "url": (row.get("url") or row.get("href") or "").strip(),
-            "text": row.get("text", "")
+            "text": row.get("text") or row.get("body") or row.get("content") or ""
         }
     return out
 
@@ -352,7 +352,7 @@ def build_citation_map_from_citations(citations: Iterable[Dict[str, Any]]) -> Di
         out[sid] = {
             "title": (c.get("title") or c.get("text") or "").strip(),
             "url": (c.get("url") or "").strip(),
-            "text": (c.get("text") or "").strip(),
+            "text": (c.get("text") or c.get("body") or "").strip(),
         }
     return out
 

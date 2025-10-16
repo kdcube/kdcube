@@ -141,6 +141,18 @@ class ContextRAGClient:
             items.append(item)
         return {"items": items}
 
+    async def runtime_ctx(self,
+                          ctx: Optional[dict] = None,
+                          user_id: str = None,
+                          conversation_id: str = None,
+                          track_id: str = None,
+                          bundle_id: str = None):
+        ctx_loaded = self._load_ctx(ctx)
+        user, conv, track, bundle = self._scope_from_ctx(
+            ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id, bundle_id=bundle_id
+        )
+        return { "user_id": user, "conversation_id": conv, "track_id": track, "bundle_id": bundle }
+
     async def recent(
             self,
             *,
@@ -227,7 +239,7 @@ class ContextRAGClient:
         tags = TURN_LOG_TAGS_BASE + [f"turn:{turn_id}"] + ([f"track:{track_id}"] if track_id else [])
         if extra_tags:
             tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
-        s3_uri, message_id, rn = self.store.put_message(
+        s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user, fingerprint=None,
             conversation_id=conversation_id,
             bundle_id=bundle_id,
@@ -347,7 +359,7 @@ class ContextRAGClient:
 
         payload = {"reaction": {"text": reaction, "ts": datetime.datetime.utcnow().isoformat()+"Z"}}
         # persist as a small artifact tied to the same turn (don’t overwrite)
-        s3_uri, message_id, rn = self.store.put_message(
+        s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user,
             conversation_id=conversation_id,
             bundle_id=bundle_id,
@@ -389,7 +401,7 @@ class ContextRAGClient:
             content_str = json.dumps(content) if isinstance(content, dict) else str(content)
         if extra_tags:
             tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
-        s3_uri, message_id, rn = self.store.put_message(
+        s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user_id, fingerprint=None,
             conversation_id=conversation_id,
             bundle_id=bundle_id,
@@ -469,7 +481,7 @@ class ContextRAGClient:
             return {"mode": "insert", **saved}
 
         #  Write a new message blob and then point the index row at it
-        s3_uri, message_id, rn = self.store.put_message(
+        s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user_id, fingerprint=None,
             conversation_id=conversation_id, bundle_id=bundle_id,
             role="artifact", text=content_str,

@@ -208,7 +208,7 @@ class ContextTools:
             else:
                 max_sid = max(max_sid, sid)
 
-            row = {"sid": sid, "title": source.get("title", ""), "url": url, "text": source.get("text", "")}
+            row = {"sid": sid, "title": source.get("title", ""), "url": url, "text": source.get("text") or source.get("body") or ""}
             for k in CITATION_OPTIONAL_ATTRS:
                 if source.get(k):
                     row[k] = source[k]

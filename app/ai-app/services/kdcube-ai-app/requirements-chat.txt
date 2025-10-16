@@ -24,9 +24,10 @@ aioboto3
 aiobotocore
 
 bs4
-mdit-py-plugins
 playwright
 markdown-it-py
+mdit-py-plugins
+linkify-it-py
 pygments
 jinja2
 

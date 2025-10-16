@@ -209,7 +209,8 @@ class _PygmentsRenderer:
 
 
 def _build_markdown_parser(renderer: _PygmentsRenderer) -> MarkdownIt:
-    md = MarkdownIt("commonmark", {"linkify": True, "html": True})
+    # md = MarkdownIt("commonmark", {"linkify": True, "html": True})
+    md = MarkdownIt("gfm-like", {"linkify": True, "html": True})
     _use_anchors_compat(md)
 
     md.use(attrs_plugin)

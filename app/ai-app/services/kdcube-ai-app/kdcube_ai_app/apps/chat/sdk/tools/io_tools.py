@@ -9,7 +9,8 @@ from typing import Annotated, Optional, Any, Dict, List, Tuple
 import semantic_kernel as sk
 
 from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
-from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_from_text
+from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_from_text, dedupe_sources_by_url, \
+    CITATION_OPTIONAL_ATTRS, normalize_sources_any
 
 try:
     from semantic_kernel.functions import kernel_function
@@ -19,7 +20,7 @@ except Exception:
 _CITABLE_TOOL_IDS = {
     "generic_tools.web_search",
     "generic_tools.browsing",
-    "ctx_tools.merge_sources",   # <-- add this
+    "ctx_tools.merge_sources",
 }
 
 # ---------- basics ----------
@@ -37,6 +38,40 @@ def _guess_mime(path: str, default: str = "application/octet-stream") -> str:
     mt, _ = mimetypes.guess_type(path)
     return mt or default
 
+def _extract_candidate_sources_from_tool_output(tool_id: str, tool_output: Any) -> List[Dict[str, Any]]:
+    """
+    Extract raw source rows from a tool's return, for citable tools only.
+    Tries common shapes without guessing content text; URLs are required.
+    Returns a list of loose rows to be normalized later.
+    """
+    rows: List[Dict[str, Any]] = []
+    if not _is_citable_tool(tool_id):
+        return rows
+
+    return normalize_sources_any(tool_output)
+
+def _canonical_sources_from_citable_tools_generators(promoted: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
+    """
+    Build the canonical source list (with stable sids) **only** from citable tools' outputs
+    present in `promoted`. Returns (canonical_sources_list, canonical_by_sid_map).
+    """
+    collected: List[Dict[str, Any]] = []
+    for it in promoted or []:
+        tool_id = (it.get("tool_id") or "").strip()
+        if not _is_citable_tool(tool_id):
+            continue
+        tool_output = it.get("output")
+        # promoted stores raw decoded output in 'output'
+        collected.extend(_extract_candidate_sources_from_tool_output(tool_id, tool_output))
+
+    # Deduplicate by URL and assign/keep SIDs
+    unified = dedupe_sources_by_url([], collected)
+    canonical_list: List[Dict[str, Any]] = [
+        {k: v for k, v in row.items() if k in ("sid", "url", "title", "text") or k in CITATION_OPTIONAL_ATTRS}
+        for row in unified if isinstance(row.get("sid"), int) and row.get("url")
+    ]
+    canonical_by_sid = { int(r["sid"]): r for r in canonical_list }
+    return canonical_list, canonical_by_sid
 
 # ---------- formats & normalization ----------
 
@@ -119,7 +154,7 @@ def _stringify_for_format(v: Any, fmt: Optional[str]) -> str:
     return str(v)
 
 
-def _normalize_out_dyn(out_dyn: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[int, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
     """
     Canonicalize dynamic contract dict {slot: VALUE} → list of artifacts for result['out'].
 
@@ -137,6 +172,37 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     artifacts: List[Dict[str, Any]] = []
 
+    def _unify_sources(parsed_sids: List[int], explicit_sources: Any) -> Tuple[List[Dict[str, Any]], List[int]]:
+        """
+        Merge SIDs parsed from text with SIDs present in explicit sources_used.
+        Then fill any missing rows from canonical_by_sid. Return (filled_sources_list, sorted_sids).
+        """
+        norm_explicit = normalize_sources_any(explicit_sources)
+        by_sid: Dict[int, Dict[str, Any]] = {}
+
+        # Seed explicit rows that carry sids
+        for row in norm_explicit:
+            sid = row.get("sid")
+            if isinstance(sid, int) and sid > 0:
+                by_sid[sid] = row
+
+        # Union of sids (parsed + explicit-with-sid)
+        unified = set(parsed_sids or [])
+        unified.update([sid for sid in by_sid.keys() if isinstance(sid, int)])
+
+        # Fill gaps from canonical space only
+        if canonical_by_sid:
+            for sid in sorted(unified):
+                if sid not in by_sid and sid in canonical_by_sid:
+                    by_sid[sid] = canonical_by_sid[sid]
+
+        # Keep any explicit rows that have no sid (they do not affect sids list)
+        nosid_rows: List[Dict[str, Any]] = [r for r in norm_explicit if not isinstance(r.get("sid"), int)]
+        sid_rows = [by_sid[s] for s in sorted([k for k in by_sid.keys() if isinstance(k, int)])]
+        filled_list = sid_rows + nosid_rows
+        final_sids = [s for s in sorted([k for k in by_sid.keys() if isinstance(k, int)])]
+        return filled_list, final_sids
+
     def push_inline(slot: str, value: Any, *, fmt: Optional[str], desc: str, citable: bool, sources_used: Any = None):
         v, use_fmt = _coerce_value_and_format(value, fmt)
         if not use_fmt:
@@ -144,6 +210,7 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any]) -> List[Dict[str, Any]]:
         text_str = _stringify_for_format(v, use_fmt)
 
         parsed_sids = extract_citation_sids_from_text(text_str)
+        filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
 
         row = {
             "resource_id": f"slot:{slot}",
@@ -156,14 +223,16 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any]) -> List[Dict[str, Any]]:
         }
         if use_fmt:
             row["format"] = use_fmt
-        if sources_used is not None and sources_used != []:
-            row["sources_used"] = sources_used
-        if parsed_sids:
-            row["sources_used_sids"] = parsed_sids
+        if filled_sources:
+            row["sources_used"] = filled_sources
+        if final_sids:
+            row["sources_used_sids"] = final_sids
         artifacts.append(row)
 
     def push_file(slot: str, relpath: str, *, mime: Optional[str], desc: str, text: str, citable: bool = False, sources_used: Any = None):
         parsed_sids = extract_citation_sids_from_text(text or "")
+        filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
+
         row = {
             "resource_id": f"slot:{slot}",
             "type": "file",
@@ -174,10 +243,10 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any]) -> List[Dict[str, Any]]:
             "description": desc or "",
             "input": {},
         }
-        if sources_used is not None and sources_used != []:
-            row["sources_used"] = sources_used
-        if parsed_sids:
-            row["sources_used_sids"] = parsed_sids
+        if filled_sources:
+            row["sources_used"] = filled_sources
+        if final_sids:
+            row["sources_used_sids"] = final_sids
         artifacts.append(row)
 
     for slot, val in (out_dyn or {}).items():
@@ -191,11 +260,9 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any]) -> List[Dict[str, Any]]:
 
         if slot_type == "file":
             mime = val.get("mime") or None
-            text_surrogate = val.get("text")  # may be None; program SHOULD have set this
+            text_surrogate = val.get("text") or "" # may be None; program SHOULD have set this
             if sources_used:
                 print(f"File Slot {slot}; {sources_used}")
-            if text_surrogate is None:
-                text_surrogate = ""
             filepath = val.get("path")
             push_file(slot, filepath, mime=mime, desc=desc, text=text_surrogate, sources_used=sources_used)
             continue
@@ -271,13 +338,13 @@ def _promote_tool_calls(raw_files: Dict[str, List[str]], outdir: pathlib.Path) -
                 base["type"] = "file"
                 base["mime"] = "application/json"
 
-            # carry used_sources from llm tool outputs
+            # carry sources_used from llm tool outputs
             try:
                 if isinstance(tool_output, dict):
                     if tool_id.endswith("generate_content_llm"):
-                        us = tool_output.get("used_sources")
+                        us = tool_output.get("sources_used")
                         if us:
-                            base["used_sources"] = us
+                            base["sources_used"] = us
                             base["sources_used"] = us  # convenience alias
                         # Also add SIDs inferred from content (if any)
                         content = tool_output.get("content")
@@ -431,13 +498,8 @@ class AgentIO:
 
         obj = json.loads(data) if isinstance(data, str) else data
 
-        # 1) normalize contract outputs (slots)
-        out_dyn = obj.get("out_dyn") or {}
-        normalized_out = _normalize_out_dyn(out_dyn) if isinstance(out_dyn, dict) else []
-
-        # 2) auto-discover saved tool calls
+        # 1) Merge tool-call index FIRST so we see all persisted calls
         raw_files = obj.get("raw_files") or {}
-        # merge in the shared index (written by tool_call)
         idx_map = _read_index(od)
         if idx_map:
             merged: Dict[str, List[str]] = {k: list(v) for k, v in (raw_files or {}).items()}
@@ -449,9 +511,20 @@ class AgentIO:
             raw_files = merged
             obj["raw_files"] = merged  # keep for traceability
 
+        # 2) Promote saved tool calls
         promoted = _promote_tool_calls(raw_files, od)
 
-        # 3) merge with simple de-duplication
+        # 3) Build canonical source space **only** from citable tools' outputs
+        canonical_list, canonical_by_sid = _canonical_sources_from_citable_tools_generators(promoted)
+        if canonical_list:
+            # persist for downstream turns (helps reconciliation)
+            obj["canonical_sources"] = canonical_list
+
+        # 4) Normalize dynamic contract deliverables with access to canonical_by_sid
+        out_dyn = obj.get("out_dyn") or {}
+        normalized_out = _normalize_out_dyn(out_dyn, canonical_by_sid=canonical_by_sid) if isinstance(out_dyn, dict) else []
+
+        # 5) Merge normalized slots with promoted artifacts (de-dup)
         def _key(a: Dict[str, Any]):
             rid = a.get("resource_id")
             if rid:

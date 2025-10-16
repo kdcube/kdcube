@@ -341,7 +341,7 @@ def reconcile_citations_for_context(history: list[dict], *, max_sources: int = 6
             by_url[u] = {
                 "url": u,
                 "title": it["title"],
-                "text": it.get("text",""),
+                "text": it.get("text") or it.get("body") or ""
             }
             for k in CITATION_OPTIONAL_ATTRS:
                 if it.get(k):
@@ -358,7 +358,7 @@ def reconcile_citations_for_context(history: list[dict], *, max_sources: int = 6
             "sid": global_sid_of_url[u],
             "url": u,
             "title": src.get("title") or u,
-            "text": src.get("text",""),
+            "text": src.get("text") or src.get("body") or "",
         }
         for k in CITATION_OPTIONAL_ATTRS:
             if src.get(k):
@@ -433,26 +433,6 @@ def reconcile_citations_for_context(history: list[dict], *, max_sources: int = 6
                     new_text = _rewrite_md_citation_tokens(text, sid_map)
                     artifact["text"] = new_text
                     used_sids_in_turn.update(sids_in_text(new_text))
-                # output = artifact.get("output") or {}
-                # text = None
-                # text_key = None
-                # text_location = None
-                #
-                # if "text" in output:
-                #     text = output["text"]
-                #     text_key = "text"
-                #     text_location = output
-                # elif "value" in artifact:
-                #     text = artifact["value"]
-                #     text_key = "value"
-                #     text_location = artifact
-
-                # if text and isinstance(text, str) and text_key and text_location:
-                #     new_text = _rewrite_md_citation_tokens(text, sid_map)
-                #     text_location[text_key] = new_text
-                #     # Collect SIDs from this deliverable
-                #     used_sids_in_turn.update(sids_in_text(new_text))
-
             # ===== UPDATE web_links_citations =====
             # Replace with canonical sources that are actually used in this turn
             if used_sids_in_turn:
