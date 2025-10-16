@@ -78,12 +78,18 @@ def _norm_usage_dict(u: Dict[str, Any]) -> Dict[str, int]:
     u = u or {}
     prompt = u.get("prompt_tokens") or u.get("input_tokens") or 0
     compl  = u.get("completion_tokens") or u.get("output_tokens") or 0
+    cache_creation_input_tokens = u.get("cache_creation_input_tokens") or 0
+    cache_read_input_tokens = u.get("cache_read_input_tokens") or 0
     total  = u.get("total_tokens") or (int(prompt) + int(compl))
     try:
         prompt, compl, total = int(prompt), int(compl), int(total)
     except Exception:
         prompt, compl, total = int(prompt or 0), int(compl or 0), int(total or (prompt + compl))
-    return {"prompt_tokens": prompt, "completion_tokens": compl, "total_tokens": total}
+    return {"prompt_tokens": prompt,
+            "completion_tokens": compl,
+            "total_tokens": total,
+            "cache_creation_input_tokens": cache_creation_input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens}
 
 def _approx_tokens_by_chars(text: str) -> Dict[str, int]:
     toks = max(1, len(text or "") // 4)

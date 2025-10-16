@@ -107,16 +107,22 @@ def _tokens_for_event(ev: Dict[str, Any]) -> int:
 
 def _spent_seed(service_type: str) -> Dict[str, int]:
     if service_type == "llm":
-        return {"input": 0, "output": 0}
+        return {
+            "input": 0,
+            "output": 0,
+            "cache_creation": 0,
+            "cache_read": 0
+        }
     if service_type == "embedding":
         return {"tokens": 0}
-    # for any future service types you may want to add later, keep empty
     return {}
 
 def _accumulate_compact(spent: Dict[str, int], ev_usage: Dict[str, Any], service_type: str) -> None:
     if service_type == "llm":
         spent["input"]  = int(spent.get("input", 0))  + int(ev_usage.get("input_tokens") or 0)
         spent["output"] = int(spent.get("output", 0)) + int(ev_usage.get("output_tokens") or 0)
+        spent["cache_creation"] = int(spent.get("cache_creation", 0)) + int(ev_usage.get("cache_creation_tokens") or 0)
+        spent["cache_read"]     = int(spent.get("cache_read", 0))     + int(ev_usage.get("cache_read_tokens") or 0)
     elif service_type == "embedding":
         spent["tokens"] = int(spent.get("tokens", 0)) + int(ev_usage.get("embedding_tokens") or 0)
 
@@ -586,10 +592,15 @@ class RateCalculator(AccountingCalculator):
             conversation_id: str,
             turn_id: str,
             app_bundle_id: Optional[str] = None,
+            date_from: Optional[str] = None,
+            date_to: Optional[str] = None,
             date_hint: Optional[str] = None,          # "YYYY-MM-DD" if you know it; else we scan 2 recent days
             service_types: Optional[List[str]] = None, # e.g. ["llm","embedding"]
             hard_file_limit: Optional[int] = 5000,
     ) -> Dict[str, Any]:
+        """
+        Query usage for a specific turn, supporting multi-day spans.
+        """
         q = AccountingQuery(
             tenant_id=tenant_id,
             project_id=project_id,
@@ -598,17 +609,32 @@ class RateCalculator(AccountingCalculator):
             hard_file_limit=hard_file_limit,
         )
 
-        # If we know the day, read only that day. Otherwise scan today & yesterday.
-        if date_hint:
+        # Build paths based on date range
+        if date_from or date_to:
+            if not date_from:
+                from datetime import datetime, timedelta
+                date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+                date_from = (date_to_dt - timedelta(days=1)).isoformat()
+            if not date_to:
+                from datetime import datetime, timedelta
+                date_from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+                date_to = (date_from_dt + timedelta(days=1)).isoformat()
+
+            q.date_from = date_from
+            q.date_to = date_to
+            paths = list(self._iter_event_paths(q))
+
+        elif date_hint:
             q.date_from = date_hint
             q.date_to = date_hint
-            paths = self._iter_event_paths(q)
+            paths = list(self._iter_event_paths(q))
+
         else:
             from datetime import datetime, timedelta
             today = datetime.utcnow().date()
-            yday = today - timedelta(days=1)
+            yesterday = today - timedelta(days=1)
             candidates = []
-            for d in (yday.isoformat(), today.isoformat()):
+            for d in (yesterday.isoformat(), today.isoformat()):
                 q.date_from, q.date_to = d, d
                 candidates.extend(list(self._iter_event_paths(q)))
             paths = candidates
@@ -623,11 +649,9 @@ class RateCalculator(AccountingCalculator):
             except Exception:
                 continue
 
-            # require same tenant/project and (optional) app bundle id; service_type already filtered by q
-            if app_bundle_id and (ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")) != app_bundle_id:
-                # some old events may only have it in context
-                ctx_ab = (ev.get("context") or {}).get("app_bundle_id")
-                if ctx_ab != app_bundle_id:
+            if app_bundle_id:
+                ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                if ev_bundle != app_bundle_id:
                     continue
 
             # turn id may be recorded under metadata or context
@@ -658,6 +682,8 @@ class RateCalculator(AccountingCalculator):
             turn_id: str,
             conversation_id: str = None,
             app_bundle_id: Optional[str] = None,
+            date_from: Optional[str] = None,
+            date_to: Optional[str] = None,
             date_hint: Optional[str] = None,
             service_types: Optional[List[str]] = None,
             hard_file_limit: Optional[int] = 5000,
@@ -668,6 +694,8 @@ class RateCalculator(AccountingCalculator):
             conversation_id=conversation_id,
             turn_id=turn_id,
             app_bundle_id=app_bundle_id,
+            date_from=date_from,
+            date_to=date_to,
             date_hint=date_hint,
             service_types=service_types,
             hard_file_limit=hard_file_limit,
@@ -682,6 +710,8 @@ class RateCalculator(AccountingCalculator):
             conversation_id: str,
             turn_id: str,
             app_bundle_id: Optional[str] = None,
+            date_from: Optional[str] = None,           # ← NEW: "YYYY-MM-DD"
+            date_to: Optional[str] = None,
             date_hint: Optional[str] = None,
             service_types: Optional[List[str]] = None,
             hard_file_limit: Optional[int] = 5000,
@@ -690,6 +720,15 @@ class RateCalculator(AccountingCalculator):
         """
         Convenience for a single turn. Applies same grouping as usage_rollup_compact,
         but filters to events that belong to the given turn.
+
+        Args:
+            date_from: Start date (inclusive), e.g., "2025-10-15"
+            date_to: End date (inclusive), e.g., "2025-10-16"
+            date_hint: DEPRECATED - use date_from/date_to instead. If provided and
+                       date_from/date_to are None, will scan only that single day.
+
+        Note: If neither date_from/date_to nor date_hint are provided, defaults to
+              scanning yesterday and today.
         """
         q = AccountingQuery(
             tenant_id=tenant_id,
@@ -699,17 +738,37 @@ class RateCalculator(AccountingCalculator):
             hard_file_limit=hard_file_limit,
         )
 
-        # Build candidate paths (just like query_turn_usage)
-        if date_hint:
+        # Build candidate paths based on date range
+        if date_from or date_to:
+            # Use explicit date range (can span multiple days)
+            if not date_from:
+                # If only date_to provided, scan from yesterday to date_to
+                from datetime import datetime, timedelta
+                date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+                date_from = (date_to_dt - timedelta(days=1)).isoformat()
+            if not date_to:
+                # If only date_from provided, scan from date_from to tomorrow
+                from datetime import datetime, timedelta
+                date_from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+                date_to = (date_from_dt + timedelta(days=1)).isoformat()
+
+            q.date_from = date_from
+            q.date_to = date_to
+            paths = list(self._iter_event_paths(q))
+
+        elif date_hint:
+            # Backward compatibility: single-day optimization
             q.date_from = date_hint
             q.date_to = date_hint
-            paths = self._iter_event_paths(q)
+            paths = list(self._iter_event_paths(q))
+
         else:
+            # Default: scan yesterday and today
             from datetime import datetime, timedelta
             today = datetime.utcnow().date()
-            yday = today - timedelta(days=1)
+            yesterday = today - timedelta(days=1)
             candidates = []
-            for d in (yday.isoformat(), today.isoformat()):
+            for d in (yesterday.isoformat(), today.isoformat()):
                 q.date_from, q.date_to = d, d
                 candidates.extend(list(self._iter_event_paths(q)))
             paths = candidates
@@ -729,18 +788,21 @@ class RateCalculator(AccountingCalculator):
             except Exception:
                 continue
 
-            # quick service filter already applied by q.service_types; keep tenant/project/bundle match
-            if app_bundle_id and (ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")) != app_bundle_id:
-                ctx_ab = (ev.get("context") or {}).get("app_bundle_id")
-                if ctx_ab != app_bundle_id:
+            # Quick service filter already applied by q.service_types; keep tenant/project/bundle match
+            if app_bundle_id:
+                ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                if ev_bundle != app_bundle_id:
                     continue
 
+            # Match turn_id (can be in metadata or context)
             md_tid = (ev.get("metadata") or {}).get("turn_id")
             ctx_tid = (ev.get("context") or {}).get("turn_id")
             if md_tid != turn_id and ctx_tid != turn_id:
                 continue
 
             service  = str(ev.get("service_type") or "").strip()
+            if not service:
+                continue
             provider = str(ev.get("provider") or (ev.get("context") or {}).get("provider") or "").strip()
             model    = str(ev.get("model_or_service") or (ev.get("context") or {}).get("model_or_service") or "").strip()
 
@@ -993,7 +1055,7 @@ def price_table():
     }
 async def example_grouped_calc(tenant, project, bundle_id):
 
-    turn_id = "turn_1760567405208_apw68b" #" "turn_1760550498939_cr526c"
+    turn_id = "turn_1760612140724_splgg3" #" "turn_1760550498939_cr526c"
     conversation_id = "88f56ef9-36fc-4a4f-8f27-5d53ff19dd03"
     kdcube_path = os.getenv("KDCUBE_STORAGE_PATH", "file:///tmp/kdcube_data")
     backend = create_storage_backend(kdcube_path)
@@ -1017,7 +1079,7 @@ async def example_grouped_calc(tenant, project, bundle_id):
         conversation_id=conversation_id,
         turn_id=turn_id,
         app_bundle_id=bundle_id,
-        date_hint="2025-10-15",
+        date_hint="2025-10-16",
         service_types=["llm","embedding"],
     )
 
