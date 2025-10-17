@@ -347,6 +347,7 @@ class AccountingTracker:
                 output_tokens=getattr(usage_obj, 'output_tokens', 0),
                 cache_creation_tokens=getattr(usage_obj, 'cache_creation_tokens', 0),
                 cache_read_tokens=getattr(usage_obj, 'cache_read_tokens', 0),
+                cache_creation=getattr(usage_obj, 'cache_creation', {}),
                 total_tokens=getattr(usage_obj, 'total_tokens', 0),
                 embedding_tokens=getattr(usage_obj, 'embedding_tokens', 0),
                 embedding_dimensions=getattr(usage_obj, 'embedding_dimensions', 0),

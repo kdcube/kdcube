@@ -77,24 +77,40 @@ def _format_cost_table_markdown(cost_breakdown: List[Dict[str, Any]],
 
 
 def _format_llm_detailed_table(llm_items: List[Dict[str, Any]]) -> str:
-    """Format detailed LLM cost table with token breakdown."""
+    """Format detailed LLM cost table with cache type breakdown."""
     lines = [
-        "| Provider | Model | Input | Cache Write | Cache Read | Output | Cost (USD) |",
-        "|---|---|---:|---:|---:|---:|---:|"
+        "| Provider | Model | Input | Cache 5m | Cache 1h | Cache Read | Output | Cost (USD) |",
+        "|---|---|---:|---:|---:|---:|---:|---:|"
     ]
 
     for item in llm_items:
         provider = item.get("provider", "unknown")
-        model = (item.get("model") or "unknown")[:30]  # Truncate long model names
+        model = (item.get("model") or "unknown")[:30]
 
         input_tok = _format_number(item.get("input_tokens", 0))
-        cache_write = _format_number(item.get("cache_creation_tokens", 0))
-        cache_read = _format_number(item.get("cache_read_tokens", 0))
         output_tok = _format_number(item.get("output_tokens", 0))
+
+        # Check if detailed cache breakdown exists
+        cache_5m = item.get("cache_5m_write_tokens", 0)
+        cache_1h = item.get("cache_1h_write_tokens", 0)
+        cache_read = item.get("cache_read_tokens", 0)
+
+        if cache_5m > 0 or cache_1h > 0:
+            # Anthropic with detailed breakdown
+            cache_5m_str = _format_number(cache_5m)
+            cache_1h_str = _format_number(cache_1h)
+            cache_read_str = _format_number(cache_read)
+        else:
+            # Legacy format (OpenAI or old Anthropic)
+            cache_creation = item.get("cache_creation_tokens", 0)
+            cache_5m_str = _format_number(cache_creation) if cache_creation > 0 else "-"
+            cache_1h_str = "-"
+            cache_read_str = _format_number(cache_read) if cache_read > 0 else "-"
+
         cost = f"${item.get('cost_usd', 0):.6f}"
 
         lines.append(
-            f"| {provider} | {model} | {input_tok} | {cache_write} | {cache_read} | {output_tok} | {cost} |"
+            f"| {provider} | {model} | {input_tok} | {cache_5m_str} | {cache_1h_str} | {cache_read_str} | {output_tok} | {cost} |"
         )
 
     return "\n".join(lines)
@@ -176,3 +192,74 @@ def _format_cost_summary_compact(cost_breakdown: List[Dict[str, Any]],
         parts.append(f"• {emb_count} embed call{'s' if emb_count > 1 else ''}")
 
     return " ".join(parts)
+
+def _format_agent_breakdown_markdown(
+        agent_costs: Dict[str, Dict[str, Any]],
+        total_cost: float
+) -> str:
+    """
+    Format agent-level cost breakdown as markdown.
+
+    Shows:
+    - Summary table: agent, total cost, % of turn
+    - Detailed per-agent breakdown
+    """
+    if not agent_costs:
+        return ""
+
+    sections = []
+
+    # Header
+    sections.append("### 👥 Cost by Agent\n")
+
+    # Summary table
+    lines = [
+        "| Agent | LLM Tokens | Cost (USD) | % of Turn |",
+        "|---|---:|---:|---:|"
+    ]
+
+    for agent in sorted(agent_costs.keys(), key=lambda a: agent_costs[a]["total_cost_usd"], reverse=True):
+        data = agent_costs[agent]
+        cost = data["total_cost_usd"]
+        pct = (cost / total_cost * 100) if total_cost > 0 else 0
+
+        tokens = data["tokens"]
+        llm_total = tokens["input"] + tokens["output"] + tokens["cache_5m_write"] + tokens["cache_1h_write"] + tokens["cache_read"]
+
+        lines.append(
+            f"| {agent} | {_format_number(llm_total)} | ${cost:.6f} | {pct:.1f}% |"
+        )
+
+    sections.append("\n".join(lines))
+
+    # Detailed breakdown per agent (optional, can be collapsed)
+    sections.append("\n<details>")
+    sections.append("<summary>📊 Detailed Token Breakdown by Agent</summary>\n")
+
+    for agent in sorted(agent_costs.keys()):
+        data = agent_costs[agent]
+        tokens = data["tokens"]
+
+        sections.append(f"\n**{agent}** (${data['total_cost_usd']:.6f})")
+
+        # Token details
+        token_lines = []
+        if tokens["input"] > 0:
+            token_lines.append(f"- Input: {_format_number(tokens['input'])}")
+        if tokens["output"] > 0:
+            token_lines.append(f"- Output: {_format_number(tokens['output'])}")
+        if tokens["cache_5m_write"] > 0:
+            token_lines.append(f"- Cache Write (5m): {_format_number(tokens['cache_5m_write'])}")
+        if tokens["cache_1h_write"] > 0:
+            token_lines.append(f"- Cache Write (1h): {_format_number(tokens['cache_1h_write'])}")
+        if tokens["cache_read"] > 0:
+            token_lines.append(f"- Cache Read: {_format_number(tokens['cache_read'])}")
+        if tokens["embedding"] > 0:
+            token_lines.append(f"- Embedding: {_format_number(tokens['embedding'])}")
+
+        if token_lines:
+            sections.append("\n".join(token_lines))
+
+    sections.append("\n</details>")
+
+    return "\n".join(sections)

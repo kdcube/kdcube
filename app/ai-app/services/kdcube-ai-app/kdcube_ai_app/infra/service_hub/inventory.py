@@ -604,7 +604,7 @@ class FormatFixerService:
             system_prompt: Original system prompt (string or SystemMessage)
         """
         # Extract text from system prompt (handles both types)
-        system_prompt_text = self._extract_system_prompt_text(system_prompt)
+        system_prompt_text = _extract_system_prompt_text(system_prompt)
 
         self.logger.start_operation(
             "format_fixing",
@@ -908,6 +908,7 @@ class ModelServiceBase:
                                 total_tokens=u["total_tokens"],
                                 cache_creation_tokens=u.get("cache_creation_input_tokens") or 0,
                                 cache_read_tokens=u.get("cache_read_input_tokens") or 0,
+                                cache_creation=u.get("cache_creation"),
                                 requests=1)
         except Exception:
             return ServiceUsage(requests=1)

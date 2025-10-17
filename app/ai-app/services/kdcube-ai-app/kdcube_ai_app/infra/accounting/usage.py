@@ -16,6 +16,7 @@ class ServiceUsage:
     output_tokens: int = 0
     cache_creation_tokens: int = 0
     cache_read_tokens: int = 0
+    cache_creation: Optional[Dict[str, Any]] = None
     total_tokens: int = 0
     embedding_tokens: int = 0
     embedding_dimensions: int = 0
@@ -34,6 +35,7 @@ class ServiceUsage:
             "output_tokens": self.output_tokens,
             "cache_creation_tokens": self.cache_creation_tokens,
             "cache_read_tokens": self.cache_read_tokens,
+            "cache_creation": self.cache_creation,
             "total_tokens": self.total_tokens,
             "embedding_tokens": self.embedding_tokens,
             "embedding_dimensions": self.embedding_dimensions,
@@ -61,6 +63,7 @@ class ServiceUsage:
             output_tokens=d.get("output_tokens", 0),
             cache_creation_tokens=d.get("cache_creation_tokens", 0),
             cache_read_tokens=d.get("cache_read_tokens", 0),
+            cache_creation=d.get("cache_creation"),
             total_tokens=d.get("total_tokens", 0),
             embedding_tokens=d.get("embedding_tokens", 0),
             embedding_dimensions=d.get("embedding_dimensions", 0),
@@ -80,6 +83,8 @@ def _norm_usage_dict(u: Dict[str, Any]) -> Dict[str, int]:
     compl  = u.get("completion_tokens") or u.get("output_tokens") or 0
     cache_creation_input_tokens = u.get("cache_creation_input_tokens") or 0
     cache_read_input_tokens = u.get("cache_read_input_tokens") or 0
+    cache_creation = u.get("cache_creation")
+
     total  = u.get("total_tokens") or (int(prompt) + int(compl))
     try:
         prompt, compl, total = int(prompt), int(compl), int(total)
@@ -89,7 +94,8 @@ def _norm_usage_dict(u: Dict[str, Any]) -> Dict[str, int]:
             "completion_tokens": compl,
             "total_tokens": total,
             "cache_creation_input_tokens": cache_creation_input_tokens,
-            "cache_read_input_tokens": cache_read_input_tokens}
+            "cache_read_input_tokens": cache_read_input_tokens,
+            **{"cache_creation": cache_creation if cache_creation else {}}}
 
 def _approx_tokens_by_chars(text: str) -> Dict[str, int]:
     toks = max(1, len(text or "") // 4)
