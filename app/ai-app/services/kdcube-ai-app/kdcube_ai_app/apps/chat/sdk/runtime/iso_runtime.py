@@ -208,7 +208,7 @@ import logging, sys
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
 
-
+logger = logging.getLogger("agent.runtime")
 # --- Directories / CV fallbacks ---
 OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
 if not OUTPUT_DIR:
@@ -230,7 +230,7 @@ except Exception:
 
 # --- Portable spec handoff (context vars + model service + registry + communicator) ---
 _PORTABLE_SPEC = os.environ.get("PORTABLE_SPEC")
-print(f"[Runtime Header] PORTABLE_SPEC {_PORTABLE_SPEC}", file=sys.stderr)
+# print(f"[Runtime Header] PORTABLE_SPEC {_PORTABLE_SPEC}", file=sys.stderr)
 _TOOL_MODULES = _json.loads(os.environ.get("RUNTIME_TOOL_MODULES") or "[]")
 _SHUTDOWN_MODULES = _json.loads(os.environ.get("RUNTIME_SHUTDOWN_MODULES") or "[]")
 
@@ -332,7 +332,10 @@ def _build_project_log_md() -> str:
             continue
         t = (data.get("type") or "inline")
         desc = data.get("description", "")
-        lines.append(f"### {name} ({t})")
+        is_draft = data.get("draft", False)
+        draft_marker = " [DRAFT]" if is_draft else ""
+        
+        lines.append(f"### {name} ({t}){draft_marker}")
         if desc:
             lines.append(desc)
         if t == "file":
@@ -533,6 +536,9 @@ def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
     redis_url = REDIS_URL
     if redis_url.startswith('"') and redis_url.endswith('"'):
         redis_url = redis_url[1:-1]
+    redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url 
+    logger.info(f"Redis url: {redis_url_safe}")
+    print(f"Redis url: {redis_url_safe}")
     channel   = (spec or {}).get("channel")   or "chat.events"
     relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
     emitter = _RelayEmitterAdapter(relay)
