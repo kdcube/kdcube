@@ -165,10 +165,13 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
       - output: <inline string/object> | <relative file path>
       - format: optional (markdown|json|plain_text|url|yaml|xml|object)
       - mime: for files only
-      - text
+      - text: for files, the textual surrogate
       - citable: bool (inline URLs default to True)
       - description: str
+      - draft: bool (optional; True = incomplete/partial deliverable)  # ✅ NEW
       - input: {}   # reserved, empty for program slots
+      - sources_used: list of citation dicts (optional)
+      - sources_used_sids: list of int SIDs (optional)
     """
     artifacts: List[Dict[str, Any]] = []
 
@@ -203,12 +206,13 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         final_sids = [s for s in sorted([k for k in by_sid.keys() if isinstance(k, int)])]
         return filled_list, final_sids
 
-    def push_inline(slot: str, value: Any, *, fmt: Optional[str], desc: str, citable: bool, sources_used: Any = None):
+    def push_inline(slot: str, value: Any, *, fmt: Optional[str], desc: str, citable: bool,
+                    sources_used: Any = None, draft: bool = False):
         v, use_fmt = _coerce_value_and_format(value, fmt)
         if not use_fmt:
             use_fmt = _detect_format_from_value(v)
-        text_str = _stringify_for_format(v, use_fmt)
 
+        text_str = _stringify_for_format(v, use_fmt)
         parsed_sids = extract_citation_sids_from_text(text_str)
         filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
 
@@ -221,15 +225,22 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
             "description": desc or "",
             "input": {},
         }
+
+        # Include draft flag if True
+        if draft:
+            row["draft"] = True
+
         if use_fmt:
             row["format"] = use_fmt
         if filled_sources:
             row["sources_used"] = filled_sources
         if final_sids:
             row["sources_used_sids"] = final_sids
+
         artifacts.append(row)
 
-    def push_file(slot: str, relpath: str, *, mime: Optional[str], desc: str, text: str, citable: bool = False, sources_used: Any = None):
+    def push_file(slot: str, relpath: str, *, mime: Optional[str], desc: str, text: str,
+                  citable: bool = False, sources_used: Any = None, draft: bool = False):  # ✅ NEW parameter
         parsed_sids = extract_citation_sids_from_text(text or "")
         filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
 
@@ -243,10 +254,16 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
             "description": desc or "",
             "input": {},
         }
+
+        # Include draft flag if True
+        if draft:
+            row["draft"] = True
+
         if filled_sources:
             row["sources_used"] = filled_sources
         if final_sids:
             row["sources_used_sids"] = final_sids
+
         artifacts.append(row)
 
     for slot, val in (out_dyn or {}).items():
@@ -255,7 +272,7 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         desc = val.get("description") or val.get("desc") or ""
         citable = bool(val.get("citable", False))
         fmt = val.get("format")
-
+        draft = bool(val.get("draft", False))
         sources_used = val.get("sources_used")
 
         if slot_type == "file":
@@ -264,13 +281,13 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
             if sources_used:
                 print(f"File Slot {slot}; {sources_used}")
             filepath = val.get("path")
-            push_file(slot, filepath, mime=mime, desc=desc, text=text_surrogate, sources_used=sources_used)
+            push_file(slot, filepath, mime=mime, desc=desc, text=text_surrogate, sources_used=sources_used, draft=draft)
             continue
         if slot_type == "inline":
             if "value" in val:
                 if sources_used:
                     print(f"Inline Slot {slot}; {sources_used}")
-                push_inline(slot, val["value"], fmt=fmt, desc=desc, citable=citable, sources_used=sources_used)
+                push_inline(slot, val["value"], fmt=fmt, desc=desc, citable=citable, sources_used=sources_used, draft=draft)
                 continue
 
     return artifacts

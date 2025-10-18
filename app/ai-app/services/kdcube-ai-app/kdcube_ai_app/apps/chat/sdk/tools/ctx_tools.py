@@ -10,6 +10,7 @@ try:
 except Exception:
     from semantic_kernel.utils.function_decorator import kernel_function
 
+import logging
 # ---- Working set from context.json ----
 from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
 
@@ -20,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     sids_in_text,
 )
 
+log = logging.getLogger(__name__)
 def _max_sid(rows: List[Dict[str,Any]]) -> int:
     m = 0
     for r in rows:
@@ -296,7 +298,7 @@ class ContextTools:
             self,
             turn_ids: Annotated[
                 str,
-                "JSON array of turn_ids to fetch: [\"turn_123\", \"turn_456\"]",
+                "JSON array of turn_ids to fetch, i.e.: [\"turn_1760743886365_abcdef\", \"turn_1760743886365_abcdeg\"]",
             ],
     ) -> Annotated[
         str,
@@ -307,10 +309,16 @@ class ContextTools:
             if not isinstance(ids, list):
                 ids = [ids]
         except:
+            log.error(f"Failed to parse turn_ids: {turn_ids}")
             return json.dumps({"error": "Invalid turn_ids format; expected JSON array"})
 
         ctx = _read_context()
         hist: List[Dict[str, Any]] = ctx.get("program_history") or []
+
+        ensure_prefix_fn = lambda id: id if id.startswith("turn_") else f"turn_{id}"
+        log.info(f"[signal control]: turn_ids before preproc: {turn_ids}")
+        ids = [ensure_prefix_fn(id) for id in ids]
+        log.info(f"[signal control]: turn_ids after preproc: {turn_ids}")
 
         # Build index
         by_id = {}
