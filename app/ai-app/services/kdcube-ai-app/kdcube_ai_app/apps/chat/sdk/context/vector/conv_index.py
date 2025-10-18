@@ -1205,6 +1205,118 @@ class ConvIndex:
             })
         return out
 
+    async def search_turn_logs_via_content(
+            self,
+            *,
+            user_id: str,
+            conversation_id: Optional[str],
+            track_id: Optional[str],
+            query_embedding: Optional[List[float]] = None,
+            query_text: Optional[str] = None,
+            search_roles: tuple[str, ...] = ("user", "assistant"),  # roles to search for turn_id match
+            top_k: int = 8,
+            days: int = 90,
+            scope: str = "track",
+            bundle_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Two-stage search optimized for finding turn logs:
+        1. Search across specified roles (user/assistant) to find relevant turn_ids
+        2. For each matched turn_id, fetch the corresponding artifact:turn.log
+
+        Returns turn log artifacts (role='artifact', tags contain 'artifact:turn.log')
+        ranked by the relevance score of the content that matched them.
+
+        Use case: "Find turn logs for turns where user/assistant discussed X"
+        """
+
+        # Build WHERE clause for content search (stage 1)
+        args: List[Any] = [user_id, list(search_roles), str(days)]
+        where = [
+            "m.user_id = $1",
+            "m.role = ANY($2)",
+            "m.ts >= now() - ($3::text || ' days')::interval",
+            "m.ts + (m.ttl_days || ' days')::interval >= now()",
+        ]
+
+        # Semantic similarity (if embedding provided)
+        if query_embedding is not None:
+            args.append(convert_embedding_to_string(query_embedding))
+            sim_sql = f"1 - (m.embedding <=> ${len(args)}::vector) AS sim"
+            where.append("m.embedding IS NOT NULL")
+            order_by = "sim DESC, m.ts DESC"
+        else:
+            sim_sql = "0.0::float AS sim"
+            order_by = "m.ts DESC"
+
+        # Scope filters
+        if scope == "track" and track_id:
+            args.append(track_id)
+            where.append(f"m.track_id = ${len(args)}")
+            if conversation_id:
+                args.append(conversation_id)
+                where.append(f"m.conversation_id = ${len(args)}")
+        elif scope == "conversation" and conversation_id:
+            args.append(conversation_id)
+            where.append(f"m.conversation_id = ${len(args)}")
+
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"m.bundle_id = ${len(args)}")
+
+        # Optional text filter (ILIKE)
+        if query_text:
+            args.append(f"%{query_text}%")
+            where.append(f"m.text ILIKE ${len(args)}")
+
+        # Main query: find matching content → fetch turn logs via LATERAL
+        q = f"""
+        WITH content_matches AS (
+            SELECT 
+                m.turn_id,
+                m.role AS matched_role,
+                m.ts AS matched_ts,
+                {sim_sql},
+                ROW_NUMBER() OVER (PARTITION BY m.turn_id ORDER BY m.ts DESC) AS rn
+            FROM {self.schema}.conv_messages m
+            WHERE {' AND '.join(where)}
+              AND m.turn_id IS NOT NULL
+            ORDER BY {order_by}
+            LIMIT {int(top_k * 2)}  -- over-fetch since we'll dedupe by turn_id
+        ),
+        unique_turns AS (
+            SELECT turn_id, matched_role, matched_ts, sim
+            FROM content_matches
+            WHERE rn = 1
+            ORDER BY sim DESC, matched_ts DESC
+            LIMIT {int(top_k)}
+        )
+        SELECT 
+            log.id, log.message_id, log.role, log.text, log.s3_uri, log.ts, log.tags,
+            log.track_id, log.turn_id, log.bundle_id,
+            ut.sim AS relevance_score,
+            ut.matched_role,
+            ut.matched_ts
+        FROM unique_turns ut
+        JOIN LATERAL (
+            SELECT *
+            FROM {self.schema}.conv_messages
+            WHERE user_id = $1
+              AND turn_id = ut.turn_id
+              AND role = 'artifact'
+              AND tags @> ARRAY['artifact:turn.log']::text[]
+              AND ts + (ttl_days || ' days')::interval >= now()
+            ORDER BY ts DESC
+            LIMIT 1
+        ) log ON TRUE
+        ORDER BY ut.sim DESC, ut.matched_ts DESC
+        """
+
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+
+        return [dict(r) for r in rows]
+
 """
         if tags_mode == "all":
             where.append(f"tags @> ${len(args)}::text[]")
@@ -1213,3 +1325,4 @@ class ConvIndex:
         else:  # "any"
             where.append(f"tags && ${len(args)}::text[]")
 """
+
