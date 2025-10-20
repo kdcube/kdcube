@@ -230,11 +230,13 @@ class ContextRAGClient:
             turn_id: str, track_id: Optional[str],
             bundle_id: str,
             log: TurnLog,
+            summary: dict,
             extra_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Writes markdown to store (assistant artifact) + indexes it."""
         md = log.to_markdown()
-        payload = {"turn_log": log.to_payload()}
+        payload = {"turn_log": log.to_payload(),
+                   "turn_summary": summary}
 
         tags = TURN_LOG_TAGS_BASE + [f"turn:{turn_id}"] + ([f"track:{track_id}"] if track_id else [])
         if extra_tags:

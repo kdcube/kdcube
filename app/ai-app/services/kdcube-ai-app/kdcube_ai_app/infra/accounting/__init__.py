@@ -35,101 +35,6 @@ CONTEXT_EXPORT_KEYS: Set[str] = {
 def register_context_keys(*keys: str) -> None:
     CONTEXT_EXPORT_KEYS.update(keys)
 
-# ================================
-# ASYNC-SAFE CONTEXT USING CONTEXTVARS
-# ================================
-
-class AccountingContext:
-    def __init__(self):
-        # canonical storage for EVERYTHING
-        self._ctx: Dict[str, Any] = {}
-        self.event_enrichment: Dict[str, Any] = {}
-
-    # convenience properties for legacy/common keys (optional)
-    @property
-    def user_id(self) -> Optional[str]: return self._ctx.get("user_id")
-    @user_id.setter
-    def user_id(self, v): self._ctx["user_id"] = v
-
-    @property
-    def session_id(self) -> Optional[str]: return self._ctx.get("session_id")
-    @session_id.setter
-    def session_id(self, v): self._ctx["session_id"] = v
-
-    @property
-    def component(self) -> Optional[str]: return self._ctx.get("component")
-    @component.setter
-    def component(self, v): self._ctx["component"] = v
-
-    # enrichment is orthogonal;
-    # event_enrichment: Dict[str, Any] = {}
-
-    def update(self, **kwargs):
-        self._ctx.update(kwargs)
-
-    def to_dict(self) -> Dict[str, Any]:
-        # return a shallow copy
-        return dict(self._ctx)
-
-# Context variables for async-safe storage
-_context_var: contextvars.ContextVar[Optional[AccountingContext]] = contextvars.ContextVar(
-    'accounting_context', default=None
-)
-_storage_var: contextvars.ContextVar[Optional['IAccountingStorage']] = contextvars.ContextVar(
-    'accounting_storage', default=None
-)
-_default_storage = None
-
-def _get_context() -> AccountingContext:
-    """Get async-safe accounting context"""
-    context = _context_var.get()
-    if context is None:
-        context = AccountingContext()
-        _context_var.set(context)
-    return context
-
-def _get_enrichment() -> Dict[str, Any]:
-    return _get_context().event_enrichment or {}
-
-def _get_storage():
-    """Get async-safe accounting storage"""
-    return _storage_var.get()
-
-def _set_storage(storage):
-    """Set async-safe accounting storage"""
-    _storage_var.set(storage)
-
-def _set_context(context: AccountingContext):
-    """Set async-safe accounting context"""
-    _context_var.set(context)
-
-# ================================
-# PUBLIC API FOR CONTEXT MANAGEMENT
-# ================================
-
-def set_context(**kwargs):
-    """Set accounting context fields"""
-    context = _get_context()
-    context.update(**kwargs)
-
-def get_context() -> Dict[str, Any]:
-    """Get current accounting context as dict"""
-    return _get_context().to_dict()
-
-def set_component(component: str):
-    """Set current component context"""
-    _get_context().component = component
-
-def clear_context():
-    """Clear accounting context"""
-    _context_var.set(None)
-
-def get_enrichment() -> Dict[str, Any]: return dict(_get_context().event_enrichment or {})
-
-# ================================
-# STORAGE INTERFACE AND IMPLEMENTATIONS
-# ================================
-
 class ServiceType(str, Enum):
     """Types of AI services that can be tracked"""
     LLM = "llm"
@@ -253,6 +158,114 @@ class AccountingEvent:
             "context": {k: v for k, v in self.context.items() if k not in flat_ctx}
         }
 
+# ================================
+# ASYNC-SAFE CONTEXT USING CONTEXTVARS
+# ================================
+
+class AccountingContext:
+    def __init__(self):
+        # canonical storage for EVERYTHING
+        self._ctx: Dict[str, Any] = {}
+        self.event_enrichment: Dict[str, Any] = {}
+        self.event_cache: List[AccountingEvent] = []
+
+    # convenience properties for legacy/common keys (optional)
+    @property
+    def user_id(self) -> Optional[str]: return self._ctx.get("user_id")
+    @user_id.setter
+    def user_id(self, v): self._ctx["user_id"] = v
+
+    @property
+    def session_id(self) -> Optional[str]: return self._ctx.get("session_id")
+    @session_id.setter
+    def session_id(self, v): self._ctx["session_id"] = v
+
+    @property
+    def component(self) -> Optional[str]: return self._ctx.get("component")
+    @component.setter
+    def component(self, v): self._ctx["component"] = v
+
+    # enrichment is orthogonal;
+    # event_enrichment: Dict[str, Any] = {}
+
+    def update(self, **kwargs):
+        self._ctx.update(kwargs)
+
+    def to_dict(self) -> Dict[str, Any]:
+        # return a shallow copy
+        return dict(self._ctx)
+
+    def cache_event(self, event: AccountingEvent):
+        """Add event to in-memory cache for fast reads during turn."""
+        self.event_cache.append(event)
+
+    def get_cached_events(self) -> List[AccountingEvent]:
+        """Get all cached events for this turn."""
+        return list(self.event_cache)
+
+    def clear_cache(self):
+        """Clear event cache (call at end of turn)."""
+        self.event_cache.clear()
+
+# Context variables for async-safe storage
+_context_var: contextvars.ContextVar[Optional[AccountingContext]] = contextvars.ContextVar(
+    'accounting_context', default=None
+)
+_storage_var: contextvars.ContextVar[Optional['IAccountingStorage']] = contextvars.ContextVar(
+    'accounting_storage', default=None
+)
+_default_storage = None
+
+def _get_context() -> AccountingContext:
+    """Get async-safe accounting context"""
+    context = _context_var.get()
+    if context is None:
+        context = AccountingContext()
+        _context_var.set(context)
+    return context
+
+def _get_enrichment() -> Dict[str, Any]:
+    return _get_context().event_enrichment or {}
+
+def _get_storage():
+    """Get async-safe accounting storage"""
+    return _storage_var.get()
+
+def _set_storage(storage):
+    """Set async-safe accounting storage"""
+    _storage_var.set(storage)
+
+def _set_context(context: AccountingContext):
+    """Set async-safe accounting context"""
+    _context_var.set(context)
+
+# ================================
+# PUBLIC API FOR CONTEXT MANAGEMENT
+# ================================
+
+def set_context(**kwargs):
+    """Set accounting context fields"""
+    context = _get_context()
+    context.update(**kwargs)
+
+def get_context() -> Dict[str, Any]:
+    """Get current accounting context as dict"""
+    return _get_context().to_dict()
+
+def set_component(component: str):
+    """Set current component context"""
+    _get_context().component = component
+
+def clear_context():
+    """Clear accounting context"""
+    _context_var.set(None)
+
+def get_enrichment() -> Dict[str, Any]: return dict(_get_context().event_enrichment or {})
+
+# ================================
+# STORAGE INTERFACE AND IMPLEMENTATIONS
+# ================================
+
 class IAccountingStorage(ABC):
     """Storage interface for accounting events"""
 
@@ -261,11 +274,13 @@ class IAccountingStorage(ABC):
 
 class FileAccountingStorage(IAccountingStorage):
     def __init__(self, storage_backend, base_path: str = "accounting",
-                 path_strategy: Optional[Callable[['AccountingEvent'], str]] = None):
+                 path_strategy: Optional[Callable[['AccountingEvent'], str]] = None,
+                 cache_in_memory: bool = True):
         self.storage_backend = storage_backend
         self.base_path = base_path.strip("/")
         self.logger = logging.getLogger(self.__class__.__name__)
         self.path_strategy = path_strategy
+        self.cache_in_memory = cache_in_memory
 
     def _default_path(self, event: AccountingEvent) -> str:
         dt = datetime.fromisoformat(event.timestamp.replace("Z","+00:00")) if event.timestamp else datetime.now()
@@ -275,11 +290,22 @@ class FileAccountingStorage(IAccountingStorage):
         return f"{self.base_path}/{tenant}/{project}/{date_path}/{event.service_type.value}/{event.event_id}.json"
 
     async def store_event(self, event: AccountingEvent) -> bool:
+        # Always cache if enabled
+        if self.cache_in_memory:
+            ctx = _get_context()
+            ctx.cache_event(event)
+
+        # # If cache-only mode, skip file write for now
+        # if self.cache_in_memory:
+        #     return True
+
+        # Original file write logic
         try:
             rel_path = f"{self.base_path}/{self.path_strategy(event)}" if self.path_strategy else self._default_path(event)
             content = json.dumps(event.to_dict(), indent=2)
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: self.storage_backend.write_text(rel_path, content))
+            # loop = asyncio.get_event_loop()
+            # await loop.run_in_executor(None, lambda: self.storage_backend.write_text(rel_path, content))
+            await self.storage_backend.write_text_a(rel_path, content)
             return True
         except Exception as e:
             self.logger.error(f"Failed to store accounting event {event.event_id}: {e}")

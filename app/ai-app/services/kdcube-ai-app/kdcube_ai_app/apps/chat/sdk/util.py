@@ -439,3 +439,38 @@ def _today_str() -> str:
 def _shorten(s: str, n: int) -> str:
     s = (s or "").strip()
     return s if len(s) <= n else (s[:n-1] + "…")
+
+def _defence(s: str, none_on_failure: bool = True):
+    """
+    Extract content from the outermost code fence, handling nested fences.
+    Works for ```json, ```python, or plain ``` blocks.
+    """
+    default_ret = None if none_on_failure else s
+    if not s:
+        return default_ret
+    s = s.lstrip()
+
+    # Find FIRST fence opening (could be ```json, ```python, or just ```)
+    fence_start = s.find('```')
+    if fence_start == -1:
+        # No fences, try JSON braces
+        first_brace = s.find('{')
+        last_brace = s.rfind('}')
+        if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+            return s[first_brace:last_brace + 1]
+        return default_ret
+
+    # Skip past the opening fence and optional language tag
+    content_start = s.find('\n', fence_start)
+    if content_start == -1:
+        return default_ret
+    content_start += 1  # Skip the newline
+
+    # Find LAST closing fence
+    last_fence = s.rfind('```')
+    if last_fence == -1 or last_fence <= fence_start:
+        return default_ret
+
+    # Extract content between first opening and last closing
+    content = s[content_start:last_fence].strip()
+    return content if content else default_ret

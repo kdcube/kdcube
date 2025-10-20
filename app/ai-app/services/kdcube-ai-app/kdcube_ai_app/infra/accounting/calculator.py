@@ -727,109 +727,21 @@ class RateCalculator(AccountingCalculator):
         )
         return int(r.get("tokens") or 0)
 
-    async def turn_usage_rollup_compact(
+    def _rollup_from_event_dicts(
             self,
-            *,
-            tenant_id: str,
-            project_id: str,
-            conversation_id: str,
-            turn_id: str,
-            app_bundle_id: Optional[str] = None,
-            date_from: Optional[str] = None,           # ← NEW: "YYYY-MM-DD"
-            date_to: Optional[str] = None,
-            date_hint: Optional[str] = None,
-            service_types: Optional[List[str]] = None,
-            hard_file_limit: Optional[int] = 5000,
+            events: List[Dict[str, Any]],
             include_zero: bool = False,
     ) -> List[Dict[str, Any]]:
-        """
-        Convenience for a single turn. Applies same grouping as usage_rollup_compact,
-        but filters to events that belong to the given turn.
-
-        Args:
-            date_from: Start date (inclusive), e.g., "2025-10-15"
-            date_to: End date (inclusive), e.g., "2025-10-16"
-            date_hint: DEPRECATED - use date_from/date_to instead. If provided and
-                       date_from/date_to are None, will scan only that single day.
-
-        Note: If neither date_from/date_to nor date_hint are provided, defaults to
-              scanning yesterday and today.
-        """
-        q = AccountingQuery(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types,
-            hard_file_limit=hard_file_limit,
-        )
-
-        # Build candidate paths based on date range
-        if date_from or date_to:
-            # Use explicit date range (can span multiple days)
-            if not date_from:
-                # If only date_to provided, scan from yesterday to date_to
-                from datetime import datetime, timedelta
-                date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
-                date_from = (date_to_dt - timedelta(days=1)).isoformat()
-            if not date_to:
-                # If only date_from provided, scan from date_from to tomorrow
-                from datetime import datetime, timedelta
-                date_from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
-                date_to = (date_from_dt + timedelta(days=1)).isoformat()
-
-            q.date_from = date_from
-            q.date_to = date_to
-            paths = list(self._iter_event_paths(q))
-
-        elif date_hint:
-            # Backward compatibility: single-day optimization
-            q.date_from = date_hint
-            q.date_to = date_hint
-            paths = list(self._iter_event_paths(q))
-
-        else:
-            # Default: scan yesterday and today
-            from datetime import datetime, timedelta
-            today = datetime.utcnow().date()
-            yesterday = today - timedelta(days=1)
-            candidates = []
-            for d in (yesterday.isoformat(), today.isoformat()):
-                q.date_from, q.date_to = d, d
-                candidates.extend(list(self._iter_event_paths(q)))
-            paths = candidates
-
-        # Now do the same rollup but filtered by turn_id
+        """Shared rollup logic that works on event dicts from memory cache."""
         rollup: Dict[Tuple[str, str, str], Dict[str, int]] = {}
-        max_files = q.hard_file_limit if q.hard_file_limit and q.hard_file_limit > 0 else None
-        processed = 0
 
-        for p in paths:
-            if max_files is not None and processed >= max_files:
-                break
-            processed += 1
-
-            try:
-                ev = json.loads(await self.fs.read_text_a(p))
-            except Exception:
-                continue
-
-            # Quick service filter already applied by q.service_types; keep tenant/project/bundle match
-            if app_bundle_id:
-                ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
-                if ev_bundle != app_bundle_id:
-                    continue
-
-            # Match turn_id (can be in metadata or context)
-            md_tid = (ev.get("metadata") or {}).get("turn_id")
-            ctx_tid = (ev.get("context") or {}).get("turn_id")
-            if md_tid != turn_id and ctx_tid != turn_id:
-                continue
-
-            service  = str(ev.get("service_type") or "").strip()
+        for ev in events:
+            service = str(ev.get("service_type") or "").strip()
             if not service:
                 continue
+
             provider = str(ev.get("provider") or (ev.get("context") or {}).get("provider") or "").strip()
-            model    = str(ev.get("model_or_service") or (ev.get("context") or {}).get("model_or_service") or "").strip()
+            model = str(ev.get("model_or_service") or (ev.get("context") or {}).get("model_or_service") or "").strip()
 
             key = (service, provider, model)
             spent = rollup.get(key)
@@ -854,7 +766,249 @@ class RateCalculator(AccountingCalculator):
                 "model": model or None,
                 "spent": {k: int(v) for k, v in spent.items()}
             })
+
         return items
+
+    async def turn_usage_rollup_compact(
+            self,
+            *,
+            tenant_id: str,
+            project_id: str,
+            conversation_id: str,
+            turn_id: str,
+            app_bundle_id: Optional[str] = None,
+            date_from: Optional[str] = None,           # ← NEW: "YYYY-MM-DD"
+            date_to: Optional[str] = None,
+            date_hint: Optional[str] = None,
+            service_types: Optional[List[str]] = None,
+            hard_file_limit: Optional[int] = 5000,
+            include_zero: bool = False,
+            use_memory_cache: bool = False,  # For fast in-turn reads
+    ) -> List[Dict[str, Any]]:
+        """
+        Convenience for a single turn. Applies same grouping as usage_rollup_compact,
+        but filters to events that belong to the given turn.
+
+        Args:
+            date_from: Start date (inclusive), e.g., "2025-10-15"
+            date_to: End date (inclusive), e.g., "2025-10-16"
+            date_hint: DEPRECATED - use date_from/date_to instead. If provided and
+                       date_from/date_to are None, will scan only that single day.
+          use_memory_cache: If True, read from in-memory cache instead of storage.
+                Useful for fast mid-turn cost calculations.
+                Events are still written to storage immediately.
+
+        Note: If neither date_from/date_to nor date_hint are provided, defaults to
+              scanning yesterday and today.
+        """
+
+        # Build rollup dict
+        rollup: Dict[Tuple[str, str, str], Dict[str, int]] = {}
+        # === GET EVENTS (cache or files) ===
+        if use_memory_cache:
+            # Read from memory cache
+            from kdcube_ai_app.infra.accounting import _get_context
+            ctx = _get_context()
+            cached_events = ctx.get_cached_events()
+
+            # Convert to dicts and filter to this turn
+            events = []
+            for event in cached_events:
+                ev = event.to_dict()
+
+                # Filter by turn_id
+                md_tid = (ev.get("metadata") or {}).get("turn_id")
+                ctx_tid = (ev.get("context") or {}).get("turn_id")
+                if md_tid != turn_id and ctx_tid != turn_id:
+                    continue
+
+                # Filter by bundle
+                if app_bundle_id:
+                    ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                    if ev_bundle != app_bundle_id:
+                        continue
+
+                # Filter by service type
+                if service_types:
+                    if ev.get("service_type") not in service_types:
+                        continue
+
+                events.append(ev)
+        else:
+            # Read from storage (existing logic)
+            q = AccountingQuery(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                app_bundle_id=app_bundle_id,
+                service_types=service_types,
+                hard_file_limit=hard_file_limit,
+            )
+
+            # Build paths based on date range
+            if date_from or date_to:
+                if not date_from:
+                    from datetime import datetime, timedelta
+                    date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+                    date_from = (date_to_dt - timedelta(days=1)).isoformat()
+                if not date_to:
+                    from datetime import datetime, timedelta
+                    date_from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+                    date_to = (date_from_dt + timedelta(days=1)).isoformat()
+                q.date_from = date_from
+                q.date_to = date_to
+                paths = list(self._iter_event_paths(q))
+            elif date_hint:
+                q.date_from = date_hint
+                q.date_to = date_hint
+                paths = list(self._iter_event_paths(q))
+            else:
+                from datetime import datetime, timedelta
+                today = datetime.utcnow().date()
+                yesterday = today - timedelta(days=1)
+                candidates = []
+                for d in (yesterday.isoformat(), today.isoformat()):
+                    q.date_from, q.date_to = d, d
+                    candidates.extend(list(self._iter_event_paths(q)))
+                paths = candidates
+
+            # Read events from files
+            events = []
+            max_files = hard_file_limit if hard_file_limit and hard_file_limit > 0 else None
+            processed = 0
+
+            for p in paths:
+                if max_files is not None and processed >= max_files:
+                    break
+                processed += 1
+
+                try:
+                    ev = json.loads(await self.fs.read_text_a(p))
+                except Exception:
+                    continue
+
+                # Filter by turn_id
+                md_tid = (ev.get("metadata") or {}).get("turn_id")
+                ctx_tid = (ev.get("context") or {}).get("turn_id")
+                if md_tid != turn_id and ctx_tid != turn_id:
+                    continue
+
+                # Filter by bundle
+                if app_bundle_id:
+                    ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                    if ev_bundle != app_bundle_id:
+                        continue
+
+                events.append(ev)
+
+        # === PROCESS EVENTS (same logic for both paths) ===
+        for ev in events:
+            service  = str(ev.get("service_type") or "").strip()
+            if not service:
+                continue
+            provider = str(ev.get("provider") or (ev.get("context") or {}).get("provider") or "").strip()
+            model    = str(ev.get("model_or_service") or (ev.get("context") or {}).get("model_or_service") or "").strip()
+
+            key = (service, provider, model)
+            spent = rollup.get(key)
+            if not spent:
+                spent = _spent_seed(service)
+                rollup[key] = spent
+
+            usage = _extract_usage(ev) or {}
+            _accumulate_compact(spent, usage, service)
+        # === BUILD OUTPUT ===
+        items: List[Dict[str, Any]] = []
+        for (service, provider, model) in sorted(rollup.keys()):
+            spent = rollup[(service, provider, model)]
+            if not include_zero:
+                if service == "llm" and (spent.get("input", 0) == 0 and spent.get("output", 0) == 0):
+                    continue
+                if service == "embedding" and spent.get("tokens", 0) == 0:
+                    continue
+            items.append({
+                "service": service,
+                "provider": provider or None,
+                "model": model or None,
+                "spent": {k: int(v) for k, v in spent.items()}
+            })
+        return items
+
+    def _agent_breakdown_from_event_dicts(
+            self,
+            events: List[Dict[str, Any]],
+            include_zero: bool = False,
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Groups usage by agent, then by (service, provider, model).
+
+        Input: List of event dicts (from memory cache)
+        Output: {
+            "answer_generator": [
+                {"service": "llm", "provider": "anthropic", "model": "...", "spent": {...}},
+                ...
+            ],
+            "solver.codegen": [...],
+            ...
+        }
+        """
+        # Nested rollup: agent -> (service, provider, model) -> spent tokens
+        agent_rollup: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
+
+        for ev in events:
+            # Extract which agent made this call
+            agent = (
+                    (ev.get("metadata") or {}).get("agent") or
+                    (ev.get("context") or {}).get("agent") or
+                    "unknown"
+            )
+
+            service = str(ev.get("service_type") or "").strip()
+            if not service:
+                continue
+
+            provider = str(ev.get("provider") or (ev.get("context") or {}).get("provider") or "").strip()
+            model = str(ev.get("model_or_service") or (ev.get("context") or {}).get("model_or_service") or "").strip()
+
+            # Initialize agent bucket if needed
+            if agent not in agent_rollup:
+                agent_rollup[agent] = {}
+
+            key = (service, provider, model)
+            spent = agent_rollup[agent].get(key)
+            if not spent:
+                spent = _spent_seed(service)  # {"input": 0, "output": 0, ...}
+                agent_rollup[agent][key] = spent
+
+            # Accumulate tokens for this agent+model combo
+            usage = _extract_usage(ev) or {}
+            _accumulate_compact(spent, usage, service)
+
+        # Convert to output format
+        result: Dict[str, List[Dict[str, Any]]] = {}
+        for agent in sorted(agent_rollup.keys()):
+            items: List[Dict[str, Any]] = []
+            for (service, provider, model) in sorted(agent_rollup[agent].keys()):
+                spent = agent_rollup[agent][(service, provider, model)]
+
+                # Skip zero entries unless requested
+                if not include_zero:
+                    if service == "llm" and (spent.get("input", 0) == 0 and spent.get("output", 0) == 0):
+                        continue
+                    if service == "embedding" and spent.get("tokens", 0) == 0:
+                        continue
+
+                items.append({
+                    "service": service,
+                    "provider": provider or None,
+                    "model": model or None,
+                    "spent": {k: int(v) for k, v in spent.items()}
+                })
+
+            if items:  # Only include agents that have usage
+                result[agent] = items
+
+        return result
+
 
     async def turn_usage_by_agent(
             self,
@@ -869,10 +1023,13 @@ class RateCalculator(AccountingCalculator):
             service_types: Optional[List[str]] = None,
             hard_file_limit: Optional[int] = 5000,
             include_zero: bool = False,
+            use_memory_cache: bool = False,  # For fast in-turn reads
     ) -> Dict[str, List[Dict[str, Any]]]:
         """
         Return usage grouped by agent, then by (service, provider, model).
 
+        Args:
+            use_memory_cache: If True, read from in-memory cache instead of storage.
         Output:
           {
             "answer_generator": [
@@ -883,66 +1040,104 @@ class RateCalculator(AccountingCalculator):
             ...
           }
         """
-        q = AccountingQuery(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types,
-            hard_file_limit=hard_file_limit,
-        )
-
-        # Build candidate paths
-        if date_from or date_to:
-            if not date_from:
-                from datetime import datetime, timedelta
-                date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
-                date_from = (date_to_dt - timedelta(days=1)).isoformat()
-            if not date_to:
-                from datetime import datetime, timedelta
-                date_from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
-                date_to = (date_from_dt + timedelta(days=1)).isoformat()
-
-            q.date_from = date_from
-            q.date_to = date_to
-            paths = list(self._iter_event_paths(q))
-        else:
-            # Default: scan yesterday and today
-            from datetime import datetime, timedelta
-            today = datetime.utcnow().date()
-            yesterday = today - timedelta(days=1)
-            candidates = []
-            for d in (yesterday.isoformat(), today.isoformat()):
-                q.date_from, q.date_to = d, d
-                candidates.extend(list(self._iter_event_paths(q)))
-            paths = candidates
 
         # Nested rollup: agent -> (service, provider, model) -> spent
         agent_rollup: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
 
-        max_files = q.hard_file_limit if q.hard_file_limit and q.hard_file_limit > 0 else None
-        processed = 0
+        # === GET EVENTS (cache or files) ===
+        if use_memory_cache:
+            # Read from memory cache
+            from kdcube_ai_app.infra.accounting import _get_context
+            ctx = _get_context()
+            cached_events = ctx.get_cached_events()
 
-        for p in paths:
-            if max_files is not None and processed >= max_files:
-                break
-            processed += 1
+            # Convert to dicts and filter
+            events = []
+            for event in cached_events:
+                ev = event.to_dict()
 
-            try:
-                ev = json.loads(await self.fs.read_text_a(p))
-            except Exception:
-                continue
-
-            # Match turn_id
-            if app_bundle_id:
-                ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
-                if ev_bundle != app_bundle_id:
+                # Filter by turn_id
+                md_tid = (ev.get("metadata") or {}).get("turn_id")
+                ctx_tid = (ev.get("context") or {}).get("turn_id")
+                if md_tid != turn_id and ctx_tid != turn_id:
                     continue
 
-            md_tid = (ev.get("metadata") or {}).get("turn_id")
-            ctx_tid = (ev.get("context") or {}).get("turn_id")
-            if md_tid != turn_id and ctx_tid != turn_id:
-                continue
+                # Filter by bundle
+                if app_bundle_id:
+                    ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                    if ev_bundle != app_bundle_id:
+                        continue
 
+                # Filter by service type
+                if service_types:
+                    if ev.get("service_type") not in service_types:
+                        continue
+
+                events.append(ev)
+        else:
+            # Read from storage (existing logic)
+            q = AccountingQuery(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                app_bundle_id=app_bundle_id,
+                service_types=service_types,
+                hard_file_limit=hard_file_limit,
+            )
+
+            # Build paths
+            if date_from or date_to:
+                if not date_from:
+                    from datetime import datetime, timedelta
+                    date_to_dt = datetime.strptime(date_to, "%Y-%m-%d").date()
+                    date_from = (date_to_dt - timedelta(days=1)).isoformat()
+                if not date_to:
+                    from datetime import datetime, timedelta
+                    date_from_dt = datetime.strptime(date_from, "%Y-%m-%d").date()
+                    date_to = (date_from_dt + timedelta(days=1)).isoformat()
+                q.date_from = date_from
+                q.date_to = date_to
+                paths = list(self._iter_event_paths(q))
+            else:
+                from datetime import datetime, timedelta
+                today = datetime.utcnow().date()
+                yesterday = today - timedelta(days=1)
+                candidates = []
+                for d in (yesterday.isoformat(), today.isoformat()):
+                    q.date_from, q.date_to = d, d
+                    candidates.extend(list(self._iter_event_paths(q)))
+                paths = candidates
+
+            # Read events from files
+            events = []
+            max_files = hard_file_limit if hard_file_limit and hard_file_limit > 0 else None
+            processed = 0
+
+            for p in paths:
+                if max_files is not None and processed >= max_files:
+                    break
+                processed += 1
+
+                try:
+                    ev = json.loads(await self.fs.read_text_a(p))
+                except Exception:
+                    continue
+
+                # Filter by turn_id
+                md_tid = (ev.get("metadata") or {}).get("turn_id")
+                ctx_tid = (ev.get("context") or {}).get("turn_id")
+                if md_tid != turn_id and ctx_tid != turn_id:
+                    continue
+
+                # Filter by bundle
+                if app_bundle_id:
+                    ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                    if ev_bundle != app_bundle_id:
+                        continue
+
+                events.append(ev)
+
+        # === PROCESS EVENTS (same logic for both paths) ===
+        for ev in events:
             # Extract agent
             agent = (
                     (ev.get("metadata") or {}).get("agent") or
@@ -970,7 +1165,7 @@ class RateCalculator(AccountingCalculator):
             usage = _extract_usage(ev) or {}
             _accumulate_compact(spent, usage, service)
 
-        # Build output: agent -> list of items
+        # === BUILD OUTPUT ===
         result: Dict[str, List[Dict[str, Any]]] = {}
 
         for agent in sorted(agent_rollup.keys()):
@@ -1265,7 +1460,7 @@ def price_table():
 def _calculate_agent_costs(
         agent_usage: Dict[str, List[Dict[str, Any]]],
         llm_pricelist: List[Dict[str, Any]],
-        emb_pricelist: List[Dict[str, Any]]
+        emb_pricelist: List[Dict[str, Any]],
 ) -> Dict[str, Dict[str, Any]]:
     """
     Calculate costs per agent.

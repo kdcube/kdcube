@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, Callable, Tuple, List
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
-from kdcube_ai_app.apps.chat.sdk.util import _json_loads_loose
+from kdcube_ai_app.apps.chat.sdk.util import _json_loads_loose, _defence
 
 logger = logging.getLogger(__name__)
 
@@ -917,69 +917,6 @@ async def _stream_agent_two_sections_to_json(
 
     # ----- parse the JSON section -----
     raw_json = parser.json  # keep original for logs
-
-    def _defence(s: str):
-        """
-        Extract content from the outermost code fence, handling nested fences.
-        Works for ```json, ```python, or plain ``` blocks.
-        """
-        if not s:
-            return None
-        s = s.lstrip()
-
-        # Find FIRST fence opening (could be ```json, ```python, or just ```)
-        fence_start = s.find('```')
-        if fence_start == -1:
-            # No fences, try JSON braces
-            first_brace = s.find('{')
-            last_brace = s.rfind('}')
-            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-                return s[first_brace:last_brace + 1]
-            return None
-
-        # Skip past the opening fence and optional language tag
-        content_start = s.find('\n', fence_start)
-        if content_start == -1:
-            return None
-        content_start += 1  # Skip the newline
-
-        # Find LAST closing fence
-        last_fence = s.rfind('```')
-        if last_fence == -1 or last_fence <= fence_start:
-            return None
-
-        # Extract content between first opening and last closing
-        content = s[content_start:last_fence].strip()
-        return content
-
-    def _extract_object_tail(s: str) -> Optional[str]:
-        """
-        After the STRUCTURED JSON marker (already cut), extract structured output:
-          1) Prefer the LAST ```json ... ``` block anywhere.
-          2) Else the LAST generic ``` ... ``` block.
-          3) Else the LAST {...} up to EOF.
-        No extra helpers; minimal and deterministic.
-        """
-        if not s:
-            return None
-        s = s.lstrip()  # tolerate leading \n or spaces
-
-        # last ```json ... ```
-        last = None
-        for m in re.finditer(r"```json\s*([\s\S]*?)\s*```", s, re.I):
-            last = m.group(1)
-        if last is not None:
-            return last.strip().strip("`").strip()
-
-        # last generic ```
-        for m in re.finditer(r"```\s*([\s\S]*?)\s*```", s):
-            last = m.group(1)
-        if last is not None:
-            return last.strip().strip("`").strip()
-
-        # last {...} to end
-        m = re.search(r"\{[\s\S]*\}\s*$", s)
-        return m.group(0).strip() if m else None
 
     data = None
     err = None
