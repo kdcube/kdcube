@@ -5,16 +5,18 @@
 
 from __future__ import annotations
 
-import datetime
+import datetime, traceback, logging
 import pathlib, json
-from typing import Optional, Sequence, List, Dict, Any, Union
+from typing import Optional, Sequence, List, Dict, Any, Union, Callable
 
+from kdcube_ai_app.apps.chat.sdk.util import _turn_id_from_tags_safe
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnLog
 
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 
+logger = logging.getLogger(__name__)
 TURN_LOG_TAGS_BASE = ["kind:turn.log", "artifact:turn.log"]
 
 class ContextRAGClient:
@@ -230,13 +232,12 @@ class ContextRAGClient:
             turn_id: str, track_id: Optional[str],
             bundle_id: str,
             log: TurnLog,
-            summary: dict,
+            payload: Optional[Dict[str, Any]] = None,
             extra_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Writes markdown to store (assistant artifact) + indexes it."""
         md = log.to_markdown()
-        payload = {"turn_log": log.to_payload(),
-                   "turn_summary": summary}
+        payload = {"turn_log": log.to_payload(), **(payload or {})}
 
         tags = TURN_LOG_TAGS_BASE + [f"turn:{turn_id}"] + ([f"track:{track_id}"] if track_id else [])
         if extra_tags:
@@ -353,13 +354,13 @@ class ContextRAGClient:
         }
 
     async def append_reaction_to_turn_log(self, *,
-                                          turn_id: str, reaction: str,
+                                          turn_id: str, reaction: dict,
                                           tenant: str, project: str, user: str,
                                           fingerprint: Optional[str],
                                           user_type: str, conversation_id: str, track_id: str,
                                           bundle_id: str):
 
-        payload = {"reaction": {"text": reaction, "ts": datetime.datetime.utcnow().isoformat()+"Z"}}
+        payload = {"reaction": reaction}
         # persist as a small artifact tied to the same turn (don’t overwrite)
         s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user,
@@ -382,6 +383,151 @@ class ContextRAGClient:
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
         )
 
+    async def apply_feedback_to_turn_log(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user: str,
+            user_type: str,
+            conversation_id: str,
+            track_id: Optional[str],
+            turn_id: str,
+            bundle_id: str,
+            feedback: dict,  # {"text": str, "confidence": float, "ts": str, "from_turn_id": str}
+    ) -> Optional[dict]:
+        """
+        Fetch the turn log, append feedback to its structure,
+        then write new S3 blob and update only s3_uri in index (preserving ts, text, embedding).
+
+        Returns the updated turn log payload or None if turn not found.
+        """
+        try:
+            # 1) Fetch the existing turn log
+            existing = await self.search(
+                query=None,
+                kinds=("artifact:turn.log",),
+                roles=("artifact",),
+                scope="conversation",
+                user_id=user,
+                conversation_id=conversation_id,
+                days=365,
+                top_k=1,
+                include_deps=False,
+                with_payload=True,
+                all_tags=[f"turn:{turn_id}"],
+            )
+
+            items = existing.get("items") or []
+            if not items:
+                logger.warning(f"Turn log not found for turn_id={turn_id}")
+                return None
+
+            turn_log_item = items[0]
+            payload = (turn_log_item.get("payload") or {}).get("payload") or {}
+
+            # 2) Extract current turn_log array and text
+            turn_log_dict = payload.get("turn_log") or {}
+            if not isinstance(turn_log_dict, dict):
+                logger.error(f"turn_log is not a dict for turn_id={turn_id}, skipping feedback")
+                return None
+
+
+            # 3) Create feedback entry
+            feedback_entry = {
+                "type": "feedback",
+                "ts": feedback.get("ts") or (datetime.datetime.utcnow().isoformat() + "Z"),
+                "text": feedback.get("text", ""),
+                "confidence": feedback.get("confidence", 0.0),
+                "from_turn_id": feedback.get("from_turn_id"),  # The turn where feedback was given
+            }
+
+            # 4) Append to turn_log array
+            # 4) Add to feedbacks array (create if doesn't exist)
+            if "feedbacks" not in turn_log_dict:
+                turn_log_dict["feedbacks"] = []
+            turn_log_dict["feedbacks"].append(feedback_entry)
+
+            # 5) Also add to entries array for chronological view (optional - uncomment if desired)
+            entries = turn_log_dict.get("entries") or []
+            entries.append({
+                "t": feedback_entry["ts"][11:19],  # Extract HH:MM:SS
+                "area": "feedback",
+                "msg": feedback.get("text", ""),
+                "level": "info",
+                "data": {
+                    "confidence": feedback.get("confidence", 0.0),
+                    "from_turn_id": feedback.get("from_turn_id")
+                }
+            })
+            turn_log_dict["entries"] = entries
+            # 6) Update text representation (append feedback as a new line)
+            current_text = payload.get("text") or ""
+            feedback_text_line = (
+                f"\n[FEEDBACK from turn {feedback.get('from_turn_id', 'unknown')} "
+                f"at {feedback_entry['ts'][:19]}] {feedback.get('text', '')}"
+            )
+            updated_text = current_text + feedback_text_line
+
+            # 7) Update payload
+            payload["turn_log"] = turn_log_dict
+
+            payload["text"] = updated_text
+            payload["updated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
+
+            # 8) Preserve original metadata
+            original_ts = turn_log_item.get("ts")
+            original_embedding = turn_log_item.get("embedding")  # Preserve embedding!
+            original_tags = turn_log_item.get("tags") or []
+
+            # 9) Write NEW S3 blob with updated payload
+            s3_uri, message_id, rn = await self.store.put_message(
+                tenant=tenant,
+                project=project,
+                user=user,
+                fingerprint=None,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+                role="artifact",
+                text="",  # Not used for S3 storage
+                id="turn.log",
+                payload=payload,
+                meta={"kind": "turn.log", "turn_id": turn_id, "track_id": track_id},
+                embedding=original_embedding,  # PRESERVE original embedding
+                user_type=user_type,
+                turn_id=turn_id,
+                track_id=track_id,
+            )
+
+            # 10) Update index: ONLY s3_uri and embedding, preserve ts and text
+            artifact_tag = "artifact:turn.log"
+            unique_tags = [f"turn:{turn_id}"]
+            merged_tags = list(dict.fromkeys(
+                original_tags + [artifact_tag] + unique_tags
+            ))
+
+            await self.idx.update_message(
+                id=int(turn_log_item["id"]),
+                s3_uri=s3_uri,
+                tags=merged_tags,
+                ts=original_ts,  # PRESERVE original timestamp
+                # text is NOT passed, so it won't be updated in PostgreSQL
+            )
+
+            logger.info(
+            f"Applied feedback to turn {turn_id}: "
+            f"feedbacks_count={len(turn_log_dict.get('feedbacks', []))}, "
+            f"entries_count={len(entries)}, "
+            f"new_s3_uri={s3_uri}, "
+            f"ts_preserved={original_ts}, "
+            f"embedding_preserved={original_embedding is not None}"
+            )
+            return payload
+
+        except Exception as e:
+            logger.error(f"Failed to apply feedback to turn log: {e}")
+            logger.error(traceback.format_exc())
+            return None
 
     async def save_artifact(
             self,
@@ -454,12 +600,15 @@ class ContextRAGClient:
             bundle_id: str,
             content: dict,
             unique_tags: List[str],
+            preserve_ts: bool = False,
+            original_ts: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Idempotent write of a single logical artifact (e.g., a memory bucket) identified
         by its unique_tags (e.g., ["mem:bucket:<id>"]). If an index row exists, update
         that row (text, s3_uri, tags, ts) in place; otherwise create a fresh artifact.
 
+        If preserve_ts=True, keep the original timestamp instead of updating to now.
         Returns: {"mode": "update"|"insert", "id": <conv_messages.id>, "message_id": "...", "s3_uri": "..."}
         """
         # 1) find the existing row
@@ -482,7 +631,7 @@ class ContextRAGClient:
             )
             return {"mode": "insert", **saved}
 
-        #  Write a new message blob and then point the index row at it
+        # 2) Write a new message blob and then point the index row at it
         s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user_id, fingerprint=None,
             conversation_id=conversation_id, bundle_id=bundle_id,
@@ -494,21 +643,29 @@ class ContextRAGClient:
         )
 
         # 3) update the existing index row in place
-        #    merge/normalize tags (keep artifact kind + unique tags)
-        # bump ts to now
-        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        # Determine timestamp: preserve original or update to now
+        if preserve_ts and original_ts:
+            update_ts = original_ts
+        elif preserve_ts:
+            # Try to get from existing record
+            update_ts = existing.get("ts")
+        else:
+            # Normal behavior: update to now
+            update_ts = datetime.datetime.utcnow().isoformat() + "Z"
+
+        # Merge/normalize tags (keep artifact kind + unique tags)
         tags = list(dict.fromkeys((existing.get("tags") or []) +
                                   [artifact_tag, f"turn:{turn_id}"] +
                                   list(unique_tags or [])))
+
         await self.idx.update_message(
             id=int(existing["id"]),
             text=content_str,
             tags=tags,
             s3_uri=s3_uri,
-            ts=now_iso,
+            ts=update_ts,  # Use preserved or new timestamp
         )
         return {"mode": "update", "id": int(existing["id"]), "message_id": existing.get("message_id"), "s3_uri": s3_uri}
-
 
     async def list_conversations_(self, user_id: str):
 
@@ -716,3 +873,149 @@ class ContextRAGClient:
             turns_map[tid]["artifacts"].append(item)
 
         return {"user_id": user_id, "conversation_id": conversation_id, "turns": [turns_map[tid] for tid in order]}
+
+def _ts_to_float(ts: str) -> float:
+    """Convert ISO timestamp to float for recency scoring"""
+    try:
+        s = (ts or "").strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        import datetime as _dt
+        return _dt.datetime.fromisoformat(s).timestamp()
+    except Exception:
+        return float("-inf")
+
+
+async def search_context(
+        conv_idx,
+        ctx_client,
+        model_service,
+        targets: list[dict],
+        user: str,
+        conv: str,
+        track: str,
+        *,
+        top_k: int = 5,
+        days: int = 365,
+        half_life_days: float = 7.0,
+        scoring_mode: str = "hybrid",
+        sim_weight: float = 0.8,
+        rec_weight: float = 0.2,
+        custom_score_fn: Optional[Callable] = None,
+        with_payload: bool = False,
+        logger = None,
+) -> tuple[str | None, list[dict]]:
+    """
+    Unified search across turn logs with flexible scoring.
+
+    Materialization strategy:
+    - Collects all hits from all targets
+    - Sorts by score
+    - If with_payload=True, materializes only top_k results
+
+    Returns:
+        (best_turn_id, all_hits_sorted)
+    """
+
+    async def _search_one(where: str, query: str, embedding: List[float]|None = None) -> list[dict]:
+        try:
+
+            search_tags = None
+            [qvec] = [embedding] if embedding else await model_service.embed_texts([query])
+            if where in ("assistant_artifact", "artifact", "project_log"):
+                where = "artifact"
+                # search_tags = ["artifact:project.log"]
+                search_tags = ["artifact:codegen.program.presentation", "artifact:solver.failure"]
+            res = await conv_idx.search_turn_logs_via_content(
+                user_id=user,
+                conversation_id=conv,
+                track_id=track,
+                query_embedding=qvec,
+                search_roles=(where,),
+                search_tags=search_tags,
+                top_k=top_k,
+                days=days,
+                scope="track",
+                half_life_days=half_life_days,
+            )
+            return res or []
+        except Exception as e:
+            if logger:
+                logger.log(f"Search failed for where={where}: {e}", "WARN")
+            return []
+
+    # Collect all hits
+    hits = []
+
+    for t in targets:
+        where = t.get("where", "assistant")
+        query = (t.get("query") or "")[:256]
+        if not query:
+            continue
+
+        rows = await _search_one(where, query, embedding=t.get("embedding"))
+
+        for r in rows:
+            sim = float(r.get("sim") or 0.0)
+            rec = float(r.get("rec") or 0.0)
+            score = float(r.get("score") or 0.0)
+
+            if sim == 0.0 and "relevance_score" in r:
+                sim = float(r.get("relevance_score") or 0.0)
+                score = sim if score == 0.0 else score
+
+            if scoring_mode == "hybrid":
+                final_score = score
+            elif scoring_mode == "sim_only":
+                final_score = sim
+            elif scoring_mode == "custom" and custom_score_fn:
+                final_score = custom_score_fn(sim, rec, r.get("ts"))
+            else:
+                final_score = sim_weight * sim + rec_weight * rec
+
+            tid = r.get("turn_id") or _turn_id_from_tags_safe(r.get("tags") or [])
+
+            hit = {
+                "turn_id": tid,
+                "role": r.get("role", "artifact"),
+                "ts": r.get("ts"),
+                "sim": sim,
+                "rec": rec,
+                "score": final_score,
+                "original_score": score,
+                "matched_via_role": r.get("matched_role"),
+                "source_query": query,
+                "source_where": where,
+                "text": r.get("text", ""),
+                "s3_uri": r.get("s3_uri"),
+            }
+
+            if "deps" in r:
+                hit["deps"] = r["deps"]
+
+            hits.append(hit)
+
+    # Sort all hits by score (descending)
+    hits.sort(key=lambda h: h["score"], reverse=True)
+
+    # Best turn is the highest scoring one
+    best_tid = hits[0]["turn_id"] if hits else None
+
+    # Materialize payloads for top_k results only
+    if with_payload and hits:
+        for hit in hits[:top_k]:  # Only top_k hits
+            s3_uri = hit.get("s3_uri")
+            if s3_uri:
+                try:
+                    payload = ctx_client.store.get_message(s3_uri)
+                    # Remove embedding to save memory
+                    if isinstance(payload, dict) and "embedding" in payload:
+                        payload = {**payload}
+                        del payload["embedding"]
+                    hit["payload"] = payload
+                except Exception as e:
+                    if logger:
+                        logger.log(f"Failed to materialize {s3_uri}: {e}", "WARN")
+                    hit["payload"] = None
+
+    return best_tid, hits

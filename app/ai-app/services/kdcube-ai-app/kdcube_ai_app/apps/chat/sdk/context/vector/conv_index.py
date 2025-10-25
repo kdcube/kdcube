@@ -422,6 +422,11 @@ class ConvIndex:
             "m.ts + (m.ttl_days || ' days')::interval >= now()",
         ]
 
+        # Calculate recency decay
+        rec_sql = """
+            exp(-ln(2) * EXTRACT(EPOCH FROM (now() - m.ts)) / ({half_life_days_s}*24*3600.0)) AS rec,
+        """
+
         # semantic similarity: only when an embedding is provided
         if query_embedding is not None:
             args.append(convert_embedding_to_string(query_embedding))
@@ -514,18 +519,21 @@ class ConvIndex:
                 WHERE e.from_id = m.id
               ) d ON TRUE
             """
-
+        rec_sql = f"""
+        exp(-ln(2) * EXTRACT(EPOCH FROM (now() - m.ts)) / ({half_life_days_s}*24*3600.0)) AS rec
+        """
         q = f"""
           WITH base AS (
             SELECT m.*,
                    {sim_sql},
                    EXTRACT(EPOCH FROM (now() - m.ts)) AS age_sec,
+                   {rec_sql}, 
                    CASE m.role WHEN 'artifact' THEN 1.10 WHEN 'assistant' THEN 1.00 ELSE 0.98 END AS rboost
             FROM {self.schema}.conv_messages m
             WHERE {' AND '.join(where)}
           )
           SELECT m.id, m.message_id, m.role, m.text, m.s3_uri, m.ts, m.tags, m.track_id, m.turn_id, m.bundle_id,
-                 m.sim, m.age_sec, m.rboost,
+                 m.sim, m.rec, m.age_sec, m.rboost,
                  (0.70*m.sim + 0.25*exp(-ln(2) * m.age_sec / ({half_life_days_s}*24*3600.0)) + 0.05*m.rboost) AS score
                  {deps_select}
           FROM base m
@@ -1213,21 +1221,30 @@ class ConvIndex:
             track_id: Optional[str],
             query_embedding: Optional[List[float]] = None,
             query_text: Optional[str] = None,
-            search_roles: tuple[str, ...] = ("user", "assistant"),  # roles to search for turn_id match
+            search_roles: tuple[str, ...] = ("user", "assistant", "artifact"),  # roles to search for turn_id match
+            search_tags: Optional[Sequence[str]] = None,
             top_k: int = 8,
             days: int = 90,
             scope: str = "track",
             bundle_id: Optional[str] = None,
+            half_life_days: float = 7.0,
     ) -> List[Dict[str, Any]]:
         """
         Two-stage search optimized for finding turn logs:
-        1. Search across specified roles (user/assistant) to find relevant turn_ids
+        1. Search across specified roles/tags to find relevant turn_ids
         2. For each matched turn_id, fetch the corresponding artifact:turn.log
 
         Returns turn log artifacts (role='artifact', tags contain 'artifact:turn.log')
         ranked by the relevance score of the content that matched them.
 
-        Use case: "Find turn logs for turns where user/assistant discussed X"
+        Use cases:
+        - Find turn logs where user/assistant discussed X:
+          search_roles=("user", "assistant"), search_tags=None
+
+        - Find turn logs where project logs mention Y:
+          search_roles=("artifact",), search_tags=["artifact:project.log"]
+
+        Now returns both similarity (sim) and recency (rec) scores, plus combined score.
         """
 
         # Build WHERE clause for content search (stage 1)
@@ -1249,6 +1266,10 @@ class ConvIndex:
             sim_sql = "0.0::float AS sim"
             order_by = "m.ts DESC"
 
+        if search_tags:
+            args.append(list(search_tags))
+            where.append(f"m.tags && ${len(args)}::text[]")
+
         # Scope filters
         if scope == "track" and track_id:
             args.append(track_id)
@@ -1269,6 +1290,10 @@ class ConvIndex:
             args.append(f"%{query_text}%")
             where.append(f"m.text ILIKE ${len(args)}")
 
+        # alf_life_days parameter for recency calculation
+        args.append(max(0.1, float(half_life_days)))
+        half_life_days_param = f"${len(args)}::float"
+
         # Main query: find matching content → fetch turn logs via LATERAL
         q = f"""
         WITH content_matches AS (
@@ -1277,6 +1302,7 @@ class ConvIndex:
                 m.role AS matched_role,
                 m.ts AS matched_ts,
                 {sim_sql},
+                exp(-ln(2) * EXTRACT(EPOCH FROM (now() - m.ts)) / ({half_life_days_param}*24*3600.0)) AS rec,
                 ROW_NUMBER() OVER (PARTITION BY m.turn_id ORDER BY m.ts DESC) AS rn
             FROM {self.schema}.conv_messages m
             WHERE {' AND '.join(where)}
@@ -1285,15 +1311,24 @@ class ConvIndex:
             LIMIT {int(top_k * 2)}  -- over-fetch since we'll dedupe by turn_id
         ),
         unique_turns AS (
-            SELECT turn_id, matched_role, matched_ts, sim
+            SELECT 
+                turn_id, 
+                matched_role, 
+                matched_ts, 
+                sim,
+                rec,
+                (0.80 * sim + 0.20 * rec) AS score
             FROM content_matches
             WHERE rn = 1
-            ORDER BY sim DESC, matched_ts DESC
+            ORDER BY score DESC, matched_ts DESC
             LIMIT {int(top_k)}
         )
         SELECT 
             log.id, log.message_id, log.role, log.text, log.s3_uri, log.ts, log.tags,
             log.track_id, log.turn_id, log.bundle_id,
+            ut.sim,
+            ut.rec,
+            ut.score,
             ut.sim AS relevance_score,
             ut.matched_role,
             ut.matched_ts
@@ -1309,7 +1344,7 @@ class ConvIndex:
             ORDER BY ts DESC
             LIMIT 1
         ) log ON TRUE
-        ORDER BY ut.sim DESC, ut.matched_ts DESC
+        ORDER BY ut.score DESC, ut.matched_ts DESC
         """
 
         async with self._pool.acquire() as con:

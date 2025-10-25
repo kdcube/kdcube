@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
+from __future__ import annotations
+
+from dataclasses import is_dataclass, asdict
 
 # chat/sdk/util.py
 import time, orjson, hashlib, re, json, unicodedata
@@ -119,9 +122,8 @@ def _json_loads_loose(text: str):
 # ---------- simple markdown generation (NO type/stage mapping) ----------
 
 def _truncate(s: str, n: int = 500) -> str:
-    if not s:
-        return ""
-    return s if len(s) <= n else s[:n] + "…"
+    s = (s or "").strip()
+    return s if len(s) <= n else (s[: n - 1] + "…")
 
 def _ms_to_iso(ms: Optional[int]) -> Optional[str]:
     if not ms and ms != 0:
@@ -478,3 +480,48 @@ def _defence(s: str, none_on_failure: bool = True, format: str = "json"):
     # Extract content between first opening and last closing
     content = s[content_start:last_fence].strip()
     return content if content else default_ret
+
+
+def _turn_id_from_tags_safe(tags: List[str]) -> Optional[str]:
+    for t in tags or []:
+        if isinstance(t, str) and t.startswith("turn:"):
+            return t.split(":", 1)[1]
+    return None
+
+def _to_jsonable(obj: Any) -> Any:
+    """
+    Convert dataclasses and pydantic/BaseModel (if any) to plain dicts.
+    Leaves basic types as-is. Avoids truncation and keeps all fields.
+    """
+    # dataclasses
+    if is_dataclass(obj):
+        return {k: _to_jsonable(v) for k, v in asdict(obj).items()}
+    # pydantic BaseModel (e.g., ProgramBrief, Deliverable subclasses)
+    try:
+        from pydantic import BaseModel  # type: ignore
+        if isinstance(obj, BaseModel):
+            return json.loads(obj.model_dump_json())  # full, including defaults
+    except Exception:
+        pass
+    # dict
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    # list/tuple
+    if isinstance(obj, (list, tuple)):
+        return [_to_jsonable(v) for v in obj]
+    # everything else
+    return obj
+
+import datetime as _dt
+
+def isoz(ts: str | None) -> str:
+    if not ts: return ""
+    try:
+        s = ts.strip()
+        if s.endswith("Z"): return s
+        if "+" not in s and "Z" not in s:
+            # assume naive UTC
+            return _dt.datetime.fromisoformat(s).replace(tzinfo=_dt.timezone.utc).isoformat().replace("+00:00","Z")
+        return _dt.datetime.fromisoformat(s.replace("Z","+00:00")).astimezone(_dt.timezone.utc).isoformat().replace("+00:00","Z")
+    except Exception:
+        return ts

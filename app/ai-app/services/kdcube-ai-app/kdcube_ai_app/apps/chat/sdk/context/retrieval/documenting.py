@@ -4,9 +4,51 @@
 # apps/chat/sdk/retrieval/documenting.py
 
 import datetime as _dt
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict, Any
+from dataclasses import dataclass
 
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+
+@dataclass
+class ViewConfig:
+    # Truncation policy for historical turns
+    max_user_chars: int = 1200
+    max_assistant_chars: int = 1600
+    max_deliverable_chars: int = 2400
+    # Expand this turn fully (e.g., the last non-clarification)
+    expand_turn_id: Optional[str] = None
+    # When True, do not truncate any blocks for the expand_turn_id
+    expand_turn_full: bool = True
+
+def _truncate(s: str, n: int) -> str:
+    s = (s or "").strip()
+    return s if not n or len(s) <= n else (s[: n - 1] + "…")
+
+def _maybe_truncate(s: str, n: int, do_truncate: bool) -> str:
+    if not do_truncate:
+        return s or ""
+    return _truncate(s or "", n)
+
+def _render_objective_memory_block(selected_bucket_cards: list[dict], objective_memory_timelines: dict) -> str:
+    selected_bucket_cards = list(selected_bucket_cards or [])
+    objective_memory_timelines = dict(objective_memory_timelines or {})
+    if not selected_bucket_cards:
+        return ""
+
+    lines = ["[OBJECTIVE MEMORY — SELECTED BUCKETS]"]
+    for card in selected_bucket_cards[:3]:
+        bid = card.get("bucket_id") or ""
+        nm  = (card.get("name") or bid or "(bucket)").strip()
+        desc = (card.get("short_desc") or card.get("objective_text") or "").strip()
+        lines.append(f"\n• Bucket: {nm}")
+        if desc:
+            lines.append(f"  Description: {desc}")
+        for s in (objective_memory_timelines.get(bid, []) or [])[:3]:
+            oh = (s.get("objective_hint") or "").strip()
+            tf, tt = s.get("ts_from",""), s.get("ts_to","")
+            if oh:
+                lines.append(f"  └─ [{tf}..{tt}] {oh}")
+    return "\n".join(lines) + "\n"
 
 def _iso(ts: str | None) -> str:
     if not ts: return ""
@@ -83,21 +125,18 @@ def _format_assistant_internal_block(title: str, items: list[dict]) -> str:
 
     return "\n".join(out)
 
-def _format_user_facing_deliverables(items: list[dict]) -> str:
-    """Format deliverables that were SHOWN to the user."""
+def _format_user_facing_deliverables(items: list[dict], *, max_chars: int = 0, do_truncate: bool = False) -> str:
+    """Format deliverables that were SHOWN to the user (optionally truncated)."""
     if not items:
         return ""
 
-    parts = ["### Deliverables Provided to User"]
-    parts.append("_These materials were delivered to the user in this turn:_")
-    parts.append("")
-
+    parts = ["### Deliverables Provided to User", "_These materials were delivered to the user in this turn:_", ""]
     for item in items:
-        content = item.get("content") or ""
-        if content:
-            parts.append(content)
-            parts.append("")
-
+        content = (item.get("content") or "").strip()
+        if not content:
+            continue
+        parts.append(_maybe_truncate(content, max_chars, do_truncate))
+        parts.append("")
     return "\n".join(parts)
 
 def _messages_with_context(
@@ -138,7 +177,7 @@ def _messages_with_context(
         u = p.get("user") or {}
         a = p.get("assistant") or {}
         arts = p.get("artifacts") or []
-        compressed_log = p.get("compressed_log") or None
+        compressed_log = p.get("compressed_turn") or None
         turn_id = p.get("turn_id") or ""
 
         # Extract timestamps

@@ -115,8 +115,6 @@ def _get_3section_protocol(json_shape_hint: str) -> str:
             "Return exactly these three sections, in order, once."
             )
 
-# chat/sdk/streaming/streaming.py
-
 PARA_INT2_OPEN  = r"<<<\s*BEGIN\s+INTERNAL\s+THINKING\s*>>>"
 PARA_JSON2_OPEN = r"<<<\s*BEGIN\s+STRUCTURED\s+JSON\s*>>>"
 
@@ -129,13 +127,37 @@ def _add_2section_protocol(base: str, json_shape_hint: str) -> str:
     return (
             base.rstrip()
             + "\n\nCRITICAL OUTPUT PROTOCOL — FOLLOW EXACTLY:\n"
-              "• Produce TWO sections in this exact order. Use each START marker below exactly once.\n"
-              "• Do NOT write any closing tags/markers like <<< END... >>> or </…>.\n\n"
-              "1) <<< BEGIN INTERNAL THINKING >>>\n"
-              "   (brief progress notes in Markdown; avoid credentials & long stack traces)\n"
-              "2) <<< BEGIN STRUCTURED JSON >>>\n"
-              f"   ```json\n{json_shape_hint}\n```\n"
-              "Return exactly these two sections, in order, once."
+        "You MUST produce EXACTLY these two markers in order:\n\n"
+        
+        "FIRST - Write this marker, then your thinking:\n"
+        "<<< BEGIN INTERNAL THINKING >>>\n"
+        "[Your brief working notes here in plain text or Markdown]\n\n"
+        
+        "SECOND - Write this marker, then the JSON:\n"
+        "<<< BEGIN STRUCTURED JSON >>>\n"
+        "```json\n"
+        f"{json_shape_hint}\n"
+        "```\n\n"
+        
+        "CRITICAL RULES:\n"
+        "• Use BOTH markers exactly as shown above\n"
+        "• Do NOT write <<< END INTERNAL THINKING >>> (no closing tags!)\n"
+        "• Do NOT write <<< END STRUCTURED JSON >>> (no closing tags!)\n"
+        "• Do NOT skip the <<< BEGIN STRUCTURED JSON >>> marker\n"
+        "• The JSON MUST come after <<< BEGIN STRUCTURED JSON >>> marker\n\n"
+        
+        "CORRECT example:\n"
+        "<<< BEGIN INTERNAL THINKING >>>\n"
+        "User wants X, I will do Y\n"
+        "<<< BEGIN STRUCTURED JSON >>>\n"
+        "```json\n"
+        '{"field": "value"}\n'
+        "```\n\n"
+        
+        "WRONG examples (DO NOT DO THIS):\n"
+        "❌ <<< BEGIN INTERNAL THINKING >>> ... <<< END INTERNAL THINKING >>> ```json ...  (has END tag, missing BEGIN JSON marker)\n"
+        "❌ <<< BEGIN INTERNAL THINKING >>> ... ```json ... (missing BEGIN JSON marker)\n"
+        "❌ Just ```json ... (missing both markers)\n"
     )
 
 def _get_2section_protocol(json_shape_hint: str) -> str:
@@ -841,6 +863,17 @@ class _TwoSectionParser:
 
             break
 
+    # async def finalize(self):
+    #     if self.mode == "internal":
+    #         raw = self.buf[self.emit_from:]
+    #         cleaned = _redact_stream_text(raw)
+    #         if cleaned:
+    #             await self.on_internal(cleaned, completed=False)
+    #             self.internal += cleaned
+    #     elif self.mode == "json":
+    #         self.json += self.buf[self.emit_from:]
+    #     # caller sends completed=True
+
     async def finalize(self):
         if self.mode == "internal":
             raw = self.buf[self.emit_from:]
@@ -848,9 +881,16 @@ class _TwoSectionParser:
             if cleaned:
                 await self.on_internal(cleaned, completed=False)
                 self.internal += cleaned
+
+            # FALLBACK: If no JSON section found, try to extract from internal
+            if not self.json.strip():
+                # Look for ```json fence in the internal buffer
+                json_match = re.search(r'```json\s*\n(.*?)```', self.buf, re.DOTALL)
+                if json_match:
+                    self.json = json_match.group(1)
+
         elif self.mode == "json":
             self.json += self.buf[self.emit_from:]
-        # caller sends completed=True
 
 async def _stream_agent_two_sections_to_json(
         svc: ModelServiceBase,

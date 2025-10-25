@@ -339,7 +339,7 @@ class TurnLog(BaseModel):
 
             elif o == "assistant_answer":
                 answer = turn_summary[o]
-                self.answer(answer)
+                # self.answer(answer)
                 turn_summary_entries.append(f"• assistant answer summary: {answer} ")
 
         try:
@@ -358,6 +358,40 @@ class TurnLog(BaseModel):
     @property
     def objective_entry(self):
         return next((d.model_dump_json() for d in self.entries if d.area == "objective"), None)
+
+    @property
+    def memories(self) -> Dict[str, Any]:
+        try:
+            st = self.state or {}
+            mem = st.get("memories")
+            if isinstance(mem, dict):
+                return mem
+            # derive once from entries and cache
+            import re
+            out = {"topics": [], "suggestions": [], "notes": []}
+            for e in (self.entries or []):
+                area = (e.area if hasattr(e, "area") else (e.get("area") if isinstance(e, dict) else "")) or ""
+                msg = (e.msg if hasattr(e, "msg") else (e.get("msg") if isinstance(e, dict) else "")) or ""
+                if area not in {"note", "summary"}:
+                    continue
+                if area == "note" and isinstance(msg, str) and msg.startswith("topics:"):
+                    payload = msg.split("topics:", 1)[1].strip()
+                    toks = [t.strip() for t in re.split(r"[;,]", payload) if t.strip()]
+                    out["topics"].extend(toks)
+                    continue
+                if area == "note" and isinstance(msg, str) and msg.startswith("suggestions:"):
+                    payload = msg.split("suggestions:", 1)[1].strip()
+                    sugs = [s.strip() for s in payload.split(";") if s.strip()]
+                    out["suggestions"].extend(sugs)
+                    continue
+                if isinstance(msg, str) and msg:
+                    out["notes"].append(msg)
+            # cache
+            self.state = self.state or {}
+            self.state["memories"] = out
+            return out
+        except Exception:
+            return {"topics": [], "suggestions": [], "notes": []}
 
     def to_markdown(self, header: str="[turn_log]") -> str:
         lines = [header]
@@ -688,12 +722,24 @@ def turn_to_pair(turn: CompressedTurn) -> Dict[str, str]:
         "assistant": turn_to_assistant_message(turn)
     }
 
-def _turn_id_from_tags_safe(tags: List[str]) -> Optional[str]:
-    for t in tags or []:
-        if isinstance(t, str) and t.startswith("turn:"):
-            return t.split(":", 1)[1]
-    return None
-
+def compressed_turn_from_tlog(tlog: Dict[str, Any]) -> Dict[str, Any]:
+    sv = tlog.get("solver", {})
+    meta = sv.get("meta", {})
+    brief = sv.get("brief", {})
+    inputs = (brief.get("inputs") or {})
+    return {
+        "turn_id": tlog.get("turn_id"),
+        "ok": sv.get("ok"),
+        "mode": (sv.get("plan") or {}).get("mode"),
+        "objective": inputs.get("objective", ""),
+        "topics": inputs.get("topics", []),
+        "deliverables": sv.get("deliverables", {}),
+        "citations": sv.get("citations", {}),
+        "program_presentation": sv.get("program_presentation", ""),
+        "failure": sv.get("failure"),
+        "failure_presentation": sv.get("failure_presentation"),
+        "meta": meta,
+    }
 
 if __name__ == "__main__":
 
