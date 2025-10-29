@@ -8,6 +8,7 @@ from typing import Optional, Tuple, List, Dict, Any
 from dataclasses import dataclass
 
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
 
 @dataclass
 class ViewConfig:
@@ -138,6 +139,43 @@ def _format_user_facing_deliverables(items: list[dict], *, max_chars: int = 0, d
         parts.append(_maybe_truncate(content, max_chars, do_truncate))
         parts.append("")
     return "\n".join(parts)
+
+def _render_citations_map_block(citations: Optional[List[Dict]]) -> str:
+    """Render CITATIONS_MAP block for the current turn."""
+    if not citations:
+        return ""
+
+    citation_map = md_utils.build_citation_map(citations)
+    if not citation_map:
+        return ""
+
+    lines = [
+        "="*70,
+        "## CITATIONS_MAP — Valid Sources for This Turn",
+        "="*70,
+        "",
+        "**CRITICAL:** These are the ONLY valid citation SIDs for this turn.",
+        "Any SID not listed here is INVALID, even if it appeared in previous turns.",
+        "These sources come from the MOST RECENT program presentation (solver output).",
+        ""
+    ]
+
+    for sid in sorted(citation_map.keys()):
+        source_data = citation_map[sid]
+        lines.append(f"### [[S:{sid}]]")
+        lines.append(f"**Title:** {source_data.get('title', 'Untitled')}")
+        lines.append(f"**URL:** {source_data.get('url', 'N/A')}")
+        if source_data.get('text'):
+            text_preview = source_data['text'][:200]
+            if len(source_data['text']) > 200:
+                text_preview += "..."
+            lines.append(f"**Preview:** {text_preview}")
+        lines.append("")
+
+    lines.append("="*70)
+    lines.append(f"**Total valid citations: {len(citation_map)}**")
+
+    return "\n".join(lines)
 
 def _messages_with_context(
         system_message: str|SystemMessage,
@@ -327,7 +365,9 @@ def _messages_with_context(
 
             payload_parts.append(intro)
             payload_parts.append("")
-            payload_parts.append("[solver.failure]" if ta_type == "failure" else "[codegen.program.presentation]")
+            significator = "[solver.failure]" if ta_type == "failure" else "[codegen.program.presentation]"
+            if not ta_text.startswith(significator):
+                payload_parts.append(significator)
             payload_parts.append(ta_text)
             payload_parts.append("")
 

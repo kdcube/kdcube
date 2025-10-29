@@ -73,6 +73,43 @@ def _canonical_sources_from_citable_tools_generators(promoted: List[Dict[str, An
     canonical_by_sid = { int(r["sid"]): r for r in canonical_list }
     return canonical_list, canonical_by_sid
 
+def _enrich_canonical_sources_with_deliverables(
+        initial_canonical: List[Dict[str, Any]],
+        initial_by_sid: Dict[int, Dict[str, Any]],
+        out_dyn: Dict[str, Any]
+) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
+    """
+    Enrich canonical sources with sources from out_dyn deliverables.
+    This handles cases where artifacts fetched from context bring their own sources.
+
+    Returns (enriched_canonical_list, enriched_canonical_by_sid).
+    """
+    if not isinstance(out_dyn, dict):
+        return initial_canonical, initial_by_sid
+
+    # Collect sources from deliverables
+    deliverable_sources: List[Dict[str, Any]] = []
+    for slot, val in out_dyn.items():
+        if isinstance(val, dict):
+            sources = val.get("sources_used")
+            if sources:
+                deliverable_sources.extend(normalize_sources_any(sources))
+
+    if not deliverable_sources:
+        return initial_canonical, initial_by_sid
+
+    # Merge with existing canonical sources using dedupe logic
+    enriched = dedupe_sources_by_url(initial_canonical, deliverable_sources)
+
+    # Rebuild canonical list and map
+    enriched_list: List[Dict[str, Any]] = [
+        {k: v for k, v in row.items() if k in ("sid", "url", "title", "text") or k in CITATION_OPTIONAL_ATTRS}
+        for row in enriched if isinstance(row.get("sid"), int) and row.get("url")
+    ]
+    enriched_by_sid = {int(r["sid"]): r for r in enriched_list}
+
+    return enriched_list, enriched_by_sid
+
 # ---------- formats & normalization ----------
 
 def _detect_format_from_value(val: Any, fallback: str = "plain_text") -> str:
@@ -530,8 +567,14 @@ class AgentIO:
         # 2) Promote saved tool calls
         promoted = _promote_tool_calls(raw_files, od)
 
-        # 3) Build canonical source space **only** from citable tools' outputs
+        # 3) Build canonical source space from citable tools' outputs
         canonical_list, canonical_by_sid = _canonical_sources_from_citable_tools_generators(promoted)
+
+        # 3b) Enrich with sources from deliverables (e.g., fetched from context)
+        out_dyn = obj.get("out_dyn") or {}
+        canonical_list, canonical_by_sid = _enrich_canonical_sources_with_deliverables(
+            canonical_list, canonical_by_sid, out_dyn
+        )
         if canonical_list:
             # persist for downstream turns (helps reconciliation)
             obj["canonical_sources"] = canonical_list
