@@ -65,22 +65,20 @@ def _extract_json_object(text: str) -> str | None:
 
 def _remove_end_marker_everywhere(text: str, marker: str) -> str:
     """
-    Remove the exact end marker. Also remove standalone lines that are only angle brackets
-    *when and only when* those lines are adjacent to where the marker would be.
-    Does NOT delete arbitrary '>>>' inside normal text.
+    Remove the exact end marker. Also remove standalone lines that are only angle brackets.
+    Does NOT strip whitespace to preserve proper spacing in streamed chunks.
     """
     if not text or not marker:
         return text
 
     s = text.replace(marker, "")
 
-    # If the model streamed marker fragments on separate lines, they tend to be lines
-    # containing only < or > runs. Strip such lines only if they are "empty-bracket lines".
-    # (Multiline, safe.)
+    # Remove standalone lines containing only angle brackets
+    # (These sometimes appear when marker fragments stream on separate lines)
     s = re.sub(r"(?m)^(?:\s*[<>]{2,}\s*)+$", "", s)
 
-    return s.strip()
-
+    # DON'T strip! Preserving leading/trailing whitespace is critical for streaming
+    return s
 def _split_safe_marker_prefix(chunk: str, marker: str) -> tuple[str, int]:
     """
     If the end of `chunk` is a dangling prefix of `marker`, withhold it.
@@ -313,8 +311,8 @@ def _json_pointer_delete(root: Any, ptr: str) -> Any:
 async def generate_content_llm(
         _SERVICE,
         agent_name:  Annotated[str, "Name of this content creator, short, to distinguish this author in the sequence of generative calls."],
-        artifact_name: Annotated[str, "Name of the artifact being produced (for tracking)."],
         instruction: Annotated[str, "What to produce (goal/contract)."],
+        artifact_name: Annotated[str|None, "Name of the artifact being produced (for tracking)."] = "",
         input_context: Annotated[str, "Optional base text or data to use."] = "",
         target_format: Annotated[str, "html|markdown|json|yaml|text",
                                  {"enum": ["html", "markdown", "json", "yaml", "text"]}] = "markdown",
@@ -831,6 +829,7 @@ async def generate_content_llm(
 
     # If strict and not ok but rounds remain, attempt one focused repair pass
     # (We already exhausted rounds for generation; one more compact attempt to repair.)
+    repair_msg  = ""
     if strict and not ok and max_rounds > 0:
         repair_reasons = []
         if not fmt_ok:
@@ -1077,6 +1076,16 @@ async def generate_content_llm(
             })
 
     # --------- finalize ---------
+    logger.info(
+        "generate_content_llm completed: agent=%s artifact=%s finished=%s ok=%s",
+        agent_name, artifact_name, finished, ok,
+        extra={
+            "content_length": len(content_clean),
+            "sources_used_count": len(sources_used),
+            "validated": validated_tag,
+            "reason": reason
+        }
+    )
     out = {
         "ok": bool(ok),
         "content": content_clean,
@@ -1195,7 +1204,8 @@ async def sources_reconciler(
         max_tokens=1200,
         strict=True,
         role="tool.source.reconciler",
-        cache_instruction=True
+        cache_instruction=True,
+        artifact_name=None
     )
 
     # --- Parse tool envelope ---
