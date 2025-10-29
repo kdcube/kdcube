@@ -37,7 +37,9 @@ from typing import Dict, List, Tuple, Optional, Iterable, Any, Set
 # ---------------------------------------------------------------------------
 
 # [[S:1]] / [[S:1,3]] / [[S:2-5]] (whitespace tolerant)
-CITE_TOKEN_RE = re.compile(r"\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
+# CITE_TOKEN_RE = re.compile(r"\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
+# In citations.py, update the pattern:
+CITE_TOKEN_RE = re.compile(r"(\s?)\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
 
 # HTML inline cite (your protocol)
 HTML_CITE_RE = re.compile(
@@ -50,10 +52,10 @@ MD_CITE_RE = re.compile(r"\[\[\s*S\s*:\s*\d+(?:\s*,\s*\d+)*\s*\]\]", re.I)
 
 # Suffix patterns used to avoid cutting tokens at streaming chunk boundaries
 CITATION_SUFFIX_PATS = [
-    re.compile(r"\[\[$"),                           # "[[" at end
-    re.compile(r"\[\[S:$", re.I),                   # "[[S:" at end
-    re.compile(r"\[\[S:\s*[0-9,\s\-]*$", re.I),     # "[[S:1, 2-5"
-    re.compile(r"\[\[S:\s*[0-9,\s\-]*\]$", re.I),   # "[[S:1]]" (missing final ']')
+    re.compile(r"\s?\[\[$"),                           # optional space + "[[" at end
+    re.compile(r"\s?\[\[S:$", re.I),                   # optional space + "[[S:" at end
+    re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*$", re.I),     # optional space + "[[S:1, 2-5"
+    re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*\]$", re.I),   # optional space + "[[S:1]" (missing final ']')
 ]
 
 # ---- shared optional attributes carried through citations ----
@@ -442,10 +444,11 @@ def replace_citation_tokens_batch(
     opts = options or CitationRenderOptions()
 
     def _sub(m: re.Match) -> str:
-        ids = _expand_ids(m.group(1))
+        preceding_space = m.group(1)  # Captured optional space
+        ids = _expand_ids(m.group(2))  # Now group 2 contains the IDs
         rendered = _render_links(ids, citation_map, opts)
         if rendered:
-            return rendered
+            return preceding_space + rendered  # Preserve the space
         return m.group(0) if opts.keep_unresolved else ""
 
     return CITE_TOKEN_RE.sub(_sub, text)

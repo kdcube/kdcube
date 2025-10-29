@@ -623,20 +623,46 @@ async def generate_content_llm(
                 await emit_delta(out, index=emitted_count, marker="canvas", agent=author, format=tgt or "markdown", artifact_name=artifact_name)
                 emitted_count += 1
 
+        # async def _flush_safe(force: bool = False):
+        #     nonlocal emit_from
+        #     if emit_from >= len(stream_buf):
+        #         return
+        #     safe_end = len(stream_buf) if force else max(emit_from, len(stream_buf) - EMIT_HOLDBACK)
+        #     if safe_end <= emit_from:
+        #         return
+        #     raw_slice = stream_buf[emit_from:safe_end]
+        #     safe_chunk, dangling1 = split_safe_citation_prefix(raw_slice)
+        #     safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
+        #     safe_chunk, dangling2 = _split_safe_marker_prefix(safe_chunk, end_marker)
+        #     if safe_chunk:
+        #         await _emit_visible(safe_chunk)
+        #         emit_from += len(safe_chunk)
+
         async def _flush_safe(force: bool = False):
             nonlocal emit_from
             if emit_from >= len(stream_buf):
                 return
-            safe_end = len(stream_buf) if force else max(emit_from, len(stream_buf) - EMIT_HOLDBACK)
-            if safe_end <= emit_from:
-                return
-            raw_slice = stream_buf[emit_from:safe_end]
-            safe_chunk, dangling1 = split_safe_citation_prefix(raw_slice)
-            safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
-            safe_chunk, dangling2 = _split_safe_marker_prefix(safe_chunk, end_marker)
-            if safe_chunk:
-                await _emit_visible(safe_chunk)
-                emit_from += len(safe_chunk)
+
+            if force:
+                # Final flush - emit all remaining content without safety checks
+                raw_slice = stream_buf[emit_from:]
+                if raw_slice:
+                    await _emit_visible(raw_slice)
+                    emit_from = len(stream_buf)
+            else:
+                # Normal streaming - use holdback and safety checks
+                safe_end = max(emit_from, len(stream_buf) - EMIT_HOLDBACK)
+                if safe_end <= emit_from:
+                    return
+                raw_slice = stream_buf[emit_from:safe_end]
+
+                safe_chunk, _ = split_safe_citation_prefix(raw_slice)
+                safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
+                safe_chunk, _ = _split_safe_marker_prefix(safe_chunk, end_marker)
+
+                if safe_chunk:
+                    await _emit_visible(safe_chunk)
+                    emit_from += len(safe_chunk)
 
         async def on_delta(piece: str):
             nonlocal stream_buf, emitted_count
@@ -644,15 +670,23 @@ async def generate_content_llm(
                 return
             round_buf.append(piece)
             stream_buf += piece
-            if tgt == "markdown":
-                await _flush_safe(force=False)
-            else:
-                raw_slice = piece
-                safe_chunk, _ = _split_safe_usage_prefix(raw_slice)
-                safe_chunk, _ = _split_safe_marker_prefix(safe_chunk, end_marker)
-                if get_comm():
-                    await emit_delta(_scrub_emit_once(safe_chunk), index=emitted_count, marker="canvas", agent=author, format=tgt or "markdown", artifact_name=artifact_name)
-                    emitted_count += 1
+            # Use buffer-based flushing for ALL formats
+            await _flush_safe(force=False)
+        # async def on_delta(piece: str):
+        #     nonlocal stream_buf, emitted_count
+        #     if not piece:
+        #         return
+        #     round_buf.append(piece)
+        #     stream_buf += piece
+        #     if tgt == "markdown":
+        #         await _flush_safe(force=False)
+        #     else:
+        #         raw_slice = piece
+        #         safe_chunk, _ = _split_safe_usage_prefix(raw_slice)
+        #         safe_chunk, _ = _split_safe_marker_prefix(safe_chunk, end_marker)
+        #         if get_comm():
+        #             await emit_delta(_scrub_emit_once(safe_chunk), index=emitted_count, marker="canvas", agent=author, format=tgt or "markdown", artifact_name=artifact_name)
+        #             emitted_count += 1
 
         async def on_complete(_):
 
@@ -892,45 +926,80 @@ async def generate_content_llm(
                 await emit_delta(out, index=emitted_count, marker="canvas", agent=rep_author, format=tgt or "markdown", artifact_name=artifact_name)
                 emitted_count += 1
 
+        # async def _rep_flush_safe(force: bool = False):
+        #     nonlocal rep_emit_from
+        #     if rep_emit_from >= len(rep_stream_buf):
+        #         return
+        #     safe_end = len(rep_stream_buf) if force else max(rep_emit_from, len(rep_stream_buf) - REP_EMIT_HOLDBACK)
+        #     if safe_end <= rep_emit_from:
+        #         return
+        #     raw_slice = rep_stream_buf[rep_emit_from:safe_end]
+        #
+        #     # 1) avoid cutting citation tokens
+        #     safe_chunk, dangling1 = split_safe_citation_prefix(raw_slice)
+        #
+        #     # 1.5) avoid cutting the hidden [[USAGE:...]] tag
+        #     safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
+        #
+        #     # 2) avoid cutting the end-marker
+        #     safe_chunk, dangling2 = _split_safe_marker_prefix(safe_chunk, end_marker)
+        #
+        #     if safe_chunk:
+        #         await _rep_emit_visible(safe_chunk)
+        #         rep_emit_from += len(safe_chunk)
+
         async def _rep_flush_safe(force: bool = False):
             nonlocal rep_emit_from
             if rep_emit_from >= len(rep_stream_buf):
                 return
-            safe_end = len(rep_stream_buf) if force else max(rep_emit_from, len(rep_stream_buf) - REP_EMIT_HOLDBACK)
-            if safe_end <= rep_emit_from:
-                return
-            raw_slice = rep_stream_buf[rep_emit_from:safe_end]
 
-            # 1) avoid cutting citation tokens
-            safe_chunk, dangling1 = split_safe_citation_prefix(raw_slice)
+            if force:
+                # Final flush - emit all remaining content
+                raw_slice = rep_stream_buf[rep_emit_from:]
+                if raw_slice:
+                    await _rep_emit_visible(raw_slice)
+                    rep_emit_from = len(rep_stream_buf)
+            else:
+                # Normal streaming - use holdback and safety checks
+                safe_end = max(rep_emit_from, len(rep_stream_buf) - REP_EMIT_HOLDBACK)
+                if safe_end <= rep_emit_from:
+                    return
+                raw_slice = rep_stream_buf[rep_emit_from:safe_end]
 
-            # 1.5) avoid cutting the hidden [[USAGE:...]] tag
-            safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
+                safe_chunk, _ = split_safe_citation_prefix(raw_slice)
+                safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
+                safe_chunk, _ = _split_safe_marker_prefix(safe_chunk, end_marker)
 
-            # 2) avoid cutting the end-marker
-            safe_chunk, dangling2 = _split_safe_marker_prefix(safe_chunk, end_marker)
-
-            if safe_chunk:
-                await _rep_emit_visible(safe_chunk)
-                rep_emit_from += len(safe_chunk)
+                if safe_chunk:
+                    await _rep_emit_visible(safe_chunk)
+                    rep_emit_from += len(safe_chunk)
 
         async def on_delta_repair(piece: str):
             nonlocal rep_stream_buf, emitted_count
             if not piece:
                 return
-            repair_buf.append(piece)         # RAW (unmodified)
-            rep_stream_buf += piece          # for visible stream
-            if tgt == "markdown":
-                await _rep_flush_safe(force=False)
-            else:
-                # non-md: emit immediately, but still avoid cutting a marker
-                raw_slice = piece
-                safe_chunk, _ = _split_safe_usage_prefix(raw_slice)
-                safe_chunk, _ = _split_safe_marker_prefix(raw_slice, end_marker)
+            repair_buf.append(piece)
+            rep_stream_buf += piece
+            # Use buffer-based flushing for ALL formats
+            await _rep_flush_safe(force=False)
 
-                if get_comm():
-                    await emit_delta(_scrub_emit_once(safe_chunk), index=emitted_count, marker="canvas", agent=rep_author, format=tgt or "markdown", artifact_name=artifact_name)
-                    emitted_count += 1
+        # async def on_delta_repair(piece: str):
+        #     nonlocal rep_stream_buf, emitted_count
+        #     if not piece:
+        #         return
+        #     repair_buf.append(piece)         # RAW (unmodified)
+        #     rep_stream_buf += piece          # for visible stream
+        #     if tgt == "markdown":
+        #         await _rep_flush_safe(force=False)
+        #     else:
+        #         # non-md: emit immediately, but still avoid cutting a marker
+        #         raw_slice = piece
+        #         safe_chunk, _ = _split_safe_usage_prefix(raw_slice)
+        #         safe_chunk, _ = _split_safe_marker_prefix(raw_slice, end_marker)
+        #
+        #         if get_comm():
+        #             await emit_delta(_scrub_emit_once(safe_chunk), index=emitted_count, marker="canvas", agent=rep_author, format=tgt or "markdown", artifact_name=artifact_name)
+        #             emitted_count += 1
 
         async def on_complete_repair(_):
             nonlocal emitted_count
