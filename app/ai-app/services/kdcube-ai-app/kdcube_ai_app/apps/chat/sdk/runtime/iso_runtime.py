@@ -1,17 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
+
+# # kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py
 import contextvars
-# chat/sdk/runtime/iso_runtime.py
 import io
 import json
-import os, sys, re
+import os, sys
 import asyncio
 import pathlib
-import runpy
 import tokenize
-import traceback
 from typing import Dict, Any, List, Tuple
-from textwrap import dedent
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
@@ -42,11 +40,11 @@ def build_current_tool_imports(alias_map: dict[str, str]) -> str:
 def build_packages_installed_block() -> str:
     return (
         "## Available Packages\n"
-        "- Data: pandas, numpy\n"
+        "- Data: pandas, numpy, openpyxl, xlsxwriter\n"
         "- Files: python-docx, python-pptx, pymupdf, pypdf, reportlab, Pillow\n"
-        "- Web: requests, aiohttp, playwright, beautifulsoup4, lxml\n"
+        "- Web: requests, aiohttp, httpx, playwright, beautifulsoup4, lxml\n"
         "- Viz: matplotlib, seaborn, plotly, networkx, graphviz, diagrams\n"
-        "- Text: markdown-it-py, pygments, jinja2\n"
+        "- Text: markdown-it-py, pygments, jinja2, python-dateutil\n"
         "- Utils: pydantic, orjson, python-dotenv, PyJWT\n"
     )
 
@@ -96,6 +94,31 @@ def _inject_header_after_future(src: str, header: str) -> str:
     if header.strip() in src:
         return src
     return "".join(lines[:i] + [header] + lines[i:])
+
+def _validate_and_report_fstring_issues(src: str, workdir: pathlib.Path) -> str:
+    """
+    Detect common f-string issues and log warnings.
+    This is a safety net - codegen should generate correct code.
+    """
+    issues = []
+
+    # Check for potential unescaped braces in f-strings
+    import re
+    # Pattern: f''' or f""" followed by content with { that might be problematic
+    pattern = r"f['\"]{{3}}.*?\{[^{].*?['\"]{{3}}"
+
+    matches = re.findall(pattern, src, re.DOTALL)
+    for match in matches:
+        # Check if there are single braces that look like JSON
+        if re.search(r'\{["\w]+:', match) and not re.search(r'\{\{', match):
+            issues.append(f"Potential unescaped brace in f-string: {match[:100]}...")
+
+    if issues:
+        warning_file = workdir / "codegen_warnings.txt"
+        warning_file.write_text("\n".join(issues))
+        print(f"[Runtime] Detected {len(issues)} potential f-string issues", file=sys.stderr)
+
+    return src
 
 def _fix_json_bools(src: str) -> str:
     """
@@ -169,14 +192,14 @@ async def _run_subprocess(entry_path: pathlib.Path, *, cwd: pathlib.Path, env: d
         await asyncio.wait_for(proc.wait(), timeout=timeout_s)
     except asyncio.TimeoutError:
         try:
-            proc.terminate()
+            proc.terminate() # SIGTERM first
         except ProcessLookupError:
             pass
         try:
             await asyncio.wait_for(proc.wait(), timeout=5)
         except asyncio.TimeoutError:
             try:
-                proc.kill()
+                proc.kill()  # SIGKILL if didn't respond
             except ProcessLookupError:
                 pass
         return {"error": "timeout", "seconds": timeout_s}
@@ -200,7 +223,7 @@ def _build_injected_header(*, globals_src: str, imports_src: str) -> str:
 # === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
 from pathlib import Path
 import json as _json
-import os, importlib, asyncio, atexit, signal, sys
+import os, importlib, asyncio, atexit, signal, sys, traceback
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from io_tools import tools as agent_io_tools
 
@@ -211,6 +234,7 @@ if not logging.getLogger().handlers:
         stream=sys.stderr,
         format="%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S"
+    )  # <-- Added missing closing parenthesis
         
 logger = logging.getLogger("agent.runtime")
 # --- Directories / CV fallbacks ---
@@ -246,26 +270,33 @@ def _bootstrap_child():
     - Bind into every tool module
     - Rebuild ChatCommunicator if present
     """
-    # Build the complete list of modules to bind into:
-    # - Anything from RUNTIME_TOOL_MODULES (parent passed actual tool module names)
-    # - All dynamic alias module names from TOOL_ALIAS_MAP values (pre-registered by file path above)
+    # Build the complete list of modules to bind into
     _BIND_TARGETS = list(_TOOL_MODULES or [])
     try:
         _ALIAS_TO_DYN = globals().get("TOOL_ALIAS_MAP", {}) or {}
         for _dyn in _ALIAS_TO_DYN.values():
             if _dyn and _dyn not in _BIND_TARGETS:
                 _BIND_TARGETS.append(_dyn)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to build bind targets: {e}", exc_info=True)
     
     # Perform a single, idempotent bootstrap and bind into all modules
     try:
         if _PORTABLE_SPEC and _BIND_TARGETS:
             from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all as _bootstrap_all
             _bootstrap_all(_PORTABLE_SPEC, module_names=_BIND_TARGETS)
-    except Exception:
-        print("bulk bootstrap failed", file=sys.stderr)
-
+            logger.info(f"Bootstrap completed successfully for {len(_BIND_TARGETS)} modules")
+    except Exception as e:
+        # Log with full traceback
+        logger.error(f"Bootstrap failed: {e}", exc_info=True)
+        # Write error marker so we know bootstrap failed
+        try:
+            marker_file = Path(os.environ.get("OUTPUT_DIR", ".")) / "bootstrap_failed.txt"
+            marker_file.write_text(f"Bootstrap error: {e}\\n{traceback.format_exc()}")
+            logger.info(f"Bootstrap failure marker written to {marker_file}")
+        except Exception as write_err:
+            logger.error(f"Could not write bootstrap failure marker: {write_err}", exc_info=True)
+            
 _bootstrap_child()
 
 # --- Globals provided by parent (must come before dyn pre-registration) ---
@@ -285,10 +316,11 @@ for _alias, _dyn_name in (_ALIAS_TO_DYN or {}).items():
         _spec = importlib.util.spec_from_file_location(_dyn_name, _path)
         _mod  = importlib.util.module_from_spec(_spec)
         sys.modules[_dyn_name] = _mod
-        _spec.loader.exec_module(_mod)  # type: ignore[attr-defined]
-    except Exception:
-        # don't fail bootstrap; an import error will still be visible later
-        pass
+        _spec.loader.exec_module(_mod)
+    except Exception as e:
+        # Don't silently fail - this will cause import errors later!
+        logger.error(f"Failed to load {_dyn_name} from {_path}: {e}", exc_info=True)
+        print(f"[ERROR] Module load failed: {_alias} -> {_dyn_name}: {e}", file=sys.stderr)
 
 # Bind services into alias modules as well (idempotent)
 try:
@@ -458,18 +490,31 @@ async def fail(description: str,
     return await agent_io_tools.save_ret(data=_json.dumps(payload), filename="result.json")
 
 def _on_term(signum, frame):
+    """Handle SIGTERM/SIGINT by checkpointing and exiting."""
+    if globals().get("_FINALIZED", False):
+        # Already finalized, just exit
+        sys.exit(0)
+    
     try:
-        if globals().get("_FINALIZED", False):
-            return
+        # Try to checkpoint synchronously if possible
         try:
             loop = asyncio.get_running_loop()
+            # Schedule checkpoint but don't wait
             loop.create_task(_write_checkpoint(reason=f"signal:{signum}", managed=True))
+            # Give it a moment to write
+            loop.run_until_complete(asyncio.sleep(0.1))
         except RuntimeError:
-            # no running loop → do a quick one-off run
-            asyncio.run(_write_checkpoint(reason=f"signal:{signum}", managed=True))
+            # No loop running - create one just for checkpoint
+            try:
+                asyncio.run(_write_checkpoint(reason=f"signal:{signum}", managed=True))
+            except:
+                pass
     except Exception:
         pass
-
+    finally:
+        # Exit with appropriate signal code
+        # Don't use os._exit in development; use sys.exit for clean shutdown
+        sys.exit(128 + signum)  # Standard Unix convention
 
 # --- Module shutdown on exit (KB, tool modules etc.) ---
 async def _async_shutdown_mod(mod):
@@ -502,17 +547,34 @@ def _sync_shutdown_all():
         pass
 
 def _on_atexit():
+    """
+    Atexit marker. Should only run if done()/fail() wasn't called.
+    DO NOT do async operations here - event loop is closed.
+    """
     try:
-        if globals().get("_FINALIZED", False):
-            return
-        try:
-            loop = asyncio.get_running_loop()
-            # If a loop is running at exit, best-effort fire-and-forget is fine.
-            loop.create_task(_write_checkpoint(reason="atexit", managed=True))
-        except RuntimeError:
-            asyncio.run(_write_checkpoint(reason="atexit", managed=True))
-    except Exception:
-        pass
+        if not globals().get("_FINALIZED", False):
+            import sys
+            import traceback
+            
+            # Try to understand why we're here
+            marker_path = Path(os.environ.get("OUTPUT_DIR", ".")) / "unexpected_exit.txt"
+            exc_info = sys.exc_info()
+            
+            details = [
+                "Process exiting without explicit done()/fail() call",
+                f"_FINALIZED={globals().get('_FINALIZED', 'not set')}",
+                f"Exception info: {exc_info}",
+            ]
+            
+            # Check if there was an uncaught exception
+            if exc_info[0] is not None:
+                details.append(f"Uncaught exception: {exc_info[0].__name__}: {exc_info[1]}")
+                details.append(traceback.format_exc())
+            
+            marker_path.write_text("\\n".join(details))
+            print("[Runtime] " + details[0], file=sys.stderr)
+    except Exception as e:
+        print(f"[Runtime] atexit handler error: {e}", file=sys.stderr)
 
 try:
     signal.signal(signal.SIGTERM, _on_term)
@@ -562,8 +624,11 @@ try:
     if _COMM_SPEC:
         _comm_obj = _rebuild_communicator_from_spec(_COMM_SPEC)
         set_comm(_comm_obj)
+        logger.info("ChatCommunicator initialized successfully")
 except Exception as _comm_err:
-    pass
+    logger.error(f"Communicator setup failed: {_comm_err}", exc_info=True)
+    print(f"[ERROR] ChatCommunicator failed: {_comm_err}", file=sys.stderr)
+    
 # === END COMMUNICATOR SETUP ===
 ''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
 
@@ -577,190 +642,14 @@ class _InProcessRuntime:
             if name and name not in sys.modules:
                 sys.modules[name] = mod
 
-    async def run_snippet(
-        self,
-        *,
-        code: str,
-        output_dir: pathlib.Path,
-        tool_modules: List[Tuple[str, object]],
-        globals: Dict[str, Any] = None,
-        timeout_s: int = 90,
-    ) -> Dict[str, Any]:
-        import tempfile, json
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        # Collect tool module names for child bootstrap + shutdown
-        tool_module_names = [name for name, _ in (tool_modules or []) if name]
-        # Always consider KB client module as a shutdown candidate
-        shutdown_candidates = list(tool_module_names) + [
-            "kdcube_ai_app.apps.chat.sdk.retrieval.kb_client"
-        ]
-
-        # Prepare GLOBALS block
-        globals_src = ""
-        if globals:
-            for k, v in globals.items():
-                if k and (k != "__name__"):
-                    globals_src += f"\n{k} = {repr(v)}\n"
-
-        injected_header = _build_injected_header(globals_src=globals_src, imports_src="")
-
-        # Prepare snippet source
-        src = _fix_json_bools(code)
-        src = _inject_header_after_future(src, injected_header)
-
-        # Temp workdir for snippet
-        import tempfile
-        workdir = pathlib.Path(tempfile.mkdtemp(prefix="cg_snip_"))
-        (workdir / "main.py").write_text(src, encoding="utf-8")
-
-        # Child env
-        child_env = os.environ.copy()
-        child_env["OUTPUT_DIR"] = str(output_dir)
-        # passthrough portable spec if provided in globals
-        ps = (globals or {}).get("PORTABLE_SPEC_JSON") or (globals or {}).get("PORTABLE_SPEC")
-        if ps:
-            child_env["PORTABLE_SPEC"] = ps if isinstance(ps, str) else json.dumps(ps, ensure_ascii=False)
-            if "PORTABLE_SPEC" in (globals or {}):
-                del globals["PORTABLE_SPEC"]
-        import json as _json
-        child_env["RUNTIME_TOOL_MODULES"] = _json.dumps(tool_module_names)
-        child_env["RUNTIME_SHUTDOWN_MODULES"] = _json.dumps(shutdown_candidates)
-
-        # Augment PYTHONPATH with parents of tool modules
-        parents = _module_parent_dirs(tool_modules)
-        if parents:
-            child_env["PYTHONPATH"] = os.pathsep.join(parents + [child_env.get("PYTHONPATH", "")])
-
-        # Run as subprocess (+ logs captured)
-        return await _run_subprocess(
-            entry_path=workdir / "main.py",
-            cwd=workdir,
-            env=child_env,
-            timeout_s=timeout_s,
-            outdir=output_dir,
-        )
-
-    async def run_main_py(
-        self,
-        *,
-        workdir: pathlib.Path,
-        output_dir: pathlib.Path,
-        tool_modules: List[Tuple[str, object]],
-        globals: Dict[str, Any] = None,
-        timeout_s: int = 90,
-    ) -> Dict[str, Any]:
-        workdir.mkdir(parents=True, exist_ok=True)
-
-        from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV, SOURCE_ID_CV
-        import json as _json
-        def _runner():
-            old_env = dict(os.environ)
-            old_path = list(sys.path)
-
-            t_out = OUTDIR_CV.set(str(output_dir))
-            t_wrk = WORKDIR_CV.set(str(workdir))
-
-            last_sid = _max_sid_from_context(output_dir)
-            t_sid = SOURCE_ID_CV.set({"next": int(last_sid) + 1})
-
-            try:
-                # Ensure the workdir is importable and tool modules resolvable
-                sys.path.insert(0, str(workdir))
-                self._ensure_modules_on_sys_modules(tool_modules)
-
-                # --- Prepare child bootstrap data in ENV ---
-                # 1) PortableSpec (if caller provided as GLOBAL, prefer that; else allow env to be already set)
-                if globals and "PORTABLE_SPEC" in globals and isinstance(globals["PORTABLE_SPEC"], str):
-                    os.environ["PORTABLE_SPEC"] = globals["PORTABLE_SPEC"]
-                    del globals["PORTABLE_SPEC"]
-
-                # 2) Tool module names (for service binding in child)
-                tool_module_names = [name for name, _ in (tool_modules or []) if name]
-                os.environ["RUNTIME_TOOL_MODULES"] = _json.dumps(tool_module_names)
-
-                # 3) Modules that should receive shutdown() / close() in child atexit
-                shutdown_module_names = list(tool_module_names)
-                # include KB client if present; it's safe if import fails in child
-                shutdown_module_names.append("kdcube_ai_app.apps.chat.sdk.retrieval.kb_client")
-                os.environ["RUNTIME_SHUTDOWN_MODULES"] = _json.dumps(shutdown_module_names)
-
-                # 4) OUTPUT_DIR redundantly (header also reads via OUTDIR_CV)
-                os.environ["OUTPUT_DIR"] = str(output_dir)
-
-                # --- Read and transform main.py ---
-                src = (workdir / "main.py").read_text(encoding="utf-8")
-
-                # 1) Fix JSON booleans/null FIRST (no exceptions here)
-                src = _fix_json_bools(src)
-
-                # 2) Build globals prelude (idempotent, simple assignments)
-                globals_src = ""
-                if globals:
-                    for k, v in globals.items():
-                        if k and (k != "__name__"):
-                            globals_src += f"\n{k} = {repr(v)}\n"
-
-                imports_src = ""
-                alias_map = (globals or {}).get("TOOL_ALIAS_MAP") or {}
-                for alias, mod_name in (alias_map or {}).items():
-                    # io_tools already has a special import as agent_io_tools; we can still expose alias too
-                    imports_src += f"\nfrom {mod_name} import tools as {alias}\n"
-
-                # 3) Inject our runtime header after any __future__
-                injected_header = _build_injected_header(globals_src=globals_src, imports_src=imports_src)
-                src = _inject_header_after_future(src, injected_header)
-
-                # 3b) Persist the rewritten file (optional: keep original alongside)
-                (workdir / "main.py").write_text(src, encoding="utf-8")
-
-                # --- Execute as a script (isolated __main__) ---
-                runpy.run_path(str(workdir / "main.py"), run_name="__main__")
-
-            finally:
-                try:
-                    OUTDIR_CV.reset(t_out)
-                    WORKDIR_CV.reset(t_wrk)
-                    SOURCE_ID_CV.reset(t_sid)
-                except Exception:
-                    pass
-                try:
-                    # best-effort parent-side shutdown for tools with .shutdown()
-                    for _, mod in tool_modules or []:
-                        try:
-                            if hasattr(mod, "shutdown"):
-                                mod.shutdown()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                try:
-                    sys.path[:] = old_path
-                    os.environ.clear()
-                    os.environ.update(old_env)
-                except Exception:
-                    print(traceback.format_exc())
-
-        try:
-            loop = asyncio.get_running_loop()
-            await asyncio.wait_for(_run_in_executor_with_ctx(loop, _runner), timeout=timeout_s)
-            return {"ok": True}
-        except asyncio.TimeoutError:
-            return {"error": "timeout", "seconds": timeout_s}
-        except Exception as e:
-            return {"error": f"{type(e).__name__}: {e}"}
-
-
-
     async def run_main_py_subprocess(
-        self,
-        *,
-        workdir: pathlib.Path,
-        output_dir: pathlib.Path,
-        tool_modules: List[Tuple[str, object]],
-        globals: Dict[str, Any] | None = None,
-        timeout_s: int = 90,
+            self,
+            *,
+            workdir: pathlib.Path,
+            output_dir: pathlib.Path,
+            tool_modules: List[Tuple[str, object]],
+            globals: Dict[str, Any] | None = None,
+            timeout_s: int = 90,
     ) -> Dict[str, Any]:
         """
         Execute workdir/main.py in a clean subprocess with a fully configured environment:
@@ -777,6 +666,7 @@ class _InProcessRuntime:
         # --- Read & transform main.py (fix JSON booleans, inject header, globals, imports) ---
         src = (workdir / "main.py").read_text(encoding="utf-8")
         src = _fix_json_bools(src)
+        src = _validate_and_report_fstring_issues(src, workdir)
 
         # --- Build child environment ---
         child_env = os.environ.copy()
