@@ -53,6 +53,27 @@ def _unwrap_fenced_block(text: str, lang: str | None = None) -> str:
 
     return text.strip()
 
+def _unwrap_fenced_blocks_concat(text: str, lang: str | None = None) -> str:
+    """
+    Collect ALL fenced blocks (```<lang> ... ``` or ~~~<lang> ... ~~~) and concatenate them.
+    If none found, return the original text stripped.
+    """
+    if not text:
+        return ""
+    parts: list[str] = []
+    if lang:
+        # lang-specific first
+        for pat in (rf"```{lang}\s*([\s\S]*?)\s*```", rf"~~~{lang}\s*([\s\S]*?)\s*~~~"):
+            for m in re.finditer(pat, text, flags=re.I):
+                parts.append(m.group(1).strip())
+    # if nothing found for explicit lang, try any fenced blocks
+    if not parts:
+        for pat in (r"```(?:\w+)?\s*([\s\S]*?)\s*```", r"~~~(?:\w+)?\s*([\s\S]*?)\s*~~~"):
+            for m in re.finditer(pat, text, flags=re.I):
+                parts.append(m.group(1).strip())
+    return "\n".join(parts).strip() if parts else text.strip()
+
+
 def _extract_json_object(text: str) -> str | None:
     """Last-resort: pull the largest {...} region if fencing/extra prose remains."""
     if not text:
@@ -409,14 +430,18 @@ async def generate_content_llm(
         ]
     elif tgt == "html":
         sys_lines += [
-            "HTML RULES:",
+            "CRITICAL HTML RULES:",
             "- Produce a complete HTML document with <html>, <head>, and <body>.",
             "- Ensure tags are properly closed; keep attributes well-formed.",
+            "- If constrained, reduce content but keep a valid DOM tree; never cut tags in the middle."
         ]
     elif tgt in ("json", "yaml"):
         sys_lines += [
-            f"{tgt.upper()} RULES:",
-            "- Produce syntactically correct structured output.",
+            f"CRITICAL {tgt.upper()} RULES:",
+            "- Return a SINGLE, COMPLETE, syntactically valid document. NEVER cut arrays/objects in the middle.",
+            "- If token budget is tight, REDUCE SCOPE (fewer items/fields) but preserve validity.",
+            "- Do NOT emit ellipses, partial items, or dangling commas/brackets.",
+            "- Avoid triple-fence code blocks for structured output; emit raw JSON/YAML only.",
             "- Do not add commentary outside the structured document.",
         ]
 
@@ -600,7 +625,8 @@ async def generate_content_llm(
 
         return blocks
 
-    for round_idx in range(max_rounds):
+    effective_max_rounds = 1 if tgt in ("json", "yaml", "html") else max_rounds
+    for round_idx in range(effective_max_rounds):
         used_rounds = round_idx + 1
 
         # ---- STREAM ONE ROUND ----
@@ -691,8 +717,9 @@ async def generate_content_llm(
         async def on_complete(_):
 
             nonlocal emitted_count
-            if tgt == "markdown":
-                await _flush_safe(force=True)
+            # if tgt == "markdown":
+            #    await _flush_safe(force=True)
+            await _flush_safe(force=True)
             emitted_count += 1
             await emit_delta("", completed=True, index=emitted_count, marker="canvas", agent=rep_author, format=tgt or "markdown", artifact_name=artifact_name)
 
@@ -771,8 +798,20 @@ async def generate_content_llm(
 
     if tgt in ("json", "yaml"):
         # Always unwrap fenced blocks and strip BOM/ZWSP
-        content_clean = _unwrap_fenced_block(content_raw, lang=tgt)
-        content_clean = _strip_bom_zwsp(content_clean)
+        # content_clean = _unwrap_fenced_block(content_raw, lang=tgt)
+
+        # Prefer concatenating *all* fenced blocks (multiple rounds), then strip BOM/ZWSP
+        stitched = _unwrap_fenced_blocks_concat(content_raw, lang=tgt)
+        # content_clean = _strip_bom_zwsp(content_clean)
+        content_clean = _strip_bom_zwsp(stitched)
+
+        # If JSON parse fails, last-resort grab the largest {...} slice from the full raw
+        if tgt == "json":
+            obj_probe, err_probe = _parse_json(content_clean)
+            if obj_probe is None:
+                alt = _extract_json_object(content_raw)
+                if alt:
+                    content_clean = _strip_bom_zwsp(alt)
     else:
         # honor code_fences only for non-structured formats
         content_clean = _strip_code_fences(content_raw, allow=code_fences)
@@ -1003,10 +1042,11 @@ async def generate_content_llm(
 
         async def on_complete_repair(_):
             nonlocal emitted_count
-            if tgt == "markdown":
-                await _rep_flush_safe(force=True)
+            # FINAL flush for ALL formats
+            await _rep_flush_safe(force=True)
             emitted_count += 1
             await emit_delta("", completed=True, index=emitted_count, marker="canvas", agent=rep_author, format=tgt or "markdown", artifact_name=artifact_name)
+
         async with with_accounting(bundle_id,
                                    track_id=track_id,
                                    agent=role,
