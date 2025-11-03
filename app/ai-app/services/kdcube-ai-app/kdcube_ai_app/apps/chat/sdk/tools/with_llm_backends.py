@@ -15,7 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import split_safe_citation_pref
     extract_sids, build_citation_map_from_sources, citations_present_inline, MD_CITE_RE
 from kdcube_ai_app.apps.chat.sdk.tools.md_utils import CODE_FENCE_RE
 from kdcube_ai_app.infra.accounting import with_accounting
-from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message
+from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message, create_cached_system_message
 
 logger = logging.getLogger("with_llm_backends")
 # # ----------------------------- helpers -----------------------------
@@ -442,16 +442,17 @@ async def generate_content_llm(
         return s[:i+1] if i != -1 else s
 
     # --------- system prompt (format + citation rules) ---------
-    sys_lines = [
+    basic_sys_instruction = "\n".join([
         "You are a precise generator. Produce ONLY the requested artifact in the requested format.",
         "NEVER include meta-explanations. Do not apologize. No prefaces. No trailing notes.",
         "If continuing, resume exactly where you left off.",
         "",
-        f"TARGET FORMAT: {tgt}",
         "GENERAL OUTPUT RULES:",
         "- Keep the output self-contained.",
         "- Avoid placeholders like 'TBD' unless explicitly requested.",
-    ]
+    ])
+
+    target_format_sys_instruction = f"TARGET FORMAT: {tgt}"
 
     # Shared STRUCTURED COMPLETION CONTRACT for tag-based formats
     structured_contract = [
@@ -461,7 +462,7 @@ async def generate_content_llm(
         "- Emit a single, cohesive document; no headers/prefaces outside the document.",
         "- Do not use triple-backtick fences; output raw markup only.",
     ]
-
+    sys_lines = []
     if tgt == "markdown":
         sys_lines += [
             "MARKDOWN RULES:",
@@ -709,6 +710,7 @@ async def generate_content_llm(
             "JSON SCHEMA (authoritative):",
             schema_text_for_prompt
         ]
+
     # Build minimal sources digest and sid map
     sid_map = ""
     digest = ""
@@ -738,6 +740,13 @@ async def generate_content_llm(
         digest = "\n\n---\n\n".join(parts)[:total_budget]
 
     sys_prompt = "\n".join(sys_lines)
+    line_with_token_budget = f"You have {max_tokens} tokens to accomplish this generation task. You must plan the generation content that fully fit this budget."
+    system_msg = create_cached_system_message([
+        {"text": basic_sys_instruction, "cache": True},
+        {"text": target_format_sys_instruction, "cache": False},
+        {"text": sys_prompt, "cache": True},
+        {"text": line_with_token_budget, "cache": False}
+    ])
 
     # --------- streaming + rounds ---------
     buf_all: List[str] = []
@@ -870,7 +879,7 @@ async def generate_content_llm(
         human_msg = create_cached_human_message(user_blocks, cache_last=False)
 
         # System message can stay as-is (string). If you want to cache parts, you already use create_cached_system_message elsewhere.
-        sys_msg = SystemMessage(content=sys_prompt)
+        # system_msg = SystemMessage(content=sys_prompt)
 
         async with with_accounting(bundle_id,
                                    track_id=track_id,
@@ -882,7 +891,7 @@ async def generate_content_llm(
                                    }):
             await _SERVICE.stream_model_text_tracked(
                 client,
-                messages=[sys_msg, human_msg],
+                messages=[system_msg, human_msg],
                 on_delta=on_delta,
                 on_complete=on_complete,
                 temperature=0.2,

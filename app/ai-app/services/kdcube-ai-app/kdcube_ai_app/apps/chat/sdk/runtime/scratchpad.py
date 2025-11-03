@@ -104,7 +104,9 @@ class TurnScratchpad:
         self.solver_result_interpretation_instruction = ""
         self.past_turn_interpretation_instruction = ""
 
+        # solver outcome
         self.turn_artifact = None
+        self.solver_status = None
         self.context_stack = []
         self.turn_stack = []
 
