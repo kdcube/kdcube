@@ -1,4 +1,4 @@
-# knowledge_base/ingestion/web/scrap_utils.py
+# tools/scrap_utils.py
 import json, re
 from datetime import datetime
 from datetime import datetime, timezone
@@ -634,3 +634,11 @@ def html_fragment_to_markdown(fragment_html: str) -> str:
     # normalize excessive blank lines
     md = re.sub(r"\n{3,}", "\n\n", md)
     return md.strip()
+
+def html_title(html: str) -> str:
+    try:
+        s = BeautifulSoup(html or "", "lxml")
+        t = s.find("title")
+        return (t.get_text(strip=True) if t else "").strip()
+    except Exception:
+        return ""

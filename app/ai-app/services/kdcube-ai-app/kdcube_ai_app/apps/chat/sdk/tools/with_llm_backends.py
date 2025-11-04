@@ -5,6 +5,8 @@
 
 import json
 import re, yaml, jsonschema
+from datetime import datetime, timezone
+
 import time
 from typing import Annotated, Optional, List, Dict, Any, Tuple, Set
 import logging
@@ -1518,3 +1520,159 @@ async def sources_reconciler(
     )
 
     return json.dumps(kept, ensure_ascii=False)
+
+async def sources_content_filter(
+        _SERVICE,
+        objective: Annotated[str, "Objective (what we are trying to achieve)."],
+        queries: Annotated[List[str], "Array of queries [q1, q2, ...]"],
+        # note: we now document optional date fields explicitly
+        sources_with_content: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "content": str, "published_time_iso"?: str, "modified_time_iso"?: str}'],
+) -> Annotated[List[int], 'List of SIDs to keep']:
+    """
+    Fast content-based filter to remove duplicates and low-quality content.
+
+    Args:
+        _SERVICE: Service instance
+        objective: What we're trying to achieve
+        queries: List of search queries
+        sources_with_content: List of {sid, content, published_time_iso?, modified_time_iso?}
+
+    Returns:
+        List of SIDs to keep
+    """
+
+    assert _SERVICE, "ContentFilter not bound to service"
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _FILTER_INSTRUCTION = f"""
+You are a content quality filter. Return a JSON array of SIDs to keep.
+
+INPUTS
+- objective: what we are trying to achieve
+- queries: related search queries
+- sources: list of items with {{sid, content, published_time_iso?, modified_time_iso?}}
+
+GOAL: Return ONLY a JSON array of SIDs to keep. Keep the minimal set that best addresses the objective and queries.
+
+EVALUATION CRITERIA (apply in order):
+
+1. RELEVANCE (primary)
+   - Keep: Content directly supports objective or answers queries
+   - Drop: Off-topic or tangential content
+
+2. SUBSTANCE (primary)
+   - Keep: Actionable details (how-to, examples, configurations, data, analysis)
+   - Keep: Meaningful text (>150 chars), clear explanations
+   - Drop: Just menus/headers/boilerplate, vague overviews without depth
+
+3. UNIQUENESS (deduplication)
+   - If 2+ sources cover the same topic with >70% overlap, keep ONLY the best one
+   - "Best" = more complete, more actionable, clearer
+
+4. FRESHNESS (tie-breaker only)
+   - Use modified_time_iso or published_time_iso when available
+   - Prefer recent over old when substance is equal
+   - Missing dates = no penalty
+
+SAFEGUARD: If any source has substance, keep at least 1 SID (even if imperfect).
+
+OUTPUT: [sid1, sid2, ...] - Array of integers only, no text.
+
+TODAY: {now_iso}
+""".strip()
+
+    _FILTER_SCHEMA = {
+        "type": "array",
+        "items": {"type": "integer"},
+        "minItems": 0
+    }
+
+    # Prepare sources for filtering
+    prepared_sources: List[Dict[str, Any]] = []
+    for row in (sources_with_content or []):
+        try:
+            sid = int(row.get("sid"))
+        except Exception:
+            continue
+        content = (row.get("content") or "").strip()
+        if not (sid and content):
+            continue
+        content_truncated = content[:2000] if len(content) > 2000 else content
+
+        prepared_sources.append({
+            "sid": sid,
+            "content": content_truncated,
+            "published_time_iso": row.get("published_time_iso"),
+            "modified_time_iso": row.get("modified_time_iso"),
+        })
+
+    # If too few sources, keep all
+    if len(prepared_sources) <= 2:
+        return [s["sid"] for s in prepared_sources]
+
+    input_ctx = {
+        "objective": (objective or "").strip(),
+        "queries": queries or []
+    }
+
+    schema_str = json.dumps(_FILTER_SCHEMA, ensure_ascii=False)
+
+    try:
+        # Use cheaper/faster settings for content filtering
+        llm_resp_s = await generate_content_llm(
+            _SERVICE=_SERVICE,
+            agent_name="Content Filter",
+            instruction=_FILTER_INSTRUCTION,
+            input_context=json.dumps(input_ctx, ensure_ascii=False),
+            target_format="json",
+            schema_json=schema_str,
+            sources_json=json.dumps(prepared_sources, ensure_ascii=False),
+            cite_sources=False,
+            max_rounds=1,
+            max_tokens=300,
+            strict=True,
+            role="tool.sources.filter.by.content",
+            cache_instruction=True,
+            artifact_name=None
+        )
+    except Exception:
+        logger.exception("sources_content_filter: LLM call failed; keeping all sources")
+        return [s["sid"] for s in prepared_sources]
+
+    # Parse response
+    try:
+        env = json.loads(llm_resp_s) if llm_resp_s else {}
+    except Exception:
+        logger.exception("sources_content_filter: cannot parse LLM envelope")
+        return [s["sid"] for s in prepared_sources]
+
+    content_str = (env.get("content") or "").strip()
+    if content_str.startswith("```"):
+        content_str = content_str.split("\n", 1)[1] if "\n" in content_str else content_str
+        if "```" in content_str:
+            content_str = content_str.rsplit("```", 1)[0]
+
+    try:
+        kept_sids = json.loads(content_str) if content_str else []
+        if not isinstance(kept_sids, list):
+            logger.warning("sources_content_filter: response is not an array")
+            return [s["sid"] for s in prepared_sources]
+
+        # Validate all items are integers
+        kept_sids = [int(sid) for sid in kept_sids if isinstance(sid, (int, str)) and str(sid).isdigit()]
+
+        # Ensure we're not keeping SIDs that don't exist
+        valid_sids = {s["sid"] for s in prepared_sources}
+        kept_sids = [sid for sid in kept_sids if sid in valid_sids]
+
+        logger.info(
+            f"sources_content_filter: objective='{(objective or '')[:100]}' "
+            f"input={len(prepared_sources)} kept={len(kept_sids)} "
+            f"dropped={len(prepared_sources) - len(kept_sids)}"
+        )
+
+        return kept_sids
+
+    except Exception:
+        logger.exception("sources_content_filter: failed to parse kept SIDs; keeping all")
+        return [s["sid"] for s in prepared_sources]
