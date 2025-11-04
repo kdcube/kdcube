@@ -51,11 +51,18 @@ HTML_CITE_RE = re.compile(
 MD_CITE_RE = re.compile(r"\[\[\s*S\s*:\s*\d+(?:\s*,\s*\d+)*\s*\]\]", re.I)
 
 # Suffix patterns used to avoid cutting tokens at streaming chunk boundaries
+# CITATION_SUFFIX_PATS = [
+#     re.compile(r"\s?\[\[$"),                           # optional space + "[[" at end
+#     re.compile(r"\s?\[\[S:$", re.I),                   # optional space + "[[S:" at end
+#     re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*$", re.I),     # optional space + "[[S:1, 2-5"
+#     re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*\]$", re.I),   # optional space + "[[S:1]" (missing final ']')
+# ]
+
 CITATION_SUFFIX_PATS = [
-    re.compile(r"\s?\[\[$"),                           # optional space + "[[" at end
-    re.compile(r"\s?\[\[S:$", re.I),                   # optional space + "[[S:" at end
-    re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*$", re.I),     # optional space + "[[S:1, 2-5"
-    re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*\]$", re.I),   # optional space + "[[S:1]" (missing final ']')
+    re.compile(r"(?:\u200b|\s)?\[\[$"),                           # "[[" at end
+    re.compile(r"(?:\u200b|\s)?\[\[S:$", re.I),
+    re.compile(r"(?:\u200b|\s)?\[\[S:\s*[0-9,\s\-]*$", re.I),
+    re.compile(r"(?:\u200b|\s)?\[\[S:\s*[0-9,\s\-]*\]$", re.I),
 ]
 
 # ---- shared optional attributes carried through citations ----
@@ -570,6 +577,12 @@ _split_safe_citation_prefix = split_safe_citation_prefix
 # Presence
 _citations_present_inline = citations_present_inline
 
+def _strip_invisible(text: str) -> str:
+    # Remove ZWSP/BOM that commonly appear in LLM output and break regex matches
+    if not isinstance(text, str):
+        return text
+    return text.replace("\u200b", "").replace("\ufeff", "")
+
 # Legacy MD-only batch replacer (first-only + embed images)
 def _replace_citation_tokens(md: str, by_id: Dict[int, Dict[str, str]], embed_images: bool = True) -> str:
     """
@@ -628,14 +641,18 @@ def replace_html_citations(
     if not isinstance(html, str) or not citation_map:
         return html or ""
 
+    html = _strip_invisible(html)
     # 1) Replace [[S:...]] tokens
     def _sub_tokens(m: re.Match) -> str:
-        ids = _expand_ids(m.group(1))
+        # NOTE: group(1) is optional leading space; group(2) is the IDs
+        # ids = _expand_ids(m.group(1))
+        ids = _expand_ids(m.group(2))
         if first_only and ids:
             ids = ids[:1]
         rendered = _render_html_sup_links(ids, citation_map)
         if rendered:
-            return rendered
+            # return rendered
+            return (m.group(1) or "") + rendered
         return m.group(0) if keep_unresolved else ""
 
     out = CITE_TOKEN_RE.sub(_sub_tokens, html)
