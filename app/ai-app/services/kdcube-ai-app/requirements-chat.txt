@@ -60,6 +60,8 @@ python-dateutil
 xlsxwriter
 openpyxl
 httpx
+tinycss2
+python-pptx
 
 rich
 tenacity
