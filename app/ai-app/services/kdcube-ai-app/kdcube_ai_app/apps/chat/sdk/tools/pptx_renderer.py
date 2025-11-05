@@ -1,873 +1,642 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
-
 # chat/sdk/tools/pptx_renderer.py
-# FINAL FIXED VERSION - H3 headers, proper height tracking, overflow prevention
 
 from __future__ import annotations
-
 import pathlib
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Any
 import json
 import re
+from html.parser import HTMLParser
+from dataclasses import dataclass
 
 from pptx import Presentation
 from pptx.util import Pt, Inches
 from pptx.enum.text import PP_ALIGN, MSO_AUTO_SIZE
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.text import MSO_ANCHOR
 
 from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
 import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
 
 
-# GPT
-# Layout heuristics (tuned to avoid overlap)
-TITLE_BAND_IN   = 0.90   # reserved height below slide title
-BOTTOM_MARGIN_IN = 0.50  # keep off the footer area
-BLOCK_GAP_IN     = 0.12  # vertical rhythm between blocks
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+EMU_PER_INCH = 914400
+SLIDE_HEIGHT = Inches(7.5)
+SLIDE_WIDTH = Inches(10)
+MARGIN = Inches(0.5)
+MAX_CONTENT_HEIGHT = Inches(6.0)  # Leave room for title
 
-# line-height multipliers (approx)
-LINE_SPACING = 1.25
-EMU_PER_IN = 914400
+def page_width_in() -> float:
+    return SLIDE_WIDTH.inches - 2 * MARGIN.inches
 
-def _emu_to_in(v: int) -> float:
-    return float(v) / EMU_PER_IN
-
-def _in_to_emu(inches: float) -> int:
-    return int(round(inches * EMU_PER_IN))
-
-def _chars_per_line(width_in: float, font_pt: float, indent_level: int = 0) -> int:
-    """
-    Very conservative char-per-line estimate.
-    Rough model: avg char width ≈ 0.55em; with bullets/indent we reduce effective width.
-    """
-    # effective width reduction per indent level (~0.35" per level)
-    indent_in = max(0, indent_level) * 0.35
-    eff_in = max(1.0, width_in - indent_in)
-    # points per inch = 72; approx chars per em = 2; fudge factor 0.8 for safety
-    chars = int((eff_in * 72 / font_pt) * 2 * 0.8)
-    # cap to a sane range
-    return max(25, min(95, chars))
-
-def _lines_for_text(text: str, width_in: float, font_pt: float, indent_level: int = 0) -> int:
-    # strip markdown emphasis markers for width calc
-    stripped = re.sub(r"(\*\*|\*)", "", text)
-    cpl = _chars_per_line(width_in, font_pt, indent_level)
-    # very conservative break: count words/characters
-    return max(1, (len(stripped) + cpl - 1) // cpl)
-
-def _pt_to_in(pts: float) -> float:
-    return pts / 72.0
-
-# def _estimate_text_block_height(lines: List[str], width_in: float, font_pt: float) -> float:
-#     """
-#     Estimate height (in inches) for mixed bullet levels text block.
-#     Each logical line is wrapped separately with a conservative model.
-#     """
-#     if not lines:
-#         return 0.0
-#     total_lines = 0
-#     for ln in lines:
-#         lvl, txt = _parse_bullet_level(ln)
-#         total_lines += _lines_for_text(txt, width_in, font_pt, lvl)
-#     line_height_in = _pt_to_in(font_pt) * LINE_SPACING
-#     # add small top+bottom padding
-#     return total_lines * line_height_in + 0.12
-PARA_SPACE_AFTER_PT = 2      # you already use this in _style_paragraph
-TF_MARGIN_IN = 0.10          # 0.05 top + 0.05 bottom (from _add_textbox)
-HEIGHT_FUDGE = 1.10          # safety multiplier for long tokens/URLs
-
-def _estimate_text_block_height(lines: List[str], width_in: float, font_pt: float) -> float:
-    """
-    Estimate height (in inches) for a list of paragraph lines (each becomes its own paragraph).
-    Accounts for wrapping, per-paragraph spacing, text frame margins, and a safety fudge.
-    """
-    if not lines:
-        return 0.0
-
-    line_height_in = _pt_to_in(font_pt) * LINE_SPACING
-    para_space_in = _pt_to_in(PARA_SPACE_AFTER_PT)
-
-    total_visual_lines = 0
-    nonempty_paras = 0
-
-    for ln in lines:
-        if not ln.strip():
-            continue
-        lvl, txt = _parse_bullet_level(ln)
-        # be more conservative on width for deep indents
-        visual_lines = _lines_for_text(txt, width_in * 0.95, font_pt, lvl)
-        total_visual_lines += visual_lines
-        nonempty_paras += 1
-
-    if nonempty_paras == 0:
-        return 0.0
-
-    content_h = total_visual_lines * line_height_in
-    # add paragraph spacing between paragraphs (n-1 gaps)
-    spacing_h = max(0, nonempty_paras - 1) * para_space_in
-    # add textframe top+bottom margins
-    margins_h = TF_MARGIN_IN
-
-    return (content_h + spacing_h + margins_h) * HEIGHT_FUDGE
-# GPT
-
-
-_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-_CIT_RE  = re.compile(r"\[\[S:(\d+)\]\]")
-
-def _outdir() -> pathlib.Path:
-    return resolve_output_dir()
-
-def _basename_only(path: str, default_ext: str = ".pptx") -> str:
-    name = Path(path).name
-    if default_ext and not name.lower().endswith(default_ext):
-        name += default_ext
-    return name
-
-def _ensure_parent(p: Path) -> None:
-    p.parent.mkdir(parents=True, exist_ok=True)
-
-def _domain_of(url: str) -> str:
-    try:
-        from urllib.parse import urlparse
-        net = urlparse(url).netloc
-        return net or url
-    except Exception:
-        return url
-
-def _split_markdown_sections(md: str) -> List[Tuple[str, List[str]]]:
-    """Split markdown into sections by ## headings."""
-    lines = (md or "").splitlines()
-    slides: List[Tuple[str, List[str]]] = []
-    cur_title: Optional[str] = None
-    cur_body: List[str] = []
-
-    for ln in lines:
-        if ln.startswith("## "):
-            if cur_title is not None:
-                slides.append((cur_title.strip(), cur_body))
-            cur_title = ln[3:]
-            cur_body = []
-        elif ln.startswith("# "):
-            if cur_title is None and not slides:
-                cur_title = ln[2:]
-                cur_body = []
-            else:
-                cur_body.append(ln)
-        else:
-            cur_body.append(ln)
-
-    if cur_title is None:
-        nonempty = next((l for l in lines if l.strip()), "Slides")
-        cur_title = nonempty.lstrip("# ").strip() or "Slides"
-
-    slides.append((cur_title.strip(), cur_body))
-    return slides
-
-# Styling
-PALETTE = {
-    "fg": RGBColor(20, 24, 31),
-    "muted": RGBColor(95, 106, 121),
-    "accent": RGBColor(31, 111, 235),
-    "quote_bg": RGBColor(245, 247, 250),
-    "code_bg": RGBColor(250, 250, 252),
-    "rule": RGBColor(220, 224, 230),
-    # "table_row_bg": RGBColor(255, 255, 255),      # even rows (base)
-    "table_header_bg": RGBColor(240, 244, 252),
-    # "table_header_fg": RGBColor(20, 24, 31),   # dark text in header
-    # "table_row_alt_bg": RGBColor(232, 237, 245)  # light zebra stripe
+# Default colors
+DEFAULT_COLORS = {
+    'text': RGBColor(51, 51, 51),
+    'primary': RGBColor(0, 102, 204),
+    'subtitle': RGBColor(102, 102, 102),
 }
 
-TYPE_SCALE = {
-    "title": Pt(36),
-    "slide_title": Pt(26),
-    "h3": Pt(20),       # For ### headers
-    "body": Pt(15),     # Slightly smaller for better fit
-    "code": Pt(12),
-    "caption": Pt(11),
-}
 
-PAGE = {
-    "content_left": Inches(0.8),
-    "content_top": Inches(1.4),
-    "content_width": Inches(8.4),  # 10.0 - 0.8 - 0.8
-    "slide_height": Inches(7.5),
-}
+# ============================================================================
+# CSS PARSER
+# ============================================================================
 
-MONO_FALLBACK = "Consolas"
+@dataclass
+class StyleInfo:
+    color: Optional[RGBColor] = None
+    background: Optional[RGBColor] = None
+    font_size: Optional[Pt] = None
+    line_height: Optional[float] = None  # multiplier, e.g. 1.6
+    padding_left: Optional[Inches] = None
+    padding_top: Optional[Inches] = None
+    padding_right: Optional[Inches] = None
+    padding_bottom: Optional[Inches] = None
+    border_color: Optional[RGBColor] = None
+    border_width: Optional[Pt] = None
+    border_left_color: Optional[RGBColor] = None
+    border_left_width: Optional[Pt] = None
+    bold: bool = False
+    italic: bool = False
 
-# Regex patterns
-_CODE_FENCE_RE = re.compile(r"^```(\w+)?\s*$")
-_TABLE_ROW_RE = re.compile(r"^\s*\|.+\|\s*$")
-_BLOCKQUOTE_RE = re.compile(r"^\s*>\s+(.*)$")
 
-def _style_run(run, *, size: Pt, bold=False, italic=False, color: RGBColor = None, mono=False):
-    run.font.size = size
-    run.font.bold = bold
-    run.font.italic = italic
-    if mono:
-        run.font.name = MONO_FALLBACK
-    if color:
-        run.font.color.rgb = color
+class CSSParser:
+    def __init__(self):
+        self.styles: Dict[str, Dict[str, str]] = {}
 
-def _style_paragraph(p, *, level=0, space_after=Pt(6), align=PP_ALIGN.LEFT):
-    p.level = max(0, min(level, 4))
-    p.space_after = space_after
-    p.line_spacing = 1.15
-    p.alignment = align
+    def get_style(self, class_name: str) -> StyleInfo:
+        """Get computed style for a class."""
+        rules = self.styles.get(class_name, {})
+        style = StyleInfo()
 
-def _add_textbox(slide, left, top, width, height):
-    tb = slide.shapes.add_textbox(left, top, width, height)
-    tf = tb.text_frame
-    tf.word_wrap = True
-    tf.margin_left = Inches(0.0)
-    tf.margin_right = Inches(0.0)
-    tf.margin_top = Inches(0.05)
-    tf.margin_bottom = Inches(0.05)
-    return tb
+        if 'color' in rules:
+            style.color = self._parse_color(rules['color'])
 
-def _add_title_slide(prs: Presentation, text: str) -> None:
-    slide = prs.slides.add_slide(prs.slide_layouts[5])
-    tbox = _add_textbox(slide, PAGE["content_left"], Inches(2.0), PAGE["content_width"], Inches(2.0))
-    p = tbox.text_frame.paragraphs[0]
-    _style_paragraph(p, align=PP_ALIGN.LEFT)
-    r = p.add_run()
-    r.text = (text or "Presentation").strip()
-    _style_run(r, size=TYPE_SCALE["title"], bold=True, color=PALETTE["fg"])
+        if 'background' in rules:
+            style.background = self._parse_color(rules['background'])
 
-def _add_slide_title(slide, title: str):
-    tbox = _add_textbox(slide, PAGE["content_left"], PAGE["content_top"], PAGE["content_width"], Inches(0.6))
-    p = tbox.text_frame.paragraphs[0]
-    _style_paragraph(p, align=PP_ALIGN.LEFT, space_after=Pt(2))
-    r = p.add_run()
-    r.text = (title or "").strip()
-    _style_run(r, size=TYPE_SCALE["slide_title"], bold=True, color=PALETTE["fg"])
+        if 'font-size' in rules:
+            style.font_size = self._parse_font_size(rules['font-size'])
 
-def _parse_bullet_level(line: str) -> tuple[int, str]:
-    """Extract bullet level and text."""
-    m = re.match(r"^(\s*)([-*]|\d+\.)\s+(.*)$", line)
-    if not m:
-        return 0, line.strip()
-    spaces, _bullet, text = m.groups()
-    lvl = min(len(spaces) // 2, 4)
-    return lvl, text.strip()
-
-def _is_table_separator(cell: str) -> bool:
-    """Check if a table cell is a separator (contains dashes)."""
-    stripped = cell.strip()
-    if not stripped:
-        return False
-    dash_count = stripped.count('-')
-    return dash_count >= 3 and dash_count >= len(stripped) - 2
-
-def _parse_table(lines: List[str]) -> Optional[List[List[str]]]:
-    """Parse markdown table into rows/columns."""
-    table_lines = [ln.strip() for ln in lines if _TABLE_ROW_RE.match(ln)]
-    if len(table_lines) < 2:
-        return None
-
-    def split_row(line: str) -> List[str]:
-        return [cell.strip() for cell in line.strip('|').split('|')]
-
-    rows = [split_row(line) for line in table_lines]
-
-    if len(rows) < 2:
-        return None
-
-    # Check if second row is separator
-    separator_row = rows[1]
-    if not all(_is_table_separator(cell) for cell in separator_row):
-        return None
-
-    # Return header + data rows (skip separator)
-    header = rows[0]
-    data_rows = rows[2:] if len(rows) > 2 else []
-
-    return [header] + data_rows
-
-def _emit_text_with_formatting(paragraph, text: str, sources_map: Dict[int, Dict[str, str]], resolve_citations: bool):
-    """Add text to paragraph with bold/italic/links/citations."""
-    # Split by bold first
-    parts = re.split(r"(\*\*[^*]+\*\*)", text)
-
-    for part in parts:
-        if not part:
-            continue
-
-        if part.startswith("**") and part.endswith("**"):
-            # Bold text
-            inner = part[2:-2]
-            # Check for italic within bold
-            italic_parts = re.split(r"(\*[^*]+\*)", inner)
-            for ipart in italic_parts:
-                if ipart.startswith("*") and ipart.endswith("*"):
-                    r = paragraph.add_run()
-                    r.text = ipart[1:-1]
-                    _style_run(r, size=TYPE_SCALE["body"], bold=True, italic=True, color=PALETTE["fg"])
-                elif ipart:
-                    r = paragraph.add_run()
-                    r.text = ipart
-                    _style_run(r, size=TYPE_SCALE["body"], bold=True, color=PALETTE["fg"])
-        else:
-            # Check for italic, links, citations
-            italic_parts = re.split(r"(\*[^*]+\*)", part)
-            for ipart in italic_parts:
-                if not ipart:
-                    continue
-
-                if ipart.startswith("*") and ipart.endswith("*"):
-                    r = paragraph.add_run()
-                    r.text = ipart[1:-1]
-                    _style_run(r, size=TYPE_SCALE["body"], italic=True, color=PALETTE["fg"])
-                else:
-                    # Handle links and citations
-                    _emit_links_and_citations(paragraph, ipart, sources_map, resolve_citations)
-
-def _emit_links_and_citations(paragraph, text: str, sources_map: Dict[int, Dict[str, str]], resolve_citations: bool):
-    """Handle links [text](url) and citations [[S:n]]."""
-    while text:
-        m_link = _LINK_RE.search(text)
-        m_cit = _CIT_RE.search(text) if resolve_citations else None
-
-        matches = []
-        if m_link:
-            matches.append(("link", m_link))
-        if m_cit:
-            matches.append(("cit", m_cit))
-
-        if not matches:
-            # Plain text
-            if text:
-                r = paragraph.add_run()
-                r.text = text
-                _style_run(r, size=TYPE_SCALE["body"], color=PALETTE["fg"])
-            return
-
-        # Get earliest match
-        kind, m = min(matches, key=lambda x: x[1].start())
-
-        # Add text before match
-        if m.start() > 0:
-            r = paragraph.add_run()
-            r.text = text[:m.start()]
-            _style_run(r, size=TYPE_SCALE["body"], color=PALETTE["fg"])
-
-        # Add match
-        if kind == "link":
-            r = paragraph.add_run()
-            r.text = m.group(1)
-            _style_run(r, size=TYPE_SCALE["body"], color=PALETTE["accent"])
-            try:
-                r.hyperlink.address = m.group(2)
-            except:
-                pass
-        else:  # citation
-            sid = int(m.group(1))
-            rec = sources_map.get(sid, {})
-            label = rec.get("title") or f"[{sid}]"
-            url = rec.get("url", "")
-            r = paragraph.add_run()
-            r.text = label
-            _style_run(r, size=TYPE_SCALE["body"], color=PALETTE["accent"])
-            if url:
+        # Parse border-bottom (for title underline)
+        if 'border-bottom' in rules:
+            parts = rules['border-bottom'].split()
+            if len(parts) >= 3:
                 try:
-                    r.hyperlink.address = url
+                    # e.g., "4px solid #0066cc"
+                    width_str = parts[0].replace('px', '').replace('pt', '')
+                    style.border_width = Pt(float(width_str))
+                    style.border_color = self._parse_color(parts[2])
                 except:
                     pass
 
-        text = text[m.end():]
+        # Parse border-left (for callout boxes)
+        if 'border-left' in rules:
+            parts = rules['border-left'].split()
+            if len(parts) >= 3:
+                try:
+                    width_str = parts[0].replace('px', '').replace('pt', '')
+                    style.border_left_width = Pt(float(width_str))
+                    style.border_left_color = self._parse_color(parts[2])
+                except:
+                    pass
 
-def _new_content_slide(prs: Presentation, title: str):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_slide_title(slide, title)
+        return style
 
-    # Keep anchors as EMUs
-    top_anchor = PAGE["content_top"] + Inches(TITLE_BAND_IN)          # EMU int
-    bottom_anchor = PAGE["slide_height"] - Inches(BOTTOM_MARGIN_IN)   # EMU int
+    def parse(self, css_text: str):
+        pattern = r'([a-zA-Z0-9_\-., #]+)\s*\{([^}]+)\}'
+        for match in re.finditer(pattern, css_text):
+            selector = match.group(1).strip()
+            # map ".highlight" -> "highlight", "h1" -> "h1", "strong" -> "strong"
+            selector = selector.replace('.', '').replace(' ', '')
+            rules = {}
+            for rule in match.group(2).split(';'):
+                rule = rule.strip()
+                if ':' in rule:
+                    prop, value = rule.split(':', 1)
+                    rules[prop.strip().lower()] = value.strip()
+            self.styles[selector] = rules
 
-    # Available height *in inches* for our estimators
-    available_height_in = _emu_to_in(bottom_anchor - top_anchor)
+    # NEW: parse inline style="..."
+    def parse_inline_rules(self, style_attr: str) -> Dict[str, str]:
+        rules = {}
+        for piece in style_attr.split(';'):
+            piece = piece.strip()
+            if ':' in piece:
+                k, v = piece.split(':', 1)
+                rules[k.strip().lower()] = v.strip()
+        return rules
 
-    y_offset_in = 0.0  # we track runtime offset in inches, convert to EMU only when placing
-    return slide, top_anchor, available_height_in, y_offset_in
+    def _parse_color(self, color_str: str) -> Optional[RGBColor]:
+        s = color_str.strip().lower()
+        if s.startswith('#'):
+            s = s[1:]
+        if len(s) == 6:
+            return RGBColor(int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+        if len(s) == 3:
+            return RGBColor(int(s[0]*2, 16), int(s[1]*2, 16), int(s[2]*2, 16))
+        return None  # do not hardcode
 
-def _peek_next_block(body_lines: List[str], start_idx: int) -> Tuple[str, int, List[str]]:
-    """
-    Return (kind, end_index, payload_lines) starting from start_idx.
-    kind in {"h3","code","table","quote","text","blank"}
-    end_index is the index AFTER the block.
-    """
-    n = len(body_lines)
-    i = start_idx
-    if i >= n:
-        return "blank", i, []
+    def _parse_font_size(self, size_str: str) -> Optional[Pt]:
+        s = size_str.strip().lower()
+        if s.endswith('em'):
+            return Pt(float(s[:-2]) * 16 * 0.75)  # 1em=16px; 1px=0.75pt
+        if s.endswith('px'):
+            return Pt(float(s[:-2]) * 0.75)
+        if s.endswith('pt'):
+            return Pt(float(s[:-2]))
+        return None
 
-    ln = body_lines[i]
-    if not ln.strip():
-        return "blank", i+1, []
+    def _parse_length_to_inches(self, s: str) -> Optional[Inches]:
+        s = s.strip().lower()
+        try:
+            if s.endswith('px'):  # assume 96dpi for CSS pixel
+                return Inches(float(s[:-2]) / 96.0)
+            if s.endswith('pt'):
+                return Inches(float(s[:-2]) / 72.0)
+            if s.endswith('in'):
+                return Inches(float(s[:-2]))
+        except:
+            pass
+        return None
 
-    if ln.startswith("### "):
-        return "h3", i+1, [ln[4:].strip()]
+    def _inflate_box_shorthand(self, v: str) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
+        # CSS padding shorthand: t r b l
+        parts = v.split()
+        if not parts: return (None, None, None, None)
+        if len(parts) == 1: parts = parts * 4
+        if len(parts) == 2: parts = [parts[0], parts[1], parts[0], parts[1]]
+        if len(parts) == 3: parts = [parts[0], parts[1], parts[2], parts[1]]
+        return tuple(parts[:4])
 
-    if _CODE_FENCE_RE.match(ln):
-        i += 1
-        code = []
-        while i < n and not _CODE_FENCE_RE.match(body_lines[i]):
-            code.append(body_lines[i]); i += 1
-        if i < n and _CODE_FENCE_RE.match(body_lines[i]):
-            i += 1
-        return "code", i, code
+    # NEW: merge rules from tag + classes + inline + body with precedence inline>class>tag>body
+    def compute_style(self, tag: str, classes: List[str], inline_style: Optional[str]) -> StyleInfo:
+        order = []
+        if 'body' in self.styles:
+            order.append(self.styles['body'])
+        if tag in self.styles:
+            order.append(self.styles[tag])
+        for cls in classes:
+            if cls in self.styles:
+                order.append(self.styles[cls])
+        if inline_style:
+            order.append(self.parse_inline_rules(inline_style))
 
-    if _TABLE_ROW_RE.match(ln):
-        table_lines = []
-        while i < n and _TABLE_ROW_RE.match(body_lines[i]):
-            table_lines.append(body_lines[i]); i += 1
-        return "table", i, table_lines
+        style = StyleInfo()
+        for rules in order:
+            if 'color' in rules:
+                style.color = self._parse_color(rules['color'])
+            if 'background' in rules:
+                style.background = self._parse_color(rules['background'])
+            if 'background-color' in rules:
+                style.background = self._parse_color(rules['background-color'])
+            if 'font-size' in rules:
+                style.font_size = self._parse_font_size(rules['font-size'])
+            if 'line-height' in rules:
+                try:
+                    style.line_height = float(re.sub('[^0-9.]', '', rules['line-height']))
+                except:
+                    pass
+            if 'padding' in rules:
+                t, r, b, l = self._inflate_box_shorthand(rules['padding'])
+                style.padding_top = self._parse_length_to_inches(t) if t else style.padding_top
+                style.padding_right = self._parse_length_to_inches(r) if r else style.padding_right
+                style.padding_bottom = self._parse_length_to_inches(b) if b else style.padding_bottom
+                style.padding_left = self._parse_length_to_inches(l) if l else style.padding_left
+            for side in ('padding-left','padding-right','padding-top','padding-bottom'):
+                if side in rules:
+                    val = self._parse_length_to_inches(rules[side])
+                    if side == 'padding-left': style.padding_left = val
+                    if side == 'padding-right': style.padding_right = val
+                    if side == 'padding-top': style.padding_top = val
+                    if side == 'padding-bottom': style.padding_bottom = val
+            if 'border-bottom' in rules:
+                parts = rules['border-bottom'].split()
+                if len(parts) >= 3:
+                    try:
+                        style.border_width = Pt(float(re.sub('[^0-9.]', '', parts[0])))
+                        style.border_color = self._parse_color(parts[-1])
+                    except:
+                        pass
+            if 'border-left' in rules:
+                parts = rules['border-left'].split()
+                if len(parts) >= 3:
+                    try:
+                        style.border_left_width = Pt(float(re.sub('[^0-9.]', '', parts[0])))
+                        style.border_left_color = self._parse_color(parts[-1])
+                    except:
+                        pass
+        return style
 
-    if _BLOCKQUOTE_RE.match(ln):
-        quotes = []
-        while i < n and _BLOCKQUOTE_RE.match(body_lines[i]):
-            m = _BLOCKQUOTE_RE.match(body_lines[i])
-            quotes.append(m.group(1)); i += 1
-        return "quote", i, quotes
+# ============================================================================
+# HTML PARSER
+# ============================================================================
 
-    # text block
-    text = []
-    while i < n:
-        curr = body_lines[i]
-        if not curr.strip():
-            i += 1
-            continue
-        if curr.startswith("### ") or _CODE_FENCE_RE.match(curr) or _TABLE_ROW_RE.match(curr) or _BLOCKQUOTE_RE.match(curr):
-            break
-        text.append(curr); i += 1
-    return "text", i, text
+class StyledHTMLParser(HTMLParser):
+    def __init__(self, css_parser: CSSParser):
+        super().__init__()
+        self.css = css_parser
+        self.body_style = self.css.compute_style('body', [], None)
+        self.slides = []
+        self.current_section = None
+        self.current_element = None
+        self.current_list = None
+        self.current_list_item = None
+        self.in_callout = False  # NEW
 
-def _count_lines_height(lines: List[str], width_in: float, font_pt: float) -> Tuple[int, float]:
-    """
-    Return (visual_lines_count, height_in) for the given lines using same estimator pieces.
-    """
-    if not lines:
-        return 0, 0.0
-    line_height_in = _pt_to_in(font_pt) * LINE_SPACING
-    para_space_in = _pt_to_in(PARA_SPACE_AFTER_PT)
+        self.format_stack: List[Dict[str, Any]] = []
+        self.class_stack: List[List[str]] = []
 
-    total_visual = 0
-    nonempty = 0
-    for ln in lines:
-        if not ln.strip():
-            continue
-        lvl, txt = _parse_bullet_level(ln)
-        total_visual += _lines_for_text(txt, width_in * 0.95, font_pt, lvl)
-        nonempty += 1
+    def _current_format(self) -> Dict[str, Any]:
+        return self.format_stack[-1] if self.format_stack else {'bold': False, 'italic': False, 'classes': []}
 
-    if nonempty == 0:
-        return 0, 0.0
-    content_h = total_visual * line_height_in
-    spacing_h = max(0, nonempty - 1) * para_space_in
-    margins_h = TF_MARGIN_IN
-    return total_visual, (content_h + spacing_h + margins_h) * HEIGHT_FUDGE
+    def _push_format(self, **kwargs):
+        fmt = self._current_format().copy()
+        fmt.update(kwargs)
+        self.format_stack.append(fmt)
 
-def _pack_lines_to_height(lines: List[str], width_in: float, font_pt: float, max_h_in: float) -> int:
-    """
-    Return how many leading lines from `lines` can fit into `max_h_in`.
-    Greedy: add one line at a time with conservative height calc.
-    """
-    if max_h_in <= 0:
-        return 0
-    lo, hi = 0, len(lines)
-    # binary search for speed on big chunks
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        _, h = _count_lines_height(lines[:mid], width_in, font_pt)
-        if h <= max_h_in:
-            lo = mid
-        else:
-            hi = mid - 1
-    return lo
+    def _pop_format(self):
+        if self.format_stack:
+            self.format_stack.pop()
+        if self.class_stack:
+            self.class_stack.pop()
 
+    def handle_starttag(self, tag, attrs):
+        attrs_dict = dict(attrs)
+        classes = attrs_dict.get('class', '').split()
+        inline = attrs_dict.get('style')
 
-def _render_section_across_slides(
-        prs: Presentation,
-        title: str,
-        body_lines: List[str],
-        sources_map: Dict[int, Dict[str, str]],
-        resolve_citations: bool
-) -> None:
-    """
-    Robust renderer that splits a section across multiple slides as needed.
-    Prevents overlaps by estimating block heights conservatively and
-    pushing blocks that don't fit to the next slide.
-    """
-    # initial slide
-    slide, top_anchor, avail_in, y = _new_content_slide(prs, title)
+        self.class_stack.append(classes)
 
-    i = 0
-    n = len(body_lines)
+        if tag in ('strong', 'b'):
+            self._push_format(bold=True)
+        elif tag in ('em', 'i'):
+            self._push_format(italic=True)
+        elif tag == 'span':
+            self._push_format(classes=classes)
 
-    def need_new_slide(cont: bool = True):
-        nonlocal slide, top_anchor, avail_in, y
-        cont_title = f"{title} (cont.)" if cont else title
-        slide, top_anchor, avail_in, y = _new_content_slide(prs, cont_title)
+        if tag == 'section':
+            self.current_section = {
+                'id': attrs_dict.get('id', ''),
+                'title': '',
+                'subtitle': '',
+                'elements': [],
+                'title_style': None,
+                'subtitle_style': None
+            }
 
-    while i < n:
-        # skip blank lines
-        if not body_lines[i].strip():
-            i += 1
-            continue
+        elif tag == 'h1' and self.current_section is not None:
+            self.current_element = {
+                'type': 'h1',
+                'text': '',
+                'runs': [],
+                'classes': classes,
+                'style': self.css.compute_style('h1', classes, inline)
+            }
 
-        # --- H3 header ---
-        if body_lines[i].startswith("### "):
-            header_text = body_lines[i][4:].strip()
-            header_h = 0.42  # header band (incl. spacing/padding)
+        elif tag == 'h2' and self.current_section is not None:
+            self.current_element = {
+                'type': 'h2',
+                'text': '',
+                'runs': [],
+                'classes': classes,
+                'style': self.css.compute_style('h2', classes, inline)
+            }
 
-            # Look ahead to the *next* block and estimate its full height.
-            kind, nxt_end, payload = _peek_next_block(body_lines, i+1)
-            need_after_h = 0.0
-            if kind == "text":
-                need_after_h = _estimate_text_block_height(payload, _emu_to_in(PAGE["content_width"]), TYPE_SCALE["body"].pt)
-            elif kind == "code":
-                need_after_h = 0.40 + max(1, min(20, len(payload))) * 0.18
-            elif kind == "table":
-                tbl = _parse_table(payload)
-                if tbl:
-                    rows = len(tbl)
-                    need_after_h = 0.30 + rows * 0.45
-            elif kind == "quote":
-                qh = _estimate_text_block_height(payload, _emu_to_in(PAGE["content_width"]), TYPE_SCALE["body"].pt)
-                need_after_h = max(0.60, qh + 0.20)
+        elif tag == 'h3' and self.current_section is not None:
+            self.current_element = {
+                'type': 'h3',
+                'text': '',
+                'runs': [],
+                'classes': classes,
+                'style': self.css.compute_style('h3', classes, inline)
+            }
+
+        elif tag == 'p' and self.current_section is not None:
+            # If we are inside a callout, keep writing into that callout element, do not create a new paragraph element
+            if self.in_callout and self.current_element and self.current_element.get('type') == 'callout':
+                return
+            elem_style = self.css.compute_style('p', classes, inline)
+            self.current_element = {
+                'type': 'subtitle' if 'subtitle' in classes else 'paragraph',
+                'text': '',
+                'runs': [],
+                'classes': classes,
+                'style': elem_style
+            }
+
+        elif tag in ('ul', 'ol') and self.current_section is not None:
+            self.current_list = {'type': 'list', 'items': []}
+
+        elif tag == 'li' and self.current_list is not None:
+            self.current_list_item = {'text': '', 'runs': [], 'style': self.css.compute_style('li', classes, inline)}
+
+        elif tag == 'div' and self.current_section is not None:
+            elem_style = self.css.compute_style('div', classes, inline)
+            if 'highlight' in classes or elem_style.background or elem_style.border_left_color:
+                self.current_element = {
+                    'type': 'callout',
+                    'text': '',
+                    'runs': [],
+                    'classes': classes,
+                    'style': elem_style
+                }
+                self.in_callout = True
+
+    def handle_endtag(self, tag):
+        if tag in ('strong', 'b', 'em', 'i', 'span'):
+            self._pop_format()
+
+        if tag == 'section' and self.current_section is not None:
+            self.slides.append(self.current_section); self.current_section = None
+
+        elif tag == 'h1' and self.current_element:
+            self.current_section['title'] = self.current_element['text'].strip()
+            self.current_section['title_style'] = self.current_element['style']
+            self.current_element = None
+
+        elif tag in ('h2', 'h3') and self.current_element:
+            self.current_section['elements'].append(self.current_element)
+            self.current_element = None
+
+        elif tag == 'p' and self.current_element:
+            if self.in_callout and self.current_element.get('type') == 'callout':
+                # nothing to close; we kept writing runs into callout
+                return
+            if self.current_element['type'] == 'subtitle':
+                self.current_section['subtitle'] = self.current_element['text'].strip()
+                self.current_section['subtitle_style'] = self.current_element['style']
             else:
-                need_after_h = 0.30  # minimal stub if blank/unknown
+                self.current_section['elements'].append(self.current_element)
+            self.current_element = None
 
-            # If header + next block won't fit, start a new slide *before* placing header
-            if y + header_h + need_after_h > avail_in:
-                need_new_slide(cont=True)
+        elif tag in ('ul', 'ol') and self.current_list:
+            self.current_section['elements'].append(self.current_list); self.current_list = None
 
-            # place header
-            tbox = _add_textbox(slide, PAGE["content_left"], top_anchor + Inches(y),
-                                PAGE["content_width"], Inches(header_h - 0.10))
-            tf = tbox.text_frame
-            tf.word_wrap = True
-            tf.auto_size = MSO_AUTO_SIZE.NONE
-            p = tf.paragraphs[0]
-            _style_paragraph(p, space_after=Pt(1))
-            r = p.add_run()
-            r.text = header_text
-            _style_run(r, size=TYPE_SCALE["h3"], bold=True, color=PALETTE["fg"])
-            y += header_h + BLOCK_GAP_IN
-            i += 1
-            continue
+        elif tag == 'li' and self.current_list_item:
+            self.current_list['items'].append(self.current_list_item); self.current_list_item = None
 
-        # --- Code fence ---
-        if _CODE_FENCE_RE.match(body_lines[i]):
-            i += 1
-            code = []
-            while i < n and not _CODE_FENCE_RE.match(body_lines[i]):
-                code.append(body_lines[i])
-                i += 1
-            # consume closing fence if present
-            if i < n and _CODE_FENCE_RE.match(body_lines[i]):
-                i += 1
+        elif tag == 'div' and self.current_element:
+            if self.current_element.get('type') == 'callout':
+                self.current_section['elements'].append(self.current_element)
+            self.current_element = None
+            self.in_callout = False
 
-            lines = code[:20]
-            per_line = 0.18
-            needed = 0.40 + max(1, len(lines)) * per_line
-            if y + needed > avail_in:
-                need_new_slide(cont=True)
+    def handle_data(self, data):
+        if not data.strip():
+            return
+        fmt = self._current_format()
+        # Inherit color: inline class run color > element style color > body color
+        color = None
+        for cls in fmt.get('classes', []):
+            s = self.css.get_style(cls)  # still okay for span classes
+            if s.color:
+                color = s.color; break
+        if color is None and self.current_element:
+            elem_style = self.current_element.get('style')
+            if elem_style and elem_style.color:
+                color = elem_style.color
+        if color is None and self.body_style.color:
+            color = self.body_style.color
 
-            rect = slide.shapes.add_shape(
-                MSO_SHAPE.ROUNDED_RECTANGLE,
-                PAGE["content_left"],
-                top_anchor + Inches(y),
-                PAGE["content_width"],
-                Inches(needed - 0.06)
+        run = {'text': data, 'bold': fmt.get('bold', False), 'italic': fmt.get('italic', False), 'color': color}
+
+        if self.current_list_item is not None:
+            self.current_list_item['text'] += data
+            self.current_list_item['runs'].append(run)
+        elif self.current_element is not None:
+            self.current_element['text'] += data
+            if 'runs' in self.current_element:
+                self.current_element['runs'].append(run)
+
+
+# ============================================================================
+# RENDERER WITH OVERFLOW PROTECTION
+# ============================================================================
+def _avg_char_width_pt(font_pt: float, bold: bool) -> float:
+    # rough average, works well enough for layout
+    base = font_pt * 0.52
+    return base * (1.08 if bold else 1.0)
+
+def _estimate_runs_height_in_inches(runs: List[Dict[str,Any]], font_pt: float, width_in_inches: float, line_height_mult: float = 1.2) -> Inches:
+    if not runs:
+        return Inches((font_pt * line_height_mult) / 72.0)
+    width_pts = width_in_inches * 72.0
+    text = ''.join(r['text'] for r in runs)
+    # estimate chars per line using weighted average width across runs
+    if not text.strip():
+        return Inches((font_pt * line_height_mult) / 72.0)
+
+    # conservative: use the smallest chars-per-line across runs
+    cpl_candidates = []
+    for r in runs:
+        fw = _avg_char_width_pt(font_pt, r.get('bold', False))
+        if fw <= 0: continue
+        cpl_candidates.append(int(max(1, width_pts / fw)))
+    cpl = min(cpl_candidates) if cpl_candidates else int(max(1, width_pts / _avg_char_width_pt(font_pt, False)))
+
+    # rough wrap count
+    lines = 0
+    for paragraph in text.split('\n'):
+        length = max(1, len(paragraph))
+        lines += int((length + cpl - 1) // cpl)
+    if lines < 1: lines = 1
+    height_pts = lines * (font_pt * line_height_mult)
+    return Inches(height_pts / 72.0)
+
+
+def estimate_content_height(elements: List[Dict], base_font_size: Pt) -> float:
+    total_in = 0.0
+    page_w_in = SLIDE_WIDTH.inches - 2 * MARGIN.inches  # <-- float inches
+
+    for elem in elements:
+        t = elem.get('type')
+        style: StyleInfo = elem.get('style') or StyleInfo()
+
+        if t in ('h2', 'h3'):
+            fs = (style.font_size or (Pt(28) if t == 'h2' else Pt(22))).pt
+            h = _estimate_runs_height_in_inches(
+                elem.get('runs', []),
+                fs,
+                page_w_in,
+                (style.line_height or 1.2),
             )
-            rect.fill.solid()
-            rect.fill.fore_color.rgb = PALETTE["code_bg"]
-            rect.line.color.rgb = PALETTE["rule"]
-            rect.line.width = Pt(0.5)
+            total_in += h.inches + 0.1
 
-            tf = rect.text_frame
-            tf.word_wrap = True
-            tf.margin_left = Inches(0.12)
-            tf.margin_right = Inches(0.12)
-            tf.margin_top = Inches(0.10)
-            tf.margin_bottom = Inches(0.10)
+        elif t == 'list':
+            fs = base_font_size.pt
+            bullets_w_in = page_w_in - 0.25  # 0.25" indent on the left
+            for it in elem.get('items', []):
+                runs = it.get('runs', [])
+                h = _estimate_runs_height_in_inches(runs, fs, bullets_w_in, 1.3)
+                total_in += h.inches + 0.06
+            total_in += 0.1
 
-            p = tf.paragraphs[0]
-            for j, code_line in enumerate(lines):
-                if j > 0:
-                    p = tf.add_paragraph()
-                r = p.add_run()
-                r.text = code_line
-                _style_run(r, size=TYPE_SCALE["code"], mono=True, color=PALETTE["fg"])
+        elif t == 'callout':
+            fs = (style.font_size or Pt(16)).pt
+            pad_l_in = (style.padding_left or Inches(0.2)).inches
+            pad_r_in = (style.padding_right or Inches(0.1)).inches
+            pad_t_in = (style.padding_top or Inches(0.1)).inches
+            pad_b_in = (style.padding_bottom or Inches(0.1)).inches
 
-            y += needed + BLOCK_GAP_IN
-            continue
-
-        # --- Table block ---
-        if _TABLE_ROW_RE.match(body_lines[i]):
-            table_lines = []
-            while i < n and _TABLE_ROW_RE.match(body_lines[i]):
-                table_lines.append(body_lines[i])
-                i += 1
-
-            table_data = _parse_table(table_lines)
-            if not table_data:
-                continue
-
-            rows, cols = len(table_data), len(table_data[0])
-            row_h = 0.45
-            needed = 0.30 + rows * row_h
-            if y + needed > avail_in:
-                need_new_slide(cont=True)
-
-            shape = slide.shapes.add_table(
-                rows, cols,
-                PAGE["content_left"],
-                top_anchor + Inches(y),
-                PAGE["content_width"],
-                Inches(needed - 0.10)
+            content_w_in = page_w_in - pad_l_in - pad_r_in
+            h = _estimate_runs_height_in_inches(
+                elem.get('runs', []),
+                fs,
+                content_w_in,
+                (style.line_height or 1.3),
             )
-            tbl = shape.table
+            total_in += max(h.inches + pad_t_in + pad_b_in, 0.6) + 0.15
 
-            # column widths
-            col_width = int(PAGE["content_width"] / cols)
-            for j in range(cols):
-                tbl.columns[j].width = col_width
+    return total_in
 
-            # taller header row
-            try:
-                tbl.rows[0].height = Inches(0.55)
-            except Exception:
-                pass
 
-            # fill cells + styles
-            for r_idx, row_data in enumerate(table_data):
-                for c_idx, cell_text in enumerate(row_data):
-                    cell = tbl.cell(r_idx, c_idx)
-                    cell.text = cell_text
-
-                    # Make header background light
-                    if r_idx == 0:
-                        cell.fill.solid()
-                        cell.fill.fore_color.rgb = PALETTE["table_header_bg"]
-
-                    # text frame hygiene
-                    tf = cell.text_frame
-                    tf.word_wrap = True
-                    tf.auto_size = MSO_AUTO_SIZE.NONE
-                    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-
-                    for p in tf.paragraphs:
-                        p.alignment = PP_ALIGN.LEFT
-                        for rr in p.runs:
-                            rr.font.size = TYPE_SCALE["body"]
-                            if r_idx == 0:
-                                rr.font.bold = True
-                                rr.font.color.rgb = PALETTE["fg"]   # dark text in header
-                            else:
-                                # Leave body text color/weight as-is so user/theme/zebra can control it later
-                                pass
-
-            y += needed + BLOCK_GAP_IN
-            continue
-
-        # --- Blockquote ---
-        if _BLOCKQUOTE_RE.match(body_lines[i]):
-            quotes = []
-            while i < n and _BLOCKQUOTE_RE.match(body_lines[i]):
-                m = _BLOCKQUOTE_RE.match(body_lines[i])
-                quotes.append(m.group(1))
-                i += 1
-
-            # estimate quote height as normal text with italics
-            q_height = _estimate_text_block_height(quotes, PAGE["content_width"].inches, TYPE_SCALE["body"].pt)
-            q_height = max(0.60, q_height + 0.20)  # padding
-
-            if y + q_height > avail_in:
-                need_new_slide(cont=True)
-
-            rect = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE,
-                PAGE["content_left"],
-                top_anchor + Inches(y),
-                PAGE["content_width"],
-                Inches(q_height - 0.08)
-            )
-            rect.fill.solid()
-            rect.fill.fore_color.rgb = PALETTE["quote_bg"]
-            rect.line.fill.background()
-
-            bar = slide.shapes.add_shape(
-                MSO_SHAPE.RECTANGLE,
-                PAGE["content_left"],
-                top_anchor + Inches(y),
-                Inches(0.08),
-                Inches(q_height - 0.08)
-            )
-            bar.fill.solid()
-            bar.fill.fore_color.rgb = PALETTE["rule"]
-            bar.line.fill.background()
-
-            tf = rect.text_frame
-            tf.word_wrap = True
-            p = tf.paragraphs[0]
-            r = p.add_run()
-            r.text = "\n".join(quotes)
-            _style_run(r, size=TYPE_SCALE["body"], italic=True, color=PALETTE["muted"])
-
-            y += q_height + BLOCK_GAP_IN
-            continue
-
-        # --- Regular text block (collect until next special) ---
-        kind, j, chunk = _peek_next_block(body_lines, i)
-        if kind != "text":
-            # nothing to render here
-            i = max(i + 1, j)
-            continue
-
-        width_in = _emu_to_in(PAGE["content_width"])
-        font_pt = TYPE_SCALE["body"].pt
-
-        # how much space remains
-        remain_in = max(0.0, avail_in - y)
-
-        # If nothing fits on this slide, start a new one
-        if remain_in < 0.35:
-            need_new_slide(cont=True)
-            remain_in = avail_in
-
-        # Pack as many lines as we can into the remaining space
-        fit_count = _pack_lines_to_height(chunk, width_in, font_pt, remain_in - BLOCK_GAP_IN)
-        if fit_count == 0:
-            need_new_slide(cont=True)
-            remain_in = avail_in
-            fit_count = _pack_lines_to_height(chunk, width_in, font_pt, remain_in - BLOCK_GAP_IN)
-
-        to_render = chunk[:fit_count]
-        _, est_h = _count_lines_height(to_render, width_in, font_pt)
-
-        tbox = _add_textbox(
-            slide,
-            PAGE["content_left"],
-            top_anchor + Inches(y),
-            PAGE["content_width"],
-            Inches(est_h)
-        )
-        tf = tbox.text_frame
-        tf.word_wrap = True
-        tf.auto_size = MSO_AUTO_SIZE.NONE
-
-        p = tf.paragraphs[0]
-        first = True
-        for line in to_render:
-            if not first:
-                p = tf.add_paragraph()
-            first = False
-            lvl, txt = _parse_bullet_level(line)
-            _style_paragraph(p, level=lvl, space_after=Pt(PARA_SPACE_AFTER_PT))
-            _emit_text_with_formatting(p, txt, sources_map, resolve_citations)
-
-        y += est_h + BLOCK_GAP_IN
-        i += fit_count  # advance within the same logical block; we'll loop back for the remainder
-        continue
-
-        # # --- Regular text block (collect until next special) ---
-        # chunk = []
-        # j = i
-        # while j < n:
-        #     curr = body_lines[j]
-        #     if not curr.strip():
-        #         j += 1
-        #         continue
-        #     if curr.startswith("### ") or _CODE_FENCE_RE.match(curr) or _TABLE_ROW_RE.match(curr) or _BLOCKQUOTE_RE.match(curr):
-        #         break
-        #     chunk.append(curr)
-        #     j += 1
-        #
-        # # nothing to render
-        # if not chunk:
-        #     i = max(i + 1, j)
-        #     continue
-        #
-        # # estimate height conservatively for body text
-        # est_h = _estimate_text_block_height(chunk, PAGE["content_width"].inches, TYPE_SCALE["body"].pt)
-        # # if it doesn't fit, move to a new slide (but re-render same chunk)
-        # if y + est_h > avail_in:
-        #     need_new_slide(cont=True)
-        #
-        # # render the text chunk
-        # tbox = _add_textbox(
-        #     slide,
-        #     PAGE["content_left"],
-        #     top_anchor + Inches(y),
-        #     PAGE["content_width"],
-        #     Inches(est_h - 0.06)
-        # )
-        # tf = tbox.text_frame
-        # tf.word_wrap = True
-        # # DISABLE AUTOSIZE
-        # tf.auto_size = MSO_AUTO_SIZE.NONE
-        # p = tf.paragraphs[0]
-        # first = True
-        # for line in chunk:
-        #     if not first:
-        #         p = tf.add_paragraph()
-        #     first = False
-        #     lvl, txt = _parse_bullet_level(line)
-        #     _style_paragraph(p, level=lvl, space_after=Pt(2))
-        #     _emit_text_with_formatting(p, txt, sources_map, resolve_citations)
-        #
-        # y += est_h + BLOCK_GAP_IN
-        # i = j  # advance to the next unread line
-
-def _add_sources_slide(prs: Presentation, sources_map: Dict[int, Dict[str, str]], order: List[int]) -> None:
+def render_slide(prs: Presentation, slide_data: Dict[str, Any]):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    _add_slide_title(slide, "Sources")
 
-    tbox = _add_textbox(
-        slide,
-        PAGE["content_left"],
-        PAGE["content_top"] + Inches(0.8),
-        PAGE["content_width"],
-        Inches(5.0)
-    )
+    title_text = slide_data.get('title', '')
+    title_style: StyleInfo = slide_data.get('title_style') or StyleInfo()
+    subtitle_text = slide_data.get('subtitle', '')
+    subtitle_style: StyleInfo = slide_data.get('subtitle_style') or StyleInfo()
+    elements = slide_data.get('elements', [])
 
-    tf = tbox.text_frame
-    tf.auto_size = MSO_AUTO_SIZE.NONE
+    page_w_in = SLIDE_WIDTH.inches - 2 * MARGIN.inches  # float inches
+
+    estimated_height = estimate_content_height(elements, Pt(18))
+    scale_factor = 1.0
+    if estimated_height > MAX_CONTENT_HEIGHT.inches:
+        scale_factor = max(0.7, MAX_CONTENT_HEIGHT.inches / estimated_height)
+
+    y = MARGIN
+
+    # TITLE
+    title_h = Inches(0.8 * scale_factor)
+    title_box = slide.shapes.add_textbox(MARGIN, y, SLIDE_WIDTH - MARGIN * 2, title_h)
+    tf = title_box.text_frame
+    tf.word_wrap = True
     p = tf.paragraphs[0]
+    r = p.add_run(); r.text = title_text
+    r.font.size = title_style.font_size or Pt(36 * scale_factor)
+    r.font.bold = True
+    if title_style.color:
+        r.font.color.rgb = title_style.color
+    y += title_h
 
-    for idx, sid in enumerate(order):
-        if idx > 0:
-            p = tf.add_paragraph()
+    # underline from CSS
+    if title_style.border_color and title_style.border_width:
+        line = slide.shapes.add_shape(
+            MSO_SHAPE.RECTANGLE,
+            MARGIN, y,
+            SLIDE_WIDTH - MARGIN * 2, title_style.border_width
+        )
+        line.fill.solid()
+        line.fill.fore_color.rgb = title_style.border_color
+        line.line.fill.background()
+        y += Inches(0.12 * scale_factor)
 
-        src = sources_map.get(sid, {})
-        title = src.get("title", f"Source {sid}")
-        url = src.get("url", "")
+    # SUBTITLE
+    if subtitle_text:
+        sub_h = Inches(0.45 * scale_factor)
+        subtitle_box = slide.shapes.add_textbox(MARGIN, y, SLIDE_WIDTH - MARGIN * 2, sub_h)
+        tf = subtitle_box.text_frame
+        p = tf.paragraphs[0]
+        r = p.add_run(); r.text = subtitle_text
+        r.font.size = subtitle_style.font_size or Pt(18 * scale_factor)
+        r.font.italic = subtitle_style.italic
+        if subtitle_style.color:
+            r.font.color.rgb = subtitle_style.color
+        y += sub_h + Inches(0.12 * scale_factor)
 
-        _style_paragraph(p, space_after=Pt(4))
+    # CONTENT
+    base_font_pt = 18 * scale_factor
 
-        r1 = p.add_run()
-        r1.text = f"[{sid}] "
-        _style_run(r1, size=TYPE_SCALE["body"], bold=True, color=PALETTE["fg"])
+    for elem in elements:
+        elem_type = elem.get('type')
+        style: StyleInfo = elem.get('style') or StyleInfo()
+        runs = elem.get('runs', [])
 
-        r2 = p.add_run()
-        r2.text = title
-        _style_run(r2, size=TYPE_SCALE["body"], color=PALETTE["fg"])
+        if elem_type in ('h2', 'h3'):
+            fs = (style.font_size.pt if style.font_size else (28 if elem_type == 'h2' else 22)) * scale_factor
+            box_h = _estimate_runs_height_in_inches(runs, fs, page_w_in, (style.line_height or 1.2))
+            # drawing width stays as Length
+            box = slide.shapes.add_textbox(MARGIN, y, SLIDE_WIDTH - MARGIN * 2, box_h)
+            tf = box.text_frame; tf.word_wrap = True
+            p = tf.paragraphs[0]
+            for run_data in runs:
+                rr = p.add_run(); rr.text = run_data['text']; rr.font.size = Pt(fs); rr.font.bold = True
+                if run_data.get('color'):
+                    rr.font.color.rgb = run_data['color']
+                elif style.color:
+                    rr.font.color.rgb = style.color
+            y += box_h + Inches(0.08 * scale_factor)
 
-        if url:
-            r3 = p.add_run()
-            r3.text = f" ({_domain_of(url)})"
-            _style_run(r3, size=TYPE_SCALE["caption"], color=PALETTE["accent"])
+        elif elem_type == 'list':
+            # keep separate measurement width vs drawing width
+            w_len = SLIDE_WIDTH - MARGIN * 2 - Inches(0.25)     # Length/EMU for drawing
+            w_in  = page_w_in - 0.25                            # float inches for measurement
+            for item in elem.get('items', []):
+                runs_i = item.get('runs', [])
+                fs = base_font_pt
+                lh = 1.3
+                h = _estimate_runs_height_in_inches(runs_i, fs, w_in, lh)
+                box = slide.shapes.add_textbox(MARGIN + Inches(0.25), y, w_len, h)
+                tf = box.text_frame; tf.word_wrap = True
+                p = tf.paragraphs[0]; p.level = 0
+                for run_data in runs_i:
+                    rr = p.add_run(); rr.text = run_data['text']; rr.font.size = Pt(fs)
+                    rr.font.bold = run_data.get('bold', False)
+                    if run_data.get('color'):
+                        rr.font.color.rgb = run_data['color']
+                y += h + Inches(0.06 * scale_factor)
+            y += Inches(0.06 * scale_factor)
+
+        elif elem_type == 'callout':
+            fs = (style.font_size.pt if style.font_size else 16) * scale_factor
+            pad_l = style.padding_left or Inches(0.2)
+            pad_r = style.padding_right or Inches(0.1)
+            pad_t = style.padding_top or Inches(0.1)
+            pad_b = style.padding_bottom or Inches(0.1)
+
+            content_w_in = page_w_in - pad_l.inches - pad_r.inches
+            content_w_len = SLIDE_WIDTH - MARGIN * 2 - pad_l - pad_r  # for drawing
+
+            content_h = _estimate_runs_height_in_inches(runs, fs, content_w_in, (style.line_height or 1.3))
+            box_h_in = max(content_h.inches + pad_t.inches + pad_b.inches, 0.6)
+            box_h = Inches(box_h_in)
+
+            if style.background:
+                bg = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, MARGIN, y, SLIDE_WIDTH - MARGIN * 2, box_h)
+                bg.fill.solid(); bg.fill.fore_color.rgb = style.background
+                bg.line.fill.background()
+
+            if style.border_left_color and style.border_left_width:
+                border = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, MARGIN, y, style.border_left_width, box_h)
+                border.fill.solid(); border.fill.fore_color.rgb = style.border_left_color
+                border.line.fill.background()
+
+            text_box = slide.shapes.add_textbox(MARGIN + pad_l, y + pad_t, content_w_len, box_h - pad_t - pad_b)
+            tf = text_box.text_frame; tf.word_wrap = True
+            p = tf.paragraphs[0]
+            for run_data in runs:
+                rr = p.add_run(); rr.text = run_data['text']; rr.font.size = Pt(fs); rr.font.bold = run_data.get('bold', False)
+                if run_data.get('color'):
+                    rr.font.color.rgb = run_data['color']
+                elif style.color:
+                    rr.font.color.rgb = style.color
+
+            y += box_h + Inches(0.12 * scale_factor)
+
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def render_pptx(
         path: str,
-        content_md: str,
+        content_md: str = "",
+        content_html: str = "",
         *,
         title: Optional[str] = None,
         base_dir: Optional[str] = None,
@@ -875,46 +644,41 @@ def render_pptx(
         resolve_citations: bool = False,
         include_sources_slide: bool = False
 ) -> str:
-    """
-    Render PPTX from Markdown - FINAL FIXED VERSION.
+    """Render PowerPoint from HTML."""
 
-    FIXES:
-    - Table parsing (checks for dashes correctly)
-    - Word wrapping (proper textbox settings)
-    - Width overflow (8.4" content area)
-    - Height tracking (proper y_offset management)
-    - H3 headers (### parsed and styled)
-    - Overflow prevention (stops when slide is full)
-    - All markdown features work
-    """
-    basename = _basename_only(path, ".pptx")
-    outdir = _outdir()
-    outfile = outdir / basename
-    _ensure_parent(outfile)
+    outdir = resolve_output_dir()
+    filename = Path(path).name
+    if not filename.endswith('.pptx'):
+        filename += '.pptx'
+    outfile = outdir / filename
+    outfile.parent.mkdir(parents=True, exist_ok=True)
 
-    sources_map: Dict[int, Dict[str, str]] = {}
-    order: List[int] = []
-    if sources:
-        sources_map, order = md_utils._normalize_sources(sources)
-
-    sections = _split_markdown_sections(content_md or "")
     prs = Presentation()
 
-    # Title slide
-    if title:
-        _add_title_slide(prs, title)
-    else:
-        fst_title, _ = sections[0]
-        _add_title_slide(prs, fst_title)
+    if content_html and content_html.strip():
+        # Parse CSS
+        css_parser = CSSParser()
+        style_match = re.search(r'<style[^>]*>(.*?)</style>', content_html, re.DOTALL | re.I)
+        if style_match:
+            css_parser.parse(style_match.group(1))
 
-    # Content slides
-    for stitle, body in sections:
-        # _add_content_slide(prs, stitle, body, sources_map, resolve_citations)
-        _render_section_across_slides(prs, stitle, body, sources_map, resolve_citations)
+            # Debug: print parsed styles
+            print("=== PARSED CSS ===")
+            for selector, rules in css_parser.styles.items():
+                print(f"{selector}: {rules}")
 
-    # Sources slide
-    if include_sources_slide and sources_map:
-        _add_sources_slide(prs, sources_map, order)
+        # Parse HTML
+        html_parser = StyledHTMLParser(css_parser)
+        html_parser.feed(content_html)
+
+        slides_data = html_parser.slides
+
+        print(f"=== PARSED {len(slides_data)} SLIDES ===")
+
+        # Render ALL slides
+        for slide_data in slides_data:
+            print(f"Rendering slide: {slide_data.get('title')}")
+            render_slide(prs, slide_data)
 
     prs.save(str(outfile))
-    return basename
+    return filename
