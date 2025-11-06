@@ -5,8 +5,7 @@
 from __future__ import annotations
 from typing import List, Optional
 import logging
-
-from datetime import datetime
+import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
@@ -17,6 +16,7 @@ from kdcube_ai_app.apps.chat.api.resolvers import (
     get_pg_pool,
 )
 from kdcube_ai_app.auth.sessions import UserSession
+from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
 
 """
 Conversations API
@@ -47,10 +47,56 @@ class ConversationFetchRequest(BaseModel):
     materialize: bool = Field(default=False, description="Fetch payloads from store for UI-visible items")
     days: int = Field(default=365, ge=1, le=3650)
 
+class TurnFeedbackRequest(BaseModel):
+    """
+    User feedback on a specific turn.
+
+    This single endpoint handles all feedback operations:
+    - Add feedback: Set reaction to "ok", "not_ok", or "neutral"
+    - Clear feedback: Set reaction to null
+
+    Examples:
+        {"reaction": "ok", "text": "Great!"}          # Add positive feedback
+        {"reaction": "not_ok", "text": "Incorrect"}   # Add negative feedback
+        {"reaction": "neutral", "text": "Note"}       # Add neutral comment
+        {"reaction": null}                            # Clear feedback
+    """
+    reaction: Optional[str] = Field(
+        None,
+        description="Reaction: 'ok', 'not_ok', 'neutral', or null to clear. Required unless clearing."
+    )
+    text: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        description="Optional feedback text (ignored when clearing)"
+    )
+    ts: Optional[str] = Field(
+        default=None,
+        description="Optional ISO8601 timestamp (defaults to now)"
+    )
+
+class TurnFeedbackResponse(BaseModel):
+    """Response after applying or clearing feedback"""
+    success: bool
+    turn_id: str
+    reaction: Optional[str] = None  # null when cleared
+    message: str
+    cleared: bool = Field(default=False, description="True if feedback was cleared")
+
+
+class ConversationFeedbackTurnsRequest(BaseModel):
+    turn_ids: Optional[List[str]] = Field(
+        default=None,
+        description="If provided, restrict to these exact turn IDs. If omitted, server discovers turns with feedbacks."
+    )
+    days: int = Field(default=365, ge=1, le=3650)
+
 # -------------------- Endpoints --------------------
 
-@router.get("/", response_model=ConversationListResponse)
+@router.get("/{tenant}/{project}", response_model=ConversationListResponse)
 async def list_conversations(
+        tenant: str,
+        project: str,
         last_n: Optional[int] = Query(default=None, ge=1, le=500),
         started_after: Optional[str] = Query(default=None, description="ISO8601 timestamp"),
         days: int = Query(default=365, ge=1, le=3650),
@@ -61,10 +107,10 @@ async def list_conversations(
         raise HTTPException(status_code=401, detail="No user in session")
 
     # parse started_after if provided
-    sa: Optional[datetime] = None
+    sa: Optional[datetime.datetime] = None
     if started_after:
         try:
-            sa = datetime.fromisoformat(started_after.replace("Z", "+00:00"))
+            sa = datetime.datetime.fromisoformat(started_after.replace("Z", "+00:00"))
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid started_after timestamp")
 
@@ -75,12 +121,13 @@ async def list_conversations(
         days=days,
         include_titles=include_titles,
     )
-    # data: {"user_id": ..., "items": [ {conversation_id, started_at, last_activity_at, title?}, ... ]}
     return data
 
 
-@router.get("/{conversation_id}/details")
+@router.get("/{tenant}/{project}/{conversation_id}/details")
 async def conversation_details(
+        tenant: str,
+        project: str,
         conversation_id: str,
         session: UserSession = Depends(get_user_session_dependency()),
 ):
@@ -103,8 +150,10 @@ async def conversation_details(
     return out
 
 
-@router.post("/{conversation_id}/fetch")
+@router.post("/{tenant}/{project}/{conversation_id}/fetch")
 async def fetch_conversation(
+        tenant: str,
+        project: str,
         conversation_id: str,
         req: ConversationFetchRequest = Body(...),
         session: UserSession = Depends(get_user_session_dependency()),
@@ -137,3 +186,232 @@ async def fetch_conversation(
     #   ]
     # }
     return data
+
+
+@router.post("/{tenant}/{project}/{conversation_id}/turns/{turn_id}/feedback", response_model=TurnFeedbackResponse)
+async def submit_turn_feedback(
+        tenant: str,
+        project: str,
+        conversation_id: str,
+        turn_id: str,
+        req: TurnFeedbackRequest = Body(...),
+        session: UserSession = Depends(get_user_session_dependency()),
+):
+    """
+    Submit, update, or clear user feedback for a specific turn.
+
+    This single endpoint handles all feedback operations:
+
+    **Add/Update Feedback:**
+    - Set reaction to "ok", "not_ok", or "neutral"
+    - Optionally include text
+    - Replaces any previous user feedback on this turn
+
+    **Clear Feedback:**
+    - Set reaction to null
+    - Removes all user feedback from this turn
+
+    Args:
+        conversation_id: The conversation ID
+        turn_id: The turn ID to provide feedback on
+        req: Feedback request with reaction and optional text
+
+    Returns:
+        TurnFeedbackResponse with success status and cleared flag
+
+    Examples:
+        # Add positive feedback
+        POST /conversations/{conv_id}/turns/{turn_id}/feedback
+        {
+            "reaction": "ok",
+            "text": "Great explanation!"
+        }
+
+        # Add neutral comment
+        POST /conversations/{conv_id}/turns/{turn_id}/feedback
+        {
+            "reaction": "neutral",
+            "text": "Note for later"
+        }
+
+        # Clear feedback
+        POST /conversations/{conv_id}/turns/{turn_id}/feedback
+        {
+            "reaction": null
+        }
+    """
+    if not session.user_id:
+        raise HTTPException(status_code=401, detail="No user in session")
+
+    try:
+        # Get tenant, project info from session or config
+        user_type = session.user_type if hasattr(session, 'user_type') else 'standard'
+
+        spec_resolved = resolve_bundle(None, override=None)
+        bundle_id = spec_resolved.id
+        track_id = "A"
+
+        # CASE 1: Clear feedback (reaction is null)
+        if req.reaction is None:
+            removed = await router.state.conversation_browser.remove_user_reaction(
+                turn_id=turn_id,
+                user_id=session.user_id,
+                conversation_id=conversation_id,
+                track_id=track_id
+            )
+
+            logger.info(
+                f"User feedback cleared: user={session.user_id}, "
+                f"conversation={conversation_id}, turn={turn_id}, "
+                f"removed={removed}"
+            )
+
+            return TurnFeedbackResponse(
+                success=True,
+                turn_id=turn_id,
+                reaction=None,
+                message="Feedback cleared" if removed else "No feedback to clear",
+                cleared=True
+            )
+
+        # CASE 2: Add/update feedback (reaction is not null)
+        # Validate reaction value
+        if req.reaction not in ("ok", "not_ok", "neutral"):
+            raise HTTPException(
+                status_code=400,
+                detail="reaction must be 'ok', 'not_ok', 'neutral', or null"
+            )
+
+        # Build reaction payload
+        feedback_ts = req.ts or (datetime.datetime.utcnow().isoformat() + "Z")
+
+        reaction = {
+            "turn_id": turn_id,
+            "text": req.text or "",
+            "confidence": 1.0,  # User feedback is always high confidence
+            "ts": feedback_ts,
+            "reaction": req.reaction,
+            "origin": "user",
+        }
+
+        # 1) Append reaction to turn log (this handles removing old user reactions)
+        await router.state.conversation_browser.append_reaction_to_turn_log(
+            turn_id=turn_id,
+            reaction=reaction,
+            tenant=tenant,
+            project=project,
+            user=session.user_id,
+            fingerprint=None,
+            user_type=user_type.value,
+            conversation_id=conversation_id,
+            track_id=track_id,
+            bundle_id=bundle_id,
+            origin="user",
+        )
+
+        # 2) Apply feedback to the turn log itself (update the turn log artifact)
+        result = await router.state.conversation_browser.apply_feedback_to_turn_log(
+            tenant=tenant,
+            project=project,
+            user=session.user_id,
+            user_type=user_type.value,
+            conversation_id=conversation_id,
+            track_id=track_id,
+            turn_id=turn_id,
+            bundle_id=bundle_id,
+            feedback={
+                "text": req.text or "",
+                "confidence": 1.0,
+                "ts": feedback_ts,
+                "from_turn_id": turn_id,  # Self-referential for user feedback
+                "origin": "user",
+                "reaction": req.reaction,
+            }
+        )
+
+        if result is None:
+            # Turn log not found
+            raise HTTPException(
+                status_code=404,
+                detail=f"Turn log not found for turn_id={turn_id}"
+            )
+
+        logger.info(
+            f"User feedback applied: user={session.user_id}, "
+            f"conversation={conversation_id}, turn={turn_id}, "
+            f"reaction={req.reaction}, has_text={bool(req.text)}"
+        )
+
+        return TurnFeedbackResponse(
+            success=True,
+            turn_id=turn_id,
+            reaction=req.reaction,
+            message="Feedback applied successfully",
+            cleared=False
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to apply user feedback: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to apply feedback: {str(e)}"
+        )
+
+@router.post("/{tenant}/{project}/{conversation_id}/turns-with-feedbacks")
+async def fetch_turns_with_feedbacks(
+        tenant: str,
+        project: str,
+        conversation_id: str,
+        req: ConversationFeedbackTurnsRequest = Body(...),
+        session: UserSession = Depends(get_user_session_dependency()),
+):
+    """
+    Return all turns in a conversation that have feedbacks (or reactions), each with:
+      - turn_id
+      - full turn_log object (materialized)
+      - assistant message (materialized)
+      - user message (materialized)
+      - feedbacks array (from the turn log payload)
+
+    Optional:
+      - limit to specific turn_ids.
+    """
+    if not session.user_id:
+        raise HTTPException(status_code=401, detail="No user in session")
+
+    try:
+        spec_resolved = resolve_bundle(None, override=None)
+        bundle_id = spec_resolved.id
+
+        data = await router.state.conversation_browser.fetch_turns_with_feedbacks(
+            user_id=session.user_id,
+            conversation_id=conversation_id,
+            turn_ids=(req.turn_ids or None),
+            days=int(req.days),
+            bundle_id=bundle_id,
+        )
+        # Shape:
+        # {
+        #   "user_id": ...,
+        #   "conversation_id": ...,
+        #   "turns": [
+        #       {
+        #           "turn_id": "...",
+        #           "turn_log": { ... },   # full object
+        #           "assistant": { ... }, # item with payload
+        #           "user": { ... },      # item with payload
+        #           "feedbacks": [ ... ], # from the turn log
+        #           "reactions": [ ... ]  # optional raw reaction artifacts
+        #       },
+        #       ...
+        #   ]
+        # }
+        return data
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch turns-with-feedbacks for conversation={conversation_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch feedback turns: {str(e)}")

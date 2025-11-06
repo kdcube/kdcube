@@ -353,15 +353,96 @@ class ContextRAGClient:
             "files": first(files),
         }
 
+    async def remove_user_reaction(self, *,
+                                   turn_id: str,
+                                   user_id: str,
+                                   conversation_id: str,
+                                   track_id: Optional[str]) -> bool:
+        """
+        Remove existing user reaction for a turn.
+
+        Used for:
+        1. Clearing reactions (when user wants to remove their feedback)
+        2. Replacing reactions (internal use when adding new reaction)
+
+        Returns:
+            True if a reaction was found and removed, False otherwise.
+        """
+        try:
+            # Find existing user reactions
+            existing = await self.search(
+                query=None,
+                kinds=("artifact:turn.log.reaction",),
+                roles=("artifact",),
+                scope="conversation",
+                user_id=user_id,
+                conversation_id=conversation_id,
+                days=365,
+                top_k=10,  # Could be multiple reactions
+                include_deps=False,
+                with_payload=True,
+                all_tags=[f"turn:{turn_id}"],
+            )
+
+            items = existing.get("items") or []
+            removed_count = 0
+
+            for item in items:
+                payload = (item.get("payload") or {}).get("payload") or {}
+                reaction_data = payload.get("reaction") or {}
+                origin = reaction_data.get("origin")
+
+                # Only remove user reactions
+                if origin == "user":
+                    # Delete from index
+                    try:
+                        await self.idx.delete_message(id=int(item["id"]))
+                        removed_count += 1
+                        logger.info(f"Removed user reaction id={item['id']} for turn {turn_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete reaction id={item['id']}: {e}")
+
+            return removed_count > 0
+
+        except Exception as e:
+            logger.error(f"Failed to remove user reaction for turn {turn_id}: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
     async def append_reaction_to_turn_log(self, *,
                                           turn_id: str, reaction: dict,
                                           tenant: str, project: str, user: str,
                                           fingerprint: Optional[str],
                                           user_type: str, conversation_id: str, track_id: str,
-                                          bundle_id: str):
+                                          bundle_id: str,
+                                          origin: str = "machine"):
+        """
+        Add a reaction to a turn log.
+
+        Args:
+            origin: "user" (explicit feedback) or "machine" (inferred feedback)
+                   If origin="user", removes any existing user reaction first (only one allowed)
+        """
+        # Ensure origin is in reaction data
+        reaction = {**reaction, "origin": origin}
+
+        # For user reactions, remove any existing user reaction first
+        if origin == "user":
+            await self.remove_user_reaction(
+                turn_id=turn_id,
+                user_id=user,
+                conversation_id=conversation_id,
+                track_id=track_id
+            )
 
         payload = {"reaction": reaction}
-        # persist as a small artifact tied to the same turn (don’t overwrite)
+
+        # Build tags with origin
+        tags = ["kind:turn.log.reaction", f"turn:{turn_id}", f"origin:{origin}"]
+        if track_id:
+            tags.append(f"track:{track_id}")
+
+        # persist as a small artifact tied to the same turn
         s3_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user,
             conversation_id=conversation_id,
@@ -369,7 +450,7 @@ class ContextRAGClient:
             role="artifact",
             text=f"[turn.log.reaction]\n{reaction}",
             payload=payload,
-            meta={"kind": "turn.log.reaction", "turn_id": turn_id, "track_id": track_id},
+            meta={"kind": "turn.log.reaction", "turn_id": turn_id, "track_id": track_id, "origin": origin},
             id="turn.log.reaction",
             embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
             fingerprint=fingerprint
@@ -379,7 +460,7 @@ class ContextRAGClient:
             bundle_id=bundle_id,
             role="artifact",
             text=f"[turn.log.reaction] {reaction}", s3_uri=s3_uri, ts=payload["reaction"]["ts"],
-            tags=["kind:turn.log.reaction", f"turn:{turn_id}", f"track:{track_id}"],
+            tags=tags,
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
         )
 
@@ -394,7 +475,7 @@ class ContextRAGClient:
             track_id: Optional[str],
             turn_id: str,
             bundle_id: str,
-            feedback: dict,  # {"text": str, "confidence": float, "ts": str, "from_turn_id": str}
+            feedback: dict,  # {"text": str, "confidence": float, "ts": str, "from_turn_id": str, "origin": str, "reaction": str}
     ) -> Optional[dict]:
         """
         Fetch the turn log, append feedback to its structure,
@@ -440,38 +521,51 @@ class ContextRAGClient:
                 "text": feedback.get("text", ""),
                 "confidence": feedback.get("confidence", 0.0),
                 "from_turn_id": feedback.get("from_turn_id"),  # The turn where feedback was given
+                "origin": feedback.get("origin", "machine"),   # NEW: user or machine
+                "reaction": feedback.get("reaction"),          # NEW: ok | not_ok | null
             }
 
-            # 4) Append to turn_log array
             # 4) Add to feedbacks array (create if doesn't exist)
             if "feedbacks" not in turn_log_dict:
                 turn_log_dict["feedbacks"] = []
+
+            # For user feedbacks, remove any existing user feedback first (only one allowed)
+            if feedback_entry["origin"] == "user":
+                turn_log_dict["feedbacks"] = [
+                    fb for fb in turn_log_dict["feedbacks"]
+                    if fb.get("origin") != "user"
+                ]
+
             turn_log_dict["feedbacks"].append(feedback_entry)
 
-            # 5) Also add to entries array for chronological view (optional - uncomment if desired)
+            # 5) Also add to entries array for chronological view
             entries = turn_log_dict.get("entries") or []
+            reaction_str = f" [{feedback_entry['reaction']}]" if feedback_entry.get("reaction") else ""
             entries.append({
                 "t": feedback_entry["ts"][11:19],  # Extract HH:MM:SS
                 "area": "feedback",
-                "msg": feedback.get("text", ""),
+                "msg": f"{feedback.get('text', '')}{reaction_str}",
                 "level": "info",
                 "data": {
                     "confidence": feedback.get("confidence", 0.0),
-                    "from_turn_id": feedback.get("from_turn_id")
+                    "from_turn_id": feedback.get("from_turn_id"),
+                    "origin": feedback_entry["origin"],
+                    "reaction": feedback_entry.get("reaction")
                 }
             })
             turn_log_dict["entries"] = entries
+
             # 6) Update text representation (append feedback as a new line)
             current_text = payload.get("text") or ""
+            origin_label = "USER" if feedback_entry["origin"] == "user" else "AUTO"
             feedback_text_line = (
-                f"\n[FEEDBACK from turn {feedback.get('from_turn_id', 'unknown')} "
+                f"\n[{origin_label} FEEDBACK{reaction_str} from turn {feedback.get('from_turn_id', 'unknown')} "
                 f"at {feedback_entry['ts'][:19]}] {feedback.get('text', '')}"
             )
             updated_text = current_text + feedback_text_line
 
             # 7) Update payload
             payload["turn_log"] = turn_log_dict
-
             payload["text"] = updated_text
             payload["updated_at"] = datetime.datetime.utcnow().isoformat() + "Z"
 
@@ -520,7 +614,9 @@ class ContextRAGClient:
             f"entries_count={len(entries)}, "
             f"new_s3_uri={s3_uri}, "
             f"ts_preserved={original_ts}, "
-            f"embedding_preserved={original_embedding is not None}"
+            f"embedding_preserved={original_embedding is not None}, "
+            f"origin={feedback_entry['origin']}, "
+            f"reaction={feedback_entry.get('reaction')}"
             )
             return payload
 
@@ -528,6 +624,180 @@ class ContextRAGClient:
             logger.error(f"Failed to apply feedback to turn log: {e}")
             logger.error(traceback.format_exc())
             return None
+
+    async def fetch_turns_with_feedbacks(
+            self,
+            *,
+            user_id: str,
+            conversation_id: str,
+            turn_ids: Optional[List[str]] = None,
+            days: int = 365,
+            bundle_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Return per-turn package for turns that have feedbacks (reaction artifacts and/or
+        non-empty feedbacks array in the turn log).
+
+        Shape:
+        {
+          "user_id": ...,
+          "conversation_id": ...,
+          "turns": [
+            {
+              "turn_id": "t-001",
+              "turn_log": <payload dict of artifact:turn.log>,
+              "assistant": <assistant message item with payload>,
+              "user": <user message item with payload>,
+              "feedbacks": [ ... ],               # from turn_log.turn_log.feedbacks (if present)
+              "reactions": [ <reaction items> ]   # optional convenience (raw artifacts with payload)
+            },
+            ...
+          ]
+        }
+        """
+
+        # Helper to read a single recent item for role/kind with payload
+        async def _first_recent(
+                *,
+                roles: tuple[str, ...],
+                all_tags: List[str]
+        ) -> Optional[dict]:
+            res = await self.recent(
+                scope="conversation",
+                days=days,
+                limit=1,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                roles=roles,
+                all_tags=all_tags,
+                with_payload=True,
+                bundle_id=bundle_id,
+            )
+            return (res.get("items") or [None])[0]
+
+        # 1) If caller didn't specify turn_ids, discover turns with feedback by scanning reaction artifacts
+        discovered_turn_ids: List[str] = []
+        if not turn_ids:
+            reactions = await self.search(
+                query=None,
+                kinds=("artifact:turn.log.reaction",),
+                roles=("artifact",),
+                scope="conversation",
+                user_id=user_id,
+                conversation_id=conversation_id,
+                days=days,
+                top_k=500,               # reasonable upper bound
+                include_deps=False,
+                with_payload=True,
+                sort="hybrid",
+                bundle_id=bundle_id,
+            )
+            for it in (reactions.get("items") or []):
+                tid = it.get("turn_id")
+                if tid:
+                    discovered_turn_ids.append(tid)
+
+            # Also consider any turn logs that already contain feedbacks even if reaction artifacts were pruned
+            # (we only do a light pass: fetch the latest 200 turn logs and inspect payload)
+            # This keeps it safe/fast while covering corner cases.
+            turn_logs_recent = await self.search(
+                query=None,
+                kinds=("artifact:turn.log",),
+                roles=("artifact",),
+                scope="conversation",
+                user_id=user_id,
+                conversation_id=conversation_id,
+                days=days,
+                top_k=200,
+                include_deps=False,
+                with_payload=True,
+                sort="hybrid",
+                bundle_id=bundle_id,
+            )
+            for it in (turn_logs_recent.get("items") or []):
+                tid = it.get("turn_id")
+                if not tid:
+                    continue
+                payload = (it.get("payload") or {}).get("payload") or {}
+                tl = payload.get("turn_log") or {}
+                fbs = tl.get("feedbacks") or []
+                if fbs and tid not in discovered_turn_ids:
+                    discovered_turn_ids.append(tid)
+
+            # Dedup while preserving order (most recent first from search already)
+            seen = set()
+            ordered = []
+            for tid in discovered_turn_ids:
+                if tid in seen:
+                    continue
+                seen.add(tid)
+                ordered.append(tid)
+            turn_ids = ordered
+
+        # Guard: if still empty, return empty result quickly
+        if not turn_ids:
+            return {"user_id": user_id, "conversation_id": conversation_id, "turns": []}
+
+        # 2) Build per-turn package
+        out_turns: List[Dict[str, Any]] = []
+        for tid in turn_ids:
+            # Materialize via existing helpers for consistency
+            mat = await self.materialize_turn(
+                turn_id=tid,
+                scope="conversation",
+                days=days,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=True
+            )
+
+            turn_log_item = mat.get("turn_log") or {}
+            turn_log_payload = ((turn_log_item.get("payload") or {}).get("payload")) if turn_log_item else None
+
+            # Extract feedbacks array from the turn log payload (preferred source of truth)
+            feedbacks = []
+            if isinstance(turn_log_payload, dict):
+                tl = turn_log_payload.get("turn_log") or {}
+                fb = tl.get("feedbacks") or []
+                if isinstance(fb, list):
+                    feedbacks = fb
+
+            # Optional: also return raw reaction artifacts (already persisted separately)
+            reactions = await self.recent(
+                kinds=("artifact:turn.log.reaction",),
+                scope="conversation",
+                days=days,
+                limit=50,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                roles=("artifact",),
+                all_tags=[f"turn:{tid}"],
+                with_payload=True,
+                bundle_id=bundle_id,
+            )
+
+            # For assistant/user messages, prefer materialized bundle
+            # (these items already have payload materialized by materialize_turn)
+            assistant = mat.get("assistant")
+            user_msg = mat.get("user")
+
+            # Fallback: if for some reason materialize_turn didn't find them, try once directly
+            if not assistant:
+                assistant = await _first_recent(roles=("assistant",), all_tags=[f"turn:{tid}"])
+            if not user_msg:
+                user_msg = await _first_recent(roles=("user",), all_tags=[f"turn:{tid}"])
+
+            out_turns.append({
+                "turn_id": tid,
+                "turn_log": turn_log_payload,                 # full object as requested
+                "assistant": assistant,                       # full item incl. payload
+                "user": user_msg,                             # full item incl. payload
+                "feedbacks": feedbacks,                       # extracted from turn log payload
+                "reactions": reactions.get("items") or [],    # optional convenience
+            })
+
+        return {"user_id": user_id, "conversation_id": conversation_id, "turns": out_turns}
+
 
     async def save_artifact(
             self,
@@ -835,13 +1105,13 @@ class ContextRAGClient:
         turn_ids: Optional[List[str]] = None,
         materialize: bool = False,
         days: int = 365,
-        bundle_id: Optional[str] = None,                         # NEW
+        bundle_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         occ = await self.idx.get_conversation_turn_ids_from_tags(
             user_id=user_id,
             conversation_id=conversation_id,
             days=days,
-            bundle_id=bundle_id,                                  # NEW
+            bundle_id=bundle_id,
             turn_ids=turn_ids or None,
         )
         turns_map: Dict[str, Dict[str, Any]] = {}
@@ -861,7 +1131,7 @@ class ContextRAGClient:
                 "type": tag_type,
                 "ts": r.get("ts"),
                 "s3_uri": r.get("s3_uri"),
-                "bundle_id": r.get("bundle_id"),                  # NEW (echo if useful to UI)
+                "bundle_id": r.get("bundle_id"),
             }
             if materialize and r.get("s3_uri"):
                 try:
@@ -1022,3 +1292,4 @@ async def search_context(
 
 
     return best_tid, final_hits
+
