@@ -238,6 +238,12 @@ class CSSParser:
                         pass
         return style
 
+def _runs_have_text(runs: List[Dict[str, Any]]) -> bool:
+    for r in runs or []:
+        if (r.get('text') or '').strip():
+            return True
+    return False
+
 # ============================================================================
 # HTML PARSER
 # ============================================================================
@@ -383,8 +389,14 @@ class StyledHTMLParser(HTMLParser):
 
             # 3) Callouts / highlight AFTER column checks
             elem_style = self.css.compute_style('div', classes, inline)
-            if ('highlight' in classes or 'highlight-box' in classes
-                    or elem_style.background or elem_style.border_left_color):
+
+            # Only promote to callout for explicit callout-ish classes or border-left,
+            # not for any background-only container.
+            callout_classes = {'highlight', 'highlight-box', 'callout', 'warning', 'success',
+                               'phase-box', 'comparison-item'}
+            is_callout = any(cls in callout_classes for cls in classes) or bool(elem_style.border_left_color)
+
+            if is_callout:
                 self.current_element = {
                     'type': 'callout',
                     'text': '',
@@ -510,7 +522,8 @@ class StyledHTMLParser(HTMLParser):
             self._table_current_row = None
 
         elif tag == 'table' and self.current_table is not None:
-            target = self.current_column_items if (self.in_columns and self.current_column_items is not None) else self.current_section['elements']
+            target = (self.current_column['elements'] if (self.in_columns and self.current_column is not None)
+                      else self.current_section['elements'])
             target.append(self.current_table)
             self.current_table = None
 
@@ -622,6 +635,8 @@ def estimate_content_height(elements: List[Dict], base_font_size: Pt) -> float:
     page_w_in = SLIDE_WIDTH.inches - 2 * MARGIN.inches  # <-- float inches
 
     for elem in elements:
+        if not elem:
+            continue
         t = elem.get('type')
         style: StyleInfo = elem.get('style') or StyleInfo()
 
@@ -750,7 +765,8 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
         # clm = elem.get('columns', [])
         # print("COLUMNS:", len(clm), "L:", len(clm[0]) if clm else 0,
         #       "R:", len(clm[1]) if len(clm) > 1 else 0)
-
+        if not elem:
+            continue
         elem_type = elem.get('type')
         style: StyleInfo = elem.get('style') or StyleInfo()
         runs = elem.get('runs', [])
@@ -791,6 +807,9 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
             y += Inches(0.06 * scale_factor)
 
         elif elem_type == 'callout':
+            # Skip ghost callouts with no visible text
+            if not _runs_have_text(runs):
+                continue
             fs = (style.font_size.pt if style.font_size else 16) * scale_factor
             pad_l = style.padding_left or Inches(0.2)
             pad_r = style.padding_right or Inches(0.1)
@@ -853,15 +872,26 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
             csL, padL_l, padL_r, padL_t, padL_b, innerL_in, innerL_len, colH_len_L = compute_col_dims(colL)
             csR, padR_l, padR_r, padR_t, padR_b, innerR_in, innerR_len, colH_len_R = compute_col_dims(colR)
 
-            # draw backgrounds first (so they sit behind text)
-            if csL.background:
+            # draw backgrounds first (only if there is some content height)
+            min_draw_in = 0.05  # ~0.05" threshold to avoid zero-height ghosts
+            if csL.background and colH_len_L.inches > min_draw_in:
                 bgL = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left_x, y, col_w_len, colH_len_L)
                 bgL.fill.solid(); bgL.fill.fore_color.rgb = csL.background
                 bgL.line.fill.background()
-            if csR.background:
+            if csR.background and colH_len_R.inches > min_draw_in:
                 bgR = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, right_x, y, col_w_len, colH_len_R)
                 bgR.fill.solid(); bgR.fill.fore_color.rgb = csR.background
                 bgR.line.fill.background()
+
+            # # draw backgrounds first (so they sit behind text)
+            # if csL.background:
+            #     bgL = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, left_x, y, col_w_len, colH_len_L)
+            #     bgL.fill.solid(); bgL.fill.fore_color.rgb = csL.background
+            #     bgL.line.fill.background()
+            # if csR.background:
+            #     bgR = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, right_x, y, col_w_len, colH_len_R)
+            #     bgR.fill.solid(); bgR.fill.fore_color.rgb = csR.background
+            #     bgR.line.fill.background()
 
             # optional: support border-left on column blocks
             if csL.border_left_color and csL.border_left_width:
@@ -942,6 +972,62 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
                             if rd.get('color'): rr.font.color.rgb = rd['color']
                             elif bs.color: rr.font.color.rgb = bs.color
                         y_col += box_h + Inches(0.08 * scale_factor)
+                    elif bt == 'table':
+                        header = b.get('header', [])
+                        rows = b.get('rows', [])
+
+                        # promote first row to header if needed
+                        if not header and rows:
+                            header, rows = rows[0], rows[1:]
+
+                        if not header:
+                            continue
+
+                        ncols = len(header)
+
+                        # heights tuned a bit smaller for columns
+                        row_h = Inches(0.30 * scale_factor)
+                        header_h = Inches(0.35 * scale_factor)
+
+                        # colors from CSS
+                        th_rules = css_parser.styles.get('th', {})
+                        stripe_rules = css_parser.styles.get('tr:nth-child(even)', {})
+                        parse_color = CSSParser()._parse_color
+                        header_bg = parse_color(th_rules.get('background-color')) if th_rules else None
+                        header_fg = parse_color(th_rules.get('color')) if th_rules else None
+                        stripe_bg = parse_color(stripe_rules.get('background-color')) if stripe_rules else None
+
+                        # build table within the column frame
+                        tbl = slide.shapes.add_table(1 + len(rows), ncols,
+                                                     x_left_len, y_col,
+                                                     avail_w_len, header_h + row_h*max(1, len(rows))).table
+
+                        # header
+                        for c, cell in enumerate(header):
+                            tc = tbl.cell(0, c)
+                            tf = tc.text_frame; tf.clear()
+                            p = tf.paragraphs[0]
+                            for rd in cell.get('runs', []):
+                                rr = p.add_run(); rr.text = rd['text']; rr.font.bold = True
+                            if header_bg:
+                                tc.fill.solid(); tc.fill.fore_color.rgb = header_bg
+                            if header_fg:
+                                for rr in p.runs: rr.font.color.rgb = header_fg
+
+                        # body
+                        for r, row in enumerate(rows, start=1):
+                            for c, cell in enumerate(row):
+                                tc = tbl.cell(r, c)
+                                tf = tc.text_frame; tf.clear()
+                                p = tf.paragraphs[0]
+                                for rd in cell.get('runs', []):
+                                    rr = p.add_run(); rr.text = rd['text']; rr.font.bold = rd.get('bold', False)
+                            if stripe_bg and (r % 2 == 0):
+                                for c in range(ncols):
+                                    tc = tbl.cell(r, c); tc.fill.solid(); tc.fill.fore_color.rgb = stripe_bg
+
+                        y_col += header_h + row_h*max(1, len(rows)) + Inches(0.06 * scale_factor)
+
                 return y_col
 
             # content frames top-lefts (apply column paddings)
@@ -961,26 +1047,32 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
         elif elem_type == 'table':
             header = elem.get('header', [])
             rows = elem.get('rows', [])
+
+            # NEW: promote first row to header if no <thead> was present
+            if not header and rows:
+                header, rows = rows[0], rows[1:]
+
             if header:
                 ncols = len(header)
-                # widths
+
+                # width + heights
                 tbl_w_len = SLIDE_WIDTH - MARGIN*2
                 row_h = Inches(0.35 * scale_factor)
                 header_h = Inches(0.4 * scale_factor)
 
-                # Colors from CSS
-                th_rules = css_parser.styles.get('th', {}) if 'css_parser' in globals() else {}
-                td_rules = css_parser.styles.get('td', {}) if 'css_parser' in globals() else {}
-                stripe_rules = css_parser.styles.get('tr:nth-child(even)', {}) if 'css_parser' in globals() else {}
+                # NEW: read CSS colors directly from the parser we were passed
+                th_rules = css_parser.styles.get('th', {})
+                stripe_rules = css_parser.styles.get('tr:nth-child(even)', {})
 
-                header_bg = CSSParser()._parse_color(th_rules.get('background-color')) if th_rules else None
-                header_fg = CSSParser()._parse_color(th_rules.get('color')) if th_rules else None
-                stripe_bg = CSSParser()._parse_color(stripe_rules.get('background-color')) if stripe_rules else None
+                parse_color = CSSParser()._parse_color
+                header_bg = parse_color(th_rules.get('background-color')) if th_rules else None
+                header_fg = parse_color(th_rules.get('color')) if th_rules else None
+                stripe_bg = parse_color(stripe_rules.get('background-color')) if stripe_rules else None
 
-                # Build table
-                tbl = slide.shapes.add_table(1 + len(rows), ncols, MARGIN, y, tbl_w_len, header_h + row_h*max(1,len(rows))).table
+                tbl = slide.shapes.add_table(1 + len(rows), ncols, MARGIN, y,
+                                             tbl_w_len, header_h + row_h*max(1, len(rows))).table
 
-                # header
+                # header cells
                 for c, cell in enumerate(header):
                     tc = tbl.cell(0, c)
                     tf = tc.text_frame; tf.clear()
@@ -990,9 +1082,9 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
                     if header_bg:
                         tc.fill.solid(); tc.fill.fore_color.rgb = header_bg
                     if header_fg:
-                        for run in p.runs: run.font.color.rgb = header_fg
+                        for rr in p.runs: rr.font.color.rgb = header_fg
 
-                # rows
+                # body rows
                 for r, row in enumerate(rows, start=1):
                     for c, cell in enumerate(row):
                         tc = tbl.cell(r, c)
@@ -1000,11 +1092,11 @@ def render_slide(prs: Presentation, slide_data: Dict[str, Any], css_parser):
                         p = tf.paragraphs[0]
                         for rd in cell.get('runs', []):
                             rr = p.add_run(); rr.text = rd['text']; rr.font.bold = rd.get('bold', False)
-                        if stripe_bg and (r % 2 == 0):
-                            tc.fill.solid(); tc.fill.fore_color.rgb = stripe_bg
+                    if stripe_bg and (r % 2 == 0):
+                        for c in range(ncols):
+                            tc = tbl.cell(r, c); tc.fill.solid(); tc.fill.fore_color.rgb = stripe_bg
 
-                y += header_h + row_h*max(1,len(rows)) + Inches(0.12 * scale_factor)
-
+                y += header_h + row_h*max(1, len(rows)) + Inches(0.12 * scale_factor)
 
 # ============================================================================
 # MAIN
@@ -1051,10 +1143,15 @@ def render_pptx(
         slides_data = html_parser.slides
         for sidx, s in enumerate(slides_data, 1):
             for e in s.get('elements', []):
+
+                if not e:
+                    continue
+
                 if e.get('type') == 'columns':
                     cols = e.get('columns', [])
-                    print(f"Slide {sidx}: COLUMNS: {len(cols)} L:{len(cols[0]) if cols else 0} R:{len(cols[1]) if len(cols)>1 else 0}")
-
+                    l = len(cols[0].get('elements', [])) if len(cols) > 0 else 0
+                    r = len(cols[1].get('elements', [])) if len(cols) > 1 else 0
+                    print(f"Slide {sidx}: COLUMNS: {len(cols)} L:{l} R:{r}")
 
         print(f"=== PARSED {len(slides_data)} SLIDES ===")
 
