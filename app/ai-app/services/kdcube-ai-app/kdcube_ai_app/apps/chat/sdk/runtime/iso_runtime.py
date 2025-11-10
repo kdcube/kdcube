@@ -9,7 +9,7 @@ import os, sys
 import asyncio
 import pathlib
 import tokenize
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
@@ -204,14 +204,23 @@ async def _run_subprocess(entry_path: pathlib.Path, *, cwd: pathlib.Path, env: d
                 pass
         return {"error": "timeout", "seconds": timeout_s}
     finally:
-        # save captured logs
+        # append logs (do not overwrite)
         try:
             out, err = await proc.communicate()
         except Exception:
             out, err = (b"", b"")
         try:
-            (outdir / "runtime.out.log").write_bytes(out or b"")
-            (outdir / "runtime.err.log").write_bytes(err or b"")
+            out_path = outdir / "runtime.out.log"
+            err_path = outdir / "runtime.err.log"
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(out_path, "ab") as f:
+                if out:
+                    f.write(out)
+                    f.write(b"\n")
+            with open(err_path, "ab") as f:
+                if err:
+                    f.write(err)
+                    f.write(b"\n")
         except Exception:
             pass
 
@@ -227,16 +236,61 @@ import os, importlib, asyncio, atexit, signal, sys, traceback
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from io_tools import tools as agent_io_tools
 
-import logging, sys
-if not logging.getLogger().handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        stream=sys.stderr,
-        format="%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S"
-    )  # <-- Added missing closing parenthesis
-        
+import logging, sys, warnings
+class _MaxLevelFilter(logging.Filter):
+    def __init__(self, level: int):
+        super().__init__()
+        self.level = level
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno <= self.level
+
+def _setup_runtime_logging():
+    fmt = "%(asctime)s | %(levelname)-8s | %(name)s:%(funcName)s:%(lineno)d | %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+
+    root = logging.getLogger()
+
+    # Python 3.8+: this clears existing handlers on root and configures anew
+    try:
+        logging.basicConfig(level=logging.INFO, handlers=[], force=True)
+    except TypeError:
+        # Fallback if force= not available: clear handlers manually
+        for h in list(root.handlers):
+            root.removeHandler(h)
+
+    # Ensure a clean slate for all known (already created) loggers to avoid double-prints
+    for name, logger in list(logging.Logger.manager.loggerDict.items()):
+        if isinstance(logger, logging.Logger):
+            logger.handlers.clear()
+            logger.propagate = True  # bubble to root
+
+    # stdout handler for DEBUG/INFO
+    h_out = logging.StreamHandler(sys.stdout)
+    h_out.setLevel(logging.DEBUG)
+    h_out.addFilter(_MaxLevelFilter(logging.INFO))
+    h_out.setFormatter(logging.Formatter(fmt, datefmt))
+
+    # stderr handler for WARNING+
+    h_err = logging.StreamHandler(sys.stderr)
+    h_err.setLevel(logging.WARNING)
+    h_err.setFormatter(logging.Formatter(fmt, datefmt))
+
+    root.setLevel(logging.INFO)
+    root.addHandler(h_out)
+    root.addHandler(h_err)
+
+    # Route warnings.warn(...) into the logging system
+    logging.captureWarnings(True)
+    warnings.simplefilter("default")  # ensure they actually fire
+
+    # Make uncaught exceptions show up as formatted ERROR logs
+    def _excepthook(exc_type, exc, tb):
+        logging.getLogger("runtime").error("Unhandled exception", exc_info=(exc_type, exc, tb))
+    sys.excepthook = _excepthook
+
+_setup_runtime_logging()
 logger = logging.getLogger("agent.runtime")
+
 # --- Directories / CV fallbacks ---
 OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
 if not OUTPUT_DIR:
@@ -399,6 +453,32 @@ def _refresh_project_log_slot():
         "value": md,
     }
 
+def _dump_delta_cache_file():
+    """
+    Best-effort: write communicator delta cache to OUTPUT/delta_aggregates.json.
+    Safe to call multiple times; last write wins.
+    """
+    try:
+        comm = None
+        try:
+            # prefer explicitly bound communicator if available
+            comm = globals().get("_comm_obj") or get_comm()
+        except Exception:
+            pass
+        if not comm:
+            return
+        dest = OUTPUT / "delta_aggregates.json"
+        try:
+            ok = comm.dump_delta_cache(dest)
+            if not ok:
+                # fallback: inline export + write
+                aggs = comm.export_delta_cache(merge_text=False)
+                dest.write_text(_json.dumps({"items": aggs}, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+    except Exception:
+        pass
+        
 async def set_progress(*, objective=None, status=None, story_append=None, out_dyn_patch=None, flush=False):
     if objective is not None:
         _PROGRESS["objective"] = str(objective)
@@ -456,6 +536,10 @@ async def done():
         "out_dyn": dict(_PROGRESS.get("out_dyn") or {})
     }
     globals()["_FINALIZED"] = True  # ← set BEFORE writing final file
+    try:
+        _dump_delta_cache_file()
+    finally:
+        pass
     return await agent_io_tools.save_ret(data=_json.dumps(payload), filename="result.json")
 
 async def fail(description: str,
@@ -487,6 +571,10 @@ async def fail(description: str,
         }
     }
     globals()["_FINALIZED"] = True  # ← set BEFORE writing final file
+    try:
+        _dump_delta_cache_file()
+    finally:
+        pass
     return await agent_io_tools.save_ret(data=_json.dumps(payload), filename="result.json")
 
 def _on_term(signum, frame):
@@ -496,6 +584,11 @@ def _on_term(signum, frame):
         sys.exit(0)
     
     try:
+        # Try to persist deltas first (best-effort)
+        try:
+            _dump_delta_cache_file()
+        except Exception:
+            pass
         # Try to checkpoint synchronously if possible
         try:
             loop = asyncio.get_running_loop()
@@ -552,6 +645,11 @@ def _on_atexit():
     DO NOT do async operations here - event loop is closed.
     """
     try:
+        # Persist deltas even if we didn't call done()/fail() (e.g., tool-only exec)
+        try:
+            _dump_delta_cache_file()
+        except Exception:
+            pass
         if not globals().get("_FINALIZED", False):
             import sys
             import traceback
@@ -591,7 +689,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatEnvelope, ServiceCtx, ConversationCtx
 )
 from kdcube_ai_app.apps.chat.emitters import (ChatRelayCommunicator, ChatCommunicator, _RelayEmitterAdapter)
-from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm, get_comm
 
 def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
     REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
@@ -624,6 +722,7 @@ try:
     if _COMM_SPEC:
         _comm_obj = _rebuild_communicator_from_spec(_COMM_SPEC)
         set_comm(_comm_obj)
+        globals()["_comm_obj"] = _comm_obj
         logger.info("ChatCommunicator initialized successfully")
 except Exception as _comm_err:
     logger.error(f"Communicator setup failed: {_comm_err}", exc_info=True)
@@ -747,3 +846,113 @@ class _InProcessRuntime:
             timeout_s=timeout_s,
             outdir=output_dir,
         )
+
+    async def run_tool_once_subprocess(
+            self,
+            *,
+            workdir: pathlib.Path,
+            output_dir: pathlib.Path,
+            tool_modules: List[Tuple[str, object]],
+            tool_id: str,
+            params: Dict[str, Any],
+            call_reason: Optional[str] = None,
+            globals: Dict[str, Any] | None = None,
+            timeout_s: int = 90,
+    ) -> Dict[str, Any]:
+        workdir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        main_py = f"""
+import os, json, importlib, asyncio, sys
+from pathlib import Path
+from io_tools import tools as agent_io_tools
+
+TOOL_ID  = {tool_id!r}
+PARAMS   = json.loads({json.dumps(json.dumps(params, ensure_ascii=False))})
+REASON   = {call_reason!r} or f"ReAct: {{TOOL_ID}}"
+
+async def _main():
+    alias, func_name = TOOL_ID.split('.', 1)
+
+    # prefer alias symbol injected by the runtime header
+    owner = globals().get(alias)
+
+    # fallback 1: import alias module if available
+    if owner is None:
+        try:
+            mod = importlib.import_module(alias)
+            owner = getattr(mod, "tools", None) or mod
+        except Exception:
+            owner = None
+
+    if owner is None:
+        raise ImportError(f"Could not resolve tool owner for alias '{{alias}}'")
+
+    fn = getattr(owner, func_name, None)
+    if fn is None:
+        raise AttributeError(f"Function '{{func_name}}' not found on alias '{{alias}}'")
+
+    # Execute via io_tools so the call is persisted to <sanitized>-<idx>.json and indexed
+    await agent_io_tools.tool_call(
+        fn=fn,
+        params_json=json.dumps(PARAMS, ensure_ascii=False),
+        call_reason=REASON,
+        tool_id=TOOL_ID
+    )
+
+    # Mark this tool-only run as finalized so atexit doesn't warn about missing done()/fail()
+    globals()["_FINALIZED"] = True
+
+asyncio.run(_main())
+"""
+        (workdir / "main.py").write_text(main_py, encoding="utf-8")
+
+        # keep the same subprocess plumbing as run_main_py_subprocess (header injection, bootstrap, alias maps, etc.)
+        g = dict(globals or {})
+        res = await self.run_main_py_subprocess(
+            workdir=workdir,
+            output_dir=output_dir,
+            tool_modules=tool_modules,
+            globals=g,
+            timeout_s=timeout_s,
+        )
+        return res
+
+    async def run_finalize_result_subprocess(
+            self,
+            *,
+            workdir: pathlib.Path,
+            output_dir: pathlib.Path,
+            tool_modules: List[Tuple[str, object]],
+            payload: Dict[str, Any],  # {ok, objective, contract, out_dyn}
+            globals: Dict[str, Any] | None = None,
+            timeout_s: int = 90,
+    ) -> Dict[str, Any]:
+        """
+        Write `result.json` in OUTDIR via io_tools.AgentIO.save_ret to ensure canonical
+        citations and promotion of tool call artifacts.
+        """
+        workdir.mkdir(parents=True, exist_ok=True)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        payload_s = json.dumps(payload, ensure_ascii=False)
+        main_py = f"""
+import json, asyncio
+from io_tools import tools as agent_io_tools
+
+DATA = json.loads({json.dumps(payload_s)})
+
+async def _main():
+    await agent_io_tools.save_ret(data=json.dumps(DATA, ensure_ascii=False), filename='result.json')
+
+asyncio.run(_main())
+"""
+        (workdir / "main.py").write_text(main_py, encoding="utf-8")
+        res = await self.run_main_py_subprocess(
+            workdir=workdir,
+            output_dir=output_dir,
+            tool_modules=tool_modules,
+            globals=dict(globals or {}),
+            timeout_s=timeout_s,
+        )
+        return res

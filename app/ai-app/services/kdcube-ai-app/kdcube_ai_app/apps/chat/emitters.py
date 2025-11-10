@@ -43,6 +43,9 @@ class _DeltaAggregate:
     marker: str
     ts_first: int = 0
     ts_last: int = 0
+    format: Optional[str] = None
+    artifact_name: Optional[str] = None
+
     chunks: List[_DeltaChunk] = field(default_factory=list)
 
     def append(self, *, ts: int, idx: int, text: str):
@@ -189,7 +192,7 @@ class ChatCommunicator:
         # default room = session_id
         self.room = self.room or self.conversation.get("session_id")
         self.target_sid = self.target_sid or self.conversation.get("socket_id")
-        self._delta_cache: dict[Tuple[str, str, str, str], _DeltaAggregate] = {}
+        self._delta_cache: dict[Tuple[str, str, str, str, str, str], _DeltaAggregate] = {}
 
     # ---------- low-level ----------
     async def emit(self, event: str, data: dict):
@@ -202,16 +205,17 @@ class ChatCommunicator:
         )
 
     # ----- internal buffer helpers -----
-    def _record_delta(self, *, text: str, index: int, agent: str, marker: str):
+    def _record_delta(self, *, text: str, index: int, agent: str, marker: str, format: str, artifact_name: str):
         if not text:
             return
         conv_id = (self.conversation or {}).get("conversation_id") or ""
         turn_id = (self.conversation or {}).get("turn_id") or ""
-        key = (conv_id, turn_id, agent or "assistant", marker or "answer")
+        key = (conv_id, turn_id, agent or "assistant", marker or "answer", format, artifact_name)
         agg = self._delta_cache.get(key)
         if not agg:
             agg = _DeltaAggregate(conversation_id=conv_id, turn_id=turn_id,
-                                  agent=agent or "assistant", marker=marker or "answer")
+                                  agent=agent or "assistant", marker=marker or "answer",
+                                  format=format, artifact_name=artifact_name)
             self._delta_cache[key] = agg
         agg.append(ts=_now_ms(), idx=int(index), text=text)
 
@@ -226,7 +230,7 @@ class ChatCommunicator:
         Filter by any of the fields if provided.
         """
         out = []
-        for (cid, tid, a, m), agg in self._delta_cache.items():
+        for (cid, tid, a, m, f, an), agg in self._delta_cache.items():
             if conversation_id and cid != conversation_id: continue
             if turn_id and tid != turn_id: continue
             if agent and a != agent: continue
@@ -236,6 +240,8 @@ class ChatCommunicator:
                 "turn_id": tid,
                 "agent": a,
                 "marker": m,
+                "format": f,
+                "artifact_name": an,
                 "ts_first": agg.ts_first,
                 "ts_last": agg.ts_last,
                 "text": agg.merged_text() if merge_text else "",
@@ -253,10 +259,97 @@ class ChatCommunicator:
             return
         keys = list(self._delta_cache.keys())
         for k in keys:
-            cid, tid, _, _ = k
+            cid, tid, _, _, _, _ = k
             if conversation_id and cid != conversation_id: continue
             if turn_id and tid != turn_id: continue
             self._delta_cache.pop(k, None)
+
+    # ---------- export / persist / merge ----------
+    def export_delta_cache(self, *, conversation_id: str | None = None,
+                           turn_id: str | None = None,
+                           agent: str | None = None,
+                           marker: str | None = None,
+                           merge_text: bool = False) -> list[dict]:
+        """
+        Snapshot the delta cache (optionally filtered). Default merge_text=False
+        to keep raw chunks; the host can re-merge deterministically.
+        """
+        return self.get_delta_aggregates(
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            agent=agent,
+            marker=marker,
+            merge_text=merge_text,
+        )
+
+    def dump_delta_cache(self, path) -> bool:
+        """
+        Write the current delta cache to a JSON file:
+          {"items":[ ...aggregates... ]}
+        Returns True on success, False on failure.
+        """
+        try:
+            from pathlib import Path
+            p = Path(path)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            data = {"items": self.export_delta_cache(merge_text=False)}
+            import json as _json
+            p.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            return True
+        except Exception:
+            return False
+
+    def merge_delta_cache(self, items: list[dict]) -> None:
+        """
+        Merge exported aggregates (items) into this communicator's cache.
+        Deduplicates chunks by (idx, ts, text) per aggregate key.
+        """
+        def _k(it: dict) -> tuple[str, str, str, str, str, str]:
+            return (
+                it.get("conversation_id") or "",
+                it.get("turn_id") or "",
+                it.get("agent") or "assistant",
+                it.get("marker") or "answer",
+                it.get("format") or "markdown",
+                it.get("artifact_name") or "Unknown",
+            )
+
+        for it in (items or []):
+            key = _k(it)
+            agg = self._delta_cache.get(key)
+            if not agg:
+                agg = _DeltaAggregate(
+                    conversation_id=key[0], turn_id=key[1],
+                    agent=key[2], marker=key[3],
+                    format=key[4], artifact_name=key[5]
+                )
+                self._delta_cache[key] = agg
+            # dedupe chunks
+            existing = {(c.idx, c.ts, c.text) for c in agg.chunks}
+            for c in (it.get("chunks") or []):
+                idx = int(c.get("idx") or 0)
+                ts  = int(c.get("ts") or 0)
+                txt = c.get("text") or ""
+                sig = (idx, ts, txt)
+                if sig in existing:
+                    continue
+                agg.append(ts=ts, idx=idx, text=txt)
+            # keep text merged ordering stable
+            agg.chunks.sort(key=lambda c: (c.idx, c.ts))
+
+    def merge_delta_cache_from_file(self, path) -> None:
+        """Load {"items":[...]} and merge into this comm."""
+        try:
+            from pathlib import Path
+            import json as _json
+            p = Path(path)
+            if not p.exists():
+                return
+            data = _json.loads(p.read_text(encoding="utf-8")) or {}
+            items = data.get("items") or []
+            self.merge_delta_cache(items)
+        except Exception:
+            pass
 
     # ---------- envelopes ----------
     def _base_env(self, typ: str) -> Dict[str, Any]:
@@ -281,8 +374,11 @@ class ChatCommunicator:
                 text = (d.get("text") or env.get("text") or "")
                 idx  = int(d.get("index") or env.get("idx") or 0)
                 marker = (d.get("marker") or "answer")
-                agent  = ((env.get("event") or {}).get("agent") or "assistant")
-                self._record_delta(text=text, index=idx, agent=agent, marker=marker)
+                eve = env.get("event") or {}
+                agent  = eve.get("agent") or "assistant"
+                format  = eve.get("format") or "markdown"
+                artifact_name  = eve.get("artifact_name") or "Unknown"
+                self._record_delta(text=text, index=idx, agent=agent, marker=marker, format=format, artifact_name=artifact_name)
         except Exception:
             pass
 
@@ -324,7 +420,8 @@ class ChatCommunicator:
 
         # record before sending
         try:
-            self._record_delta(text=text, index=index, agent=agent, marker=marker)
+            self._record_delta(text=text, index=index, agent=agent, marker=marker,
+                               format=kwargs.get("format"), artifact_name=kwargs.get("artifact_name"))
         except Exception:
             pass
 
