@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2025
+# Copyright (c) 2025 Elena Viter
 
 # chat/sdk/runtime/tool_subsystem.py
 
 from __future__ import annotations
 import os
+from dataclasses import dataclass
+
 import sys
 import json
 import time
@@ -19,8 +21,12 @@ from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLog
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 
-# Contracts/doc types reused by CodegenToolManager
-from .contracts import ToolModuleSpec
+@dataclass
+class ToolModuleSpec:
+    ref: str                 # dotted path or file path (abs/rel)
+    use_sk: bool = False     # introspect via Semantic Kernel metadata
+    alias: Optional[str] = None  # import alias for 'tools' (unique per module)
+
 
 class ToolSubsystem:
     """
@@ -51,6 +57,16 @@ class ToolSubsystem:
         self.registry = registry or {}
 
         specs = self._resolve_tools(tools_specs or [])
+
+        s_: List[ToolModuleSpec] = []
+
+        if specs:
+            for m in specs:
+                s_.append(ToolModuleSpec(
+                    ref=m.get("ref"),
+                    use_sk=bool(m.get("use_sk", False)),
+                    alias=m.get("alias")
+                ))
 
         # Loaded modules + metadata
         self._modules: List[Dict[str, Any]] = []   # {name, mod, alias, use_sk, file}

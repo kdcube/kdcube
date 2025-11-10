@@ -74,12 +74,12 @@ CITATION_SUFFIX_PATS = [
 # ---- shared optional attributes carried through citations ----
 CITATION_OPTIONAL_ATTRS = (
     "provider", "published_time_iso", "modified_time_iso", "expiration",
-    "mime", "source_type", "rn",
+    "mime", "source_type", "rn", "author" #, "q_relevance", "o_relevance"
 )
 
 # ---- URL normalization (canonical; strips UTM/gclid/fbclid; stable ordering) ----
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
-_UTM_PARAMS = {"utm_source","utm_medium","utm_campaign","utm_term","utm_content","utm_id","gclid","fbclid"}
+_UTM_PARAMS = {"utm_source", "utm_medium", "utm_campaign","utm_term","utm_content","utm_id","gclid","fbclid"}
 
 def normalize_url(u: str) -> str:
     try:
