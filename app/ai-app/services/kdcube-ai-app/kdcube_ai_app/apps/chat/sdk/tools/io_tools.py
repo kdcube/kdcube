@@ -552,18 +552,18 @@ class AgentIO:
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return rel
 
-    @kernel_function(
-        name="save_ret",
-        description=(
-                "Write the program's result to OUTPUT_DIR (default 'result.json').\n"
-                "RESULT SHAPE (authoritative):\n"
-                "  - ok: bool (required)\n"
-                "  - objective: str (recommended)\n"
-                "  - contract: dict(slot-> {description, type})\n"
-                "  - out_dyn:  dict(slot->VALUE)\n"
-                "  - error: dict with keys error, where, details, managed: optional keys for failures\n"
-        )
-    )
+    # @kernel_function(
+    #     name="save_ret",
+    #     description=(
+    #             "Write the program's result to OUTPUT_DIR (default 'result.json').\n"
+    #             "RESULT SHAPE (authoritative):\n"
+    #             "  - ok: bool (required)\n"
+    #             "  - objective: str (recommended)\n"
+    #             "  - contract: dict(slot-> {description, type})\n"
+    #             "  - out_dyn:  dict(slot->VALUE)\n"
+    #             "  - error: dict with keys error, where, details, managed: optional keys for failures\n"
+    #     )
+    # )
     async def save_ret(
             self,
             data: Annotated[str, "JSON-encoded object to write."],
