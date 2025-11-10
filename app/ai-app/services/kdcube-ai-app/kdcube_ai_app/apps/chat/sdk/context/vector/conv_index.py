@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import asyncpg
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Sequence, Union, Callable, Iterable
+from typing import List, Dict, Any, Optional, Sequence, Union, Callable, Iterable, Tuple
 
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -37,6 +37,14 @@ def _safe_json_loads(value: Any) -> Any:
         except (json.JSONDecodeError, TypeError):
             return value
     return value
+
+CONV_STATE_KIND = "artifact:conversation.state"
+
+def _state_tag(state: str) -> str:
+    return f"conv.state:{state}"
+
+def _base_state_tags(conversation_id: str) -> list[str]:
+    return [CONV_STATE_KIND, "conv.state", f"conv:{conversation_id}"]
 
 class ConvIndex:
     def __init__(self,
@@ -87,6 +95,104 @@ class ConvIndex:
         if data:
             return data
         raise FileNotFoundError("conversation_history.sql / deploy-conversation-history.sql not found in package")
+
+    async def get_conversation_state_row(
+            self, *, user_id: str, conversation_id: str
+    ) -> Optional[Dict[str, Any]]:
+        q = f"""
+          SELECT id, message_id, role, text, s3_uri, ts, tags, track_id, turn_id, bundle_id
+          FROM {self.schema}.conv_messages
+          WHERE user_id=$1 AND conversation_id=$2
+            AND role='artifact'
+            AND tags @> ARRAY[$3,$4]::text[]   -- artifact:conversation.state + conv.state
+          ORDER BY ts DESC
+          LIMIT 1
+        """
+        async with self._pool.acquire() as con:
+            row = await con.fetchrow(q, user_id, conversation_id, CONV_STATE_KIND, "conv.state")
+        return dict(row) if row else None
+
+    # conv_index.py (where your try_set_conversation_state_cas lives)
+    async def try_set_conversation_state_cas(
+            self,
+            *,
+            user_id: str,
+            conversation_id: str,
+            new_state: str,             # 'idle' | 'in_progress' | 'error'
+            s3_uri: str,
+            now_ts: str,
+            require_not_in_progress: bool = False,
+            last_turn_id: str | None = None,   # <— NEW (to tag the active turn)
+    ) -> dict:
+        """
+        Upsert the conv.state row with optional CAS.
+        Returns: {
+          "ok": bool,
+          "row": {"id": int, "tags": list[str]},
+          "state": str | None,
+          "current_turn_id": str | None,
+        }
+        """
+        base_tags = _base_state_tags(conversation_id)
+        new_state_tag = _state_tag(new_state)
+        turn_tag = f"conv.turn:{last_turn_id}" if last_turn_id else None
+
+        def _parse_tags(tags: list[str]) -> tuple[str | None, str | None]:
+            state = None
+            turn  = None
+            for t in tags or []:
+                if t.startswith("conv.state:"):
+                    state = t.split(":", 1)[1]
+                elif t.startswith("conv.turn:"):
+                    turn = t.split(":", 1)[1]
+            return state, turn
+
+        # 1) Existing row?
+        row = await self.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
+        async with self._pool.acquire() as con:
+            if row is None:
+                # INSERT
+                tags = base_tags + [new_state_tag] + ([turn_tag] if turn_tag else [])
+                q_ins = f"""
+                  INSERT INTO {self.schema}.conv_messages
+                    (user_id, conversation_id, role, text, s3_uri, ts, ttl_days, user_type, tags)
+                  VALUES ($1,$2,'artifact','', $3, $4, 3650, 'system', $5)
+                  RETURNING id, tags
+                """
+                rec = await con.fetchrow(q_ins, user_id, conversation_id, s3_uri, _coerce_ts(now_ts), tags)
+                st, cur_turn = _parse_tags(rec["tags"])
+                return {"ok": True, "row": {"id": rec["id"], "tags": rec["tags"]}, "state": st, "current_turn_id": cur_turn}
+
+            # 2) UPDATE with CAS; replace any old conv.state:* and conv.turn:* with new
+            q_upd = f"""
+              UPDATE {self.schema}.conv_messages
+              SET
+                s3_uri = $1,
+                ts     = $2,
+                tags   = (
+                    SELECT ARRAY(
+                        SELECT DISTINCT t
+                        FROM unnest(tags) AS t
+                        WHERE t NOT LIKE 'conv.state:%' AND t NOT LIKE 'conv.turn:%'
+                        UNION ALL
+                        SELECT unnest($3::text[])
+                    )
+                )
+              WHERE id = $4
+              {"AND NOT (tags && ARRAY['conv.state:in_progress']::text[])" if require_not_in_progress else ""}
+              RETURNING id, tags
+            """
+            tags_add = base_tags + [new_state_tag] + ([turn_tag] if turn_tag else [])
+            rec = await con.fetchrow(q_upd, s3_uri, _coerce_ts(now_ts), tags_add, int(row["id"]))
+            if rec is None:
+                # CAS failed
+                # Fetch current row to report state/turn to caller
+                cur = await self.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
+                st, cur_turn = _parse_tags((cur or {}).get("tags") if cur else [])
+                return {"ok": False, "row": cur, "state": st, "current_turn_id": cur_turn}
+
+            st, cur_turn = _parse_tags(rec["tags"])
+            return {"ok": True, "row": {"id": rec["id"], "tags": rec["tags"]}, "state": st, "current_turn_id": cur_turn}
 
     async def add_message(
             self,

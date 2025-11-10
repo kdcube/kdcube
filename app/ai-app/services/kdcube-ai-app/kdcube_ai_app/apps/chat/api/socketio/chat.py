@@ -323,6 +323,9 @@ class SocketIOChatHandler:
         # ------- collect only cheap info up-front -------
         message_data = data.get("message", {})
         # message_data["conversation_id"] = "565fbaea-c54c-4e0e-a73a-0ddb3aed158f"
+        # message_data["conversation_id"] = "cbd6155a-8714-4d49-8a77-c7a802bfe848"
+        # message_data["conversation_id"] = "927b6edd-e664-4b2d-87ef-a041995b6e18"
+        # message_data["conversation_id"] = "b2c2405c-0a94-4cce-bfdc-d811403256b3"
         logger.info("chat_message sid=%s '%s'...", sid, (message_data or {}).get("message", "")[:100])
 
         try:
@@ -468,9 +471,10 @@ class SocketIOChatHandler:
             if "project" not in ext_config and project_id:
                 ext_config["project"] = project_id
 
+            svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
+            conv = ConversationCtx(session_id=session.session_id, conversation_id=conversation_id, turn_id=turn_id)
+
             if not spec_resolved:
-                svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id)
-                conv = ConversationCtx(session_id=session.session_id, conversation_id=conversation_id, turn_id=turn_id)
                 self._comm.emit_error(svc, conv, error=f"Unknown bundle_id '{agentic_bundle_id}'", target_sid=sid, session_id=session.session_id)
                 return
 
@@ -506,6 +510,54 @@ class SocketIOChatHandler:
                 accounting=ChatTaskAccounting(envelope=acct_env),
             )
 
+            set_res = await self.app.state.conversation_browser.set_conversation_state(
+                tenant=payload.actor.tenant_id,
+                project=payload.actor.project_id,
+                user_id=payload.user.user_id,
+                conversation_id=payload.routing.conversation_id,
+                new_state="in_progress",
+                by_instance=self.instance_id,
+                request_id=request_id,
+                last_turn_id=payload.routing.turn_id,
+                require_not_in_progress=True,
+                user_type=payload.user.user_type,
+                bundle_id=payload.routing.bundle_id,
+            )
+
+            if not set_res["ok"]:
+                # Did NOT acquire; someone else is active
+                active_turn = set_res.get("current_turn_id")
+                try:
+                    self._comm.emit_conv_status(
+                        svc, conv,
+                        state="in_progress",
+                        updated_at=set_res["updated_at"],
+                        current_turn_id=active_turn,
+                        session_id=payload.routing.session_id,
+                        target_sid=sid  # DM this requester tab only
+                    )
+                    self._comm.emit_error(
+                        svc, conv,
+                        error="Conversation is busy (another tab/process is answering).",
+                        target_sid=sid,
+                        session_id=payload.routing.session_id,
+                    )
+                except Exception:
+                    pass
+                return
+
+            # We DID acquire the lock → proceed and announce with our turn_id
+            try:
+                self._comm.emit_conv_status(
+                    svc, conv,
+                    state="in_progress",
+                    updated_at=set_res["updated_at"],
+                    current_turn_id=payload.routing.turn_id,
+                    session_id=payload.routing.session_id
+                )
+            except Exception:
+                pass
+
             # atomic enqueue with backpressure accounting
             success, reason, stats = await self.chat_queue_manager.enqueue_chat_task_atomic(
                 session.user_type,
@@ -515,14 +567,38 @@ class SocketIOChatHandler:
                 "/socket.io/chat",
             )
             if not success:
-                svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
-                conv = ConversationCtx(session_id=session.session_id, conversation_id=conversation_id, turn_id=turn_id)
-                self._comm.emit_error(svc, conv, error=f"System under pressure - request rejected ({reason})", target_sid=sid, session_id=session.session_id)
+                # rollback state, since nothing will process this turn
+                res_reset = await self.app.state.conversation_browser.set_conversation_state(
+                    tenant=payload.actor.tenant_id,
+                    project=payload.actor.project_id,
+                    user_id=payload.user.user_id,
+                    conversation_id=payload.routing.conversation_id,
+                    new_state="idle",
+                    by_instance=self.instance_id,
+                    request_id=request_id,
+                    last_turn_id=payload.routing.turn_id,
+                    require_not_in_progress=False,
+                    user_type=payload.user.user_type,
+                    bundle_id=payload.routing.bundle_id,
+                )
+                # let the requester tab know
+                self._comm.emit_conv_status(
+                    svc, conv,
+                    state="idle",
+                    updated_at=res_reset["updated_at"],
+                    current_turn_id=res_reset.get("current_turn_id"),
+                    session_id=payload.routing.session_id,
+                    target_sid=sid,  # DM the requester tab; or omit target_sid to session-broadcast
+                )
+                self._comm.emit_error(
+                    svc, conv,
+                    error=f"System under pressure - request rejected ({reason})",
+                    target_sid=sid,
+                    session_id=payload.routing.session_id,
+                )
                 return
 
             # ack to client via communicator (same envelope as processor emits)
-            svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
-            conv = ConversationCtx(session_id=session.session_id, conversation_id=conversation_id, turn_id=turn_id)
             self._comm.emit_start(svc, conv, message=(message[:100] + "..." if len(message) > 100 else message), queue_stats=stats, target_sid=sid, session_id=session.session_id)
 
         except Exception as e:

@@ -3,6 +3,7 @@
 
 # chat/emitters.py
 from __future__ import annotations
+from datetime import datetime
 
 from dataclasses import dataclass, field
 from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple
@@ -116,6 +117,45 @@ class ChatRelayCommunicator:
     def emit_error(self, service: ServiceCtx, conv: ConversationCtx, *, error: str, title: Optional[str] = "Workflow Error", step: str = "workflow", target_sid: Optional[str] = None, session_id: Optional[str] = None):
         self._pub(ChatEnvelope.error(service, conv, error=error, title=title, step=step), target_sid=target_sid, session_id=session_id)
 
+    def emit_conv_status(
+            self,
+            svc: ServiceCtx,
+            conv: ConversationCtx,
+            *,
+            state: str,
+            updated_at: str,
+            current_turn_id: str | None = None,
+            target_sid: str | None = None,
+            session_id: str | None = None,
+    ):
+        payload = {
+            "type": "conv.status",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "service": {
+                "request_id": getattr(svc, "request_id", None),
+                "tenant": getattr(svc, "tenant", None),
+                "project": getattr(svc, "project", None),
+                "user": getattr(svc, "user", None),
+            },
+            "conversation": {
+                "session_id": conv.session_id,
+                "conversation_id": conv.conversation_id,
+                "turn_id": conv.turn_id,
+            },
+            "event": {"step": "conv.state", "status": state},
+            "data": {
+                "state": state,
+                "updated_at": updated_at,
+                **({"current_turn_id": current_turn_id} if current_turn_id else {}),
+            },
+        }
+        self._comm.pub(
+            event="conv_status",
+            data=payload,
+            target_sid=target_sid,
+            session_id=session_id,
+            channel=self._channel,
+        )
     # ---------- binding helpers (nice for processors) ----------
 
     class _Bound:

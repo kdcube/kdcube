@@ -1491,6 +1491,88 @@ class ContextRAGClient:
 
         return {"user_id": user_id, "conversation_id": conversation_id, "turns": [turns_map[tid] for tid in order]}
 
+
+    async def get_conversation_state(self, *, user_id: str, conversation_id: str) -> dict:
+        row = await self.idx.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
+        if not row:
+            return {"state": "idle", "updated_at": None, "meta": {}}
+        tags = set(row.get("tags") or [])
+        state = "idle"
+        for t in tags:
+            if isinstance(t, str) and t.startswith("conv.state:"):
+                state = t.split(":", 1)[1]
+                break
+        payload = {}
+        try:
+            if row.get("s3_uri"):
+                payload = self.store.get_message(row["s3_uri"])
+        except Exception:
+            payload = {}
+        return {
+            "state": state,
+            "updated_at": row.get("ts"),
+            "meta": (payload.get("payload") or {}) if isinstance(payload, dict) else {},
+        }
+
+    async def set_conversation_state(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user_id: str,
+            conversation_id: str,
+            new_state: str,                     # 'idle' | 'in_progress' | 'error'
+            by_instance: str | None = None,
+            request_id: str | None = None,
+            last_turn_id: str | None = None,    # <— still stored in S3 payload; also passed to index as tag
+            require_not_in_progress: bool = False,
+            user_type: str = "system",
+            bundle_id: str | None = None,
+            track_id: str | None = None,
+    ) -> dict:
+        """
+        Returns: {
+          "ok": bool,
+          "updated_at": str,
+          "state": str | None,
+          "current_turn_id": str | None,
+          "row": {...}   # index row if available
+        }
+        """
+        now_iso = datetime.datetime.utcnow().isoformat() + "Z"
+        payload = {
+            "state": new_state,
+            "updated_at": now_iso,
+            **({"by_instance": by_instance} if by_instance else {}),
+            **({"request_id": request_id} if request_id else {}),
+            **({"last_turn_id": last_turn_id} if last_turn_id else {}),
+        }
+
+        # Persist a tiny artifact for lineage
+        s3_uri, message_id, rn = await self.store.put_message(
+            tenant=tenant, project=project, user=user_id, fingerprint=None,
+            conversation_id=conversation_id, turn_id="conv", role="artifact", text="",
+            id="conversation.state", bundle_id=bundle_id, payload=payload,
+            meta={"kind": "conversation.state", "track_id": track_id},
+            embedding=None, user_type=user_type, track_id=track_id,
+            msg_ts=now_iso.replace(":", "-"),
+        )
+
+        res = await self.idx.try_set_conversation_state_cas(
+            user_id=user_id, conversation_id=conversation_id,
+            new_state=new_state, s3_uri=s3_uri, now_ts=now_iso,
+            require_not_in_progress=require_not_in_progress,
+            last_turn_id=last_turn_id,   # <— NEW
+        )
+
+        return {
+            "ok": bool(res.get("ok")),
+            "updated_at": now_iso,
+            "state": res.get("state"),
+            "current_turn_id": res.get("current_turn_id"),
+            "row": res.get("row"),
+        }
+
 def _ts_to_float(ts: str) -> float:
     """Convert ISO timestamp to float for recency scoring"""
     try:

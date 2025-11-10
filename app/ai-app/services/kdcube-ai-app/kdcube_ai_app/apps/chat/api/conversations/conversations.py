@@ -130,6 +130,12 @@ class ConversationsInPeriodResponse(BaseModel):
     items: List[FeedbackConversationItem]
     next_cursor: Optional[str] = None
 
+class ConversationStatus(BaseModel):
+    conversation_id: str
+    state: str            # idle | in_progress | error
+    updated_at: Optional[str] = None
+    meta: Optional[dict] = None
+
 # -------------------- Endpoints --------------------
 
 @router.get("/{tenant}/{project}", response_model=ConversationListResponse)
@@ -162,6 +168,14 @@ async def list_conversations(
     )
     return data
 
+@router.get("/{tenant}/{project}/{conversation_id}/status", response_model=ConversationStatus)
+async def conversation_status(tenant: str, project: str, conversation_id: str, session: UserSession = Depends(get_user_session_dependency())):
+    if not session.user_id:
+        raise HTTPException(status_code=401, detail="No user in session")
+    st = await router.state.conversation_browser.get_conversation_state(
+        user_id=session.user_id, conversation_id=conversation_id
+    )
+    return ConversationStatus(conversation_id=conversation_id, **st)
 
 @router.get("/{tenant}/{project}/{conversation_id}/details")
 async def conversation_details(

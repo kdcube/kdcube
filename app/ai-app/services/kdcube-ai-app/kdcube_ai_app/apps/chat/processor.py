@@ -15,6 +15,7 @@ import traceback
 from typing import Optional, Dict, Any, Iterable
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload, ServiceCtx, ConversationCtx
@@ -41,6 +42,7 @@ class EnhancedChatRequestProcessor:
             middleware: MultiprocessDistributedMiddleware,
             chat_handler,
             *,
+            conversation_ctx: ContextRAGClient,
             process_id: Optional[int] = None,
             relay: Optional[ChatRelayCommunicator] = None,   # unified relay (pub/sub)
             max_concurrent: Optional[int] = None,
@@ -55,6 +57,7 @@ class EnhancedChatRequestProcessor:
         self.task_timeout_sec = int(os.getenv("CHAT_TASK_TIMEOUT_SEC", str(task_timeout_sec or 600)))
         self.lock_ttl_sec = lock_ttl_sec
         self.lock_renew_sec = lock_renew_sec
+        self.conversation_ctx = conversation_ctx
 
         self._relay = relay or ChatRelayCommunicator()  # transport
         self._processor_task: Optional[asyncio.Task] = None
@@ -309,9 +312,9 @@ class EnhancedChatRequestProcessor:
         session_id = payload.routing.session_id
         socket_id = payload.routing.socket_id
         task_id = payload.meta.task_id
-
+        request_id = (payload.accounting.envelope or {}).get("request_id", task_id)
         svc = ServiceCtx(
-            request_id=(payload.accounting.envelope or {}).get("request_id", task_id),
+            request_id=request_id,
             tenant=payload.actor.tenant_id,
             project=payload.actor.project_id,
             user=payload.user.user_id or payload.user.fingerprint,
@@ -342,6 +345,58 @@ class EnhancedChatRequestProcessor:
         # storage_backend = create_storage_backend(os.environ.get("KDCUBE_STORAGE_PATH"), **{})
         storage_backend = create_storage_backend(_settings.STORAGE_PATH, **{})
 
+        # set_res = await self.conversation_ctx.set_conversation_state(
+        #     tenant=payload.actor.tenant_id,
+        #     project=payload.actor.project_id,
+        #     user_id=payload.user.user_id,
+        #     conversation_id=payload.routing.conversation_id,
+        #     new_state="in_progress",
+        #     by_instance=f"{self.middleware.instance_id}:{self.process_id}",
+        #     request_id=payload.routing.request_id,
+        #     last_turn_id=payload.routing.turn_id,
+        #     require_not_in_progress=True,
+        #     user_type=payload.user.user_type,
+        #     bundle_id=payload.routing.bundle_id,
+        # )
+        #
+        # if not set_res["ok"]:
+        #     # Did NOT acquire; someone else is active
+        #     active_turn = set_res.get("current_turn_id")
+        #     try:
+        #         self._relay.emit_conv_status(
+        #             svc, conv,
+        #             state="in_progress",
+        #             updated_at=set_res["updated_at"],
+        #             current_turn_id=active_turn,
+        #             session_id=payload.routing.session_id,
+        #             target_sid=socket_id  # DM this requester tab only
+        #         )
+        #         self._relay.emit_error(
+        #             svc, conv,
+        #             error="Conversation is busy (another tab/process is answering). Try again when it completes.",
+        #             session_id=payload.routing.session_id,
+        #             target_sid=socket_id
+        #         )
+        #     except Exception:
+        #         pass
+        #     # release lock and exit this task early
+        #     if lock_key:
+        #         await self.middleware.redis.delete(lock_key)
+        #     self._current_load = max(0, self._current_load - 1)
+        #     return
+        #
+        # # We DID acquire the lock → proceed and announce with our turn_id
+        # try:
+        #     self._relay.emit_conv_status(
+        #         svc, conv,
+        #         state="in_progress",
+        #         updated_at=set_res["updated_at"],
+        #         current_turn_id=payload.routing.turn_id,
+        #         session_id=payload.routing.session_id
+        #     )
+        # except Exception:
+        #     pass
+
         # 5) Announce start (async)
         msg = (
             (payload.request.message[:100] + "...")
@@ -357,6 +412,7 @@ class EnhancedChatRequestProcessor:
         )
 
         # 6) Execute with lock renew + timeout
+        success = False
         try:
             async with bind_accounting(envelope, storage_backend, enabled=True):
                 async with with_accounting("chat.orchestrator",
@@ -379,18 +435,39 @@ class EnhancedChatRequestProcessor:
                         )
 
             result = result or {}
+            success = True
             await comm.complete(data=result)
 
         except asyncio.TimeoutError:
             tb = "Task timed out"
             await comm.error(message=tb, data={"task_id": task_id})
+            success = False
         except Exception:
             tb = traceback.format_exc()
             await comm.error(message=tb, data={"task_id": task_id})
+            success = False
         finally:
             try:
                 if lock_key:
                     await self.middleware.redis.delete(lock_key)
             finally:
                 self._current_load = max(0, self._current_load - 1)
+                try:
+                    res = await self.conversation_ctx.set_conversation_state(
+                        tenant=payload.actor.tenant_id, project=payload.actor.project_id, user_id=payload.user.user_id, conversation_id=payload.routing.conversation_id,
+                        new_state=("idle" if success else "error"),
+                        by_instance=f"{self.middleware.instance_id}:{self.process_id}",
+                        request_id=request_id,
+                        last_turn_id=payload.routing.turn_id,
+                        require_not_in_progress=False,
+                        user_type=payload.user.user_type,
+                        bundle_id=payload.routing.bundle_id,
+                    )
+                    self._relay.emit_conv_status(svc, conv,
+                                                 state=("idle" if success else "error"),
+                                                 updated_at=res["updated_at"],
+                                                 current_turn_id=res.get("current_turn_id"),
+                                                 session_id=session_id, target_sid=None)
+                except Exception as ex:
+                    logger.error(traceback.format_exc())
 

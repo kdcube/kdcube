@@ -194,13 +194,12 @@ async def lifespan(app: FastAPI):
         handler = agentic_app_func
 
         middleware, heartbeat_manager = get_heartbeats_mgr_and_middleware(port=port)
-        processor = get_external_request_processor(middleware, handler, app)
+        # processor = get_external_request_processor(middleware, handler, app)
         health_checker = service_health_checker(middleware)
 
         # Store in app state for monitoring endpoints
         app.state.middleware = middleware
         app.state.heartbeat_manager = heartbeat_manager
-        app.state.processor = processor
         app.state.health_checker = health_checker
 
         # Reuse system components you already provision
@@ -208,6 +207,9 @@ async def lifespan(app: FastAPI):
         app.state.conversation_browser = conversation_browser
         app.state.conversation_index = conversation_index
         app.state.conversation_store = conversation_store
+
+        processor = get_external_request_processor(middleware, handler, app)
+        app.state.processor = processor
 
         # Start services
         await middleware.init_redis()

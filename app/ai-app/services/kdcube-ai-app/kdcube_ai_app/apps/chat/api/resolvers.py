@@ -381,6 +381,7 @@ def get_external_request_processor(middleware, chat_handler, app):
         middleware,
         chat_handler,                     # agentic workflow entrypoint
         relay=app.state.chat_comm,      # use the Redis relay communicator
+        conversation_ctx=app.state.conversation_browser,
         max_concurrent=5,
         task_timeout_sec=900,
     )
