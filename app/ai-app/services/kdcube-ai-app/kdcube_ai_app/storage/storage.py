@@ -197,6 +197,7 @@ class S3StorageBackend(IStorageBackend):
                  aws_access_key_id: Optional[str] = None,
                  aws_secret_access_key: Optional[str] = None,
                  region_name: Optional[str] = None,
+                 profile_name: Optional[str] = None,
                  skip_bucket_check: bool = False):
         # try:
         #    import boto3
@@ -212,6 +213,7 @@ class S3StorageBackend(IStorageBackend):
         # Keep for async session reuse
         self._aws_access_key_id = aws_access_key_id
         self._aws_secret_access_key = aws_secret_access_key
+        self._profile_name = profile_name
         self._region_name = region_name
 
         if aws_access_key_id:
@@ -220,6 +222,8 @@ class S3StorageBackend(IStorageBackend):
             session_kwargs['aws_secret_access_key'] = aws_secret_access_key
         if region_name:
             session_kwargs['region_name'] = region_name
+        if profile_name:
+            session_kwargs['profile_name'] = profile_name
 
         self.s3_client = self._create_s3_client(session_kwargs)
 
@@ -248,6 +252,7 @@ class S3StorageBackend(IStorageBackend):
                 aws_access_key_id=getattr(self, "_aws_access_key_id", None),
                 aws_secret_access_key=getattr(self, "_aws_secret_access_key", None),
                 region_name=getattr(self, "_region_name", None),
+                profile_name=getattr(self, "_profile_name", None),
             ).items() if v
         }
 
