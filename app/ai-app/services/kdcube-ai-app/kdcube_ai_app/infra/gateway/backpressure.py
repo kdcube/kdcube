@@ -207,7 +207,7 @@ class BackpressureManager:
         analytics["last_updated"] = time.time()
 
         # Store updated analytics
-        await self.redis.setex(analytics_key, self.gateway_config.redis.analytics_ttl, json.dumps(analytics, default=str))
+        await self.redis.setex(analytics_key, self.gateway_config.redis.analytics_ttl, json.dumps(analytics, default=str, ensure_ascii=False))
 
     # async def check_capacity(self,
     #                          user_type: UserType,
@@ -879,7 +879,7 @@ class AtomicBackpressureManager:
         analytics["peak_size_today"] = max(analytics.get("peak_size_today", 0), current_size)
         analytics["last_updated"] = time.time()
 
-        await self.redis.setex(analytics_key, self.gateway_config.redis.analytics_ttl, json.dumps(analytics, default=str))
+        await self.redis.setex(analytics_key, self.gateway_config.redis.analytics_ttl, json.dumps(analytics, default=str, ensure_ascii=False))
 
     async def get_queue_stats(self):
         """Enhanced queue stats - uses capacity calculator if available, otherwise atomic calculation"""
@@ -1172,7 +1172,7 @@ class AtomicChatQueueManager:
                 priv_queue_key,
                 # Arguments
                 user_type.value,
-                json.dumps(chat_task_data),  # Your actual chat task
+                json.dumps(chat_task_data, ensure_ascii=False),  # Your actual chat task
                 str(theoretical_thresholds["anonymous_threshold"]),
                 str(theoretical_thresholds["registered_threshold"]),
                 str(theoretical_thresholds["hard_limit"]),

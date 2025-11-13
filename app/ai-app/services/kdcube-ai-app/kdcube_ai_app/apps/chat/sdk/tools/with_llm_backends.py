@@ -346,7 +346,7 @@ def _json_pointer_delete(root: Any, ptr: str) -> Any:
 
     # remove only when parent is a dict and key exists
     if isinstance(parent, dict) and key in parent:
-        new_root = json.loads(json.dumps(root))  # cheap deep copy that’s schema-safe
+        new_root = json.loads(json.dumps(root, ensure_ascii=False))  # cheap deep copy that’s schema-safe
         p2 = new_root
         for raw in parts[:-1]:
             part = raw.replace("~1", "/").replace("~0", "~")
@@ -1036,7 +1036,7 @@ async def generate_content_llm(
         # If we got a Python obj and a JSON schema is provided, try to validate by dumping to JSON
         if schema_json and payload_obj is not None:
             try:
-                as_json = json.loads(json.dumps(payload_obj))
+                as_json = json.loads(json.dumps(payload_obj, ensure_ascii=False))
                 schema_ok, schema_reason = _validate_json_schema(as_json, schema_json)
                 if not schema_ok and citation_container_path:
                     pruned = _json_pointer_delete(as_json, citation_container_path)
@@ -1256,7 +1256,7 @@ async def generate_content_llm(
                 fmt_reason = parse_err
             if schema_json and payload_obj is not None:
                 try:
-                    as_json = json.loads(json.dumps(payload_obj))
+                    as_json = json.loads(json.dumps(payload_obj, ensure_ascii=False))
                     schema_ok, schema_reason = _validate_json_schema(as_json, schema_json)
                     if not schema_ok and citation_container_path:
                         pruned = _json_pointer_delete(as_json, citation_container_path)
@@ -1368,7 +1368,7 @@ async def generate_content_llm(
         },
         "sources_used": sources_used,
     }
-    return json.dumps(out)
+    return json.dumps(out, ensure_ascii=False)
 
 async def sources_reconciler(
         _SERVICE,

@@ -413,7 +413,7 @@ class AsyncSegmentEmbeddingProcessor:
         filename = f"segment_{segment_id}_embedding.json"
         subfolder = f"{segment_type.value}/size_{embedding_size}"
 
-        content = json.dumps(metadata, indent=2)
+        content = json.dumps(metadata, indent=2, ensure_ascii=False)
         self.storage.save_stage_content("embedding", resource_id, version, filename, content, subfolder=subfolder)
 
     def _create_system_resource_from_segment(self, segment: Dict[str, Any], resource_id: str, version: str) -> SystemResource:

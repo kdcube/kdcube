@@ -617,7 +617,7 @@ async def llm_streaming_structured(
 
         if (isinstance(content, dict) or isinstance(content, list)) and parse_json:
             # Convert JSON response to string for consistency
-            wrapper.content = json.dumps(content, indent=2)
+            wrapper.content = json.dumps(content, indent=2, ensure_ascii=False)
         else:
             wrapper.content = str(content)
 
@@ -714,7 +714,7 @@ async def example_with_progress(model_record):
     # Convert to dict format like BatchResultWrapper
     result_dict = wrapper_result.to_dict()
     print("\nAs dictionary:")
-    print(json.dumps(result_dict, indent=2))
+    print(json.dumps(result_dict, indent=2, ensure_ascii=False))
 
 def test_platform_streaming():
     import os

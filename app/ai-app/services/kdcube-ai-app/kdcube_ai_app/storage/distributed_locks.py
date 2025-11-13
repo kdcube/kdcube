@@ -152,7 +152,7 @@ class DistributedResourceLocks:
                     return None  # Assume lock is valid to be safe
 
             # Try to create lock atomically
-            lock_content = json.dumps(lock_info.to_dict(), indent=2)
+            lock_content = json.dumps(lock_info.to_dict(), indent=2, ensure_ascii=False)
 
             # Atomic lock creation strategy
             if self._try_atomic_create(lock_path, lock_content):
@@ -305,7 +305,7 @@ class DistributedResourceLocks:
 
             # Write queue entry
             entry_path = self._get_queue_entry_path(resource_id, version)
-            entry_content = json.dumps(entry.to_dict(), indent=2)
+            entry_content = json.dumps(entry.to_dict(), indent=2, ensure_ascii=False)
             self.backend.write_text(entry_path, entry_content)
 
             logger.debug(f"Added to queue: {resource_id} v{version}")

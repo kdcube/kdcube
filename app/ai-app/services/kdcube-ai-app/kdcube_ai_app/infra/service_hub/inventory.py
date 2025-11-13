@@ -5,7 +5,7 @@
 
 import asyncio
 import json
-import os
+import os, sys
 import logging
 from datetime import datetime
 from uuid import uuid4
@@ -43,6 +43,66 @@ def _mid(role: str, msg_ts: str | None = None) -> str:
         msg_ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
     return f"{role}-{msg_ts}-{uuid4().hex[:8]}"
 
+def _msg_history(ms: List[BaseMessage]) -> dict:
+    """
+    Build a message history suitable for diagnostics/logging.
+
+    Supports:
+      - Plain text messages
+      - Anthropic-style block messages in additional_kwargs['message_blocks']
+      - Messages whose .content is already a list of blocks
+
+    For block messages, we record:
+      - 'content'          → concatenated text from text blocks (for quick preview/search)
+      - 'content_blocks'   → the normalized blocks (preserves cache_control and non-text parts)
+    """
+    history = []
+    try:
+        for m in ms:
+            role = (
+                "system" if isinstance(m, SystemMessage) else
+                "user" if isinstance(m, HumanMessage) else
+                "assistant" if isinstance(m, AIMessage) else
+                "unknown"
+            )
+
+            entry = {"role": role}
+            addkw = getattr(m, "additional_kwargs", {}) or {}
+
+            # 1) Anthropic-style message_blocks on the message
+            blocks = addkw.get("message_blocks")
+
+            # 2) Or LC message content already as list-of-blocks
+            if not blocks and isinstance(getattr(m, "content", None), list):
+                blocks = m.content  # treat as blocks
+
+            if blocks:
+                # If the message has a message-level cache_control, apply as a default
+                default_cache_ctrl = addkw.get("cache_control")
+                norm_blocks = _normalize_anthropic_blocks(blocks, default_cache_ctrl=default_cache_ctrl)
+
+                # Concise preview: join only text blocks
+                text_preview = "\n\n".join(
+                    b.get("text", "")
+                    for b in norm_blocks
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+
+                entry["content"] = text_preview
+                entry["content_blocks"] = norm_blocks
+                # Optional: surface message-level cache_control if present
+                if default_cache_ctrl:
+                    entry["cache_control"] = default_cache_ctrl
+            else:
+                # Plain string content (default path)
+                entry["content"] = getattr(m, "content", "") or ""
+
+            history.append(entry)
+    except Exception:
+        # Keep logging resilient; return whatever we could collect
+        pass
+
+    return {"history": history}
 
 from langchain_openai import ChatOpenAI
 def make_chat_openai(*, model: str, api_key: str,
@@ -240,22 +300,103 @@ def _normalize_message_for_openai(msg: BaseMessage) -> BaseMessage:
 # =========================
 # Logging
 # =========================
+
 class AgentLogger:
     def __init__(self, name: str, log_level: str = "INFO"):
         self.logger = logging.getLogger(f"agent.{name}")
         self.logger.setLevel(getattr(logging, log_level.upper()))
+
+        # OPTIONAL: make stdout UTF-8 if this process owns the console
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
         if not self.logger.handlers:
             self.logger.addHandler(logging.NullHandler())
-            # h = logging.StreamHandler()
-            # h.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            # self.logger.addHandler(h)
+            # If you add real handlers elsewhere, prefer FileHandler(..., encoding="utf-8")
+
         self.start_time = None
         self.execution_logs = []
+
+    # ---------- ROBUST HELPERS ----------
+
+    @staticmethod
+    def _json_dumps_robust(obj: Any) -> str:
+        """
+        Try to serialize to JSON nicely; fall back to ASCII; last resort repr of the error.
+        Also sanitize to a string that won't crash the output stream.
+        """
+        # 1) Best: pretty UTF-8, allow non-serializables via default=str
+        try:
+            s = json.dumps(obj, indent=2, ensure_ascii=False, default=str)
+        except Exception as e1:
+            # 2) Fallback: ASCII-only
+            try:
+                s = json.dumps(obj, indent=2, ensure_ascii=True, default=str)
+            except Exception as e2:
+                s = f"<json.dumps failed: {e1!r}; fallback failed: {e2!r}>"
+
+        # 3) Make it safe for whatever stream encoding the handler uses.
+        # If encoding fails (e.g., unpaired surrogates), backslash-escape the offenders.
+        try:
+            # No-op test encode to UTF-8
+            s.encode("utf-8")
+            return s
+        except Exception:
+            return s.encode("utf-8", "backslashreplace").decode("utf-8", "strict")
+
+    def _emit(self, level: str, prefix: str, obj: Any = None, text: str | None = None):
+        """
+        Single guarded emit:
+          - Builds a log-safe string (robust JSON if obj is given, else text).
+          - If the handler's stream can't encode it, we backslash-escape.
+          - Never throws.
+        """
+        try:
+            payload = text if text is not None else self._json_dumps_robust(obj)
+            msg = f"{prefix}{payload}"
+
+            # Try to encode against the first handler's stream encoding (if any)
+            enc = None
+            try:
+                if self.logger.handlers:
+                    stream = getattr(self.logger.handlers[0], "stream", None)
+                    enc = getattr(stream, "encoding", None)
+            except Exception:
+                enc = None
+
+            if enc:
+                try:
+                    msg.encode(enc)
+                except Exception:
+                    msg = msg.encode(enc, "backslashreplace").decode(enc, "strict")
+            else:
+                # Unknown encoding → make sure it's UTF-8 safe
+                try:
+                    msg.encode("utf-8")
+                except Exception:
+                    msg = msg.encode("utf-8", "backslashreplace").decode("utf-8", "strict")
+
+            getattr(self.logger, level.lower())(msg)
+
+        except Exception as e:
+            # Absolute last-resort: never crash due to logging
+            try:
+                getattr(self.logger, "error")(
+                    f"[logging-fallback] {prefix}{repr(obj) if obj is not None else repr(text)} (exc={e!r})"
+                )
+            except Exception:
+                # Swallow everything
+                pass
+
+    # ---------- PUBLIC API ----------
 
     def start_operation(self, operation: str, **kwargs):
         self.start_time = time.time()
         log_data = {"operation": operation, "timestamp": datetime.now().isoformat(), "inputs": kwargs}
-        self.logger.info(f"🚀 Starting {operation} - {json.dumps(log_data, indent=2)}")
+        self._emit("info", f"🚀 Starting {operation} - ", obj=log_data)
         return log_data
 
     def log_step(self, step: str, data: Any = None, level: str = "INFO"):
@@ -263,39 +404,42 @@ class AgentLogger:
         if self.start_time:
             entry["elapsed_time"] = f"{time.time() - self.start_time:.2f}s"
         self.execution_logs.append(entry)
-        getattr(self.logger, level.lower())(f"📋 {step} - {json.dumps(entry, indent=2, default=str)}")
+        self._emit(level, "📋 " + step + " - ", obj=entry)
 
     def log_model_call(self, model_name: str, prompt_length: int, response_length: int | None = None, success: bool = True):
-        data = {"model": model_name, "prompt_length": prompt_length, "response_length": response_length,
-                "success": success, "timestamp": datetime.now().isoformat()}
+        data = {
+            "model": model_name, "prompt_length": prompt_length, "response_length": response_length,
+            "success": success, "timestamp": datetime.now().isoformat()
+        }
         if self.start_time:
             data["elapsed_time"] = f"{time.time() - self.start_time:.2f}s"
-        self.logger.info(f"{'✅' if success else '❌'} Model Call - {json.dumps(data, indent=2)}")
+        self._emit("info", ("✅" if success else "❌") + " Model Call - ", obj=data)
 
     def log_error(self, error: Exception, context: str | None = None):
-        data = {"error_type": type(error).__name__, "error_message": str(error), "context": context,
-                "timestamp": datetime.now().isoformat()}
+        data = {
+            "error_type": type(error).__name__, "error_message": str(error),
+            "context": context, "timestamp": datetime.now().isoformat()
+        }
         if self.start_time:
             data["elapsed_time"] = f"{time.time() - self.start_time:.2f}s"
-        self.logger.error(f"💥 Error - {json.dumps(data, indent=2)}")
+        self._emit("error", "💥 Error - ", obj=data)
 
-    def finish_operation(self,
-                         success: bool = True,
-                         result_summary: str | None = None,
-                         **kwargs):
+    def finish_operation(self, success: bool = True, result_summary: str | None = None, **kwargs):
         if not self.start_time:
             return
         total = time.time() - self.start_time
-        summary = {"success": success, "total_time": f"{total:.2f}s", "result_summary": result_summary,
-                   "total_steps": len(self.execution_logs), "timestamp": datetime.now().isoformat(),
-                   **kwargs}
-        self.logger.info(f"{'🎉' if success else '💥'} Operation Complete - {json.dumps(summary, indent=2)}")
+        summary = {
+            "success": success, "total_time": f"{total:.2f}s", "result_summary": result_summary,
+            "total_steps": len(self.execution_logs), "timestamp": datetime.now().isoformat(), **kwargs
+        }
+        self._emit("info", ("🎉" if success else "💥") + " Operation Complete - ", obj=summary)
         self.start_time = None
         self.execution_logs = []
         return summary
 
     def log(self, message: str, level: str = "INFO"):
-        getattr(self.logger, level.lower())(message)
+        # Guard free-form messages too
+        self._emit(level, "", text=message)
 
 # =========================
 # Config (+ role mapping)
@@ -681,7 +825,7 @@ class FormatFixerService:
             "format_fixing",
             raw_output_length=len(raw_output),
             expected_format=expected_format,
-            input_data_length=len(input_data),
+            input_data_length=0,
             system_prompt_length=len(system_prompt_text),
             model=self.config.format_fixer_model,
             provider="anthropic"
@@ -1374,16 +1518,6 @@ class ModelServiceBase:
                 sys, usr = "", ""
             return {"system_preview": sys, "user_preview": usr}
 
-        def _msg_history(ms: List[BaseMessage]) -> dict:
-            history = []
-            try:
-                for m in ms:
-                    role = "system" if isinstance(m, SystemMessage) else "user" if isinstance(m, HumanMessage) else "assistant" if isinstance(m, AIMessage) else "unknown"
-                    history.append({"role": role, "content": (m.content or "")})
-            except Exception:
-               pass
-            return {"history": history}
-
         msg_data = _msg_history(messages) if debug else _msg_preview(messages)
 
         slog.start_operation(
@@ -1735,7 +1869,7 @@ def export_execution_logs(execution_data: Dict[str, Any], filename: str | None =
         filename = f"execution_logs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     try:
         with open(filename, 'w') as f:
-            json.dump(execution_data, f, indent=2, default=str)
+            json.dump(execution_data, f, indent=2, default=str, ensure_ascii=False)
         return f"Logs exported to {filename}"
     except Exception as e:
         return f"Failed to export logs: {str(e)}"

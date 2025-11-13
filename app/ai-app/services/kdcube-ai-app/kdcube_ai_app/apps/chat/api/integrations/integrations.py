@@ -151,7 +151,7 @@ async def admin_set_bundles(
             "ts": datetime.utcnow().isoformat() + "Z"
         }
         redis = request.app.state.middleware.redis
-        await redis.publish(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, json.dumps(msg))
+        await redis.publish(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
     except Exception as e:
         logger.error(f"Failed to publish config update: {e}")
 
@@ -189,7 +189,7 @@ async def admin_reset_bundles_from_env(
         "updated_by": session.username or session.user_id or "unknown",
         "ts": datetime.utcnow().isoformat() + "Z"
     }
-    await redis.publish(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, json.dumps(msg))
+    await redis.publish(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
 
     return {
         "status": "ok",

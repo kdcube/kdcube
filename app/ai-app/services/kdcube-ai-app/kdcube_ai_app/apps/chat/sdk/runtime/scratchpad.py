@@ -153,6 +153,8 @@ class TurnScratchpad:
 
         self.started_at = datetime.utcnow().isoformat() + "Z"
 
+        self.agents_responses = dict()
+
     def propose_fact(
             self,
             *,

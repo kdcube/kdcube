@@ -150,7 +150,7 @@ class SessionManager:
 
     async def _save_session(self, session_key: str, session: UserSession):
         """Save session to Redis"""
-        session_data = json.dumps(asdict(session), default=str)
+        session_data = json.dumps(asdict(session), default=str, ensure_ascii=False)
         await self.redis.setex(session_key, self.SESSION_TTL, session_data)
 
         index_key = f"{self.SESSION_INDEX_PREFIX}:{session.session_id}"

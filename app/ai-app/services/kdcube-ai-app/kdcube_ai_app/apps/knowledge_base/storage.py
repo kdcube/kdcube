@@ -135,7 +135,7 @@ class KnowledgeBaseStorage:
     def save_resource_metadata(self, resource_id: str, metadata: Dict[str, Any]) -> None:
         """Save resource metadata (always to data/raw)."""
         metadata_path = self.get_resource_metadata_path(resource_id)
-        metadata_json = json.dumps(metadata, indent=2)
+        metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
         self.backend.write_text(metadata_path, metadata_json)
 
     def get_version_metadata(self, resource_id: str, version: str) -> Optional[Dict[str, Any]]:
@@ -154,7 +154,7 @@ class KnowledgeBaseStorage:
     def save_version_metadata(self, resource_id: str, version: str, metadata: Dict[str, Any]) -> None:
         """Save version-specific metadata (always to data/raw)."""
         metadata_path = self.get_resource_version_metadata_path(resource_id, version)
-        metadata_json = json.dumps(metadata, indent=2)
+        metadata_json = json.dumps(metadata, indent=2, ensure_ascii=False)
         self.backend.write_text(metadata_path, metadata_json)
 
     def save_version_content(self, resource_id: str, version: str, filename: str, content: bytes) -> str:
@@ -396,7 +396,7 @@ class KnowledgeBaseStorage:
 
     def save_extraction_results(self, resource_id: str, version: str, results: List[Dict[str, Any]], filename: str = "extraction.json") -> str:
         """Save extraction results as JSON."""
-        content = json.dumps(results, indent=2)
+        content = json.dumps(results, indent=2, ensure_ascii=False)
         return self.save_stage_content("extraction", resource_id, version, filename, content)
 
     def get_segments(self, resource_id: str, version: Optional[str] = None, filename: str = "segments.json", subfolder: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
@@ -416,7 +416,7 @@ class KnowledgeBaseStorage:
 
     def save_segments(self, resource_id: str, version: str, segments: List[Dict[str, Any]], filename: str = "segments.json", subfolder: Optional[str] = None) -> str:
         """Save segmentation results as JSON, optionally in a subfolder."""
-        content = json.dumps(segments, indent=2)
+        content = json.dumps(segments, indent=2, ensure_ascii=False)
         return self.save_stage_content("segmentation", resource_id, version, filename, content, subfolder=subfolder)
 
     def list_subfolders(self, stage: ProcessingStage, resource_id: str, version: Optional[str] = None) -> List[str]:
@@ -558,9 +558,9 @@ class KnowledgeBaseStorage:
         # Append to log file
         if self.backend.exists(log_file):
             existing_content = self.backend.read_text(log_file)
-            new_content = existing_content + "\n" + json.dumps(log_entry)
+            new_content = existing_content + "\n" + json.dumps(log_entry, ensure_ascii=False)
         else:
-            new_content = json.dumps(log_entry)
+            new_content = json.dumps(log_entry, ensure_ascii=False)
 
         self.backend.write_text(log_file, new_content)
 
@@ -740,7 +740,7 @@ class KnowledgeBaseCollaborativeStorage(KnowledgeBaseStorage):
             metadata_with_info["updated_by_server"] = self.locks.server_id
 
             # Create content
-            content = json.dumps(metadata_with_info, indent=2)
+            content = json.dumps(metadata_with_info, indent=2, ensure_ascii=False)
 
             # Atomic write strategy
             temp_path = f"{metadata_path}.tmp.{self.locks.process_id}.{int(time.time())}"

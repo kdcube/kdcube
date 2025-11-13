@@ -97,7 +97,7 @@ class PersistentRebuildTracker:
         try:
             # Write to temporary file first (atomic write pattern)
             temp_path = f"{operation_path}.tmp.{int(time.time())}"
-            content = json.dumps(operation.to_dict(), indent=2)
+            content = json.dumps(operation.to_dict(), indent=2, ensure_ascii=False)
             self.backend.write_text(temp_path, content)
 
             # Atomic rename (if supported) or overwrite

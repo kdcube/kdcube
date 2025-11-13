@@ -116,7 +116,7 @@ class ThrottlingMonitor:
 
         await self.redis.zadd(
             self.events_key,
-            {json.dumps(event_data, default=str): event.timestamp}
+            {json.dumps(event_data, default=str, ensure_ascii=False): event.timestamp}
         )
 
         # Keep only last 24 hours

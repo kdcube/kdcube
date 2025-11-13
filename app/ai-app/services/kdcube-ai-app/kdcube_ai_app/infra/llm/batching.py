@@ -141,7 +141,7 @@ class OpenAIBatch(Batch):
             raise ValueError("Messages must be provided to create a batch.")
 
         # Create JSONL content
-        jsonl_messages = "\n".join([json.dumps(self._convert_message_to_request(m)) for m in self.messages])
+        jsonl_messages = "\n".join([json.dumps(self._convert_message_to_request(m), ensure_ascii=False) for m in self.messages])
 
         # Use io.BytesIO which OpenAI accepts
         import io

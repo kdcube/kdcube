@@ -74,7 +74,7 @@ class SummarizationModule(ProcessingModule):
         # Save individual summaries for easy access
         for i, segment_summary in enumerate(summary_results["segment_summaries"]):
             summary_filename = f"segment_summary_{i}.json"
-            summary_content = json.dumps(segment_summary, indent=2)
+            summary_content = json.dumps(segment_summary, indent=2, ensure_ascii=False)
             self.storage.save_stage_content(self.stage_name, resource_id, version, summary_filename, summary_content)
 
         # Log operation

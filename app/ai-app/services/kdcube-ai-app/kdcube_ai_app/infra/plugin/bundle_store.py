@@ -82,7 +82,7 @@ async def publish_update(redis, reg: BundlesRegistry, *, tenant: Optional[str]=N
         "registry": reg.model_dump()
     }
     if actor: payload["actor"] = actor
-    await redis.publish(REDIS_CHANNEL, json.dumps(payload))
+    await redis.publish(REDIS_CHANNEL, json.dumps(payload, ensure_ascii=False))
 
 async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Optional[str] = None) -> Optional[BundlesRegistry]:
     """

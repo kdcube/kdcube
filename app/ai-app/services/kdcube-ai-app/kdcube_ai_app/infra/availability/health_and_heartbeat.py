@@ -110,7 +110,7 @@ class MultiprocessDistributedMiddleware:
             print(f"Process {process_id} heartbeat: {heartbeat}")
 
         key = f"{self.PROCESS_HEARTBEAT_PREFIX}:{self.instance_id}:{service_type}:{service_name}:{process_id}"
-        await self.redis.setex(key, self.HEARTBEAT_TTL, json.dumps(asdict(heartbeat), default=str))
+        await self.redis.setex(key, self.HEARTBEAT_TTL, json.dumps(asdict(heartbeat), default=str, ensure_ascii=False))
 
         # Also register service endpoint for local discovery
         if port:
@@ -185,7 +185,7 @@ class MultiprocessDistributedMiddleware:
 
         # Store aggregated status
         status_key = f"{self.INSTANCE_STATUS_PREFIX}:{self.instance_id}:{service_type}:{service_name}"
-        await self.redis.setex(status_key, self.HEARTBEAT_TTL, json.dumps(asdict(status), default=str))
+        await self.redis.setex(status_key, self.HEARTBEAT_TTL, json.dumps(asdict(status), default=str, ensure_ascii=False))
 
         return status
 

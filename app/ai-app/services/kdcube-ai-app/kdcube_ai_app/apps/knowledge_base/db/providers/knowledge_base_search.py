@@ -207,7 +207,7 @@ class KnowledgeBaseSearch:
             ent_parts = []
             for ent in entity_filters:
                 ent_parts.append("entities @> %s")
-                facet_params.append(json.dumps([{"key": ent.key, "value": ent.value}]))
+                facet_params.append(json.dumps([{"key": ent.key, "value": ent.value}], ensure_ascii=False))
             joiner = " AND " if entities_match_all else " OR "
             facet_clauses.append("(" + joiner.join(ent_parts) + ")")
 
@@ -353,13 +353,13 @@ class KnowledgeBaseSearch:
             # All entities must be present (AND condition)
             for entity in entity_filters:
                 where_clauses.append("entities @> %s")
-                params.append(json.dumps([{"key": entity.key, "value": entity.value}]))
+                params.append(json.dumps([{"key": entity.key, "value": entity.value}], ensure_ascii=False))
         else:
             # Any entity can be present (OR condition)
             entity_conditions = []
             for entity in entity_filters:
                 entity_conditions.append("entities @> %s")
-                params.append(json.dumps([{"key": entity.key, "value": entity.value}]))
+                params.append(json.dumps([{"key": entity.key, "value": entity.value}], ensure_ascii=False))
             where_clauses.append(f"({' OR '.join(entity_conditions)})")
 
         # Add resource filter if specified
@@ -606,7 +606,7 @@ class KnowledgeBaseSearch:
             for ent in entity_filters:
                 parts.append("entities @> %s")
                 # [{"key":"...", "value":"..."}]
-                param_sink.append(json.dumps([{"key": ent.key, "value": ent.value}]))
+                param_sink.append(json.dumps([{"key": ent.key, "value": ent.value}], ensure_ascii=False))
             joiner = " AND " if use_and else " OR "
             return "(" + joiner.join(parts) + ")"
 
@@ -802,7 +802,7 @@ class KnowledgeBaseSearch:
             parts = []
             for ent in entity_filters:
                 parts.append("entities @> %s")
-                param_sink.append(json.dumps([{"key": ent.key, "value": ent.value}]))
+                param_sink.append(json.dumps([{"key": ent.key, "value": ent.value}], ensure_ascii=False))
             joiner = " AND " if use_and else " OR "
             return "(" + joiner.join(parts) + ")"
 

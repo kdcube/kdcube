@@ -752,7 +752,7 @@ class SegmentationModule(ProcessingModule):
         elements_dicts = [el.to_dict() for el in elements]
         self.storage.save_stage_content(
             self.stage_name, resource_id, version, "unstructured_elements.json",
-            json.dumps(elements_dicts, indent=2),
+            json.dumps(elements_dicts, indent=2, ensure_ascii=False),
         )
 
         max_characters = kwargs.get("max_characters", 2048)
@@ -778,7 +778,7 @@ class SegmentationModule(ProcessingModule):
             })
         self.storage.save_stage_content(
             self.stage_name, resource_id, version, "unstructured_chunks.json",
-            json.dumps(chunks_meta, indent=2),
+            json.dumps(chunks_meta, indent=2, ensure_ascii=False),
         )
 
         # 4) build base + retrieval segments (unchanged except: use `content_file` rn)
@@ -819,7 +819,7 @@ class SegmentationModule(ProcessingModule):
 
         base_payload = [s.to_dict() for s in base_segments]
         self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json",
-                                        json.dumps(base_payload, indent=2))
+                                        json.dumps(base_payload, indent=2, ensure_ascii=False))
 
         retrieval_segments: List[CompoundSegment] = []
         for s in base_segments:
@@ -835,9 +835,9 @@ class SegmentationModule(ProcessingModule):
 
         retr_json = [c.to_dict() for c in retrieval_segments]
         self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json",
-                                        json.dumps(retr_json, indent=2), subfolder=SegmentType.RETRIEVAL.value)
+                                        json.dumps(retr_json, indent=2, ensure_ascii=False), subfolder=SegmentType.RETRIEVAL.value)
         self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json",
-                                        json.dumps(retr_json, indent=2), subfolder=SegmentType.CONTINUOUS.value)
+                                        json.dumps(retr_json, indent=2, ensure_ascii=False), subfolder=SegmentType.CONTINUOUS.value)
 
         results = {
             "resource_id": resource_id,
@@ -925,7 +925,7 @@ class SegmentationModule(ProcessingModule):
 
             # Save base
             base_data = [s.to_dict() for s in all_base_segments]
-            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(base_data, indent=2))
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(base_data, indent=2, ensure_ascii=False))
 
             # Make one compound segment for both types
             from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import CompoundSegment
@@ -940,8 +940,8 @@ class SegmentationModule(ProcessingModule):
             )
 
             comp_json = [compound.to_dict()]
-            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_json, indent=2), subfolder=SegmentType.RETRIEVAL.value)
-            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_json, indent=2), subfolder=SegmentType.CONTINUOUS.value)
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_json, indent=2, ensure_ascii=False), subfolder=SegmentType.RETRIEVAL.value)
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_json, indent=2, ensure_ascii=False), subfolder=SegmentType.CONTINUOUS.value)
 
             results = {
                 "resource_id": resource_id,
@@ -979,7 +979,7 @@ class SegmentationModule(ProcessingModule):
         # Save base segments
         import json
         base_data = [seg.to_dict() for seg in all_base_segments]
-        self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(base_data, indent=2))
+        self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(base_data, indent=2, ensure_ascii=False))
 
         # Compound segments (original logic)
         from kdcube_ai_app.apps.knowledge_base.modules.contracts.segmentation import SegmentType
@@ -997,7 +997,7 @@ class SegmentationModule(ProcessingModule):
                 if validation_issues:
                     self.logger.warning(f"Validation issues found in retrieval segments: {validation_issues}")
             comp_data = [seg.to_dict() for seg in compound_segments]
-            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_data, indent=2), subfolder=segment_type.value)
+            self.storage.save_stage_content(self.stage_name, resource_id, version, "segments.json", json.dumps(comp_data, indent=2, ensure_ascii=False), subfolder=segment_type.value)
             compound_results[segment_type.value] = len(compound_segments)
 
         from datetime import datetime

@@ -46,7 +46,7 @@ def _try_module_attr_of(cv: ContextVar) -> Optional[tuple[str, str]]:
 def _encode_value(v: Any) -> dict:
     # Prefer JSON; fall back to cloudpickle (base64). Mark encoding.
     try:
-        json.dumps(v)
+        json.dumps(v, ensure_ascii=False)
         return {"kind": "json", "data": v}
     except Exception:
         if cloudpickle is None:

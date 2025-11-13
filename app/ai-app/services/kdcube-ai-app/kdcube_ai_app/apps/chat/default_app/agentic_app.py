@@ -452,7 +452,7 @@ INSTRUCTIONS:
 - Sort "reranked_docs" by descending "relevance_score".
 - "reasoning" should summarize the key ranking factors (brief).
 """
-        docs_text = json.dumps(state["retrieved_docs"], indent=2)
+        docs_text = json.dumps(state["retrieved_docs"], indent=2, ensure_ascii=False)
         user_msg = f"User question: {state['user_message']}\n\nDocuments to rerank:\n{docs_text}"
 
         with with_accounting("chat.agentic.reranking", metadata={"message": user_msg}):

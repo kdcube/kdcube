@@ -220,7 +220,7 @@ Valid output:
         filename = f"segment_{segment_id}_metadata.json"
         subfolder = segment_type.value
 
-        content = json.dumps(metadata, indent=2)
+        content = json.dumps(metadata, indent=2, ensure_ascii=False)
         self.storage.save_stage_content("metadata", resource_id, version, filename, content, subfolder=subfolder)
 
     def _create_system_resource_from_segment(self, segment: Dict[str, Any], resource_id: str, version: str) -> SystemResource:
@@ -593,7 +593,7 @@ Text: "{segment.get('text', '')}" """
             "model_name": batch_info.model_name,
             "submitted_at": batch_info.submitted_at,
             "status": batch_info.status
-        }, indent=2)
+        }, indent=2, ensure_ascii=False)
 
         self.storage.save_stage_content("metadata", batch_info.resource_id, batch_info.version,
                                         filename, content, subfolder="batches")

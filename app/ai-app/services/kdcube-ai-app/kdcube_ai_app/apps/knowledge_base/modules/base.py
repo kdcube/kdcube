@@ -61,7 +61,7 @@ class ProcessingModule(ABC):
             filename = f"{self.stage_name}.json"
 
         import json
-        content = json.dumps(results, indent=2, default=str)
+        content = json.dumps(results, indent=2, default=str, ensure_ascii=False)
         self.storage.save_stage_content(self.stage_name, resource_id, version, filename, content)
 
     def cleanup(self, resource_id: str, version: str) -> None:

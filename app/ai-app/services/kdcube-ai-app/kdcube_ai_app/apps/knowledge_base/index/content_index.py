@@ -279,7 +279,7 @@ class FSContentIndexManager(IContentIndexManager):
         try:
             # Write to temporary file first
             temp_path = f"{self.hash_index_path}.tmp.{int(time.time())}"
-            content = json.dumps(self._hash_index, indent=2)
+            content = json.dumps(self._hash_index, indent=2, ensure_ascii=False)
             self.backend.write_text(temp_path, content)
 
             # Atomic rename (if backend supports it, otherwise just overwrite)
@@ -321,7 +321,7 @@ class FSContentIndexManager(IContentIndexManager):
                 "last_updated": time.time()
             }
 
-            content = json.dumps(bloom_metadata, indent=2)
+            content = json.dumps(bloom_metadata, indent=2, ensure_ascii=False)
             self.backend.write_text(self.bloom_index_path, content)
             logger.debug("Saved bloom filter metadata")
         except Exception as e:
@@ -337,7 +337,7 @@ class FSContentIndexManager(IContentIndexManager):
                 "bloom_filter_enabled": BLOOM_AVAILABLE and self._bloom_filter is not None
             }
 
-            content = json.dumps(metadata, indent=2)
+            content = json.dumps(metadata, indent=2, ensure_ascii=False)
             self.backend.write_text(self.meta_index_path, content)
         except Exception as e:
             logger.error(f"Error saving index metadata: {e}")

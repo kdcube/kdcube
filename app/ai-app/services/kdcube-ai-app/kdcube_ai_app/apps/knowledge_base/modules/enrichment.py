@@ -83,7 +83,7 @@ class EnrichmentModule(ProcessingModule):
 
         segmentation_module = self.pipeline.get_module("segmentation")
         all_segments = segmentation_module.get_segments_by_type(resource_id, version, SegmentType.RETRIEVAL)
-        print(json.dumps(all_segments, indent=2))
+        print(json.dumps(all_segments, indent=2, ensure_ascii=False))
 
         ok = 0
         total = len(all_segments)
@@ -182,4 +182,4 @@ class EnrichmentModule(ProcessingModule):
         return json.loads(s) if s else None
 
     def _save_json(self, stage: str, rid: str, ver: str, name: str, obj: Dict[str, Any], subfolder: Optional[str] = None):
-        self.storage.save_stage_content(stage, rid, ver, name, json.dumps(obj, indent=2), subfolder=subfolder)
+        self.storage.save_stage_content(stage, rid, ver, name, json.dumps(obj, indent=2, ensure_ascii=False), subfolder=subfolder)

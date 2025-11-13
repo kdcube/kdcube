@@ -304,7 +304,7 @@ class FileAccountingStorage(IAccountingStorage):
             event_dict = event.to_dict()
 
             rel_path = f"{self.base_path}/{self.path_strategy(event)}" if self.path_strategy else self._default_path(event)
-            content = json.dumps(event_dict, indent=2)
+            content = json.dumps(event_dict, indent=2, ensure_ascii=False)
             # loop = asyncio.get_event_loop()
             # await loop.run_in_executor(None, lambda: self.storage_backend.write_text(rel_path, content))
             await self.storage_backend.write_text_a(rel_path, content)

@@ -18,7 +18,7 @@ import aiohttp
 from bs4 import BeautifulSoup
 import asyncio
 import logging
-import json
+import json, os
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
@@ -244,9 +244,98 @@ def _infer_time_sensitivity(objective: Optional[str], queries: List[str]) -> boo
     return False
 
 
+# ============================================================================
+# Source-Specific Cookie Manager
+# ============================================================================
+
+class SourceCookieManager:
+    """
+    Manages authentication cookies for different content sources.
+
+    Reads from environment variables in format:
+    WEB_FETCH_RESOURCES_<SOURCE>='{"cookies": {"cookie_name": "cookie_value", ...}}'
+
+    Example:
+    WEB_FETCH_RESOURCES_MEDIUM='{"cookies": {"uid": "abc123", "sid": "xyz789"}}'
+    """
+
+    _cookie_cache: Dict[str, Dict[str, str]] = {}
+    _loaded = False
+
+    @classmethod
+    def _load_cookies(cls):
+        """Load all cookies from environment variables once."""
+        if cls._loaded:
+            return
+
+        cls._loaded = True
+
+        # Map of source identifiers to environment variable suffixes
+        source_mappings = {
+            'medium.com': 'MEDIUM',
+            'towardsdatascience.com': 'MEDIUM',  # Uses same Medium cookies
+            'nytimes.com': 'NYT',
+            'wsj.com': 'WSJ',
+            # Add more sources as needed
+        }
+
+        for domain, env_suffix in source_mappings.items():
+            env_var = f'WEB_FETCH_RESOURCES_{env_suffix}'
+            env_value = os.getenv(env_var)
+
+            if env_value:
+                try:
+                    config = json.loads(env_value)
+                    cookies = config.get('cookies', {})
+
+                    if cookies:
+                        cls._cookie_cache[domain] = cookies
+                        logger.info(f"✓ Loaded cookies for {domain} from {env_var}")
+                        logger.debug(f"  Cookie keys: {list(cookies.keys())}")
+                    else:
+                        logger.warning(f"⚠ {env_var} exists but has no cookies")
+
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ Failed to parse {env_var}: {e}")
+                except Exception as e:
+                    logger.error(f"❌ Error loading {env_var}: {e}")
+
+    @classmethod
+    def get_cookies_for_url(cls, url: str) -> Optional[Dict[str, str]]:
+        """
+        Get cookies for a specific URL if available.
+
+        Args:
+            url: The URL to fetch
+
+        Returns:
+            Dict of cookies or None if no cookies configured for this source
+        """
+        cls._load_cookies()
+
+        url_lower = url.lower()
+
+        for domain, cookies in cls._cookie_cache.items():
+            if domain in url_lower:
+                logger.debug(f"Using cookies for {domain}: {list(cookies.keys())}")
+                return cookies
+
+        return None
+
+    @classmethod
+    def has_cookies_for_url(cls, url: str) -> bool:
+        """Check if cookies are available for this URL."""
+        return cls.get_cookies_for_url(url) is not None
+
+
+# ============================================================================
+# Web Content Fetcher
+# ============================================================================
+
 class WebContentFetcher:
     """
     Minimal content fetcher that can be integrated into existing web_search function.
+    Supports source-specific authentication via cookies.
     """
 
     def __init__(
@@ -315,7 +404,7 @@ class WebContentFetcher:
                 logger.info(f"Successfully fetched {url}: {result['content_length']} chars")
                 return result
 
-            if self.enable_archive and status in ["paywall", "error", "insufficient_content", "blocked_403"]:
+            if self.enable_archive and status in ["paywall", "error", "insufficient_content", "blocked_403", "session_expired"]:
                 logger.info(f"Trying archive fallback for: {url} (reason: {status})")
                 content, meta = await self._fetch_archive(url)
                 if content:
@@ -366,7 +455,31 @@ class WebContentFetcher:
                 'Cache-Control': 'max-age=0',
             }
 
-            async with self.session.get(url, headers=headers, allow_redirects=True) as response:
+            # Get source-specific cookies
+            cookies = SourceCookieManager.get_cookies_for_url(url)
+
+            if cookies:
+                logger.debug(f"Using authenticated cookies for {url}")
+
+            async with self.session.get(
+                url,
+                headers=headers,
+                allow_redirects=True,
+                cookies=cookies  # Pass cookies if available
+            ) as response:
+                # Detect expired/invalid session
+                if response.status == 401:
+                    if cookies:
+                        logger.warning(f"Got 401 for {url} - session may be expired")
+                        return "", "session_expired", {}
+                    return "", "paywall", {}
+
+                # Check if redirected to login (another sign of expired session)
+                final_url = str(response.url)
+                if cookies and any(indicator in final_url.lower() for indicator in ['/signin', '/login', '/auth']):
+                    logger.warning(f"Redirected to login page for {url} - session expired")
+                    return "", "session_expired", {}
+
                 if response.status == 403:
                     if retry:
                         logger.info(f"Got 403 for {url} with bot ID, retrying with standard headers")
@@ -375,9 +488,6 @@ class WebContentFetcher:
                     else:
                         logger.warning(f"Got 403 for {url} even with standard headers - site blocks bots")
                         return "", "blocked_403", {}
-
-                if response.status == 401:
-                    return "", "paywall", {}
 
                 if response.status != 200:
                     return "", f"http_{response.status}", {}
@@ -562,39 +672,444 @@ class SiteSpecificExtractors:
     - Handle exceptions gracefully
     """
 
+    # @staticmethod
+    # def extract_medium(html: str) -> str:
+    #     """Enhanced Medium extraction with multiple fallback strategies."""
+    #     try:
+    #         soup = BeautifulSoup(html, 'lxml')
+    #
+    #         # Strategy 0: Check for paywall redirect
+    #         # If redirected to signin, the session expired
+    #         if soup.find('input', attrs={'name': 'signInRedirect'}):
+    #             logger.warning("Detected sign-in page - session expired")
+    #             return ""
+    #
+    #         # Strategy 1: JSON-LD (current approach)
+    #         for script in soup.find_all('script', type='application/ld+json'):
+    #             try:
+    #                 data = json.loads(script.string)
+    #                 if 'articleBody' in data:
+    #                     logger.debug("Found Medium article in JSON-LD articleBody")
+    #                     return data['articleBody']
+    #                 if isinstance(data, dict) and '@graph' in data:
+    #                     for item in data['@graph']:
+    #                         if isinstance(item, dict) and 'articleBody' in item:
+    #                             logger.debug("Found Medium article in JSON-LD @graph")
+    #                             return item['articleBody']
+    #             except:
+    #                 continue
+    #
+    #         # Strategy 2: Look for preloaded state (Medium stores article in JS)
+    #         for script in soup.find_all('script'):
+    #             script_text = script.string or ""
+    #             if 'window.__APOLLO_STATE__' in script_text:
+    #                 try:
+    #                     match = re.search(r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});', script_text, re.DOTALL)
+    #                     if match:
+    #                         apollo_state = json.loads(match.group(1))
+    #                         # Navigate through the complex structure
+    #                         for key, value in apollo_state.items():
+    #                             if isinstance(value, dict) and 'content' in value:
+    #                                 content = value.get('content', {})
+    #                                 if isinstance(content, dict) and 'bodyModel' in content:
+    #                                     body_model = content['bodyModel']
+    #                                     paragraphs = []
+    #                                     if isinstance(body_model, dict) and 'paragraphs' in body_model:
+    #                                         for para in body_model['paragraphs']:
+    #                                             if isinstance(para, dict) and 'text' in para:
+    #                                                 paragraphs.append(para['text'])
+    #                                     if paragraphs:
+    #                                         logger.debug("Found Medium article in Apollo state")
+    #                                         return '\n\n'.join(paragraphs)
+    #                 except Exception as e:
+    #                     logger.debug(f"Apollo state parsing failed: {e}")
+    #                     continue
+    #
+    #         # Strategy 3: Look for initial Next.js data
+    #         for script in soup.find_all('script', id='__NEXT_DATA__'):
+    #             try:
+    #                 data = json.loads(script.string or '{}')
+    #                 # Navigate through Next.js data structure
+    #                 props = data.get('props', {}).get('pageProps', {})
+    #
+    #                 # Try to find article in various places
+    #                 for key in ['post', 'article', 'story', 'initialState']:
+    #                     if key in props:
+    #                         item = props[key]
+    #                         if isinstance(item, dict):
+    #                             # Look for content
+    #                             content = item.get('content', {})
+    #                             if isinstance(content, dict):
+    #                                 # Extract paragraphs
+    #                                 body = content.get('bodyModel', {})
+    #                                 if isinstance(body, dict) and 'paragraphs' in body:
+    #                                     paragraphs = [
+    #                                         p.get('text', '')
+    #                                         for p in body['paragraphs']
+    #                                         if isinstance(p, dict) and 'text' in p
+    #                                     ]
+    #                                     if paragraphs:
+    #                                         logger.debug("Found Medium article in __NEXT_DATA__")
+    #                                         return '\n\n'.join(paragraphs)
+    #             except Exception as e:
+    #                 logger.debug(f"Next.js data parsing failed: {e}")
+    #                 continue
+    #
+    #         # Strategy 4: Direct article content with better selectors
+    #         # Try multiple content selectors Medium uses
+    #         content_selectors = [
+    #             'article section',  # Common Medium structure
+    #             'article div[data-testid="storyContent"]',
+    #             'article .section-content',
+    #             'article[data-post-id]',  # Articles have post IDs
+    #             '.postArticle-content',
+    #             '[data-selectable-paragraph]',  # Older Medium
+    #         ]
+    #
+    #         for selector in content_selectors:
+    #             elements = soup.select(selector)
+    #             if elements:
+    #                 # Extract all paragraphs
+    #                 paragraphs = []
+    #                 for el in elements:
+    #                     # Remove script/style
+    #                     for unwanted in el.find_all(['script', 'style', 'figure', 'img']):
+    #                         unwanted.decompose()
+    #
+    #                     text = el.get_text(separator='\n\n', strip=True)
+    #                     if text and len(text) > 50:
+    #                         paragraphs.append(text)
+    #
+    #                 if paragraphs:
+    #                     result = '\n\n'.join(paragraphs)
+    #                     if len(result) > 500:
+    #                         logger.debug(f"Found Medium article via selector: {selector}")
+    #                         return result
+    #
+    #         # Strategy 5: Fallback - just get article tag content
+    #         article = soup.find('article')
+    #         if article:
+    #             for el in article.find_all(['script', 'style', 'figure']):
+    #                 el.decompose()
+    #             text = article.get_text(separator='\n\n', strip=True)
+    #             if len(text) > 500:
+    #                 logger.debug("Found Medium article in <article> tag")
+    #                 return text
+    #
+    #         logger.debug("No Medium article content found with any strategy")
+    #         return ""
+    #
+    #     except Exception as e:
+    #         logger.warning(f"Medium extractor failed: {e}")
+    #         return ""
+
     @staticmethod
     def extract_medium(html: str) -> str:
-        """
-        Extract from Medium articles using JSON-LD embedded content.
-        Medium embeds full article text in JSON-LD for SEO, bypassing the paywall.
-        """
+        """Enhanced Medium extraction with markdown formatting."""
         try:
             soup = BeautifulSoup(html, 'lxml')
 
-            # Look for JSON-LD scripts
+            # Strategy 0: Check for paywall redirect
+            if soup.find('input', attrs={'name': 'signInRedirect'}):
+                logger.warning("Detected sign-in page - session expired")
+                return ""
+
+            # Strategy 1: JSON-LD with markdown conversion
             for script in soup.find_all('script', type='application/ld+json'):
                 try:
                     data = json.loads(script.string)
-
-                    # Medium articles have articleBody
                     if 'articleBody' in data:
-                        logger.debug("Found Medium article in JSON-LD")
-                        return data['articleBody']
-
-                    # Sometimes it's nested
+                        logger.debug("Found Medium article in JSON-LD articleBody (plain text)")
+                        # Fall through to try other methods for better formatting
                     if isinstance(data, dict) and '@graph' in data:
                         for item in data['@graph']:
                             if isinstance(item, dict) and 'articleBody' in item:
-                                logger.debug("Found Medium article in JSON-LD @graph")
-                                return item['articleBody']
-
-                except json.JSONDecodeError:
+                                logger.debug("Found Medium article in JSON-LD @graph (plain text)")
+                                # Fall through to try other methods
+                except:
                     continue
+
+                def _best_srcset_value(srcset: str) -> str:
+                    # choose the last candidate (usually largest width)
+                    parts = [p.strip() for p in (srcset or "").split(",") if p.strip()]
+                    if not parts:
+                        return ""
+                    return parts[-1].split()[0]  # "<url> <w>"
+
+                def _best_src_from_picture(pic_tag):
+                    # look at all <source> children; prefer the last srcset (largest)
+                    best = ""
+                    for src in pic_tag.find_all("source"):
+                        # BeautifulSoup lowercases attribute names, so srcset works even if HTML has srcSet
+                        s = src.get("srcset") or src.get("srcSet") or ""
+                        cand = _best_srcset_value(s)
+                        if cand:
+                            best = cand
+                    # sometimes an <img> is still present as a fallback
+                    if not best:
+                        img = pic_tag.find("img")
+                        if img:
+                            best = _best_src_from_img_tag(img)
+                    return best
+
+            def _best_src_from_img_tag(img):
+                # prefer src; fall back to data-src or the largest candidate in srcset
+                src = img.get('src') or img.get('data-src') or ''
+                if not src:
+                    srcset = img.get('srcset', '')
+                    if srcset:
+                        # pick the last (usually largest)
+                        parts = [p.strip() for p in srcset.split(',') if p.strip()]
+                        if parts:
+                            src = parts[-1].split()[0]
+                return src
+
+            def _append_image(lines, src, alt=None, caption=None):
+                if not src:
+                    return
+                alt = (alt or caption or "").strip()
+                lines.append(f"![{alt}]({src})\n")
+                # print caption only if it's non-empty and different from alt
+                if caption:
+                    cap = caption.strip()
+                    if cap and cap != alt:
+                        lines.append(f"*{cap}*\n")
+
+            def _miro_url_from_id(image_id: str, max_width: int = 1400) -> str:
+                # Medium’s stable CDN format; image_id is something like '0*weAr9MNo0tbNpNMu'
+                # Using v2 + resize:fit yields a portable URL that doesn't need cookies.
+                return f"https://miro.medium.com/v2/resize:fit:{max_width}/{image_id}"
+
+            def _image_url_from_apollo(apollo_state: dict, image_id: str) -> str:
+                # Try to resolve to originalUrl if present; else build from id
+                try:
+                    for k, v in apollo_state.items():
+                        if isinstance(v, dict) and v.get('id') == image_id:
+                            url = v.get('originalUrl') or v.get('url')
+                            if url:
+                                return url
+                except Exception:
+                    pass
+                return _miro_url_from_id(image_id)
+
+            def paragraphs_to_markdown(paragraphs: List[Dict], apollo_state: Optional[dict] = None) -> str:
+                lines = []
+                for para in paragraphs:
+                    if not isinstance(para, dict):
+                        continue
+                    p_type = para.get('type', 'P')
+                    text = para.get('text', '') or ''
+                    markups = para.get('markups', []) or []
+
+                    if p_type in ('IMG', 'Image', 'FIGURE'):
+                        meta = para.get('metadata', {}) or {}
+                        image_id = meta.get('id') or meta.get('imageId') or ''
+                        src = _image_url_from_apollo(apollo_state or {}, image_id) if image_id else (para.get('href', '') or '')
+                        caption = (para.get('caption') or meta.get('caption') or '').strip()
+                        alt = (
+                                meta.get('alt')
+                                or meta.get('title')
+                                or para.get('text')              # sometimes carries a label
+                                or caption
+                        )
+                        _append_image(lines, src, alt, caption)
+                        continue
+
+                    # existing inline formatting for non-image paragraphs
+                    if markups:
+                        text = _apply_markups(text, markups)
+
+                    if p_type == 'H2':
+                        lines.append(f"## {text}\n")
+                    elif p_type == 'H3':
+                        lines.append(f"### {text}\n")
+                    elif p_type == 'H4':
+                        lines.append(f"#### {text}\n")
+                    elif p_type in ['PRE', 'CODE']:
+                        lines.append(f"```\n{text}\n```\n")
+                    elif p_type == 'PQ':
+                        lines.append(f"> {text}\n")
+                    elif p_type == 'OLI':
+                        lines.append(f"1. {text}")
+                    elif p_type == 'ULI':
+                        lines.append(f"* {text}")
+                    else:
+                        lines.append(f"{text}\n")
+                return '\n'.join(lines)
+
+            def _apply_markups(text: str, markups: List[Dict]) -> str:
+                """Apply inline formatting markups to text."""
+                if not markups:
+                    return text
+
+                # Sort markups by start position (reverse order for replacement)
+                sorted_markups = sorted(markups, key=lambda m: m.get('start', 0), reverse=True)
+
+                for markup in sorted_markups:
+                    m_type = markup.get('type')
+                    start = markup.get('start', 0)
+                    end = markup.get('end', len(text))
+
+                    if start >= end or end > len(text):
+                        continue
+
+                    segment = text[start:end]
+
+                    if m_type == 'STRONG' or m_type == 'EM':
+                        # Bold
+                        replacement = f"**{segment}**"
+                    elif m_type == 'EM':
+                        # Italic
+                        replacement = f"*{segment}*"
+                    elif m_type == 'CODE':
+                        # Inline code
+                        replacement = f"`{segment}`"
+                    elif m_type == 'A':
+                        # Link
+                        href = markup.get('href', '#')
+                        replacement = f"[{segment}]({href})"
+                    else:
+                        # Unknown markup, keep as-is
+                        replacement = segment
+
+                    text = text[:start] + replacement + text[end:]
+
+                return text
+
+            # Strategy 2: Apollo State with markdown conversion
+            for script in soup.find_all('script'):
+                script_text = script.string or ""
+                if 'window.__APOLLO_STATE__' in script_text:
+                    try:
+                        match = re.search(r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});', script_text, re.DOTALL)
+                        if match:
+                            apollo_state = json.loads(match.group(1))
+                            for key, value in apollo_state.items():
+                                if isinstance(value, dict) and 'content' in value:
+                                    body_model = value.get('content', {}).get('bodyModel', {})
+                                    if isinstance(body_model, dict) and 'paragraphs' in body_model:
+                                        md = paragraphs_to_markdown(body_model['paragraphs'], apollo_state)
+                                        if md and len(md) > 500:
+                                            return md
+                    except Exception as e:
+                        logger.debug(f"Apollo state parsing failed: {e}")
+                        continue
+
+            # Strategy 3: Next.js data with markdown conversion
+            for script in soup.find_all('script', id='__NEXT_DATA__'):
+                try:
+                    data = json.loads(script.string or '{}')
+                    props = data.get('props', {}).get('pageProps', {})
+                    for key in ['post', 'article', 'story', 'initialState']:
+                        item = props.get(key)
+                        if isinstance(item, dict):
+                            body = item.get('content', {}).get('bodyModel', {})
+                            if isinstance(body, dict) and 'paragraphs' in body:
+                                md = paragraphs_to_markdown(body['paragraphs'], props.get('apolloState') or {})
+                                if md and len(md) > 500:
+                                    return md
                 except Exception as e:
-                    logger.debug(f"Error parsing JSON-LD: {e}")
+                    logger.debug(f"Next.js data parsing failed: {e}")
                     continue
 
-            logger.debug("No articleBody found in Medium JSON-LD")
+            # Strategy 4: Direct HTML parsing with markdown conversion
+            article = soup.find('article')
+            if article:
+                markdown_lines = []
+                image_found = False  # track if we captured any image
+
+                for element in article.find_all(['h1','h2','h3','h4','p','pre','blockquote','ul','ol','figure','img','picture']):
+                    if element.name == 'picture':
+                        src = _best_src_from_picture(element)
+                        # look up a caption from a wrapping figure if present
+                        cap_el = element.find_parent('figure')
+                        caption = (cap_el.find('figcaption').get_text(strip=True) if cap_el and cap_el.find('figcaption') else None)
+                        # try to find alt from a descendant img or attributes
+                        img = element.find('img')
+                        alt = (img.get('alt') if img else None) or element.get('aria-label') or element.get('title') or caption
+                        if src:
+                            _append_image(markdown_lines, src, alt, caption)
+                            image_found = True
+
+                    elif element.name == 'figure':
+                        pic = element.find('picture')
+                        if pic:
+                            src = _best_src_from_picture(pic)
+                            img = pic.find('img')
+                            alt_attr = img.get('alt') if img else None
+                        else:
+                            img = element.find('img')
+                            src = _best_src_from_img_tag(img) if img else ""
+                            alt_attr = img.get('alt') if img else None
+                        cap_el = element.find('figcaption')
+                        caption = cap_el.get_text(strip=True) if cap_el else None
+                        alt = alt_attr or element.get('aria-label') or element.get('title') or caption
+                        if src:
+                            _append_image(markdown_lines, src, alt, caption)
+                            image_found = True
+
+                    elif element.name == 'img':
+                        src = _best_src_from_img_tag(element)
+                        alt = element.get('alt') or element.get('aria-label') or element.get('title')
+                        if src:
+                            _append_image(markdown_lines, src, alt)
+                            image_found = True
+
+                    # ... keep your existing heading/para/list handling exactly as-is ...
+                    if element.name == 'h1':
+                        markdown_lines.append(f"# {element.get_text(strip=True)}\n")
+                    elif element.name == 'h2':
+                        markdown_lines.append(f"## {element.get_text(strip=True)}\n")
+                    elif element.name == 'h3':
+                        markdown_lines.append(f"### {element.get_text(strip=True)}\n")
+                    elif element.name == 'h4':
+                        markdown_lines.append(f"#### {element.get_text(strip=True)}\n")
+                    elif element.name == 'pre':
+                        code_text = element.get_text(strip=True)
+                        markdown_lines.append(f"```\n{code_text}\n```\n")
+                    elif element.name == 'blockquote':
+                        quote_text = element.get_text(strip=True)
+                        markdown_lines.append(f"> {quote_text}\n")
+                    elif element.name == 'p':
+                        # your inline formatting block ... unchanged
+                        p_html = str(element)
+                        p_soup = BeautifulSoup(p_html, 'lxml')
+                        for strong in p_soup.find_all(['strong', 'b']):
+                            strong.replace_with(f"**{strong.get_text()}**")
+                        for em in p_soup.find_all(['em', 'i']):
+                            em.replace_with(f"*{em.get_text()}*")
+                        for code in p_soup.find_all('code'):
+                            code.replace_with(f"`{code.get_text()}`")
+                        for link in p_soup.find_all('a'):
+                            href = link.get('href', '#')
+                            link.replace_with(f"[{link.get_text()}]({href})")
+                        text = p_soup.get_text(separator=' ', strip=True)
+                        if text:
+                            markdown_lines.append(f"{text}\n")
+                    elif element.name == 'ul':
+                        for li in element.find_all('li', recursive=False):
+                            markdown_lines.append(f"* {li.get_text(strip=True)}")
+                        markdown_lines.append("")
+                    elif element.name == 'ol':
+                        for idx, li in enumerate(element.find_all('li', recursive=False), 1):
+                            markdown_lines.append(f"{idx}. {li.get_text(strip=True)}")
+                        markdown_lines.append("")
+
+                markdown = '\n'.join(markdown_lines)
+
+                # Fallback cover image (og:image) if we saw no inline article images
+                if not image_found:
+                    og = soup.find('meta', attrs={'property':'og:image'})
+                    if og and og.get('content'):
+                        cover = og['content'].strip()
+                        if cover:
+                            markdown = f"![cover]({cover})\n\n" + markdown
+
+                if len(markdown) > 500:
+                    logger.debug("Found Medium article in <article> tag (with images)")
+                    return markdown
+
+            logger.debug("No Medium article content found with any strategy")
             return ""
 
         except Exception as e:

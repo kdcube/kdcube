@@ -264,7 +264,7 @@ class TenantProjects:
 
             # Create project directory structure
             metadata_path = self._get_project_metadata_path(project_name)
-            metadata_content = json.dumps(project_metadata.to_dict(), indent=2)
+            metadata_content = json.dumps(project_metadata.to_dict(), indent=2, ensure_ascii=False)
 
             # FIXED: Use write_text instead of save with bytes
             self.storage_backend.write_text(metadata_path, metadata_content)
@@ -325,7 +325,7 @@ class TenantProjects:
 
             # Save updated metadata
             metadata_path = self._get_project_metadata_path(project_name)
-            metadata_content = json.dumps(metadata.to_dict(), indent=2)
+            metadata_content = json.dumps(metadata.to_dict(), indent=2, ensure_ascii=False)
 
             # FIXED: Use write_text instead of save with bytes
             self.storage_backend.write_text(metadata_path, metadata_content)

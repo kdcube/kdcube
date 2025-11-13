@@ -229,7 +229,7 @@ class CircuitBreaker:
         stats_dict = asdict(stats)
         stats_dict['state'] = stats.state.value
 
-        await self.redis.set(self.stats_key, json.dumps(stats_dict, default=str), ex=3600)
+        await self.redis.set(self.stats_key, json.dumps(stats_dict, default=str, ensure_ascii=False), ex=3600)
 
         # Invalidate cache
         self._last_cache_update = 0

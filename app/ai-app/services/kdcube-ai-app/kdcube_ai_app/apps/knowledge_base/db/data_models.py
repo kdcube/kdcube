@@ -150,6 +150,9 @@ class HybridSearchParams(BaseModel):
     # reranking
     should_rerank: bool = False
 
+    # Visibility/access control filter
+    visibility: Optional[str] = "anonymous"  # 'anonymous', 'registered', 'payed', 'privileged', or user_id
+
 
 class SegmentProcessingData(BaseModel):
     """
