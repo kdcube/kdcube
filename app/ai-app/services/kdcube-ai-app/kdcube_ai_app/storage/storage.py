@@ -825,10 +825,28 @@ class InMemoryStorageBackend(IStorageBackend):
             return files + list(other_objects)
 
     def delete(self, path: str) -> None:
+        """
+        Delete a file or a whole subtree (prefix) from the in-memory storage.
+
+        Behaves like LocalFileSystemBackend.delete and S3StorageBackend.delete:
+        - If `path` is an exact file key, remove that file.
+        - Additionally, remove all keys that start with `path + '/'`
+          (i.e., treat `path` as a directory/prefix).
+        """
         with self.__with_lock():
-            if path in self.__fs_objects:
-                fs_object = self.__fs_objects.pop(path)
-                self.__total_size -= fs_object.data_size
+            # 1) delete exact file, if present
+            obj = self.__fs_objects.pop(path, None)
+            if obj is not None:
+                self.__total_size -= obj.data_size
+
+            # 2) delete everything under this "directory" prefix
+            prefix = path if path.endswith('/') else path + '/'
+            keys_to_delete = [k for k in self.__fs_objects.keys() if k.startswith(prefix)]
+
+            for k in keys_to_delete:
+                obj = self.__fs_objects.pop(k, None)
+                if obj is not None:
+                    self.__total_size -= obj.data_size
 
     def get_size(self, path: str) -> int:
         with self.__with_lock():
