@@ -136,6 +136,19 @@ class ConversationStatus(BaseModel):
     updated_at: Optional[str] = None
     meta: Optional[dict] = None
 
+class ConversationDeleteResponse(BaseModel):
+    conversation_id: str
+    deleted_messages: int = Field(..., description="Rows deleted from conv_messages")
+    deleted_storage_messages: int = Field(
+        ..., description="Message blobs removed from storage (best-effort)"
+    )
+    deleted_storage_attachments: int = Field(
+        ..., description="Attachment files removed from storage (best-effort)"
+    )
+    deleted_storage_executions: int = Field(
+        ..., description="Execution snapshot files removed from storage (best-effort)"
+    )
+
 # -------------------- Endpoints --------------------
 
 @router.get("/{tenant}/{project}", response_model=ConversationListResponse)
@@ -239,6 +252,72 @@ async def fetch_conversation(
     #   ]
     # }
     return data
+
+@router.delete(
+    "/{tenant}/{project}/{conversation_id}",
+    response_model=ConversationDeleteResponse,
+)
+async def delete_conversation(
+        tenant: str,
+        project: str,
+        conversation_id: str,
+        session: UserSession = Depends(get_user_session_dependency()),
+):
+    """
+    Hard-delete a conversation (and related artifacts) for the authenticated user.
+
+    This will:
+      - remove all index rows for this {user_id, conversation_id} (including state, logs, reactions, etc.)
+      - best-effort delete message JSONs, attachments, and execution artifacts in storage.
+
+    NOTE: This operation is irreversible.
+    """
+    if not session.user_id:
+        raise HTTPException(status_code=401, detail="No user in session")
+
+    # Resolve user_type as the string used when writing messages (e.g. "standard")
+    raw_user_type = getattr(session, "user_type", "standard")
+    user_type_str = getattr(raw_user_type, "value", str(raw_user_type))
+
+    # Bundle scoping (same pattern as feedback endpoints)
+    try:
+        spec_resolved = resolve_bundle(None, override=None)
+        bundle_id = spec_resolved.id
+    except Exception:
+        bundle_id = None
+
+    try:
+        result = await router.state.conversation_browser.delete_conversation(
+            tenant=tenant,
+            project=project,
+            user_id=session.user_id,
+            conversation_id=conversation_id,
+            user_type=user_type_str,
+            bundle_id=bundle_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            f"Failed to delete conversation={conversation_id} for user={session.user_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete conversation: {str(e)}",
+        )
+    if result.get("deleted_messages", 0) == 0:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    # You can decide whether "0 deleted_messages" should be treated as 404.
+    # For now we just return the counts.
+    return ConversationDeleteResponse(
+        conversation_id=conversation_id,
+        deleted_messages=result.get("deleted_messages", 0),
+        deleted_storage_messages=result.get("deleted_storage_messages", 0),
+        deleted_storage_attachments=result.get("deleted_storage_attachments", 0),
+        deleted_storage_executions=result.get("deleted_storage_executions", 0),
+    )
 
 
 @router.post("/{tenant}/{project}/{conversation_id}/turns/{turn_id}/feedback", response_model=TurnFeedbackResponse)

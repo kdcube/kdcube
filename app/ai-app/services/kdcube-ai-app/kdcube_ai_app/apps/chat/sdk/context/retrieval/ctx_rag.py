@@ -1587,6 +1587,69 @@ class ContextRAGClient:
             "row": res.get("row"),
         }
 
+    async def delete_conversation(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user_id: str,
+            conversation_id: str,
+            user_type: str,
+            bundle_id: Optional[str] = None,
+            fingerprint: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """
+        Hard-delete a conversation for a user:
+
+          1) Remove all conv_messages rows (and edges) from the index
+          2) Best-effort delete blobs in ConversationStore under
+             conversation/attachments/executions for this conversation.
+
+        Returns a dict with counts:
+          {
+            "deleted_messages": ...,
+            "deleted_storage_messages": ...,
+            "deleted_storage_attachments": ...,
+            "deleted_storage_executions": ...
+          }
+        """
+        # 1) Delete index rows
+        deleted_rows = await self.idx.delete_conversation(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+
+        # 2) Delete blobs from storage
+        # user_or_fp is the stable id used in RNs; same logic as put_message/attachments
+        try:
+            who, user_or_fp = self.store._who_and_id(user_id, fingerprint)  # type: ignore[attr-defined]
+        except Exception:
+            # Fallback: use raw user_id
+            user_or_fp = user_id
+
+        storage_counts = {"messages": 0, "attachments": 0, "executions": 0}
+        try:
+            storage_counts = await self.store.delete_conversation(
+                tenant=tenant,
+                project=project,
+                user_type=user_type,
+                user_or_fp=user_or_fp,
+                conversation_id=conversation_id,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to delete blobs for conversation={conversation_id}: {e}",
+                exc_info=True
+            )
+
+        return {
+            "deleted_messages": int(deleted_rows or 0),
+            "deleted_storage_messages": int(storage_counts.get("messages", 0) or 0),
+            "deleted_storage_attachments": int(storage_counts.get("attachments", 0) or 0),
+            "deleted_storage_executions": int(storage_counts.get("executions", 0) or 0),
+        }
+
 def _ts_to_float(ts: str) -> float:
     """Convert ISO timestamp to float for recency scoring"""
     try:

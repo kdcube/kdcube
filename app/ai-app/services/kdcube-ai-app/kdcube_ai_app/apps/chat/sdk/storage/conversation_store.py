@@ -204,6 +204,96 @@ class ConversationStore:
         out_all.sort(key=lambda x: x.get("timestamp", ""))
         return out_all
 
+    async def _delete_tree(self, rel_base: str) -> int:
+        """
+        Best-effort recursive delete of all files under a conversation-relative base.
+
+        Currently fully implemented for file:// storage; for other schemes it tries to
+        call backend-specific helpers if available.
+
+        Returns:
+            Approximate number of files deleted (0 if nothing or unsupported).
+        """
+        if not rel_base:
+            return 0
+
+        # ----- file:// backend: delete directory tree on local FS -----
+        if self.scheme == "file":
+            import os, shutil
+
+            base_path = os.path.normpath(os.path.join(self._file_base, rel_base))
+            if not os.path.exists(base_path):
+                return 0
+
+            # Count files before deletion for stats
+            count = 0
+            for root, dirs, files in os.walk(base_path):
+                count += len(files)
+
+            shutil.rmtree(base_path, ignore_errors=True)
+            return count
+
+        # ----- non-file backends (e.g. s3) -----
+        # Here we try to delegate to the underlying backend if it supports
+        # delete_tree / delete_prefix. You can flesh this out as needed.
+        try:
+            backend = self.backend
+
+            if hasattr(backend, "delete_tree"):
+                fn = getattr(backend, "delete_tree")
+                res = fn(rel_base) if not hasattr(fn, "__await__") else await fn(rel_base)
+                return int(res or 0) if isinstance(res, int) else 0
+
+            if hasattr(backend, "delete_prefix"):
+                fn = getattr(backend, "delete_prefix")
+                res = fn(rel_base) if not hasattr(fn, "__await__") else await fn(rel_base)
+                return int(res or 0) if isinstance(res, int) else 0
+        except Exception:
+            # Best-effort; don't break delete_conversation if storage cleanup fails
+            pass
+
+        return 0
+
+    async def delete_conversation(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user_type: str,
+            user_or_fp: str,
+            conversation_id: str,
+    ) -> Dict[str, int]:
+        """
+        Delete all blobs for a given conversation: messages, attachments, executions.
+
+        Layout:
+          cb/tenants/{tenant}/projects/{project}/conversation/{user_type}/{user_or_fp}/{conversation_id}
+          cb/tenants/{tenant}/projects/{project}/attachments/{user_type}/{user_or_fp}/{conversation_id}
+          cb/tenants/{tenant}/projects/{project}/executions/{user_type}/{user_or_fp}/{conversation_id}
+        """
+        conv_base = self._join(
+            self.root_prefix, "tenants", tenant, "projects", project,
+            "conversation", user_type, user_or_fp, conversation_id
+        )
+        att_base = self._join(
+            self.root_prefix, "tenants", tenant, "projects", project,
+            "attachments", user_type, user_or_fp, conversation_id
+        )
+        exec_base = self._join(
+            self.root_prefix, "tenants", tenant, "projects", project,
+            "executions", user_type, user_or_fp, conversation_id
+        )
+
+        messages_deleted = await self._delete_tree(conv_base)
+        attachments_deleted = await self._delete_tree(att_base)
+        executions_deleted = await self._delete_tree(exec_base)
+
+        return {
+            "messages": messages_deleted,
+            "attachments": attachments_deleted,
+            "executions": executions_deleted,
+        }
+
     # ---------- attachments (role-aware, turn in path) ----------
 
     async def put_attachment(
