@@ -622,7 +622,7 @@ class SocketIOChatHandler:
         user_session = (socket_session or {}).get("user_session", {})
         conv_id = conv_id or user_session.get("session_id")
         # lookup current row
-        row = await self.app.state.conversation_browser.conv_idx.get_conversation_state_row(
+        row = await self.app.state.conversation_browser.idx.get_conversation_state_row(
             user_id=user_session.get("user_id"),
             conversation_id=conv_id
         )
