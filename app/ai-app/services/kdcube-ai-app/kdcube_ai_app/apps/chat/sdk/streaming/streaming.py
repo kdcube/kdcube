@@ -192,7 +192,8 @@ def _get_2section_protocol(json_shape_hint: str) -> str:
         "4. DO NOT solve the user's problem in Section 2\n"
         "5. DO NOT include explanations, examples, or additional content after the JSON\n"
         "6. DO NOT add markdown, text, or anything else after the closing ```\n"
-        "7. Section 2 is METADATA ONLY — the actual solution comes later from other agents\n\n"
+        "7. DO NOT include markdown code fences (like ```mermaid or ```) inside JSON string values - use plain text descriptions instead\n"  # NEW
+        "8. Section 2 is METADATA ONLY — the actual solution comes later from other agents\n\n"
 
         "❌ WRONG (adds content after JSON):\n"
         "<<< BEGIN STRUCTURED JSON >>>\n"
@@ -842,18 +843,53 @@ class _TwoSectionParser:
                 break
         return i
 
+#     @staticmethod
+#     def _extract_json_block_only(raw: str) -> str:
+#         """
+#         SAFEGUARD: Extract ONLY the ```json...``` block from the JSON section.
+#         Ignores any content before the fence or after the closing ```.
+#
+#         This protects against models that add extra content like:
+# ```json
+#         {...}
+# ```
+#         >>>
+#         Here's the solution: ...
+#         """
+#         if not raw or not raw.strip():
+#             return ""
+#
+#         # Find the ```json fence (case-insensitive)
+#         json_fence_match = re.search(r'```\s*json\s*\n', raw, re.IGNORECASE)
+#         if not json_fence_match:
+#             # Maybe just ``` without json marker?
+#             json_fence_match = re.search(r'```\s*\n', raw)
+#             if not json_fence_match:
+#                 # No fence at all - return as-is and let downstream parser handle it
+#                 return raw
+#
+#         # Start of actual JSON content (after the opening fence)
+#         start_pos = json_fence_match.end()
+#
+#         # Find the closing ``` (first occurrence after the opening fence)
+#         remaining = raw[start_pos:]
+#         close_fence_match = re.search(r'\n?\s*```', remaining)
+#
+#         if close_fence_match:
+#             # Extract only content between fences
+#             json_content = remaining[:close_fence_match.start()]
+#         else:
+#             # No closing fence - take everything after opening fence
+#             json_content = remaining
+#
+#         return json_content.strip()
+
     @staticmethod
     def _extract_json_block_only(raw: str) -> str:
         """
         SAFEGUARD: Extract ONLY the ```json...``` block from the JSON section.
-        Ignores any content before the fence or after the closing ```.
-
-        This protects against models that add extra content like:
-```json
-        {...}
-```
-        >>>
-        Here's the solution: ...
+        Handles cases where ``` appears inside JSON string values by finding
+        the actual JSON object boundaries first.
         """
         if not raw or not raw.strip():
             return ""
@@ -861,28 +897,89 @@ class _TwoSectionParser:
         # Find the ```json fence (case-insensitive)
         json_fence_match = re.search(r'```\s*json\s*\n', raw, re.IGNORECASE)
         if not json_fence_match:
-            # Maybe just ``` without json marker?
-            json_fence_match = re.search(r'```\s*\n', raw)
-            if not json_fence_match:
-                # No fence at all - return as-is and let downstream parser handle it
-                return raw
+            # No fence at all - try to extract JSON object directly
+            obj_start = raw.find('{')
+            if obj_start == -1:
+                return raw  # No JSON at all
 
-        # Start of actual JSON content (after the opening fence)
-        start_pos = json_fence_match.end()
+            # Use the same brace-matching logic to extract the object
+            brace_count = 0
+            in_string = False
+            escape_next = False
+            obj_end = -1
 
-        # Find the closing ``` (first occurrence after the opening fence)
-        remaining = raw[start_pos:]
-        close_fence_match = re.search(r'\n?\s*```', remaining)
+            for i in range(obj_start, len(raw)):
+                char = raw[i]
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"':
+                    in_string = not in_string
+                    continue
+                if not in_string:
+                    if char == '{':
+                        brace_count += 1
+                    elif char == '}':
+                        brace_count -= 1
+                        if brace_count == 0:
+                            obj_end = i
+                            break
 
-        if close_fence_match:
-            # Extract only content between fences
-            json_content = remaining[:close_fence_match.start()]
-        else:
-            # No closing fence - take everything after opening fence
-            json_content = remaining
+            if obj_end != -1:
+                return raw[obj_start:obj_end + 1].strip()
 
-        return json_content.strip()
+            return raw  # Couldn't extract, return as-is
 
+        # Content after opening fence
+        remaining = raw[json_fence_match.end():]
+
+        # Find the JSON object by parsing brace boundaries (respecting strings)
+        obj_start = remaining.find('{')
+        if obj_start == -1:
+            # No JSON object found - just remove any trailing fence
+            close_fence = re.search(r'\n?\s*```', remaining)
+            return remaining[:close_fence.start()].strip() if close_fence else remaining.strip()
+
+        # Find matching closing brace using a simple state machine
+        brace_count = 0
+        in_string = False
+        escape_next = False
+        obj_end = -1
+
+        for i in range(obj_start, len(remaining)):
+            char = remaining[i]
+
+            if escape_next:
+                escape_next = False
+                continue
+
+            if char == '\\':
+                escape_next = True
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                continue
+
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        obj_end = i
+                        break
+
+        if obj_end == -1:
+            # Couldn't find matching brace - fall back to finding closing fence
+            close_fence = re.search(r'\n?\s*```', remaining)
+            return remaining[:close_fence.start()].strip() if close_fence else remaining.strip()
+
+        # Return only the JSON object content (from { to })
+        return remaining[obj_start:obj_end + 1].strip()
     async def feed(self, piece: str):
         if not piece:
             return
@@ -1025,7 +1122,8 @@ async def _stream_agent_two_sections_to_json(
     data = None
     err = None
     raw_json_clean = _sanitize_ws_and_invisibles(raw_json)
-    tail = _defence(raw_json_clean) or ""
+    # tail = _defence(raw_json_clean) or ""
+    tail = raw_json_clean
 
     if tail:
         try:
@@ -1258,7 +1356,8 @@ async def _stream_agent_to_json(
     data = None
     err = None
     raw_json_clean = _sanitize_ws_and_invisibles(raw_json)
-    tail = _defence(raw_json_clean) or ""
+    tail = raw_json_clean
+    # tail = _defence(raw_json_clean) or ""
 
     if tail:
         try:
