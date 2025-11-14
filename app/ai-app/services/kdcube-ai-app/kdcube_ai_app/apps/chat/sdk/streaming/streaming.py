@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import logging
-import re, json
-from typing import Dict, Any, Optional, Callable, Tuple, List
+import re, json, time
+from typing import Dict, Any, Optional, Tuple, List
 
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
@@ -269,9 +269,6 @@ class _SectionsStreamParser:
     import re as _re
 
     # BEGIN markers (existing)
-    # _INT_RE  = _re.compile(r"<<<?\s*BEGIN\s+INTERNAL\s+THINKING\s*>>>?", _re.I)
-    # _USER_RE = _re.compile(r"<<<?\s*BEGIN\s+USER[-–—]?\s*FACING\s*THINKING\s*>>>?", _re.I)
-    # _JSON_RE = _re.compile(r"<<<?\s*BEGIN\s+STRUCTURED\s+JSON\s*>>>?", _re.I)
 
     _INT_RE  = BEGIN_INT_RE
     _USER_RE = BEGIN_USER_RE
@@ -517,26 +514,6 @@ async def _stream_agent_sections_to_json(
             return schema_model.model_validate(loaded).model_dump()
         except Exception:
             return None
-    # def _try_parse_json(raw_json: str) -> Optional[Dict[str, Any]]:
-    #     raw = (raw_json or "").strip()
-    #     # handle fenced block if present
-    #     if raw.startswith("```"):
-    #         nl = raw.find("\n")
-    #         raw = raw[nl + 1 :] if nl >= 0 else ""
-    #         end = raw.rfind("```")
-    #         if end >= 0:
-    #             raw = raw[:end]
-    #     raw = raw.strip().strip("`")
-    #     if not raw:
-    #         return None
-    #     m = re.search(r"\{.*\}\s*$", raw, re.S)
-    #     if not m:
-    #         return None
-    #     try:
-    #         loaded = _json_loads_loose(m.group(0)) or {}
-    #         return schema_model.model_validate(loaded).model_dump()
-    #     except Exception:
-    #         return None
 
     data = _try_parse_json(json_tail)
     raw_data = json_tail
@@ -1009,4 +986,258 @@ async def _stream_agent_two_sections_to_json(
         "agent_response": data,
         "log": {"error": err, "raw_data": raw_json},
         "internal_thinking": parser.internal,  # already streamed
+    }
+
+async def _stream_agent_to_json(
+        svc: ModelServiceBase,
+        *,
+        client_name: str,
+        client_role: str,
+        sys_prompt: str|SystemMessage,
+        messages: List[HumanMessage|AIMessage],
+        schema_model=None,
+        on_progress_delta=None,
+        temperature: float = 0.2,
+        max_tokens: int = 1200,
+) -> Dict[str, Any]:
+    """
+    Generic streaming function that accepts a conversation history.
+
+    If schema_model is provided:
+      - Expects 2-part output: INTERNAL THINKING + STRUCTURED JSON
+      - Validates JSON against schema_model
+
+    If schema_model is None:
+      - Streams all output as-is via on_progress_delta
+      - Returns raw text in agent_response
+
+    Args:
+        svc: ModelServiceBase instance
+        client_name: Name of the LLM client to use
+        client_role: Role identifier for the client
+        sys_prompt: System message (string or SystemMessage)
+        messages: List of conversation messages (HumanMessage|AIMessage)
+        schema_model: Optional Pydantic model for JSON validation
+        on_progress_delta: Optional callback for streaming chunks
+        temperature: Model temperature (default 0.2)
+        max_tokens: Maximum tokens to generate (default 1200)
+
+    Returns:
+        Dict with keys:
+        - agent_response: Parsed JSON dict (if schema_model) or raw text (if no schema_model)
+        - log: Dict with error, raw_data, and timing info
+        - internal_thinking: The streamed thinking section (if schema_model)
+    """
+    t_start = time.perf_counter()
+
+    run_logger = AgentLogger("StreamAgentToJson", getattr(svc.config, "log_level", "INFO"))
+    sys_message_len = len(sys_prompt) if isinstance(sys_prompt, str) else len(sys_prompt.content)
+
+    run_logger.start_operation(
+        "stream_agent_to_json",
+        client_role=client_role,
+        client_name=client_name,
+        system_prompt_len=sys_message_len,
+        messages_count=len(messages),
+        has_schema=schema_model is not None,
+        expected_format=getattr(schema_model, "__name__", "raw_text") if schema_model else "raw_text",
+    )
+
+    # Timing dict to track all durations
+    timings = {}
+
+    # Measure message preparation
+    t_prep_start = time.perf_counter()
+    system_message = SystemMessage(content=sys_prompt) if isinstance(sys_prompt, str) else sys_prompt
+    full_messages = [system_message] + messages
+    timings["message_prep_ms"] = (time.perf_counter() - t_prep_start) * 1000
+
+    # Measure client retrieval (includes first-time creation overhead)
+    t_client_start = time.perf_counter()
+    client = svc.get_client(client_name)
+    timings["client_get_ms"] = (time.perf_counter() - t_client_start) * 1000
+
+    # Measure config retrieval
+    t_cfg_start = time.perf_counter()
+    cfg = svc.describe_client(client, role=client_role)
+    timings["config_describe_ms"] = (time.perf_counter() - t_cfg_start) * 1000
+
+    # Case 1: No schema model - simple streaming
+    if schema_model is None:
+        raw_parts: List[str] = []
+
+        t_stream_start = time.perf_counter()
+        t_first_token = None
+
+        async def on_delta(piece: str):
+            nonlocal t_first_token
+            if piece:
+                if t_first_token is None:
+                    t_first_token = time.perf_counter()
+                    timings["time_to_first_token_ms"] = (t_first_token - t_stream_start) * 1000
+                raw_parts.append(piece)
+                if on_progress_delta is not None:
+                    await on_progress_delta(piece, completed=False)
+
+        async def on_complete(_):
+            if on_progress_delta is not None:
+                await on_progress_delta("", completed=True)
+            timings["streaming_ms"] = (time.perf_counter() - t_stream_start) * 1000
+            run_logger.log_step("stream_complete", {
+                "chars": sum(len(p) for p in raw_parts),
+                "streaming_ms": timings["streaming_ms"],
+                "ttft_ms": timings.get("time_to_first_token_ms")
+            })
+
+        await svc.stream_model_text_tracked(
+            client,
+            full_messages,
+            on_delta=on_delta,
+            on_complete=on_complete,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            client_cfg=cfg,
+            role=client_role,
+        )
+
+        raw_text = "".join(raw_parts)
+        timings["total_ms"] = (time.perf_counter() - t_start) * 1000
+        timings["overhead_ms"] = timings["total_ms"] - timings.get("streaming_ms", 0)
+
+        run_logger.finish_operation(
+            True,
+            "stream_agent_to_json_complete",
+            result_preview={
+                "chars": len(raw_text),
+                "has_schema": False,
+                "provider": getattr(cfg, "provider", None),
+                "model": getattr(cfg, "model_name", None),
+                "timings": timings,
+            },
+        )
+
+        return {
+            "agent_response": raw_text,
+            "log": {
+                "error": None,
+                "raw_data": raw_text,
+                "timings": timings,
+            },
+        }
+
+    # Case 2: With schema model - 2-section parsing
+    deltas = 0
+    t_stream_start = time.perf_counter()
+    t_first_token = None
+
+    async def _emit_progress(piece: str, completed: bool = False, **kwargs):
+        nonlocal deltas, t_first_token
+        if piece and t_first_token is None:
+            t_first_token = time.perf_counter()
+            timings["time_to_first_token_ms"] = (t_first_token - t_stream_start) * 1000
+        if on_progress_delta is not None:
+            await on_progress_delta(piece or "", completed, **kwargs)
+            if piece:
+                deltas += 1
+
+    parser = _TwoSectionParser(on_internal=_emit_progress)
+
+    async def on_delta(piece: str):
+        await parser.feed(piece)
+
+    async def on_complete(_):
+        await parser.finalize()
+        await _emit_progress("", completed=True)
+        timings["streaming_ms"] = (time.perf_counter() - t_stream_start) * 1000
+        run_logger.log_step("stream_complete", {
+            "deltas": deltas,
+            "streaming_ms": timings["streaming_ms"],
+            "ttft_ms": timings.get("time_to_first_token_ms")
+        })
+
+    await svc.stream_model_text_tracked(
+        client,
+        full_messages,
+        on_delta=on_delta,
+        on_complete=on_complete,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        client_cfg=cfg,
+        role=client_role,
+    )
+
+    # Parse the JSON section
+    t_parse_start = time.perf_counter()
+    raw_json = parser.json
+    data = None
+    err = None
+    raw_json_clean = _sanitize_ws_and_invisibles(raw_json)
+    tail = _defence(raw_json_clean) or ""
+
+    if tail:
+        try:
+            loaded = _json_loads_loose(tail) or {}
+            data = schema_model.model_validate(loaded).model_dump()
+        except Exception as ex:
+            logger.error(f"[_stream_agent_to_json] JSON parse failed: {ex}\nraw_json={raw_json}\nraw_json_clean={raw_json_clean}\ntail={tail}")
+            data = None
+
+    timings["initial_parse_ms"] = (time.perf_counter() - t_parse_start) * 1000
+
+    # Format fixing if needed
+    if data is None and raw_json.strip():
+        t_fix_start = time.perf_counter()
+
+        fix_input = tail if tail.strip() else raw_json_clean
+        # Build a summary of the conversation for format fixer context
+        last_user_msg = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
+
+        fix = await svc.format_fixer.fix_format(
+            raw_output=fix_input,
+            expected_format=getattr(schema_model, "__name__", str(schema_model)),
+            input_data=last_user_msg,
+            system_prompt=sys_prompt,
+        )
+
+        timings["format_fix_ms"] = (time.perf_counter() - t_fix_start) * 1000
+
+        if fix.get("success"):
+            try:
+                data = schema_model.model_validate(fix["data"]).model_dump()
+            except Exception as ex:
+                err = f"JSON parse after format fix failed: {ex}"
+
+    if data is None:
+        try:
+            data = schema_model.model_validate({}).model_dump()
+        except Exception:
+            data = {}
+
+    timings["total_ms"] = (time.perf_counter() - t_start) * 1000
+    timings["overhead_ms"] = (timings["total_ms"]
+                              - timings.get("streaming_ms", 0)
+                              - timings.get("format_fix_ms", 0))
+
+    run_logger.finish_operation(
+        True,
+        "stream_agent_to_json_complete",
+        result_preview={
+            "error": err,
+            "internal_len": len(parser.internal),
+            "json_len": len(parser.json),
+            "has_schema": True,
+            "provider": getattr(cfg, "provider", None),
+            "model": getattr(cfg, "model_name", None),
+            "timings": timings,
+        },
+    )
+
+    return {
+        "agent_response": data,
+        "log": {
+            "error": err,
+            "raw_data": raw_json,
+            "timings": timings,
+        },
+        "internal_thinking": parser.internal,
     }

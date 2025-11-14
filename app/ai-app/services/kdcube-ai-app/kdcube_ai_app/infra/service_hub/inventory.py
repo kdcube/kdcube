@@ -903,12 +903,18 @@ class ModelServiceBase:
         self.config = config
         self.logger = AgentLogger("ModelServiceBase", config.log_level)
         self.router = ModelRouter(config)
-        self.format_fixer = FormatFixerService(config)
+        self._format_fixer = None
         self._anthropic_async = None
 
         self._emb_model = embedding_model()
 
     # ---------- back-compat clients (lazily resolved) ----------
+    @property
+    def format_fixer(self):
+        if self._format_fixer is None:
+            self._format_fixer = FormatFixerService(self.config)
+        return self._format_fixer
+
     @property
     def classifier_client(self):       return self.router.get_client("classifier", 0.1)
     @property
