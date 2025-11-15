@@ -159,6 +159,54 @@ class ChatRelayCommunicator:
             session_id=session_id,
             channel=self._channel,
         )
+
+    def emit_conversation_status(
+            self,
+            request_id: str,
+            tenant: str,
+            project: str,
+            bundle_id: str,
+            user_id: str,
+            session_id: str,
+            conversation_id: str,
+            state: str,
+            updated_at: str | None = None,
+            turn_id: str | None = None,
+            target_sid: str | None = None,
+    ):
+        if not updated_at:
+            updated_at = datetime.utcnow().isoformat() + "Z"
+        payload = {
+            "type": "conv.status",
+            "timestamp": updated_at,
+            "service": {
+                "request_id":request_id,
+                "tenant": tenant,
+                "project": project,
+                "user": user_id,
+                "bundle_id": bundle_id
+            },
+            "conversation": {
+                "session_id": session_id,
+                "conversation_id": conversation_id,
+                "turn_id": turn_id,
+            },
+            "event": {"step": "conv.state", "status": state},
+            "data": {
+                "state": state,
+                "updated_at": updated_at,
+                **({"current_turn_id": turn_id} if turn_id else {}),
+            },
+        }
+        session_id = session_id
+
+        self._comm.pub(
+            event="conv_status",
+            data=payload,
+            target_sid=target_sid,
+            session_id=session_id,
+            channel=self._channel,
+        )
     # ---------- binding helpers (nice for processors) ----------
 
     class _Bound:

@@ -3,6 +3,8 @@
 
 # chat/api/conversations/conversations.py
 from __future__ import annotations
+
+import uuid
 from typing import List, Optional
 import logging
 import datetime
@@ -281,6 +283,7 @@ async def delete_conversation(
 
     # Bundle scoping (same pattern as feedback endpoints)
     try:
+        from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
         spec_resolved = resolve_bundle(None, override=None)
         bundle_id = spec_resolved.id
     except Exception:
@@ -311,6 +314,17 @@ async def delete_conversation(
 
     # You can decide whether "0 deleted_messages" should be treated as 404.
     # For now we just return the counts.
+    await router.state.chat_comm.emit_conversation_status(
+        request_id=str(uuid.uuid4()),
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        user_id=session.user_id or session.fingerprint,
+        session_id=session.session_id,
+        conversation_id=conversation_id,
+        state="deleted",
+        target_sid=None,  # session-broadcast
+    )
     return ConversationDeleteResponse(
         conversation_id=conversation_id,
         deleted_messages=result.get("deleted_messages", 0),
