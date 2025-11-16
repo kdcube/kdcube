@@ -160,7 +160,7 @@ class ChatRelayCommunicator:
             channel=self._channel,
         )
 
-    def emit_conversation_status(
+    async def emit_conversation_status(
             self,
             request_id: str,
             tenant: str,
