@@ -25,7 +25,9 @@ UI_ARTIFACT_TAGS = {
     "artifact:codegen.program.files",
     "artifact:conv.thinking.stream",
     "artifact:conv.canvas.stream",
-    "chat:user", "chat:assistant"
+    "artifact:turn.log.reaction",
+    "chat:user",
+    "chat:assistant"
 }
 
 FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
@@ -1445,6 +1447,68 @@ class ContextRAGClient:
             "turns": turns
         }
 
+    async def conversation_exists(
+            self,
+            *,
+            user_id: str,
+            conversation_id: str,
+            bundle_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Best-effort check whether a conversation exists for a given user.
+
+        Strategy:
+          1) Look for the conv.start fingerprint (artifact:turn.fingerprint.v1 + conv.start tag)
+          2) Fallback: check if there is any turn activity in the index for this conversation.
+
+        Returns:
+          True if conversation appears to exist, False otherwise.
+        """
+        if not user_id or not conversation_id:
+            return False
+
+        try:
+            # 1) Check conv.start fingerprint within this conversation
+            data = await self.search(
+                query=None,
+                embedding=None,
+                kinds=(FINGERPRINT_KIND,),
+                scope="conversation",
+                days=3650,
+                top_k=1,
+                include_deps=False,
+                with_payload=False,
+                ctx=None,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                track_id=None,
+                any_tags=None,
+                all_tags=[CONV_START_FPS_TAG],
+                not_tags=None,
+                timestamp_filters=None,
+                bundle_id=bundle_id,
+            )
+
+            if data.get("items"):
+                return True
+
+            # 2) Fallback: any turn activity seen via tags
+            occ = await self.idx.get_conversation_turn_ids_from_tags(
+                user_id=user_id,
+                conversation_id=conversation_id,
+                bundle_id=bundle_id,
+            )
+            return bool(occ)
+
+        except Exception as e:
+            logger.error(
+                f"conversation_exists check failed for user={user_id}, "
+                f"conversation_id={conversation_id}: {e}",
+                exc_info=True,
+            )
+            # Best-effort: on error, treat as non-existent
+            return False
+
     async def fetch_conversation_artifacts(
         self,
         *,
@@ -1455,6 +1519,7 @@ class ContextRAGClient:
         days: int = 365,
         bundle_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        # 1) Collect UI-visible artifacts per turn (existing behavior)
         occ = await self.idx.get_conversation_turn_ids_from_tags(
             user_id=user_id,
             conversation_id=conversation_id,
@@ -1474,6 +1539,9 @@ class ContextRAGClient:
             if tid not in turns_map:
                 turns_map[tid] = {"turn_id": tid, "artifacts": []}
                 order.append(tid)
+            # only user-origin reactions are considered "feedback"
+            if "artifact:turn.log.reaction" in tag_hits and "origin:user" not in tags:
+                    continue
             item = {
                 "message_id": r.get("mid"),
                 "type": tag_type,

@@ -515,6 +515,12 @@ class SocketIOChatHandler:
                 accounting=ChatTaskAccounting(envelope=acct_env),
             )
 
+            conv_exists = await self.app.state.conversation_browser.conversation_exists(
+                user_id=payload.user.user_id,
+                conversation_id=conversation_id,
+                bundle_id=payload.routing.bundle_id,
+            )
+
             set_res = await self.app.state.conversation_browser.set_conversation_state(
                 tenant=payload.actor.tenant_id,
                 project=payload.actor.project_id,
@@ -552,6 +558,14 @@ class SocketIOChatHandler:
 
             # We DID acquire the lock → proceed and announce with our turn_id
             try:
+                if not conv_exists:
+                    logger.info(f"New conversation created: {payload.routing.conversation_id} for user {payload.user.user_id}")
+                    self._comm.emit_conv_status(
+                        svc, conv, routing,
+                        state="created",
+                        updated_at=set_res["updated_at"],
+                        current_turn_id=payload.routing.turn_id,
+                    )
                 self._comm.emit_conv_status(
                     svc, conv, routing,
                     state="in_progress",
