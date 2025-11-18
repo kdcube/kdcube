@@ -14,7 +14,7 @@ import logging
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import delta as emit_delta, get_comm
 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import split_safe_citation_prefix, replace_citation_tokens_streaming, \
-    extract_sids, build_citation_map_from_sources, citations_present_inline, MD_CITE_RE
+    extract_sids, build_citation_map_from_sources, citations_present_inline, MD_CITE_RE, adapt_source_for_llm
 from kdcube_ai_app.apps.chat.sdk.tools.md_utils import CODE_FENCE_RE
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message, create_cached_system_message
@@ -766,15 +766,14 @@ async def generate_content_llm(
             raw_sources = json.loads(sources_json) if sources_json else []
         except Exception:
             raw_sources = []
+
         for s in raw_sources or []:
             if not isinstance(s, dict):
                 continue
-            sid = s.get("sid")
-            title = s.get("title") or ""
-            body = s.get("text") or s.get("body") or s.get("content") or ""
-            if sid is None:
+            norm = adapt_source_for_llm(s, include_full_content=True, max_text_len=6000)
+            if not norm:
                 continue
-            rows.append({"sid": int(sid), "title": title, "text": body})
+            rows.append(norm)
         sid_map = "\n".join([f"- {r['sid']}: {r['title'][:160]}" for r in rows])
         total_budget = 10000
         per = max(600, total_budget // max(1, len(rows))) if rows else 0
@@ -1353,18 +1352,29 @@ async def generate_content_llm(
 
     # Combine with telemetry (if present)
     combined_used_sids = sorted(set((artifact_used_sids or []) + (usage_sids or [])))
-    # Resolve used_sources (expand to url/title when possible)
-    sources_used = []
-    if combined_used_sids:
-        cm = build_citation_map_from_sources(sources_json)
+    # Resolve used_sources by taking the ORIGINAL source objects (preserve all fields)
+    sources_used: List[Dict[str, Any]] = []
+    if combined_used_sids and sources_json:
+        try:
+            raw_sources = json.loads(sources_json)
+        except Exception:
+            raw_sources = []
+
+        by_sid: Dict[int, Dict[str, Any]] = {}
+        for s in raw_sources or []:
+            if not isinstance(s, dict):
+                continue
+            try:
+                sid_val = int(s.get("sid"))
+            except Exception:
+                continue
+            by_sid[sid_val] = s  # keep full dict as-is
+
         for sid in combined_used_sids:
-            meta = cm.get(sid) or {}
-            sources_used.append({
-                "sid": sid,
-                "url": meta.get("url", ""),
-                "title": meta.get("title", ""),
-                "text": meta.get("text") or meta.get("body") or meta.get("content") or "",
-            })
+            src = by_sid.get(sid)
+            if src is not None:
+                # shallow copy to avoid unexpected mutation
+                sources_used.append(dict(src))
 
     # --------- finalize ---------
     logger.info(
@@ -1398,7 +1408,7 @@ async def sources_reconciler(
         _SERVICE,
         objective: Annotated[str, "Objective (what we are trying to achieve with these sources)."],
         queries: Annotated[List[str], "Array of [q1, q2, ...]"],
-        sources_list: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "title": str, "body": str}'],
+        sources_list: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "title": str, "text": str}'],
         max_items: Annotated[int, "Optional: cap of kept sources (default 12)."] = 12
 ) -> Annotated[str, 'JSON array of kept sources: [{sid, verdict, o_relevance, q_relevance:[{qid,score}], reasoning}]']:
 
@@ -1408,7 +1418,7 @@ async def sources_reconciler(
         You are a strict source reconciler.
     
     GOAL
-    - Input: (1) objective, (2) queries (qid→string), (3) sources [{sid,title,body}]. 
+    - Input: (1) objective, (2) queries (qid→string), (3) sources [{sid,title,text}]. 
     - Return ONLY sources relevant to the objective AND at least one query.
     - If a source is irrelevant, DO NOT include it  at all (omit it entirely).
     - Output MUST validate against the provided JSON Schema.
@@ -1469,7 +1479,7 @@ async def sources_reconciler(
         except Exception:
             continue
         title = (row.get("title") or "").strip()
-        text = (row.get("body") or row.get("text") or row.get("content") or "").strip()
+        text = (row.get("text") or row.get("text") or row.get("content") or "").strip()
         if not (sid and (title or text)):
             continue
         prepared_sources.append({"sid": sid, "title": title, "text": text})

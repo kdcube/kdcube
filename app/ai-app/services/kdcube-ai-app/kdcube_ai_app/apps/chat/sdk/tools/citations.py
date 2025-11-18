@@ -74,8 +74,32 @@ CITATION_SUFFIX_PATS = [
 # ---- shared optional attributes carried through citations ----
 CITATION_OPTIONAL_ATTRS = (
     "provider", "published_time_iso", "modified_time_iso", "expiration",
-    "mime", "source_type", "rn", "author" #, "q_relevance", "o_relevance"
+    "mime", "source_type", "rn", "author",
+    "content_length", "fetch_status",
+    "objective_relevance", "query_relevance",
 )
+
+canonical_source_shape_reference = {
+    "sid": int,
+    "url": str,
+    "title": str,
+    # short snippet/preview (from search result)
+    "text": str,
+    # full content (if fetched)
+    "content": str,              # optional
+    "content_length": int,       # optional
+
+    # metadata
+    "provider": str, # "web" | "kb" | ...
+    "source_type": str, # "web_search" | "kb" | ...
+    "published_time_iso": str | None,
+    "modified_time_iso": str | None,
+    "fetch_status": str | None,
+
+    # scoring
+    "objective_relevance": float | None,
+    "query_relevance": float | None,
+}
 
 # ---- URL normalization (canonical; strips UTM/gclid/fbclid; stable ordering) ----
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
@@ -114,17 +138,31 @@ def normalize_citation_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     url = normalize_url(url)
 
     title = (it.get("title") or it.get("description") or url).strip()
-    text  = (it.get("text") or it.get("body") or it.get("content") or it.get("value_preview") or "").strip()
-    sid   = it.get("sid")
+    # Short snippet / preview
+    snippet = (
+        it.get("text") or
+        it.get("body") or
+        it.get("value_preview") or
+        ""
+    )
+    snippet = snippet.strip()
+
+    # Full content (if present)
+    full_content = (it.get("content") or "").strip()
+
+    sid = it.get("sid")
     try:
         sid = int(sid) if sid is not None and str(sid).strip() != "" else None
     except Exception:
         sid = None
 
     # ⬇️ carry rich attrs if present
-    out = {"url": url, "title": title, "text": text}
+    out = {"url": url, "title": title, "text": snippet}
     if sid is not None:
         out["sid"] = sid
+    if full_content:
+        out["content"] = full_content
+
     for k in CITATION_OPTIONAL_ATTRS:
         if it.get(k) not in (None, ""):
             out[k] = it[k]
@@ -181,21 +219,53 @@ def dedupe_sources_by_url(prior: List[Dict[str, Any]], new: List[Dict[str, Any]]
                 existing["title"] = row.get("title","")
             if len(row.get("text","")) > len(existing.get("text","")):
                 existing["text"] = row.get("text","")
+
+            # Richer full content wins
+            if len(row.get("content", "")) > len(existing.get("content", "")):
+                existing["content"] = row.get("content", "")
+
+            # copy metadata if missing
             for k in CITATION_OPTIONAL_ATTRS:
                 if not existing.get(k) and row.get(k):
                     existing[k] = row[k]
+
+            # best scoring
+            try:
+                if row.get("objective_relevance") is not None:
+                    existing["objective_relevance"] = max(
+                        float(existing.get("objective_relevance") or 0.0),
+                        float(row["objective_relevance"]),
+                    )
+            except Exception:
+                pass
+
+            try:
+                if row.get("query_relevance") is not None:
+                    existing["query_relevance"] = max(
+                        float(existing.get("query_relevance") or 0.0),
+                        float(row["query_relevance"]),
+                    )
+            except Exception:
+                pass
             if isinstance(row.get("sid"), int):
                 existing["sid"] = existing.get("sid") or row["sid"]
                 max_sid = max(max_sid, int(existing["sid"]))
             return
-        # new
+        # NEW URL path
         sid = row.get("sid")
-        if not isinstance(sid, int) or sid <= 0:
+        try:
+            sid = int(sid) if sid is not None and sid > 0 else None
+        except Exception:
+            sid = None
+        if not sid:
             max_sid += 1
             sid = max_sid
         else:
             max_sid = max(max_sid, sid)
+
         kept = {"sid": sid, "url": url, "title": row.get("title",""), "text": row.get("text","")}
+        if row.get("content"):
+            kept["content"] = row["content"]
         for k in CITATION_OPTIONAL_ATTRS:
             if row.get(k):
                 kept[k] = row[k]
@@ -722,4 +792,104 @@ def replace_html_citations(
         return rendered or (tag if keep_unresolved else "")
 
     out = HTML_CITE_RE.sub(_sub_html_sup, out)
+    return out
+
+def _to_str_for_llm(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value)
+
+
+def adapt_source_for_llm(
+        src: Dict[str, Any],
+        *,
+        include_full_content: bool = True,
+        max_text_len: int = 2000,
+) -> Dict[str, Any]:
+    """
+    Normalize a raw source object into the canonical shape used by LLM tools.
+
+    Output (subset of canonical_source_shape_reference):
+      {
+        "sid": int,
+        "url": str,
+        "title": str,
+        "text"?: str,      # short snippet / preview
+        "content"?: str,   # full body (optional)
+        ...CITATION_OPTIONAL_ATTRS
+      }
+
+    Semantics:
+      - We reuse normalize_citation_item() for URL/title/text/content + metadata.
+      - `text`  is a short snippet (and may be derived from `content`).
+      - `content` is the full body; only emitted when include_full_content=True.
+      - We never emit legacy fields like `body`/`snippet`/`preview`.
+    """
+    if not isinstance(src, dict):
+        return {}
+
+    # First, reuse the existing normalization logic (url/title/text/content + metadata).
+    # Note: normalize_citation_item may ignore entries without URL; that's OK here.
+    base = normalize_citation_item(src) or {}
+    if not base:
+        # if no url, but upstream already guarantees sid/title, we can fallback:
+        url = (src.get("url") or src.get("href") or "").strip()
+        if not url:
+            return {}
+        base = {
+            "url": url,
+            "title": (src.get("title") or src.get("description") or url).strip(),
+            "text": (src.get("text") or "").strip(),
+            "content": (src.get("content") or "").strip(),
+        }
+        for k in CITATION_OPTIONAL_ATTRS:
+            if src.get(k) not in (None, ""):
+                base[k] = src[k]
+
+    out: Dict[str, Any] = {}
+
+    # sid: we expect upstream to set it; if not, try to coerce
+    sid_raw = src.get("sid") or base.get("sid")
+    try:
+        sid = int(sid_raw)
+    except Exception:
+        sid = 0
+    out["sid"] = sid
+
+    # url + title
+    url = (base.get("url") or "").strip()
+    title = (base.get("title") or url or f"Source {sid}").strip()
+    out["url"] = url
+    out["title"] = title
+
+    # snippet vs full content
+    snippet_raw: Optional[str] = base.get("text") or src.get("text")
+    full_raw: Optional[str] = base.get("content") or src.get("content")
+
+    if snippet_raw is None and full_raw is not None:
+        snippet_raw = full_raw
+
+    snippet = _to_str_for_llm(snippet_raw) if snippet_raw is not None else ""
+    full = _to_str_for_llm(full_raw) if full_raw is not None else ""
+
+    if snippet and max_text_len > 0 and len(snippet) > max_text_len:
+        snippet = snippet[:max_text_len]
+
+    if snippet:
+        out["text"] = snippet
+    if include_full_content and full:
+        out["content"] = full
+
+    # carry standard metadata
+    for k in CITATION_OPTIONAL_ATTRS:
+        if base.get(k) not in (None, ""):
+            out[k] = base[k]
+
+    # also keep content_length if upstream set it
+    if src.get("content_length") is not None:
+        out["content_length"] = src["content_length"]
+
     return out

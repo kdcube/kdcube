@@ -1,6 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
 # tools/scrap_utils.py
 import json, re
-from datetime import datetime
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
@@ -8,7 +10,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 
 import base64, os, mimetypes, requests
 from urllib.parse import urljoin, urlparse
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 
 from kdcube_ai_app.apps.utils.sql_dt_utils import _parse_utc_instant
 from kdcube_ai_app.tools.extraction_types import ImageSpec
@@ -44,29 +46,85 @@ def _post_soup(url: str, data: Dict[str, str], session: Optional[requests.Sessio
     resp.raise_for_status()
     return BeautifulSoup(resp.text, "lxml")
 
+# ============================================================================
+# Date parsing helpers (shared)
+# ============================================================================
+
 _MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
 }
+_ISO_DATE_RE = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
 
 def _parse_human_date(s: str) -> Optional[str]:
     """
     Parse dates like 'September 19, 2025' -> ISO date '2025-09-19'.
     Returns None if parsing fails.
     """
-    s = s.strip()
+    s = (s or "").strip()
     m = re.search(r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})", s)
     if not m:
         return None
-    month_name, day, year = m.group(1), m.group(2), m.group(3)
-    month = _MONTHS.get(month_name.lower())
+    month = _MONTHS.get(m.group(1).lower())
     if not month:
         return None
     try:
-        dt = datetime(int(year), month, int(day))
+        dt = datetime(int(m.group(3)), month, int(m.group(2)))
         return dt.date().isoformat()
     except Exception:
         return None
+
+def _parse_date_any(s: str) -> Optional[datetime]:
+    """
+    Robust-ish parse for the typical things we see in HTML:
+    - ISO 8601 (optionally with 'Z')
+    - RFC 822/2822 / HTTP date (via email.utils.parsedate_to_datetime)
+    - 'September 19, 2025'
+    - '2025-9-19', '2025/09/19'
+    """
+    if not s:
+        return None
+    s = s.strip()
+
+    # ISO 8601 (allow 'Z')
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        pass
+
+    # RFC 2822/822 (e.g. RSS, HTTP)
+    try:
+        dt = parsedate_to_datetime(s)
+        return dt
+    except Exception:
+        pass
+    # "September 19, 2025"
+    iso = _parse_human_date(s)
+    if iso:
+        try:
+            y, m, d = map(int, iso.split("-"))
+            return datetime(y, m, d)
+        except Exception:
+            pass
+    # "2025-9-19" or "2025/09/19"
+    m = _ISO_DATE_RE.search(s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            pass
+
+    return None
+
+def _normalize_to_utc_iso(dt: datetime) -> str:
+    """Ensure datetime is timezone-aware (UTC) and return isoformat()."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+# ============================================================================
+# Misc helpers
+# ============================================================================
 
 def _text(el) -> str:
     return el.get_text(" ", strip=True) if el else ""
@@ -151,39 +209,377 @@ def build_imagespecs_from_urls(
         ))
     return out
 
-_ISO_DATE_RE = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
+# ============================================================================
+# Shared publication/modified date extraction
+# ============================================================================
 
-def _parse_date_any(s: str) -> Optional[datetime]:
-    if not s:
-        return None
-    s = s.strip()
-    # ISO 8601 (allow 'Z')
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        pass
-    # RFC 2822/822 (e.g., RSS/HTTP)
-    try:
-        dt = parsedate_to_datetime(s)
-        return dt
-    except Exception:
-        pass
-    # "September 19, 2025"
-    iso = _parse_human_date(s)  # your existing helper → 'YYYY-MM-DD'
-    if iso:
+PublicationDateMeta = Dict[str, Optional[str] | float]
+
+def extract_publication_dates_core(
+    *,
+    soup: Optional[BeautifulSoup],
+    url: str,
+    last_modified_header: Optional[str] = None,
+    sitemap_lastmod: Optional[str] = None,
+    archive_snapshot_date: Optional[str] = None,
+    archive_snapshot_url: Optional[str] = None,
+) -> PublicationDateMeta:
+    """
+    Shared date extractor used by both sync tools and async fetchers.
+
+    It tries, in order:
+    - JSON-LD Article/NewsArticle/BlogPosting
+    - Meta tags (OpenGraph, article:*, DC/dcterms, citation_publication_date)
+    - <time> / itemprop / common date classes
+    - Parsely/Sailthru JSON blobs
+    - Visible "Last updated" / "Published on" text patterns
+    - schema.org WebPage/Website with dateModified / datePublished
+    - URL patterns (/YYYY/MM/DD/)
+    - HTTP Last-Modified header
+    - Sitemap <lastmod> (mainly as modified, weakly as publish if nothing else)
+    - Copyright footer year (weak publish)
+    - Archive snapshot date (only as very weak modified if nothing else)
+
+    Returns dict with keys:
+      - published_time_raw / published_time_iso
+      - modified_time_raw / modified_time_iso
+      - archive_snapshot_date / archive_snapshot_url
+      - date_method / date_confidence  (for the "main" content date)
+    """
+    out: PublicationDateMeta = {
+        "published_time_raw": None,
+        "published_time_iso": None,
+        "modified_time_raw": None,
+        "modified_time_iso": None,
+        "archive_snapshot_date": archive_snapshot_date,
+        "archive_snapshot_url": archive_snapshot_url,
+        "date_method": None,
+        "date_confidence": 0.0,
+    }
+
+    def _set(kind: str, raw: str, method: str, conf: float) -> bool:
+        """
+        Set published/modified time with best-method tracking.
+        kind: "published" | "modified"
+        """
+        dt = _parse_date_any(raw)
+        if not dt:
+            return False
+        iso = _normalize_to_utc_iso(dt)
+
+        if kind == "published":
+            out["published_time_raw"] = raw
+            out["published_time_iso"] = iso
+        elif kind == "modified":
+            out["modified_time_raw"] = raw
+            out["modified_time_iso"] = iso
+        else:
+            return False
+
+        # Track best overall content date (for freshness)
+        if conf > (out["date_confidence"] or 0.0):
+            out["date_method"] = method
+            out["date_confidence"] = conf
+        return True
+
+    # ----------------------------- 1) JSON-LD Article -------------------------
+    if soup:
         try:
-            y, m, d = map(int, iso.split("-"))
-            return datetime(y, m, d)
+            for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
+                try:
+                    data = json.loads(node.string or "")
+                except Exception:
+                    continue
+                objs = data if isinstance(data, list) else [data]
+                for obj in objs:
+                    if not isinstance(obj, dict):
+                        continue
+                    types = obj.get("@type") or obj.get("type")
+                    if isinstance(types, str):
+                        types = [types]
+                    types = [t.lower() for t in (types or []) if isinstance(t, str)]
+
+                    if any(t in ("article", "newsarticle", "blogposting") for t in types):
+                        pub = obj.get("datePublished") or obj.get("dateCreated")
+                        mod = obj.get("dateModified") or obj.get("dateUpdated")
+                        if pub:
+                            _set("published", pub, "jsonld:article", 0.98)
+                        if mod:
+                            _set("modified", mod, "jsonld:article:modified", 0.95)
         except Exception:
             pass
-    # "2025-9-19" or "2025/09/19"
-    m = _ISO_DATE_RE.search(s)
-    if m:
+
+    # -------------------------- 2) Meta tags (OG/Article/DC) ------------------
+    if soup:
         try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            meta_pub_keys = [
+                ("property", "article:published_time"),
+                ("name", "article:published_time"),
+                ("property", "og:published_time"),
+                ("name", "pubdate"),
+                ("name", "publish-date"),
+                ("name", "date"),
+                ("name", "DC.date"),
+                ("name", "DC.date.issued"),
+                ("name", "DC.date.published"),
+                ("name", "dcterms.created"),
+                ("name", "dcterms.issued"),
+                ("name", "citation_publication_date"),
+            ]
+            for attr, key in meta_pub_keys:
+                el = soup.find("meta", attrs={attr: key})
+                if el and el.get("content"):
+                    _set("published", el["content"].strip(), f"meta:{key}", 0.9)
+
+            meta_mod_keys = [
+                ("property", "article:modified_time"),
+                ("name", "article:modified_time"),
+                ("property", "og:updated_time"),
+                ("name", "dcterms.modified"),
+                ("name", "DC.date.modified"),
+            ]
+            for attr, key in meta_mod_keys:
+                el = soup.find("meta", attrs={attr: key})
+                if el and el.get("content"):
+                    _set("modified", el["content"].strip(), f"meta:{key}", 0.9)
+
+            # Parsely / Sailthru blobs
+            for key in ["parsely-page", "sailthru.date"]:
+                el = soup.find("meta", attrs={"name": key})
+                if el and el.get("content"):
+                    try:
+                        blob = json.loads(el["content"])
+                        pub = blob.get("pub_date") or blob.get("date")
+                        if pub:
+                            _set("published", pub, f"meta:{key}", 0.85)
+                    except Exception:
+                        # some sites put raw date here
+                        _set("published", el["content"].strip(), f"meta:{key}", 0.7)
         except Exception:
             pass
+
+    # --------------- 3) <time> / itemprop / common classes --------------------
+    if soup:
+        try:
+            sel = [
+                'time[datetime]',
+                'time[content]',
+                'meta[itemprop="datePublished"][content]',
+                '[itemprop="datePublished"]',
+                '.entry-date',
+                '.post-date',
+                '.published',
+                'time.published',
+            ]
+            for el in soup.select(",".join(sel)):
+                v = el.get("datetime") or el.get("content") or el.get_text(" ", strip=True)
+                if v:
+                    _set("published", v, "dom:time/byline", 0.75)
+        except Exception:
+            pass
+
+    # --------------- 4) Visible text patterns (published/updated) -------------
+    if soup:
+        try:
+            page_text = soup.get_text(" ", strip=True)
+
+            # Published-like patterns
+            published_patterns = [
+                (r'published\s+on\s*:?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', 0.75),
+                (r'posted\s+on\s*:?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', 0.7),
+                (r'first\s+published\s*:?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', 0.7),
+            ]
+            for pat, conf in published_patterns:
+                m = re.search(pat, page_text, re.IGNORECASE)
+                if m:
+                    _set("published", m.group(1), "text:published_pattern", conf)
+                    break
+
+            # Updated-like patterns
+            updated_patterns = [
+                (r'last\s+updated?\s*:?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', 0.7),
+                (r'updated\s+on\s*:?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', 0.7),
+                (r'modified\s*:?\s*([A-Za-z]+\s+\d{1,2},?\s+\d{4})', 0.6),
+                # very generic numeric pattern, low confidence
+                (r'(\d{1,2}[/.]\d{1,2}[/.]\d{2,4})', 0.4),
+            ]
+            for pat, conf in updated_patterns:
+                m = re.search(pat, page_text, re.IGNORECASE)
+                if m:
+                    _set("modified", m.group(1), "text:updated_pattern", conf)
+                    break
+        except Exception:
+            pass
+
+    # --------------- 5) schema.org WebPage/Website dateModified --------------
+    if soup:
+        try:
+            for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
+                try:
+                    data = json.loads(node.string or "")
+                except Exception:
+                    continue
+                objs = data if isinstance(data, list) else [data]
+                for obj in objs:
+                    if not isinstance(obj, dict):
+                        continue
+                    types = obj.get("@type") or obj.get("type")
+                    if isinstance(types, str):
+                        types = [types]
+                    types = [t.lower() for t in (types or []) if isinstance(t, str)]
+
+                    if any(t in ("webpage", "website") for t in types):
+                        d_mod = obj.get("dateModified")
+                        d_pub = obj.get("datePublished")
+                        if d_mod:
+                            _set("modified", d_mod, "jsonld:webpage:modified", 0.55)
+                        if d_pub:
+                            _set("published", d_pub, "jsonld:webpage:published", 0.5)
+        except Exception:
+            pass
+
+    # --------------- 6) URL pattern (/YYYY/MM/DD/) ---------------------------
+    if not out["published_time_iso"]:
+        try:
+            m = re.search(r"/(20\d{2})/([01]?\d)/([0-3]?\d)/", url or "")
+            if m:
+                y, mo, d = map(int, m.groups())
+                dt = datetime(y, mo, d)
+                _set("published", f"{y:04d}-{mo:02d}-{d:02d}", "url_path", 0.6)
+        except Exception:
+            pass
+
+    # --------------- 7) HTTP Last-Modified header ----------------------------
+    if last_modified_header:
+        # treat primarily as modified
+        if _set("modified", last_modified_header, "http:last-modified", 0.75):
+            # if we still have no published date at all, we can use it as weak proxy
+            if not out["published_time_iso"]:
+                _set("published", last_modified_header, "http:last-modified_as_pub", 0.5)
+
+    # --------------- 8) Sitemap <lastmod> ------------------------------------
+    if sitemap_lastmod:
+        # treat primarily as modified – crawl hint for "content changed"
+        if _set("modified", sitemap_lastmod, "sitemap:lastmod", 0.65):
+            if not out["published_time_iso"]:
+                # if we truly have nothing better, we *may* also treat this as a weak publish date
+                _set("published", sitemap_lastmod, "sitemap:lastmod_as_pub", 0.5)
+
+    # --------------- 9) Copyright year in footer/text ------------------------
+    if soup and not out["published_time_iso"]:
+        try:
+            # Prefer footer if present
+            footer = soup.find(['footer', 'div'], id=lambda x: x and 'footer' in x.lower())
+            search_text = footer.get_text(" ", strip=True) if footer else soup.get_text(" ", strip=True)
+
+            copyright_patterns = [
+                r'©\s*(\d{4})',
+                r'copyright\s+©?\s*(\d{4})',
+                r'\(c\)\s*(\d{4})',
+            ]
+            for pat in copyright_patterns:
+                m = re.search(pat, search_text, re.IGNORECASE)
+                if m:
+                    year = int(m.group(1))
+                    current_year = datetime.now(timezone.utc).year
+                    if 2000 <= year <= current_year + 1:
+                        dt = datetime(year, 1, 1)
+                        iso = _normalize_to_utc_iso(dt)
+                        out["published_time_raw"] = str(year)
+                        out["published_time_iso"] = iso
+                        if 0.3 > (out["date_confidence"] or 0.0):
+                            out["date_method"] = "copyright_year"
+                            out["date_confidence"] = 0.3
+                        break
+        except Exception:
+            pass
+
+    # --------------- 10) Archive snapshot date (Wayback) ---------------------
+    # We never treat archive snapshot as publish date by default.
+    # If we *still* have neither published nor modified, it can serve as a
+    # very weak "seen alive at" / modified-ish signal. It is always exposed
+    # separately as archive_snapshot_date/url.
+    if archive_snapshot_date:
+        if not out["published_time_iso"] and not out["modified_time_iso"]:
+            if _set("modified", archive_snapshot_date, "archive:wayback", 0.2):
+                # do NOT set published_time_* from archive snapshot
+                pass
+
+    return out
+
+def extract_publication_dates_from_html(
+    html: str,
+    url: str,
+    last_modified_header: Optional[str] = None
+) -> Dict[str, Optional[str]]:
+    """
+    Synchronous convenience wrapper around extract_publication_dates_core.
+    Does *not* attempt sitemap/wayback since that requires async/network.
+    """
+    try:
+        soup = BeautifulSoup(html or "", "lxml")
+    except Exception:
+        soup = None
+
+    meta = extract_publication_dates_core(
+        soup=soup,
+        url=url,
+        last_modified_header=last_modified_header,
+    )
+    return meta
+
+def extract_publication_dates(
+    soup: BeautifulSoup,
+    url: str
+) -> Dict[str, Optional[str]]:
+    """
+    Backwards-compatible wrapper for older call sites.
+
+    Returns:
+      {
+        'published_time_raw', 'published_time_iso',
+        'modified_time_raw',  'modified_time_iso',
+        'method', 'confidence'
+      }
+    """
+    meta = extract_publication_dates_core(
+        soup=soup,
+        url=url,
+        last_modified_header=getattr(soup, "_http_last_modified", None),
+    )
+    return {
+        "published_time_raw": meta.get("published_time_raw"),
+        "published_time_iso": meta.get("published_time_iso"),
+        "modified_time_raw": meta.get("modified_time_raw"),
+        "modified_time_iso": meta.get("modified_time_iso"),
+        "method": meta.get("date_method"),
+        "confidence": meta.get("date_confidence") or 0.0,
+    }
+
+def _effective_post_instant(post) -> datetime | None:
+    """
+    Prefer modified, else published, else archive snapshot, using the richest
+    field available. This is used as a single "content date" for ranking/
+    freshness when we don't care about exact provenance.
+    """
+    meta: Dict[str, Any] = getattr(post, "meta", {}) or {}
+    candidates = [
+        meta.get("modified_time_iso"),
+        meta.get("published_time_iso"),
+        meta.get("archive_snapshot_date"),
+        getattr(post, "modified", None),
+        getattr(post, "date_raw", None),
+        getattr(post, "date", None),
+    ]
+    for c in candidates:
+        dt = _parse_utc_instant(c)
+        if dt:
+            return dt
     return None
+
+# ============================================================================
+# HTML → cleaned article / markdown / title
+# ============================================================================
 
 def to_full_html_document(*, fragment_html: str, title: str,
                           canonical: str | None = None,
@@ -288,284 +684,6 @@ def make_clean_content_html(
     art.append(body)
 
     return str(art)
-
-def extract_publication_dates_from_html(html: str, url: str, last_modified_header: Optional[str] = None) -> Dict[str, Optional[str]]:
-    """
-    Returns a dict:
-      {
-        'published_time_raw', 'published_time_iso',
-        'modified_time_raw',  'modified_time_iso',
-        'date_method', 'date_confidence'
-      }
-    """
-    out = {
-        "published_time_raw": None, "published_time_iso": None,
-        "modified_time_raw":  None, "modified_time_iso":  None,
-        "date_method": None, "date_confidence": 0.0
-    }
-
-    def set_pub(raw, method, conf):
-        dt = _parse_date_any(raw)
-        if dt:
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            out["published_time_raw"] = raw
-            out["published_time_iso"] = dt.isoformat()
-            out["date_method"] = method
-            out["date_confidence"] = conf
-            return True
-        return False
-
-    def set_mod(raw):
-        dt = _parse_date_any(raw)
-        if dt:
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            out["modified_time_raw"] = raw
-            out["modified_time_iso"] = dt.isoformat()
-
-    try:
-        soup = BeautifulSoup(html or "", "lxml")
-    except Exception:
-        soup = None
-
-    # 1) JSON-LD
-    if soup:
-        for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
-            try:
-                data = json.loads(node.string or "")
-            except Exception:
-                continue
-            objs = data if isinstance(data, list) else [data]
-            for obj in objs:
-                if not isinstance(obj, dict):
-                    continue
-                types = obj.get("@type") or obj.get("type")
-                if isinstance(types, str):
-                    types = [types]
-                types = [t.lower() for t in (types or []) if isinstance(t, str)]
-                if any(t in ("article", "newsarticle", "blogposting") for t in types):
-                    pub = obj.get("datePublished") or obj.get("dateCreated")
-                    mod = obj.get("dateModified") or obj.get("dateUpdated")
-                    if pub and set_pub(pub, "jsonld", 0.98):
-                        if mod: set_mod(mod)
-                        return out
-                    if mod: set_mod(mod)
-
-    # 2) Meta tags (OpenGraph/Article/DC)
-    if soup:
-        meta_keys = [
-            ("property", "article:published_time"),
-            ("name", "article:published_time"),
-            ("property", "og:published_time"),
-            ("name", "pubdate"),
-            ("name", "publish-date"),
-            ("name", "date"),
-            ("name", "DC.date"), ("name", "DC.date.issued"), ("name", "DC.date.published"),
-            ("name", "dcterms.created"), ("name", "dcterms.issued"),
-            ("name", "citation_publication_date"),
-        ]
-        for attr, key in meta_keys:
-            el = soup.find("meta", attrs={attr: key})
-            if el and el.get("content"):
-                if set_pub(el["content"].strip(), f"meta:{key}", 0.9):
-                    break
-
-        # Modified variants
-        for attr, key in [
-            ("property", "article:modified_time"),
-            ("name", "article:modified_time"),
-            ("property", "og:updated_time"),
-            ("name", "dcterms.modified"),
-            ("name", "DC.date.modified"),
-        ]:
-            el = soup.find("meta", attrs={attr: key})
-            if el and el.get("content"):
-                set_mod(el["content"].strip())
-
-        # <time> / itemprop / common classes
-        if not out["published_time_iso"]:
-            sel = [
-                'time[datetime]', 'time[content]',
-                'meta[itemprop="datePublished"][content]',
-                '[itemprop="datePublished"]',
-                '.entry-date', '.post-date', '.published', 'time.published'
-            ]
-            for el in soup.select(",".join(sel)):
-                v = el.get("datetime") or el.get("content") or el.get_text(" ", strip=True)
-                if v and set_pub(v, "dom:time/byline", 0.75):
-                    break
-
-    # URL pattern (/YYYY/MM/DD/)
-    if not out["published_time_iso"]:
-        m = re.search(r"/(20\d{2})/([01]?\d)/([0-3]?\d)/", url or "")
-        if m:
-            try:
-                y, mo, d = map(int, m.groups())
-                dt = datetime(y, mo, d, tzinfo=timezone.utc)
-                out.update({
-                    "published_time_raw": f"{y:04d}-{mo:02d}-{d:02d}",
-                    "published_time_iso": dt.isoformat(),
-                    "date_method": "url_path",
-                    "date_confidence": 0.6
-                })
-            except Exception:
-                pass
-
-    # HTTP Last-Modified as last resort (low confidence, not publish time)
-    if not out["published_time_iso"] and last_modified_header:
-        if set_pub(last_modified_header, "http:last-modified", 0.4):
-            # keep confidence low
-            pass
-
-    return out
-def extract_publication_dates(soup: BeautifulSoup, url: str) -> Dict[str, Optional[str]]:
-    """
-    Returns {
-      'published_time_raw', 'published_time_iso',
-      'modified_time_raw',  'modified_time_iso',
-      'method', 'confidence'
-    }
-    """
-    out = {
-        "published_time_raw": None, "published_time_iso": None,
-        "modified_time_raw":  None, "modified_time_iso":  None,
-        "method": None, "confidence": 0.0
-    }
-
-    def set_pub(raw, method, conf):
-        dt = _parse_date_any(raw)
-        if dt:
-            out["published_time_raw"] = raw
-            out["published_time_iso"] = dt.isoformat()
-            out["method"] = method
-            out["confidence"] = conf
-            return True
-        return False
-
-    def set_mod(raw):
-        dt = _parse_date_any(raw)
-        if dt:
-            out["modified_time_raw"] = raw
-            out["modified_time_iso"] = dt.isoformat()
-
-    # 1) JSON-LD (highest confidence)
-    for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
-        try:
-            data = json.loads(node.string or "")
-        except Exception:
-            continue
-        objs = data if isinstance(data, list) else [data]
-        for obj in objs:
-            if not isinstance(obj, dict): continue
-            types = obj.get("@type") or obj.get("type")
-            if isinstance(types, str): types = [types]
-            types = [t.lower() for t in (types or []) if isinstance(t, str)]
-            if any(t in ("article","newsarticle","blogposting") for t in types):
-                pub = obj.get("datePublished") or obj.get("dateCreated")
-                mod = obj.get("dateModified") or obj.get("dateUpdated")
-                if pub and set_pub(pub, "jsonld", 0.98):
-                    if mod: set_mod(mod)
-                    return out
-                if mod: set_mod(mod)
-
-    # 2) Meta tags (OpenGraph/Article/DC)
-    meta_keys = [
-        ("property","article:published_time"),
-        ("name","article:published_time"),
-        ("property","og:published_time"),
-        ("name","pubdate"),
-        ("name","publish-date"),
-        ("name","date"),
-        ("name","DC.date"), ("name","DC.date.issued"), ("name","DC.date.published"),
-        ("name","dcterms.created"), ("name","dcterms.issued"),
-        ("name","citation_publication_date"),
-    ]
-    for attr, key in meta_keys:
-        el = soup.find("meta", attrs={attr: key})
-        if el and el.get("content"):
-            if set_pub(el["content"].strip(), f"meta:{key}", 0.9):
-                break
-
-    # 2b) Modified variants
-    for attr, key in [("property","article:modified_time"), ("name","article:modified_time"), ("property","og:updated_time"),
-                      ("name","dcterms.modified"), ("name","DC.date.modified")]:
-        el = soup.find("meta", attrs={attr: key})
-        if el and el.get("content"):
-            set_mod(el["content"].strip())
-
-    # 2c) Parsely/Sailthru JSON blobs
-    for key in ["parsely-page", "sailthru.date"]:
-        el = soup.find("meta", attrs={"name": key})
-        if el and el.get("content"):
-            try:
-                blob = json.loads(el["content"])
-                pub = blob.get("pub_date") or blob.get("date")
-                if pub and not out["published_time_iso"]:
-                    set_pub(pub, f"meta:{key}", 0.85)
-            except Exception:
-                # some sites put raw date here
-                if not out["published_time_iso"]:
-                    set_pub(el["content"].strip(), f"meta:{key}", 0.7)
-
-    # 3) <time> / itemprop / common classes
-    sel = [
-        'time[datetime]', 'time[content]',
-        'meta[itemprop="datePublished"][content]',
-        '[itemprop="datePublished"]',
-        '.entry-date', '.post-date', '.published', 'time.published'
-    ]
-    for el in soup.select(",".join(sel)):
-        v = el.get("datetime") or el.get("content") or el.get_text(" ", strip=True)
-        if v and not out["published_time_iso"]:
-            if set_pub(v, "dom:time/byline", 0.75):
-                break
-
-    # 4) Visible byline fallback you already parse (keep if not set)
-    if not out["published_time_iso"]:
-        # allow your existing author/date extraction to populate date_raw
-        pass
-
-    # 5) URL pattern (/YYYY/MM/DD/)
-    if not out["published_time_iso"]:
-        m = re.search(r"/(20\d{2})/([01]?\d)/([0-3]?\d)/", url)
-        if m:
-            y, mo, d = map(int, m.groups())
-            try:
-                dt = datetime(y, mo, d)
-                out.update({
-                    "published_time_raw": f"{y:04d}-{mo:02d}-{d:02d}",
-                    "published_time_iso": dt.isoformat(),
-                    "method": "url_path",
-                    "confidence": 0.6
-                })
-            except Exception:
-                pass
-
-    # 6) HTTP Last-Modified as last resort
-    if not out["published_time_iso"]:
-        lm = getattr(soup, "_http_last_modified", None)
-        if lm and set_pub(lm, "http:last-modified", 0.4):
-            # Keep confidence low—this is not publish time.
-            pass
-
-    return out
-
-def _effective_post_instant(post) -> datetime | None:
-    """Prefer modified, else published, using the richest field available."""
-    meta = getattr(post, "meta", {}) or {}
-    candidates = [
-        getattr(post, "modified", None),
-        getattr(post, "date_raw", None),
-        meta.get("modified_time_iso"),
-        meta.get("published_time_iso"),
-        getattr(post, "date", None),
-    ]
-    for c in candidates:
-        dt = _parse_utc_instant(c)
-        if dt:
-            return dt
-    return None
 
 def html_fragment_to_markdown(fragment_html: str) -> str:
     """

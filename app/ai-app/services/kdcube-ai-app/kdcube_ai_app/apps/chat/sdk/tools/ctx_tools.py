@@ -208,9 +208,34 @@ class ContextTools:
                 dst["title"] = src.get("title", "")
             if len(src.get("text", "")) > len(dst.get("text", "")):
                 dst["text"] = src.get("text", "")
+
+            # prefer longer full content
+            if len(src.get("content", "")) > len(dst.get("content", "")):
+                dst["content"] = src.get("content", "")
+
+            # timestamps, provider, etc. – first non-empty wins
             for k in CITATION_OPTIONAL_ATTRS:
                 if not dst.get(k) and src.get(k):
                     dst[k] = src[k]
+
+            # Scoring – keep the best
+            try:
+                if src.get("objective_relevance") is not None:
+                    dst["objective_relevance"] = max(
+                        float(dst.get("objective_relevance") or 0.0),
+                        float(src["objective_relevance"]),
+                    )
+            except Exception:
+                pass
+
+            try:
+                if src.get("query_relevance") is not None:
+                    dst["query_relevance"] = max(
+                        float(dst.get("query_relevance") or 0.0),
+                        float(src["query_relevance"]),
+                    )
+            except Exception:
+                pass
 
         for src in all_sources:
             url = normalize_url(src.get("url", ""))
@@ -247,6 +272,8 @@ class ContextTools:
                 "title": src.get("title", ""),
                 "text": src.get("text") or src.get("body") or src.get("content") or "",
             }
+            if src.get("content"):
+                row["content"] = src["content"]
             for k in CITATION_OPTIONAL_ATTRS:
                 if src.get(k):
                     row[k] = src[k]

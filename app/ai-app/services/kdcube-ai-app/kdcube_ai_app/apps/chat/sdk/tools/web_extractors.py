@@ -13,205 +13,26 @@
 # pip install aiolimiter  # For rate limiting
 # pip install tenacity  # For retry logic
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
 import aiohttp
 from bs4 import BeautifulSoup
 import asyncio
 import logging
 import json, os
-
-from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 import re
 
-from kdcube_ai_app.tools.scrap_utils import html_title, make_clean_content_html, html_fragment_to_markdown
+from kdcube_ai_app.tools.scrap_utils import (
+    html_title,
+    make_clean_content_html,
+    html_fragment_to_markdown,
+    extract_publication_dates_core,
+)
 
 logger = logging.getLogger(__name__)
 
-# --- Date parsing helpers ---
-
-_MONTHS = {
-    "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
-    "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12,
-}
-_ISO_DATE_RE = re.compile(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})")
-
-def _parse_human_date(s: str) -> Optional[str]:
-    s = (s or "").strip()
-    m = re.search(r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})", s)
-    if not m:
-        return None
-    month = _MONTHS.get(m.group(1).lower())
-    if not month:
-        return None
-    try:
-        dt = datetime(int(m.group(3)), month, int(m.group(2)))
-        return dt.date().isoformat()
-    except Exception:
-        return None
-
-def _parse_date_any(s: str) -> Optional[datetime]:
-    if not s:
-        return None
-    s = s.strip()
-    # ISO 8601
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        pass
-    # RFC 2822/HTTP
-    try:
-        return parsedate_to_datetime(s)
-    except Exception:
-        pass
-    # "September 19, 2025"
-    iso = _parse_human_date(s)
-    if iso:
-        try:
-            y, m, d = map(int, iso.split("-"))
-            return datetime(y, m, d)
-        except Exception:
-            pass
-    # "2025-9-19" or "2025/09/19"
-    m = _ISO_DATE_RE.search(s)
-    if m:
-        try:
-            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-        except Exception:
-            pass
-    return None
-
-def _extract_publication_dates_from_html(html: str, url: str, last_modified_header: Optional[str] = None) -> Dict[str, Optional[str]]:
-    """
-    Returns a dict:
-      {
-        'published_time_raw', 'published_time_iso',
-        'modified_time_raw',  'modified_time_iso',
-        'date_method', 'date_confidence'
-      }
-    """
-    out = {
-        "published_time_raw": None, "published_time_iso": None,
-        "modified_time_raw":  None, "modified_time_iso":  None,
-        "date_method": None, "date_confidence": 0.0
-    }
-
-    def set_pub(raw, method, conf):
-        dt = _parse_date_any(raw)
-        if dt:
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            out["published_time_raw"] = raw
-            out["published_time_iso"] = dt.isoformat()
-            out["date_method"] = method
-            out["date_confidence"] = conf
-            return True
-        return False
-
-    def set_mod(raw):
-        dt = _parse_date_any(raw)
-        if dt:
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            out["modified_time_raw"] = raw
-            out["modified_time_iso"] = dt.isoformat()
-
-    try:
-        soup = BeautifulSoup(html or "", "lxml")
-    except Exception:
-        soup = None
-
-    # 1) JSON-LD
-    if soup:
-        for node in soup.find_all("script", attrs={"type": "application/ld+json"}):
-            try:
-                data = json.loads(node.string or "")
-            except Exception:
-                continue
-            objs = data if isinstance(data, list) else [data]
-            for obj in objs:
-                if not isinstance(obj, dict):
-                    continue
-                types = obj.get("@type") or obj.get("type")
-                if isinstance(types, str):
-                    types = [types]
-                types = [t.lower() for t in (types or []) if isinstance(t, str)]
-                if any(t in ("article", "newsarticle", "blogposting") for t in types):
-                    pub = obj.get("datePublished") or obj.get("dateCreated")
-                    mod = obj.get("dateModified") or obj.get("dateUpdated")
-                    if pub and set_pub(pub, "jsonld", 0.98):
-                        if mod: set_mod(mod)
-                        return out
-                    if mod: set_mod(mod)
-
-    # 2) Meta tags (OpenGraph/Article/DC)
-    if soup:
-        meta_keys = [
-            ("property", "article:published_time"),
-            ("name", "article:published_time"),
-            ("property", "og:published_time"),
-            ("name", "pubdate"),
-            ("name", "publish-date"),
-            ("name", "date"),
-            ("name", "DC.date"), ("name", "DC.date.issued"), ("name", "DC.date.published"),
-            ("name", "dcterms.created"), ("name", "dcterms.issued"),
-            ("name", "citation_publication_date"),
-        ]
-        for attr, key in meta_keys:
-            el = soup.find("meta", attrs={attr: key})
-            if el and el.get("content"):
-                if set_pub(el["content"].strip(), f"meta:{key}", 0.9):
-                    break
-
-        # Modified variants
-        for attr, key in [
-            ("property", "article:modified_time"),
-            ("name", "article:modified_time"),
-            ("property", "og:updated_time"),
-            ("name", "dcterms.modified"),
-            ("name", "DC.date.modified"),
-        ]:
-            el = soup.find("meta", attrs={attr: key})
-            if el and el.get("content"):
-                set_mod(el["content"].strip())
-
-        # <time> / itemprop / common classes
-        if not out["published_time_iso"]:
-            sel = [
-                'time[datetime]', 'time[content]',
-                'meta[itemprop="datePublished"][content]',
-                '[itemprop="datePublished"]',
-                '.entry-date', '.post-date', '.published', 'time.published'
-            ]
-            for el in soup.select(",".join(sel)):
-                v = el.get("datetime") or el.get("content") or el.get_text(" ", strip=True)
-                if v and set_pub(v, "dom:time/byline", 0.75):
-                    break
-
-    # URL pattern (/YYYY/MM/DD/)
-    if not out["published_time_iso"]:
-        m = re.search(r"/(20\d{2})/([01]?\d)/([0-3]?\d)/", url or "")
-        if m:
-            try:
-                y, mo, d = map(int, m.groups())
-                dt = datetime(y, mo, d, tzinfo=timezone.utc)
-                out.update({
-                    "published_time_raw": f"{y:04d}-{mo:02d}-{d:02d}",
-                    "published_time_iso": dt.isoformat(),
-                    "date_method": "url_path",
-                    "date_confidence": 0.6
-                })
-            except Exception:
-                pass
-
-    # HTTP Last-Modified as last resort (low confidence, not publish time)
-    if not out["published_time_iso"] and last_modified_header:
-        if set_pub(last_modified_header, "http:last-modified", 0.4):
-            # keep confidence low
-            pass
-
-    return out
+# --- auxiliary freshness helpers (still used elsewhere if needed) ---
 
 def _age_days_from_iso(dt_iso: Optional[str]) -> Optional[float]:
     if not dt_iso:
@@ -233,7 +54,7 @@ def _infer_time_sensitivity(objective: Optional[str], queries: List[str]) -> boo
     ]
     if any(k in text for k in keywords):
         return True
-    # any explicit year in queries/objective equals current year or the next?
+    # any explicit year in queries/objective equals current year or near?
     year_matches = re.findall(r"\b(20\d{2})\b", text)
     try:
         now_year = datetime.now(timezone.utc).year
@@ -242,7 +63,6 @@ def _infer_time_sensitivity(objective: Optional[str], queries: List[str]) -> boo
     except Exception:
         pass
     return False
-
 
 # ============================================================================
 # Source-Specific Cookie Manager
@@ -304,17 +124,10 @@ class SourceCookieManager:
     def get_cookies_for_url(cls, url: str) -> Optional[Dict[str, str]]:
         """
         Get cookies for a specific URL if available.
-
-        Args:
-            url: The URL to fetch
-
-        Returns:
-            Dict of cookies or None if no cookies configured for this source
         """
         cls._load_cookies()
 
         url_lower = url.lower()
-
         for domain, cookies in cls._cookie_cache.items():
             if domain in url_lower:
                 logger.debug(f"Using cookies for {domain}: {list(cookies.keys())}")
@@ -326,7 +139,6 @@ class SourceCookieManager:
     def has_cookies_for_url(cls, url: str) -> bool:
         """Check if cookies are available for this URL."""
         return cls.get_cookies_for_url(url) is not None
-
 
 # ============================================================================
 # Web Content Fetcher
@@ -347,7 +159,7 @@ class WebContentFetcher:
         self.timeout = timeout
         self.max_concurrent = max_concurrent
         self.enable_archive = enable_archive
-        self.session = None
+        self.session: Optional[aiohttp.ClientSession] = None
 
     async def __aenter__(self):
         """Create aiohttp session."""
@@ -375,36 +187,217 @@ class WebContentFetcher:
 
         async def fetch_with_semaphore(url: str):
             async with semaphore:
-                return await self.fetch_one(url, max_length)
+                return await self.fetch_single(url, max_length)
 
         tasks = [fetch_with_semaphore(url) for url in urls]
         return await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def fetch_one(self, url: str, max_length: int = 15000) -> Dict[str, Any]:
-        result = {
+    async def _fetch_sitemap_date(self, url: str) -> Optional[str]:
+        """
+        Try to find the page's lastmod date in sitemap.xml.
+
+        Returns ISO datetime string or None (string from <lastmod>, *not* parsed).
+        """
+        try:
+            from urllib.parse import urlparse
+
+            parsed = urlparse(url)
+            base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+            sitemap_urls = [
+                f"{base_url}/sitemap.xml",
+                f"{base_url}/sitemap_index.xml",
+                f"{base_url}/sitemap-index.xml",
+            ]
+
+            for sitemap_url in sitemap_urls:
+                try:
+                    async with self.session.get(sitemap_url, timeout=5) as response:
+                        if response.status != 200:
+                            continue
+
+                        xml_text = await response.text()
+                        soup = BeautifulSoup(xml_text, "lxml-xml")  # Use XML parser
+
+                        for url_elem in soup.find_all("url"):
+                            loc = url_elem.find("loc")
+                            lastmod = url_elem.find("lastmod")
+                            if loc and lastmod:
+                                if loc.get_text(strip=True) == url:
+                                    return lastmod.get_text(strip=True)
+
+                except Exception as e:
+                    logger.debug(f"Sitemap check failed for {sitemap_url}: {e}")
+                    continue
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Sitemap date extraction failed: {e}")
+            return None
+
+    async def _get_archive_dates(self, url: str) -> Dict[str, Optional[str]]:
+        """
+        Query Archive.org's Availability API for first/last snapshot dates.
+
+        Returns dict with 'archive_snapshot_date' and 'archive_url', or {}.
+        Useful for pages without explicit dates; timestamp is when Wayback
+        captured the page (NOT publish date).
+        """
+        try:
+            api_url = f"https://archive.org/wayback/available?url={url}"
+
+            async with self.session.get(api_url, timeout=5) as response:
+                if response.status != 200:
+                    return {}
+
+                data = await response.json()
+
+                archived = data.get("archived_snapshots", {})
+                closest = archived.get("closest", {})
+
+                if closest.get("available"):
+                    timestamp_str = closest.get("timestamp", "")
+                    if len(timestamp_str) >= 8:
+                        # "20240115120000" -> "2024-01-15T12:00:00Z"
+                        year = timestamp_str[0:4]
+                        month = timestamp_str[4:6]
+                        day = timestamp_str[6:8]
+                        hour = timestamp_str[8:10] if len(timestamp_str) >= 10 else "00"
+                        minute = timestamp_str[10:12] if len(timestamp_str) >= 12 else "00"
+                        second = timestamp_str[12:14] if len(timestamp_str) >= 14 else "00"
+
+                        iso_date = f"{year}-{month}-{day}T{hour}:{minute}:{second}Z"
+
+                        return {
+                            "archive_snapshot_date": iso_date,
+                            "archive_url": closest.get("url"),
+                        }
+
+                return {}
+
+        except Exception as e:
+            logger.debug(f"Archive.org date check failed for {url}: {e}")
+            return {}
+
+    async def _infer_dates_from_html(
+        self,
+        html: str,
+        url: str,
+        last_modified_header: Optional[str],
+    ) -> Dict[str, Any]:
+        """
+        Use the shared extract_publication_dates_core + optional sitemap/Wayback.
+
+        Strategy:
+        - First run core with only HTML + HTTP Last-Modified (cheap).
+        - If no published/modified found, optionally enrich with sitemap + archive
+          and run core again with those signals.
+        - Archive snapshot is always exposed as archive_snapshot_date/url.
+        """
+        try:
+            soup = BeautifulSoup(html or "", "lxml")
+        except Exception:
+            soup = None
+
+        # First pass: only HTML + HTTP Last-Modified
+        meta = extract_publication_dates_core(
+            soup=soup,
+            url=url,
+            last_modified_header=last_modified_header,
+        )
+
+        have_date = meta.get("published_time_iso") or meta.get("modified_time_iso")
+        sitemap_date: Optional[str] = None
+        archive_info: Dict[str, Optional[str]] = {}
+
+        # Only pay network cost for sitemap/Wayback if we still have nothing.
+        if not have_date:
+            try:
+                sitemap_date = await self._fetch_sitemap_date(url)
+            except Exception as e:
+                logger.debug(f"Sitemap fetch failed for {url}: {e}")
+
+            if self.enable_archive:
+                try:
+                    archive_info = await self._get_archive_dates(url)
+                except Exception as e:
+                    logger.debug(f"Archive fetch failed for {url}: {e}")
+                    archive_info = {}
+
+            meta = extract_publication_dates_core(
+                soup=soup,
+                url=url,
+                last_modified_header=last_modified_header,
+                sitemap_lastmod=sitemap_date,
+                archive_snapshot_date=archive_info.get("archive_snapshot_date"),
+                archive_snapshot_url=archive_info.get("archive_url"),
+            )
+        else:
+            # We already have a real date. Optionally just attach archive info
+            # as a "seen alive" hint, without using it as publish/modified.
+            if self.enable_archive:
+                try:
+                    archive_info = await self._get_archive_dates(url)
+                    if archive_info.get("archive_snapshot_date"):
+                        meta["archive_snapshot_date"] = archive_info["archive_snapshot_date"]
+                        meta["archive_snapshot_url"] = archive_info.get("archive_url")
+                except Exception as e:
+                    logger.debug(f"Archive fetch (enrich) failed for {url}: {e}")
+
+        return meta
+
+    async def fetch_single(self, url: str, max_length: int = 15000) -> Dict[str, Any]:
+        """
+        Fetch and extract content from a single URL.
+
+        Returns:
+            Dict with keys: url, content, status, content_length,
+            published_time_iso/published_time_raw,
+            modified_time_iso/modified_time_raw,
+            archive_snapshot_date/archive_snapshot_url,
+            date_method/date_confidence, error?
+        """
+        result: Dict[str, Any] = {
             "url": url,
             "content": "",
             "status": "failed",
             "content_length": 0,
-            # date fields
-            "published_time_raw": None, "published_time_iso": None,
-            "modified_time_raw": None,  "modified_time_iso": None,
-            "date_method": None, "date_confidence": 0.0,
+            "published_time_raw": None,
+            "published_time_iso": None,
+            "modified_time_raw": None,
+            "modified_time_iso": None,
+            "archive_snapshot_date": None,
+            "archive_snapshot_url": None,
+            "date_method": None,
+            "date_confidence": 0.0,
         }
 
         try:
             content, status, meta = await self._fetch_direct(url)
-            logger.debug(f"Direct fetch for {url}: status={status}, content_len={len(content)}")
+            logger.debug(
+                f"Direct fetch for {url}: status={status}, "
+                f"len={len(content)}, pub={meta.get('published_time_iso') if meta else None}"
+            )
 
             if content:
                 result["content"] = self._truncate(content, max_length)
                 result["content_length"] = len(result["content"])
                 result["status"] = status
                 result.update(meta or {})
-                logger.info(f"Successfully fetched {url}: {result['content_length']} chars")
+                logger.info(
+                    f"Fetched {url}: {result['content_length']} chars, "
+                    f"pub={result.get('published_time_iso')}, "
+                    f"mod={result.get('modified_time_iso')}, "
+                    f"method={result.get('date_method')}"
+                )
                 return result
 
-            if self.enable_archive and status in ["paywall", "error", "insufficient_content", "blocked_403", "session_expired"]:
+            # Archive fallback for failed fetches
+            if self.enable_archive and status in [
+                "paywall", "error", "insufficient_content",
+                "blocked_403", "session_expired"
+            ]:
                 logger.info(f"Trying archive fallback for: {url} (reason: {status})")
                 content, meta = await self._fetch_archive(url)
                 if content:
@@ -412,7 +405,10 @@ class WebContentFetcher:
                     result["content_length"] = len(result["content"])
                     result["status"] = "archive"
                     result.update(meta or {})
-                    logger.info(f"Archive fetch succeeded for {url}: {result['content_length']} chars")
+                    logger.info(
+                        f"Archive fetch succeeded for {url}: {result['content_length']} chars, "
+                        f"pub={result.get('published_time_iso')}"
+                    )
                     return result
                 else:
                     logger.warning(f"Archive fetch also failed for {url}")
@@ -426,7 +422,6 @@ class WebContentFetcher:
             result["error"] = str(e)
 
         return result
-
 
     async def _fetch_direct(self, url: str, retry: bool = True) -> tuple[str, str, Dict[str, Any]]:
         try:
@@ -455,9 +450,7 @@ class WebContentFetcher:
                 'Cache-Control': 'max-age=0',
             }
 
-            # Get source-specific cookies
             cookies = SourceCookieManager.get_cookies_for_url(url)
-
             if cookies:
                 logger.debug(f"Using authenticated cookies for {url}")
 
@@ -465,18 +458,17 @@ class WebContentFetcher:
                 url,
                 headers=headers,
                 allow_redirects=True,
-                cookies=cookies  # Pass cookies if available
+                cookies=cookies
             ) as response:
-                # Detect expired/invalid session
+                # expired/invalid session?
                 if response.status == 401:
                     if cookies:
                         logger.warning(f"Got 401 for {url} - session may be expired")
                         return "", "session_expired", {}
                     return "", "paywall", {}
 
-                # Check if redirected to login (another sign of expired session)
                 final_url = str(response.url)
-                if cookies and any(indicator in final_url.lower() for indicator in ['/signin', '/login', '/auth']):
+                if cookies and any(ind in final_url.lower() for ind in ['/signin', '/login', '/auth']):
                     logger.warning(f"Redirected to login page for {url} - session expired")
                     return "", "session_expired", {}
 
@@ -503,8 +495,10 @@ class WebContentFetcher:
                     try:
                         extracted_text = extractor(html)
                         if extracted_text:
-                            meta = _extract_publication_dates_from_html(
-                                html, url, last_modified_header=response.headers.get("Last-Modified")
+                            meta = await self._infer_dates_from_html(
+                                html,
+                                url,
+                                response.headers.get("Last-Modified"),
                             )
                             logger.info(f"Site-specific extractor succeeded for: {url}")
                             return extracted_text, "success", meta
@@ -526,15 +520,16 @@ class WebContentFetcher:
                     markdown = html_fragment_to_markdown(clean_fragment)
                 except Exception:
                     markdown = ""
-                # Generic extraction
                 text = self._extract_text(html)
-                # Choose the best available representation for `content`
                 chosen = markdown if len(markdown) >= 200 else text
                 if len((chosen or "").strip()) < 100:
                     logger.warning(f"Extracted content too short ({len(chosen)}) for {url}")
                     return "", "insufficient_content", {}
-                meta = _extract_publication_dates_from_html(
-                    html, url, last_modified_header=response.headers.get("Last-Modified")
+
+                meta = await self._infer_dates_from_html(
+                    html,
+                    url,
+                    response.headers.get("Last-Modified"),
                 )
                 return chosen, "success", meta
 
@@ -545,13 +540,15 @@ class WebContentFetcher:
             return "", "error", {}
 
     async def _fetch_archive(self, url: str) -> tuple[str, Dict[str, Any]]:
+        """
+        Try to fetch content via the Wayback Machine.
+        """
         archives = [f"https://web.archive.org/web/{url}"]
         for archive_url in archives:
             try:
                 content, status, meta = await self._fetch_direct(archive_url)
                 if content and status == "success":
                     logger.info(f"Archive fetch succeeded: {archive_url}")
-                    # mark method to reflect archive origin if we didn't already have one
                     if not meta.get("date_method"):
                         meta["date_method"] = "archive"
                     return content, meta
@@ -575,7 +572,6 @@ class WebContentFetcher:
             'premium content',
         ]
 
-        # Medium specific
         if 'medium.com' in url and 'metered-paywall' in html_lower:
             return True
 
@@ -587,49 +583,40 @@ class WebContentFetcher:
         try:
             soup = BeautifulSoup(html, 'lxml')
 
-            # Remove unwanted elements (but keep header/main content)
             for element in soup(['script', 'style', 'iframe', 'noscript']):
                 element.decompose()
 
-            # Try multiple strategies to find main content
-            main = None
-
-            # Strategy 1: Look for main/article tags
             main = soup.find('main') or soup.find('article')
 
-            # Strategy 2: Look for content-like divs
             if not main or len(main.get_text(strip=True)) < 200:
-                content_candidates = soup.find_all('div', class_=lambda x: x and any(
-                    keyword in str(x).lower()
-                    for keyword in ['content', 'article', 'post', 'entry', 'body', 'main', 'text']
-                ))
-                # Pick the div with most text
+                content_candidates = soup.find_all(
+                    'div',
+                    class_=lambda x: x and any(
+                        keyword in str(x).lower()
+                        for keyword in ['content', 'article', 'post', 'entry', 'body', 'main', 'text']
+                    ),
+                )
                 if content_candidates:
                     main = max(content_candidates, key=lambda x: len(x.get_text(strip=True)))
 
-            # Strategy 3: Look for role="main"
             if not main or len(main.get_text(strip=True)) < 200:
                 main = soup.find(attrs={'role': 'main'})
 
-            # Strategy 4: Fall back to body, but remove nav/footer/aside
             if not main or len(main.get_text(strip=True)) < 200:
                 main = soup.body
                 if main:
-                    # Remove navigation elements from body
                     for unwanted in main.find_all(['nav', 'footer', 'aside', 'header']):
                         unwanted.decompose()
 
-            # Extract text
             if main:
                 text = main.get_text(separator='\n', strip=True)
             else:
                 text = soup.get_text(separator='\n', strip=True)
 
-            # Clean up whitespace but don't be too aggressive
             lines = []
             for line in text.split('\n'):
                 line = line.strip()
-                if line and len(line) > 2:  # Keep lines with more than 2 chars
+                if line and len(line) > 2:
                     lines.append(line)
 
             result = '\n'.join(lines)
@@ -665,143 +652,8 @@ class WebContentFetcher:
 class SiteSpecificExtractors:
     """
     Specialized extractors for common sites with paywalls or special formatting.
-
-    All extractors should:
-    - Take html (str) as input
-    - Return str (extracted text) or empty string on failure
-    - Handle exceptions gracefully
+    All extractors return plain/markdown text or "" on failure.
     """
-
-    # @staticmethod
-    # def extract_medium(html: str) -> str:
-    #     """Enhanced Medium extraction with multiple fallback strategies."""
-    #     try:
-    #         soup = BeautifulSoup(html, 'lxml')
-    #
-    #         # Strategy 0: Check for paywall redirect
-    #         # If redirected to signin, the session expired
-    #         if soup.find('input', attrs={'name': 'signInRedirect'}):
-    #             logger.warning("Detected sign-in page - session expired")
-    #             return ""
-    #
-    #         # Strategy 1: JSON-LD (current approach)
-    #         for script in soup.find_all('script', type='application/ld+json'):
-    #             try:
-    #                 data = json.loads(script.string)
-    #                 if 'articleBody' in data:
-    #                     logger.debug("Found Medium article in JSON-LD articleBody")
-    #                     return data['articleBody']
-    #                 if isinstance(data, dict) and '@graph' in data:
-    #                     for item in data['@graph']:
-    #                         if isinstance(item, dict) and 'articleBody' in item:
-    #                             logger.debug("Found Medium article in JSON-LD @graph")
-    #                             return item['articleBody']
-    #             except:
-    #                 continue
-    #
-    #         # Strategy 2: Look for preloaded state (Medium stores article in JS)
-    #         for script in soup.find_all('script'):
-    #             script_text = script.string or ""
-    #             if 'window.__APOLLO_STATE__' in script_text:
-    #                 try:
-    #                     match = re.search(r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});', script_text, re.DOTALL)
-    #                     if match:
-    #                         apollo_state = json.loads(match.group(1))
-    #                         # Navigate through the complex structure
-    #                         for key, value in apollo_state.items():
-    #                             if isinstance(value, dict) and 'content' in value:
-    #                                 content = value.get('content', {})
-    #                                 if isinstance(content, dict) and 'bodyModel' in content:
-    #                                     body_model = content['bodyModel']
-    #                                     paragraphs = []
-    #                                     if isinstance(body_model, dict) and 'paragraphs' in body_model:
-    #                                         for para in body_model['paragraphs']:
-    #                                             if isinstance(para, dict) and 'text' in para:
-    #                                                 paragraphs.append(para['text'])
-    #                                     if paragraphs:
-    #                                         logger.debug("Found Medium article in Apollo state")
-    #                                         return '\n\n'.join(paragraphs)
-    #                 except Exception as e:
-    #                     logger.debug(f"Apollo state parsing failed: {e}")
-    #                     continue
-    #
-    #         # Strategy 3: Look for initial Next.js data
-    #         for script in soup.find_all('script', id='__NEXT_DATA__'):
-    #             try:
-    #                 data = json.loads(script.string or '{}')
-    #                 # Navigate through Next.js data structure
-    #                 props = data.get('props', {}).get('pageProps', {})
-    #
-    #                 # Try to find article in various places
-    #                 for key in ['post', 'article', 'story', 'initialState']:
-    #                     if key in props:
-    #                         item = props[key]
-    #                         if isinstance(item, dict):
-    #                             # Look for content
-    #                             content = item.get('content', {})
-    #                             if isinstance(content, dict):
-    #                                 # Extract paragraphs
-    #                                 body = content.get('bodyModel', {})
-    #                                 if isinstance(body, dict) and 'paragraphs' in body:
-    #                                     paragraphs = [
-    #                                         p.get('text', '')
-    #                                         for p in body['paragraphs']
-    #                                         if isinstance(p, dict) and 'text' in p
-    #                                     ]
-    #                                     if paragraphs:
-    #                                         logger.debug("Found Medium article in __NEXT_DATA__")
-    #                                         return '\n\n'.join(paragraphs)
-    #             except Exception as e:
-    #                 logger.debug(f"Next.js data parsing failed: {e}")
-    #                 continue
-    #
-    #         # Strategy 4: Direct article content with better selectors
-    #         # Try multiple content selectors Medium uses
-    #         content_selectors = [
-    #             'article section',  # Common Medium structure
-    #             'article div[data-testid="storyContent"]',
-    #             'article .section-content',
-    #             'article[data-post-id]',  # Articles have post IDs
-    #             '.postArticle-content',
-    #             '[data-selectable-paragraph]',  # Older Medium
-    #         ]
-    #
-    #         for selector in content_selectors:
-    #             elements = soup.select(selector)
-    #             if elements:
-    #                 # Extract all paragraphs
-    #                 paragraphs = []
-    #                 for el in elements:
-    #                     # Remove script/style
-    #                     for unwanted in el.find_all(['script', 'style', 'figure', 'img']):
-    #                         unwanted.decompose()
-    #
-    #                     text = el.get_text(separator='\n\n', strip=True)
-    #                     if text and len(text) > 50:
-    #                         paragraphs.append(text)
-    #
-    #                 if paragraphs:
-    #                     result = '\n\n'.join(paragraphs)
-    #                     if len(result) > 500:
-    #                         logger.debug(f"Found Medium article via selector: {selector}")
-    #                         return result
-    #
-    #         # Strategy 5: Fallback - just get article tag content
-    #         article = soup.find('article')
-    #         if article:
-    #             for el in article.find_all(['script', 'style', 'figure']):
-    #                 el.decompose()
-    #             text = article.get_text(separator='\n\n', strip=True)
-    #             if len(text) > 500:
-    #                 logger.debug("Found Medium article in <article> tag")
-    #                 return text
-    #
-    #         logger.debug("No Medium article content found with any strategy")
-    #         return ""
-    #
-    #     except Exception as e:
-    #         logger.warning(f"Medium extractor failed: {e}")
-    #         return ""
 
     @staticmethod
     def extract_medium(html: str) -> str:
@@ -1203,13 +1055,18 @@ class SiteSpecificExtractors:
             if not content:
                 return ""
 
-            # Remove unwanted sections
-            for unwanted in content.find_all(['table', 'sup', 'div'], class_=['infobox', 'navbox', 'reflist', 'reference']):
+            for unwanted in content.find_all(
+                ['table', 'sup', 'div'],
+                class_=['infobox', 'navbox', 'reflist', 'reference']
+            ):
                 unwanted.decompose()
 
-            # Get paragraphs
             paragraphs = content.find_all('p')
-            text = '\n\n'.join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+            text = '\n\n'.join(
+                p.get_text(strip=True)
+                for p in paragraphs
+                if p.get_text(strip=True)
+            )
 
             if text:
                 logger.debug("Extracted Wikipedia content")
