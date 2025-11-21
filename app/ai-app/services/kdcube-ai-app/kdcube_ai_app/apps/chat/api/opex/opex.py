@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
+# # kdcube_ai_app/apps/chat/api/opex/opex.py
 from typing import Optional, List
-import logging
-import os
+import logging, asyncio
 
 from pydantic import BaseModel, Field
-from fastapi import Depends, HTTPException, Request, APIRouter, Query
+from fastapi import Depends, HTTPException, Request, APIRouter, Query, FastAPI
+from contextlib import asynccontextmanager
 
 from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency, auth_without_pressure
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -28,10 +29,35 @@ Provides REST endpoints for querying operational expenditure data
 from the accounting system using the RateCalculator.
 """
 
+_scheduler_task: Optional[asyncio.Task] = None
 logger = logging.getLogger("OPEX.API")
 
+@asynccontextmanager
+async def opex_lifespan(app: FastAPI):
+    """
+    Router lifespan: start scheduler on startup, stop it on shutdown.
+    """
+    global _scheduler_task
+
+    import kdcube_ai_app.apps.chat.api.opex.routines as routines
+    if _scheduler_task is None:
+        _scheduler_task = asyncio.create_task(routines.aggregation_scheduler_loop())
+        logger.info("[OPEX Aggregator] Background scheduler task started")
+
+    try:
+        yield
+    finally:
+        if _scheduler_task is not None:
+            _scheduler_task.cancel()
+            try:
+                await _scheduler_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[OPEX Aggregator] Background scheduler task stopped")
+            _scheduler_task = None
+
 # Create router
-router = APIRouter()
+router = APIRouter(lifespan=opex_lifespan)
 
 # =============================================================================
 # Request/Response Models
@@ -213,37 +239,36 @@ async def get_total_usage(
         - cost_estimate: Estimated costs based on price table
     """
     try:
-        # TODO: get back when we have scheduled aggregates!
-        # calc = _get_calculator(request)
-        #
-        # service_types_list = None
-        # if service_types:
-        #     service_types_list = [s.strip() for s in service_types.split(",")]
-        #
-        # result = await calc.usage_all_users(
-        #     tenant_id=tenant,
-        #     project_id=project,
-        #     date_from=date_from,
-        #     date_to=date_to,
-        #     app_bundle_id=app_bundle_id,
-        #     service_types=service_types_list,
-        #     hard_file_limit=hard_file_limit
-        # )
-        #
-        # # Add cost estimate
-        # cost_estimate = None
-        # if result.get("rollup"):
-        #     cost_estimate = _compute_cost_estimate(result["rollup"])
-        # END OF TODO: get back when we have scheduled aggregates!
+        calc = _get_calculator(request)
+
+        service_types_list = None
+        if service_types:
+            service_types_list = [s.strip() for s in service_types.split(",")]
+
+        result = await calc.usage_all_users(
+            tenant_id=tenant,
+            project_id=project,
+            date_from=date_from,
+            date_to=date_to,
+            app_bundle_id=app_bundle_id,
+            service_types=service_types_list,
+            hard_file_limit=hard_file_limit,
+            require_aggregates=True # never triggers a big raw scan
+        )
+
+        # Add cost estimate
+        cost_estimate = None
+        if result.get("rollup"):
+            cost_estimate = _compute_cost_estimate(result["rollup"])
 
         # MOCK
-        result = {
-            "total": 0,
-            "rollup": 0,
-            "user_count": 0,
-            "event_count": 0
-        }
-        cost_estimate = 0
+        # result = {
+        #     "total": 0,
+        #     "rollup": 0,
+        #     "user_count": 0,
+        #     "event_count": 0
+        # }
+        # cost_estimate = 0
         # MOCK
 
         return {
@@ -255,6 +280,9 @@ async def get_total_usage(
             "cost_estimate": cost_estimate
         }
 
+    except RuntimeError as e:
+        # Aggregates missing / incomplete
+        raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.exception(f"[get_total_usage] {tenant}/{project} failed")
         raise HTTPException(status_code=500, detail=f"Failed to query usage: {str(e)}")
@@ -687,3 +715,65 @@ async def admin_get_price_table(
     except Exception as e:
         logger.exception("[admin_get_price_table] failed")
         raise HTTPException(status_code=500, detail=f"Failed to get price table: {str(e)}")
+
+@router.post("/admin/run-aggregation-range")
+async def admin_run_aggregation_range(
+        start_date: str = Query(..., description="Start date (YYYY-MM-DD)"),
+        end_date: Optional[str] = Query(
+            None,
+            description="End date (YYYY-MM-DD, inclusive). "
+                        "If omitted, defaults to yesterday in Europe/Berlin."
+        ),
+        session: UserSession = Depends(auth_without_pressure())
+):
+    """
+    Manually backfill daily + monthly aggregates for a date range.
+
+    This uses the same Redis locking as the scheduler, so it is safe to call
+    on multiple API instances concurrently.
+
+    Examples:
+      - /admin/run-aggregation-range?start_date=2025-01-01
+        -> backfills from 2025-01-01 up to yesterday.
+      - /admin/run-aggregation-range?start_date=2025-01-01&end_date=2025-01-10
+        -> backfills 2025-01-01 .. 2025-01-10.
+    """
+
+    import kdcube_ai_app.apps.chat.api.opex.routines as routines
+    from datetime import datetime, timedelta, date
+
+    try:
+        start = date.fromisoformat(start_date)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid start_date, expected format YYYY-MM-DD",
+        )
+
+    if end_date:
+        try:
+            end = date.fromisoformat(end_date)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid end_date, expected format YYYY-MM-DD",
+            )
+    else:
+        # default: yesterday in ACCOUNTING_TZ
+        end = (datetime.now(routines.ACCOUNTING_TZ) - timedelta(days=1)).date()
+
+    if end < start:
+        raise HTTPException(
+            status_code=400,
+            detail="end_date must be greater than or equal to start_date",
+        )
+
+    # This will loop date-by-date and use Redis locks inside.
+    await routines.run_aggregation_range(start, end)
+
+    return {
+        "status": "ok",
+        "start_date": start.isoformat(),
+        "end_date": end.isoformat(),
+        "message": "Aggregation triggered for date range",
+    }

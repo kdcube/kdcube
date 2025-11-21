@@ -986,6 +986,7 @@ class AccountingCalculator:
             app_bundle_id: Optional[str] = None,
             service_types: Optional[List[str]] = None,
             hard_file_limit: Optional[int] = None,
+            require_aggregates: bool = False,
     ) -> Dict[str, Any]:
         """
         Query (2): Total spendings for all users in given timeframe.
@@ -1031,7 +1032,11 @@ class AccountingCalculator:
             if agg_res is not None:
                 return agg_res
 
-        # Fallback: previous behavior (pure raw scan)
+            if require_aggregates:
+                # No aggregates or failure → refuse instead of raw scan
+                raise RuntimeError("Aggregates not available for requested range")
+
+        # Fallback: pure raw scan (only if require_aggregates=False)
         query = AccountingQuery(
             tenant_id=tenant_id,
             project_id=project_id,
