@@ -489,7 +489,7 @@ class ConversationStore:
         # Already looks like a backend-relative key (e.g., 'cb/tenants/...')
         return text.lstrip("/")
 
-    def get_message(self, uri_or_path: str) -> dict:
+    async def get_message(self, uri_or_path: str) -> dict:
         """
         Load a single message JSON by its URI or path and return the record (dict).
         - Supports 'file://', 's3://', absolute file paths, or backend-relative keys.
@@ -501,7 +501,7 @@ class ConversationStore:
             raise ValueError(f"Message path must point to a .json file: got '{rel}'")
 
         try:
-            raw = self.backend.read_text(rel)
+            raw = await self.backend.read_text_a(rel)
         except Exception as e:
             raise FileNotFoundError(f"Cannot read message at {uri_or_path}: {e}")
 

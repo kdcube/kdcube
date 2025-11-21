@@ -17,7 +17,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from abc import ABC, abstractmethod
 
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.utils.util import _deep_merge
+from kdcube_ai_app.infra.accounting.turn_cache import TurnEventCache
 from kdcube_ai_app.infra.accounting.usage import ServiceUsage
 
 # ================================
@@ -262,6 +264,88 @@ def clear_context():
 
 def get_enrichment() -> Dict[str, Any]: return dict(_get_context().event_enrichment or {})
 
+def _current_turn_ids_from_context() -> tuple[str, str, str, str]:
+    """
+    Helper: compute (tenant, project, conversation_id, turn_id)
+    from current AccountingContext.
+    """
+    ctx = _get_context()
+    d = ctx.to_dict()
+
+    tenant = d.get("tenant_id") or d.get("tenant") or "unknown"
+    project = d.get("project_id") or d.get("project") or "unknown"
+    conversation_id = d.get("conversation_id") or "no-conv"
+    turn_id = d.get("turn_id") or "no-turn"
+    return tenant, project, conversation_id, turn_id
+
+
+async def get_turn_events(
+        *,
+        tenant: Optional[str] = None,
+        project: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
+) -> list[dict]:
+    """
+    Read all events for a given turn from Redis via the current storage.
+
+    If args are omitted, they are taken from current AccountingContext.
+    Returns [] if no Redis turn cache is configured.
+    """
+    storage = _get_storage()
+    if not isinstance(storage, FileAccountingStorage):
+        return []
+
+    if storage.turn_cache is None:
+        return []
+
+    if not (tenant and project and conversation_id and turn_id):
+        t, p, c, tn = _current_turn_ids_from_context()
+        tenant = tenant or t
+        project = project or p
+        conversation_id = conversation_id or c
+        turn_id = turn_id or tn
+
+    return await storage.turn_cache.get_events_for_turn(
+        tenant=tenant,
+        project=project,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
+
+
+async def clear_turn_events(
+        *,
+        tenant: Optional[str] = None,
+        project: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        turn_id: Optional[str] = None,
+) -> None:
+    """
+    Delete the Redis cache for the given turn via the current storage.
+    No-op if Redis cache is not configured.
+    """
+    storage = _get_storage()
+    if not isinstance(storage, FileAccountingStorage):
+        return
+
+    if storage.turn_cache is None:
+        return
+
+    if not (tenant and project and conversation_id and turn_id):
+        t, p, c, tn = _current_turn_ids_from_context()
+        tenant = tenant or t
+        project = project or p
+        conversation_id = conversation_id or c
+        turn_id = turn_id or tn
+
+    await storage.turn_cache.clear_turn(
+        tenant=tenant,
+        project=project,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
+
 # ================================
 # STORAGE INTERFACE AND IMPLEMENTATIONS
 # ================================
@@ -275,12 +359,14 @@ class IAccountingStorage(ABC):
 class FileAccountingStorage(IAccountingStorage):
     def __init__(self, storage_backend, base_path: str = "accounting",
                  path_strategy: Optional[Callable[['AccountingEvent'], str]] = None,
-                 cache_in_memory: bool = True):
+                 cache_in_memory: bool = True,
+                 turn_cache: Optional[TurnEventCache] = None,):
         self.storage_backend = storage_backend
         self.base_path = base_path.strip("/")
         self.logger = logging.getLogger(self.__class__.__name__)
         self.path_strategy = path_strategy
         self.cache_in_memory = cache_in_memory
+        self.turn_cache = turn_cache
 
     def _default_path(self, event: AccountingEvent) -> str:
         dt = datetime.fromisoformat(event.timestamp.replace("Z","+00:00")) if event.timestamp else datetime.now()
@@ -290,16 +376,21 @@ class FileAccountingStorage(IAccountingStorage):
         return f"{self.base_path}/{tenant}/{project}/{date_path}/{event.service_type.value}/{event.event_id}.json"
 
     async def store_event(self, event: AccountingEvent) -> bool:
-        # Always cache if enabled
+        # In-process cache (fast reads within this process)
         if self.cache_in_memory:
             ctx = _get_context()
             ctx.cache_event(event)
 
-        # # If cache-only mode, skip file write for now
-        # if self.cache_in_memory:
-        #     return True
+        # Cross-process per-turn cache (Redis)
+        if self.turn_cache is not None:
+            try:
+                await self.turn_cache.append_event(event)
+            except Exception as e:
+                self.logger.error(
+                    f"Failed to append accounting event {event.event_id} to turn cache: {e}"
+                )
 
-        # Original file write logic
+        # File/S3 write
         try:
             event_dict = event.to_dict()
 
@@ -548,19 +639,58 @@ class AccountingSystem:
     """Main accounting system interface"""
 
     @staticmethod
-    def init_storage(storage_backend,
-                     enabled: bool = True,
-                     *,
-                     base_path: str = "accounting",
-                     path_strategy: Optional[Callable[['AccountingEvent'], str]] = None):
-        """Initialize accounting storage in context"""
+    def init_storage(
+            storage_backend,
+            enabled: bool = True,
+            *,
+            base_path: str = "accounting",
+            path_strategy: Optional[Callable[['AccountingEvent'], str]] = None,
+            cache_in_memory: bool = True,
+            redis_turn_cache: bool = True,
+            turn_cache_ttl_s: int = 3600,
+            redis_url: Optional[str] = None,
+    ):
+        """
+        Initialize accounting storage in context.
+
+        redis_turn_cache:
+            If True, also mirror events into a Redis per-turn cache so
+            subprocesses and the orchestrator can see the same turn events.
+        """
         global _default_storage
-        if enabled:
-            if not path_strategy:
-                path_strategy = grouped_by_component_and_seed()
-            _default_storage = FileAccountingStorage(storage_backend, base_path=base_path, path_strategy=path_strategy)
-        else:
+
+        settings = get_settings()
+
+        if not enabled:
             _default_storage = NoOpAccountingStorage()
+            _set_storage(_default_storage)
+            return
+
+        if not path_strategy:
+            path_strategy = grouped_by_component_and_seed()
+
+        turn_cache = None
+        if redis_turn_cache:
+            try:
+                if not redis_url:
+                    redis_url = settings.REDIS_URL
+                turn_cache = TurnEventCache(
+                    redis_url=redis_url,
+                    ttl_seconds=turn_cache_ttl_s,
+                )
+            except Exception as e:
+                logging.getLogger("accounting").warning(
+                    f"Failed to init TurnEventCache, continuing without it: {e}"
+                )
+                turn_cache = None
+
+        _default_storage = FileAccountingStorage(
+            storage_backend,
+            base_path=base_path,
+            path_strategy=path_strategy,
+            cache_in_memory=cache_in_memory,
+            turn_cache=turn_cache,
+        )
         _set_storage(_default_storage)
 
     @staticmethod

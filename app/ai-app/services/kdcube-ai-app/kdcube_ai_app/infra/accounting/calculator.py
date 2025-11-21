@@ -25,6 +25,7 @@ from dataclasses import dataclass, asdict
 from datetime import datetime, date, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple, AsyncIterator
 
+from kdcube_ai_app.infra.accounting import get_turn_events
 from kdcube_ai_app.storage.storage import IStorageBackend, create_storage_backend
 
 logger = logging.getLogger("AccountingCalculator")
@@ -62,7 +63,6 @@ class AccountingQuery:
 
     # safety: max number of files to read
     hard_file_limit: Optional[int] = None
-
 
 # -----------------------------
 # Filename parsing helpers
@@ -1472,39 +1472,58 @@ class RateCalculator(AccountingCalculator):
         """
         Compact rollup for a single turn.
 
-        HIGHLY OPTIMIZED: Uses prefix filtering + optional memory cache.
+        When use_memory_cache=True, this now reads from the Redis-backed
+        turn cache via the accounting layer instead of the in-process
+        AccountingContext cache.
+
+        Otherwise it falls back to scanning storage with prefix optimization.
         """
+        events: List[Dict[str, Any]] = []
+
         if use_memory_cache:
-            # Fast path: read from memory cache
-            from kdcube_ai_app.infra.accounting import _get_context
+            # --- FAST PATH: Redis turn cache (via accounting layer) ---
+            try:
+                cached_events = await get_turn_events(
+                    tenant=tenant_id,
+                    project=project_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to read turn events from Redis cache "
+                    "(tenant=%s, project=%s, conv=%s, turn=%s): %s",
+                    tenant_id,
+                    project_id,
+                    conversation_id,
+                    turn_id,
+                    e,
+                )
+                cached_events = []
 
-            ctx = _get_context()
-            cached_events = ctx.get_cached_events()
-
-            events = []
-            for event in cached_events:
-                ev = event.to_dict()
-
-                # Filter by turn_id
-                md_tid = (ev.get("metadata") or {}).get("turn_id")
-                ctx_tid = (ev.get("context") or {}).get("turn_id")
-                if md_tid != turn_id and ctx_tid != turn_id:
-                    continue
-
-                # Filter by bundle
+            for ev in cached_events:
+                # Filter by app bundle
                 if app_bundle_id:
-                    ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                    ev_bundle = (
+                            ev.get("app_bundle_id")
+                            or (ev.get("context") or {}).get("app_bundle_id")
+                    )
                     if ev_bundle != app_bundle_id:
                         continue
 
-                # Filter by service type
-                if service_types:
-                    if ev.get("service_type") not in service_types:
+                # Filter by user_id if specified
+                if user_id:
+                    ev_user = ev.get("user_id") or (ev.get("context") or {}).get("user_id")
+                    if ev_user != user_id:
                         continue
+
+                # Filter by service types if specified
+                if service_types and ev.get("service_type") not in service_types:
+                    continue
 
                 events.append(ev)
         else:
-            # Slow path: read from storage with prefix optimization
+            # --- SLOW PATH: read from storage with prefix optimization ---
             if date_from or date_to:
                 from datetime import timedelta
 
@@ -1539,7 +1558,6 @@ class RateCalculator(AccountingCalculator):
             )
 
             paths = [p async for p in self._iter_event_paths(query)]
-            events = []
 
             for p in paths:
                 try:
@@ -1552,7 +1570,7 @@ class RateCalculator(AccountingCalculator):
 
                 events.append(ev)
 
-        # Process events (same logic for both paths)
+        # --- Common aggregation logic for both paths ---
         rollup: Dict[Tuple[str, str, str], Dict[str, int]] = {}
 
         for ev in events:
@@ -1560,8 +1578,14 @@ class RateCalculator(AccountingCalculator):
             if not service:
                 continue
 
-            provider = str(ev.get("provider") or (ev.get("context") or {}).get("provider") or "").strip()
-            model = str(ev.get("model_or_service") or (ev.get("context") or {}).get("model_or_service") or "").strip()
+            context = ev.get("context") or {}
+
+            provider = str(
+                ev.get("provider") or context.get("provider") or ""
+            ).strip()
+            model = str(
+                ev.get("model_or_service") or context.get("model_or_service") or ""
+            ).strip()
 
             key = (service, provider, model)
             spent = rollup.get(key)
@@ -1572,23 +1596,27 @@ class RateCalculator(AccountingCalculator):
             usage = _extract_usage(ev) or {}
             _accumulate_compact(spent, usage, service)
 
-        # Build output
         items: List[Dict[str, Any]] = []
         for (service, provider, model) in sorted(rollup.keys()):
             spent = rollup[(service, provider, model)]
             if not include_zero:
-                if service == "llm" and (spent.get("input", 0) == 0 and spent.get("output", 0) == 0):
+                if service == "llm" and (
+                        spent.get("input", 0) == 0 and spent.get("output", 0) == 0
+                ):
                     continue
                 if service == "embedding" and spent.get("tokens", 0) == 0:
                     continue
-            items.append({
-                "service": service,
-                "provider": provider or None,
-                "model": model or None,
-                "spent": {k: int(v) for k, v in spent.items()},
-            })
+            items.append(
+                {
+                    "service": service,
+                    "provider": provider or None,
+                    "model": model or None,
+                    "spent": {k: int(v) for k, v in spent.items()},
+                }
+            )
 
         return items
+
 
     async def turn_usage_by_agent(
             self,
@@ -1609,35 +1637,55 @@ class RateCalculator(AccountingCalculator):
         """
         Return usage grouped by agent, then by (service, provider, model).
 
-        HIGHLY OPTIMIZED: Uses prefix filtering + optional memory cache.
-        Now leverages agent name in filename for ultra-efficient filtering.
+        When use_memory_cache=True, this now reads from the Redis-backed
+        turn cache via the accounting layer instead of the in-process
+        AccountingContext cache.
+
+        Otherwise it falls back to scanning storage with prefix optimization.
         """
+        events: List[Dict[str, Any]] = []
+
         if use_memory_cache:
-            from kdcube_ai_app.infra.accounting import _get_context
+            # --- FAST PATH: Redis turn cache (via accounting layer) ---
+            try:
+                cached_events = await get_turn_events(
+                    tenant=tenant_id,
+                    project=project_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to read turn events from Redis cache "
+                    "(tenant=%s, project=%s, conv=%s, turn=%s): %s",
+                    tenant_id,
+                    project_id,
+                    conversation_id,
+                    turn_id,
+                    e,
+                )
+                cached_events = []
 
-            ctx = _get_context()
-            cached_events = ctx.get_cached_events()
-
-            events = []
-            for event in cached_events:
-                ev = event.to_dict()
-
-                md_tid = (ev.get("metadata") or {}).get("turn_id")
-                ctx_tid = (ev.get("context") or {}).get("turn_id")
-                if md_tid != turn_id and ctx_tid != turn_id:
-                    continue
-
+            for ev in cached_events:
                 if app_bundle_id:
-                    ev_bundle = ev.get("app_bundle_id") or (ev.get("context") or {}).get("app_bundle_id")
+                    ev_bundle = (
+                            ev.get("app_bundle_id")
+                            or (ev.get("context") or {}).get("app_bundle_id")
+                    )
                     if ev_bundle != app_bundle_id:
                         continue
 
-                if service_types:
-                    if ev.get("service_type") not in service_types:
+                if user_id:
+                    ev_user = ev.get("user_id") or (ev.get("context") or {}).get("user_id")
+                    if ev_user != user_id:
                         continue
+
+                if service_types and ev.get("service_type") not in service_types:
+                    continue
 
                 events.append(ev)
         else:
+            # --- SLOW PATH: read from storage with prefix optimization ---
             if date_from or date_to:
                 from datetime import timedelta
 
@@ -1669,7 +1717,6 @@ class RateCalculator(AccountingCalculator):
             )
 
             paths = [p async for p in self._iter_event_paths(query)]
-            events = []
 
             for p in paths:
                 try:
@@ -1682,12 +1729,13 @@ class RateCalculator(AccountingCalculator):
 
                 events.append(ev)
 
-        # Process events - group by agent
+        # --- Common aggregation logic for both paths ---
         agent_rollup: Dict[str, Dict[Tuple[str, str, str], Dict[str, int]]] = {}
 
         for ev in events:
             metadata = ev.get("metadata") or {}
             context = ev.get("context") or {}
+
             agent = (
                     metadata.get("agent")
                     or context.get("agent")
@@ -1700,8 +1748,12 @@ class RateCalculator(AccountingCalculator):
             if not service:
                 continue
 
-            provider = str(ev.get("provider") or context.get("provider") or "").strip()
-            model = str(ev.get("model_or_service") or context.get("model_or_service") or "").strip()
+            provider = str(
+                ev.get("provider") or context.get("provider") or ""
+            ).strip()
+            model = str(
+                ev.get("model_or_service") or context.get("model_or_service") or ""
+            ).strip()
 
             if agent not in agent_rollup:
                 agent_rollup[agent] = {}
@@ -1715,7 +1767,6 @@ class RateCalculator(AccountingCalculator):
             usage = _extract_usage(ev) or {}
             _accumulate_compact(spent, usage, service)
 
-        # Build output
         result: Dict[str, List[Dict[str, Any]]] = {}
 
         for agent in sorted(agent_rollup.keys()):
@@ -1725,23 +1776,26 @@ class RateCalculator(AccountingCalculator):
                 spent = agent_rollup[agent][(service, provider, model)]
 
                 if not include_zero:
-                    if service == "llm" and (spent.get("input", 0) == 0 and spent.get("output", 0) == 0):
+                    if service == "llm" and (
+                            spent.get("input", 0) == 0 and spent.get("output", 0) == 0
+                    ):
                         continue
                     if service == "embedding" and spent.get("tokens", 0) == 0:
                         continue
 
-                items.append({
-                    "service": service,
-                    "provider": provider or None,
-                    "model": model or None,
-                    "spent": {k: int(v) for k, v in spent.items()},
-                })
+                items.append(
+                    {
+                        "service": service,
+                        "provider": provider or None,
+                        "model": model or None,
+                        "spent": {k: int(v) for k, v in spent.items()},
+                    }
+                )
 
             if items:
                 result[agent] = items
 
         return result
-
 
 # -----------------------------
 # Price calculation helpers

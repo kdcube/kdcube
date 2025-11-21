@@ -152,7 +152,7 @@ class ContextRAGClient:
                 item["deps"] = r["deps"]
             if with_payload and r.get("s3_uri"):
                 try:
-                    item["payload"] = self.store.get_message(r["s3_uri"])
+                    item["payload"] = await self.store.get_message(r["s3_uri"])
                 except Exception:
                     pass
             items.append(item)
@@ -229,14 +229,14 @@ class ContextRAGClient:
             }
             if with_payload and r.get("s3_uri"):
                 try:
-                    item["payload"] = self.store.get_message(r["s3_uri"])
+                    item["payload"] = await self.store.get_message(r["s3_uri"])
                 except Exception:
                     pass
             items.append(item)
         return {"items": items}
 
     async def pull_text_artifact(self, *, artifact_uri: str) -> dict:
-        doc = self.store.get_message(artifact_uri)
+        doc = await self.store.get_message(artifact_uri)
         return doc.get("payload") or {}
 
     async def save_turn_log_as_artifact(
@@ -1552,7 +1552,7 @@ class ContextRAGClient:
             }
             if materialize and r.get("s3_uri"):
                 try:
-                    data = self.store.get_message(r["s3_uri"]) or {}
+                    data = await self.store.get_message(r["s3_uri"]) or {}
                     item["data"] = data
                     if "embedding" in item["data"]:
                         del item["data"]["embedding"]
@@ -1587,7 +1587,7 @@ class ContextRAGClient:
         payload = {}
         try:
             if row.get("s3_uri"):
-                payload = self.store.get_message(row["s3_uri"])
+                payload = await self.store.get_message(row["s3_uri"])
         except Exception:
             payload = {}
         return {
@@ -1951,7 +1951,7 @@ async def search_context(
             s3_uri = hit.get("s3_uri")
             if s3_uri:
                 try:
-                    payload = ctx_client.store.get_message(s3_uri)
+                    payload = await ctx_client.store.get_message(s3_uri)
                     # Remove embedding to save memory
                     if isinstance(payload, dict) and "embedding" in payload:
                         payload = {**payload}
