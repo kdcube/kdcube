@@ -201,27 +201,38 @@ async def _run_subprocess(entry_path: pathlib.Path, *, cwd: pathlib.Path, env: d
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+
+    out: bytes = b""
+    err: bytes = b""
+    timed_out = False
+
     try:
-        await asyncio.wait_for(proc.wait(), timeout=timeout_s)
+        # Read and wait at the same time; avoids pipe deadlock
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
     except asyncio.TimeoutError:
+        timed_out = True
         try:
-            proc.terminate() # SIGTERM first
+            proc.terminate()
         except ProcessLookupError:
             pass
+
+        # Give it a moment to shut down gracefully
         try:
-            await asyncio.wait_for(proc.wait(), timeout=5)
+            out2, err2 = await asyncio.wait_for(proc.communicate(), timeout=5)
+            # Append any extra output we got after terminate()
+            out += out2
+            err += err2
         except asyncio.TimeoutError:
+            # Force kill if it still doesn’t exit
             try:
-                proc.kill()  # SIGKILL if didn't respond
+                proc.kill()
             except ProcessLookupError:
                 pass
-        return {"error": "timeout", "seconds": timeout_s}
+            out2, err2 = await proc.communicate()
+            out += out2
+            err += err2
     finally:
         # append logs (do not overwrite)
-        try:
-            out, err = await proc.communicate()
-        except Exception:
-            out, err = (b"", b"")
         try:
             out_path = outdir / "runtime.out.log"
             err_path = outdir / "runtime.err.log"
@@ -236,6 +247,9 @@ async def _run_subprocess(entry_path: pathlib.Path, *, cwd: pathlib.Path, env: d
                     f.write(b"\n")
         except Exception:
             pass
+
+    if timed_out:
+        return {"error": "timeout", "seconds": timeout_s}
 
     return {"ok": proc.returncode == 0, "returncode": proc.returncode}
 
@@ -971,4 +985,3 @@ asyncio.run(_main())
             timeout_s=timeout_s,
         )
         return res
-
