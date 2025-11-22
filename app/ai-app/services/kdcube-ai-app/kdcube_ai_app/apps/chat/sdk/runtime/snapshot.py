@@ -6,7 +6,7 @@
 from __future__ import annotations
 import os
 import gc, sys, types, base64, json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from contextvars import ContextVar
 import contextvars
 import asyncio
@@ -43,48 +43,116 @@ def _try_module_attr_of(cv: ContextVar) -> Optional[tuple[str, str]]:
             continue
     return None
 
-def _encode_value(v: Any) -> dict:
-    # Prefer JSON; fall back to cloudpickle (base64). Mark encoding.
-    try:
-        json.dumps(v, ensure_ascii=False)
-        return {"kind": "json", "data": v}
-    except Exception:
-        if cloudpickle is None:
-            # last resort: repr (better than dropping it)
-            return {"kind": "repr", "data": repr(v)}
-        b = cloudpickle.dumps(v)
-        return {"kind": "pickle_b64", "data": base64.b64encode(b).decode("ascii")}
+def _is_json_primitive(v: Any) -> bool:
+    return v is None or isinstance(v, (bool, int, float, str))
+
+def _encode_value(v: Any) -> Tuple[bool, Any]:
+    """
+    Encode a ContextVar value into something JSON-serializable.
+
+    Returns:
+        (ok, encoded_value)
+
+    - ok == False → value is NOT portable; caller MUST skip this ContextVar.
+    - ok == True  → encoded_value is JSON-safe and may be stored.
+    """
+
+    # Primitives are fine
+    if _is_json_primitive(v):
+        return True, v
+
+    # Lists: keep encodable elements
+    if isinstance(v, list):
+        out = []
+        for item in v:
+            ok_item, enc_item = _encode_value(item)
+            if ok_item:
+                out.append(enc_item)
+        return True, out
+
+    # Dicts: keep encodable values, stringifiable keys
+    if isinstance(v, dict):
+        out = {}
+        for k, val in v.items():
+            # We only support primitive keys
+            if not _is_json_primitive(k):
+                continue
+            ok_val, enc_val = _encode_value(val)
+            if ok_val:
+                out[str(k)] = enc_val
+        return True, out
+
+    # Any other type (custom classes, AccountingContext, storage backends, etc.)
+    # is considered NON-portable here → we SKIP it instead of stringifying.
+    return False, None
+
+
+def _decode_value(v: Any) -> Any:
+    """
+    Reverse of _encode_value for our simple scheme.
+    All stored values are JSON-safe; just return them.
+    """
+    return v
 
 def snapshot_all_contextvars() -> dict:
     """
     Returns a portable snapshot:
+
       {
         "entries": [
-          {"module": "pkg.mod", "attr": "FOO_CV", "name": "FOO_CV", "value": {...}},
+          {"module": "pkg.mod", "attr": "FOO_CV", "name": "FOO_CV", "value": ...},
           ...
         ]
       }
-    Includes every ContextVar with a value in the *current* context.
+
+    Includes every ContextVar with a *portable* value in the current context.
+
+    - Values must be JSON-safe (primitives / lists / dicts) per _encode_value.
+    - Any ContextVar with a non-portable value (e.g. AccountingContext, storage backends)
+      is **skipped** here and should be handled by its own dedicated snapshot logic.
     """
     entries: List[dict] = []
 
-    # Get the currently-active context by running a no-op to bind lookups
-    # (copy_context not strictly necessary for reading, but harmless).
-    for obj in gc.get_objects():
-        if not isinstance(obj, ContextVar):
+    # Copy list to avoid surprises if GC mutates during iteration
+    for obj in list(gc.get_objects()):
+        try:
+            is_cv = isinstance(obj, ContextVar)
+        except ReferenceError:
+            # weakref proxy whose referent is gone
             continue
+        except Exception:
+            # ultra-defensive: never let snapshot explode
+            continue
+
+        if not is_cv:
+            continue
+
         cv: ContextVar = obj
         try:
             val = cv.get()
         except LookupError:
-            continue  # not bound in this context; skip
+            # not bound in this context
+            continue
+        except ReferenceError:
+            # referent gone between isinstance and get()
+            continue
+        except Exception:
+            # any other weirdness → skip
+            continue
 
-        where = _try_module_attr_of(cv)  # best-effort identity
-        serialized = _encode_value(val)
+        ok, encoded = _encode_value(val)
+        if not ok:
+            # Non-portable value (e.g. AccountingContext); skip this CV entirely.
+            continue
 
-        ent = {
+        try:
+            where = _try_module_attr_of(cv)  # best-effort identity (module + attr)
+        except Exception:
+            where = None
+
+        ent: Dict[str, Any] = {
             "name": getattr(cv, "name", None),
-            "value": serialized,
+            "value": encoded,
         }
         if where:
             ent["module"], ent["attr"] = where
@@ -155,11 +223,18 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
     # accounting_storage = { "storage_path": os.environ.get("KDCUBE_STORAGE_PATH") }
     accounting_storage = { "storage_path": _settings.STORAGE_PATH }
     config_spec = _config_to_model_config_spec(svc.config)
+    try:
+        cv_snapshot = snapshot_all_contextvars()
+    except Exception as e:
+        # logging optional
+        # logger.warning("Failed to snapshot all contextvars: %s", e)
+        cv_snapshot = {"entries": []}
+
     spec = PortableSpec(
         model_config=config_spec,
         comm=comm_spec,
         integrations=integrations_spec,
-        cv_snapshot=snapshot_all_contextvars(),
+        cv_snapshot=cv_snapshot,
         env_passthrough=env_passthrough,
         contextvars=contextvars,
         accounting_storage=accounting_storage

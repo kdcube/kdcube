@@ -270,29 +270,29 @@ await app.state.sse_hub.unregister(client)
 
 ```mermaid
 graph TD
-  subgraph Orchestrator / Workers
-    W1[Worker / Agentic App]
-  end
+    subgraph "Orchestrator / Workers"
+        W1[Worker / Agentic App]
+    end
 
-  subgraph Chat Service Process
-    SC[ServiceCommunicator]
-    HUB[SSEHub]
-    SSE1[SSE Client 1<br>/sse/stream]
-    SSE2[SSE Client 2<br>/sse/stream]
-  end
+    subgraph "Chat Service Process"
+        SC[ServiceCommunicator]
+        HUB[SSEHub]
+        SSE1[SSE Client 1<br>/sse/stream]
+        SSE2[SSE Client 2<br>/sse/stream]
+    end
 
-  Redis[(Redis Pub/Sub)]
+    Redis[(Redis Pub/Sub)]
 
-  W1 -->|pub(event, session_id)| SC
-  SC -->|PUBLISH kdcube.relay.chatbot.chat.events.&lt;session&gt;| Redis
+    W1 -->|pub event, session_id| SC
+    SC -->|PUBLISH kdcube.relay.chatbot.chat.events.session| Redis
 
-  HUB -->|subscribe_add(chat.events.&lt;session&gt;)| SC
-  SC -->|SUBSCRIBE kdcube.relay.chatbot.chat.events.&lt;session&gt;| Redis
+    HUB -->|subscribe_add chat.events.session| SC
+    SC -->|SUBSCRIBE kdcube.relay.chatbot.chat.events.session| Redis
 
-  Redis -->|message on channel| SC
-  SC -->|on_message(payload)| HUB
-  HUB -->|enqueue SSE frame| SSE1
-  HUB -->|enqueue SSE frame| SSE2
+    Redis -->|message on channel| SC
+    SC -->|on_message payload| HUB
+    HUB -->|enqueue SSE frame| SSE1
+    HUB -->|enqueue SSE frame| SSE2
 ```
 
 ### Sequence diagram for one event
