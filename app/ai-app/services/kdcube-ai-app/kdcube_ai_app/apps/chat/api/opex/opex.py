@@ -244,36 +244,36 @@ async def get_total_usage(
         - cost_estimate: Estimated costs based on price table
     """
     try:
-        calc = _get_calculator(request)
-
-        service_types_list = None
-        if service_types:
-            service_types_list = [s.strip() for s in service_types.split(",")]
-
-        result = await calc.usage_all_users(
-            tenant_id=tenant,
-            project_id=project,
-            date_from=date_from,
-            date_to=date_to,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit,
-            require_aggregates=True # never triggers a big raw scan
-        )
-
-        # Add cost estimate
-        cost_estimate = None
-        if result.get("rollup"):
-            cost_estimate = _compute_cost_estimate(result["rollup"])
+        # calc = _get_calculator(request)
+        #
+        # service_types_list = None
+        # if service_types:
+        #     service_types_list = [s.strip() for s in service_types.split(",")]
+        #
+        # result = await calc.usage_all_users(
+        #     tenant_id=tenant,
+        #     project_id=project,
+        #     date_from=date_from,
+        #     date_to=date_to,
+        #     app_bundle_id=app_bundle_id,
+        #     service_types=service_types_list,
+        #     hard_file_limit=hard_file_limit,
+        #     require_aggregates=True # never triggers a big raw scan
+        # )
+        #
+        # # Add cost estimate
+        # cost_estimate = None
+        # if result.get("rollup"):
+        #     cost_estimate = _compute_cost_estimate(result["rollup"])
 
         # MOCK
-        # result = {
-        #     "total": 0,
-        #     "rollup": 0,
-        #     "user_count": 0,
-        #     "event_count": 0
-        # }
-        # cost_estimate = 0
+        result = {
+            "total": 0,
+            "rollup": 0,
+            "user_count": 0,
+            "event_count": 0
+        }
+        cost_estimate = 0
         # MOCK
 
         return {
@@ -314,32 +314,32 @@ async def get_usage_by_user(
     """
     try:
         # TODO: get back when we have scheduled aggregates!
-        calc = _get_calculator(request)
-
-        service_types_list = None
-        if service_types:
-            service_types_list = [s.strip() for s in service_types.split(",")]
-
-        by_user = await calc.usage_by_user(
-            tenant_id=tenant,
-            project_id=project,
-            date_from=date_from,
-            date_to=date_to,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit
-        )
-
-        # Add cost estimates per user
-        user_costs = {}
-        for user_id, user_data in by_user.items():
-            if user_data.get("rollup"):
-                user_costs[user_id] = _compute_cost_estimate(user_data["rollup"])
+        # calc = _get_calculator(request)
+        #
+        # service_types_list = None
+        # if service_types:
+        #     service_types_list = [s.strip() for s in service_types.split(",")]
+        #
+        # by_user = await calc.usage_by_user(
+        #     tenant_id=tenant,
+        #     project_id=project,
+        #     date_from=date_from,
+        #     date_to=date_to,
+        #     app_bundle_id=app_bundle_id,
+        #     service_types=service_types_list,
+        #     hard_file_limit=hard_file_limit
+        # )
+        #
+        # # Add cost estimates per user
+        # user_costs = {}
+        # for user_id, user_data in by_user.items():
+        #     if user_data.get("rollup"):
+        #         user_costs[user_id] = _compute_cost_estimate(user_data["rollup"])
 
         # END OF TODO: get back when we have scheduled aggregates!
         # MOCK
-        # by_user = dict()
-        # user_costs = dict()
+        by_user = dict()
+        user_costs = dict()
         # MOCK
 
         return {
@@ -379,38 +379,38 @@ async def get_conversation_usage(
     """
     try:
         # TODO: get back when we have scheduled aggregates!
-        calc = _get_calculator(request)
-
-        service_types_list = None
-        if service_types:
-            service_types_list = [s.strip() for s in service_types.split(",")]
-
-        result = await calc.usage_user_conversation(
-            tenant_id=tenant,
-            project_id=project,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            date_from=date_from,
-            date_to=date_to,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit
-        )
-
-        # Add cost estimate
-        cost_estimate = None
-        if result.get("rollup"):
-            cost_estimate = _compute_cost_estimate(result["rollup"])
+        # calc = _get_calculator(request)
+        #
+        # service_types_list = None
+        # if service_types:
+        #     service_types_list = [s.strip() for s in service_types.split(",")]
+        #
+        # result = await calc.usage_user_conversation(
+        #     tenant_id=tenant,
+        #     project_id=project,
+        #     user_id=user_id,
+        #     conversation_id=conversation_id,
+        #     date_from=date_from,
+        #     date_to=date_to,
+        #     app_bundle_id=app_bundle_id,
+        #     service_types=service_types_list,
+        #     hard_file_limit=hard_file_limit
+        # )
+        #
+        # # Add cost estimate
+        # cost_estimate = None
+        # if result.get("rollup"):
+        #     cost_estimate = _compute_cost_estimate(result["rollup"])
         # END OF TODO: get back when we have scheduled aggregates!
 
         # MOCK
-        # result = {
-        #     "total": 0,
-        #     "rollup": 0,
-        #     "turns": {},
-        #     "event_count": 0
-        # }
-        # cost_estimate = 0
+        result = {
+            "total": 0,
+            "rollup": 0,
+            "turns": {},
+            "event_count": 0
+        }
+        cost_estimate = 0
         # MOCK
 
         return {
@@ -545,35 +545,35 @@ async def get_agent_usage(
     """
     try:
         # TODO: get back when we have scheduled aggregates!
-        calc = _get_calculator(request)
-
-        service_types_list = None
-        if service_types:
-            service_types_list = [s.strip() for s in service_types.split(",")]
-
-        by_agent = await calc.usage_by_agent(
-            tenant_id=tenant,
-            project_id=project,
-            date_from=date_from,
-            date_to=date_to,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            turn_id=turn_id,
-            app_bundle_id=app_bundle_id,
-            service_types=service_types_list,
-            hard_file_limit=hard_file_limit
-        )
-
-        # Add cost estimates per agent
-        agent_costs = {}
-        for agent_name, agent_data in by_agent.items():
-            if agent_data.get("rollup"):
-                agent_costs[agent_name] = _compute_cost_estimate(agent_data["rollup"])
+        # calc = _get_calculator(request)
+        #
+        # service_types_list = None
+        # if service_types:
+        #     service_types_list = [s.strip() for s in service_types.split(",")]
+        #
+        # by_agent = await calc.usage_by_agent(
+        #     tenant_id=tenant,
+        #     project_id=project,
+        #     date_from=date_from,
+        #     date_to=date_to,
+        #     user_id=user_id,
+        #     conversation_id=conversation_id,
+        #     turn_id=turn_id,
+        #     app_bundle_id=app_bundle_id,
+        #     service_types=service_types_list,
+        #     hard_file_limit=hard_file_limit
+        # )
+        #
+        # # Add cost estimates per agent
+        # agent_costs = {}
+        # for agent_name, agent_data in by_agent.items():
+        #     if agent_data.get("rollup"):
+        #         agent_costs[agent_name] = _compute_cost_estimate(agent_data["rollup"])
         # END OF TODO: get back when we have scheduled aggregates!
 
         # MOCK
-        # by_agent = dict()
-        # agent_costs = dict()
+        by_agent = dict()
+        agent_costs = dict()
         # MOCK
 
         return {
