@@ -111,7 +111,7 @@ async def run_py_in_docker(
       - call iso_runtime.run_py_code() which recreates the previous behavior
         (header injection, bootstrap, writing result.json, runtime logs, etc.)
     """
-    log = logger or AgentLogger("docker_exec")
+    log = logger or AgentLogger("docker.exec")
 
     workdir = workdir.resolve()
     outdir = outdir.resolve()

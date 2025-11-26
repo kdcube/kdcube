@@ -8,16 +8,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libmagic1 file \
     && rm -rf /var/lib/apt/lists/* && apt-get clean
 
+# Isolated venv
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
+# Install Python deps
 COPY services/kdcube-ai-app/requirements-chat.txt requirements.txt
-
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt && \
-    python3 -m playwright install --with-deps chromium
+    python -m playwright install --with-deps chromium
 
-RUN mkdir "/workspace"
-WORKDIR "/workspace"
+# --- App code ---
+# copy your repo into the image so `kdcube_ai_app` is importable
+WORKDIR /workspace
+COPY . /opt/app
+ENV PYTHONPATH="/opt/app:${PYTHONPATH}"
 
-ENTRYPOINT ["/opt/venv/bin/python3"]
+# optional: default timeout for in-container exec (can be overridden by env)
+ENV PY_CODE_EXEC_TIMEOUT=600
+
+# --- Entrypoint ---
+# this module uses WORKDIR/OUTPUT_DIR/RUNTIME_GLOBALS_JSON provided by run_py_in_docker
+CMD ["python", "-m", "kdcube_ai_app.apps.chat.sdk.runtime.exec_host_entrypoint"]
