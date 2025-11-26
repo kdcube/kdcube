@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import sys
 import json
@@ -17,6 +17,7 @@ import importlib
 import importlib.util
 from typing import Any, Dict, List, Optional, Tuple, Callable
 
+from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
@@ -46,16 +47,35 @@ class ToolSubsystem:
             service: ModelServiceBase,
             comm: ChatCommunicator,
             logger: Optional[AgentLogger],
+            bundle_spec: BundleSpec,
             context_rag_client: Optional[ContextRAGClient],
             registry: Optional[Dict[str, Any]] = None,
             tools_specs: Optional[List[Dict[str, Any]]] = None,  # [{"module"| "ref", "alias", "use_sk": bool}]
+            raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
     ):
         self.svc = service
         self.comm = comm
+        self.bundle_spec = bundle_spec
         self.log = logger or AgentLogger("tool_subsystem")
         self.context_rag_client = context_rag_client
         self.registry = registry or {}
+        self.raw_tool_specs = raw_tool_specs or []
 
+        # --- compute bundle_root once ---
+        self.bundle_root: pathlib.Path | None = None
+        if bundle_spec and bundle_spec.path and bundle_spec.id:
+            self.bundle_root = pathlib.Path(bundle_spec.path).joinpath(
+                bundle_spec.id
+            ).resolve()
+
+        # If resolved tool_specs are not provided, resolve from raw_tool_specs + bundle_root
+        if tools_specs is None and self.raw_tool_specs:
+            if not self.bundle_root:
+                raise RuntimeError("bundle_root is required to resolve raw_tool_specs")
+            tools_specs = resolve_codegen_tools_specs(
+                tool_specs=self.raw_tool_specs,
+                bundle_root=self.bundle_root,
+            )
         specs = self._resolve_tools(tools_specs or [])
 
         s_: List[ToolModuleSpec] = []
@@ -450,3 +470,56 @@ class ToolSubsystem:
         if "plugin" not in entry: entry["plugin"] = (raw or {}).get("plugin_name", "") or ""
         if "plugin_alias" not in entry: entry["plugin_alias"] = alias
         return entry
+
+    def export_runtime_globals(self) -> Dict[str, Any]:
+        """
+        Minimal shape to pass into iso_runtime / docker for tool execution.
+        Host-only / heavy things stay out.
+        """
+        alias_to_dyn, alias_to_file = self.get_alias_maps()
+
+        bundle_dict = None
+        if self.bundle_spec:
+            try:
+                bundle_dict = asdict(self.bundle_spec)
+            except TypeError:
+                bundle_dict = {
+                    "id": self.bundle_spec.id,
+                    "name": self.bundle_spec.name,
+                    "path": self.bundle_spec.path,
+                    "module": self.bundle_spec.module,
+                    "singleton": self.bundle_spec.singleton,
+                    "description": self.bundle_spec.description,
+                }
+
+        return {
+            "TOOL_ALIAS_MAP": alias_to_dyn,
+            "TOOL_MODULE_FILES": alias_to_file,
+            "BUNDLE_SPEC": bundle_dict,
+            "BUNDLE_ROOT_HOST": str(self.bundle_root) if self.bundle_root else None,
+            "RAW_TOOL_SPECS": self.raw_tool_specs or [],
+        }
+
+def resolve_codegen_tools_specs(tool_specs: List[Dict[str, Any]],
+                                bundle_root: pathlib.Path | None = None) -> List[Dict[str, Any]]:
+    """
+    Turn the portable descriptor into concrete specs with absolute paths
+    for "ref" entries, *relative to bundle_root*.
+
+    This function can be called:
+      - on the host (orchestrator) with its bundle_root
+      - inside docker with the container's bundle_root (/bundles/<id>, etc.)
+    """
+    root = bundle_root
+    specs: List[Dict[str, Any]] = []
+
+    for spec in tool_specs:
+        s = dict(spec)  # shallow copy
+        ref = s.get("ref")
+        if ref and not os.path.isabs(ref):
+            if root is None:
+                raise ValueError("bundle_root is required when ref is relative")
+            s["ref"] = str((root / ref).resolve())
+        specs.append(s)
+
+    return specs
