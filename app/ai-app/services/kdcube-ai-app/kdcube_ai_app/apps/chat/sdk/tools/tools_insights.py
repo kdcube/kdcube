@@ -7,6 +7,7 @@
 BUILTIN_TOOLS = {
     "llm_tools.generate_content_llm",
     "generic_tools.web_search",
+    "generic_tools.fetch_url_contents",
     "generic_tools.write_pdf",
     "generic_tools.write_pptx",
     "generic_tools.write_docx",
@@ -14,6 +15,10 @@ BUILTIN_TOOLS = {
     "generic_tools.write_png",
     "generic_tools.write_xlsx",
     "generic_tools.write_file",
+}
+
+EXEC_TOOLS = {
+    "exec_tools.execute_code_python"
 }
 
 # Tools that accept/need citations on input
@@ -50,7 +55,17 @@ SEARCH_TOOL_IDS = {
     "generic_tools.web_search",
 }
 
+FETCH_URI_TOOL_IDS = {
+    "generic_tools.fetch_url_contents",
+}
+GENERATIVE_TOOL_IDS = {
+    "llm_tools.generate_content_llm",
+}
+
 def is_write_tool(tool_id: str) -> bool:
+    return tool_id in WRITE_TOOLS
+
+def is_code_exec_tool(tool_id: str) -> bool:
     return tool_id in WRITE_TOOLS
 
 def does_tool_accept_sources(tool_id: str) -> bool:
@@ -66,6 +81,17 @@ def is_search_tool(tool_id: str) -> bool|None:
     # None means "we do not know"
     return tool_id in SEARCH_TOOL_IDS if tool_id in BUILTIN_TOOLS else None
 
+def is_fetch_uri_content_tool(tool_id: str) -> bool|None:
+    # None means "we do not know"
+    return tool_id in FETCH_URI_TOOL_IDS if tool_id in BUILTIN_TOOLS else None
+
+def is_generative_tool(tool_id: str) -> bool|None:
+    # None means "we do not know"
+    return tool_id in GENERATIVE_TOOL_IDS if tool_id in BUILTIN_TOOLS else None
+
+def should_isolate_tool_execution(tool_id: str) -> bool:
+    # For now, only write tools are isolated
+    return is_write_tool(tool_id) or is_code_exec_tool(tool_id)
 
 def default_mime_for_write_tool(tool_id: str) -> str:
     return {

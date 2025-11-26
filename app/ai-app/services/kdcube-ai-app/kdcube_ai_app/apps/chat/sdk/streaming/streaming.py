@@ -1125,7 +1125,7 @@ async def _stream_agent_two_sections_to_json(
         "internal_thinking": parser.internal,  # already streamed
     }
 
-async def _stream_agent_to_json(
+async def stream_agent_to_json(
         svc: ModelServiceBase,
         *,
         client_name: str,

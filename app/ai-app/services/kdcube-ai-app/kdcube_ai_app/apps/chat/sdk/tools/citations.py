@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 import json
-import re
+import re, unicodedata
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Iterable, Any, Set
 
@@ -40,6 +40,9 @@ from typing import Dict, List, Tuple, Optional, Iterable, Any, Set
 # CITE_TOKEN_RE = re.compile(r"\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
 # In citations.py, update the pattern:
 CITE_TOKEN_RE = re.compile(r"(\s?)\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
+CITATION_LIKE_RE = re.compile(r"\[\[.*?\]\]")
+# Telemetry / usage tag (for [[USAGE:...]]), so we can ignore it in debuggers
+USAGE_TAG_RE = re.compile(r"\[\[\s*USAGE\s*:[^\]]*\]\]", re.I)
 
 # HTML inline cite (your protocol)
 HTML_CITE_RE = re.compile(
@@ -128,6 +131,107 @@ def normalize_url(u: str) -> str:
         return (u or "").strip()
 
 # ---- item and collection normalizers ----
+def debug_citation_tokens(text: str) -> list[dict]:
+    """
+    Find tokens that look like [[...]] and dump them with codepoints.
+    This is diagnostic only, for logs.
+    """
+    out = []
+    if not isinstance(text, str):
+        return out
+
+    for m in CITATION_LIKE_RE.finditer(text):
+        token = m.group(0)
+        start, end = m.start(), m.end()
+
+        # Normalize invisibles once
+        clean = _strip_invisible(token)
+
+        # Skip telemetry tags like [[USAGE:...]] – they are not citation bugs
+        if USAGE_TAG_RE.fullmatch(clean):
+            continue
+
+        # classify the token a bit
+        has_s_colon = "S:" in clean or "S :" in clean or "S： " in clean  # very loose
+
+        # build a readable codepoint dump
+        cps = [
+            {
+                "ch": ch,
+                "repr": repr(ch),
+                "codepoint": f"U+{ord(ch):04X}",
+                "name": unicodedata.name(ch, "UNKNOWN")
+            }
+            for ch in token
+        ]
+
+        out.append(
+            {
+                "span": [start, end],
+                "raw": token,
+                "raw_repr": repr(token),
+                "clean": clean,
+                "clean_repr": repr(clean),
+                "has_s_colon": has_s_colon,
+                "codepoints": cps,
+            }
+        )
+
+    return out
+
+
+def debug_only_suspicious_tokens(text: str) -> list[dict]:
+    """
+    Return only tokens that look like broken citation markers.
+    - Ignores valid [[S:...]] tokens.
+    - Ignores telemetry tags like [[USAGE:...]].
+    """
+    out = []
+    if not isinstance(text, str):
+        return out
+
+    for m in CITATION_LIKE_RE.finditer(text):
+        token = m.group(0)
+        start, end = m.start(), m.end()
+
+        clean = _strip_invisible(token)
+
+        # Skip telemetry tags like [[USAGE:...]]
+        if USAGE_TAG_RE.fullmatch(clean):
+            continue
+
+        # skip things that clearly aren’t citations if you want (e.g. no 'S')
+        if "S" not in clean:
+            continue
+
+        # if clean token fully matches our normal [[S:...]] pattern, it's fine
+        if CITE_TOKEN_RE.fullmatch(clean):
+            continue
+
+        # otherwise log it as suspicious
+        cps = [
+            {
+                "ch": ch,
+                "repr": repr(ch),
+                "codepoint": f"U+{ord(ch):04X}",
+                "name": unicodedata.name(ch, "UNKNOWN")
+            }
+            for ch in token
+        ]
+
+        out.append(
+            {
+                "span": [start, end],
+                "raw": token,
+                "raw_repr": repr(token),
+                "clean": clean,
+                "clean_repr": repr(clean),
+                "codepoints": cps,
+            }
+        )
+
+    return out
+
 def normalize_citation_item(it: Dict[str, Any], allow_missing_url: bool = False) -> Optional[Dict[str, Any]]:
     """
     Accepts loose shapes with keys like url|href|value, title|description, text|body|content.
@@ -534,6 +638,7 @@ def replace_citation_tokens_batch(
     """
     if not citation_map:
         return text
+    text = _strip_invisible(text)
     opts = options or CitationRenderOptions()
 
     def _sub(m: re.Match) -> str:

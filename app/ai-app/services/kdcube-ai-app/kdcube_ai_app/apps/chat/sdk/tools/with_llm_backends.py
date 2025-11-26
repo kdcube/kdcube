@@ -379,7 +379,7 @@ async def generate_content_llm(
         schema_json: Annotated[str,
         "Optional JSON Schema. If provided (and target_format is json|yaml), "
         "the schema is inserted into the prompt and the model MUST produce an output that validates against it."] = "",
-        sources_json: Annotated[str, "JSON array of sources: {sid:int, title:str, url?:str, text:str}."] = "[]",
+        sources_json: Annotated[str, "JSON array of sources: {sid:int, title:str, url?:str, text:str, content?: str}."] = "[]",
         cite_sources: Annotated[bool, "If true and sources provided, require citations (inline for Markdown/HTML; sidecar for JSON/YAML)."] = False,
         citation_embed: Annotated[str, "auto|inline|sidecar|none",
         {"enum": ["auto", "inline", "sidecar", "none"]}] = "auto",
@@ -794,7 +794,8 @@ async def generate_content_llm(
         per = max(600, total_budget // max(1, len(rows))) if rows else 0
         parts = []
         for r in rows:
-            t = (r["text"] or "")[:per]
+            body = r.get("content") or r.get("text") or ""
+            t = body[:per]
             parts.append(f"[sid:{r['sid']}] {r['title']}\n{t}".strip())
         digest = "\n\n---\n\n".join(parts)[:total_budget]
 
@@ -915,6 +916,7 @@ async def generate_content_llm(
                 max_tokens=max_toks,
                 client_cfg=cfg,
                 role=role_name,
+                debug_citations=True
             )
 
         return "".join(round_buf), emitted_local
@@ -1539,7 +1541,8 @@ async def sources_reconciler(
     kept_sids = [k["sid"] for k in kept]
     logger.warning(
         "sources_reconciler: objective='%s' kept=%d sids=%s stats=%s reason=%s",
-        (objective or "")[:160], len(kept), kept_sids[:12], stats, reason
+        # (objective or "")[:160], len(kept), kept_sids[:12], stats, reason
+        objective or "", len(kept), kept_sids, stats, reason
     )
 
     return json.dumps(kept, ensure_ascii=False)
@@ -1620,11 +1623,10 @@ TODAY: {now_iso}
         content = (row.get("content") or "").strip()
         if not (sid and content):
             continue
-        content_truncated = content[:2000] if len(content) > 2000 else content
 
         prepared_sources.append({
             "sid": sid,
-            "content": content_truncated,
+            "content": content,
             "published_time_iso": row.get("published_time_iso"),
             "modified_time_iso": row.get("modified_time_iso"),
         })

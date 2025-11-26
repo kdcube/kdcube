@@ -35,6 +35,7 @@ from kdcube_ai_app.infra.llm.util import get_service_key_fn
 from kdcube_ai_app.infra.embedding.embedding import get_embedding
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 import kdcube_ai_app.infra.service_hub.errors as service_errors
+import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
 
 # =========================
 # ids/util
@@ -1511,6 +1512,7 @@ class ModelServiceBase:
             debug: bool = True,
             tools: Optional[list] = None,
             tool_choice: Optional[Union[str, dict]] = None,
+            debug_citations: bool = False,
     ) -> Dict[str, Any]:
         # dedicated streaming logger (new instance as requested)
         slog = AgentLogger("StreamTracker", self.config.log_level)
@@ -1662,6 +1664,9 @@ class ModelServiceBase:
                         slog.log_error(cb_err, "on_event_callback_failed")
 
             full_text = "".join(final_chunks)
+            suspicious_tokens = None
+            if debug_citations:
+                suspicious_tokens = citation_utils.debug_only_suspicious_tokens(full_text)
             slog.log_step(
                 "stream_finished",
                 {
@@ -1675,6 +1680,7 @@ class ModelServiceBase:
                     "thought_groups": len(thoughts_grouped),
                     "tool_events": len(tool_calls_list),
                     "citations": len(citations),
+                    "citation_debug": suspicious_tokens
                 },
             )
 
