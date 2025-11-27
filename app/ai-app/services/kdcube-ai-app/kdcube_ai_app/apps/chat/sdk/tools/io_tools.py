@@ -344,7 +344,8 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         if slot_type == "inline":
             if "value" in val:
                 if sources_used:
-                    print(f"Inline Slot {slot}; {sources_used}")
+                    # print(f"Inline Slot {slot}; {sources_used}")
+                    pass
                 push_inline(slot, val["value"], fmt=fmt, desc=desc, citable=citable, sources_used=sources_used, draft=draft)
                 continue
 
