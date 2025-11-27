@@ -1,3 +1,8 @@
+Will the context vars that are bootstrapped be available on sup.handle_request ?
+Because the logs are now written on 2 sides, in executor and in supervisor, what is the way we collect the error and info log now?
+
+
+as a result of docker run we will have these logs
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
@@ -128,9 +133,6 @@ async def run_py_in_docker(
     workdir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # This will be the *directory name* under /bundles in the container
-    bundle_dir: Optional[str] = None
-
     # --- Rewrite TOOL_MODULE_FILES for container paths if bundle_root is provided ---
     if bundle_root is not None:
         bundle_root = bundle_root.resolve()
@@ -140,16 +142,14 @@ async def run_py_in_docker(
         tg = dict(runtime_globals)  # shallow copy
         tmf = dict(tg.get("TOOL_MODULE_FILES") or {})
 
+        # Inside the container we mount bundle_root to /bundle
+
+        # Determine bundle_id
         bundle_spec = tg.get("BUNDLE_SPEC") or {}
-        module_name = bundle_spec.get("module") or ""
-        module_first_segment = module_name.split(".", 1)[0] if module_name else None
+        bundle_id = bundle_spec.get("id") or bundle_root.name
 
-        # 🔹 Single source of truth for container dir name under /bundles
-        #    Prefer first segment of module name; fall back to id; then to directory name.
-        bundle_dir = module_first_segment or bundle_spec.get("id") or bundle_root.name
-
-        # This is where the bundle_root will appear *inside the container*
-        container_bundle_root = f"{CONTAINER_BUNDLES_ROOT}/{bundle_dir}"
+        # Inside the container we mount this root at /bundles/<bundle_id>
+        container_bundle_root = f"{CONTAINER_BUNDLES_ROOT}/{bundle_id}"
 
         rewritten: Dict[str, Optional[str]] = {}
         for alias, path in tmf.items():
@@ -161,16 +161,17 @@ async def run_py_in_docker(
                 rel = os.path.relpath(p, host_bundle_root)
                 rewritten[alias] = f"{container_bundle_root}/{rel}"
             else:
-                # Paths outside the bundle root (e.g. site-packages) are importable by name
+                # Paths outside the bundle root (e.g. site-packages) are available
+                # by module name; we don't need an explicit file location.
                 rewritten[alias] = None
 
         tg["TOOL_MODULE_FILES"] = rewritten
-        tg["BUNDLE_ID"] = bundle_spec.get("id") or bundle_dir
-        tg["BUNDLE_DIR"] = bundle_dir
+        tg["BUNDLE_ID"] = bundle_id
         tg["BUNDLE_ROOT_CONTAINER"] = container_bundle_root
         runtime_globals = tg
 
     base_env: Dict[str, str] = dict(extra_env or {})
+    # Overlay runtime-specific values (these win over host env)
     base_env["RUNTIME_GLOBALS_JSON"] = json.dumps(runtime_globals, ensure_ascii=False)
     base_env["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
     base_env["WORKDIR"]               = "/workspace/work"
@@ -179,7 +180,12 @@ async def run_py_in_docker(
     img = image or _DEFAULT_IMAGE
     to = timeout_s or _DEFAULT_TIMEOUT_S
 
-    # We no longer recompute bundle_id here; we just use bundle_dir
+    # derive bundle_id again (same as above)
+    bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
+    bundle_id = bundle_spec.get("id")
+    if bundle_root is not None and not bundle_id:
+        bundle_id = bundle_root.name
+
     argv = _build_docker_argv(
         image=img,
         host_workdir=workdir,
@@ -187,7 +193,7 @@ async def run_py_in_docker(
         extra_env=base_env,
         extra_args=extra_docker_args or [],
         bundle_root=bundle_root,
-        bundle_id=bundle_dir,   # <-- this is the first segment of module name
+        bundle_id=bundle_id,
     )
 
     log.log(f"[docker.exec] Running: {' '.join(argv)}")
@@ -250,3 +256,8 @@ async def run_py_in_docker(
         log.log(f"[docker.exec] Container exited with {rc}", level="ERROR")
 
     return {"ok": ok, "returncode": rc}
+
+
+but what are these logs about?
+
+And what about the logs of the executor and supervisor. We need to capture them. We might configure logging to write directly in the workdir out maybe?

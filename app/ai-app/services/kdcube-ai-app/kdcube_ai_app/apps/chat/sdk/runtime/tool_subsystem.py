@@ -15,8 +15,9 @@ import asyncio
 import inspect
 import importlib
 import importlib.util
-from typing import Any, Dict, List, Optional, Tuple, Callable
+from typing import Any, Dict, List, Optional, Tuple
 
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
@@ -63,9 +64,11 @@ class ToolSubsystem:
 
         # --- compute bundle_root once ---
         self.bundle_root: pathlib.Path | None = None
-        if bundle_spec and bundle_spec.path and bundle_spec.id:
+        if bundle_spec and bundle_spec.path and bundle_spec.module:
+            # Extract first segment of module (e.g., 'codegen' from 'codegen.entrypoint')
+            module_first_segment = bundle_spec.module.split('.')[0]
             self.bundle_root = pathlib.Path(bundle_spec.path).joinpath(
-                bundle_spec.id
+                module_first_segment
             ).resolve()
 
         # If resolved tool_specs are not provided, resolve from raw_tool_specs + bundle_root
@@ -133,6 +136,8 @@ class ToolSubsystem:
         self._by_id = {e["id"]: e for e in self.tools_info}
         self._mods_by_alias = {m["alias"]: m for m in self._modules}
 
+        self._secure_stub = ToolStub()
+
     # ---------- public surface used by manager + react solver ----------
 
     def tool_catalog_for_prompt(self, *, allowed_plugins: Optional[List[str]] = None,
@@ -167,7 +172,6 @@ class ToolSubsystem:
         return [(m["name"], m["mod"]) for m in self._modules]
 
     def get_owner_for_alias(self, alias: str):
-        """Return module owner to call (prefer <mod>.tools if present)."""
         modrec = self._mods_by_alias.get(alias)
         if not modrec:
             return None

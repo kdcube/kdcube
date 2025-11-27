@@ -1,0 +1,8 @@
+Actually this requires all open sourced tools to have the fully safe execution side effects regardless of the params values.
+When i told about s3 i meant that our infra, i.e. accounting infra which is working when we use some services behind the tools (search, embeddings, llm calls etc.) is using s3 to store these accounting events - side effects of the tools calls.
+Of course nothing will prevent the code from containing the direct calls to some services. Except the thourough code sanitization (which is also the case - to pass the code via LLM to find the exploits).
+so this last idea i like. let's now think how to implement it.
+I already only allow to execute tools via io_tools.AgentIO.tool_call.
+So this call will be 100% in place and wrap the tool. Otherwise nothing just work.
+So if code want to run the tool it must run it with thsi wrapper
+so there i can add our machinery which will send the request to execute in supervised env.

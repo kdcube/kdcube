@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl ca-certificates \
     fonts-noto fonts-noto-cjk fonts-noto-color-emoji \
     libmagic1 file \
+    bubblewrap \
     && rm -rf /var/lib/apt/lists/* && apt-get clean
 
 # Isolated venv
@@ -29,4 +30,4 @@ ENV PY_CODE_EXEC_TIMEOUT=600
 
 # --- Entrypoint ---
 # this module uses WORKDIR/OUTPUT_DIR/RUNTIME_GLOBALS_JSON provided by run_py_in_docker
-CMD ["python", "-m", "kdcube_ai_app.apps.chat.sdk.runtime.exec_host_entrypoint"]
+ENTRYPOINT ["python", "-m", "kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry"]

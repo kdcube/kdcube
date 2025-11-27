@@ -1,3 +1,20 @@
+> 👉 So: supervisor must not own _PROGRESS or project log. It may receive a final snapshot via files or tools, but it must not be the canonical source.
+
+True
+and the rest as well but you did nothing in the supervisor code which will support this.
+you need to add done() and fail() implementations there which must be executed if exec sent the done / fail.
+
+We now need to also have exec haeding which will only contain what is needed and in done() / fail() have the proxy to super.
+
+you did not generate nothing out of that.
+
+please do.
+so we need a new function in iso runtime which builds the main py for executor.
+with only needed for it stuff and supervisor-send" stubs in the done() / fail().
+
+
+we will create the executor main.py with that heading.
+
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
@@ -281,6 +298,14 @@ import os, importlib, asyncio, atexit, signal, sys, traceback
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from io_tools import tools as agent_io_tools
 
+import logging, sys, warnings
+class _MaxLevelFilter(logging.Filter):
+    def __init__(self, level: int):
+        super().__init__()
+        self.level = level
+    def filter(self, record: logging.LogRecord) -> bool:
+        return record.levelno <= self.level
+
 import logging
 import kdcube_ai_app.apps.utils.logging_config as logging_config
 
@@ -293,7 +318,7 @@ if not OUTPUT_DIR:
     raise RuntimeError("OUTPUT_DIR missing in run context")
 OUTPUT = Path(OUTPUT_DIR)
 
-# Ensure ContextVars are set even if only env was provided
+# ✅ Ensure child process has ContextVars set even when only env is present
 try:
     if not OUTDIR_CV.get(""):
         od = os.environ.get("OUTPUT_DIR")
@@ -329,7 +354,7 @@ def _bootstrap_child():
                 _BIND_TARGETS.append(_dyn)
     except Exception as e:
         logger.error(f"Failed to build bind targets: {e}", exc_info=True)
-    
+
     # Perform a single, idempotent bootstrap and bind into all modules
     try:
         if _PORTABLE_SPEC and _BIND_TARGETS:
@@ -346,10 +371,10 @@ def _bootstrap_child():
             logger.info(f"Bootstrap failure marker written to {marker_file}")
         except Exception as write_err:
             logger.error(f"Could not write bootstrap failure marker: {write_err}", exc_info=True)
-            
+
 _bootstrap_child()
 
-# --- Globals provided by parent (must come before alias imports) ---
+# --- Globals provided by parent (must come before dyn pre-registration) ---
 <GLOBALS_SRC>
 
 # --- Dyn tool modules pre-registration (by file path) ---
@@ -384,7 +409,7 @@ try:
                 pass
 except Exception:
     pass
-    
+
 # --- Tool alias imports (auto-injected) ---
 <TOOL_IMPORTS_SRC>
 
@@ -420,7 +445,7 @@ def _build_project_log_md() -> str:
         desc = data.get("description", "")
         is_draft = data.get("draft", False)
         draft_marker = " [DRAFT]" if is_draft else ""
-        
+
         lines.append(f"### {name} ({t}){draft_marker}")
         if desc:
             lines.append(desc)
@@ -474,7 +499,7 @@ def _dump_delta_cache_file():
             pass
     except Exception:
         pass
-        
+
 async def set_progress(*, objective=None, status=None, story_append=None, out_dyn_patch=None, flush=False):
     if objective is not None:
         _PROGRESS["objective"] = str(objective)
@@ -494,7 +519,7 @@ async def set_progress(*, objective=None, status=None, story_append=None, out_dy
 
     if flush and not globals().get("_FINALIZED", False):
         await _write_checkpoint(reason="progress", managed=True)
-        
+
 # initialize with an empty log so it's present even before first set_progress()
 _refresh_project_log_slot()
 
@@ -510,20 +535,10 @@ async def _write_checkpoint(reason: str = "checkpoint", managed: bool = True):
             "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
             "contract": (g.get("CONTRACT") or {}),
             "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
-            "error": {
-                "where": "runtime",
-                "details": "",
-                "error": reason,
-                "description": reason,
-                "managed": bool(managed),
-            },
+            "error": {"where": "runtime", "details": "", "error": reason, "description": reason, "managed": bool(managed)}
         }
-        await agent_io_tools.save_ret(
-            data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
-        )
+        await agent_io_tools.save_ret(data=_json.dumps(payload, ensure_ascii=False), filename="result.json")
     except Exception:
-        # best-effort only
         pass
 
 async def done():
@@ -539,9 +554,9 @@ async def done():
         "ok": True,
         "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
         "contract": (g.get("CONTRACT") or {}),
-        "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
+        "out_dyn": dict(_PROGRESS.get("out_dyn") or {})
     }
-    globals()["_FINALIZED"] = True  # set BEFORE writing final file
+    globals()["_FINALIZED"] = True  # ← set BEFORE writing final file
     try:
         _dump_delta_cache_file()
     finally:
@@ -574,9 +589,9 @@ async def fail(description: str,
             "error": str(error or ""),
             "description": description,
             "managed": bool(managed),
-        },
+        }
     }
-    globals()["_FINALIZED"] = True  # set BEFORE writing final file
+    globals()["_FINALIZED"] = True  # ← set BEFORE writing final file
     try:
         _dump_delta_cache_file()
     finally:
@@ -588,7 +603,7 @@ def _on_term(signum, frame):
     if globals().get("_FINALIZED", False):
         # Already finalized, just exit
         sys.exit(0)
-    
+
     try:
         # Try to persist deltas first (best-effort)
         try:
@@ -659,22 +674,22 @@ def _on_atexit():
         if not globals().get("_FINALIZED", False):
             import sys
             import traceback
-            
+
             # Try to understand why we're here
             marker_path = Path(os.environ.get("OUTPUT_DIR", ".")) / "unexpected_exit.txt"
             exc_info = sys.exc_info()
-            
+
             details = [
                 "Process exiting without explicit done()/fail() call",
                 f"_FINALIZED={globals().get('_FINALIZED', 'not set')}",
                 f"Exception info: {exc_info}",
             ]
-            
+
             # Check if there was an uncaught exception
             if exc_info[0] is not None:
                 details.append(f"Uncaught exception: {exc_info[0].__name__}: {exc_info[1]}")
                 details.append(traceback.format_exc())
-            
+
             marker_path.write_text("\\n".join(details))
             print("[Runtime] " + details[0], file=sys.stderr)
     except Exception as e:
@@ -706,7 +721,7 @@ def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
     redis_url = REDIS_URL
     if redis_url.startswith('"') and redis_url.endswith('"'):
         redis_url = redis_url[1:-1]
-    redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url 
+    redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url
     logger.info(f"Redis url: {redis_url_safe}")
     print(f"Redis url: {redis_url_safe}")
     channel   = (spec or {}).get("channel")   or "chat.events"
@@ -733,284 +748,9 @@ try:
 except Exception as _comm_err:
     logger.error(f"Communicator setup failed: {_comm_err}", exc_info=True)
     print(f"[ERROR] ChatCommunicator failed: {_comm_err}", file=sys.stderr)
-    
+
 # === END COMMUNICATOR SETUP ===
 ''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
-
-def _build_iso_injected_header(*, globals_src: str, imports_src: str) -> str:
-    """
-    Build the executor-side runtime header.
-
-    IMPORTANT:
-    - No bootstrap of ModelService / KB / communicator here.
-    - No _dump_delta_cache_file here.
-      All privileged state (COMM, KB, secrets) lives in the supervisor.
-    - Executor owns only:
-        * OUTDIR / WORKDIR (via ContextVars or env)
-        * _PROGRESS + project_log
-        * set_progress / done / fail that proxy to supervisor via io_tools.save_ret.
-    """
-    from textwrap import dedent
-    return dedent('''\
-# === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
-from pathlib import Path
-import json as _json
-import os, asyncio, atexit, signal, sys
-
-from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
-from io_tools import tools as agent_io_tools
-
-import logging
-import kdcube_ai_app.apps.utils.logging_config as logging_config
-
-logging_config.configure_logging()
-logger = logging.getLogger("agent.runtime")
-
-# --- Directories / CV fallbacks ---
-OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
-if not OUTPUT_DIR:
-    raise RuntimeError("OUTPUT_DIR missing in run context")
-OUTPUT = Path(OUTPUT_DIR)
-
-# Ensure ContextVars are set even if only env was provided
-try:
-    if not OUTDIR_CV.get(""):
-        od = os.environ.get("OUTPUT_DIR")
-        if od:
-            OUTDIR_CV.set(od)
-    if not WORKDIR_CV.get(""):
-        wd = os.environ.get("WORKDIR")
-        if wd:
-            WORKDIR_CV.set(wd)
-except Exception:
-    pass
-
-# --- Globals provided by parent (must come before alias imports) ---
-<GLOBALS_SRC>
-
-# --- Tool alias imports (auto-injected) ---
-<TOOL_IMPORTS_SRC>
-
-# -------- Live progress cache (executor-local) --------
-_PROGRESS = {
-    "objective": "",
-    "status": "In progress",
-    "story": [],          # list[str]
-    "out_dyn": {},        # slot_name -> slot dict (inline/file)
-}
-_FINALIZED = False  # prevents late checkpoints from overwriting the final result
-
-def _build_project_log_md() -> str:
-    lines = []
-    lines.append("# Project Log")
-    lines.append("")
-    lines.append("## Objective")
-    lines.append(str(_PROGRESS.get("objective", "")))
-    lines.append("")
-    lines.append("## Status")
-    lines.append(str(_PROGRESS.get("status", "")))
-    lines.append("")
-    lines.append("## Story")
-    story = " ".join(_PROGRESS.get("story") or [])
-    lines.append(story)
-    lines.append("")
-    lines.append("## Produced Slots")
-
-    for name, data in (_PROGRESS.get("out_dyn") or {}).items():
-        if name == "project_log":
-            continue
-        t = (data.get("type") or "inline")
-        desc = data.get("description", "")
-        is_draft = data.get("draft", False)
-        draft_marker = " [DRAFT]" if is_draft else ""
-
-        lines.append(f"### {name} ({t}){draft_marker}")
-        if desc:
-            lines.append(desc)
-        if t == "file":
-            mime = data.get("mime", "")
-            path = data.get("path", "")
-            if mime:
-                lines.append(f"**Mime:** {mime}")
-            if path:
-                lines.append(f"**Filename:** {path}")
-        else:
-            fmt = data.get("format", "")
-            if fmt:
-                lines.append(f"**Format:** {fmt}")
-
-    return "\\n".join(lines).strip()
-
-def _refresh_project_log_slot():
-    """Keep 'project_log' as a first-class slot in _PROGRESS['out_dyn']."""
-    od = _PROGRESS["out_dyn"]
-    md = _build_project_log_md()
-    od["project_log"] = {
-        "type": "inline",
-        "format": "markdown",
-        "description": "Live run log",
-        "value": md,
-    }
-
-async def set_progress(*, objective=None, status=None, story_append=None, out_dyn_patch=None, flush=False):
-    if objective is not None:
-        _PROGRESS["objective"] = str(objective)
-    if status is not None:
-        _PROGRESS["status"] = str(status)
-    if story_append:
-        if isinstance(story_append, (list, tuple)):
-            _PROGRESS["story"].extend([str(s) for s in story_append])
-        else:
-            _PROGRESS["story"].append(str(story_append))
-    if out_dyn_patch:
-        od = _PROGRESS["out_dyn"]
-        for k, v in (out_dyn_patch or {}).items():
-            od[k] = v
-
-    _refresh_project_log_slot()
-
-    if flush and not globals().get("_FINALIZED", False):
-        await _write_checkpoint(reason="progress", managed=True)
-
-# initialize with an empty log so it's present even before first set_progress()
-_refresh_project_log_slot()
-
-async def _write_checkpoint(reason: str = "checkpoint", managed: bool = True):
-    if globals().get("_FINALIZED", False):
-        return
-    try:
-        _refresh_project_log_slot()
-        g = globals()
-        payload = {
-            "ok": False,
-            "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
-            "contract": (g.get("CONTRACT") or {}),
-            "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
-            "error": {
-                "where": "runtime",
-                "details": "",
-                "error": reason,
-                "description": reason,
-                "managed": bool(managed),
-            },
-        }
-        await agent_io_tools.save_ret(
-            data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
-        )
-    except Exception:
-        # best-effort only
-        pass
-
-async def done():
-    # ensure latest log
-    _refresh_project_log_slot()
-    g = globals()
-    status = (_PROGRESS.get("status") or "Completed")
-    if status.lower().startswith("in progress"):
-        _PROGRESS["status"] = "Completed"
-        _refresh_project_log_slot()
-    payload = {
-        "ok": True,
-        "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
-        "contract": (g.get("CONTRACT") or {}),
-        "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
-    }
-    globals()["_FINALIZED"] = True  # set BEFORE writing final file
-    try:
-        return await agent_io_tools.save_ret(
-            data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
-        )
-    except Exception:
-        # nothing more we can do here
-        return None
-
-async def fail(description: str,
-               where: str = "",
-               error: str = "",
-               details: str = "",
-               managed: bool = True,
-               out_dyn: dict | None = None):
-    """
-    Managed failure helper. Always writes result.json with a normalized envelope.
-    Uses the canonical _PROGRESS['out_dyn'] which already contains 'project_log'.
-    """
-    _PROGRESS["status"] = "Failed"
-    _refresh_project_log_slot()
-
-    g = globals()
-    payload = {
-        "ok": False,
-        "objective": str(_PROGRESS.get("objective") or description),
-        "contract": (g.get("CONTRACT") or {}),
-        "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
-        "error": {
-            "where": (where or "runtime"),
-            "details": str(details or ""),
-            "error": str(error or ""),
-            "description": description,
-            "managed": bool(managed),
-        },
-    }
-    globals()["_FINALIZED"] = True  # set BEFORE writing final file
-    try:
-        return await agent_io_tools.save_ret(
-            data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
-        )
-    except Exception:
-        return None
-
-def _on_term(signum, frame):
-    """
-    Handle SIGTERM/SIGINT by best-effort checkpoint and exit.
-    Done/Fail remain executor responsibilities; supervisor is not involved here.
-    """
-    try:
-        if globals().get("_FINALIZED", False):
-            sys.exit(0)
-
-        try:
-            asyncio.run(_write_checkpoint(reason=f"signal:{signum}", managed=True))
-        except Exception:
-            pass
-    finally:
-        # standard Unix convention for "terminated by signal"
-        sys.exit(128 + signum)
-
-def _on_atexit():
-    """
-    Atexit marker. Should only run if done()/fail() wasn't called.
-    DO NOT do async operations here - event loop may be closed.
-    """
-    try:
-        if globals().get("_FINALIZED", False):
-            return
-
-        marker_path = Path(os.environ.get("OUTPUT_DIR", ".")) / "unexpected_exit.txt"
-        details = [
-            "Process exiting without explicit done()/fail() call",
-            f"_FINALIZED={globals().get('_FINALIZED', 'not set')}",
-        ]
-        marker_path.write_text("\\n".join(details), encoding="utf-8")
-        print("[Runtime] " + details[0], file=sys.stderr)
-    except Exception:
-        # avoid raising from atexit
-        pass
-
-try:
-    signal.signal(signal.SIGTERM, _on_term)
-    signal.signal(signal.SIGINT, _on_term)
-except Exception:
-    # e.g., not allowed in some embedding environments
-    pass
-
-atexit.register(_on_atexit)
-
-# === END HEADER ===
-''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
-
 
 class _InProcessRuntime:
     def __init__(self, logger: AgentLogger):
@@ -1074,11 +814,7 @@ class _InProcessRuntime:
         for alias, mod_name in (alias_map or {}).items():
             imports_src += f"\nfrom {mod_name} import tools as {alias}\n"
 
-        if docker:
-            injected_header = _build_iso_injected_header(globals_src=globals_src, imports_src=imports_src)
-        else:
-            injected_header = _build_injected_header(globals_src=globals_src, imports_src=imports_src)
-
+        injected_header = _build_injected_header(globals_src=globals_src, imports_src=imports_src)
         src = _inject_header_after_future(src, injected_header)
         main_path.write_text(src, encoding="utf-8")
 
@@ -1459,3 +1195,609 @@ async def run_py_code(
         sandbox_net=sandbox_net,
     )
     return res
+
+This is the current code.
+
+once you did this, you must check the supervisor has all on board ready to work.
+I refreshed my memory on how done() and fail() are implemented, and they indeed must run on executor,
+supervisor has nothing to do with them. so we leave this in executor. Please make sure its in heading with other needed functions we promie codegen it can execute.
+
+this is how supervisor look like.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# kdcube_ai_app/apps/chat/sdk/runtime/isolated/supervisor_entry.py
+
+
+import socket
+import struct
+import os
+import json
+import asyncio
+from typing import Dict, Any, Callable, Optional
+
+from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
+
+
+class PrivilegedSupervisor:
+    def __init__(self, socket_path: str = "/tmp/supervisor.sock", logger: Optional[AgentLogger] = None):
+        self.socket_path = socket_path
+        self.allowed_child_pid: Optional[int] = None
+        self.registered_tools: dict[str, Callable[..., Any]] = {}
+        self.log = logger or AgentLogger("priv_supervisor")
+
+        # Remove old socket
+        try:
+            os.unlink(self.socket_path)
+        except OSError:
+            pass
+
+        # Create Unix domain socket
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.bind(self.socket_path)
+
+        # Only supervisor user can access this socket (root inside container)
+        os.chmod(self.socket_path, 0o600)
+        self.sock.listen(8)
+
+    def set_allowed_child(self, pid: int):
+        """Only this specific PID can make requests."""
+        self.allowed_child_pid = pid
+
+    def set_allowed_tools(self, tool_ids: list[str]):
+        """Register which tool_ids are allowed (string ids only)."""
+        # in a more advanced version you can map tool_id -> callable here
+        self.registered_tools = {tid: None for tid in tool_ids}
+
+    def register_tool_callables(self, tool_map: Dict[str, Callable[..., Any]]):
+        """
+        Optional: provide direct mapping tool_id -> callable
+        if you don't want to rely on importlib resolution.
+        """
+        self.registered_tools.update(tool_map or {})
+
+    def _resolve_tool_fn(self, tool_id: str) -> Optional[Callable[..., Any]]:
+        fn = self.registered_tools.get(tool_id)
+        if fn is not None:
+            return fn
+
+        # Fallback: resolve from "<alias>.<fn_name>"
+        # This still uses alias embedded in tool_id, but we do NOT pass alias separately.
+        try:
+            alias, name = tool_id.split(".", 1)
+        except ValueError:
+            return None
+
+        try:
+            mod = __import__(alias)
+            owner = getattr(mod, "tools", mod)
+            fn = getattr(owner, name, None)
+            if callable(fn):
+                self.registered_tools[tool_id] = fn
+                return fn
+        except Exception:
+            return None
+
+        return None
+
+    def handle_request(self):
+        """
+        Blocking handler for a single request.
+        Intended to be called from an executor / separate task.
+        """
+        conn, _ = self.sock.accept()
+
+        try:
+            # Get peer credentials (Linux-specific)
+            creds = conn.getsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_PEERCRED,
+                struct.calcsize('3i')
+            )
+            pid, uid, gid = struct.unpack('3i', creds)
+
+            # Enforce pid & uid (uid=1001 child, pid=allowed_child_pid)
+            if self.allowed_child_pid is not None and pid != self.allowed_child_pid:
+                conn.sendall(b'{"ok": false, "error": "Unauthorized process"}')
+                return
+
+            if uid != 1001:  # your unprivileged uid inside container
+                conn.sendall(b'{"ok": false, "error": "Wrong UID"}"')
+                return
+
+            data = conn.recv(4096)
+            if not data:
+                conn.sendall(b'{"ok": false, "error": "Empty request"}')
+                return
+
+            request = json.loads(data.decode("utf-8"))
+            result = self.execute_privileged_operation(request)
+            conn.sendall(json.dumps(result).encode("utf-8"))
+        except Exception as e:
+            try:
+                conn.sendall(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+            except Exception:
+                pass
+        finally:
+            conn.close()
+
+    def execute_privileged_operation(self, request: dict) -> dict:
+        """Only this code can access network/credentials.
+
+        IMPORTANT:
+        This MUST go through io_tools.tool_call so that:
+          - tool_calls_index.json is updated
+          - <sanitized>-<idx>.json is written
+          - all side effects we care about are preserved.
+
+        In *this* context, io_tools.tool_call executes the tool directly
+        (no supervisor recursion), which is exactly what we want.
+        """
+        tool_id = request.get("tool_id")
+        params = request.get("params") or {}
+        reason = request.get("reason") or ""
+
+        if not tool_id:
+            return {"ok": False, "error": "Missing tool_id"}
+
+        if self.registered_tools and tool_id not in self.registered_tools:
+            return {"ok": False, "error": f"Unknown tool: {tool_id}"}
+
+        fn = self._resolve_tool_fn(tool_id)
+        if fn is None:
+            return {"ok": False, "error": f"Could not resolve tool callable for {tool_id}"}
+
+        try:
+            async def _run():
+                return await agent_io_tools.tool_call(
+                    fn=fn,
+                    params_json=json.dumps(params, ensure_ascii=False),
+                    call_reason=reason,
+                    tool_id=tool_id,
+                )
+
+            # Supervisor side is sync, so we drive the async tool_call here.
+            out = asyncio.run(_run())
+
+            # tool_call already persisted the call; we just forward the raw result
+            return {"ok": True, "result": out}
+        except Exception as e:
+            self.log.log(f"[supervisor] Tool {tool_id} failed: {e}", level="ERROR")
+            return {"ok": False, "error": str(e)}
+
+    async def handle_stream(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """
+        Async version of handle_request for asyncio.start_unix_server.
+        Runs in the supervisor's event loop → shares ContextVars with everything else.
+        """
+        try:
+            sock = writer.get_extra_info("socket")
+            if sock is None:
+                writer.write(b'{"ok": false, "error": "No underlying socket"}')
+                await writer.drain()
+                return
+
+            # SO_PEERCRED: pid, uid, gid
+            creds = sock.getsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_PEERCRED,
+                struct.calcsize('3i')
+            )
+            pid, uid, gid = struct.unpack('3i', creds)
+
+            # We relaxed PID, so just enforce UID (your unprivileged UID, e.g. 1001)
+            if uid != 1001:
+                writer.write(b'{"ok": false, "error": "Wrong UID"}')
+                await writer.drain()
+                return
+
+            # Read request (you can make this loop if you want streaming)
+            data = await reader.read(4096)
+            if not data:
+                writer.write(b'{"ok": false, "error": "Empty request"}')
+                await writer.drain()
+                return
+
+            request = json.loads(data.decode("utf-8"))
+            result = self.execute_privileged_operation(request)
+            writer.write(json.dumps(result).encode("utf-8"))
+            await writer.drain()
+
+        except Exception as e:
+            try:
+                writer.write(json.dumps({"ok": False, "error": str(e)}).encode("utf-8"))
+                await writer.drain()
+            except Exception:
+                pass
+        finally:
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+
+Next, make sure that the runtime of supervisor is FULLY bootsrapped in accordance to how we bosstrapped runtime )with context vars and coomunicator and anything else) in the heading for codegenerated programs that were able to fully run.
+
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# kdcube_ai_app/apps/chat/sdk/runtime/exec/py_code_exec_entry.py
+
+"""
+What this expects from the outside
+
+Your existing run_py_in_docker(...) already sets:
+
+WORKDIR=/workspace/work
+OUTPUT_DIR=/workspace/out
+RUNTIME_GLOBALS_JSON=...
+RUNTIME_TOOL_MODULES=...
+
+plus mounts host_workdir → /workspace/work and host_outdir → /workspace/out
+and sets the image’s entrypoint (see below)
+
+Optionally, in base_env in docker.run_py_in_docker:
+base_env["SUPERVISOR_SOCKET"] = "/tmp/supervisor.sock"
+But our Python entrypoint already uses that as default, so you can skip it.
+"""
+
+import asyncio
+import json
+import os
+import pathlib
+import signal
+import importlib.util
+import sys
+from typing import Any, Dict, List, Optional
+
+from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import run_py_code
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.supervisor_entry import PrivilegedSupervisor
+import kdcube_ai_app.apps.utils.logging_config as logging_config
+
+# Optional central registry; if you don’t have it yet, dynamic resolution will be used
+try:
+    from kdcube_ai_app.apps.chat.sdk.runtime import tool_registry
+except ImportError:  # pragma: no cover - optional
+    tool_registry = None  # type: ignore[assignment]
+
+# Optional bootstrap for supervisor-side tools (same PORTABLE_SPEC / modules story)
+try:
+    from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all
+except ImportError:  # pragma: no cover
+    bootstrap_bind_all = None  # type: ignore[assignment]
+
+from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm, get_comm
+from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all, bootstrap_from_spec
+
+
+def _load_runtime_globals() -> Dict[str, Any]:
+    raw = os.environ.get("RUNTIME_GLOBALS_JSON") or "{}"
+    try:
+        data = json.loads(raw)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception:
+        data = {}
+
+    # Enforce defaults for sandbox flags inside container:
+    # - FS is already controlled by docker (--read-only + mounts), so disable FS sandbox.
+    # - NET: make sure user-code subprocess runs with no network.
+    data.setdefault("SANDBOX_FS", "0")
+    data.setdefault("SANDBOX_NET", "0")
+    return data
+
+
+def _load_tool_module_names() -> List[str]:
+    raw = os.environ.get("RUNTIME_TOOL_MODULES") or "[]"
+    try:
+        arr = json.loads(raw)
+        if not isinstance(arr, list):
+            return []
+        return [str(x) for x in arr]
+    except Exception:
+        return []
+
+
+def _portable_spec_str(runtime_globals: Dict[str, Any]) -> Optional[str]:
+    ps = runtime_globals.get("PORTABLE_SPEC_JSON") or runtime_globals.get("PORTABLE_SPEC")
+    if ps is None:
+        return None
+    if isinstance(ps, str):
+        return ps
+    try:
+        return json.dumps(ps, ensure_ascii=False)
+    except Exception:
+        return None
+
+def _bootstrap_supervisor_runtime(runtime_globals: Dict[str, Any],
+                                  tool_module_names: list[str],
+                                  logger: AgentLogger,
+                                  outdir: pathlib.Path) -> None:
+    """
+    This function runs in the supervisor process once, before we accept any tool calls.
+
+    It mirrors what the injected header used to do inside user code.
+    """
+    import logging, warnings, importlib, traceback, json as _json
+    from pathlib import Path
+    from kdcube_ai_app.apps.chat.sdk.protocol import (
+        ChatEnvelope, ServiceCtx, ConversationCtx
+    )
+    from kdcube_ai_app.apps.chat.emitters import (ChatRelayCommunicator, ChatCommunicator, _RelayEmitterAdapter)
+    import kdcube_ai_app.apps.utils.logging_config as logging_config
+
+    logging_config.configure_logging()
+    log = logging.getLogger("agent.runtime")
+
+    # ---------- OUTDIR_CV / WORKDIR_CV ----------
+    outdir_s = os.environ.get("OUTPUT_DIR")
+    workdir_s = os.environ.get("WORKDIR")
+    if outdir_s:
+        OUTDIR_CV.set(outdir_s)
+    if workdir_s:
+        WORKDIR_CV.set(workdir_s)
+
+    # ---------- Portable Spec & modules ----------
+    ps = runtime_globals.get("PORTABLE_SPEC_JSON") or runtime_globals.get("PORTABLE_SPEC")
+    if isinstance(ps, dict):
+        ps_str = _json.dumps(ps, ensure_ascii=False)
+    else:
+        ps_str = ps
+
+    TOOL_ALIAS_MAP = runtime_globals.get("TOOL_ALIAS_MAP") or {}
+    TOOL_MODULE_FILES = runtime_globals.get("TOOL_MODULE_FILES") or {}
+
+    # Preload dyn alias modules from TOOL_MODULE_FILES (same as header)
+    import importlib.util
+    for alias, dyn_name in (TOOL_ALIAS_MAP or {}).items():
+        path = (TOOL_MODULE_FILES or {}).get(alias)
+        if not path:
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(dyn_name, path)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[dyn_name] = mod
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+            log.info(f"[supervisor.bootstrap] loaded dyn module {dyn_name} from {path}")
+        except Exception as e:
+            log.error(f"[supervisor.bootstrap] failed to load {dyn_name} from {path}: {e}", exc_info=True)
+
+    # Build full module list for bootstrap_bind_all
+    bind_targets = list(tool_module_names or [])
+    for dyn_name in (TOOL_ALIAS_MAP or {}).values():
+        if dyn_name and dyn_name not in bind_targets:
+            bind_targets.append(dyn_name)
+
+    if ps_str and bind_targets:
+        try:
+            bootstrap_bind_all(ps_str, module_names=bind_targets)
+            log.info(f"[supervisor.bootstrap] bootstrap_bind_all completed for {len(bind_targets)} modules")
+        except Exception as e:
+            log.error(f"[supervisor.bootstrap] bootstrap_bind_all failed: {e}", exc_info=True)
+            marker = outdir / "bootstrap_failed_supervisor.txt"
+            try:
+                marker.write_text(f"Bootstrap error: {e}\n{traceback.format_exc()}", encoding="utf-8")
+            except Exception:
+                pass
+
+    # ---------- Communicator from COMM_SPEC ----------
+    COMM_SPEC = runtime_globals.get("COMM_SPEC") or {}
+    if COMM_SPEC:
+        try:
+            REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+            REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+            REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
+            REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+            redis_url = REDIS_URL
+            if redis_url.startswith('"') and redis_url.endswith('"'):
+                redis_url = redis_url[1:-1]
+            redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url
+            log.info(f"[supervisor.bootstrap] Redis url: {redis_url_safe}")
+
+            channel = (COMM_SPEC or {}).get("channel") or "chat.events"
+            relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
+            emitter = _RelayEmitterAdapter(relay)
+            svc = ServiceCtx(**(COMM_SPEC.get("service") or {}))
+            conv = ConversationCtx(**(COMM_SPEC.get("conversation") or {}))
+            comm = ChatCommunicator(
+                emitter=emitter,
+                service=svc.model_dump() if hasattr(svc, "model_dump") else dict(svc),
+                conversation=conv.model_dump() if hasattr(conv, "model_dump") else dict(conv),
+                room=COMM_SPEC.get("room"),
+                target_sid=COMM_SPEC.get("target_sid"),
+            )
+            set_comm(comm)
+            globals()["_comm_obj"] = comm  # so _dump_delta_cache_file can find it
+            log.info("[supervisor.bootstrap] ChatCommunicator initialized successfully")
+        except Exception as e:
+            log.error(f"[supervisor.bootstrap] Communicator setup failed: {e}", exc_info=True)
+
+async def _supervisor_loop(sup: PrivilegedSupervisor, stop_event: asyncio.Event, log: AgentLogger) -> None:
+    """
+    Main accept loop for the PrivilegedSupervisor, running in the same process
+    as the driver.
+
+    - Blocks on sup.handle_request() in a thread-pool (one request at a time).
+    - Exits when stop_event is set or when the process terminates.
+    """
+    loop = asyncio.get_running_loop()
+    log.log("[supervisor.entry] entering main accept loop", level="INFO")
+
+    while not stop_event.is_set():
+        # handle_request() blocks on accept(); we run it in a worker thread
+        await loop.run_in_executor(None, sup.handle_request)
+
+    log.log("[supervisor.entry] stop_event set, leaving accept loop", level="INFO")
+
+
+async def _async_main() -> int:
+    """
+    Container-side main:
+
+      1. Read WORKDIR / OUTPUT_DIR / RUNTIME_GLOBALS_JSON / RUNTIME_TOOL_MODULES from env.
+      2. Bootstrap tool modules on the supervisor side (ModelService, registry, etc.).
+      3. Start PrivilegedSupervisor on a Unix socket.
+      4. In parallel, run iso_runtime.run_py_code(...) which:
+           - injects the big header into workdir/main.py
+           - runs user code in a **networkless** subprocess
+      5. When user code finishes, ask supervisor loop to stop and exit with
+         the same return code.
+    """
+    logger = AgentLogger("py_code_exec_entry")
+
+    workdir = pathlib.Path(os.environ.get("WORKDIR", "/workspace/work")).resolve()
+    outdir = pathlib.Path(os.environ.get("OUTPUT_DIR", "/workspace/out")).resolve()
+    workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    runtime_globals = _load_runtime_globals()
+    tool_module_names = _load_tool_module_names()
+    spec_str = _portable_spec_str(runtime_globals)
+
+    logger.log(
+        f"[entry] workdir={workdir}, outdir={outdir}, "
+        f"tool_modules={tool_module_names}, "
+        f"has_portable_spec={bool(spec_str)}",
+        level="INFO",
+    )
+
+    # 🔹 1. Bootstrap the *supervisor* runtime before doing anything else
+    _bootstrap_supervisor_runtime(runtime_globals, tool_module_names, logger, outdir)
+
+    # 🔹 2. Prepare supervisor object
+    socket_path = os.environ.get("SUPERVISOR_SOCKET", "/tmp/supervisor.sock")
+    # Remove old socket
+    try:
+        os.unlink(socket_path)
+    except OSError:
+        pass
+
+    sup = PrivilegedSupervisor(socket_path=socket_path, logger=logger)
+    # (You can remove the bind/listen in __init__ if you like; asyncio will own the socket.)
+
+    # Register allowed tools / callables from registry
+    if tool_registry is not None:
+        try:
+            tool_ids = tool_registry.list_tool_ids()
+            sup.set_allowed_tools(tool_ids)
+            tool_map = tool_registry.build_tool_map()  # id -> callable
+            sup.register_tool_callables(tool_map)
+            logger.log(
+                f"[entry] supervisor registered {len(tool_ids)} allowed tools", level="INFO"
+            )
+        except Exception as e:
+            logger.log(f"[entry] tool_registry wiring failed: {e}", level="ERROR")
+    else:
+        logger.log(
+            "[entry] no tool_registry module; supervisor will rely on dynamic resolution",
+            level="WARNING",
+        )
+
+    # 🔹 3. Start asyncio Unix server so all requests share the same ContextVars
+    server = await asyncio.start_unix_server(
+        sup.handle_stream,
+        path=socket_path,
+        backlog=8,
+    )
+    os.chmod(socket_path, 0o600)
+
+    logger.log(f"[entry] supervisor listening on {socket_path}", level="INFO")
+
+    stop_event = asyncio.Event()
+
+    async def _wait_server_stop():
+        await stop_event.wait()
+        server.close()
+        await server.wait_closed()
+        logger.log("[entry] supervisor server shut down", level="INFO")
+
+    server_task = asyncio.create_task(_wait_server_stop())
+
+    loop = asyncio.get_running_loop()
+
+    def _on_sig(*_args: Any) -> None:
+        if not stop_event.is_set():
+            stop_event.set()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, _on_sig)
+        except NotImplementedError:
+            pass
+
+    # 🔹 4. Run executor (networkless, no PORTABLE_SPEC) in parallel
+    timeout_env = os.environ.get("PY_CODE_EXEC_TIMEOUT")
+    try:
+        timeout_s = int(timeout_env) if timeout_env else None
+    except ValueError:
+        timeout_s = None
+
+    # ❗ After supervisor bootstrap, drop PORTABLE_SPEC so executor never sees it
+    exec_globals = dict(runtime_globals)
+    exec_globals.pop("PORTABLE_SPEC", None)
+    exec_globals.pop("PORTABLE_SPEC_JSON", None)
+
+    logger.log("[entry] starting run_py_code()", level="INFO")
+    res = await run_py_code(
+        workdir=workdir,
+        output_dir=outdir,
+        globals=exec_globals,
+        logger=logger,
+        timeout_s=timeout_s or 600,
+    )
+
+    logger.log(f"[entry] run_py_code() finished with result={res}", level="INFO")
+
+    # 🔹 5. Stop supervisor server
+    stop_event.set()
+    try:
+        await asyncio.wait_for(server_task, timeout=1.0)
+    except asyncio.TimeoutError:
+        logger.log("[entry] supervisor server did not exit in time", level="WARNING")
+    except Exception as e:
+        logger.log(f"[entry] supervisor server error on shutdown: {e}", level="ERROR")
+
+    # Map run_py_code() result to exit code
+    if isinstance(res, dict):
+        if res.get("error") == "timeout":
+            return 124  # typical timeout exit code
+
+        rc = res.get("returncode")
+        if isinstance(rc, int):
+            return rc
+
+    # Unknown failure shape → generic error
+    return 1
+
+
+def main() -> None:
+    try:
+        logging_config.configure_logging()
+        rc = asyncio.run(_async_main())
+    except Exception as e:
+        # last-resort log to stderr; Inventory logger may not be available
+        print(f"[py_code_exec_entry] fatal error: {e}", file=sys.stderr)
+        rc = 1
+    sys.exit(rc)
+
+
+if __name__ == "__main__":
+    main()
+
+
+If anything is missing this must be added.
+the infra must be ready and env and context must be shared for all occasions when the supervisor run the requested tool.
+Till the supervisor end of life (when executor finishes).
+Make sure all async ops Are finished on super before it exit.
+The modules of tools all must be loaded once and the comm is injected as.
+
+Regardless how you decide to handle the _dump_delta_cache_file - this stuff is being collected on supervisor and must be run there before exit.
+For taht we need comm object - one taht we also must inject with set_comm(_comm_obj).
+
+
+
+Please rework each piece of this task set. I need complete code for each.

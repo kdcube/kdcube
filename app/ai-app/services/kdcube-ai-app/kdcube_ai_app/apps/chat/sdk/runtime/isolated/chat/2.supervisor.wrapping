@@ -1,0 +1,589 @@
+I get so far py_code_exec_entry (which will run in the subprocess with no network access, i.e. thanks to bubblewrap, right?)
+
+FROM python:3.12-slim
+
+ENV PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    fonts-noto fonts-noto-cjk fonts-noto-color-emoji \
+    libmagic1 file \
+    && rm -rf /var/lib/apt/lists/* && apt-get clean
+
+# Isolated venv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python deps
+COPY services/kdcube-ai-app/requirements-chat.txt requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    python -m playwright install --with-deps chromium
+
+# --- App code ---
+# copy your repo into the image so `kdcube_ai_app` is importable
+WORKDIR /workspace
+COPY . /opt/app
+ENV PYTHONPATH="/opt/app:${PYTHONPATH}"
+
+# optional: default timeout for in-container exec (can be overridden by env)
+ENV PY_CODE_EXEC_TIMEOUT=600
+
+# --- Entrypoint ---
+# this module uses WORKDIR/OUTPUT_DIR/RUNTIME_GLOBALS_JSON provided by run_py_in_docker
+ENTRYPOINT ["python", "-m", "kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry"]
+
+also this is my current docker image. Please verify.
+
+also let's make sure that runpy code is what is needed in order to run the "provided code".
+
+# Author: 2025 Elena Viter
+
+# sdk/runtime/iso_runtime.py
+...
+
+Also, i do not see where we do bootstrapping around the supervisor
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# kdcube_ai_app/apps/chat/sdk/runtime/exec/py_code_exec_entry.py
+...
+
+
+It just won't be able to run none of the tools and the infra will be not set.
+
+All this stuff that we have in the iso_runtime in _build_injected_header
+
+This is what must run in the supervisor before it starts.
+
+Actually maybe not all but many from it. It must bootstrap the environment before to start accept execute tools on executor request.
+
+
+Look on codegen agent:
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# chat/sdk/codegen/codegen/agent.py
+
+....
+
+it generates the code which we appended to the heading
+
+# === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
+from pathlib import Path
+import json as _json
+import os, importlib, asyncio, atexit, signal, sys
+from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
+from io_tools import tools as agent_io_tools
+
+import logging, sys
+if not logging.getLogger().handlers:
+    logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
+
+logger = logging.getLogger("agent.runtime")
+# --- Directories / CV fallbacks ---
+OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
+if not OUTPUT_DIR:
+    raise RuntimeError("OUTPUT_DIR missing in run context")
+OUTPUT = Path(OUTPUT_DIR)
+
+# ✅ Ensure child process has ContextVars set even when only env is present
+try:
+    if not OUTDIR_CV.get(""):
+        od = os.environ.get("OUTPUT_DIR")
+        if od:
+            OUTDIR_CV.set(od)
+    if not WORKDIR_CV.get(""):
+        wd = os.environ.get("WORKDIR")
+        if wd:
+            WORKDIR_CV.set(wd)
+except Exception:
+    pass
+
+# --- Portable spec handoff (context vars + model service + registry + communicator) ---
+_PORTABLE_SPEC = os.environ.get("PORTABLE_SPEC")
+print(f"[Runtime Header] PORTABLE_SPEC {_PORTABLE_SPEC}", file=sys.stderr)
+_TOOL_MODULES = _json.loads(os.environ.get("RUNTIME_TOOL_MODULES") or "[]")
+_SHUTDOWN_MODULES = _json.loads(os.environ.get("RUNTIME_SHUTDOWN_MODULES") or "[]")
+
+def _bootstrap_child():
+    """
+    - Apply env passthrough
+    - Restore ALL ContextVars captured in the parent snapshot
+    - Initialize ModelService/registry
+    - Bind into every tool module
+    - Rebuild ChatCommunicator if present
+    """
+    # Build the complete list of modules to bind into:
+    # - Anything from RUNTIME_TOOL_MODULES (parent passed actual tool module names)
+    # - All dynamic alias module names from TOOL_ALIAS_MAP values (pre-registered by file path above)
+    _BIND_TARGETS = list(_TOOL_MODULES or [])
+    try:
+        _ALIAS_TO_DYN = globals().get("TOOL_ALIAS_MAP", {}) or {}
+        for _dyn in _ALIAS_TO_DYN.values():
+            if _dyn and _dyn not in _BIND_TARGETS:
+                _BIND_TARGETS.append(_dyn)
+    except Exception:
+        pass
+
+    # Perform a single, idempotent bootstrap and bind into all modules
+    try:
+        if _PORTABLE_SPEC and _BIND_TARGETS:
+            from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all as _bootstrap_all
+            _bootstrap_all(_PORTABLE_SPEC, module_names=_BIND_TARGETS)
+    except Exception:
+        print("bulk bootstrap failed", file=sys.stderr)
+
+_bootstrap_child()
+
+# --- Globals provided by parent (must come before dyn pre-registration) ---
+
+CONTRACT = {'summary_pdf': {'name': 'summary_pdf', 'type': 'file', 'description': '3-page executive summary PDF with diagrams and key points table', 'format': None, 'mime': 'application/pdf', 'filename_hint': 'ukraine_russia_security_summary_3pages.pdf', 'content_guidance': 'Source markdown ~650-750 tokens. Structure: (1) Executive Summary (80-100 tokens), (2) Key Points Table (8-10 rows: risk category, impact, mitigation, budget), (3) Three diagram sections with 40-50 token context each, (4) Budget Allocation Summary (60-80 tokens). Embed three PNG diagrams inline. Target 3 pages when rendered. Professional tone, executive-friendly.'}, 'project_log': {'type': 'inline', 'description': 'Live run log', 'format': 'markdown', 'content_guidance': '', '_hidden': True}}
+
+COMM_SPEC = {'channel': 'chat.events', 'service': {'request_id': '56d98d33-a39e-4d3d-be22-97695577a5e9', 'tenant': 'alldemo', 'project': 'example-product-demo', 'user': 'admin-user-1'}, 'conversation': {'session_id': '1d6d5c06-1f82-49c5-8d0d-a89ec658969c', 'conversation_id': 'b19f15f9-58a7-487d-b8cf-c2c95c02ac7e', 'turn_id': 'turn_1761261127690_6ztilt'}, 'room': '1d6d5c06-1f82-49c5-8d0d-a89ec658969c', 'target_sid': 'LQE-KkzTYLKj_JyKAAAB'}
+
+TOOL_ALIAS_MAP = {'io_tools': 'dyn_io_tools_24d6764d', 'ctx_tools': 'dyn_ctx_tools_fb0cb30a', 'llm_tools': 'dyn_llm_tools_886ef24e', 'generic_tools': 'dyn_generic_agent_tools_84d68db8'}
+
+TOOL_MODULE_FILES = {'io_tools': '/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tools/io_tools.py', 'ctx_tools': '/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tools/ctx_tools.py', 'llm_tools': '/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/custom_apps/codegen/orchestrator/tools/llm_tools.py', 'generic_tools': '/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/custom_apps/codegen/orchestrator/tools/generic_agent_tools.py'}
+
+
+# --- Dyn tool modules pre-registration (by file path) ---
+# The parent passes:
+#   TOOL_ALIAS_MAP   : {"io_tools": "dyn_io_tools_<hash>", ...}
+#   TOOL_MODULE_FILES: {"io_tools": "/abs/path/to/io_tools.py", ...}
+_ALIAS_TO_DYN  = globals().get("TOOL_ALIAS_MAP", {}) or {}
+_ALIAS_TO_FILE = globals().get("TOOL_MODULE_FILES", {}) or {}
+for _alias, _dyn_name in (_ALIAS_TO_DYN or {}).items():
+    _path = (_ALIAS_TO_FILE or {}).get(_alias)
+    if not _path:
+        continue
+    try:
+        _spec = importlib.util.spec_from_file_location(_dyn_name, _path)
+        _mod  = importlib.util.module_from_spec(_spec)
+        sys.modules[_dyn_name] = _mod
+        _spec.loader.exec_module(_mod)  # type: ignore[attr-defined]
+    except Exception:
+        # don't fail bootstrap; an import error will still be visible later
+        pass
+
+# Bind services into alias modules as well (idempotent)
+try:
+    if _PORTABLE_SPEC:
+        from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_from_spec as _bs
+        for _dyn_name in (_ALIAS_TO_DYN or {}).values():
+            try:
+                _m = importlib.import_module(_dyn_name)
+                _bs(_PORTABLE_SPEC, tool_module=_m)
+            except Exception:
+                pass
+except Exception:
+    pass
+
+# --- Tool alias imports (auto-injected) ---
+
+from dyn_io_tools_24d6764d import tools as io_tools
+
+from dyn_ctx_tools_fb0cb30a import tools as ctx_tools
+
+from dyn_llm_tools_886ef24e import tools as llm_tools
+
+from dyn_generic_agent_tools_84d68db8 import tools as generic_tools
+
+
+# -------- Live progress cache (safe, in-process) --------
+_PROGRESS = {
+    "objective": "",
+    "status": "In progress",
+    "story": [],          # list[str]
+    "out_dyn": {},        # slot_name -> slot dict (inline/file)
+}
+_FINALIZED = False  # prevents late checkpoints from overwriting the final result
+
+def _build_project_log_md() -> str:
+    lines = []
+    lines.append("# Project Log")
+    lines.append("")
+    lines.append("## Objective")
+    lines.append(str(_PROGRESS.get("objective", "")))
+    lines.append("")
+    lines.append("## Status")
+    lines.append(str(_PROGRESS.get("status", "")))
+    lines.append("")
+    lines.append("## Story")
+    story = " ".join(_PROGRESS.get("story") or [])
+    lines.append(story)
+    lines.append("")
+    lines.append("## Produced Slots")
+
+    for name, data in (_PROGRESS.get("out_dyn") or {}).items():
+        if name == "project_log":
+            continue
+        t = (data.get("type") or "inline")
+        desc = data.get("description", "")
+        lines.append(f"### {name} ({t})")
+        if desc:
+            lines.append(desc)
+        if t == "file":
+            mime = data.get("mime", "")
+            path = data.get("path", "")
+            if mime:
+                lines.append(f"**Mime:** {mime}")
+            if path:
+                lines.append(f"**Filename:** {path}")
+        else:
+            fmt = data.get("format", "")
+            if fmt:
+                lines.append(f"**Format:** {fmt}")
+
+    return "\n".join(lines).strip()
+
+def _refresh_project_log_slot():
+    """Keep 'project_log' as a first-class slot in _PROGRESS['out_dyn']."""
+    od = _PROGRESS["out_dyn"]
+    md = _build_project_log_md()
+    od["project_log"] = {
+        "type": "inline",
+        "format": "markdown",
+        "description": "Live run log",
+        "value": md,
+    }
+
+async def set_progress(*, objective=None, status=None, story_append=None, out_dyn_patch=None, flush=False):
+    if objective is not None:
+        _PROGRESS["objective"] = str(objective)
+    if status is not None:
+        _PROGRESS["status"] = str(status)
+    if story_append:
+        if isinstance(story_append, (list, tuple)):
+            _PROGRESS["story"].extend([str(s) for s in story_append])
+        else:
+            _PROGRESS["story"].append(str(story_append))
+    if out_dyn_patch:
+        od = _PROGRESS["out_dyn"]
+        for k, v in (out_dyn_patch or {}).items():
+            od[k] = v
+
+    _refresh_project_log_slot()
+
+    if flush and not globals().get("_FINALIZED", False):
+        await _write_checkpoint(reason="progress", managed=True)
+
+# initialize with an empty log so it's present even before first set_progress()
+_refresh_project_log_slot()
+
+async def _write_checkpoint(reason: str = "checkpoint", managed: bool = True):
+    if globals().get("_FINALIZED", False):
+        return
+    try:
+        # ensure log is up-to-date at checkpoint time
+        _refresh_project_log_slot()
+        g = globals()
+        payload = {
+            "ok": False,
+            "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
+            "contract": (g.get("CONTRACT") or {}),
+            "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
+            "error": {"where": "runtime", "details": "", "error": reason, "description": reason, "managed": bool(managed)}
+        }
+        await agent_io_tools.save_ret(data=_json.dumps(payload), filename="result.json")
+    except Exception:
+        pass
+
+async def done():
+    # ensure latest log
+    _refresh_project_log_slot()
+    g = globals()
+    # normalize status
+    status = (_PROGRESS.get("status") or "Completed")
+    if status.lower().startswith("in progress"):
+        _PROGRESS["status"] = "Completed"
+        _refresh_project_log_slot()
+    payload = {
+        "ok": True,
+        "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
+        "contract": (g.get("CONTRACT") or {}),
+        "out_dyn": dict(_PROGRESS.get("out_dyn") or {})
+    }
+    globals()["_FINALIZED"] = True  # ← set BEFORE writing final file
+    return await agent_io_tools.save_ret(data=_json.dumps(payload), filename="result.json")
+
+async def fail(description: str,
+               where: str = "",
+               error: str = "",
+               details: str = "",
+               managed: bool = True,
+               out_dyn: dict | None = None):
+    """
+    Managed failure helper. Always writes result.json with a normalized envelope.
+    Uses the canonical _PROGRESS['out_dyn'] which already contains 'project_log'.
+    """
+    # update status for the log and refresh slot
+    _PROGRESS["status"] = "Failed"
+    _refresh_project_log_slot()
+
+    g = globals()
+    payload = {
+        "ok": False,
+        "objective": str(_PROGRESS.get("objective") or description),
+        "contract": (g.get("CONTRACT") or {}),
+        "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
+        "error": {
+            "where": (where or "runtime"),
+            "details": str(details or ""),
+            "error": str(error or ""),
+            "description": description,
+            "managed": bool(managed),
+        }
+    }
+    globals()["_FINALIZED"] = True  # ← set BEFORE writing final file
+    return await agent_io_tools.save_ret(data=_json.dumps(payload), filename="result.json")
+
+def _on_term(signum, frame):
+    try:
+        if globals().get("_FINALIZED", False):
+            os._exit(0)
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_write_checkpoint(reason=f"signal:{signum}", managed=True))
+        except RuntimeError:
+            # no running loop → do a quick one-off run
+            asyncio.run(_write_checkpoint(reason=f"signal:{signum}", managed=True))
+    finally:
+        # Ensure we terminate; parent can rehost artifacts
+        os._exit(143)  # 128+15 (SIGTERM)
+
+
+# --- Module shutdown on exit (KB, tool modules etc.) ---
+async def _async_shutdown_mod(mod):
+    try:
+        if hasattr(mod, "shutdown") and callable(mod.shutdown):
+            maybe = mod.shutdown()
+            if asyncio.iscoroutine(maybe):
+                await maybe
+        elif hasattr(mod, "close") and callable(mod.close):
+            maybe = mod.close()
+            if asyncio.iscoroutine(maybe):
+                await maybe
+    except Exception:
+        pass
+
+def _sync_shutdown_all():
+    try:
+        import importlib
+        mods = []
+        for name in set(_SHUTDOWN_MODULES or []):
+            try:
+                mods.append(importlib.import_module(name))
+            except Exception:
+                pass
+        async def _run():
+            for m in mods:
+                await _async_shutdown_mod(m)
+        asyncio.run(_run())
+    except Exception:
+        pass
+
+def _on_atexit():
+    try:
+        if globals().get("_FINALIZED", False):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            # If a loop is running at exit, best-effort fire-and-forget is fine.
+            loop.create_task(_write_checkpoint(reason="atexit", managed=True))
+        except RuntimeError:
+            asyncio.run(_write_checkpoint(reason="atexit", managed=True))
+    except Exception:
+        pass
+
+try:
+    signal.signal(signal.SIGTERM, _on_term)
+    signal.signal(signal.SIGINT, _on_term)
+except Exception:
+    pass
+# atexit.register(lambda: asyncio.run(_write_checkpoint(reason="atexit", managed=True)))
+atexit.register(_on_atexit)
+atexit.register(_sync_shutdown_all)
+
+# === END HEADER ===
+# === CHAT COMMUNICATOR RECONSTRUCTION ===
+from kdcube_ai_app.apps.chat.sdk.protocol import (
+    ChatEnvelope, ServiceCtx, ConversationCtx
+)
+from kdcube_ai_app.apps.chat.emitters import (ChatRelayCommunicator, ChatCommunicator, _RelayEmitterAdapter)
+from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm
+
+def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
+    REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+    REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+    REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
+    REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+    # redis_url = (spec or {}).get("redis_url") or os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+    redis_url = REDIS_URL
+    if redis_url.startswith('"') and redis_url.endswith('"'):
+        redis_url = redis_url[1:-1]
+    redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url
+    logger.info(f"Redis url: {redis_url_safe}")
+    print(f"Redis url: {redis_url_safe}")
+    channel   = (spec or {}).get("channel")   or "chat.events"
+    relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
+    emitter = _RelayEmitterAdapter(relay)
+    svc = ServiceCtx(**(spec.get("service") or {}))
+    conv = ConversationCtx(**(spec.get("conversation") or {}))
+    comm = ChatCommunicator(
+        emitter=emitter,
+        service=svc.model_dump() if hasattr(svc, "model_dump") else dict(svc),
+        conversation=conv.model_dump() if hasattr(conv, "model_dump") else dict(conv),
+        room=spec.get("room"),
+        target_sid=spec.get("target_sid"),
+    )
+    return comm
+
+try:
+    _COMM_SPEC = globals().get("COMM_SPEC") or {}
+    if _COMM_SPEC:
+        _comm_obj = _rebuild_communicator_from_spec(_COMM_SPEC)
+        set_comm(_comm_obj)
+except Exception as _comm_err:
+    pass
+# === END COMMUNICATOR SETUP ===
+import json, asyncio
+
+async def main():
+    await set_progress(objective="3-page summary with diagrams and key points", story_append="Started.", flush=True)
+
+    try:
+        # Fetch prior work
+        turns = json.loads(await agent_io_tools.tool_call(
+            fn=ctx_tools.fetch_turn_artifacts,
+            params_json=json.dumps({"turn_ids": '["turn_1761249384693_v2em29", "turn_1761260605715_30nlcn"]'}),
+            call_reason="Load analysis and diagrams",
+            tool_id="ctx_tools.fetch_turn_artifacts"
+        ))
+
+        analysis_turn = turns["turn_1761249384693_v2em29"]
+        diagram_turn = turns["turn_1761260605715_30nlcn"]
+
+        analysis_text = analysis_turn["deliverables"]["analysis_report_docx"]["text"]
+        analysis_sources = analysis_turn["deliverables"]["analysis_report_docx"].get("sources_used", [])
+
+        diagram_sources = diagram_turn["deliverables"]["supply_chain_risk_png"].get("sources_used", [])
+
+        # Merge sources
+        unified_sources = json.loads(await agent_io_tools.tool_call(
+            fn=ctx_tools.merge_sources,
+            params_json=json.dumps({"source_collections": json.dumps([analysis_sources, diagram_sources])}),
+            call_reason="Merge sources for citations",
+            tool_id="ctx_tools.merge_sources"
+        ))
+
+        await set_progress(story_append="Loaded analysis and diagrams.", flush=True)
+
+        # Generate summary markdown
+        gen = json.loads(await agent_io_tools.tool_call(
+            fn=llm_tools.generate_content_llm,
+            params_json=json.dumps({
+                "agent_name": "SummaryWriter",
+                "instruction": "Create 3-page executive summary. Structure: (1) Executive Summary (80-100 tokens), (2) Key Points Table with columns: Risk Category | Impact | Mitigation | Budget Allocation (8-10 rows covering cyber, supply chain, employee safety, geopolitical, infrastructure), (3) Three diagram sections: Supply Chain Risk (40-50 tokens context), Employee Risk (40-50 tokens context), Event Timeline 2025-2027 (40-50 tokens context). Embed diagrams using: ![Supply Chain Risk](supply_chain_risk_diagram.png), ![Employee Risk](employee_risk_diagram.png), ![Timeline](event_timeline_2025-2027.png). (4) Budget Allocation Summary (60-80 tokens). Professional, executive-friendly tone. Target ~650-750 tokens total.",
+                "input_context": analysis_text[:4000],
+                "target_format": "markdown",
+                "sources_json": json.dumps(unified_sources),
+                "cite_sources": True,
+                "max_tokens": 800
+            }),
+            call_reason="Generate summary content",
+            tool_id="llm_tools.generate_content_llm"
+        ))
+
+        if not gen.get("ok"):
+            await fail("Summary generation failed", where="generate", error=gen.get("reason", ""), out_dyn=_PROGRESS["out_dyn"])
+            return
+
+        summary_md = gen["content"]
+        sources_used = gen.get("sources_used", [])
+
+        await set_progress(story_append="Summary generated.", flush=True)
+
+        # Create PDF slot with draft flag
+        pdf_path = "ukraine_russia_security_summary_3pages.pdf"
+        pdf_slot = {
+            "type": "file",
+            "path": pdf_path,
+            "mime": "application/pdf",
+            "text": summary_md,
+            "sources_used": sources_used,
+            "description": "3-page executive summary PDF with diagrams and key points table",
+            "draft": True
+        }
+        await set_progress(story_append="Rendering PDF.", out_dyn_patch={"summary_pdf": pdf_slot}, flush=True)
+
+        # Render PDF
+        await agent_io_tools.tool_call(
+            fn=generic_tools.write_pdf,
+            params_json=json.dumps({
+                "path": str(OUTPUT / pdf_path),
+                "content": summary_md,
+                "format": "markdown",
+                "title": "Ukraine-Russia Security Risk Summary (2025-2027)",
+                "sources": json.dumps(sources_used),
+                "resolve_citations": True,
+                "include_sources_section": True,
+                "embed_images": True,
+                "base_dir": str(OUTPUT)
+            }),
+            call_reason="Render summary to PDF",
+            tool_id="generic_tools.write_pdf"
+        )
+
+        # Finalize
+        del pdf_slot["draft"]
+        await set_progress(story_append="PDF complete.", out_dyn_patch={"summary_pdf": pdf_slot}, status="Completed", flush=True)
+        await done()
+
+    except Exception as e:
+        await fail("Unhandled error", where="main", error=f"{type(e).__name__}: {e}", managed=False, out_dyn=_PROGRESS["out_dyn"])
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+This is the full program we need to run.
+
+
+Note how codegen relies on our advertised fail(), set_progress(), done() functions and added their calls in the function body.
+These functions currently via io tools and occasionly write in the ALLOWED PATH (workdir out).
+
+In isolated paradigm, we will not wrap the codegenerated code in the same wrapping (which is being done in iso runtime) because the tools won't execute in the context of executor (but on supervisor, instead).
+
+So,
+
+we need to understand 2 things with this
+- if the version of the _build_injected_header also OK for dockerized solution. Because in the context of the program which will wrap the tool execution of the code generated program none of the services such as redis or model service which are bootstrapped won't work (which is what we need). At the same time, we want certain env var to sneak in (OUTPUT_DIR, WORKDIR,  RUNTIME_TOOL_MODULES, RUNTIME_SHUTDOWN_MODULES, )
+
+
+PORTABLE_SPEC - should not be provided.
+
+this is what's there
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# kdcube_ai_app/apps/chat/sdk/runtime/snapshot.py
+
+...
+
+the executor should not care because it is not allowed to run directly any code which can rely on that.
+
+Just let's verify that the heading will work fine without this PORTABLE_SPEC_JSON is attached to "dummy executor" code.
+
+So when we attach the header to codegenerated program, it will still be able to run and write where allowed and DO NOT use network (this usage will cause failure? or just timeout?) and all tool_call will go via proxy (supervisor) but the done() / fail() whatever else commands are executable (they should) in the executor - they only rely on ability to write to workdir out.
+
+And i did not notice, in the wrapping of main entrypoint, that you restore indeed all as we do this in the iso_runtime in the "heading" that we attach to program.
+We should because we also care here about the modules aliases to load (remember the tools can be in different directories and they are not installed, so the runtime need to import the modules properly based on the dynamic names we give them )
+
+for now i see you only do PORTABLE_SPEC
+
+no RUNTIME_TOOL_MODULES
+RUNTIME_SHUTDOWN_MODULES
+
+no loading
