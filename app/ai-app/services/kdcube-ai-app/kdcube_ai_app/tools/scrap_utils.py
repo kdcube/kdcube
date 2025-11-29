@@ -685,7 +685,7 @@ def make_clean_content_html(
 
     return str(art)
 
-def html_fragment_to_markdown(fragment_html: str) -> str:
+def html_fragment_to_markdown_old(fragment_html: str) -> str:
     """
     Convert a cleaned HTML fragment (e.g., from make_clean_content_html) to Markdown.
     Uses markdownify if available; otherwise a light fallback that preserves basic structure.
@@ -752,6 +752,212 @@ def html_fragment_to_markdown(fragment_html: str) -> str:
     # normalize excessive blank lines
     md = re.sub(r"\n{3,}", "\n\n", md)
     return md.strip()
+
+def html_fragment_to_markdown(fragment_html: str) -> str:
+    """
+    Convert a cleaned HTML fragment (e.g., from make_clean_content_html) to Markdown.
+    Uses markdownify if available; otherwise a fallback that properly converts structure.
+
+    Key fix: The fallback now recursively processes elements and builds markdown strings
+    directly, rather than modifying soup in-place and then calling get_text() which loses
+    the markdown formatting.
+    """
+    fragment_html = fragment_html or ""
+    if not fragment_html.strip():
+        return ""
+
+    # Try markdownify first (best quality)
+    if _md_convert:
+        try:
+            return _md_convert(fragment_html, heading_style="ATX", strip=["style", "script"]).strip()
+        except Exception:
+            pass
+
+    # Fallback: manual HTML to Markdown conversion
+    soup = BeautifulSoup(fragment_html, "lxml")
+
+    def txt(el):
+        """Extract text from element."""
+        return el.get_text(" ", strip=True) if el else ""
+
+    def process_element(elem) -> str:
+        """
+        Recursively process an element and return its markdown representation.
+        This preserves structure (headings, tables, lists) properly.
+        """
+        # Handle text nodes
+        if isinstance(elem, NavigableString):
+            text = str(elem).strip()
+            # Preserve single spaces, collapse multiple
+            text = re.sub(r'\s+', ' ', text)
+            return text if text else ""
+
+        if not isinstance(elem, Tag):
+            return ""
+
+        # Handle specific elements
+
+        # Headings
+        if elem.name and re.match(r"^h[1-6]$", elem.name):
+            level = int(elem.name[1])
+            text = txt(elem)
+            if text:
+                return f"\n{'#' * level} {text}\n\n"
+            return ""
+
+        # Code blocks
+        elif elem.name == "pre":
+            code = elem.get_text("", strip=False).strip()
+            if code:
+                return f"\n```\n{code}\n```\n\n"
+            return ""
+
+        # Inline code
+        elif elem.name == "code" and (not elem.parent or elem.parent.name != "pre"):
+            text = txt(elem)
+            if text:
+                return f"`{text}`"
+            return ""
+
+        # Tables - convert to proper markdown table format
+        elif elem.name == "table":
+            rows = []
+            has_header = False
+
+            for tr in elem.find_all("tr"):
+                cells = []
+                for cell in tr.find_all(["td", "th"]):
+                    cell_text = txt(cell).replace("|", "\\|").replace("\n", " ")
+                    cells.append(cell_text)
+
+                if cells:
+                    rows.append("| " + " | ".join(cells) + " |")
+
+                    # Check if this row has <th> tags (header row)
+                    if tr.find("th") and not has_header:
+                        # Add separator after header
+                        num_cols = len(cells)
+                        separator = "| " + " | ".join(["---"] * num_cols) + " |"
+                        rows.append(separator)
+                        has_header = True
+
+            if rows:
+                return "\n" + "\n".join(rows) + "\n\n"
+            return ""
+
+        # Lists
+        elif elem.name in ("ul", "ol"):
+            list_items = []
+            for i, li in enumerate(elem.find_all("li", recursive=False)):
+                # Process list item children to preserve inline formatting
+                li_content = []
+                for child in li.children:
+                    child_md = process_element(child)
+                    if child_md:
+                        li_content.append(child_md)
+
+                text = "".join(li_content).strip()
+                if text:
+                    if elem.name == "ol":
+                        list_items.append(f"{i+1}. {text}")
+                    else:
+                        list_items.append(f"- {text}")
+
+            if list_items:
+                return "\n" + "\n".join(list_items) + "\n\n"
+            return ""
+
+        # Links
+        elif elem.name == "a":
+            text = txt(elem)
+            href = elem.get("href", "")
+            if text and href:
+                return f"[{text}]({href})"
+            elif text:
+                return text
+            elif href:
+                return f"<{href}>"
+            return ""
+
+        # Images
+        elif elem.name == "img":
+            alt = elem.get("alt", "")
+            src = elem.get("src", "")
+            if src:
+                return f"![{alt}]({src})"
+            elif alt:
+                return alt
+            return ""
+
+        # Line breaks
+        elif elem.name == "br":
+            return "\n"
+
+        # Bold
+        elif elem.name in ("strong", "b"):
+            text = txt(elem)
+            if text:
+                return f"**{text}**"
+            return ""
+
+        # Italic
+        elif elem.name in ("em", "i"):
+            text = txt(elem)
+            if text:
+                return f"*{text}*"
+            return ""
+
+        # Block elements - process children with spacing
+        elif elem.name in ("p", "div", "section", "article", "blockquote"):
+            child_content = []
+            for child in elem.children:
+                child_md = process_element(child)
+                if child_md:
+                    child_content.append(child_md)
+
+            if child_content:
+                result = "".join(child_content).strip()
+                if result:
+                    # Add blockquote marker if needed
+                    if elem.name == "blockquote":
+                        result = "\n".join(f"> {line}" for line in result.split("\n"))
+                    return result + "\n\n"
+            return ""
+
+        # Default: process children recursively
+        else:
+            result = []
+            for child in elem.children:
+                child_md = process_element(child)
+                if child_md:
+                    result.append(child_md)
+            return "".join(result)
+
+    # Process all top-level children
+    markdown_parts = []
+
+    # Handle both full documents and fragments
+    if soup.body:
+        # Full HTML document
+        for child in soup.body.children:
+            md = process_element(child)
+            if md and md.strip():
+                markdown_parts.append(md)
+    else:
+        # HTML fragment
+        for child in soup.children:
+            md = process_element(child)
+            if md and md.strip():
+                markdown_parts.append(md)
+
+    markdown = "".join(markdown_parts)
+
+    # Clean up excessive whitespace
+    markdown = re.sub(r"\n{3,}", "\n\n", markdown)  # Max 2 newlines
+    markdown = re.sub(r" +", " ", markdown)  # Collapse spaces
+    markdown = markdown.strip()
+
+    return markdown
 
 def html_title(html: str) -> str:
     try:

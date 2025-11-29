@@ -871,6 +871,31 @@ def _replace_citation_tokens(md: str, by_id: Dict[int, Dict[str, str]], embed_im
     )
     return replace_citation_tokens_batch(md, by_id, opts)
 
+def find_unmapped_citation_sids(
+        text: str,
+        citation_map: Dict[int, Dict[str, str]],
+) -> List[int]:
+    """
+    Debug helper: SIDs that appear in [[S:...]] markers in `text`
+    but have no entry in `citation_map`.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+
+    all_sids = set(extract_citation_sids_any(text))
+    if not citation_map:
+        return sorted(all_sids)
+
+    known_sids: set[int] = set()
+    for k in citation_map.keys():
+        try:
+            known_sids.add(int(k))
+        except Exception:
+            continue
+
+    return sorted(sid for sid in all_sids if sid not in known_sids)
+
+
 def _append_sources_section(md: str, by_id: Dict[int, Dict[str, Any]], order: List[int]) -> str:
     return append_sources_section_if_missing(md, by_id, order)
 

@@ -69,6 +69,7 @@ aiolimiter
 beautifulsoup4
 brotli
 markdownify
+trafilatura
 
 clamd
 aiofiles

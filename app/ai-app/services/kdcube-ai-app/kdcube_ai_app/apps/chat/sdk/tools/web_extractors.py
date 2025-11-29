@@ -1,68 +1,152 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# chat/sdk/tools/web_extractors.py
+"""
+Web content extraction with adaptive header selection and smart fallbacks.
 
+Key improvements:
+1. Adaptive header selection based on site type (bot vs browser headers)
+2. Automatic fallback from custom -> trafilatura if content extraction fails
+3. Smart Discourse forum detection
 
-# 1. Install required dependencies
-# pip install aiohttp beautifulsoup4 lxml
-#
-# # Optional but recommended:
-# pip install playwright  # For JavaScript-heavy sites
-# pip install redis  # For caching
-# pip install aiolimiter  # For rate limiting
-# pip install tenacity  # For retry logic
+Architecture:
+- SourceCookieManager: Handles authentication cookies for paywalled sites
+- HeaderSelector: Chooses appropriate headers based on URL patterns
+- ContentExtractor: Strategy selection with automatic fallback
+- WebContentFetcher: HTTP fetching with authentication and content extraction
+- SiteSpecificExtractors: Custom extractors for Medium, GitHub, StackOverflow, etc.
+"""
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 import aiohttp
-from bs4 import BeautifulSoup
 import asyncio
 import logging
-import json, os
-from datetime import datetime, timezone
+import json
+import os
 import re
+from datetime import datetime, timezone
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+
+# Trafilatura for main content extraction
+try:
+    import trafilatura
+    from trafilatura.settings import use_config
+    TRAFILATURA_AVAILABLE = True
+
+    # Configure trafilatura for better extraction
+    trafilatura_config = use_config()
+    trafilatura_config.set("DEFAULT", "EXTRACTION_TIMEOUT", "0")
+    trafilatura_config.set("DEFAULT", "MIN_EXTRACTED_SIZE", "200")
+    trafilatura_config.set("DEFAULT", "MIN_OUTPUT_SIZE", "100")
+except ImportError:
+    TRAFILATURA_AVAILABLE = False
+    trafilatura = None
+    trafilatura_config = None
 
 from kdcube_ai_app.tools.scrap_utils import (
+    extract_publication_dates_core,
     html_title,
     make_clean_content_html,
     html_fragment_to_markdown,
-    extract_publication_dates_core,
 )
 import kdcube_ai_app.utils.text as text_utils
 
 logger = logging.getLogger(__name__)
 
-# --- auxiliary freshness helpers (still used elsewhere if needed) ---
 
-def _age_days_from_iso(dt_iso: Optional[str]) -> Optional[float]:
-    if not dt_iso:
-        return None
-    try:
-        dt = datetime.fromisoformat(dt_iso.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        return max(0.0, (now - dt).total_seconds() / 86400.0)
-    except Exception:
-        return None
+# ============================================================================
+# Header Selection for Different Site Types
+# ============================================================================
 
-def _infer_time_sensitivity(objective: Optional[str], queries: List[str]) -> bool:
-    text = " ".join([objective or ""] + queries).lower()
-    keywords = [
-        "latest", "today", "yesterday", "this week", "this month", "breaking",
-        "recent", "now", "current", "update", "updated"
-    ]
-    if any(k in text for k in keywords):
-        return True
-    # any explicit year in queries/objective equals current year or near?
-    year_matches = re.findall(r"\b(20\d{2})\b", text)
-    try:
-        now_year = datetime.now(timezone.utc).year
-        if any(int(y) >= now_year - 1 for y in year_matches):
+class HeaderSelector:
+    """
+    Chooses appropriate HTTP headers based on URL patterns.
+
+    Bot headers (Googlebot): For bot-friendly sites like Discourse forums
+    Browser headers: For sites that might block bots
+    """
+
+    # Bot-friendly headers (for Discourse, documentation sites)
+    BOT_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+    }
+
+    # Regular browser headers (for sites that block bots)
+    BROWSER_HEADERS = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        'Sec-Ch-Ua': '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+    }
+
+    @classmethod
+    def should_use_bot_headers(cls, url: str) -> bool:
+        """
+        Determine if we should use bot headers for this URL.
+
+        Bot headers work better for:
+        - Discourse forums (they serve crawler-friendly HTML)
+        - Community/documentation sites
+        - Forums and discussion platforms
+
+        Returns:
+            True if bot headers should be used, False for browser headers
+        """
+        domain = urlparse(url).netloc.lower()
+        path = urlparse(url).path.lower()
+
+        # Discourse forums - these WANT to be crawled
+        if 'discourse' in domain:
             return True
-    except Exception:
-        pass
-    return False
+
+        # Common Discourse-powered sites
+        discourse_sites = [
+            'community.openai.com',
+            'discuss.pytorch.org',
+            'community.fly.io',
+            'forum.cursor.com',
+            'meta.discourse.org',
+            'discuss.elastic.co',
+        ]
+        if any(site in domain for site in discourse_sites):
+            return True
+
+        # Other forum indicators (be conservative - only if clearly a forum)
+        if any(indicator in domain for indicator in ['forum.', 'discuss.', 'community.']):
+            return True
+
+        # Documentation sites that are bot-friendly
+        if any(indicator in domain or indicator in path
+               for indicator in ['/docs/', '/documentation/']):
+            # Only for known bot-friendly doc platforms
+            if any(platform in domain for platform in ['github.com', 'gitlab.com', 'readthedocs']):
+                return True
+
+        # Default to browser headers (safer - avoids 403s)
+        return False
+
+    @classmethod
+    def get_headers(cls, url: str) -> Dict[str, str]:
+        """Get appropriate headers for the URL."""
+        if cls.should_use_bot_headers(url):
+            logger.debug(f"Using bot headers for: {url}")
+            return cls.BOT_HEADERS.copy()
+        else:
+            logger.debug(f"Using browser headers for: {url}")
+            return cls.BROWSER_HEADERS.copy()
+
 
 # ============================================================================
 # Source-Specific Cookie Manager
@@ -76,7 +160,7 @@ class SourceCookieManager:
     WEB_FETCH_RESOURCES_<SOURCE>='{"cookies": {"cookie_name": "cookie_value", ...}}'
 
     Example:
-    WEB_FETCH_RESOURCES_MEDIUM='{"cookies": {"uid": "abc123", "sid": "xyz789"}}'
+        WEB_FETCH_RESOURCES_MEDIUM='{"cookies": {"uid": "abc123", "sid": "xyz789"}}'
     """
 
     _cookie_cache: Dict[str, Dict[str, str]] = {}
@@ -93,7 +177,7 @@ class SourceCookieManager:
         # Map of source identifiers to environment variable suffixes
         source_mappings = {
             'medium.com': 'MEDIUM',
-            'towardsdatascience.com': 'MEDIUM',  # Uses same Medium cookies
+            'towardsdatascience.com': 'MEDIUM',
             'nytimes.com': 'NYT',
             'wsj.com': 'WSJ',
             # Add more sources as needed
@@ -110,7 +194,7 @@ class SourceCookieManager:
 
                     if cookies:
                         cls._cookie_cache[domain] = cookies
-                        logger.info(f"✓ Loaded cookies for {domain} from {env_var}")
+                        logger.info(f"✓ Loaded cookies for {domain}")
                         logger.debug(f"  Cookie keys: {list(cookies.keys())}")
                     else:
                         logger.warning(f"⚠ {env_var} exists but has no cookies")
@@ -122,12 +206,10 @@ class SourceCookieManager:
 
     @classmethod
     def get_cookies_for_url(cls, url: str) -> Optional[Dict[str, str]]:
-        """
-        Get cookies for a specific URL if available.
-        """
+        """Get cookies for a specific URL if available."""
         cls._load_cookies()
-
         url_lower = url.lower()
+
         for domain, cookies in cls._cookie_cache.items():
             if domain in url_lower:
                 logger.debug(f"Using cookies for {domain}: {list(cookies.keys())}")
@@ -140,527 +222,6 @@ class SourceCookieManager:
         """Check if cookies are available for this URL."""
         return cls.get_cookies_for_url(url) is not None
 
-# ============================================================================
-# Web Content Fetcher
-# ============================================================================
-
-class WebContentFetcher:
-    """
-    Minimal content fetcher that can be integrated into existing web_search function.
-    Supports source-specific authentication via cookies.
-    """
-
-    def __init__(
-            self,
-            timeout: int = 15,
-            max_concurrent: int = 5,
-            enable_archive: bool = False
-    ):
-        self.timeout = timeout
-        self.max_concurrent = max_concurrent
-        self.enable_archive = enable_archive
-        self.session: Optional[aiohttp.ClientSession] = None
-
-    async def __aenter__(self):
-        """Create aiohttp session."""
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        self.session = aiohttp.ClientSession(timeout=timeout)
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Close aiohttp session."""
-        if self.session:
-            await self.session.close()
-
-    async def fetch_multiple(
-            self,
-            urls: list[str],
-            max_length: int = 15000
-    ) -> list[Dict[str, Any]]:
-        """
-        Fetch content for multiple URLs with concurrency control.
-
-        Returns:
-            List of {url, content, status, content_length, error?}
-        """
-        semaphore = asyncio.Semaphore(self.max_concurrent)
-
-        async def fetch_with_semaphore(url: str):
-            async with semaphore:
-                return await self.fetch_single(url, max_length)
-
-        tasks = [fetch_with_semaphore(url) for url in urls]
-        return await asyncio.gather(*tasks, return_exceptions=True)
-
-    async def _fetch_sitemap_date(self, url: str) -> Optional[str]:
-        """
-        Try to find the page's lastmod date in sitemap.xml.
-
-        Returns ISO datetime string or None (string from <lastmod>, *not* parsed).
-        """
-        try:
-            from urllib.parse import urlparse
-
-            parsed = urlparse(url)
-            base_url = f"{parsed.scheme}://{parsed.netloc}"
-
-            sitemap_urls = [
-                f"{base_url}/sitemap.xml",
-                f"{base_url}/sitemap_index.xml",
-                f"{base_url}/sitemap-index.xml",
-            ]
-
-            for sitemap_url in sitemap_urls:
-                try:
-                    async with self.session.get(sitemap_url, timeout=5) as response:
-                        if response.status != 200:
-                            continue
-
-                        xml_text = await response.text()
-                        soup = BeautifulSoup(xml_text, "lxml-xml")  # Use XML parser
-
-                        for url_elem in soup.find_all("url"):
-                            loc = url_elem.find("loc")
-                            lastmod = url_elem.find("lastmod")
-                            if loc and lastmod:
-                                if loc.get_text(strip=True) == url:
-                                    return lastmod.get_text(strip=True)
-
-                except Exception as e:
-                    logger.debug(f"Sitemap check failed for {sitemap_url}: {e}")
-                    continue
-
-            return None
-
-        except Exception as e:
-            logger.debug(f"Sitemap date extraction failed: {e}")
-            return None
-
-    async def _get_archive_dates(self, url: str) -> Dict[str, Optional[str]]:
-        """
-        Query Archive.org's Availability API for first/last snapshot dates.
-
-        Returns dict with 'archive_snapshot_date' and 'archive_url', or {}.
-        Useful for pages without explicit dates; timestamp is when Wayback
-        captured the page (NOT publish date).
-        """
-        try:
-            api_url = f"https://archive.org/wayback/available?url={url}"
-
-            async with self.session.get(api_url, timeout=5) as response:
-                if response.status != 200:
-                    return {}
-
-                data = await response.json()
-
-                archived = data.get("archived_snapshots", {})
-                closest = archived.get("closest", {})
-
-                if closest.get("available"):
-                    timestamp_str = closest.get("timestamp", "")
-                    if len(timestamp_str) >= 8:
-                        # "20240115120000" -> "2024-01-15T12:00:00Z"
-                        year = timestamp_str[0:4]
-                        month = timestamp_str[4:6]
-                        day = timestamp_str[6:8]
-                        hour = timestamp_str[8:10] if len(timestamp_str) >= 10 else "00"
-                        minute = timestamp_str[10:12] if len(timestamp_str) >= 12 else "00"
-                        second = timestamp_str[12:14] if len(timestamp_str) >= 14 else "00"
-
-                        iso_date = f"{year}-{month}-{day}T{hour}:{minute}:{second}Z"
-
-                        return {
-                            "archive_snapshot_date": iso_date,
-                            "archive_url": closest.get("url"),
-                        }
-
-                return {}
-
-        except Exception as e:
-            logger.debug(f"Archive.org date check failed for {url}: {e}")
-            return {}
-
-    async def _infer_dates_from_html(
-        self,
-        html: str,
-        url: str,
-        last_modified_header: Optional[str],
-    ) -> Dict[str, Any]:
-        """
-        Use the shared extract_publication_dates_core + optional sitemap/Wayback.
-
-        Strategy:
-        - First run core with only HTML + HTTP Last-Modified (cheap).
-        - If no published/modified found, optionally enrich with sitemap + archive
-          and run core again with those signals.
-        - Archive snapshot is always exposed as archive_snapshot_date/url.
-        """
-        try:
-            soup = BeautifulSoup(html or "", "lxml")
-        except Exception:
-            soup = None
-
-        # First pass: only HTML + HTTP Last-Modified
-        meta = extract_publication_dates_core(
-            soup=soup,
-            url=url,
-            last_modified_header=last_modified_header,
-        )
-
-        have_date = meta.get("published_time_iso") or meta.get("modified_time_iso")
-        sitemap_date: Optional[str] = None
-        archive_info: Dict[str, Optional[str]] = {}
-
-        # Only pay network cost for sitemap/Wayback if we still have nothing.
-        if not have_date:
-            try:
-                sitemap_date = await self._fetch_sitemap_date(url)
-            except Exception as e:
-                logger.debug(f"Sitemap fetch failed for {url}: {e}")
-
-            if self.enable_archive:
-                try:
-                    archive_info = await self._get_archive_dates(url)
-                except Exception as e:
-                    logger.debug(f"Archive fetch failed for {url}: {e}")
-                    archive_info = {}
-
-            meta = extract_publication_dates_core(
-                soup=soup,
-                url=url,
-                last_modified_header=last_modified_header,
-                sitemap_lastmod=sitemap_date,
-                archive_snapshot_date=archive_info.get("archive_snapshot_date"),
-                archive_snapshot_url=archive_info.get("archive_url"),
-            )
-        else:
-            # We already have a real date. Optionally just attach archive info
-            # as a "seen alive" hint, without using it as publish/modified.
-            if self.enable_archive:
-                try:
-                    archive_info = await self._get_archive_dates(url)
-                    if archive_info.get("archive_snapshot_date"):
-                        meta["archive_snapshot_date"] = archive_info["archive_snapshot_date"]
-                        meta["archive_snapshot_url"] = archive_info.get("archive_url")
-                except Exception as e:
-                    logger.debug(f"Archive fetch (enrich) failed for {url}: {e}")
-
-        return meta
-
-    async def fetch_single(self, url: str, max_length: int = 15000) -> Dict[str, Any]:
-        """
-        Fetch and extract content from a single URL.
-
-        Returns:
-            Dict with keys: url, content, status, content_length,
-            published_time_iso/published_time_raw,
-            modified_time_iso/modified_time_raw,
-            archive_snapshot_date/archive_snapshot_url,
-            date_method/date_confidence, error?
-        """
-        result: Dict[str, Any] = {
-            "url": url,
-            "content": "",
-            "status": "failed",
-            "content_length": 0,
-            "published_time_raw": None,
-            "published_time_iso": None,
-            "modified_time_raw": None,
-            "modified_time_iso": None,
-            "archive_snapshot_date": None,
-            "archive_snapshot_url": None,
-            "date_method": None,
-            "date_confidence": 0.0,
-        }
-
-        try:
-            content, status, meta = await self._fetch_direct(url)
-            logger.debug(
-                f"Direct fetch for {url}: status={status}, "
-                f"len={len(content)}, pub={meta.get('published_time_iso') if meta else None}"
-            )
-
-            if content:
-                result["content"] = self._truncate(content, max_length)
-                result["content_length"] = len(result["content"])
-                result["status"] = status
-                result.update(meta or {})
-
-                # Final safety: strip surrogates from all string fields
-                for k, v in list(result.items()):
-                    if isinstance(v, str):
-                        result[k] = text_utils.strip_surrogates(v)
-                for k, v in result.items():
-                    if isinstance(v, str) and text_utils.has_surrogates(v):
-                        logger.error("Surrogates survived in %s for %s", k, url)
-
-                logger.info(
-                    f"Fetched {url}: {result['content_length']} chars, "
-                    f"pub={result.get('published_time_iso')}, "
-                    f"mod={result.get('modified_time_iso')}, "
-                    f"method={result.get('date_method')}"
-                )
-                return result
-
-            # Archive fallback for failed fetches
-            if self.enable_archive and status in [
-                "paywall", "error", "insufficient_content",
-                "blocked_403", "session_expired"
-            ]:
-                logger.info(f"Trying archive fallback for: {url} (reason: {status})")
-                content, meta = await self._fetch_archive(url)
-                if content:
-                    result["content"] = self._truncate(content, max_length)
-                    result["content_length"] = len(result["content"])
-                    result["status"] = "archive"
-                    result.update(meta or {})
-
-                    for k, v in list(result.items()):
-                        if isinstance(v, str):
-                            result[k] = text_utils.strip_surrogates(v)
-                    logger.info(
-                        f"Archive fetch succeeded for {url}: {result['content_length']} chars, "
-                        f"pub={result.get('published_time_iso')}"
-                    )
-                    return result
-                else:
-                    logger.warning(f"Archive fetch also failed for {url}")
-
-            result["status"] = status
-            result["error"] = f"Fetch failed: {status}"
-            logger.warning(f"Failed to fetch {url}: {status}")
-
-        except Exception as e:
-            logger.exception(f"Error fetching {url}")
-            result["error"] = str(e)
-
-        return result
-
-    async def _fetch_direct(self, url: str, retry: bool = True) -> tuple[str, str, Dict[str, Any]]:
-        try:
-            if 'arxiv.org/abs/' in url:
-                logger.info(f"ArXiv PDF detected: {url}")
-                return "", "pdf_redirect", {}
-
-            user_agent = (
-                'Test-Research-Bot/1.0 (Web content indexing for research; support@example.com)'
-                if retry else
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            )
-
-            headers = {
-                'User-Agent': user_agent,
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'DNT': '1',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0',
-            }
-
-            cookies = SourceCookieManager.get_cookies_for_url(url)
-            if cookies:
-                logger.debug(f"Using authenticated cookies for {url}")
-
-            async with self.session.get(
-                url,
-                headers=headers,
-                allow_redirects=True,
-                cookies=cookies
-            ) as response:
-                # expired/invalid session?
-                if response.status == 401:
-                    if cookies:
-                        logger.warning(f"Got 401 for {url} - session may be expired")
-                        return "", "session_expired", {}
-                    return "", "paywall", {}
-
-                final_url = str(response.url)
-                if cookies and any(ind in final_url.lower() for ind in ['/signin', '/login', '/auth']):
-                    logger.warning(f"Redirected to login page for {url} - session expired")
-                    return "", "session_expired", {}
-
-                if response.status == 403:
-                    if retry:
-                        logger.info(f"Got 403 for {url} with bot ID, retrying with standard headers")
-                        await asyncio.sleep(1)
-                        return await self._fetch_direct(url, retry=False)
-                    else:
-                        logger.warning(f"Got 403 for {url} even with standard headers - site blocks bots")
-                        return "", "blocked_403", {}
-
-                if response.status != 200:
-                    return "", f"http_{response.status}", {}
-
-                content_type = (response.headers.get('Content-Type') or '').lower()
-                if 'text/html' not in content_type and 'text/plain' not in content_type:
-                    return "", "non_html", {}
-
-                html = await response.text()
-
-                extractor = SiteSpecificExtractors.get_extractor(url)
-                if extractor:
-                    try:
-                        extracted_text = extractor(html) or ""
-                        extracted_text = text_utils.strip_surrogates(extracted_text)
-                        if extracted_text.strip():
-                            meta = await self._infer_dates_from_html(
-                                html,
-                                url,
-                                response.headers.get("Last-Modified"),
-                            )
-                            logger.info(f"Site-specific extractor succeeded for: {url}")
-                            return extracted_text, "success", meta
-                        logger.debug(f"Site-specific extractor returned empty for: {url}")
-                    except Exception as e:
-                        logger.warning(f"Site-specific extractor failed for {url}: {e}")
-
-                # Check paywalls first
-                if self._is_paywalled(html, url):
-                    return "", "paywall", {}
-
-                title = html_title(html)
-                try:
-                    clean_fragment = make_clean_content_html(
-                        post_url=url,
-                        raw_html=html,
-                        title=title or "",
-                    )
-                    markdown = html_fragment_to_markdown(clean_fragment)
-                except Exception:
-                    markdown = ""
-                text = self._extract_text(html)
-                chosen = markdown if len(markdown) >= 200 else text
-                chosen = text_utils.strip_surrogates(chosen)
-                if len((chosen or "").strip()) < 100:
-                    logger.warning(f"Extracted content too short ({len(chosen)}) for {url}")
-                    return "", "insufficient_content", {}
-
-                meta = await self._infer_dates_from_html(
-                    html,
-                    url,
-                    response.headers.get("Last-Modified"),
-                )
-                return chosen, "success", meta
-
-        except asyncio.TimeoutError:
-            return "", "timeout", {}
-        except Exception as e:
-            logger.warning(f"Direct fetch failed for {url}: {e}")
-            return "", "error", {}
-
-    async def _fetch_archive(self, url: str) -> tuple[str, Dict[str, Any]]:
-        """
-        Try to fetch content via the Wayback Machine.
-        """
-        archives = [f"https://web.archive.org/web/{url}"]
-        for archive_url in archives:
-            try:
-                content, status, meta = await self._fetch_direct(archive_url)
-                if content and status == "success":
-                    logger.info(f"Archive fetch succeeded: {archive_url}")
-                    if not meta.get("date_method"):
-                        meta["date_method"] = "archive"
-                    return content, meta
-            except Exception as e:
-                logger.debug(f"Archive fetch failed for {archive_url}: {e}")
-                continue
-        return "", {}
-
-    @staticmethod
-    def _is_paywalled(html: str, url: str) -> bool:
-        """Detect common paywall indicators."""
-        html_lower = html.lower()
-
-        indicators = [
-            'paywall',
-            'subscriber-only',
-            'subscription required',
-            'register to read',
-            'sign in to continue',
-            'member exclusive',
-            'premium content',
-        ]
-
-        if 'medium.com' in url and 'metered-paywall' in html_lower:
-            return True
-
-        return any(ind in html_lower for ind in indicators)
-
-    @staticmethod
-    def _extract_text(html: str) -> str:
-        """Extract clean text from HTML."""
-        try:
-            soup = BeautifulSoup(html, 'lxml')
-
-            for element in soup(['script', 'style', 'iframe', 'noscript']):
-                element.decompose()
-
-            main = soup.find('main') or soup.find('article')
-
-            if not main or len(main.get_text(strip=True)) < 200:
-                content_candidates = soup.find_all(
-                    'div',
-                    class_=lambda x: x and any(
-                        keyword in str(x).lower()
-                        for keyword in ['content', 'article', 'post', 'entry', 'body', 'main', 'text']
-                    ),
-                )
-                if content_candidates:
-                    main = max(content_candidates, key=lambda x: len(x.get_text(strip=True)))
-
-            if not main or len(main.get_text(strip=True)) < 200:
-                main = soup.find(attrs={'role': 'main'})
-
-            if not main or len(main.get_text(strip=True)) < 200:
-                main = soup.body
-                if main:
-                    for unwanted in main.find_all(['nav', 'footer', 'aside', 'header']):
-                        unwanted.decompose()
-
-            if main:
-                text = main.get_text(separator='\n', strip=True)
-            else:
-                text = soup.get_text(separator='\n', strip=True)
-
-            lines = []
-            for line in text.split('\n'):
-                line = line.strip()
-                if line and len(line) > 2:
-                    lines.append(line)
-
-            result = '\n'.join(lines)
-            result = text_utils.strip_surrogates(result)
-
-            logger.debug(f"Extracted {len(result)} chars of text after surrogate stripping")
-            return result
-
-        except Exception as e:
-            logger.warning(f"HTML parsing failed: {e}")
-            return ""
-
-    @staticmethod
-    def _truncate(content: str, max_length: int) -> str:
-        """Truncate content intelligently."""
-        content = text_utils.strip_surrogates(content)
-        if max_length <= 0 or len(content) <= max_length:
-            return content
-
-        truncated = content[:max_length]
-
-        # Find last sentence boundary
-        for char in ['.', '\n', '!', '?']:
-            pos = truncated.rfind(char)
-            if pos > max_length * 0.8:
-                return truncated[:pos + 1] + "\n\n[... truncated ...]"
-
-        return truncated + "\n\n[... truncated ...]"
-
 
 # ============================================================================
 # Site-Specific Extractors
@@ -668,89 +229,75 @@ class WebContentFetcher:
 
 class SiteSpecificExtractors:
     """
-    Specialized extractors for common sites with paywalls or special formatting.
-    All extractors return plain/markdown text or "" on failure.
+    Specialized extractors for sites with paywalls, special formatting, or
+    content that trafilatura doesn't handle well.
+
+    Each extractor returns markdown-formatted text with images, or empty string on failure.
     """
 
-    @staticmethod
-    def extract_medium(html: str) -> str:
-        """Enhanced Medium extraction with markdown formatting."""
+    def extract_medium(self, html: str) -> str:
+        """
+        Extract Medium content with full markdown formatting and images.
+        Handles Apollo State, Next.js data, and direct HTML parsing.
+        """
         try:
             soup = BeautifulSoup(html, 'lxml')
 
-            # Strategy 0: Check for paywall redirect
+            # Check for paywall redirect
             if soup.find('input', attrs={'name': 'signInRedirect'}):
-                logger.warning("Detected sign-in page - session expired")
+                logger.warning("Medium: session expired")
                 return ""
 
-            # Strategy 1: JSON-LD with markdown conversion
-            for script in soup.find_all('script', type='application/ld+json'):
-                try:
-                    data = json.loads(script.string)
-                    if 'articleBody' in data:
-                        logger.debug("Found Medium article in JSON-LD articleBody (plain text)")
-                        # Fall through to try other methods for better formatting
-                    if isinstance(data, dict) and '@graph' in data:
-                        for item in data['@graph']:
-                            if isinstance(item, dict) and 'articleBody' in item:
-                                logger.debug("Found Medium article in JSON-LD @graph (plain text)")
-                                # Fall through to try other methods
-                except:
-                    continue
+            # Helper functions for image handling
+            def _best_srcset_value(srcset: str) -> str:
+                """Choose the largest image from srcset."""
+                parts = [p.strip() for p in (srcset or "").split(",") if p.strip()]
+                if not parts:
+                    return ""
+                return parts[-1].split()[0]  # "<url> <width>w"
 
-                def _best_srcset_value(srcset: str) -> str:
-                    # choose the last candidate (usually largest width)
-                    parts = [p.strip() for p in (srcset or "").split(",") if p.strip()]
-                    if not parts:
-                        return ""
-                    return parts[-1].split()[0]  # "<url> <w>"
-
-                def _best_src_from_picture(pic_tag):
-                    # look at all <source> children; prefer the last srcset (largest)
-                    best = ""
-                    for src in pic_tag.find_all("source"):
-                        # BeautifulSoup lowercases attribute names, so srcset works even if HTML has srcSet
-                        s = src.get("srcset") or src.get("srcSet") or ""
-                        cand = _best_srcset_value(s)
-                        if cand:
-                            best = cand
-                    # sometimes an <img> is still present as a fallback
-                    if not best:
-                        img = pic_tag.find("img")
-                        if img:
-                            best = _best_src_from_img_tag(img)
-                    return best
+            def _best_src_from_picture(pic_tag):
+                """Extract best image URL from <picture> tag."""
+                best = ""
+                for src in pic_tag.find_all("source"):
+                    s = src.get("srcset") or src.get("srcSet") or ""
+                    cand = _best_srcset_value(s)
+                    if cand:
+                        best = cand
+                if not best:
+                    img = pic_tag.find("img")
+                    if img:
+                        best = _best_src_from_img_tag(img)
+                return best
 
             def _best_src_from_img_tag(img):
-                # prefer src; fall back to data-src or the largest candidate in srcset
+                """Extract best image URL from <img> tag."""
                 src = img.get('src') or img.get('data-src') or ''
                 if not src:
                     srcset = img.get('srcset', '')
                     if srcset:
-                        # pick the last (usually largest)
                         parts = [p.strip() for p in srcset.split(',') if p.strip()]
                         if parts:
                             src = parts[-1].split()[0]
                 return src
 
             def _append_image(lines, src, alt=None, caption=None):
+                """Append image markdown to lines."""
                 if not src:
                     return
                 alt = (alt or caption or "").strip()
                 lines.append(f"![{alt}]({src})\n")
-                # print caption only if it's non-empty and different from alt
                 if caption:
                     cap = caption.strip()
                     if cap and cap != alt:
                         lines.append(f"*{cap}*\n")
 
             def _miro_url_from_id(image_id: str, max_width: int = 1400) -> str:
-                # Medium’s stable CDN format; image_id is something like '0*weAr9MNo0tbNpNMu'
-                # Using v2 + resize:fit yields a portable URL that doesn't need cookies.
+                """Build Medium CDN URL from image ID."""
                 return f"https://miro.medium.com/v2/resize:fit:{max_width}/{image_id}"
 
             def _image_url_from_apollo(apollo_state: dict, image_id: str) -> str:
-                # Try to resolve to originalUrl if present; else build from id
+                """Resolve image URL from Apollo State or build from ID."""
                 try:
                     for k, v in apollo_state.items():
                         if isinstance(v, dict) and v.get('id') == image_id:
@@ -761,33 +308,67 @@ class SiteSpecificExtractors:
                     pass
                 return _miro_url_from_id(image_id)
 
-            def paragraphs_to_markdown(paragraphs: List[Dict], apollo_state: Optional[dict] = None) -> str:
+            def _apply_markups(text: str, markups: list) -> str:
+                """Apply inline formatting markups (bold, italic, code, links) to text."""
+                if not markups:
+                    return text
+
+                sorted_markups = sorted(markups, key=lambda m: m.get('start', 0), reverse=True)
+
+                for markup in sorted_markups:
+                    m_type = markup.get('type')
+                    start = markup.get('start', 0)
+                    end = markup.get('end', len(text))
+
+                    if start >= end or end > len(text):
+                        continue
+
+                    segment = text[start:end]
+
+                    if m_type == 'STRONG':
+                        replacement = f"**{segment}**"
+                    elif m_type == 'EM':
+                        replacement = f"*{segment}*"
+                    elif m_type == 'CODE':
+                        replacement = f"`{segment}`"
+                    elif m_type == 'A':
+                        href = markup.get('href', '#')
+                        replacement = f"[{segment}]({href})"
+                    else:
+                        replacement = segment
+
+                    text = text[:start] + replacement + text[end:]
+
+                return text
+
+            def paragraphs_to_markdown(paragraphs: list, apollo_state: Optional[dict] = None) -> str:
+                """Convert Medium paragraphs structure to markdown with images."""
                 lines = []
                 for para in paragraphs:
                     if not isinstance(para, dict):
                         continue
+
                     p_type = para.get('type', 'P')
                     text = para.get('text', '') or ''
                     markups = para.get('markups', []) or []
 
+                    # Handle images
                     if p_type in ('IMG', 'Image', 'FIGURE'):
                         meta = para.get('metadata', {}) or {}
                         image_id = meta.get('id') or meta.get('imageId') or ''
-                        src = _image_url_from_apollo(apollo_state or {}, image_id) if image_id else (para.get('href', '') or '')
+                        src = (_image_url_from_apollo(apollo_state or {}, image_id)
+                               if image_id else (para.get('href', '') or ''))
                         caption = (para.get('caption') or meta.get('caption') or '').strip()
-                        alt = (
-                                meta.get('alt')
-                                or meta.get('title')
-                                or para.get('text')              # sometimes carries a label
-                                or caption
-                        )
+                        alt = (meta.get('alt') or meta.get('title') or
+                               para.get('text') or caption)
                         _append_image(lines, src, alt, caption)
                         continue
 
-                    # existing inline formatting for non-image paragraphs
+                    # Apply inline formatting
                     if markups:
                         text = _apply_markups(text, markups)
 
+                    # Format by paragraph type
                     if p_type == 'H2':
                         lines.append(f"## {text}\n")
                     elif p_type == 'H3':
@@ -804,67 +385,36 @@ class SiteSpecificExtractors:
                         lines.append(f"* {text}")
                     else:
                         lines.append(f"{text}\n")
+
                 return '\n'.join(lines)
 
-            def _apply_markups(text: str, markups: List[Dict]) -> str:
-                """Apply inline formatting markups to text."""
-                if not markups:
-                    return text
-
-                # Sort markups by start position (reverse order for replacement)
-                sorted_markups = sorted(markups, key=lambda m: m.get('start', 0), reverse=True)
-
-                for markup in sorted_markups:
-                    m_type = markup.get('type')
-                    start = markup.get('start', 0)
-                    end = markup.get('end', len(text))
-
-                    if start >= end or end > len(text):
-                        continue
-
-                    segment = text[start:end]
-
-                    if m_type == 'STRONG' or m_type == 'EM':
-                        # Bold
-                        replacement = f"**{segment}**"
-                    elif m_type == 'EM':
-                        # Italic
-                        replacement = f"*{segment}*"
-                    elif m_type == 'CODE':
-                        # Inline code
-                        replacement = f"`{segment}`"
-                    elif m_type == 'A':
-                        # Link
-                        href = markup.get('href', '#')
-                        replacement = f"[{segment}]({href})"
-                    else:
-                        # Unknown markup, keep as-is
-                        replacement = segment
-
-                    text = text[:start] + replacement + text[end:]
-
-                return text
-
-            # Strategy 2: Apollo State with markdown conversion
+            # Strategy 1: Apollo State (best for structured content with images)
             for script in soup.find_all('script'):
                 script_text = script.string or ""
                 if 'window.__APOLLO_STATE__' in script_text:
                     try:
-                        match = re.search(r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});', script_text, re.DOTALL)
+                        match = re.search(
+                            r'window\.__APOLLO_STATE__\s*=\s*(\{.+?\});',
+                            script_text,
+                            re.DOTALL
+                        )
                         if match:
                             apollo_state = json.loads(match.group(1))
                             for key, value in apollo_state.items():
                                 if isinstance(value, dict) and 'content' in value:
                                     body_model = value.get('content', {}).get('bodyModel', {})
                                     if isinstance(body_model, dict) and 'paragraphs' in body_model:
-                                        md = paragraphs_to_markdown(body_model['paragraphs'], apollo_state)
+                                        md = paragraphs_to_markdown(
+                                            body_model['paragraphs'],
+                                            apollo_state
+                                        )
                                         if md and len(md) > 500:
+                                            logger.debug("Medium: extracted via Apollo State")
                                             return md
                     except Exception as e:
                         logger.debug(f"Apollo state parsing failed: {e}")
-                        continue
 
-            # Strategy 3: Next.js data with markdown conversion
+            # Strategy 2: Next.js data
             for script in soup.find_all('script', id='__NEXT_DATA__'):
                 try:
                     data = json.loads(script.string or '{}')
@@ -874,28 +424,36 @@ class SiteSpecificExtractors:
                         if isinstance(item, dict):
                             body = item.get('content', {}).get('bodyModel', {})
                             if isinstance(body, dict) and 'paragraphs' in body:
-                                md = paragraphs_to_markdown(body['paragraphs'], props.get('apolloState') or {})
+                                md = paragraphs_to_markdown(
+                                    body['paragraphs'],
+                                    props.get('apolloState') or {}
+                                )
                                 if md and len(md) > 500:
+                                    logger.debug("Medium: extracted via Next.js data")
                                     return md
                 except Exception as e:
                     logger.debug(f"Next.js data parsing failed: {e}")
-                    continue
 
-            # Strategy 4: Direct HTML parsing with markdown conversion
+            # Strategy 3: Direct HTML parsing with images
             article = soup.find('article')
             if article:
                 markdown_lines = []
-                image_found = False  # track if we captured any image
+                image_found = False
 
-                for element in article.find_all(['h1','h2','h3','h4','p','pre','blockquote','ul','ol','figure','img','picture']):
+                for element in article.find_all([
+                    'h1', 'h2', 'h3', 'h4', 'p', 'pre', 'blockquote',
+                    'ul', 'ol', 'figure', 'img', 'picture'
+                ]):
+                    # Handle images
                     if element.name == 'picture':
                         src = _best_src_from_picture(element)
-                        # look up a caption from a wrapping figure if present
                         cap_el = element.find_parent('figure')
-                        caption = (cap_el.find('figcaption').get_text(strip=True) if cap_el and cap_el.find('figcaption') else None)
-                        # try to find alt from a descendant img or attributes
+                        caption = (cap_el.find('figcaption').get_text(strip=True)
+                                   if cap_el and cap_el.find('figcaption') else None)
                         img = element.find('img')
-                        alt = (img.get('alt') if img else None) or element.get('aria-label') or element.get('title') or caption
+                        alt = ((img.get('alt') if img else None) or
+                               element.get('aria-label') or
+                               element.get('title') or caption)
                         if src:
                             _append_image(markdown_lines, src, alt, caption)
                             image_found = True
@@ -912,20 +470,22 @@ class SiteSpecificExtractors:
                             alt_attr = img.get('alt') if img else None
                         cap_el = element.find('figcaption')
                         caption = cap_el.get_text(strip=True) if cap_el else None
-                        alt = alt_attr or element.get('aria-label') or element.get('title') or caption
+                        alt = (alt_attr or element.get('aria-label') or
+                               element.get('title') or caption)
                         if src:
                             _append_image(markdown_lines, src, alt, caption)
                             image_found = True
 
                     elif element.name == 'img':
                         src = _best_src_from_img_tag(element)
-                        alt = element.get('alt') or element.get('aria-label') or element.get('title')
+                        alt = (element.get('alt') or element.get('aria-label') or
+                               element.get('title'))
                         if src:
                             _append_image(markdown_lines, src, alt)
                             image_found = True
 
-                    # ... keep your existing heading/para/list handling exactly as-is ...
-                    if element.name == 'h1':
+                    # Handle text content
+                    elif element.name == 'h1':
                         markdown_lines.append(f"# {element.get_text(strip=True)}\n")
                     elif element.name == 'h2':
                         markdown_lines.append(f"## {element.get_text(strip=True)}\n")
@@ -940,7 +500,7 @@ class SiteSpecificExtractors:
                         quote_text = element.get_text(strip=True)
                         markdown_lines.append(f"> {quote_text}\n")
                     elif element.name == 'p':
-                        # your inline formatting block ... unchanged
+                        # Apply inline formatting
                         p_html = str(element)
                         p_soup = BeautifulSoup(p_html, 'lxml')
                         for strong in p_soup.find_all(['strong', 'b']):
@@ -966,69 +526,62 @@ class SiteSpecificExtractors:
 
                 markdown = '\n'.join(markdown_lines)
 
-                # Fallback cover image (og:image) if we saw no inline article images
+                # Fallback: add cover image if no inline images found
                 if not image_found:
-                    og = soup.find('meta', attrs={'property':'og:image'})
+                    og = soup.find('meta', attrs={'property': 'og:image'})
                     if og and og.get('content'):
                         cover = og['content'].strip()
                         if cover:
                             markdown = f"![cover]({cover})\n\n" + markdown
 
                 if len(markdown) > 500:
-                    logger.debug("Found Medium article in <article> tag (with images)")
+                    logger.debug("Medium: extracted via article tag")
                     return markdown
 
-            logger.debug("No Medium article content found with any strategy")
+            logger.debug("Medium: no content found with any strategy")
             return ""
 
         except Exception as e:
-            logger.warning(f"Medium extractor failed: {e}")
+            logger.warning(f"Medium extraction failed: {e}")
             return ""
 
-    @staticmethod
-    def extract_github(html: str) -> str:
-        """
-        Extract README or main content from GitHub.
-        """
+    def extract_github(self, html: str) -> str:
+        """Extract README or main content from GitHub."""
         try:
             soup = BeautifulSoup(html, 'lxml')
 
             # Find README content (newer GitHub layout)
             readme = soup.find('article', class_='markdown-body')
             if readme:
-                logger.debug("Found GitHub README in article.markdown-body")
+                logger.debug("GitHub: found README in article.markdown-body")
                 text = readme.get_text(separator='\n', strip=True)
                 return text_utils.strip_surrogates(text)
 
             # Try alternative selectors
             readme = soup.find('div', {'id': 'readme'})
             if readme:
-                logger.debug("Found GitHub README in div#readme")
+                logger.debug("GitHub: found README in div#readme")
                 text = readme.get_text(separator='\n', strip=True)
                 return text_utils.strip_surrogates(text)
 
             # Look for any markdown-body class
             markdown = soup.find(class_='markdown-body')
             if markdown:
-                logger.debug("Found GitHub markdown-body")
+                logger.debug("GitHub: found markdown-body")
                 text = markdown.get_text(separator='\n', strip=True)
                 return text_utils.strip_surrogates(text)
 
-            logger.debug("No GitHub README found")
+            logger.debug("GitHub: no README found")
             return ""
 
         except Exception as e:
-            logger.warning(f"GitHub extractor failed: {e}")
+            logger.warning(f"GitHub extraction failed: {e}")
             return ""
 
-    @staticmethod
-    def extract_stackoverflow(html: str) -> str:
-        """
-        Extract question and answers from StackOverflow.
-        """
+    def extract_stackoverflow(self, html: str) -> str:
+        """Extract question and answers from StackOverflow."""
         try:
             soup = BeautifulSoup(html, 'lxml')
-
             parts = []
 
             # Get the question
@@ -1053,17 +606,16 @@ class SiteSpecificExtractors:
 
             result = '\n'.join(parts)
             if result:
-                logger.debug("Extracted StackOverflow Q&A")
+                logger.debug("StackOverflow: extracted Q&A")
                 return result
 
             return ""
 
         except Exception as e:
-            logger.warning(f"StackOverflow extractor failed: {e}")
+            logger.warning(f"StackOverflow extraction failed: {e}")
             return ""
 
-    @staticmethod
-    def extract_wikipedia(html: str) -> str:
+    def extract_wikipedia(self, html: str) -> str:
         """
         Extract main content from Wikipedia, excluding navigation and references.
         """
@@ -1073,14 +625,17 @@ class SiteSpecificExtractors:
             # Find main content
             content = soup.find('div', {'id': 'mw-content-text'})
             if not content:
+                logger.debug("Wikipedia: no content div found")
                 return ""
 
+            # Remove unwanted elements
             for unwanted in content.find_all(
-                ['table', 'sup', 'div'],
-                class_=['infobox', 'navbox', 'reflist', 'reference']
+                    ['table', 'sup', 'div'],
+                    class_=['infobox', 'navbox', 'reflist', 'reference', 'metadata']
             ):
                 unwanted.decompose()
 
+            # Extract paragraphs
             paragraphs = content.find_all('p')
             text = '\n\n'.join(
                 p.get_text(strip=True)
@@ -1089,28 +644,21 @@ class SiteSpecificExtractors:
             )
 
             if text:
-                logger.debug("Extracted Wikipedia content")
+                logger.debug(f"Wikipedia: extracted {len(text)} chars")
                 return text
 
             return ""
 
         except Exception as e:
-            logger.warning(f"Wikipedia extractor failed: {e}")
+            logger.warning(f"Wikipedia extraction failed: {e}")
             return ""
 
-    @staticmethod
-    def extract_ibm_docs(html: str) -> str:
-        """
-        Extract content from IBM documentation sites.
-        IBM docs often have content in specific div structures.
-        """
+    def extract_ibm_docs(self, html: str) -> str:
+        """Extract content from IBM documentation sites."""
         try:
             soup = BeautifulSoup(html, 'lxml')
 
             # IBM docs often use these patterns
-            content = None
-
-            # Try common IBM docs selectors
             content = (
                     soup.find('div', class_='bx--content') or
                     soup.find('div', class_='ibm-content') or
@@ -1121,24 +669,27 @@ class SiteSpecificExtractors:
 
             if content:
                 # Remove navigation and sidebars
-                for unwanted in content.find_all(['nav', 'aside', 'div'], class_=lambda x: x and any(
-                        keyword in str(x).lower() for keyword in ['nav', 'sidebar', 'toc', 'breadcrumb']
-                )):
+                for unwanted in content.find_all(
+                        ['nav', 'aside', 'div'],
+                        class_=lambda x: x and any(
+                            keyword in str(x).lower()
+                            for keyword in ['nav', 'sidebar', 'toc', 'breadcrumb']
+                        )
+                ):
                     unwanted.decompose()
 
                 text = content.get_text(separator='\n', strip=True)
                 if text:
-                    logger.debug(f"Extracted {len(text)} chars from IBM docs")
+                    logger.debug(f"IBM Docs: extracted {len(text)} chars")
                     return text
 
             return ""
 
         except Exception as e:
-            logger.warning(f"IBM docs extractor failed: {e}")
+            logger.warning(f"IBM docs extraction failed: {e}")
             return ""
 
-    @classmethod
-    def get_extractor(cls, url: str):
+    def get_extractor(self, url: str):
         """
         Get appropriate extractor function for URL.
         Returns a callable that takes html and returns text, or None.
@@ -1146,15 +697,782 @@ class SiteSpecificExtractors:
         url_lower = url.lower()
 
         if 'medium.com' in url_lower or 'towardsdatascience.com' in url_lower:
-            return cls.extract_medium
+            return self.extract_medium
         elif 'github.com' in url_lower:
-            return cls.extract_github
+            return self.extract_github
         elif 'stackoverflow.com' in url_lower or 'stackexchange.com' in url_lower:
-            return cls.extract_stackoverflow
+            return self.extract_stackoverflow
         elif 'wikipedia.org' in url_lower:
-            return cls.extract_wikipedia
+            return self.extract_wikipedia
         elif 'ibm.com/docs' in url_lower or 'ibm.com/support' in url_lower:
-            return cls.extract_ibm_docs
+            return self.extract_ibm_docs
 
         # No specific extractor
         return None
+
+
+# ============================================================================
+# Content Extraction Strategy
+# ============================================================================
+
+class ContentExtractor:
+    """
+    Handles content extraction with smart fallback strategy:
+    1. Site-specific extractors (for known paywalled sites like Medium)
+    2. Custom extraction (HTML->markdown) [if mode="custom"]
+    3. Trafilatura fallback (if custom extraction fails or returns insufficient content)
+    4. BeautifulSoup fallback (generic)
+    """
+
+    ExtractionMethod = Literal["trafilatura", "custom", "custom_with_trafilatura_fallback", "site_specific", "fallback", "none"]
+
+    def __init__(self):
+        self.site_extractors = SiteSpecificExtractors()
+
+    async def extract(
+            self,
+            html: str,
+            url: str,
+            *,
+            prefer_markdown: bool = True,
+            fallback_to_text: bool = True,
+            extraction_mode: Literal["trafilatura", "custom"] = "trafilatura",
+    ) -> tuple[str, ExtractionMethod]:
+        """
+        Extract content using best available method with TRUE parallel extraction.
+
+        Args:
+            html: Raw HTML content
+            url: Source URL (used for site detection)
+            prefer_markdown: If True, request markdown output from extractors
+            fallback_to_text: If True, use BeautifulSoup fallback
+            extraction_mode: "trafilatura" or "custom" for generic site extraction
+                - "custom": Run both custom and trafilatura in TRUE parallel, pick best
+
+        Returns:
+            (content, method) where method indicates which extractor succeeded:
+            - "site_specific": Custom extractor (Medium, GitHub, etc.)
+            - "trafilatura": Trafilatura extraction
+            - "custom": Custom HTML->markdown extraction
+            - "custom_with_trafilatura_fallback": Custom insufficient, used trafilatura
+            - "fallback": BeautifulSoup fallback
+            - "none": All methods failed
+        """
+        if not html:
+            return "", "none"
+
+        # STEP 1: Try site-specific first (handles special cases like Medium)
+        site_extractor = self.site_extractors.get_extractor(url)
+        if site_extractor:
+            try:
+                content = site_extractor(html)
+                if content and len(content.strip()) >= 200:
+                    logger.debug(f"✓ Site-specific extractor succeeded: {url}")
+                    return text_utils.strip_surrogates(content), "site_specific"
+            except Exception as e:
+                logger.debug(f"Site-specific extraction failed for {url}: {e}")
+
+        # STEP 2: Generic extraction based on mode
+        if extraction_mode == "custom":
+            # Run BOTH custom and trafilatura in TRUE PARALLEL using asyncio.gather
+            async def run_custom():
+                try:
+                    # Run in thread pool since it's CPU-bound
+                    loop = asyncio.get_event_loop()
+                    return await loop.run_in_executor(None, self._extract_custom, html, url)
+                except Exception as e:
+                    logger.debug(f"Custom extraction failed for {url}: {e}")
+                    return ""
+
+            async def run_trafilatura():
+                if not TRAFILATURA_AVAILABLE:
+                    return ""
+                try:
+                    # Run in thread pool since it's CPU-bound
+                    loop = asyncio.get_event_loop()
+                    output_format = 'markdown' if prefer_markdown else 'txt'
+                    return await loop.run_in_executor(
+                        None,
+                        self._extract_trafilatura,
+                        html,
+                        url,
+                        output_format
+                    )
+                except Exception as e:
+                    logger.debug(f"Trafilatura extraction failed for {url}: {e}")
+                    return ""
+
+            # Run BOTH in parallel and wait for both to complete
+            custom_content, trafilatura_content = await asyncio.gather(
+                run_custom(),
+                run_trafilatura()
+            )
+
+            # Decision logic: prefer custom if it has sufficient content
+            custom_len = len(custom_content.strip()) if custom_content else 0
+            trafilatura_len = len(trafilatura_content.strip()) if trafilatura_content else 0
+
+            if custom_len >= 200:
+                logger.debug(f"✓ Custom extraction succeeded: {url} ({custom_len} chars)")
+                return custom_content, "custom"
+            elif trafilatura_len >= 200:
+                logger.info(f"✓ Using trafilatura (custom insufficient: {custom_len} chars, trafilatura: {trafilatura_len} chars)")
+                return trafilatura_content, "custom_with_trafilatura_fallback"
+            elif custom_len > 0:
+                # Custom got something, even if short
+                logger.debug(f"Using short custom content ({custom_len} chars)")
+                return custom_content, "custom"
+            elif trafilatura_len > 0:
+                logger.debug(f"Using short trafilatura content ({trafilatura_len} chars)")
+                return trafilatura_content, "custom_with_trafilatura_fallback"
+
+        elif extraction_mode == "trafilatura" and TRAFILATURA_AVAILABLE:
+            # Try trafilatura directly (best for general articles)
+            try:
+                loop = asyncio.get_event_loop()
+                output_format = 'markdown' if prefer_markdown else 'txt'
+                content = await loop.run_in_executor(
+                    None,
+                    self._extract_trafilatura,
+                    html,
+                    url,
+                    output_format
+                )
+                if content:
+                    logger.debug(f"✓ Trafilatura extraction succeeded: {url}")
+                    return content, "trafilatura"
+            except Exception as e:
+                logger.debug(f"Trafilatura extraction failed for {url}: {e}")
+
+        # STEP 3: Fallback to BeautifulSoup
+        if fallback_to_text:
+            try:
+                content = self._extract_fallback(html)
+                if content:
+                    logger.debug(f"✓ Fallback extraction succeeded: {url}")
+                    return content, "fallback"
+            except Exception as e:
+                logger.warning(f"Fallback extraction failed for {url}: {e}")
+
+        return "", "none"
+
+    def _extract_trafilatura(
+            self,
+            html: str,
+            url: str,
+            output_format: Literal['txt', 'markdown'] = 'markdown'
+    ) -> str:
+        """Extract using trafilatura with images and tables."""
+        if not TRAFILATURA_AVAILABLE:
+            return ""
+
+        # Create a custom config for better table/content preservation
+        from trafilatura.settings import use_config
+        custom_config = use_config()
+
+        # Critical: Preserve tables and structured content
+        custom_config.set("DEFAULT", "EXTRACTION_TIMEOUT", "0")
+        custom_config.set("DEFAULT", "MIN_EXTRACTED_SIZE", "100")  # Lower threshold
+        custom_config.set("DEFAULT", "MIN_OUTPUT_SIZE", "50")       # Lower threshold
+        custom_config.set("DEFAULT", "MIN_EXTRACTED_COMM_SIZE", "10")
+        custom_config.set("DEFAULT", "MIN_OUTPUT_COMM_SIZE", "10")
+
+        # Try with favor_precision=False first (more inclusive)
+        content = trafilatura.extract(
+            html,
+            url=url,
+            output_format=output_format,
+            config=custom_config,
+            include_comments=False,
+            include_tables=True,        # CRITICAL for tables
+            include_images=True,
+            include_links=True,
+            deduplicate=True,
+            with_metadata=False,
+            favor_precision=False,      # MORE INCLUSIVE - captures more content
+            favor_recall=True,          # PRIORITIZE RECALL - don't miss content
+        )
+
+        # If we got very little content, try with even more lenient settings
+        if not content or len(content.strip()) < 200:
+            logger.debug(f"Trafilatura first pass too short ({len(content or '')} chars), trying lenient mode")
+
+            # Even more lenient
+            lenient_config = use_config()
+            lenient_config.set("DEFAULT", "MIN_EXTRACTED_SIZE", "50")
+            lenient_config.set("DEFAULT", "MIN_OUTPUT_SIZE", "30")
+
+            content = trafilatura.extract(
+                html,
+                url=url,
+                output_format=output_format,
+                config=lenient_config,
+                include_comments=False,
+                include_tables=True,
+                include_images=True,
+                include_links=True,
+                deduplicate=False,      # Don't deduplicate - keep all content
+                with_metadata=False,
+                favor_precision=False,
+                favor_recall=True,
+            )
+
+        if not content:
+            return ""
+
+        content = text_utils.strip_surrogates(content)
+
+        # Basic quality check - but be lenient
+        if len(content.strip()) < 50:
+            return ""
+
+        image_count = content.count('![') if output_format == 'markdown' else 0
+        logger.debug(f"Trafilatura extracted {len(content)} chars with {image_count} images")
+
+        return content
+
+    def _extract_custom(self, html: str, url: str) -> str:
+        """
+        Custom HTML->markdown extraction (original Elena's method).
+        Uses make_clean_content_html + html_fragment_to_markdown.
+
+        Removes UI chrome and boilerplate while KEEPING useful metadata like:
+        - Usernames (who said what)
+        - Timestamps (when discussions happened)
+        - Reaction counts (community sentiment)
+        """
+        try:
+            soup = BeautifulSoup(html, 'lxml')
+
+            # STAGE 1: Remove structural boilerplate (navigation, not content)
+            for element in soup.select('nav, header, footer, aside, [role="navigation"], [role="banner"], [role="complementary"]'):
+                element.decompose()
+
+            # STAGE 2: Remove interactive UI elements (buttons, not text)
+            # Cookie banners, popups, modals, overlays
+            for element in soup.select('[class*="cookie"], [class*="banner"], [class*="popup"], [class*="modal"], [class*="overlay"], [id*="cookie"]'):
+                element.decompose()
+
+            # Social sharing BUTTONS (not the content)
+            for element in soup.select('[class*="share-button"], [class*="social-button"], [data-track*="share"]'):
+                element.decompose()
+
+            # Ads and sponsored content
+            for element in soup.select('[class*="ad-"], [class*="advertisement"], [id*="ad-"], [class*="sponsored"]'):
+                element.decompose()
+
+            # Action BUTTONS (reply, like, edit buttons - not the text counts)
+            for element in soup.select('button, [role="button"]'):
+                element.decompose()
+
+            # Navigation breadcrumbs (redundant navigation)
+            for element in soup.select('[class*="breadcrumb"], [aria-label*="readcrumb"]'):
+                element.decompose()
+
+            # Related posts, recommendations, sidebars (off-topic)
+            for element in soup.select('[class*="related"], [class*="recommend"], [class*="sidebar"], [class*="suggested"]'):
+                element.decompose()
+
+            # User signatures (forum footers)
+            for element in soup.select('[class*="signature"], [class*="user-sig"]'):
+                element.decompose()
+
+            # Post action menus, edit history dropdowns
+            for element in soup.select('[class*="post-menu"], [class*="edit-history"]'):
+                element.decompose()
+
+            title = html_title(html)
+
+            # Clean HTML and convert to markdown
+            clean_fragment = make_clean_content_html(
+                post_url=url,
+                raw_html=str(soup),
+                title=title or "",
+            )
+            markdown = html_fragment_to_markdown(clean_fragment)
+
+            if markdown and len(markdown.strip()) >= 200:
+                markdown = text_utils.strip_surrogates(markdown)
+
+                # STAGE 3: Minimal post-processing - only remove clear UI noise
+                lines = markdown.split('\n')
+                cleaned_lines = []
+
+                # Track title to avoid duplication
+                title_seen = False
+
+                for line in lines:
+                    line_stripped = line.strip()
+                    line_lower = line_stripped.lower()
+
+                    # Skip duplicate title
+                    if not title_seen and title and line_stripped == title:
+                        title_seen = True
+                        cleaned_lines.append(line)
+                        continue
+                    elif title_seen and title and line_stripped == title:
+                        continue
+
+                    # Only skip OBVIOUS UI noise, keep metadata
+                    skip_patterns = [
+                        # Navigation instructions
+                        line_lower.startswith('skip to'),
+                        line_lower.startswith('jump to'),
+                        line_lower.startswith('go to'),
+                        # Action words (isolated, not in sentences)
+                        line_lower in ['reply', 'edit', 'delete', 'share', 'report', 'flag'],
+                        line_lower in ['like', 'unlike', 'upvote', 'downvote'],
+                        line_lower.startswith('sign up'),
+                        line_lower.startswith('log in'),
+                        line_lower.startswith('subscribe'),
+                        # UI element labels
+                        line_lower in ['menu', 'search', 'close', 'back', 'next', 'previous'],
+                        line_lower.startswith('show more'),
+                        line_lower.startswith('load more'),
+                        line_lower.startswith('see all'),
+                        # Empty lines
+                        len(line_stripped) <= 1,
+                        ]
+
+                    if not any(skip_patterns):
+                        cleaned_lines.append(line)
+
+                markdown = '\n'.join(cleaned_lines)
+
+                # Remove excessive blank lines (more than 2 consecutive)
+                while '\n\n\n' in markdown:
+                    markdown = markdown.replace('\n\n\n', '\n\n')
+
+                markdown = markdown.strip()
+
+                if len(markdown) >= 200:
+                    logger.debug(f"Custom extraction: {len(markdown)} chars (cleaned, metadata preserved)")
+                    return markdown
+
+            # Fallback to simpler text extraction if markdown is too short
+            soup = BeautifulSoup(html, 'lxml')
+            for element in soup(['script', 'style', 'iframe', 'noscript']):
+                element.decompose()
+
+            main = soup.find('main') or soup.find('article')
+            if not main or len(main.get_text(strip=True)) < 200:
+                content_candidates = soup.find_all(
+                    'div',
+                    class_=lambda x: x and any(
+                        keyword in str(x).lower()
+                        for keyword in ['content', 'article', 'post', 'entry', 'body', 'main', 'text']
+                    ),
+                )
+                if content_candidates:
+                    main = max(content_candidates, key=lambda x: len(x.get_text(strip=True)))
+
+            if main:
+                text = main.get_text(separator='\n', strip=True)
+            else:
+                text = soup.get_text(separator='\n', strip=True)
+
+            lines = [line.strip() for line in text.split('\n') if line.strip() and len(line.strip()) > 2]
+            result = '\n'.join(lines)
+            result = text_utils.strip_surrogates(result)
+
+            if len(result) >= 100:
+                logger.debug(f"Custom extraction (text fallback): {len(result)} chars")
+                return result
+
+            return ""
+
+        except Exception as e:
+            logger.warning(f"Custom extraction failed: {e}")
+            return ""
+
+    def _extract_fallback(self, html: str) -> str:
+        """Fallback extraction using BeautifulSoup (text only, no images)."""
+        soup = BeautifulSoup(html, 'lxml')
+
+        # Remove noise
+        for element in soup(['script', 'style', 'iframe', 'noscript', 'nav', 'footer', 'aside']):
+            element.decompose()
+
+        # Try to find main content
+        main = (
+                soup.find('main') or
+                soup.find('article') or
+                soup.find('div', class_=lambda x: x and any(
+                    kw in str(x).lower()
+                    for kw in ['content', 'article', 'post', 'entry']
+                ))
+        )
+
+        if main and len(main.get_text(strip=True)) >= 200:
+            text = main.get_text(separator='\n', strip=True)
+        else:
+            text = soup.get_text(separator='\n', strip=True)
+
+        # Clean up text
+        lines = [line.strip() for line in text.split('\n') if line.strip() and len(line.strip()) > 2]
+        result = '\n'.join(lines)
+
+        return text_utils.strip_surrogates(result)
+
+
+# ============================================================================
+# Web Content Fetcher
+# ============================================================================
+
+class WebContentFetcher:
+    """
+    Fetches web content with smart header selection and authentication support.
+    Uses ContentExtractor for extraction strategy with automatic fallbacks.
+
+    Usage:
+        async with WebContentFetcher(prefer_markdown=True) as fetcher:
+            results = await fetcher.fetch_multiple(['https://example.com'])
+
+        # With custom extraction mode (includes automatic trafilatura fallback)
+        async with WebContentFetcher(extraction_mode="custom") as fetcher:
+            result = await fetcher.fetch_single('https://discourse.example.com/topic')
+    """
+
+    def __init__(
+            self,
+            timeout: int = 15,
+            max_concurrent: int = 5,
+            enable_archive: bool = False,
+            prefer_markdown: bool = True,
+            extraction_mode: Literal["trafilatura", "custom"] = "trafilatura",
+    ):
+        """
+        Initialize fetcher.
+
+        Args:
+            timeout: Request timeout in seconds
+            max_concurrent: Maximum concurrent requests
+            enable_archive: Try Wayback Machine if fetch fails
+            prefer_markdown: Request markdown output from extractors
+            extraction_mode: "trafilatura" or "custom" for generic site extraction
+                - "custom": Tries custom extraction first, automatically falls back to trafilatura
+        """
+        self.timeout = timeout
+        self.max_concurrent = max_concurrent
+        self.enable_archive = enable_archive
+        self.prefer_markdown = prefer_markdown
+        self.extraction_mode = extraction_mode
+        self.session: Optional[aiohttp.ClientSession] = None
+        self.extractor = ContentExtractor()
+
+    async def __aenter__(self):
+        """Create aiohttp session."""
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        self.session = aiohttp.ClientSession(timeout=timeout)
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Close aiohttp session."""
+        if self.session:
+            await self.session.close()
+
+    async def fetch_multiple(
+            self,
+            urls: list[str],
+            max_length: int = 15000
+    ) -> list[Dict[str, Any]]:
+        """
+        Fetch content for multiple URLs with concurrency control.
+
+        Args:
+            urls: List of URLs to fetch
+            max_length: Maximum content length per URL
+
+        Returns:
+            List of result dicts (see fetch_single for structure)
+        """
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        async def fetch_with_semaphore(url: str):
+            async with semaphore:
+                return await self.fetch_single(url, max_length)
+
+        tasks = [fetch_with_semaphore(url) for url in urls]
+        return await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def fetch_single(self, url: str, max_length: int = 15000) -> Dict[str, Any]:
+        """
+        Fetch and extract content from a single URL with smart header selection.
+
+        Args:
+            url: URL to fetch
+            max_length: Maximum content length
+
+        Returns:
+            Dict with keys:
+            - url: Source URL
+            - content: Extracted content
+            - status: "success", "paywall", "error", etc.
+            - content_length: Length of extracted content
+            - extraction_method: Method used ("trafilatura", "custom", etc.)
+            - published_time_iso: ISO datetime string (if found)
+            - modified_time_iso: ISO datetime string (if found)
+            - date_method: How date was extracted
+            - date_confidence: Confidence score for date (0.0-1.0)
+            - error: Error message (if status != "success")
+        """
+        result: Dict[str, Any] = {
+            "url": url,
+            "content": "",
+            "status": "failed",
+            "content_length": 0,
+            "extraction_method": "none",
+            "published_time_iso": None,
+            "modified_time_iso": None,
+            "date_method": None,
+            "date_confidence": 0.0,
+        }
+
+        try:
+            # Check for special cases
+            if 'arxiv.org/abs/' in url:
+                logger.info(f"ArXiv PDF detected: {url}")
+                result["status"] = "pdf_redirect"
+                return result
+
+            # Fetch HTML with smart header selection
+            html, status, last_modified = await self._fetch_html(url)
+
+            if not html:
+                result["status"] = status
+                result["error"] = f"Fetch failed: {status}"
+
+                # Try archive fallback for certain failures
+                if self.enable_archive and status in [
+                    "paywall", "error", "blocked_403", "session_expired", "insufficient_content"
+                ]:
+                    logger.info(f"Trying archive fallback for: {url}")
+                    html, status, last_modified = await self._fetch_archive(url)
+
+                    if html:
+                        result["status"] = "archive"
+                    else:
+                        logger.warning(f"Archive fetch also failed for {url}")
+                        return result
+
+            # Check for paywall
+            if self._is_paywalled(html, url):
+                result["status"] = "paywall"
+                result["error"] = "Paywall detected"
+                return result
+
+            # Extract content using strategy (site-specific -> custom/trafilatura -> fallback)
+            content, extraction_method = await self.extractor.extract(
+                html,
+                url,
+                prefer_markdown=self.prefer_markdown,
+                fallback_to_text=True,
+                extraction_mode=self.extraction_mode
+            )
+
+            if not content or len(content.strip()) < 100:
+                result["status"] = "insufficient_content"
+                result["error"] = "Content too short after extraction"
+                return result
+
+            # Truncate if needed
+            if max_length > 0 and len(content) > max_length:
+                content = self._truncate(content, max_length)
+
+            # Extract publication dates
+            date_meta = await self._extract_dates(html, url, last_modified)
+
+            # Build result
+            result.update({
+                "content": content,
+                "content_length": len(content),
+                "status": "success",
+                "extraction_method": extraction_method,
+                **date_meta
+            })
+
+            # Safety: strip surrogates from all string fields
+            for k, v in list(result.items()):
+                if isinstance(v, str):
+                    result[k] = text_utils.strip_surrogates(v)
+
+            logger.info(
+                f"✓ Fetched {url}: {result['content_length']} chars "
+                f"via {extraction_method}, pub={result.get('published_time_iso')}"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.exception(f"Error fetching {url}")
+            result["error"] = str(e)
+            return result
+
+    async def _fetch_html(self, url: str) -> tuple[str, str, Optional[str]]:
+        """
+        Fetch HTML from URL with smart header selection.
+
+        Uses bot headers for Discourse forums, browser headers for other sites.
+
+        Returns:
+            (html, status, last_modified_header)
+            status: "success", "timeout", "blocked_403", "session_expired", "http_XXX", etc.
+        """
+        try:
+            # Smart header selection based on URL
+            headers = HeaderSelector.get_headers(url)
+
+            cookies = SourceCookieManager.get_cookies_for_url(url)
+            if cookies:
+                logger.debug(f"Using authenticated cookies for {url}")
+
+            async with self.session.get(
+                    url,
+                    headers=headers,
+                    allow_redirects=True,
+                    cookies=cookies
+            ) as response:
+                # Check for authentication issues
+                if response.status == 401:
+                    return "", "session_expired" if cookies else "paywall", None
+
+                final_url = str(response.url)
+                if cookies and any(ind in final_url.lower() for ind in ['/signin', '/login', '/auth']):
+                    logger.warning(f"Redirected to login page for {url}")
+                    return "", "session_expired", None
+
+                if response.status == 403:
+                    logger.warning(f"Got 403 for {url}")
+                    return "", "blocked_403", None
+
+                if response.status != 200:
+                    return "", f"http_{response.status}", None
+
+                content_type = (response.headers.get('Content-Type') or '').lower()
+                if 'text/html' not in content_type and 'text/plain' not in content_type:
+                    return "", "non_html", None
+
+                html = await response.text()
+                last_modified = response.headers.get("Last-Modified")
+
+                return html, "success", last_modified
+
+        except asyncio.TimeoutError:
+            return "", "timeout", None
+        except Exception as e:
+            logger.warning(f"Fetch failed for {url}: {e}")
+            return "", "error", None
+
+    async def _fetch_archive(self, url: str) -> tuple[str, str, Optional[str]]:
+        """Try to fetch content via the Wayback Machine."""
+        archive_url = f"https://web.archive.org/web/{url}"
+        return await self._fetch_html(archive_url)
+
+    async def _extract_dates(
+            self,
+            html: str,
+            url: str,
+            last_modified_header: Optional[str]
+    ) -> Dict[str, Any]:
+        """Extract publication dates from HTML using shared utility."""
+        try:
+            soup = BeautifulSoup(html or "", "lxml")
+        except Exception:
+            soup = None
+
+        meta = extract_publication_dates_core(
+            soup=soup,
+            url=url,
+            last_modified_header=last_modified_header,
+        )
+
+        return {
+            "published_time_iso": meta.get("published_time_iso"),
+            "modified_time_iso": meta.get("modified_time_iso"),
+            "date_method": meta.get("date_method"),
+            "date_confidence": meta.get("date_confidence", 0.0),
+        }
+
+    @staticmethod
+    def _is_paywalled(html: str, url: str) -> bool:
+        """Detect common paywall indicators."""
+        html_lower = html.lower()
+
+        indicators = [
+            'paywall',
+            'subscriber-only',
+            'subscription required',
+            'register to read',
+            'sign in to continue',
+            'member exclusive',
+            'premium content',
+        ]
+
+        if 'medium.com' in url and 'metered-paywall' in html_lower:
+            return True
+
+        return any(ind in html_lower for ind in indicators)
+
+    @staticmethod
+    def _truncate(content: str, max_length: int) -> str:
+        """Truncate content intelligently at sentence boundaries."""
+        content = text_utils.strip_surrogates(content)
+
+        if max_length <= 0 or len(content) <= max_length:
+            return content
+
+        truncated = content[:max_length]
+
+        # Find last sentence boundary
+        for char in ['.', '\n', '!', '?']:
+            pos = truncated.rfind(char)
+            if pos > max_length * 0.8:
+                return truncated[:pos + 1] + "\n\n[... truncated ...]"
+
+        return truncated + "\n\n[... truncated ...]"
+
+
+# ============================================================================
+# Convenience Functions
+# ============================================================================
+
+async def fetch_urls_simple(
+        urls: List[str],
+        *,
+        timeout: int = 15,
+        max_concurrent: int = 5,
+        prefer_markdown: bool = True,
+        max_length: int = 15000,
+        extraction_mode: Literal["trafilatura", "custom"] = "trafilatura",
+) -> List[Dict[str, Any]]:
+    """
+    Simple convenience function to fetch multiple URLs.
+
+    Args:
+        urls: List of URLs to fetch
+        timeout: Request timeout in seconds
+        max_concurrent: Maximum concurrent requests
+        prefer_markdown: Request markdown output
+        max_length: Maximum content length per URL
+        extraction_mode: "trafilatura" or "custom" for generic site extraction
+            - "custom": Tries custom first, automatically falls back to trafilatura
+
+    Returns:
+        List of result dicts (see WebContentFetcher.fetch_single for structure)
+
+    Example:
+        results = await fetch_urls_simple(
+            ['https://community.openai.com/t/topic/123'],
+            extraction_mode="custom"  # Will use bot headers + custom extraction + trafilatura fallback
+        )
+        for r in results:
+            if r['status'] == 'success':
+                print(f"{r['url']}: {len(r['content'])} chars via {r['extraction_method']}")
+    """
+    async with WebContentFetcher(
+            timeout=timeout,
+            max_concurrent=max_concurrent,
+            prefer_markdown=prefer_markdown,
+            extraction_mode=extraction_mode
+    ) as fetcher:
+        return await fetcher.fetch_multiple(urls, max_length=max_length)

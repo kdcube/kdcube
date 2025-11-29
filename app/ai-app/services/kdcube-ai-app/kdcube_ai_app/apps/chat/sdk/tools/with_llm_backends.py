@@ -8,13 +8,14 @@ import re, yaml, jsonschema
 from datetime import datetime, timezone
 
 import time
-from typing import Annotated, Optional, List, Dict, Any, Tuple, Set
+from typing import Annotated, Optional, List, Dict, Any, Tuple, Set, Callable, Awaitable
 import logging
 
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import delta as emit_delta, get_comm
 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import split_safe_citation_prefix, replace_citation_tokens_streaming, \
-    extract_sids, build_citation_map_from_sources, citations_present_inline, MD_CITE_RE, adapt_source_for_llm
+    extract_sids, build_citation_map_from_sources, citations_present_inline, MD_CITE_RE, adapt_source_for_llm, \
+    find_unmapped_citation_sids
 from kdcube_ai_app.apps.chat.sdk.tools.md_utils import CODE_FENCE_RE
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message, create_cached_system_message
@@ -387,6 +388,7 @@ async def generate_content_llm(
         allow_inline_citations_in_strings: Annotated[bool, "Permit [[S:n]] tokens inside JSON/YAML string fields."] = False,
         # end_marker: Annotated[str, "Completion marker appended by the model at the very end."] = "<<<GENERATION FINISHED>>>",
         max_tokens: Annotated[int, "Per-round token cap.", {"min": 256, "max": 8000}] = 7000,
+        thinking_budget: Annotated[int, "Per-round thinking token cap.", {"min": 128, "max": 4000}] = 0,
         max_rounds: Annotated[int, "Max generation/repair rounds.", {"min": 1, "max": 10}] = 4,
         code_fences: Annotated[bool, "Allow triple-backtick fenced blocks in output."] = True,
         continuation_hint: Annotated[str, "Optional extra hint used on continuation rounds."] = "",
@@ -394,6 +396,9 @@ async def generate_content_llm(
         role: str = "tool.generator",
         cache_instruction: bool=True,
         channel_to_stream: Optional[str]="canvas",
+        temperature: float=0.2,
+        on_delta_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_thinking_fn: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> Annotated[str, 'JSON string: {ok, content, format, finished, retries, reason, stats, sources_used: [ { "sid": 1, "url": "...", "title": "...", "text": "..." }, ... ]}']:
     """
     Returns JSON string:
@@ -780,7 +785,15 @@ async def generate_content_llm(
             "- Example: [[USAGE:1,3,5]]",
             "- Do NOT add any other commentary around it.",
         ]
-
+    if have_sources and require_citations:
+        sys_lines += [
+            "",
+            "USAGE TELEMETRY (INVISIBLE TO USER):",
+            "- If sources are provided but citations are not required, you MUST record which source IDs you actually relied on.",
+            "- Do this by inserting a single line `[[USAGE:<sid(s)>]]` immediately BEFORE the completion marker.",
+            "- Example: [[USAGE:1,3,5]]",
+            "- Do NOT add any other commentary around it.",
+        ]
     schema_text_for_prompt = ""
     if schema_json:
         logger.warning(f"schema_json={schema_json} provided. target_format={tgt}")
@@ -825,7 +838,7 @@ async def generate_content_llm(
         for s in raw_sources or []:
             if not isinstance(s, dict):
                 continue
-            norm = adapt_source_for_llm(s, include_full_content=True, max_text_len=6000)
+            norm = adapt_source_for_llm(s, include_full_content=True, max_text_len=-1)
             if not norm:
                 continue
             rows.append(norm)
@@ -835,9 +848,10 @@ async def generate_content_llm(
         parts = []
         for r in rows:
             body = r.get("content") or r.get("text") or ""
-            t = body[:per]
+            # t = body[:per]
+            t = body
             parts.append(f"[sid:{r['sid']}] {r['title']}\n{t}".strip())
-        digest = "\n\n---\n\n".join(parts)[:total_budget]
+        digest = "\n\n---\n\n".join(parts)# [:total_budget]
 
     sys_prompt = "\n".join(sys_lines)
 
@@ -868,6 +882,7 @@ async def generate_content_llm(
             role_name: str,
             temperature: float,
             max_toks: int,
+            thinking_budget: int,
             author_for_chunks: str,
             author_for_complete: str,
             start_index: int,
@@ -880,9 +895,7 @@ async def generate_content_llm(
         cfg = _SERVICE.describe_client(client, role=role_name)
 
         round_buf: List[str] = []   # RAW text from this round
-        stream_buf = ""
-        emit_from = 0
-        EMIT_HOLDBACK = 32
+        pending = ""                # tail buffer not yet emitted
         emitted_local = 0
 
         async def _emit_visible(text: str):
@@ -890,52 +903,79 @@ async def generate_content_llm(
             if not text:
                 return
             clean = _scrub_emit_once(text)
-            # clean = _rm_invis(clean)
             out = replace_citation_tokens_streaming(clean, citation_map) if tgt == "markdown" else clean
             if get_comm():
                 idx = start_index + emitted_local
-                await emit_delta(out, index=idx, marker=channel_to_stream, agent=author_for_chunks, format=tgt or "markdown", artifact_name=artifact_name)
+                await emit_delta(out, index=idx, marker=channel_to_stream,
+                                 agent=author_for_chunks, format=tgt or "markdown",
+                                 artifact_name=artifact_name)
+                if on_delta_fn:
+                    await on_delta_fn(out)
                 emitted_local += 1
 
-        async def _flush_safe(force: bool = False):
-            nonlocal emit_from
-            if emit_from >= len(stream_buf):
+
+        async def _flush_pending(force: bool = False):
+            """
+            Emit only a safe prefix of `pending`:
+
+            - In non-force mode: withhold any trailing partial [[S:...]],
+              [[USAGE:...]] or end marker.
+            - In force mode: emit everything (scrubber will strip full markers).
+            """
+            nonlocal pending
+            if not pending:
                 return
 
             if force:
-                raw_slice = stream_buf[emit_from:]
-                if raw_slice:
-                    await _emit_visible(raw_slice)
-                    emit_from = len(stream_buf)
-            else:
-                safe_end = max(emit_from, len(stream_buf) - EMIT_HOLDBACK)
-                if safe_end <= emit_from:
-                    return
-                raw_slice = stream_buf[emit_from:safe_end]
+                # Final flush: everything goes through the scrubber + replacer
+                await _emit_visible(pending)
+                pending = ""
+                return
 
-                safe_chunk, _ = split_safe_citation_prefix(raw_slice)
-                safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
-                safe_chunk, _ = _split_safe_marker_prefix(safe_chunk, end_marker)
+            # Non-force: trim to safe prefix
+            safe_chunk, _ = split_safe_citation_prefix(pending)
+            safe_chunk, _ = _split_safe_usage_prefix(safe_chunk)
+            safe_chunk, _ = _split_safe_marker_prefix(safe_chunk, end_marker)
 
-                if safe_chunk:
-                    await _emit_visible(safe_chunk)
-                    emit_from += len(safe_chunk)
+            if not safe_chunk:
+                # Nothing safe to emit yet (we might be in the middle of a token)
+                return
+
+            await _emit_visible(safe_chunk)
+            # Drop exactly what we emitted from the front of pending
+            pending = pending[len(safe_chunk):]
+
 
         async def on_delta(piece: str):
-            nonlocal stream_buf
+            nonlocal pending
             if not piece:
                 return
             round_buf.append(piece)
-            stream_buf += piece
-            await _flush_safe(force=False)
+            pending += piece
+            await _flush_pending(force=False)
+
+        async def on_thinking(out):
+            if not out:
+                return
+            if on_thinking_fn:
+                tt = out.get("text")
+                if tt:
+                    await on_thinking_fn(tt)
+
 
         async def on_complete(_):
             nonlocal emitted_local
-            await _flush_safe(force=True)
+            # Flush everything that’s left (including any last complete citation tokens)
+            await _flush_pending(force=True)
             if get_comm():
                 idx = start_index + emitted_local
                 emitted_local += 1
-                await emit_delta("", completed=True, index=idx, marker=channel_to_stream, agent=author_for_complete, format=tgt or "markdown", artifact_name=artifact_name)
+                await emit_delta("", completed=True, index=idx, marker=channel_to_stream,
+                                 agent=author_for_complete, format=tgt or "markdown",
+                                 artifact_name=artifact_name)
+                if on_delta_fn:
+                    await on_delta_fn("")
+
 
         async with with_accounting(
                 bundle_id,
@@ -951,12 +991,15 @@ async def generate_content_llm(
                 client,
                 messages=messages,
                 on_delta=on_delta,
+                on_thinking=on_thinking,
                 on_complete=on_complete,
                 temperature=temperature,
                 max_tokens=max_toks,
                 client_cfg=cfg,
                 role=role_name,
-                debug_citations=True
+                max_thinking_tokens=thinking_budget,
+                debug_citations=True,
+
             )
 
         return "".join(round_buf), emitted_local
@@ -977,7 +1020,8 @@ async def generate_content_llm(
 
         # 3) Input context (may be large; non-cached, truncated once here)
         if input_context:
-            blocks.append({"text": f"INPUT CONTEXT:\n{input_context[:12000]}", "cache": False})
+            # blocks.append({"text": f"INPUT CONTEXT:\n{input_context[:12000]}", "cache": False})
+            blocks.append({"text": f"INPUT CONTEXT:\n{input_context}", "cache": False})
 
         # 4) Sources (sid map + digest), non-cached
         if rows:
@@ -1019,11 +1063,12 @@ async def generate_content_llm(
         chunk, emitted_inc = await _stream_round(
             messages=[system_msg, human_msg],
             role_name=role,
-            temperature=0.2,
+            temperature=temperature,
             max_toks=max_tokens,
             author_for_chunks=author_for_chunks,
             author_for_complete=rep_author,
             start_index=emitted_count,
+            thinking_budget=thinking_budget
         )
         emitted_count += emitted_inc
         buf_all.append(chunk)
@@ -1239,6 +1284,7 @@ async def generate_content_llm(
                 author_for_chunks=rep_author,
                 author_for_complete=rep_author,
                 start_index=emitted_count,
+                thinking_budget=thinking_budget
             )
             emitted_count += emitted_inc_rep
 
@@ -1384,6 +1430,18 @@ async def generate_content_llm(
             "reason": reason
         }
     )
+    unmapped = []
+    try:
+        if tgt in ("markdown", "text", "html"):
+            unmapped = find_unmapped_citation_sids(content_clean, citation_map)
+    except Exception:
+        unmapped = []
+
+    if unmapped:
+        logger.warning(
+            "generate_content_llm: unmapped citation SIDs in artifact: %s (map has %s)",
+            unmapped, sorted(citation_map.keys())
+        )
     out = {
         "ok": bool(ok),
         "content": content_clean,
@@ -1499,6 +1557,7 @@ async def sources_reconciler(
         schema_json=schema_str,
         sources_json=json.dumps(prepared_sources, ensure_ascii=False),
         cite_sources=False,
+        citation_embed="none",
         max_rounds=2,
         max_tokens=1200,
         strict=True,
@@ -1593,6 +1652,7 @@ async def sources_content_filter(
         queries: Annotated[List[str], "Array of queries [q1, q2, ...]"],
         # note: we now document optional date fields explicitly
         sources_with_content: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "content": str, "published_time_iso"?: str, "modified_time_iso"?: str}'],
+        on_thinking_fn: Optional[Callable[[str], Awaitable[None]]] = None,
 ) -> Annotated[List[int], 'List of SIDs to keep']:
     """
     Fast content-based filter to remove duplicates and low-quality content.
@@ -1689,6 +1749,7 @@ TODAY: {now_iso}
             agent_name="Content Filter",
             instruction=_FILTER_INSTRUCTION,
             input_context=json.dumps(input_ctx, ensure_ascii=False),
+            on_thinking_fn=on_thinking_fn,
             target_format="json",
             schema_json=schema_str,
             sources_json=json.dumps(prepared_sources, ensure_ascii=False),
@@ -1742,3 +1803,346 @@ TODAY: {now_iso}
     except Exception:
         logger.exception("sources_content_filter: failed to parse kept SIDs; keeping all")
         return [s["sid"] for s in prepared_sources]
+
+async def sources_filter_and_segment(
+        _SERVICE,
+        objective: Annotated[str, "Objective (what we are trying to achieve)."],
+        queries: Annotated[List[str], "Array of queries [q1, q2, ...]"],
+        sources_with_content: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "content": str, "published_time_iso"?: str, "modified_time_iso"?: str}'],
+        on_thinking_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_delta_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        thinking_budget: Optional[int] = None,
+) -> Annotated[Dict[int, List[Dict[str, str]]], 'Mapping: sid -> [{"s": "...", "e": "..."}] (1–2 spans)']:
+    """
+    Combined filter + segmenter (returns {sid: [{"s":..., "e":...}], ...}).
+    """
+    assert _SERVICE, "FilterSegmenter not bound to service"
+    import kdcube_ai_app.apps.chat.sdk.tools.content_filters as content_filters
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    _INSTRUCTION = content_filters.FILTER_AND_SEGMENT_GUIDE(now_iso)
+
+    prepared_sources: List[Dict[str, Any]] = []
+    for row in (sources_with_content or []):
+        try:
+            sid = int(row.get("sid"))
+        except Exception:
+            continue
+        content = (row.get("content") or "").strip()
+        if not (sid and content):
+            continue
+        prepared_sources.append({
+            "sid": sid,
+            "content": content,
+            "published_time_iso": row.get("published_time_iso"),
+            "modified_time_iso": row.get("modified_time_iso"),
+        })
+
+    if not prepared_sources:
+        return {}
+
+    input_ctx = {
+        "objective": (objective or "").strip(),
+        "queries": queries or []
+    }
+
+    logger.info(
+        f"sources_filter_and_segment: processing {len(prepared_sources)} sources "
+        f"for objective: '{(objective or '')[:120]}'"
+    )
+
+    try:
+        llm_resp_s = await generate_content_llm(
+            _SERVICE=_SERVICE,
+            agent_name="Content Filter + Segmenter",
+            instruction=_INSTRUCTION,
+            input_context=json.dumps(input_ctx, ensure_ascii=False),
+            target_format="json",
+            schema_json="",                 # ← no schema
+            sources_json=json.dumps(prepared_sources, ensure_ascii=False),
+            citation_embed="none",
+            cite_sources=False,
+            max_rounds=1,
+            max_tokens=700,
+            thinking_budget=thinking_budget,
+            strict=True,                    # format check only
+            role="tool.sources.filter.by.content.and.segment",
+            cache_instruction=True,
+            artifact_name=None,
+            channel_to_stream="debug",
+            temperature=0.1,
+            on_thinking_fn=on_thinking_fn,
+            on_delta_fn=on_delta_fn
+        )
+    except Exception:
+        logger.exception("sources_filter_and_segment: LLM call failed")
+        return {}
+
+    try:
+        env = json.loads(llm_resp_s) if llm_resp_s else {}
+    except Exception:
+        logger.exception("sources_filter_and_segment: cannot parse LLM envelope")
+        return {}
+
+    content_str = (env.get("content") or "").strip()
+    if content_str.startswith("```"):
+        content_str = content_str.split("\n", 1)[1] if "\n" in content_str else content_str
+        if "```" in content_str:
+            content_str = content_str.rsplit("```", 1)[0]
+
+    try:
+        raw = json.loads(content_str) if content_str else {}
+        if not isinstance(raw, dict):
+            logger.warning("sources_filter_and_segment: result is not an object")
+            return {}
+
+        valid_sids = {s["sid"] for s in prepared_sources}
+        sid_to_content = {s["sid"]: s["content"] for s in prepared_sources}
+        out: Dict[int, List[Dict[str, str]]] = {}
+
+        for k, arr in raw.items():
+            try:
+                sid = int(k)
+            except Exception:
+                # allow numeric keys or stringified numbers; ignore others
+                continue
+            if sid not in valid_sids:
+                logger.warning(f"sources_filter_and_segment: SID {sid} not in valid set, skipping")
+                continue
+
+            source_content = sid_to_content.get(sid, "")
+            if not source_content:
+                continue
+
+            spans: List[Dict[str, str]] = []
+            for it in (arr or []):
+                if not isinstance(it, dict):
+                    continue
+
+                s = (it.get("s") or "").strip()
+                e = (it.get("e") or "").strip()
+
+                # Validate anchor lengths - allow short but distinctive anchors
+                if not (3 <= len(s) <= 150 and 3 <= len(e) <= 150):
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"anchor length out of bounds (s={len(s)}, e={len(e)})"
+                    )
+                    # continue
+
+                # Reject if start and end are identical
+                if s.lower().strip() == e.lower().strip():
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"identical start/end anchors: '{s}'"
+                    )
+                    continue
+
+                # Reject page titles (contain " | ")
+                if " | " in s or " | " in e:
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"contains page title pattern ' | '"
+                    )
+                    continue
+
+                # Check if anchors exist in content
+                s_lower = s.lower()
+                e_lower = e.lower()
+                content_lower = source_content.lower()
+
+                s_idx = content_lower.find(s_lower)
+                if s_idx == -1:
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"start anchor not found: '{s[:50]}'"
+                    )
+                    continue
+
+                e_idx = content_lower.find(e_lower, s_idx + len(s))
+                if e_idx == -1:
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"end anchor not found or appears before start: '{e[:50]}'"
+                    )
+                    continue
+
+                # Check span size - should capture substantial content
+                span_size = e_idx - s_idx
+                if span_size < 200:  # relaxed from 100
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"span too small ({span_size} chars)"
+                    )
+                    # continue
+
+                # Check if span is ONLY at the very top and tiny (likely just page title/nav)
+                # But allow larger spans that start near top (could be legitimate content after nav)
+                content_len = len(source_content)
+                if s_idx < 50 and span_size < 300:  # very top AND very small = likely nav
+                    logger.debug(
+                        f"sources_filter_and_segment: SID {sid} span rejected - "
+                        f"appears to be page title/nav (starts at {s_idx}, size {span_size})"
+                    )
+                    # continue
+
+                spans.append({"s": s, "e": e})
+
+            if spans:
+                # out[sid] = spans[:2]
+                out[sid] = spans
+
+        # if not out and prepared_sources:
+        #     # minimal safeguard: pick the first with a coarse slice
+        #     sid0 = prepared_sources[0]["sid"]
+        #     c0 = prepared_sources[0]["content"]
+            # out[sid0] = [{"s": c0[:80], "e": c0[120:220]}]
+
+        logger.info(f"sources_filter_and_segment: produced spans for {len(out)} sources")
+        return out
+
+    except Exception:
+        logger.exception("sources_filter_and_segment: parse error")
+        return {}
+
+
+async def filter_search_results_by_content(
+        _SERVICE,
+        objective: str,
+        queries: list,
+        search_results: list,
+        do_segment: bool = False,
+        on_thinking_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        thinking_budget: int = 0,
+):
+    """
+    Filter and optionally segment search results based on content quality.
+
+    Args:
+        _SERVICE: Service instance
+        objective: What we're trying to achieve
+        queries: List of search queries
+        search_results: List of search result dicts with 'sid', 'content', etc.
+        do_segment: If True, also segment content using spans
+
+    Returns:
+        Filtered (and possibly segmented) search results
+    """
+    if not search_results:
+        logger.info("filter_search_results_by_content: no results to filter")
+        return []
+
+    logger.info(
+        f"filter_search_results_by_content: filtering {len(search_results)} sources "
+        f"(segment={do_segment}) for objective: '{objective[:100]}'"
+    )
+
+    import kdcube_ai_app.apps.chat.sdk.tools.content_filters as content_filters
+
+    # Prepare items with extra signals
+    sources_for_filter = []
+    for row in search_results:
+        content = row.get("content", "")
+        pub_iso = row.get("published_time_iso")
+        mod_iso = row.get("modified_time_iso")
+        sources_for_filter.append({
+            "sid": row["sid"],
+            "content": content,
+            "published_time_iso": pub_iso,
+            "modified_time_iso": mod_iso,
+        })
+
+
+    try:
+        if do_segment:
+            # ===== Combined path: filter + segment =====
+            spans_map = await sources_filter_and_segment(
+                _SERVICE=_SERVICE,
+                objective=objective,
+                queries=queries,
+                sources_with_content=sources_for_filter,
+                on_thinking_fn=on_thinking_fn,
+                thinking_budget=thinking_budget
+            ) or {}
+
+            # Normalize keys to ints
+            try:
+                spans_map_int = {}
+                for k, v in (spans_map.items() if isinstance(spans_map, dict) else []):
+                    try:
+                        spans_map_int[int(k)] = v or []
+                    except Exception:
+                        continue
+                spans_map = spans_map_int
+            except Exception:
+                logger.exception("filter_search_results_by_content: failed to normalize spans_map keys")
+                spans_map = {}
+
+            kept_sids_set = set(spans_map.keys())
+            filtered_rows = [row for row in search_results if row["sid"] in kept_sids_set]
+
+            # Apply spans to content
+            applied = 0
+            failed_to_apply = 0
+
+            for row in filtered_rows:
+                sid = row["sid"]
+                spans = spans_map.get(sid) or []
+                if spans:
+                    original_content = row.get("content", "") or ""
+                    pruned = content_filters.trim_with_spans(original_content, spans)
+
+                    if pruned and pruned != original_content:
+                        row["content_original_length"] = len(original_content)
+                        row["content"] = pruned
+                        row["content_length"] = len(pruned)
+                        row["seg_spans"] = spans
+                        applied += 1
+
+                        logger.debug(
+                            f"  SID {sid}: trimmed from {len(original_content)} to {len(pruned)} chars"
+                        )
+                    else:
+                        failed_to_apply += 1
+                        logger.warning(
+                            f"  SID {sid}: spans did not extract content, keeping original "
+                            f"(spans: {spans})"
+                        )
+
+            dropped = len(search_results) - len(filtered_rows)
+            logger.info(
+                f"filter_search_results_by_content: filter+segment results: "
+                f"kept {len(filtered_rows)}/{len(search_results)} sources, "
+                f"dropped {dropped}, spans applied to {applied} sources, "
+                f"failed to apply {failed_to_apply}"
+            )
+
+            search_results = filtered_rows
+
+        else:
+            # ===== Pure filter path (existing behavior) =====
+            kept_sids = await sources_content_filter(
+                _SERVICE=_SERVICE,
+                objective=objective,
+                queries=queries,
+                sources_with_content=sources_for_filter
+            )
+
+            kept_sids_set = set(kept_sids)
+            filtered_rows = [row for row in search_results if row["sid"] in kept_sids_set]
+
+            dropped = len(search_results) - len(filtered_rows)
+            logger.info(
+                f"filter_search_results_by_content: content filter results: "
+                f"kept {len(filtered_rows)}/{len(search_results)} sources, "
+                f"dropped {dropped}"
+            )
+
+            search_results = filtered_rows
+
+    except Exception:
+        logger.exception(
+            "filter_search_results_by_content: filter/segment failed; keeping all fetched sources"
+        )
+
+    return search_results
