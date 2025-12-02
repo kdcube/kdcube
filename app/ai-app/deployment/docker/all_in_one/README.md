@@ -90,3 +90,8 @@ With image rebuild
 ```shell
   docker compose stop web-proxy && docker compose rm web-proxy -f && docker compose up web-proxy -d --build 
 ```
+
+### Exec image
+```shell
+docker build -t py-code-exec:latest -f Dockerfile_Runner ../../..
+```
