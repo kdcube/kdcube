@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# kdcube_ai_app/apps/chat/sdk/runtime/exec/py_code_exec_entry.py
+# kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py
 
 """
 What this expects from the outside
@@ -17,7 +17,7 @@ plus mounts host_workdir → /workspace/work and host_outdir → /workspace/out
 and sets the image’s entrypoint (see below)
 
 Optionally, in base_env in docker.run_py_in_docker:
-base_env["SUPERVISOR_SOCKET"] = "/tmp/supervisor.sock"
+base_env["SUPERVISOR_SOCKET_PATH"] = "/tmp/supervisor.sock"
 But our Python entrypoint already uses that as default, so you can skip it.
 """
 
@@ -61,12 +61,6 @@ def _load_runtime_globals() -> Dict[str, Any]:
             data = {}
     except Exception:
         data = {}
-
-    # Enforce defaults for sandbox flags inside container:
-    # - FS is already controlled by docker (--read-only + mounts), so disable FS sandbox.
-    # - NET: make sure user-code subprocess runs with no network.
-    data.setdefault("SANDBOX_FS", "0")
-    data.setdefault("SANDBOX_NET", "0")
     return data
 
 
@@ -92,122 +86,303 @@ def _portable_spec_str(runtime_globals: Dict[str, Any]) -> Optional[str]:
     except Exception:
         return None
 
-
 def _bootstrap_supervisor_runtime(
-    runtime_globals: Dict[str, Any],
-    tool_module_names: list[str],
-    logger: AgentLogger,
-    outdir: pathlib.Path,
+        runtime_globals: Dict[str, Any],
+        tool_module_names: list[str],
+        logger: AgentLogger,
+        outdir: pathlib.Path,
 ) -> None:
     """
-    This function runs in the supervisor process once, before we accept any tool calls.
+    Supervisor-side bootstrap: load dynamic modules, then let bootstrap_bind_all
+    handle all the heavy lifting (CVs, ModelService, registry, communicator).
 
-    It mirrors what the injected header used to do inside user code (in the non-isolated mode):
-      - Restores ContextVars (OUTDIR / WORKDIR).
-      - Bootstraps ModelService / registry / KB for tool modules.
-      - Rebuilds ChatCommunicator from COMM_SPEC and registers it via set_comm().
+    This runs once in the supervisor process before accepting tool calls.
     """
-    import logging
     import traceback
     import json as _json
-    from pathlib import Path
-    from kdcube_ai_app.apps.chat.sdk.protocol import (
-        ChatEnvelope,
-        ServiceCtx,
-        ConversationCtx,
-    )
-    from kdcube_ai_app.apps.chat.emitters import (
-        ChatRelayCommunicator,
-        ChatCommunicator,
-        _RelayEmitterAdapter,
-    )
+    import importlib.util as _importlib_util
 
-    log = logging.getLogger("agent.runtime")
+    # ---------- Get portable spec ----------
+    ps = runtime_globals.get("PORTABLE_SPEC_JSON")
+    if not ps:
+        logger.log("[supervisor.bootstrap] ERROR: PORTABLE_SPEC_JSON missing", "ERROR")
+        raise ValueError("PORTABLE_SPEC_JSON required but not found in runtime_globals")
 
-    # ---------- OUTDIR_CV / WORKDIR_CV ----------
-    outdir_s = os.environ.get("OUTPUT_DIR")
-    workdir_s = os.environ.get("WORKDIR")
-    if outdir_s:
-        OUTDIR_CV.set(outdir_s)
-    if workdir_s:
-        WORKDIR_CV.set(workdir_s)
+    ps_str = ps if isinstance(ps, str) else _json.dumps(ps, ensure_ascii=False)
 
-    # ---------- Portable Spec & modules ----------
-    ps = runtime_globals.get("PORTABLE_SPEC_JSON") or runtime_globals.get("PORTABLE_SPEC")
-    if isinstance(ps, dict):
-        ps_str = _json.dumps(ps, ensure_ascii=False)
-    else:
-        ps_str = ps
-
+    # ---------- Load dynamic modules FIRST (before bootstrap tries to import them) ----------
     TOOL_ALIAS_MAP = runtime_globals.get("TOOL_ALIAS_MAP") or {}
     TOOL_MODULE_FILES = runtime_globals.get("TOOL_MODULE_FILES") or {}
+    RAW_TOOL_SPECS = runtime_globals.get("RAW_TOOL_SPECS") or []
 
-    # Preload dyn alias modules from TOOL_MODULE_FILES (same as old header)
-    import importlib.util as _importlib_util
+    logger.log(f"[supervisor.bootstrap] TOOL_ALIAS_MAP: {TOOL_ALIAS_MAP}", "INFO")
+    logger.log(f"[supervisor.bootstrap] TOOL_MODULE_FILES keys: {list(TOOL_MODULE_FILES.keys())}", "INFO")
+
+    # Build alias → module name map for library modules
+    alias_to_module: Dict[str, str] = {}
+    for spec in RAW_TOOL_SPECS:
+        if "module" in spec and spec.get("alias"):
+            alias_to_module[spec["alias"]] = spec["module"]
+
+    logger.log(f"[supervisor.bootstrap] alias_to_module: {alias_to_module}", "INFO")
+
+    # Load all dynamic alias modules
+    loaded_modules = []
+    failed_modules = []
+
     for alias, dyn_name in (TOOL_ALIAS_MAP or {}).items():
         path = (TOOL_MODULE_FILES or {}).get(alias)
+
+        # Resolve library modules from RAW_TOOL_SPECS if no explicit path
+        if not path and alias in alias_to_module:
+            module_name = alias_to_module[alias]
+            logger.log(f"[supervisor.bootstrap] resolving {alias} from library module {module_name}", "INFO")
+            try:
+                spec_obj = _importlib_util.find_spec(module_name)
+                if spec_obj and spec_obj.origin:
+                    path = spec_obj.origin
+                    logger.log(
+                        f"[supervisor.bootstrap] resolved library module: "
+                        f"{alias} → {module_name} → {path}",
+                        "INFO"
+                    )
+                else:
+                    logger.log(f"[supervisor.bootstrap] find_spec returned None or no origin for {module_name}", "WARNING")
+            except Exception as e:
+                logger.log(
+                    f"[supervisor.bootstrap] find_spec failed for {module_name}: {e}\n{traceback.format_exc()}",
+                    "ERROR"
+                )
+                failed_modules.append((alias, dyn_name, f"find_spec failed: {e}"))
+                continue
+
         if not path:
+            logger.log(f"[supervisor.bootstrap] no path for alias {alias} -> {dyn_name}, skipping", "WARNING")
+            failed_modules.append((alias, dyn_name, "no path"))
             continue
+
+        logger.log(f"[supervisor.bootstrap] loading {dyn_name} from {path}", "INFO")
+
         try:
             spec = _importlib_util.spec_from_file_location(dyn_name, path)
             if spec is None or spec.loader is None:
+                error = f"spec_from_file_location returned None or no loader"
+                logger.log(f"[supervisor.bootstrap] {error} for {dyn_name}", "ERROR")
+                failed_modules.append((alias, dyn_name, error))
                 continue
+
             mod = _importlib_util.module_from_spec(spec)
             sys.modules[dyn_name] = mod
-            spec.loader.exec_module(mod)  # type: ignore[union-attr]
-            log.info(f"[supervisor.bootstrap] loaded dyn module {dyn_name} from {path}")
-        except Exception as e:
-            log.error(f"[supervisor.bootstrap] failed to load {dyn_name} from {path}: {e}", exc_info=True)
+            logger.log(f"[supervisor.bootstrap] added {dyn_name} to sys.modules, executing...", "INFO")
 
-    # Build full module list for bootstrap_bind_all
+            spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+            logger.log(f"[supervisor.bootstrap] ✅ loaded dyn module {dyn_name} from {path}", "INFO")
+            loaded_modules.append((alias, dyn_name, path))
+
+            # Verify it's actually importable now
+            try:
+                test_import = importlib.import_module(dyn_name)
+                logger.log(f"[supervisor.bootstrap] ✅ verified {dyn_name} is importable", "INFO")
+            except Exception as e:
+                logger.log(f"[supervisor.bootstrap] ⚠️  {dyn_name} in sys.modules but not importable: {e}", "WARNING")
+
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {e}"
+            logger.log(
+                f"[supervisor.bootstrap] ❌ failed to load {dyn_name} from {path}:\n{traceback.format_exc()}",
+                "ERROR"
+            )
+            failed_modules.append((alias, dyn_name, error_msg))
+
+    # Log summary
+    logger.log(f"[supervisor.bootstrap] Module loading summary:", "INFO")
+    logger.log(f"[supervisor.bootstrap]   Loaded: {len(loaded_modules)}/{len(TOOL_ALIAS_MAP)}", "INFO")
+    for alias, dyn_name, path in loaded_modules:
+        logger.log(f"[supervisor.bootstrap]     ✅ {alias} → {dyn_name}", "INFO")
+    if failed_modules:
+        logger.log(f"[supervisor.bootstrap]   Failed: {len(failed_modules)}", "ERROR")
+        for alias, dyn_name, error in failed_modules:
+            logger.log(f"[supervisor.bootstrap]     ❌ {alias} → {dyn_name}: {error}", "ERROR")
+
+    # ---------- Build full module list for bootstrap ----------
     bind_targets = list(tool_module_names or [])
     for dyn_name in (TOOL_ALIAS_MAP or {}).values():
         if dyn_name and dyn_name not in bind_targets:
             bind_targets.append(dyn_name)
 
-    if ps_str and bind_targets and bootstrap_bind_all is not None:
+    logger.log(f"[supervisor.bootstrap] bind_targets: {bind_targets}", "INFO")
+
+    # ---------- Single bootstrap call handles everything ----------
+    if bootstrap_bind_all is not None:
         try:
-            bootstrap_bind_all(ps_str, module_names=bind_targets)
-            log.info(f"[supervisor.bootstrap] bootstrap_bind_all completed for {len(bind_targets)} modules")
+            logger.log(f"[supervisor.bootstrap] calling bootstrap_bind_all for {len(bind_targets)} modules", "INFO")
+            bootstrap_bind_all(ps_str, module_names=bind_targets, bootstrap_env=False)
+            logger.log("[supervisor.bootstrap] ✅ bootstrap_bind_all completed successfully", "INFO")
+
+            # Store comm reference for delta cache dumping
+            try:
+                comm = get_comm()
+                if comm:
+                    globals()["_comm_obj"] = comm
+                    logger.log("[supervisor.bootstrap] stored comm reference for delta cache", "INFO")
+            except Exception as e:
+                logger.log(f"[supervisor.bootstrap] could not get comm: {e}", "WARNING")
+
         except Exception as e:
-            log.error(f"[supervisor.bootstrap] bootstrap_bind_all failed: {e}", exc_info=True)
+            logger.log(f"[supervisor.bootstrap] ❌ bootstrap_bind_all failed: {e}", "ERROR")
+            logger.log(f"[supervisor.bootstrap] traceback:\n{traceback.format_exc()}", "ERROR")
             marker = outdir / "bootstrap_failed_supervisor.txt"
             try:
                 marker.write_text(f"Bootstrap error: {e}\n{traceback.format_exc()}", encoding="utf-8")
             except Exception:
                 pass
+            raise  # Re-raise to make failure obvious
+    else:
+        logger.log("[supervisor.bootstrap] ❌ bootstrap_bind_all not available", "ERROR")
+        raise ImportError("bootstrap_bind_all not available")
 
-    # ---------- Communicator from COMM_SPEC ----------
-    COMM_SPEC = runtime_globals.get("COMM_SPEC") or {}
-    if COMM_SPEC:
-        try:
-            REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
-            REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-            REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
-            REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-            redis_url = REDIS_URL
-            if redis_url.startswith('"') and redis_url.endswith('"'):
-                redis_url = redis_url[1:-1]
-            redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url
-            log.info(f"[supervisor.bootstrap] Redis url: {redis_url_safe}")
-
-            channel = (COMM_SPEC or {}).get("channel") or "chat.events"
-            relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
-            emitter = _RelayEmitterAdapter(relay)
-            svc = ServiceCtx(**(COMM_SPEC.get("service") or {}))
-            conv = ConversationCtx(**(COMM_SPEC.get("conversation") or {}))
-            comm = ChatCommunicator(
-                emitter=emitter,
-                service=svc.model_dump() if hasattr(svc, "model_dump") else dict(svc),
-                conversation=conv.model_dump() if hasattr(conv, "model_dump") else dict(conv),
-                room=COMM_SPEC.get("room"),
-                target_sid=COMM_SPEC.get("target_sid"),
-            )
-            set_comm(comm)
-            globals()["_comm_obj"] = comm  # for delta cache dumping
-            log.info("[supervisor.bootstrap] ChatCommunicator initialized successfully")
-        except Exception as e:
-            log.error(f"[supervisor.bootstrap] Communicator setup failed: {e}", exc_info=True)
+# def _bootstrap_supervisor_runtime(
+#     runtime_globals: Dict[str, Any],
+#     tool_module_names: list[str],
+#     logger: AgentLogger,
+#     outdir: pathlib.Path,
+# ) -> None:
+#     """
+#     This function runs in the supervisor process once, before we accept any tool calls.
+#
+#     It mirrors what the injected header used to do inside user code (in the non-isolated mode):
+#       - Restores ContextVars (OUTDIR / WORKDIR).
+#       - Bootstraps ModelService / registry / KB for tool modules.
+#       - Rebuilds ChatCommunicator from COMM_SPEC and registers it via set_comm().
+#     """
+#     import logging
+#     import traceback
+#     import json as _json
+#     from kdcube_ai_app.apps.chat.sdk.protocol import (
+#         ChatEnvelope,
+#         ServiceCtx,
+#         ConversationCtx,
+#     )
+#     from kdcube_ai_app.apps.chat.emitters import (
+#         ChatRelayCommunicator,
+#         ChatCommunicator,
+#         _RelayEmitterAdapter,
+#     )
+#
+#     # ---------- OUTDIR_CV / WORKDIR_CV ----------
+#     outdir_s = os.environ.get("OUTPUT_DIR")
+#     workdir_s = os.environ.get("WORKDIR")
+#     if outdir_s:
+#         OUTDIR_CV.set(outdir_s)
+#     if workdir_s:
+#         WORKDIR_CV.set(workdir_s)
+#
+#     # ---------- Portable Spec & modules ----------
+#     ps = runtime_globals.get("PORTABLE_SPEC_JSON") or runtime_globals.get("PORTABLE_SPEC")
+#     if isinstance(ps, dict):
+#         ps_str = _json.dumps(ps, ensure_ascii=False)
+#     else:
+#         ps_str = ps
+#
+#     TOOL_ALIAS_MAP = runtime_globals.get("TOOL_ALIAS_MAP") or {}
+#     TOOL_MODULE_FILES = runtime_globals.get("TOOL_MODULE_FILES") or {}
+#     RAW_TOOL_SPECS = runtime_globals.get("RAW_TOOL_SPECS") or []  # ← Need this!
+#
+#     # Build a map from alias → module name for library modules
+#     alias_to_module: Dict[str, str] = {}
+#     for spec in RAW_TOOL_SPECS:
+#         if "module" in spec and spec.get("alias"):
+#             alias_to_module[spec["alias"]] = spec["module"]
+#
+#     # Preload dyn alias modules from TOOL_MODULE_FILES
+#     import importlib.util as _importlib_util
+#     for alias, dyn_name in (TOOL_ALIAS_MAP or {}).items():
+#         path = (TOOL_MODULE_FILES or {}).get(alias)
+#
+#         # If path is None, try to resolve from RAW_TOOL_SPECS module name
+#         if not path and alias in alias_to_module:
+#             module_name = alias_to_module[alias]
+#             try:
+#                 spec = importlib.util.find_spec(module_name)
+#                 if spec and spec.origin:
+#                     path = spec.origin
+#                     logger.log(
+#                         f"[supervisor.bootstrap] resolved library module: "
+#                         f"{alias} → {module_name} → {path}",
+#                         "INFO"
+#                     )
+#             except Exception as e:
+#                 logger.log(
+#                     f"[supervisor.bootstrap] failed to resolve module {module_name}: {e}",
+#                     "ERROR"
+#                 )
+#                 continue
+#
+#         if not path:
+#             logger.log(f"[supervisor.bootstrap] no path for alias {alias}, skipping dyn load", "WARNING")
+#             continue
+#
+#         try:
+#             spec = _importlib_util.spec_from_file_location(dyn_name, path)
+#             if spec is None or spec.loader is None:
+#                 continue
+#             mod = _importlib_util.module_from_spec(spec)
+#             sys.modules[dyn_name] = mod
+#             spec.loader.exec_module(mod)  # type: ignore[union-attr]
+#             logger.log(f"[supervisor.bootstrap] loaded dyn module {dyn_name} from {path}", "INFO")
+#         except Exception as e:
+#             logger.log(f"[supervisor.bootstrap] failed to load {dyn_name} from {path}: {e}", "ERROR")
+#
+#     # Build full module list for bootstrap_bind_all
+#     bind_targets = list(tool_module_names or [])
+#     for dyn_name in (TOOL_ALIAS_MAP or {}).values():
+#         if dyn_name and dyn_name not in bind_targets:
+#             bind_targets.append(dyn_name)
+#
+#     if ps_str and bind_targets and bootstrap_bind_all is not None:
+#         try:
+#             bootstrap_bind_all(ps_str, module_names=bind_targets)
+#             logger.log(f"[supervisor.bootstrap] bootstrap_bind_all completed for {len(bind_targets)} modules", "INFO")
+#         except Exception as e:
+#             logger.log(f"[supervisor.bootstrap] bootstrap_bind_all failed: {e}", "ERROR")
+#             marker = outdir / "bootstrap_failed_supervisor.txt"
+#             try:
+#                 marker.write_text(f"Bootstrap error: {e}\n{traceback.format_exc()}", encoding="utf-8")
+#             except Exception:
+#                 pass
+#
+#     # ---------- Communicator from COMM_SPEC ----------
+#     COMM_SPEC = runtime_globals.get("COMM_SPEC") or {}
+#     if COMM_SPEC:
+#         try:
+#             REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
+#             REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
+#             REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
+#             REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+#             redis_url = REDIS_URL
+#             if redis_url.startswith('"') and redis_url.endswith('"'):
+#                 redis_url = redis_url[1:-1]
+#             redis_url_safe = redis_url.replace(REDIS_PASSWORD, "REDIS_PASSWORD") if REDIS_PASSWORD else redis_url
+#             logger.log(f"[supervisor.bootstrap] Redis url: {redis_url_safe}", "INFO")
+#
+#             channel = (COMM_SPEC or {}).get("channel") or "chat.events"
+#             relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
+#             emitter = _RelayEmitterAdapter(relay)
+#             svc = ServiceCtx(**(COMM_SPEC.get("service") or {}))
+#             conv = ConversationCtx(**(COMM_SPEC.get("conversation") or {}))
+#             comm = ChatCommunicator(
+#                 emitter=emitter,
+#                 service=svc.model_dump() if hasattr(svc, "model_dump") else dict(svc),
+#                 conversation=conv.model_dump() if hasattr(conv, "model_dump") else dict(conv),
+#                 room=COMM_SPEC.get("room"),
+#                 target_sid=COMM_SPEC.get("target_sid"),
+#             )
+#             set_comm(comm)
+#             globals()["_comm_obj"] = comm  # for delta cache dumping
+#             logger.log("[supervisor.bootstrap] ChatCommunicator initialized successfully", "INFO")
+#         except Exception as e:
+#             logger.log(f"[supervisor.bootstrap] Communicator setup failed: {e}", "ERROR")
 
 
 def _dump_delta_cache_file(outdir: pathlib.Path, logger: AgentLogger) -> None:
@@ -339,7 +514,7 @@ async def _async_main() -> int:
     _bootstrap_supervisor_runtime(runtime_globals, tool_module_names, logger, outdir)
 
     # 🔹 2. Prepare supervisor object & Unix server
-    socket_path = os.environ.get("SUPERVISOR_SOCKET", "/tmp/supervisor.sock")
+    socket_path = os.environ.get("SUPERVISOR_SOCKET_PATH", "/tmp/supervisor.sock")
     # Remove old socket
     try:
         os.unlink(socket_path)
@@ -347,24 +522,9 @@ async def _async_main() -> int:
         pass
 
     sup = PrivilegedSupervisor(socket_path=socket_path, logger=logger)
-
-    # Register allowed tools / callables from registry
-    if tool_registry is not None:
-        try:
-            tool_ids = tool_registry.list_tool_ids()
-            sup.set_allowed_tools(tool_ids)
-            tool_map = tool_registry.build_tool_map()  # id -> callable
-            sup.register_tool_callables(tool_map)
-            logger.log(
-                f"[entry] supervisor registered {len(tool_ids)} allowed tools", level="INFO"
-            )
-        except Exception as e:
-            logger.log(f"[entry] tool_registry wiring failed: {e}", level="ERROR")
-    else:
-        logger.log(
-            "[entry] no tool_registry module; supervisor will rely on dynamic resolution",
-            level="WARNING",
-        )
+    alias_map = runtime_globals.get("TOOL_ALIAS_MAP") or {}
+    sup.set_alias_map(alias_map)
+    logger.log(f"[entry] Set alias map with {len(alias_map)} entries: {list(alias_map.keys())}", level="INFO")
 
     # Async Unix server so all requests share the same ContextVars
     server = await asyncio.start_unix_server(
@@ -372,7 +532,7 @@ async def _async_main() -> int:
         path=socket_path,
         backlog=8,
     )
-    os.chmod(socket_path, 0o600)
+    os.chmod(socket_path, 0o666)
 
     logger.log(f"[entry] supervisor listening on {socket_path}", level="INFO")
 

@@ -1,52 +1,83 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# kdcube_ai_app/apps/chat/sdk/runtime/secure_client.py
+# kdcube_ai_app/apps/chat/sdk/runtime/isolated/secure_client.py
 
-import socket
+import asyncio
 import json
+import base64
+from typing import Any, Dict
+
 
 class ToolStub:
-    """This module is imported by generated code
-
-    Even though this is open source and the attacker can read it,
-    they CANNOT replicate it because:
-    1. They don't run in the correct UID (1001)
-    2. They don't have the correct PID
-    3. The socket is only accessible to the supervisor's child
-    """
+    """Client for calling tools via the privileged supervisor socket."""
 
     def __init__(self, socket_path: str = '/tmp/supervisor.sock'):
         self.socket_path = socket_path
 
-    def call_tool(self, tool_id: str, params: dict, reason: str | None = None) -> dict:
-        """Call the privileged supervisor for a tool execution.
+    @staticmethod
+    def _encode_params(params: dict) -> dict:
+        """Recursively encode bytes values as base64 with special marker."""
+        if not isinstance(params, dict):
+            return params
 
-        We always talk in terms of tool_id, never alias.
-        but the supervisor will reject the connection because:
-        - Wrong PID (kernel enforced via SO_PEERCRED)
-        - Wrong UID (process runs as different user)
+        result = {}
+        for key, value in params.items():
+            if isinstance(value, bytes):
+                result[key] = {
+                    "__type__": "bytes",
+                    "__data__": base64.b64encode(value).decode("ascii")
+                }
+            elif isinstance(value, dict):
+                result[key] = ToolStub._encode_params(value)
+            elif isinstance(value, list):
+                result[key] = [
+                    ToolStub._encode_params(item) if isinstance(item, dict) else item
+                    for item in value
+                ]
+            else:
+                result[key] = value
+        return result
 
-        _call_supervisor('web_search', {'query': query...})
+    async def call_tool(self, tool_id: str, params: dict, reason: str | None = None) -> dict:
         """
+        Call the privileged supervisor for a tool execution.
+        Now ASYNC to properly integrate with the executor's event loop.
+        """
+        # Encode any bytes parameters
+        encoded_params = self._encode_params(params or {})
+
         payload = {
             "tool_id": tool_id,
-            "params": params or {},
+            "params": encoded_params,
         }
         if reason:
             payload["reason"] = reason
 
         try:
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.connect(self.socket_path)
+            # Use asyncio Unix socket connection
+            reader, writer = await asyncio.open_unix_connection(self.socket_path)
 
-            request = json.dumps(payload)
-            sock.sendall(request.encode("utf-8"))
+            # Send request
+            request = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            writer.write(request)
+            await writer.drain()
 
-            # naive single-read; can be extended to loop if needed
-            response = sock.recv(4096)
-            sock.close()
+            # Signal we're done sending
+            writer.write_eof()
 
-            return json.loads(response.decode("utf-8"))
+            # Read response until EOF
+            response_bytes = await reader.read()
+
+            writer.close()
+            await writer.wait_closed()
+
+            if not response_bytes:
+                return {"ok": False, "error": "Empty response from supervisor"}
+
+            return json.loads(response_bytes.decode("utf-8"))
+
+        except json.JSONDecodeError as e:
+            return {"ok": False, "error": f"Invalid JSON from supervisor: {e}"}
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": f"Stub connection failed: {e}"}

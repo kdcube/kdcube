@@ -9,6 +9,7 @@ import os
 import pathlib
 from typing import Dict, Any, Optional
 
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.environment import filter_host_environment
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 _DEFAULT_IMAGE = os.environ.get("PY_CODE_EXEC_IMAGE", "py-code-exec:latest")
@@ -29,6 +30,7 @@ def _build_docker_argv(
         extra_args: list[str] | None = None,
         bundle_root: pathlib.Path | None = None,
         bundle_id: str | None = None,
+        network_mode: str | None = None,
 ) -> list[str]:
     """
     Build a `docker run` invocation that:
@@ -39,6 +41,9 @@ def _build_docker_argv(
       - uses `image` as the container image
     """
     argv: list[str] = ["docker", "run", "--rm"]
+    # CRITICAL: Allow network namespace creation (unshare) for isolation
+    argv += ["--cap-add=SYS_ADMIN"]
+    argv += ["--network", network_mode]
 
     # Optional extra args (e.g. --network, --cpus) if you ever need them
     if extra_args:
@@ -103,6 +108,7 @@ async def run_py_in_docker(
         extra_env: Optional[Dict[str, str]] = None,
         bundle_root: Optional[pathlib.Path] = None,
         extra_docker_args: Optional[list[str]] = None,
+        network_mode: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     High-level helper used by iso_runtime / ReAct execution:
@@ -122,6 +128,11 @@ async def run_py_in_docker(
         (header injection, bootstrap, writing result.json, runtime logs, etc.)
     """
     log = logger or AgentLogger("docker.exec")
+
+    base_env = filter_host_environment(os.environ.copy())
+    # Add any extra_env passed in
+    if extra_env:
+        base_env.update(extra_env)
 
     workdir = workdir.resolve()
     outdir = outdir.resolve()
@@ -170,11 +181,11 @@ async def run_py_in_docker(
         tg["BUNDLE_ROOT_CONTAINER"] = container_bundle_root
         runtime_globals = tg
 
-    base_env: Dict[str, str] = dict(extra_env or {})
     base_env["RUNTIME_GLOBALS_JSON"] = json.dumps(runtime_globals, ensure_ascii=False)
     base_env["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
     base_env["WORKDIR"]               = "/workspace/work"
     base_env["OUTPUT_DIR"]            = "/workspace/out"
+    base_env["LOG_DIR"] = "/workspace/out/logs"
 
     img = image or _DEFAULT_IMAGE
     to = timeout_s or _DEFAULT_TIMEOUT_S
@@ -188,6 +199,7 @@ async def run_py_in_docker(
         extra_args=extra_docker_args or [],
         bundle_root=bundle_root,
         bundle_id=bundle_dir,   # <-- this is the first segment of module name
+        network_mode=network_mode or "host",
     )
 
     log.log(f"[docker.exec] Running: {' '.join(argv)}")

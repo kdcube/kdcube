@@ -5,6 +5,7 @@
 
 import os, json, pathlib, re, mimetypes, inspect
 from typing import Annotated, Optional, Any, Dict, List, Tuple
+import base64
 
 import semantic_kernel as sk
 
@@ -58,6 +59,62 @@ def _sanitize_tool_id(tid: str) -> str:
 def _guess_mime(path: str, default: str = "application/octet-stream") -> str:
     mt, _ = mimetypes.guess_type(path)
     return mt or default
+
+def _serialize_params_for_json(params: dict) -> str:
+    """
+    Serialize params to JSON, base64-encoding any bytes values.
+    This is for persisting tool calls, not for execution.
+    """
+    def encode_value(v):
+        if isinstance(v, bytes):
+            return {
+                "__type__": "bytes",
+                "__data__": base64.b64encode(v).decode("ascii"),
+                "__length__": len(v)
+            }
+        elif isinstance(v, dict):
+            return {k: encode_value(val) for k, val in v.items()}
+        elif isinstance(v, list):
+            return [encode_value(item) for item in v]
+        else:
+            return v
+
+    encoded = {k: encode_value(v) for k, v in params.items()}
+    return json.dumps(encoded, ensure_ascii=False, default=str)
+
+def _normalize_workdir_paths(data: Any,
+                             workspace_outdir: str = "/workspace/out") -> Any:
+    """
+    Recursively scan data for container paths and convert to relative paths.
+
+    Converts:
+      - "/workspace/out/file.xlsx" → "file.xlsx"
+      - "/workspace/out/subdir/file.txt" → "subdir/file.txt"
+
+    Works on strings, dicts, lists, and nested structures.
+    """
+    if isinstance(data, str):
+        # Check if it's a container path
+        if data.startswith(workspace_outdir + "/"):
+            # Strip the container prefix, keep relative path
+            return data[len(workspace_outdir) + 1:]
+        elif data == workspace_outdir:
+            # Edge case: path is exactly the outdir
+            return "."
+        return data
+
+    elif isinstance(data, dict):
+        return {k: _normalize_workdir_paths(v, workspace_outdir) for k, v in data.items()}
+
+    elif isinstance(data, list):
+        return [_normalize_workdir_paths(item, workspace_outdir) for item in data]
+
+    elif isinstance(data, tuple):
+        return tuple(_normalize_workdir_paths(item, workspace_outdir) for item in data)
+
+    else:
+        # Primitives (int, float, bool, None, etc.) pass through unchanged
+        return data
 
 def _extract_candidate_sources_from_tool_output(tool_id: str, tool_output: Any) -> List[Dict[str, Any]]:
     """
@@ -475,16 +532,21 @@ class AgentIO:
     async def tool_call(
             self,
             fn: Annotated[Any, "Callable tool to invoke (e.g., generic_tools.web_search)."],
-            params_json: Annotated[str, "JSON-encoded dict of keyword arguments forwarded to the tool."] = "{}",
+            params: Annotated[str | dict, "Tool parameters. Pass as JSON string or dict. Dict form supports bytes for binary content."] = "{}",
             call_reason: Annotated[Optional[str], "Short human reason for the call (5–12 words)."] = None,
             tool_id: Annotated[Optional[str], "Qualified id like 'generic_tools.web_search'. If omitted, derived from fn.__module__+'.'+fn.__name__."] = None,
             filename: Annotated[Optional[str], "Override filename for the saved JSON (relative in OUTPUT_DIR)."] = None,
     ) -> Annotated[Any, "Raw return from the tool"]:
-        # parse params
-        try:
-            params = json.loads(params_json) if isinstance(params_json, str) else dict(params_json or {})
-        except Exception:
-            params = {"_raw": params_json}
+        # ---- Parse params: accept str (JSON) or dict ----
+        if isinstance(params, dict):
+            final_params = params  # Use directly (may contain bytes)
+        elif isinstance(params, str):
+            try:
+                final_params = json.loads(params)
+            except Exception:
+                final_params = {"_raw": params}
+        else:
+            final_params = {}
 
         # ---- Compute tool_id (tid) exactly once ----------------------------
         if tool_id:
@@ -508,7 +570,7 @@ class AgentIO:
             stub = ToolStub(socket_path=socket_path)
 
             try:
-                stub_res = stub.call_tool(tool_id=tid, params=params, reason=str(call_reason or ""))
+                stub_res = await stub.call_tool(tool_id=tid, params=final_params, reason=str(call_reason or ""))
 
                 if not isinstance(stub_res, dict):
                     raise RuntimeError(f"Bad supervisor response type: {type(stub_res)!r}")
@@ -521,7 +583,7 @@ class AgentIO:
                         tool_id=tid,
                         description=str(call_reason or ""),
                         data=ret,
-                        params=json.dumps(params, ensure_ascii=False, default=str),
+                        params=final_params,
                         index=i,
                         filename=rel,
                     )
@@ -544,7 +606,7 @@ class AgentIO:
                     tool_id=tid,
                     description=str(call_reason or ""),
                     data=err_env,
-                    params=json.dumps(params, ensure_ascii=False, default=str),
+                    params=final_params,
                     index=i,
                     filename=rel,
                 )
@@ -569,7 +631,7 @@ class AgentIO:
                         tool_id=tid,
                         description=str(call_reason or ""),
                         data=err_env,
-                        params=json.dumps(params, ensure_ascii=False, default=str),
+                        params=final_params,
                         index=i,
                         filename=rel,
                     )
@@ -585,7 +647,7 @@ class AgentIO:
             if fn is None:
                 raise ValueError("tool_call: fn cannot be None in local/supervisor mode")
 
-            ret = fn(**params) if params else fn()
+            ret = fn(**final_params) if final_params else fn()
             if inspect.isawaitable(ret):
                 ret = await ret
 
@@ -594,7 +656,7 @@ class AgentIO:
                 tool_id=tid,
                 description=str(call_reason or ""),
                 data=ret,  # raw
-                params=json.dumps(params, ensure_ascii=False, default=str),
+                params=final_params,
                 index=i,
                 filename=rel,
             )
@@ -620,7 +682,7 @@ class AgentIO:
                     tool_id=tid,
                     description=str(call_reason or ""),
                     data=err_env,  # stored in ret
-                    params=json.dumps(params, ensure_ascii=False, default=str),
+                    params=final_params,
                     index=i,
                     filename=rel,
                 )
@@ -636,7 +698,7 @@ class AgentIO:
             tool_id: str,
             description: Optional[str],
             data: Any,
-            params: str = "{}",
+            params: str | dict = "{}",
             index: int = 0,
             filename: Optional[str] = None,
     ) -> str:
@@ -644,11 +706,26 @@ class AgentIO:
         rel = filename or f"{_sanitize_tool_id(tool_id)}-{index}.json"
         path = od / rel
 
-        # decode params
+        # Decode params if string, or use directly if dict
+        if isinstance(params, dict):
+            p = params  # For payload structure
+            params_json_str = _serialize_params_for_json(params)  # Safe JSON with base64 for bytes
+        elif isinstance(params, str):
+            try:
+                p = json.loads(params)
+                params_json_str = params
+            except Exception:
+                p = {"_raw": params}
+                params_json_str = json.dumps(p)
+        else:
+            p = {}
+            params_json_str = "{}"
+
+        # Parse params_json_str to get the dict for normalization
         try:
-            p = json.loads(params) if isinstance(params, str) else dict(params or {})
+            p = json.loads(params_json_str)
         except Exception:
-            p = {"_raw": params}
+            p = {"_raw": params_json_str}
 
         # keep RAW unless it's JSON-looking string
         ret: Any = data
@@ -659,6 +736,9 @@ class AgentIO:
                     ret = json.loads(s)
                 except Exception:
                     ret = s
+        # Normalize container paths to relative paths
+        # This makes persisted JSON portable for the host
+        ret = _normalize_workdir_paths(ret, workspace_outdir=str(resolve_output_dir()))
 
         payload = {"description": description or "", "in": {"tool_id": tool_id, "params": p}, "ret": ret}
         try:

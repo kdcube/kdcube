@@ -9,7 +9,7 @@ import os, sys
 import asyncio
 import pathlib
 import tokenize
-from typing import Dict, Any, List, Tuple, Optional
+from typing import Dict, Any, List, Tuple, Optional, Literal
 
 from kdcube_ai_app.apps.chat.sdk.util import strip_lone_surrogates
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
@@ -24,7 +24,7 @@ def build_current_tool_imports(alias_map: dict[str, str]) -> str:
     Returns a Markdown code block with python import lines.
     """
     # Always show the wrapper import first
-    lines = ["from io_tools import tools as agent_io_tools  # wrapper for tool_call/save_ret"]
+    lines = ["from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools  # wrapper for tool_call/save_ret"]
     seen = set()
 
     for alias, module in (alias_map or {}).items():
@@ -193,25 +193,57 @@ def _module_parent_dirs(tool_modules: List[Tuple[str, object]]) -> List[str]:
             uniq.append(d); seen.add(d)
     return uniq
 
-async def _run_subprocess(entry_path: pathlib.Path, *, cwd: pathlib.Path, env: dict, timeout_s: int, outdir: pathlib.Path, sandbox_fs: bool = True, sandbox_net: bool = True) -> Dict[str, Any]:
+async def _run_subprocess(entry_path: pathlib.Path, *,
+                          cwd: pathlib.Path,
+                          env: dict,
+                          timeout_s: int,
+                          outdir: pathlib.Path,
+                          allow_network: bool = True) -> Dict[str, Any]:
     """
     Environment toggles (per-call via env, or global via os.environ):
-      - sandbox_fs: True -> enable FS sandbox if bwrap present
-                    False (default)          -> disable sandbox
-      - sandbox_net: True (default) -> network allowed
-                     False          -> network disabled (--unshare-net)
+      - allow_network: True (default) -> network allowed
+                       False          -> network disabled (--unshare-net)
     """
-    from kdcube_ai_app.apps.chat.sdk.runtime import bubblewrap as bwrap
-    use_sandbox = sandbox_fs and bwrap.bwrap_available()
 
-    if use_sandbox:
-        proc = await bwrap.run_proc(entry_path=entry_path,
-                                    cwd=cwd,
-                                    env=env,
-                                    outdir=outdir,
-                                    sandbox_net=sandbox_net) # Child env as seen inside sandbox
+    import logging
+    import ctypes
+    log = logging.getLogger("agent.runtime")
+
+    CLONE_NEWNET = 0x40000000
+    EXECUTOR_UID = 1001
+    EXECUTOR_GID = 1001
+
+    def preexec_fn():
+        """This runs in the child process BEFORE exec.
+        We're still root here, so we can create namespace and drop privileges."""
+        try:
+            # 1. Create isolated network namespace (requires root)
+            libc = ctypes.CDLL("libc.so.6")
+            if libc.unshare(CLONE_NEWNET) != 0:
+                raise OSError(f"unshare(CLONE_NEWNET) failed")
+
+            # 2. Drop to unprivileged user
+            os.setgid(EXECUTOR_GID)
+            os.setuid(EXECUTOR_UID)
+
+            log.info(f"[executor] Network isolated and dropped to UID {EXECUTOR_UID}")
+        except Exception as e:
+            log.error(f"[executor] Isolation failed: {e}")
+            raise
+    if not allow_network:
+        # Original behavior
+        log.info(f"[_run_subprocess] Starting isolated executor (root→uid 1001, no network)")
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-u", str(entry_path),
+            cwd=str(cwd),
+            env=env,
+            preexec_fn=preexec_fn,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
     else:
         # Original behavior
+        log.info(f"[_run_subprocess] Using plain subprocess for {entry_path}")
         proc = await asyncio.create_subprocess_exec(
             sys.executable, "-u", str(entry_path),
             cwd=str(cwd),
@@ -279,7 +311,7 @@ from pathlib import Path
 import json as _json
 import os, importlib, asyncio, atexit, signal, sys, traceback
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
-from io_tools import tools as agent_io_tools
+from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
 import logging
 import kdcube_ai_app.apps.utils.logging_config as logging_config
@@ -334,7 +366,7 @@ def _bootstrap_child():
     try:
         if _PORTABLE_SPEC and _BIND_TARGETS:
             from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all as _bootstrap_all
-            _bootstrap_all(_PORTABLE_SPEC, module_names=_BIND_TARGETS)
+            _bootstrap_all(_PORTABLE_SPEC, module_names=_BIND_TARGETS, bootstrap_env=True)
             logger.info(f"Bootstrap completed successfully for {len(_BIND_TARGETS)} modules")
     except Exception as e:
         # Log with full traceback
@@ -755,10 +787,9 @@ def _build_iso_injected_header(*, globals_src: str, imports_src: str) -> str:
 # === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
 from pathlib import Path
 import json as _json
-import os, asyncio, atexit, signal, sys
-
+import os, asyncio, atexit, signal, sys, importlib
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
-from io_tools import tools as agent_io_tools
+from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
 import logging
 import kdcube_ai_app.apps.utils.logging_config as logging_config
@@ -787,6 +818,57 @@ except Exception:
 
 # --- Globals provided by parent (must come before alias imports) ---
 <GLOBALS_SRC>
+
+# --- Dyn tool modules pre-registration (by file path) ---
+# CRITICAL: Load dynamic modules before import statements try to use them
+_ALIAS_TO_DYN  = globals().get("TOOL_ALIAS_MAP", {}) or {}
+_ALIAS_TO_FILE = globals().get("TOOL_MODULE_FILES", {}) or {}
+_RAW_TOOL_SPECS = globals().get("RAW_TOOL_SPECS", []) or []
+
+# Build a map from alias → module name for library modules
+_alias_to_module: dict[str, str] = {}
+for _spec in _RAW_TOOL_SPECS:
+    if "module" in _spec and _spec.get("alias"):
+        _alias_to_module[_spec["alias"]] = _spec["module"]
+
+# Preload dyn alias modules
+for _alias, _dyn_name in (_ALIAS_TO_DYN or {}).items():
+    _path = (_ALIAS_TO_FILE or {}).get(_alias)
+    
+    # If path is None, try to resolve from RAW_TOOL_SPECS module name
+    if not _path and _alias in _alias_to_module:
+        _module_name = _alias_to_module[_alias]
+        try:
+            _spec_obj = importlib.util.find_spec(_module_name)
+            if _spec_obj and _spec_obj.origin:
+                _path = _spec_obj.origin
+                logger.info(
+                    f"[executor] resolved library module: "
+                    f"{_alias} → {_module_name} → {_path}"
+                )
+        except Exception as _e:
+            logger.error(
+                f"[executor] failed to resolve module {_module_name}: {_e}",
+                exc_info=True
+            )
+            continue
+    
+    if not _path:
+        logger.warning(f"[executor] no path for alias {_alias}, skipping dyn load")
+        continue
+        
+    try:
+        _spec = importlib.util.spec_from_file_location(_dyn_name, _path)
+        if _spec is None or _spec.loader is None:
+            logger.error(f"[executor] Could not create spec for {_dyn_name} from {_path}")
+            continue
+        _mod = importlib.util.module_from_spec(_spec)
+        sys.modules[_dyn_name] = _mod
+        _spec.loader.exec_module(_mod)
+        logger.info(f"[executor] Loaded dynamic module {_dyn_name} from {_path}")
+    except Exception as e:
+        logger.error(f"[executor] Failed to load {_dyn_name} from {_path}: {e}", exc_info=True)
+        print(f"[ERROR] Module load failed: {_alias} -> {_dyn_name}: {e}", file=sys.stderr)
 
 # --- Tool alias imports (auto-injected) ---
 <TOOL_IMPORTS_SRC>
@@ -1023,30 +1105,47 @@ class _InProcessRuntime:
                 sys.modules[name] = mod
 
     async def run_main_py_subprocess(
-        self,
-        *,
-        workdir: pathlib.Path,
-        output_dir: pathlib.Path,
-        bundle_root: str|None,
-        tool_modules: List[Tuple[str, object]],
-        globals: Dict[str, Any] | None = None,
-        docker: bool = False,
-        timeout_s: int = 90,
+            self,
+            *,
+            workdir: pathlib.Path,
+            output_dir: pathlib.Path,
+            bundle_root: str|None,
+            tool_modules: List[Tuple[str, object]],
+            globals: Dict[str, Any] | None = None,
+            isolation: Optional[Literal["none", "local_network", "docker", "local"]] = "none",
+            timeout_s: int = 90,
     ) -> Dict[str, Any]:
-        """
-        Execute workdir/main.py in an isolated runtime.
+        """Execute workdir/main.py in an isolated runtime."""
 
-        - docker=False: spawn a local subprocess (optionally bwrap-sandboxed).
-        - docker=True : delegate to docker.run_py_in_docker(), which will run
-                        iso_runtime.run_py_code() inside the py-code-exec container.
+        # Make a working copy so we don't mutate caller's dict
+        g = dict(globals or {})
 
-        In both modes we:
-          - fix JSON booleans
-          - scan f-strings
-          - inject the runtime header (globals + TOOL_ALIAS_MAP imports)
-          - compute the tool module list (RUNTIME_TOOL_MODULES / SHUTDOWN_MODULES)
-          - compute the same runtime env (OUTPUT_DIR, WORKDIR, etc.).
-        """
+        # Compute tool module names (needed by both docker and local)
+        alias_map = g.get("TOOL_ALIAS_MAP") or {}
+        tool_module_names: List[str] = [name for name, _ in (tool_modules or []) if name]
+        for dyn_name in alias_map.values():
+            if dyn_name and dyn_name not in tool_module_names:
+                tool_module_names.append(dyn_name)
+
+        # --- DOCKER BRANCH: Just delegate, don't touch files ---
+        if isolation == "docker":
+            from kdcube_ai_app.apps.chat.sdk.runtime import docker as docker_runtime
+            network_mode = os.environ.get("PY_CODE_EXEC_NETWORK_MODE", "host")
+            # Docker will handle everything - just pass globals as-is
+            # (including PORTABLE_SPEC which supervisor needs)
+            return await docker_runtime.run_py_in_docker(
+                workdir=workdir,
+                outdir=output_dir,
+                runtime_globals=g,  # Keep PORTABLE_SPEC in here!
+                tool_module_names=tool_module_names,
+                logger=self.log,
+                timeout_s=timeout_s,
+                bundle_root=pathlib.Path(bundle_root).resolve() if bundle_root else None,
+                extra_env={},  # Don't duplicate PORTABLE_SPEC in extra_env
+                network_mode=network_mode
+            )
+
+        # --- LOCAL BRANCH: Prepare file and run subprocess ---
         workdir.mkdir(parents=True, exist_ok=True)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1054,121 +1153,50 @@ class _InProcessRuntime:
         if not main_path.exists():
             raise FileNotFoundError(f"main.py not found in workdir: {workdir}")
 
-        # --- Read & transform main.py (host-side) ---------------------------
+        # Read & transform main.py
         src = main_path.read_text(encoding="utf-8")
         src = _fix_json_bools(src)
         src = _validate_and_report_fstring_issues(src, workdir)
 
-        # Make a working copy of globals so we don't mutate the caller dict
-        g = dict(globals or {})
-
-        # Build globals prelude (simple assignments)
-        globals_src = ""
-        for k, v in g.items():
-            if k and (k != "__name__"):
-                globals_src += f"\n{k} = {repr(v)}\n"
-
-        # Build alias import block from TOOL_ALIAS_MAP provided by the caller
+        # Build imports for header
         imports_src = ""
-        alias_map = (g.get("TOOL_ALIAS_MAP") or {}) if g else {}
         for alias, mod_name in (alias_map or {}).items():
             imports_src += f"\nfrom {mod_name} import tools as {alias}\n"
 
-        if docker:
-            injected_header = _build_iso_injected_header(globals_src=globals_src, imports_src=imports_src)
-        else:
-            injected_header = _build_injected_header(globals_src=globals_src, imports_src=imports_src)
+        # Build globals for header (exclude PORTABLE_SPEC from injected code)
+        globals_src = ""
+        for k, v in g.items():
+            if k and k != "__name__" and k not in {"PORTABLE_SPEC", "PORTABLE_SPEC_JSON"}:
+                globals_src += f"\n{k} = {repr(v)}\n"
 
+        # Inject header
+        injected_header = _build_injected_header(globals_src=globals_src, imports_src=imports_src)
         src = _inject_header_after_future(src, injected_header)
         main_path.write_text(src, encoding="utf-8")
 
-        # --- Compute tool module names (for bootstrap + shutdown) -----------
-        tool_module_names: List[str] = [name for name, _ in (tool_modules or []) if name]
+        # Build subprocess env
+        child_env = os.environ.copy()
+        child_env["OUTPUT_DIR"] = str(output_dir)
+        child_env["WORKDIR"] = str(workdir)
 
-        # ALSO bind into dynamic alias modules so bootstrap reaches them
-        for dyn_name in (alias_map or {}).values():
-            if dyn_name and dyn_name not in tool_module_names:
-                tool_module_names.append(dyn_name)
-
-        # --- Sandbox flags (same semantics for both backends) ---------------
-        sandbox_fs = False
-        sandbox_net = True
-        if "SANDBOX_FS" in g:
-            sandbox_fs = str(g["SANDBOX_FS"]) != "0"
-        if "SANDBOX_NET" in g:
-            sandbox_net = str(g["SANDBOX_NET"]) != "0"
-
-        # --- PortableSpec handling (shared) ---------------------------------
-        # Accept either PORTABLE_SPEC_JSON (dict/string) or PORTABLE_SPEC (string)
+        # Serialize runtime_globals (KEEP PORTABLE_SPEC in it for bootstrap to use)
         ps = g.get("PORTABLE_SPEC_JSON") or g.get("PORTABLE_SPEC")
-        portable_spec_str: str | None = None
         if ps is not None:
             portable_spec_str = ps if isinstance(ps, str) else json.dumps(ps, ensure_ascii=False)
-            # don't leak these back into user code
-            g.pop("PORTABLE_SPEC", None)
-            g.pop("PORTABLE_SPEC_JSON", None)
+            child_env["PORTABLE_SPEC"] = portable_spec_str
 
-        # --- Runtime env that both backends see (before adaptation) ---------
-        runtime_env: Dict[str, str] = {}
+        child_env["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
+        shutdown_candidates = list(tool_module_names) + ["kdcube_ai_app.apps.chat.sdk.retrieval.kb_client"]
+        child_env["RUNTIME_SHUTDOWN_MODULES"] = json.dumps(shutdown_candidates, ensure_ascii=False)
 
-        # flags
-        runtime_env["SANDBOX_FS"] = "1" if sandbox_fs else "0"
-        runtime_env["SANDBOX_NET"] = "1" if sandbox_net else "0"
-
-        # dirs (host paths; docker backend will rewrite them to /workspace,/output)
-        runtime_env["OUTPUT_DIR"] = str(output_dir)
-        runtime_env["WORKDIR"] = str(workdir)
-
-        # spec + runtime modules
-        if portable_spec_str is not None:
-            runtime_env["PORTABLE_SPEC"] = portable_spec_str
-
-        runtime_env["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
-
-        shutdown_candidates = list(tool_module_names) + [
-            "kdcube_ai_app.apps.chat.sdk.retrieval.kb_client"
-        ]
-        runtime_env["RUNTIME_SHUTDOWN_MODULES"] = json.dumps(shutdown_candidates, ensure_ascii=False)
-
-        # --- Docker backend --------------------------------------------------
-        if docker:
-            # Pass the same env + globals into the docker runtime.
-            # docker.run_py_in_docker is responsible for:
-            #   - mapping host paths -> container paths
-            #   - exporting runtime_env as container env
-            from kdcube_ai_app.apps.chat.sdk.runtime import docker as docker_runtime
-
-            # Build the *same* env we’d use for a local subprocess
-            host_env = os.environ.copy()
-            host_env.update(runtime_env)
-
-            return await docker_runtime.run_py_in_docker(
-                workdir=workdir,
-                outdir=output_dir,
-                runtime_globals=g,               # includes SANDBOX_* & TOOL_* etc.
-                tool_module_names=tool_module_names,
-                logger=self.log,
-                timeout_s=timeout_s,
-                bundle_root=pathlib.Path(bundle_root).resolve() if bundle_root else None,
-                extra_env=host_env,
-            )
-
-        # --- Local subprocess backend (original behavior) -------------------
-        child_env = os.environ.copy()
-        child_env.update(runtime_env)
-
-        # Augment PYTHONPATH so alias imports (from {mod} import tools as {alias}) resolve
+        # Augment PYTHONPATH
         parents = _module_parent_dirs(tool_modules)
         file_parents: List[str] = []
-        try:
-            alias_files = (g.get("TOOL_MODULE_FILES") or {}) if g else {}
-            for _p in (alias_files or {}).values():
-                if _p:
-                    file_parents.append(str(pathlib.Path(_p).resolve().parent))
-        except Exception:
-            pass
+        alias_files = g.get("TOOL_MODULE_FILES") or {}
+        for _p in (alias_files or {}).values():
+            if _p:
+                file_parents.append(str(pathlib.Path(_p).resolve().parent))
 
-        # de-duplicate while preserving order
         seen = set()
         extra_paths: List[str] = []
         for d in [str(workdir)] + file_parents + parents:
@@ -1176,22 +1204,19 @@ class _InProcessRuntime:
                 extra_paths.append(d)
                 seen.add(d)
 
-        child_env["PYTHONPATH"] = os.pathsep.join(
-            extra_paths + [child_env.get("PYTHONPATH", "")]
-        )
+        child_env["PYTHONPATH"] = os.pathsep.join(extra_paths + [child_env.get("PYTHONPATH", "")])
 
-        # --- Run as subprocess (capture stdout/err to files beside OUTPUT_DIR) ---
+        # Run subprocess
         return await _run_subprocess(
             entry_path=main_path,
             cwd=workdir,
             env=child_env,
             timeout_s=timeout_s,
             outdir=output_dir,
-            sandbox_fs=sandbox_fs,
-            sandbox_net=sandbox_net,
+            allow_network=isolation != "local_network"
         )
 
-    async def run_tool_once_subprocess(
+    async def run_tool_in_isolation(
             self,
             *,
             workdir: pathlib.Path,
@@ -1202,7 +1227,7 @@ class _InProcessRuntime:
             params: Dict[str, Any],
             call_reason: Optional[str] = None,
             globals: Dict[str, Any] | None = None,
-            docker: bool = False,
+            isolation: Optional[Literal["none", "docker", "local_network", "local"]] = "none",
             timeout_s: int = 90,
     ) -> Dict[str, Any]:
         """
@@ -1219,7 +1244,7 @@ class _InProcessRuntime:
         main_py = f"""
 import os, json, importlib, asyncio, sys
 from pathlib import Path
-from io_tools import tools as agent_io_tools
+from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
 TOOL_ID  = {tool_id!r}
 PARAMS   = json.loads({params_json!r})
@@ -1249,7 +1274,7 @@ async def _main():
     # Execute via io_tools so the call is persisted to <sanitized>-<idx>.json and indexed
     await agent_io_tools.tool_call(
         fn=fn,
-        params_json=json.dumps(PARAMS, ensure_ascii=False),
+        params=PARAMS,
         call_reason=REASON,
         tool_id=TOOL_ID
     )
@@ -1269,51 +1294,10 @@ asyncio.run(_main())
             bundle_root=bundle_root,
             tool_modules=tool_modules,
             globals=g,
-            docker=docker,
+            isolation=isolation,
             timeout_s=timeout_s,
         )
         return res
-
-    async def run_finalize_result_subprocess(
-            self,
-            *,
-            workdir: pathlib.Path,
-            output_dir: pathlib.Path,
-            tool_modules: List[Tuple[str, object]],
-            payload: Dict[str, Any],  # {ok, objective, contract, out_dyn}
-            globals: Dict[str, Any] | None = None,
-            timeout_s: int = 90,
-    ) -> Dict[str, Any]:
-        """
-        Write `result.json` in OUTDIR via io_tools.AgentIO.save_ret to ensure canonical
-        citations and promotion of tool call artifacts.
-        """
-        workdir.mkdir(parents=True, exist_ok=True)
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        payload_s = json.dumps(payload, ensure_ascii=False)
-        main_py = f"""
-import json, asyncio
-from io_tools import tools as agent_io_tools
-
-DATA = json.loads({payload_s!r})
-
-async def _main():
-    await agent_io_tools.save_ret(data=json.dumps(DATA, ensure_ascii=False), filename='result.json')
-
-asyncio.run(_main())
-"""
-        (workdir / "main.py").write_text(main_py, encoding="utf-8")
-        res = await self.run_main_py_subprocess(
-            workdir=workdir,
-            output_dir=output_dir,
-            bundle_root=None,
-            tool_modules=tool_modules,
-            globals=dict(globals or {}),
-            timeout_s=timeout_s,
-        )
-        return res
-
 
 # --- Docker entry runtime: run_py_code --------------------------------------
 
@@ -1369,28 +1353,14 @@ async def run_py_code(
         # if you care about consistent home expansion in user code:
         "HOME",
         # custom socket path, so executor can reach supervisor:
-        "SUPERVISOR_SOCKET",
+        "SUPERVISOR_SOCKET_PATH",
     }
     for k in SAFE_KEYS:
         v = base_env.get(k)
-    if v is not None:
-        child_env[k] = v
+        if v is not None:
+            child_env[k] = v
 
-    # SANDBOX flags (inside Docker, FS sandbox is usually not needed)
-    sandbox_fs = False
-    sandbox_net = True
     g = globals or {}
-
-    if "SANDBOX_FS" in g:
-        sandbox_fs = str(g["SANDBOX_FS"]) != "0"
-        child_env["SANDBOX_FS"] = str(g["SANDBOX_FS"])
-    else:
-        # default: disable bwrap in container
-        child_env["SANDBOX_FS"] = "0"
-
-    if "SANDBOX_NET" in g:
-        sandbox_net = str(g["SANDBOX_NET"]) != "0"
-        child_env["SANDBOX_NET"] = str(g["SANDBOX_NET"])
 
     # ❌ IMPORTANT: do NOT propagate PORTABLE_SPEC into executor
     # (we already used it in the supervisor, and py_code_exec_entry
@@ -1403,20 +1373,20 @@ async def run_py_code(
         if k and k != "__name__":
             globals_src += f"\n{k} = {repr(v)}\n"
 
-    # Tool alias imports (must match TOOL_ALIAS_MAP)
+    # # Tool alias imports (must match TOOL_ALIAS_MAP)
     imports_src = ""
     alias_map = (g.get("TOOL_ALIAS_MAP") or {}) if g else {}
     for alias, mod_name in (alias_map or {}).items():
         imports_src += f"\nfrom {mod_name} import tools as {alias}\n"
 
-    injected_header = _build_injected_header(globals_src=globals_src, imports_src=imports_src)
+    injected_header = _build_iso_injected_header(globals_src=globals_src, imports_src=imports_src)
     src = _inject_header_after_future(src, injected_header)
     main_path.write_text(src, encoding="utf-8")
 
     # OUTPUT_DIR / WORKDIR inside this container
     child_env["OUTPUT_DIR"] = str(output_dir)
     child_env["WORKDIR"] = str(workdir)
-
+    child_env["AGENT_IO_CONTEXT"] = "limited"
     # RUNTIME_TOOL_MODULES:
     # - Start from env (if any), then augment with dynamic alias modules from TOOL_ALIAS_MAP
     tool_module_names: list[str] = []
@@ -1432,7 +1402,6 @@ async def run_py_code(
             tool_module_names.append(dyn_name)
 
     child_env["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
-
     # Modules to shutdown on exit (KB client included)
     shutdown_candidates = list(tool_module_names) + [
         "kdcube_ai_app.apps.chat.sdk.retrieval.kb_client"
@@ -1447,15 +1416,18 @@ async def run_py_code(
         f"runtime_modules={tool_module_names}",
         level="INFO",
     )
-
+    log.log(f"[py_code_exec] About to call _run_subprocess", level="INFO")
     # Execute the rewritten main.py as a child process inside this container.
+    log.log(f"[py_code_exec] base_env PYTHONPATH: {base_env.get('PYTHONPATH')}", level="INFO")
+    log.log(f"[py_code_exec] child_env PYTHONPATH: {child_env.get('PYTHONPATH')}", level="INFO")
+    log.log(f"[py_code_exec] child_env keys: {sorted(child_env.keys())}", level="INFO")
     res = await _run_subprocess(
         entry_path=main_path,
         cwd=workdir,
         env=child_env,
         timeout_s=timeout_s,
         outdir=output_dir,
-        sandbox_fs=sandbox_fs,
-        sandbox_net=sandbox_net,
+        allow_network=False,
     )
+    log.log(f"[py_code_exec] _run_subprocess returned: {res}", level="INFO")
     return res

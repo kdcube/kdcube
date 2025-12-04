@@ -186,7 +186,11 @@ class ToolSubsystem:
         except Exception:
             return None
 
-    async def prebind_for_in_memory(self, *, workdir: pathlib.Path, outdir: pathlib.Path, logger: AgentLogger):
+    async def prebind_for_in_memory(self, *,
+                                    workdir: pathlib.Path,
+                                    outdir: pathlib.Path,
+                                    logger: AgentLogger,
+                                    bootstrap_env: bool = True):
         """
         Mirror sandbox bootstrap in-process so io_tools writes to the same outdir/workdir and
         tool modules have service bindings.
@@ -226,7 +230,7 @@ class ToolSubsystem:
         spec = build_portable_spec(svc=self.svc, chat_comm=self.comm)
         bind_names = [m["name"] for m in self._modules]
         try:
-            bootstrap_bind_all(spec.to_json(), module_names=bind_names)
+            bootstrap_bind_all(spec.to_json(), module_names=bind_names, bootstrap_env=bootstrap_env)
             set_comm(self.comm)
         except Exception as e:
             logger.log(f"[tool-subsystem] bootstrap_bind_all/set_comm failed: {e}", level="ERROR")

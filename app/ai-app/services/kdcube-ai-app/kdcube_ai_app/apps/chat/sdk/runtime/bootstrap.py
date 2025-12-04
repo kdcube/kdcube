@@ -214,7 +214,9 @@ def _bind_target(target, *, svc, registry=None, integrations=None):
     except Exception:
         pass
 
-def bootstrap_bind_all(spec_json: str, *, module_names: list[str]) -> dict:
+def bootstrap_bind_all(spec_json: str, *,
+                       module_names: list[str],
+                       bootstrap_env: bool = True) -> dict:
     """
     Single-shot bootstrap:
       - apply env and restore ContextVars once
@@ -226,10 +228,11 @@ def bootstrap_bind_all(spec_json: str, *, module_names: list[str]) -> dict:
     spec = PortableSpec.from_json(spec_json)
 
     # 1) env passthrough
-    try:
-        apply_env(spec.env_passthrough)
-    except Exception:
-        print("apply_env failed", file=sys.stderr)
+    if bootstrap_env:
+        try:
+            apply_env(spec.env_passthrough)
+        except Exception:
+            print("apply_env failed", file=sys.stderr)
 
     # 2) run_ctx/accounting CVs
     try:
@@ -313,7 +316,7 @@ def bootstrap_bind_all(spec_json: str, *, module_names: list[str]) -> dict:
 
     return {"ok": True}
 
-def bootstrap_from_spec(spec_json: str, *, tool_module) -> Dict[str, Any]:
+def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = False) -> Dict[str, Any]:
     """
     Child-side bootstrap. Safe to call multiple times (idempotent-ish).
     - Applies env_passthrough
@@ -325,11 +328,12 @@ def bootstrap_from_spec(spec_json: str, *, tool_module) -> Dict[str, Any]:
     spec = PortableSpec.from_json(spec_json)
 
     # 1) ENV first (so downstream fallbacks can read OUTPUT_DIR/WORKDIR/REDIS_URL, etc.)
-    try:
-        apply_env(spec.env_passthrough)
-        print(f"env_passthrough restore done")
-    except Exception:
-        print(f"apply_env failed {traceback.format_exc()}", file=sys.stderr)
+    if bootstrap_env:
+        try:
+            apply_env(spec.env_passthrough)
+            print(f"env_passthrough restore done")
+        except Exception:
+            print(f"apply_env failed {traceback.format_exc()}", file=sys.stderr)
 
     # 2) Module-specific ContextVars restoration
     #    2.1 run_ctx: fallback from env → OUTDIR_CV/WORKDIR_CV, then restore snapshot

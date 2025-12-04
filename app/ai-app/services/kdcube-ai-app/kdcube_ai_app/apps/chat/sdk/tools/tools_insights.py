@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
+from typing import Literal
 
 # chat/sdk/tools/tools_insights.py
 
@@ -97,7 +98,20 @@ def is_generative_tool(tool_id: str) -> bool|None:
 
 def should_isolate_tool_execution(tool_id: str) -> bool:
     # For now, only write tools are isolated
-    return is_write_tool(tool_id) or is_code_exec_tool(tool_id)
+    return should_isolate_in_docker(tool_id) or is_write_tool(tool_id)
+
+def should_isolate_in_docker(tool_id: str) -> bool:
+    # return tool_id == "generic_tools.write_file" or is_code_exec_tool(tool_id)
+    # return is_code_exec_tool(tool_id)
+    return tool_id in ("generic_tools.write_file", "llm_tools.generate_content_llm") or is_code_exec_tool(tool_id)
+
+def tool_isolation(tool_id: str) -> Literal["none", "docker", "local_network", "local"]:
+    if should_isolate_in_docker(tool_id):
+        return "docker"
+    elif should_isolate_tool_execution(tool_id):
+        return "local"
+    else:
+        return "none"
 
 def default_mime_for_write_tool(tool_id: str) -> str:
     return {
