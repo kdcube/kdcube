@@ -80,7 +80,8 @@ def trim_with_spans(
     n = len(content)
     exclusive = (str(end_boundary).lower() == "exclusive")
 
-    for sp in spans[:2]:
+    # for sp in spans[:2]:
+    for sp in spans:
         s = (sp.get("s") or "").strip()
         e_raw = sp.get("e")
         e = (e_raw if e_raw is not None else "").strip()

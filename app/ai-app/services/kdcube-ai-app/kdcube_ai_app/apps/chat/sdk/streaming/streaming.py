@@ -1034,7 +1034,7 @@ async def _stream_agent_two_sections_to_json(
         client_role: str,
         sys_prompt: str|SystemMessage,
         user_msg: str|HumanMessage,
-        schema_model,
+        schema_model=None,  # ← Make optional
         on_progress_delta=None,
         temperature: float = 0.2,
         max_tokens: int = 1200,
@@ -1043,7 +1043,9 @@ async def _stream_agent_two_sections_to_json(
     """
     2-part streaming:
       1) INTERNAL THINKING  -> streamed to user (via on_progress_delta) with redaction
-      2) STRUCTURED JSON    -> buffered & validated against schema_model
+      2) STRUCTURED JSON    -> buffered & validated against schema_model (if provided)
+
+    If schema_model is None, the JSON section is returned as raw text without validation.
     """
     run_logger = AgentLogger("TwoSectionStream", getattr(svc.config, "log_level", "INFO"))
     sys_message_len = len(sys_prompt) if isinstance(sys_prompt, str) else len(sys_prompt.content)
@@ -1053,7 +1055,7 @@ async def _stream_agent_two_sections_to_json(
         client_name=client_name,
         system_prompt_len=sys_message_len,
         user_msg_len=len(user_msg) if isinstance(user_msg, str) else "block",
-        expected_format=getattr(schema_model, "__name__", str(schema_model)),
+        expected_format=getattr(schema_model, "__name__", "raw_json") if schema_model else "raw_json",
     )
 
     deltas = 0
@@ -1099,6 +1101,34 @@ async def _stream_agent_two_sections_to_json(
     # ----- parse the JSON section -----
     raw_json = parser.json  # keep original for logs
 
+    # ========== Handle schema_model=None case ==========
+    if schema_model is None:
+        # No validation - just return raw JSON text
+        ok_flag = svc_error is None
+        run_logger.finish_operation(
+            True,
+            "two_section_stream_complete_no_schema",
+            result_preview={
+                "internal_len": len(parser.internal),
+                "json_len": len(parser.json),
+                "provider": getattr(cfg, "provider", None),
+                "model": getattr(cfg, "model_name", None),
+            },
+        )
+
+        return {
+            "agent_response": raw_json,  # Return raw JSON text
+            "log": {
+                "error": None,
+                "raw_data": raw_json,
+                "service_error": svc_error,
+                "ok": ok_flag
+            },
+            "internal_thinking": parser.internal,  # already streamed
+        }
+    # ========== END NEW ==========
+
+    # Original validation logic when schema_model is provided
     data = None
     err = None
     raw_json_clean = _sanitize_ws_and_invisibles(raw_json)

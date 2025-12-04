@@ -4,10 +4,7 @@
 # chat/sdk/tools/with_llm_backends.py
 
 import json
-import re, yaml, jsonschema
-from datetime import datetime, timezone
-
-import time
+import re
 from typing import Annotated, Optional, List, Dict, Any, Tuple, Set, Callable, Awaitable
 import logging
 
@@ -16,7 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.streaming.artifacts_channeled_streaming import 
 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import split_safe_citation_prefix, replace_citation_tokens_streaming, \
     extract_sids, build_citation_map_from_sources, citations_present_inline, adapt_source_for_llm, \
-    find_unmapped_citation_sids, USAGE_TAG_RE, _split_safe_usage_prefix
+    find_unmapped_citation_sids, USAGE_TAG_RE, _split_safe_usage_prefix, _expand_ids
 from kdcube_ai_app.apps.chat.sdk.tools.text_proc_utils import _rm_invis, _remove_end_marker_everywhere, \
     _split_safe_marker_prefix, _remove_marker, _unwrap_fenced_blocks_concat, _strip_bom_zwsp, _parse_json, \
     _extract_json_object, _strip_code_fences, _format_ok, _validate_json_schema, _parse_yaml, _validate_sidecar, \
@@ -64,8 +61,8 @@ async def generate_content_llm(
         cache_instruction: bool=True,
         channel_to_stream: Optional[str]="canvas",
         temperature: float=0.2,
-        on_delta_fn: Optional[Callable[[str], Awaitable[None]]] = None,
-        on_thinking_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+        on_delta_fn = None,
+        on_thinking_fn = None,
         infra_call: bool = False,
         include_url_in_source_digest: bool = False
 ) -> Annotated[str, 'JSON string: {ok, content, format, finished, retries, reason, stats, sources_used: [ { "sid": 1, "url": "...", "title": "...", "text": "..." }, ... ]}']:
@@ -159,13 +156,28 @@ async def generate_content_llm(
     def _scrub_emit_once(s: str) -> str:
         if not s:
             return s
-        # Normalize invisibles first so regexes see a clean pattern
+
+        # Normalize invisibles first so regexes see a cleaner pattern
         s = _rm_invis(s)
 
-        # strip the exact completion marker
+        # 1) Strip the exact completion marker (can appear multiple times)
         s = _remove_end_marker_everywhere(s, end_marker)
-        # strip any complete hidden usage tag occurrences
+
+        # 2) Strip any USAGE tags using the robust regex from citations.py
         s = USAGE_TAG_RE.sub("", s)
+
+        # 3) Belt-and-suspenders fallback:
+        #    In case the model produced something extremely odd that still
+        #    looks like [[USAGE:...]] but doesn't match USAGE_TAG_RE,
+        #    we nuke it with a very permissive pattern.
+        if "[[USAGE" in s.upper():
+            s = re.sub(
+                r"\[\[\s*USAGE\s*:.*?\]\]",
+                "",
+                s,
+                flags=re.I | re.S,
+            )
+
         return s
 
     # Local safe-stop guard for taggy formats
@@ -648,6 +660,7 @@ async def generate_content_llm(
         round_buf: List[str] = []   # RAW text from this round
         pending = ""                # tail buffer not yet emitted
         emitted_local = 0
+        thinking_idx = 0  # ← ADD THIS: track thinking index
 
         composite_streamer: Optional[CompositeJsonArtifactStreamer] = None
         if (
@@ -671,20 +684,38 @@ async def generate_content_llm(
                 return
             clean = _scrub_emit_once(text)
             out = replace_citation_tokens_streaming(clean, citation_map) if replace_in_stream else clean
-
             # 🔸 Do NOT stream raw JSON for composite artifacts to canvas
+            idx = start_index + emitted_local
             if is_managed_json and composite_cfg and channel_to_stream == "canvas":
                 # still allow on_delta_fn to observe raw stream if needed
                 if on_delta_fn:
-                    await on_delta_fn(out)
+                    await on_delta_fn(
+                    text=out,
+                    index=idx,
+                    marker=channel_to_stream,
+                    agent=author_for_chunks,
+                    format=tgt or "markdown",
+                    artifact_name=artifact_name,
+                )
                 return
             if get_comm():
-                idx = start_index + emitted_local
+                from kdcube_ai_app.apps.chat.sdk.tools.citations import debug_only_suspicious_tokens
+                suspicious = debug_only_suspicious_tokens(out)
+                if suspicious:
+                    logger.warning("Unreplaced citation-like tokens in emitted chunk: %s", suspicious)
+
                 await emit_delta(out, index=idx, marker=channel_to_stream,
                                  agent=author_for_chunks, format=tgt or "markdown",
                                  artifact_name=artifact_name)
                 if on_delta_fn:
-                    await on_delta_fn(out)
+                    await on_delta_fn(
+                        text=out,
+                        index=idx,
+                        marker=channel_to_stream,
+                        agent=author_for_chunks,
+                        format=tgt or "markdown",
+                        artifact_name=artifact_name,
+                    )
                 emitted_local += 1
 
 
@@ -733,12 +764,22 @@ async def generate_content_llm(
                 await _flush_pending(force=False)
 
         async def on_thinking(out):
+            nonlocal thinking_idx
             if not out:
                 return
             if on_thinking_fn:
                 tt = out.get("text")
                 if tt:
-                    await on_thinking_fn(tt)
+                    await on_thinking_fn(
+                        text=tt,
+                        index=thinking_idx,
+                        marker="thinking",
+                        agent=author_for_chunks,
+                        format="markdown",
+                        artifact_name=artifact_name,  # or could use a separate thinking artifact name
+                        completed=False
+                    )
+                    thinking_idx += 1
 
 
         async def on_complete(_):
@@ -749,7 +790,15 @@ async def generate_content_llm(
                 await composite_streamer.finish()
                 # no raw JSON completion to canvas for composite
                 if on_delta_fn:
-                    await on_delta_fn("")
+                    await on_delta_fn(
+                        text="",
+                        index=start_index + emitted_local,
+                        marker=channel_to_stream,
+                        agent=author_for_complete,
+                        format=tgt or "markdown",
+                        artifact_name=artifact_name,
+                        completed=True
+                    )
                 return
             # Flush everything that’s left (including any last complete citation tokens)
             await _flush_pending(force=True)
@@ -760,7 +809,15 @@ async def generate_content_llm(
                                  agent=author_for_complete, format=tgt or "markdown",
                                  artifact_name=artifact_name)
                 if on_delta_fn:
-                    await on_delta_fn("")
+                    await on_delta_fn(
+                        text="",
+                        index=idx,
+                        marker=channel_to_stream,
+                        agent=author_for_complete,
+                        format=tgt or "markdown",
+                        artifact_name=artifact_name,
+                        completed=True
+                    )
 
 
         async with with_accounting(
@@ -878,16 +935,8 @@ async def generate_content_llm(
     if m_usage:
         try:
             ids_str = m_usage.group(1) or ""
-            for part in ids_str.split(","):
-                part = part.strip()
-                if not part:
-                    continue
-                if "-" in part:
-                    a, b = [int(x.strip()) for x in part.split("-", 1)]
-                    lo, hi = (a, b) if a <= b else (b, a)
-                    usage_sids.extend(range(lo, hi + 1))
-                elif part.isdigit():
-                    usage_sids.append(int(part))
+            # reuse the same logic as [[S:...]] tokens
+            usage_sids = _expand_ids(ids_str)
         except Exception:
             logger.exception("Failed to parse USAGE tag: %r", m_usage.group(0))
         # remove the usage tag from the content BEFORE we do any more cleaning
@@ -1250,6 +1299,19 @@ async def generate_content_llm(
             "generate_content_llm: unmapped citation SIDs in artifact: %s (map has %s)",
             unmapped, sorted(citation_map.keys())
         )
+    from kdcube_ai_app.apps.chat.sdk.tools.citations import debug_only_suspicious_tokens, CITE_TOKEN_RE
+
+    # 1) Log any suspicious tokens (for future debugging)
+    suspicious = debug_only_suspicious_tokens(content_clean)
+    if suspicious:
+        logger.warning("Final artifact still contains suspicious [[...]] tokens: %s", suspicious)
+    # 2) As a safety net, strip any remaining raw [[S:...]]-style tokens
+    #    (non-destructive: only the markers, not surrounding text)
+    def _strip_raw_cite_tokens(text: str) -> str:
+        # Reuse the same core pattern but drop matches instead of rendering.
+        return CITE_TOKEN_RE.sub(lambda m: m.group(1) or "", text)
+
+    content_clean = _strip_raw_cite_tokens(content_clean)
     out = {
         "ok": bool(ok),
         "content": content_clean,

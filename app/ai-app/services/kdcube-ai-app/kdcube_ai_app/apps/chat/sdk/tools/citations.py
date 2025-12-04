@@ -37,29 +37,64 @@ from typing import Dict, List, Tuple, Optional, Iterable, Any, Set
 # ---------------------------------------------------------------------------
 
 # [[S:1]] / [[S:1,3]] / [[S:2-5]] (whitespace tolerant)
-# CITE_TOKEN_RE = re.compile(r"\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
-# In citations.py, update the pattern:
-CITE_TOKEN_RE = re.compile(r"(\s?)\[\[\s*S\s*:\s*([0-9,\s\-]+)\s*\]\]", re.I)
+IDS_BODY = r"[0-9,\s\-–]+"
+# Allow ANY body; let _expand_ids filter/ignore bad pieces
+CITE_BODY = r"[^\]]+"      # anything up to the first ']'
+CITE_CORE = r"\[\[\s*S\s*:\s*(" + CITE_BODY + r")\s*\]\]"
+CITE_TOKEN_RE = re.compile(r"(\s?)" + CITE_CORE, re.I)
+
+
+
 CITATION_LIKE_RE = re.compile(r"\[\[.*?\]\]")
 # Telemetry / usage tag (for [[USAGE:...]]), so we can ignore it in debuggers
+# OLD
 USAGE_TAG_RE = re.compile(r"\[\[\s*USAGE\s*:\s*([0-9]+(?:\s*,\s*[0-9]+)*)\s*\]\]", re.I)
+# NEW
+USAGE_TAG_RE = re.compile(
+    r"\[\[\s*USAGE\s*:\s*([0-9]+(?:\s*[-–]\s*[0-9]+|\s*,\s*[0-9]+)*)\s*\]\]",
+    re.I
+)
+# SUPER NEW
+# reuse same body as citations, or define a separate one if you prefer
+USAGE_IDS_BODY = r"[0-9,\s\-–]+"
+
+USAGE_TAG_RE = re.compile(
+    r"\[\[\s*USAGE\s*:\s*(" + USAGE_IDS_BODY + r")\s*\]\]",
+    re.I
+)
+
+# ANTI_FRAGILE
+# - We allow ANY characters except ']' inside the body.
+# - Parsing of numeric IDs / ranges is delegated to _expand_ids.
+USAGE_TAG_RE = re.compile(
+    r"\[\[\s*USAGE\s*:\s*([^\]]+)\]\]",
+    re.I,
+)
 
 USAGE_SUFFIX_PATS = [
-    re.compile(r"(?:\u200b|\s)?\[\[$"),                              # "[[" at end
+    # "[[" at end (optionally with ZWSP/space before it)
+    re.compile(r"(?:\u200b|\s)?\[\[$"),
+    # Progressive spellings of "USAGE" after "[["
     re.compile(r"(?:\u200b|\s)?\[\[\s*U\s*$", re.I),
     re.compile(r"(?:\u200b|\s)?\[\[\s*US\s*$", re.I),
     re.compile(r"(?:\u200b|\s)?\[\[\s*USA\s*$", re.I),
     re.compile(r"(?:\u200b|\s)?\[\[\s*USAG\s*$", re.I),
-    re.compile(r"(?:\u200b|\s)?\[\[\s*USAGE\s*:\s*[0-9,\s\-]*$", re.I),
-    re.compile(r"(?:\u200b|\s)?\[\[\s*USAGE\s*:\s*[0-9,\s\-]*\]$", re.I),
+    re.compile(r"(?:\u200b|\s)?\[\[\s*USAGE\s*$", re.I),
+    # Partial [[USAGE:...   (no closing ] yet) – accept any chars up to end-of-chunk
+    re.compile(r"(?:\u200b|\s)?\[\[\s*USAGE\s*:\s*[^\]]*$", re.I),
+    # [[USAGE:...]] but missing the final ']' (rare, but safe to withhold)
+    re.compile(r"(?:\u200b|\s)?\[\[\s*USAGE\s*:\s*[^\]]*\]$", re.I),
 ]
 
 def _split_safe_usage_prefix(chunk: str) -> tuple[str, int]:
     if not chunk:
         return "", 0
+
+    clean = _normalize_citation_chars(_strip_invisible(chunk))
+
     for pat in USAGE_SUFFIX_PATS:
-        m = pat.search(chunk)
-        if m and m.end() == len(chunk):
+        m = pat.search(clean)
+        if m and m.end() == len(clean):
             return chunk[:m.start()], len(chunk) - m.start()
     return chunk, 0
 
@@ -90,7 +125,10 @@ HTML_BRACKET_S_RE = re.compile(r'\[S:\s*([0-9,\s\-–]+)\]', re.I)
 
 
 # Markdown inline cite presence (fast check)
+# OLD
 MD_CITE_RE = re.compile(r"\[\[\s*S\s*:\s*\d+(?:\s*,\s*\d+)*\s*\]\]", re.I)
+# NEW
+MD_CITE_RE    = re.compile(CITE_CORE, re.I)
 
 # Suffix patterns used to avoid cutting tokens at streaming chunk boundaries
 # CITATION_SUFFIX_PATS = [
@@ -100,12 +138,47 @@ MD_CITE_RE = re.compile(r"\[\[\s*S\s*:\s*\d+(?:\s*,\s*\d+)*\s*\]\]", re.I)
 #     re.compile(r"\s?\[\[S:\s*[0-9,\s\-]*\]$", re.I),   # optional space + "[[S:1]" (missing final ']')
 # ]
 
+# OLD
+# CITATION_SUFFIX_PATS = [
+#     re.compile(r"(?:\u200b|\s)?\[\[$"),                           # "[[" at end
+#     re.compile(r"(?:\u200b|\s)?\[\[S:$", re.I),
+#     re.compile(r"(?:\u200b|\s)?\[\[S:\s*[0-9,\s\-]*$", re.I),
+#     re.compile(r"(?:\u200b|\s)?\[\[S:\s*[0-9,\s\-]*\]$", re.I),
+# ]
+
+# NEW
 CITATION_SUFFIX_PATS = [
-    re.compile(r"(?:\u200b|\s)?\[\[$"),                           # "[[" at end
-    re.compile(r"(?:\u200b|\s)?\[\[S:$", re.I),
-    re.compile(r"(?:\u200b|\s)?\[\[S:\s*[0-9,\s\-]*$", re.I),
-    re.compile(r"(?:\u200b|\s)?\[\[S:\s*[0-9,\s\-]*\]$", re.I),
+    # "[[" at end (optionally leading ZWSP/space)
+    re.compile(r"(?:\u200b|\s)?\[\[$"),
+    # "[[S:" or "[[ S:" etc. truncated right after the colon
+    re.compile(r"(?:\u200b|\s)?\[\[\s*S:$", re.I),
+    # "[[S:1, 2-3" (no closing ]] yet)
+    re.compile(r"(?:\u200b|\s)?\[\[\s*S:\s*[0-9,\s\-–]*$", re.I),
+    # "[[S:1, 2-3]" (missing final ']')
+    re.compile(r"(?:\u200b|\s)?\[\[\s*S:\s*[0-9,\s\-–]*\]$", re.I),
 ]
+
+# Characters that often appear in model output but should be treated as ASCII
+_CITATION_CHAR_MAP = str.maketrans({
+    "［": "[",
+    "］": "]",
+    "：": ":",     # full-width colon
+    "﹕": ":",     # small colon
+    "︰": ":",     # vertical colon-like
+    "–": "-",      # en dash
+    "—": "-",      # em dash
+})
+
+def _normalize_citation_chars(text: str) -> str:
+    """
+    Length-preserving normalization for citation-like tokens:
+    - full-width brackets/colons → ASCII
+    - dash variants → "-"
+    Safe for streaming because length and indices stay identical.
+    """
+    if not isinstance(text, str):
+        return text
+    return text.translate(_CITATION_CHAR_MAP)
 
 # ---- shared optional attributes carried through citations ----
 CITATION_OPTIONAL_ATTRS = (
@@ -489,7 +562,8 @@ def _expand_ids(ids_str: str) -> List[int]:
         p = part.strip()
         if not p:
             continue
-        # support hyphen-minus and en dash
+
+        # support hyphen-minus and en dash for ranges
         if "-" in p or "–" in p:
             p2 = p.replace("–", "-")
             try:
@@ -497,12 +571,13 @@ def _expand_ids(ids_str: str) -> List[int]:
                 lo, hi = (a, b) if a <= b else (b, a)
                 out.extend(range(lo, hi + 1))
             except Exception:
+                # ignore malformed ranges
                 continue
         else:
             if p.isdigit():
                 out.append(int(p))
-    # in-order de-dupe
-    seen = set()
+    # in-order de-dup
+    seen: Set[int] = set()
     uniq: List[int] = []
     for i in out:
         if i not in seen:
@@ -596,65 +671,24 @@ def extract_sids(sources_json: Optional[str]) -> List[int]:
 # ---------------------------------------------------------------------------
 # Streaming-safe helpers
 # ---------------------------------------------------------------------------
-
-# def split_safe_citation_prefix(chunk: str) -> Tuple[str, int]:
-#     """
-#     Given a partial chunk, return (safe_prefix, dangling_len).
-#     If the end of chunk looks like a truncated [[S:...]] token, we clip it off
-#     and report how many chars were withheld (dangling).
-#     """
-#     if not chunk:
-#         return "", 0
-#     for pat in CITATION_SUFFIX_PATS:
-#         m = pat.search(chunk)
-#         if m and m.end() == len(chunk):
-#             return chunk[:m.start()], len(chunk) - m.start()
-#     return chunk, 0
-
+# NEW
 def split_safe_citation_prefix(chunk: str) -> Tuple[str, int]:
     """
-    Streaming helper: given a chunk, returns (safe_prefix, dangling_len).
-
-    - We look for the *last* '[[S:' (case-insensitive) in the chunk.
-    - If there is no '[[S:' → whole chunk is safe.
-    - If there *is* a '[[S:' but no closing ']]' after it yet →
-      treat from that '[[S:' to the end as dangling (to be
-      prefixed to the next chunk).
-    - Otherwise (we do have ']]' after it) → whole chunk is safe
-      (the token is complete and can be safely passed to the
-      replacer in this round).
+    Given a partial chunk, return (safe_prefix, dangling_len).
+    If the end of chunk looks like a truncated [[S:...]] token, clip it off.
     """
-    if not chunk or not isinstance(chunk, str):
+    if not chunk:
         return "", 0
 
-    # Use a cleaned copy only for searching; we keep original for slicing.
-    clean = _strip_invisible(chunk)
-    clean_lower = clean.lower()
-    marker = "[[s:"
+    # Normalize ONLY for detection; indices remain valid
+    clean = _normalize_citation_chars(_strip_invisible(chunk))
 
-    # Last potential citation opener
-    last = clean_lower.rfind(marker)
-    if last == -1:
-        # No '[[S:' at all → everything is safe
-        return chunk, 0
-
-    # From that last '[[S:' to the end, check if there is a closing ']]'
-    tail = clean[last:]
-    if "]]" in tail:
-        # At least one complete [[S:...]] in the tail → safe to emit all.
-        return chunk, 0
-
-    # We have a trailing '[[S:' with no ']]' yet → treat it as dangling.
-    # Find the same location in the original chunk (case-insensitive).
-    chunk_lower = chunk.lower()
-    last_orig = chunk_lower.rfind(marker)
-    if last_orig == -1:
-        # Shouldn't happen, but be safe: emit all.
-        return chunk, 0
-
-    safe_prefix = chunk[:last_orig]
-    dangling_len = len(chunk) - last_orig
-    return safe_prefix, dangling_len
+    for pat in CITATION_SUFFIX_PATS:
+        m = pat.search(clean)
+        if m and m.end() == len(clean):
+            # m.start()/end() indices are valid on original chunk
+            return chunk[:m.start()], len(chunk) - m.start()
+    return chunk, 0
 
 # ---------------------------------------------------------------------------
 # Replacement / rendering (batch & streaming)
@@ -717,6 +751,8 @@ def replace_citation_tokens_batch(
     if not citation_map:
         return text
     text = _strip_invisible(text)
+    # Clean weird invisibles AND normalize punctuation before matching
+    text = _normalize_citation_chars(_strip_invisible(text))
     opts = options or CitationRenderOptions()
 
     def _sub(m: re.Match) -> str:
@@ -814,7 +850,10 @@ def extract_citation_sids_from_text(text: str) -> List[int]:
     if not text or not isinstance(text, str):
         return []
 
+    # OLD
     pattern = r'\[\[S:([0-9,\-\s]+)\]\]'
+    # NEW
+    pattern = r'\[\[\s*S\s*:\s*([0-9,\-\s–]+)\s*\]\]'
     matches = re.findall(pattern, text)
     sids: Set[int] = set()
 
@@ -889,11 +928,20 @@ _split_safe_citation_prefix = split_safe_citation_prefix
 # Presence
 _citations_present_inline = citations_present_inline
 
+INVISIBLES = {
+    "\u200b",  # ZWSP
+    "\ufeff",  # BOM
+    "\u200c",  # ZWNJ
+    "\u200d",  # ZWJ
+    "\u2060",  # WORD JOINER
+}
+
 def _strip_invisible(text: str) -> str:
-    # Remove ZWSP/BOM that commonly appear in LLM output and break regex matches
     if not isinstance(text, str):
         return text
-    return text.replace("\u200b", "").replace("\ufeff", "")
+    for ch in INVISIBLES:
+        text = text.replace(ch, "")
+    return text
 
 # Legacy MD-only batch replacer (first-only + embed images)
 def _replace_citation_tokens(md: str, by_id: Dict[int, Dict[str, str]], embed_images: bool = True) -> str:
@@ -901,11 +949,19 @@ def _replace_citation_tokens(md: str, by_id: Dict[int, Dict[str, str]], embed_im
     Legacy behavior: keep only first sid, render links (or images if embed_images),
     and drop unresolved tokens. Preserved for compatibility with older callers.
     """
+    # OLD
+    # opts = CitationRenderOptions(
+    #     mode="links",
+    #     embed_images=bool(embed_images),
+    #     keep_unresolved=False,
+    #     first_only=True,
+    # )
+    # NEW
     opts = CitationRenderOptions(
         mode="links",
         embed_images=bool(embed_images),
         keep_unresolved=False,
-        first_only=True,
+        first_only=False,
     )
     return replace_citation_tokens_batch(md, by_id, opts)
 

@@ -6,7 +6,9 @@ import time
 from typing import Annotated, Optional, List, Dict, Any, Tuple, Set, Callable, Awaitable
 import logging
 
+from kdcube_ai_app.apps.chat.sdk.tools.web.filter_segmenter import filter_and_segment_stream
 from kdcube_ai_app.apps.chat.sdk.tools.with_llm_backends import generate_content_llm
+from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
 
 logger = logging.getLogger(__name__)
 
@@ -314,17 +316,21 @@ TODAY: {now_iso}
     }
 
     schema_str = json.dumps(_FILTER_SCHEMA, ensure_ascii=False)
-
+    user_message = f"""
+TASK CLARIFICATION:
+You will see an "objective" and "queries" below in INPUT CONTEXT section. This is what the USER searched for.
+"""
     try:
         # Use cheaper/faster settings for content filtering
         llm_resp_s = await generate_content_llm(
             _SERVICE=_SERVICE,
             agent_name="Content Filter",
-            instruction="Filter sources as requested.",
+            instruction=user_message,
             sys_instruction=_FILTER_INSTRUCTION,
             input_context=json.dumps(input_ctx, ensure_ascii=False),
             on_thinking_fn=on_thinking_fn,
             target_format="json",
+            citation_embed="none",
             schema_json=schema_str,
             sources_json=json.dumps(prepared_sources, ensure_ascii=False),
             cite_sources=False,
@@ -335,7 +341,9 @@ TODAY: {now_iso}
             cache_instruction=True,
             artifact_name=None,
             channel_to_stream="debug",
-            infra_call=True
+            temperature=0.7,
+            infra_call=True,
+            include_url_in_source_digest=True
         )
     except Exception:
         logger.exception("sources_content_filter: LLM call failed; keeping all sources")
@@ -380,7 +388,7 @@ TODAY: {now_iso}
         return [s["sid"] for s in prepared_sources]
 
 async def sources_filter_and_segment(
-        _SERVICE,
+        _SERVICE: ModelServiceBase,
         objective: Annotated[str, "Objective (what we are trying to achieve)."],
         queries: Annotated[List[str], "Array of queries [q1, q2, ...]"],
         sources_with_content: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "content": str, "published_time_iso"?: str, "modified_time_iso"?: str}'],
@@ -406,11 +414,14 @@ async def sources_filter_and_segment(
     logger = logging.getLogger(__name__)
 
     import kdcube_ai_app.apps.chat.sdk.tools.web.content_filters as content_filters
+    from kdcube_ai_app.apps.chat.sdk.tools.web.filter_segmenter import filter_and_segment_stream
 
     now_iso = datetime.now(timezone.utc).isoformat()
-    # If you have the new high-recall guide, point to it; otherwise keep the current one.
-    _INSTRUCTION = content_filters.FILTER_AND_SEGMENT_GUIDE(now_iso)
+    mode = "balanced"  # or "precision" or "recall" - can be parameterized later
 
+    # ============================================================
+    # PREPARE SOURCES
+    # ============================================================
     prepared_sources: List[Dict[str, Any]] = []
     for row in (sources_with_content or []):
         try:
@@ -436,75 +447,153 @@ async def sources_filter_and_segment(
         "queries": queries or []
     }
 
-    user_message = f"""
-TASK CLARIFICATION:
-You will see an "objective" and "queries" below in INPUT CONTEXT section. This is what the USER searched for.
-"""
     logger.info(
         f"sources_filter_and_segment: processing {len(prepared_sources)} sources "
         f"for objective: '{(objective or '')[:120]}'"
     )
 
+    # ============================================================
+    # CALL LLM (either 2-fold streaming or traditional)
+    # ============================================================
+    raw_dict = None  # Will hold the raw spans dict from either path
+
     try:
-        llm_resp_s = await generate_content_llm(
-            _SERVICE=_SERVICE,
-            agent_name="Content Filter + Segmenter",
-            instruction=user_message,
-            sys_instruction=_INSTRUCTION,
-            input_context=json.dumps(input_ctx, ensure_ascii=False),
-            target_format="json",
-            schema_json="",                 # ← no schema
-            sources_json=json.dumps(prepared_sources, ensure_ascii=False),
-            citation_embed="none",
-            cite_sources=False,
-            max_rounds=1,
-            max_tokens=700,
-            thinking_budget=thinking_budget,
-            strict=True,                    # format check only
-            role="tool.sources.filter.by.content.and.segment",
-            cache_instruction=True,
-            artifact_name=None,
-            channel_to_stream="debug",
-            temperature=0.7,
-            on_thinking_fn=on_thinking_fn,
-            on_delta_fn=on_delta_fn,
-            infra_call=True,
-            include_url_in_source_digest=True
-        )
+        role = "tool.sources.filter.by.content.and.segment"
+        spec = _SERVICE.router.config.ensure_role(role)
+
+        if spec:
+            provider, model = spec["provider"], spec["model"]
+            logger.info(f"sources_filter_and_segment: using model {model} from provider {provider} for role {role}")
+
+            if provider == "anthropic":
+                # ===== ANTHROPIC: Use 2-fold streaming =====
+                logger.info("sources_filter_and_segment: using 2-fold streaming for Anthropic")
+
+                result = await filter_and_segment_stream(
+                    _SERVICE,
+                    objective=objective,
+                    queries=queries,
+                    sources_with_content=prepared_sources,
+                    mode=mode,
+                    on_thinking_fn=on_thinking_fn,
+                    thinking_budget=thinking_budget or 180,
+                    max_tokens=700,
+                    role=role
+                )
+
+                # ===== FIX: Extract agent_response properly =====
+                raw_dict = result.get("agent_response")
+                # If agent_response is empty or not a dict, parse from raw_data
+                if not raw_dict or not isinstance(raw_dict, dict):
+                    raw_data = result.get("log", {}).get("raw_data", "")
+                    if raw_data:
+                        try:
+                            # Strip markdown fences if present
+                            cleaned = raw_data.strip()
+                            if cleaned.startswith("```"):
+                                cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else cleaned
+                                if "```" in cleaned:
+                                    cleaned = cleaned.rsplit("```", 1)[0]
+
+                            raw_dict = json.loads(cleaned) if isinstance(cleaned, str) else cleaned
+                            result["agent_response"] = raw_dict
+                            if not isinstance(raw_dict, dict):
+                                logger.warning(f"sources_filter_and_segment: parsed raw_data is not a dict: {type(raw_dict)}")
+                                raw_dict = {}
+                        except Exception as e:
+                            logger.exception(f"sources_filter_and_segment: failed to parse raw_data: {e}")
+                            raw_dict = {}
+                    else:
+                        raw_dict = {}
+
+                import kdcube_ai_app.apps.chat.sdk.viz.logging_helpers as logging_helpers
+                logging_helpers.log_agent_packet("ctx.reconciler", "ctx", result)
+
+            else:
+                # ===== NON-ANTHROPIC: Use traditional generate_content_llm =====
+                logger.info(f"sources_filter_and_segment: using traditional backend for {provider}")
+
+                _INSTRUCTION = content_filters.FILTER_AND_SEGMENT_GUIDE(now_iso)
+                user_message = """
+TASK CLARIFICATION:
+You will see an "objective" and "queries" below in INPUT CONTEXT section. This is what the USER searched for.
+"""
+
+                llm_resp_s = await generate_content_llm(
+                    _SERVICE=_SERVICE,
+                    agent_name="Content Filter + Segmenter",
+                    instruction=user_message,
+                    sys_instruction=_INSTRUCTION,
+                    input_context=json.dumps(input_ctx, ensure_ascii=False),
+                    target_format="json",
+                    schema_json="",
+                    sources_json=json.dumps(prepared_sources, ensure_ascii=False),
+                    citation_embed="none",
+                    cite_sources=False,
+                    max_rounds=1,
+                    max_tokens=700,
+                    thinking_budget=thinking_budget,
+                    strict=True,
+                    role=role,
+                    cache_instruction=True,
+                    artifact_name=None,
+                    channel_to_stream="debug",
+                    temperature=0.7,
+                    on_thinking_fn=on_thinking_fn,
+                    on_delta_fn=on_delta_fn,
+                    infra_call=True,
+                    include_url_in_source_digest=True
+                )
+
+                try:
+                    env = json.loads(llm_resp_s) if llm_resp_s else {}
+                except Exception:
+                    logger.exception("sources_filter_and_segment: cannot parse LLM envelope")
+                    return {}
+
+                content_str = (env.get("content") or "").strip()
+                if content_str.startswith("```"):
+                    content_str = content_str.split("\n", 1)[1] if "\n" in content_str else content_str
+                    if "```" in content_str:
+                        content_str = content_str.rsplit("```", 1)[0]
+
+                try:
+                    raw_dict = json.loads(content_str) if content_str else {}
+                    if not isinstance(raw_dict, dict):
+                        logger.warning("sources_filter_and_segment: result is not an object")
+                        return {}
+                except Exception:
+                    logger.exception("sources_filter_and_segment: failed to parse JSON content")
+                    return {}
+        else:
+            logger.warning("sources_filter_and_segment: no spec found for role, cannot proceed")
+            return {}
+
     except Exception:
         logger.exception("sources_filter_and_segment: LLM call failed")
         return {}
 
-    try:
-        env = json.loads(llm_resp_s) if llm_resp_s else {}
-    except Exception:
-        logger.exception("sources_filter_and_segment: cannot parse LLM envelope")
+    # ============================================================
+    # UNIFIED VALIDATION & SPAN EXTRACTION
+    # ============================================================
+    if raw_dict is None:
+        logger.warning("sources_filter_and_segment: no raw_dict produced")
         return {}
 
-    content_str = (env.get("content") or "").strip()
-    if content_str.startswith("```"):
-        content_str = content_str.split("\n", 1)[1] if "\n" in content_str else content_str
-        if "```" in content_str:
-            content_str = content_str.rsplit("```", 1)[0]
-
     try:
-        raw = json.loads(content_str) if content_str else {}
-        if not isinstance(raw, dict):
-            logger.warning("sources_filter_and_segment: result is not an object")
-            return {}
-
         valid_sids = {s["sid"] for s in prepared_sources}
         sid_to_content = {s["sid"]: s["content"] for s in prepared_sources}
         out: Dict[int, List[Dict[str, str]]] = {}
 
         exclusive = (end_boundary.lower() == "exclusive")
 
-        for k, arr in raw.items():
+        for k, arr in raw_dict.items():
             try:
                 sid = int(k)
             except Exception:
                 # allow numeric keys or stringified numbers; ignore others
                 continue
+
             if sid not in valid_sids:
                 logger.warning(f"sources_filter_and_segment: SID {sid} not in valid set, skipping")
                 continue
@@ -582,10 +671,6 @@ You will see an "objective" and "queries" below in INPUT CONTEXT section. This i
 
                 spans.append({"s": s, "e": e})
 
-            # 🔴 OLD LOGIC (drops SID when spans == []). This ignores the 'filter' decision so we disable this in favor of higher recall logic
-            # if spans:
-            #    # out[sid] = spans[:2]
-            #    out[sid] = spans
             # 🟢 NEW LOGIC: always keep SID if model returned it and content exists.
             # Empty list means: "use full content for this SID (no trimming)".
             out[sid] = spans or []
@@ -594,9 +679,8 @@ You will see an "objective" and "queries" below in INPUT CONTEXT section. This i
         return out
 
     except Exception:
-        logger.exception("sources_filter_and_segment: parse error")
+        logger.exception("sources_filter_and_segment: validation/parse error")
         return {}
-
 
 async def filter_search_results_by_content(
         _SERVICE,
