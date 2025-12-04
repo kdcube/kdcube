@@ -438,6 +438,80 @@ class TurnLog(BaseModel):
     def to_payload(self) -> Dict[str, Any]:
         return json.loads(self.model_dump_json())
 
+    def lines_for_area(
+            self,
+            area: LogArea | str,
+            *,
+            exclude_contains: Optional[List[str]] = None,
+    ) -> List[str]:
+        """
+        Return log lines for a given area (e.g. 'solver') as strings, using the
+        same formatting as `TurnLogEntry.to_line()`.
+
+        Args:
+            area: log area name, e.g. 'solver', 'user', 'note'.
+            exclude_contains: optional list of substrings; any line containing
+                              one of them will be skipped.
+
+        Returns:
+            List of formatted log lines.
+        """
+        area_str = str(area)
+        exclude_contains = exclude_contains or []
+        out: List[str] = []
+
+        for e in (self.entries or []):
+            # Determine entry area (support both TurnLogEntry and dict for robustness)
+            try:
+                if hasattr(e, "area"):
+                    entry_area = e.area
+                elif isinstance(e, dict):
+                    entry_area = e.get("area") or ""
+                else:
+                    entry_area = ""
+            except Exception:
+                entry_area = ""
+
+            if entry_area != area_str:
+                continue
+
+            # Build the line
+            try:
+                if hasattr(e, "to_line"):
+                    line = e.to_line()
+                else:
+                    if isinstance(e, dict):
+                        t = e.get("t", "")
+                        msg = e.get("msg", "")
+                        lvl = e.get("level", "info")
+                    else:
+                        t = getattr(e, "t", "")
+                        msg = getattr(e, "msg", "")
+                        lvl = getattr(e, "level", "info")
+
+                    base = f"{t} [{area_str}] {msg}".strip()
+                    if lvl and lvl != "info":
+                        base += f"  !{lvl}"
+                    line = base
+            except Exception:
+                # Skip malformed entries, but keep going
+                continue
+
+            if any(tag in line for tag in exclude_contains):
+                continue
+
+            out.append(line)
+
+        return out
+
+    def text_for_area(
+            self,
+            area: LogArea | str,
+            *,
+            exclude_contains: Optional[List[str]] = None,
+    ) -> str:
+        return "\n".join(self.lines_for_area(area, exclude_contains=exclude_contains))
+
 
 def new_turn_log(user_id: str, conversation_id: str, turn_id: str) -> TurnLog:
     return TurnLog(
