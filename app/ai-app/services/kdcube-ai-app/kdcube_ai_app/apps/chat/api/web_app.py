@@ -332,11 +332,24 @@ async def gateway_middleware(request: Request, call_next):
     if request.method == "OPTIONS" or request.url.path.startswith(("/profile", "/monitoring", "/admin", "/health", "/docs", "/openapi.json", "/favicon.ico")):
         return await call_next(request)
 
-    # If already processed by a dependency earlier in the chain (rare but safe), skip
     if getattr(request.state, STATE_FLAG, False):
         return await call_next(request)
 
     try:
+        # FOR SSE: Check query params for auth tokens if headers are missing
+        if request.url.path.startswith("/sse/"):
+            bearer_token = request.query_params.get("bearer_token")
+            id_token = request.query_params.get("id_token")
+
+            # Inject into headers so gateway adapter can process normally
+            if bearer_token and "authorization" not in request.headers:
+                request._headers = dict(request.headers)
+                request._headers["authorization"] = f"Bearer {bearer_token}"
+            if id_token:
+                request._headers = dict(request.headers) if not hasattr(request, '_headers') else request._headers
+                id_token_header = os.getenv("EXTRA_ID_TOKEN_HEADER", "X-ID-Token")
+                request._headers[id_token_header.lower()] = id_token
+
         session = await app.state.gateway_adapter.process_request(request, [])
         setattr(request.state, STATE_SESSION, session)
         setattr(request.state, STATE_USER_TYPE, session.user_type.value)
@@ -344,14 +357,12 @@ async def gateway_middleware(request: Request, call_next):
 
         response = await call_next(request)
 
-        # Add headers once
         response.headers["X-User-Type"] = session.user_type.value
         response.headers["X-Session-ID"] = session.session_id
         return response
     except HTTPException as e:
         headers = getattr(e, "headers", {})
         return JSONResponse(status_code=e.status_code, content={"detail": e.detail}, headers=headers)
-
 
 # ================================
 # REQUEST/RESPONSE MODELS
