@@ -3,8 +3,8 @@
 
 # infra/accounting/usage.py
 from dataclasses import dataclass
-from typing import Dict, Any, Optional
-import logging
+from typing import Dict, Any, Optional, List
+import logging, json
 
 logger = logging.getLogger(__name__)
 
@@ -137,3 +137,88 @@ def _structured_usage_extractor(result, *_a, **_kw) -> ServiceUsage:
         )
     except Exception:
         return ServiceUsage(requests=1)
+
+
+def _parse_queries_arg(queries: Any) -> List[str]:
+    # mirrors your normalization logic, but lightweight
+    if isinstance(queries, (list, tuple)):
+        return [str(q).strip() for q in queries if str(q).strip()]
+
+    s = str(queries or "").strip()
+    if not s:
+        return []
+    if s.startswith("["):
+        try:
+            arr = json.loads(s)
+            return [str(x).strip() for x in arr if str(x).strip()]
+        except Exception:
+            return [s]
+    return [s]
+
+def ws_usage_extractor(
+        result: Any,
+        _self,
+        queries: Any,
+        objective: Optional[str] = None,
+        refinement: str = "balanced",
+        n: int = 8,
+        **_kw
+) -> ServiceUsage:
+    q_list = _parse_queries_arg(queries)
+
+    # count results
+    search_results = 0
+    try:
+        if isinstance(result, str):
+            data = json.loads(result)
+        else:
+            data = result
+        if isinstance(data, list):
+            search_results = len(data)
+    except Exception:
+        search_results = 0
+
+    return ServiceUsage(
+        search_queries=len(q_list),
+        search_results=search_results,
+        requests=1
+    )
+
+def ws_meta_extractor(
+        _self,
+        queries: Any,
+        objective: Optional[str] = None,
+        refinement: str = "balanced",
+        n: int = 8,
+        freshness: Optional[str] = None,
+        country: Optional[str] = None,
+        safesearch: str = "moderate",
+        reconciling: bool = True,
+        fetch_content: bool = True,
+        **_kw
+) -> Dict[str, Any]:
+    q_list = _parse_queries_arg(queries)
+    return {
+        "objective": objective,
+        "refinement": refinement,
+        "n": int(n),
+        "freshness": freshness,
+        "country": country,
+        "safesearch": safesearch,
+        "reconciling": bool(reconciling),
+        "fetch_content": bool(fetch_content),
+        "query_variants": q_list,
+    }
+
+def ws_provider_extractor(_self, *a, **kw) -> str:
+    # Prefer an attribute you set on the instance or backend
+    backend = getattr(_self, "search_backend", None)
+    if backend:
+        return str(getattr(backend, "provider", None) or getattr(backend, "name", None) or "unknown")
+    return "unknown"
+
+def ws_model_extractor(_self, *a, **kw) -> str:
+    backend = getattr(_self, "search_backend", None)
+    if backend:
+        return str(getattr(backend, "name", None) or "web-search")
+    return "web-search"
