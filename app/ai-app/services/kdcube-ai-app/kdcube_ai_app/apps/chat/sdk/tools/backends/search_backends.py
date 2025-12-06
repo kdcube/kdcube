@@ -45,6 +45,9 @@ import aiohttp
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import sources_reconciler, \
     filter_search_results_by_content, filter_fetch_results
+from kdcube_ai_app.infra.accounting import track_web_search
+from kdcube_ai_app.infra.accounting.usage import ws_provider_extractor, ws_model_extractor, ws_usage_extractor, \
+    ws_meta_extractor
 from .fetch_backends import fetch_search_results_content
 
 logger = logging.getLogger(__name__)
@@ -291,8 +294,8 @@ class SearchBackend(ABC):
             return []
 
         per_query_max = clamp_max_results(per_query_max, lo=1, hi=50)
-
         sem = asyncio.Semaphore(max(1, int(concurrency)))
+        errors: List[tuple[str, Exception]] = []
 
         async def _one(q: str) -> List[Dict[str, Any]]:
             async with sem:
@@ -305,10 +308,16 @@ class SearchBackend(ABC):
                         safesearch=safesearch,
                     )
                 except Exception as e:
-                    logger.warning("%s.search_many failed for %r: %s", self.name, q, e)
-                    return []
+                    errors.append((q, e))
+                    raise
+        try:
+            res = await asyncio.gather(*[_one(q) for q in qs])
+        except Exception as e:
+            # Surface the first error with query context
+            q, err = errors[0] if errors else ("<unknown>", e)
+            raise SearchBackendError(f"{self.name}.search_many failed for {q!r}: {err}") from err
 
-        return await asyncio.gather(*[_one(q) for q in qs])
+        return res
 
     @abstractmethod
     async def _search_impl(self, req: SearchRequest) -> List[Dict[str, Any]]:
@@ -369,10 +378,7 @@ class DDGSearchBackend(SearchBackend):
         return await asyncio.to_thread(self._blocking_search, req)
 
     def _blocking_search(self, req: SearchRequest) -> List[Dict[str, Any]]:
-        kwargs: Dict[str, Any] = {
-            "keywords": req.query,
-            "max_results": req.max_results,
-        }
+        kwargs: Dict[str, Any] = {"max_results": req.max_results}
 
         if req.freshness:
             tl = self._FRESHNESS_MAP.get(req.freshness)
@@ -388,8 +394,7 @@ class DDGSearchBackend(SearchBackend):
         results: List[Dict[str, Any]] = []
         try:
             with DDGS() as ddgs:
-                for r in ddgs.text(**kwargs):
-                    # ddgs uses href or url depending on version
+                for r in ddgs.text(req.query, **kwargs):
                     url = (r.get("href") or r.get("url") or "").strip()
                     if not url:
                         continue
@@ -397,7 +402,7 @@ class DDGSearchBackend(SearchBackend):
                         make_hit(
                             r.get("title", ""),
                             url,
-                            r.get("body", "") or r.get("text", ""),
+                            r.get("body", "") or r.get("text", "") or r.get("description", ""),
                             self.name,
                             )
                     )
@@ -405,6 +410,7 @@ class DDGSearchBackend(SearchBackend):
             raise SearchBackendError(f"DDG search failed: {e}") from e
 
         return results
+
 
 
 # ----------------------------- Brave backend -----------------------------
@@ -684,6 +690,12 @@ def get_search_backend(name: Optional[str] = None) -> SearchBackend:
 
     raise SearchBackendError(f"Unknown backend '{n}'. Use 'duckduckgo' or 'brave'.")
 
+@track_web_search(
+    provider_extractor=ws_provider_extractor,
+    model_extractor=ws_model_extractor,
+    usage_extractor=ws_usage_extractor,
+    metadata_extractor=ws_meta_extractor,
+)
 async def web_search(
         _SERVICE,
         queries: Annotated[str|List[str], (
@@ -698,7 +710,7 @@ async def web_search(
         freshness: Annotated[Optional[str], "Canonical freshness: 'day'|'week'|'month'|'year' or null."] = None,
         country: Annotated[Optional[str], "Canonical country ISO2, e.g. 'DE', 'US'."] = None,
         safesearch: Annotated[str, "Canonical safesearch: 'off'|'moderate'|'strict'."] = "moderate",
-) -> Annotated[str, (
+) -> Annotated[List[dict]|None, (
         "JSON array: [{sid, title, url, text, objective_relevance?, query_relevance?, content?}, ...]. "
         "Relevance fields present only when reconciliation runs successfully. Content field is present if fetched."
         "Relevance scored on snippets (0-1). Content refined by mode. Pre-sorted by relevance."
@@ -758,7 +770,7 @@ async def web_search(
 
     if not q_list:
         logger.warning("web_search: no valid queries after normalization")
-        return json.dumps([])
+        return []
 
     # --- comm / thinking channel setup ---
     try:
@@ -823,6 +835,12 @@ async def web_search(
         logger.exception("web_search: failed to init backend; falling back to DDG")
         search_backend = get_search_backend("duckduckgo")
 
+    provider_name = (
+            getattr(search_backend, "provider", None)
+            or getattr(search_backend, "name", None)
+            or "unknown"
+    )
+
     # Decide external pipeline defaults based on backend capability flags
     reconciling = bool(getattr(search_backend, "default_use_external_reconciler", True))
     # You said: keep refinement in both backends (external refinement stays available)
@@ -837,6 +855,13 @@ async def web_search(
         safesearch=safesearch,
         concurrency=8,
     )
+    if not per_query_results:
+        # Nothing found: avoid LLM reconciliation + content fetch.
+        base = _claim_sid_block(0)  # no-op but consistent
+        if not finish_thinking_is_sent:
+            await finish_thinking()
+        return []
+
     # Wrap each result list in an iterator so we can round-robin them
     streams = [iter(res) for res in per_query_results]
 
@@ -862,13 +887,17 @@ async def web_search(
                 unique[url]["title"] = hit["title"]
             if not unique[url].get("text") and hit.get("body"):
                 unique[url]["text"] = hit["body"]
+            if not unique[url].get("provider") and hit.get("vendor"):
+                unique[url]["provider"] = hit.get("vendor")
             continue
 
         unique[url] = {
             "title": hit.get("title", ""),
             "url": url,
             "text": hit.get("body", ""),
+            "provider": hit.get("vendor") or provider_name,
         }
+
 
     # ---- Build raw unique rows (no global SIDs yet) ----
     rows = []
@@ -879,6 +908,7 @@ async def web_search(
             "title": row["title"],
             "url": row["url"],
             "text": row["text"],
+            "provider": row.get("provider") or provider_name,
         })
         if len(rows) >= n:
             break
@@ -905,7 +935,7 @@ async def web_search(
             for i, r in enumerate(rows):
                 r["sid"] = base + i
             await finish_thinking()
-            return json.dumps(rows, ensure_ascii=False)
+            return rows
 
         # Map sid -> relevance from reconciler output (sid are ephemeral here)
         try:
@@ -916,7 +946,7 @@ async def web_search(
             for i, r in enumerate(rows):
                 r["sid"] = base + i
             await finish_thinking()
-            return json.dumps(rows, ensure_ascii=False)
+            return rows
 
         logger.info(f"web_search: reconciler response: {kept}")
         rel_by_sid: Dict[int, Dict[str, float]] = {}
@@ -1014,5 +1044,8 @@ async def web_search(
         )
 
     # tag authority for downstream
-    final_rows = [{**f, "authority": "web"} for f in final_rows]
-    return json.dumps(final_rows, ensure_ascii=False)
+    final_rows = [
+        {**f, "authority": "web", "provider": f.get("provider") or provider_name}
+        for f in final_rows
+    ]
+    return final_rows
