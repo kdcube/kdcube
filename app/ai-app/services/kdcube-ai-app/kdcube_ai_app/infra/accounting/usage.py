@@ -126,18 +126,22 @@ def _approx_tokens_by_chars(text: str) -> Dict[str, int]:
 def _structured_usage_extractor(result, *_a, **_kw) -> ServiceUsage:
     """track_llm usage_extractor for dicts returned by call_model_with_structure."""
     try:
-        logger.info(f"Usage {result.get('usage')}")
-        u = _norm_usage_dict(result.get("usage") or {})
+        usage = None
+        if isinstance(result, dict):
+            usage = result.get("usage")
+        else:
+            usage = getattr(result, "usage", None)
+
+        u = _norm_usage_dict(usage or {})
         return ServiceUsage(
-            input_tokens=u["prompt_tokens"],
-            output_tokens=u["completion_tokens"],
+            input_tokens=u.get("prompt_tokens", 0),
+            output_tokens=u.get("completion_tokens", 0),
             thinking_tokens=u.get("thinking_tokens", 0),
-            total_tokens=u["total_tokens"],
+            total_tokens=u.get("total_tokens", (u.get("prompt_tokens", 0) + u.get("completion_tokens", 0))),
             requests=1,
         )
     except Exception:
         return ServiceUsage(requests=1)
-
 
 def _parse_queries_arg(queries: Any) -> List[str]:
     # mirrors your normalization logic, but lightweight
@@ -155,44 +159,29 @@ def _parse_queries_arg(queries: Any) -> List[str]:
             return [s]
     return [s]
 
+def _ws_get_queries_arg(args, kwargs):
+    # 1) explicit kw wins
+    if "queries" in kwargs:
+        return kwargs.get("queries")
+
+    # 2) positional heuristics:
+    # function: (_SERVICE, queries, ...)
+    # method:   (self, _SERVICE, queries, ...)
+    if len(args) >= 3:
+        return args[2]
+    if len(args) >= 2:
+        return args[1]
+    return None
+
+
 def ws_usage_extractor(
-        result: Any = None,
-        _self: Any = None,
-        queries: Any = None,
-        objective: Optional[str] = None,
-        refinement: str = "balanced",
-        n: int = 8,
+        result,
         *args,
-        **_kw
-) -> "ServiceUsage":
-    """
-    Signature-agnostic usage extractor.
-
-    Works with both decoration styles:
-      - method: ws_usage_extractor(result, self, queries, ...)
-      - function: ws_usage_extractor(result, _SERVICE, queries, ...)
-
-    Also tolerates:
-      - result passed as kw
-      - queries passed as kw
-      - missing/shifted positional args
-    """
-    if result is None and "result" in _kw:
-        result = _kw.get("result")
-
-    # If queries not provided explicitly, try to recover from positional args.
-    # For both method and function backends, the wrapped callable signature is effectively:
-    #   (self_or_service, queries, objective, refinement, n, ...)
-    # So in extractor calls that receive original args, queries is usually at index 1.
-    if queries is None:
-        if len(args) >= 2:
-            queries = args[1]
-        else:
-            queries = _kw.get("queries")
-
+        **kwargs
+) -> ServiceUsage:
+    queries = _ws_get_queries_arg(args, kwargs)
     q_list = _parse_queries_arg(queries)
 
-    # count results
     search_results = 0
     try:
         data = json.loads(result) if isinstance(result, str) else result
@@ -209,68 +198,26 @@ def ws_usage_extractor(
 
 
 def ws_meta_extractor(
-        _self: Any = None,
-        queries: Any = None,
-        objective: Optional[str] = None,
-        refinement: str = "balanced",
-        n: int = 8,
-        freshness: Optional[str] = None,
-        country: Optional[str] = None,
-        safesearch: str = "moderate",
-        reconciling: bool = True,
-        fetch_content: bool = True,
         *args,
-        **_kw
+        **kwargs
 ) -> Dict[str, Any]:
-    """
-    Signature-agnostic metadata extractor.
-
-    Tries to recover args by position if not passed by name.
-    """
-    # recover positional where possible
-    if queries is None:
-        if len(args) >= 2:
-            queries = args[1]
-        else:
-            queries = _kw.get("queries")
-
-    if objective is None:
-        if len(args) >= 3:
-            objective = args[2]
-        else:
-            objective = _kw.get("objective")
-
-    if refinement == "balanced":
-        # only override if explicitly provided in args/kw
-        if len(args) >= 4 and args[3]:
-            refinement = args[3]
-        else:
-            refinement = _kw.get("refinement", refinement)
-
-    if n == 8:
-        if len(args) >= 5 and args[4]:
-            try:
-                n = int(args[4])
-            except Exception:
-                pass
-        else:
-            try:
-                n = int(_kw.get("n", n))
-            except Exception:
-                pass
-
-    freshness = _kw.get("freshness", freshness)
-    country = _kw.get("country", country)
-    safesearch = _kw.get("safesearch", safesearch)
-    reconciling = bool(_kw.get("reconciling", reconciling))
-    fetch_content = bool(_kw.get("fetch_content", fetch_content))
-
+    queries = _ws_get_queries_arg(args, kwargs)
     q_list = _parse_queries_arg(queries)
+
+    objective = kwargs.get("objective")
+    refinement = kwargs.get("refinement", "balanced")
+    n = kwargs.get("n", 8)
+
+    freshness = kwargs.get("freshness")
+    country = kwargs.get("country")
+    safesearch = kwargs.get("safesearch", "moderate")
+    reconciling = kwargs.get("reconciling", True)
+    fetch_content = kwargs.get("fetch_content", True)
 
     return {
         "objective": objective,
         "refinement": refinement,
-        "n": int(n),
+        "n": int(n) if n is not None else 0,
         "freshness": freshness,
         "country": country,
         "safesearch": safesearch,
@@ -280,61 +227,44 @@ def ws_meta_extractor(
     }
 
 
-def ws_provider_extractor(result: Any = None, *_a, **_kw) -> str:
-    try:
-        # If web_search returns list[dict]
-        if isinstance(result, list) and result:
-            # try direct fields first
-            p = result[0].get("provider") or result[0].get("vendor")
-            if p:
-                return str(p)
+def ws_provider_extractor(result, *args, **kwargs) -> str:
+    # explicit override if you ever pass it
+    prov = kwargs.get("provider") or kwargs.get("search_provider")
+    if prov:
+        return str(prov)
 
-            # optional: majority vote if mixed
-            counts = {}
-            for r in result:
-                pv = r.get("provider") or r.get("vendor")
-                if not pv:
-                    continue
-                counts[pv] = counts.get(pv, 0) + 1
-            if counts:
-                return str(max(counts.items(), key=lambda kv: kv[1])[0])
+    # Extract from search results
+    try:
+        data = json.loads(result) if isinstance(result, str) else result
+        if isinstance(data, list) and data:
+            # prefer first non-empty provider
+            for item in data:
+                if isinstance(item, dict):
+                    p = item.get("provider")
+                    if p:
+                        return str(p)
     except Exception:
         pass
-
-    # fallback to explicit kw
-    p = _kw.get("provider")
-    if p:
-        return str(p)
 
     return "unknown"
 
+def ws_model_extractor(*args, **kwargs) -> str:
+    # allow an explicit override
+    m = kwargs.get("model_or_service") or kwargs.get("search_backend_name")
+    if m:
+        return str(m)
 
-def ws_model_extractor(
-        _self: Any = None,
-        *args,
-        **kwargs
-) -> str:
-    """
-    Signature-agnostic model extractor for web search.
-
-    Goal here is usually 'which search backend' rather than an LLM model.
-    """
-    # 1) explicit kw override
-    model = kwargs.get("model") or kwargs.get("backend_name")
-    if model:
-        return str(model)
-
-    # 2) try _self.search_backend (method style)
-    try:
-        backend = getattr(_self, "search_backend", None)
+    if args:
+        first = args[0]
+        backend = getattr(first, "search_backend", None)
         if backend:
-            return str(getattr(backend, "name", None) or "web-search")
-    except Exception:
-        pass
+            return str(getattr(backend, "name", None)
+                       or getattr(backend, "provider", None)
+                       or "web-search")
 
-    # 3) infer from provider kw if present
-    provider = kwargs.get("provider")
-    if provider:
-        return str(provider)
+        # fallback if first arg is backend-like
+        return str(getattr(first, "name", None)
+                   or getattr(first, "provider", None)
+                   or "web-search")
 
     return "web-search"
