@@ -5,7 +5,6 @@
 """
 FastAPI chat application with modular Socket.IO integration and gateway protection
 """
-import uuid
 import time
 import logging
 import os
@@ -17,7 +16,7 @@ from typing import Dict, Optional, List
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from dotenv import load_dotenv, find_dotenv
 
@@ -30,17 +29,16 @@ from kdcube_ai_app.infra.rendering.link_preview import close_shared_link_preview
 from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
-from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session
 
 from kdcube_ai_app.apps.middleware.gateway import STATE_FLAG, STATE_SESSION, STATE_USER_TYPE
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.config import get_gateway_config
+from kdcube_ai_app.infra.namespaces import CONFIG
 
 # Import our simplified components
 from kdcube_ai_app.apps.chat.api.resolvers import (
     get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency,
-    # get_orchestrator,
     INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, auth_without_pressure, get_tenant, _announce_startup,
     get_pg_pool, get_conversation_system
 )
@@ -347,10 +345,11 @@ async def gateway_middleware(request: Request, call_next):
                 request._headers["authorization"] = f"Bearer {bearer_token}"
             if id_token:
                 request._headers = dict(request.headers) if not hasattr(request, '_headers') else request._headers
-                id_token_header = os.getenv("EXTRA_ID_TOKEN_HEADER", "X-ID-Token")
+                id_token_header = CONFIG.ID_TOKEN_HEADER_NAME
                 request._headers[id_token_header.lower()] = id_token
 
-        session = await app.state.gateway_adapter.process_request(request, [])
+        # session = await app.state.gateway_adapter.process_request(request, [])
+        session = await app.state.gateway_adapter.process_by_policy(request)
         setattr(request.state, STATE_SESSION, session)
         setattr(request.state, STATE_USER_TYPE, session.user_type.value)
         setattr(request.state, STATE_FLAG, True)
@@ -362,7 +361,11 @@ async def gateway_middleware(request: Request, call_next):
         return response
     except HTTPException as e:
         headers = getattr(e, "headers", {})
-        return JSONResponse(status_code=e.status_code, content={"detail": e.detail}, headers=headers)
+        return JSONResponse(
+            status_code=e.status_code,
+            content=e.detail if isinstance(e.detail, dict) else {"detail": e.detail},
+            headers=headers
+        )
 
 # ================================
 # REQUEST/RESPONSE MODELS
@@ -378,8 +381,8 @@ class ChatRequest(BaseModel):
     bundle_id: Optional[str] = None
     message: str
     session_id: Optional[str] = None
-    config: Optional[ConfigRequest] = {}
-    chat_history: Optional[List[ChatMessage]] = []
+    config: Optional[ConfigRequest] = None
+    chat_history: List[ChatMessage] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -447,7 +450,6 @@ async def check_embeddings_endpoint(request: ConfigRequest,
             }
         )
 
-
 @app.get("/profile")
 # think of replacing with auth_without_pressure
 async def get_profile(session: UserSession = Depends(get_user_session_dependency())):
@@ -469,111 +471,6 @@ async def get_profile(session: UserSession = Depends(get_user_session_dependency
             "session_id": session.session_id,
             "created_at": session.created_at
         }
-
-
-@app.post("/landing/chat")
-async def chat_endpoint(
-        payload: ChatRequest,  # rename to avoid shadowing fastapi.Request
-        session: UserSession = Depends(get_user_session_dependency())
-):
-    """Main chat endpoint - supports both anonymous and registered users.
-       Only enqueues; worker binds accounting from attached envelope."""
-    try:
-        # IDs
-        task_id = str(uuid.uuid4())
-        request_id = str(uuid.uuid4())
-        session_id = payload.session_id or session.session_id
-        bundle_id = payload.bundle_id
-
-        # Build an accounting snapshot (no storage I/O here)
-        # Try to infer tenant / project if you carry them in config; safe to leave None.
-        cfg_dict = payload.config.model_dump() if payload.config else {}
-        project_id = cfg_dict.get("project")
-        tenant_id = cfg_dict.get("tenant_id") or get_tenant()
-
-        acct_env = build_envelope_from_session(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            request_id=request_id,
-            component="chat.rest",
-            app_bundle_id=bundle_id,
-            metadata={
-                "entrypoint": "/landing/chat"
-            },
-        )
-
-        # Prepare task payload for the orchestrator/worker
-        task_data = {
-            "task_id": task_id,
-            "message": payload.message,
-            "session_id": session_id,
-            "config": cfg_dict,
-            "chat_history": convert_chat_history(payload.chat_history or []),
-            "user_type": session.user_type.value,
-            "user_info": {
-                "user_id": session.user_id,
-                "username": session.username,
-                "fingerprint": session.fingerprint,
-                "roles": session.roles,
-                "permissions": session.permissions,
-            },
-            "created_at": time.time(),
-            "instance_id": INSTANCE_ID,
-            "acct": acct_env.to_dict(),  # <— accounting envelope for downstream worker
-            "kdcube_path": os.environ.get("KDCUBE_STORAGE_PATH"),
-            "target_room": session_id  # <— explicit for clarity
-        }
-
-        # Use the gateway-provided context we stored in the session at auth time
-        context = session.request_context
-
-        # Atomic enqueue with backpressure protection
-        chat_queue_manager = app.state.chat_queue_manager
-        success, reason, stats = await chat_queue_manager.enqueue_chat_task_atomic(
-            session.user_type,
-            task_data,
-            session,
-            context,
-            "/landing/chat"
-        )
-
-        if not success:
-            retry_after = 30 if "anonymous" in reason else 45 if "registered" in reason else 60
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": "System under pressure",
-                    "reason": reason,
-                    "retry_after": retry_after,
-                    "stats": stats
-                },
-                headers={"Retry-After": str(retry_after)}
-            )
-
-        # Keep the existing response shape for compatibility
-        return ChatResponse(
-            status="processing_started",
-            task_id=task_id,
-            session_id=session_id,
-            user_type=session.user_type.value,
-            message=f"Request queued for {session.user_type.value} user"
-        )
-
-    except CircuitBreakerError as e:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": "Service temporarily unavailable",
-                "reason": f"Circuit breaker '{e.circuit_name}' is open",
-                "retry_after": e.retry_after,
-                "circuit_breaker": e.circuit_name
-            },
-            headers={"Retry-After": str(e.retry_after)}
-        )
-    except Exception as e:
-        logger.error(f"Chat endpoint error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/landing/models")
 async def get_available_models(session: UserSession = Depends(get_user_session_dependency())):

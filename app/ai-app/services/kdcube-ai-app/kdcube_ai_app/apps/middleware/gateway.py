@@ -5,11 +5,9 @@
 """
 FastAPI adapter for the simplified gateway
 """
-from contextlib import asynccontextmanager
 
-from fastapi import Request, HTTPException, Depends
-from fastapi.responses import JSONResponse
-from typing import List, Optional, Dict, Any, Iterable
+from fastapi import Request, HTTPException
+from typing import List, Optional, Dict, Iterable
 from pydantic import BaseModel
 
 from kdcube_ai_app.infra.gateway.gateway import (
@@ -23,6 +21,7 @@ from kdcube_ai_app.auth.AuthManager import RequirementBase, AuthenticationError,
     RequireRoles
 from kdcube_ai_app.infra.namespaces import CONFIG
 
+STATE_ADMIN_CHECKED = "_gw_admin_checked"
 
 class CircuitBreakerStatusResponse(BaseModel):
     name: str
@@ -54,8 +53,10 @@ STATE_USER_TYPE = "user_type"
 class FastAPIGatewayAdapter:
     """FastAPI adapter for the request gateway"""
 
-    def __init__(self, gateway: RequestGateway):
+    def __init__(self, gateway: RequestGateway,
+                 policy_resolver):
         self.gateway = gateway
+        self.policy = policy_resolver
 
     def _extract_context(self, request: Request) -> RequestContext:
         """Extract request context from FastAPI request"""
@@ -66,12 +67,48 @@ class FastAPIGatewayAdapter:
             id_token=request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME),
         )
 
+    async def resolve_session(self, request: Request) -> UserSession:
+        """
+        AuthN/AuthZ + session resolution only.
+        No rate limit, no backpressure.
+        Safe for middleware + SSE stream connect.
+        """
+        return await self.process_request(
+            request,
+            requirements=[],
+            bypass_throttling=True,
+            bypass_gate=True,
+        )
+
+    def get_session_light(self):
+        async def dependency(request: Request) -> UserSession:
+            existing: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
+            if existing is not None:
+                return existing
+
+            session = await self.resolve_session(request)
+            setattr(request.state, STATE_SESSION, session)
+            setattr(request.state, STATE_USER_TYPE, session.user_type.value)
+            setattr(request.state, STATE_FLAG, True)
+            return session
+        return dependency
+
+    async def process_by_policy(self, request: Request) -> UserSession:
+        pol = self.policy.resolve(request)
+        return await self.process_request(
+            request,
+            requirements=pol.requirements or [],
+            bypass_throttling=pol.bypass_throttling,
+            bypass_gate=pol.bypass_gate,
+        )
+
     async def process_request(self,
                               request: Request,
                               requirements: List[RequirementBase] = None,
                               bypass_throttling: bool = False,
                               bypass_gate: bool = False) -> UserSession:
         """Process request and return session"""
+        requirements = requirements or []
         context = self._extract_context(request)
         endpoint = request.url.path
 
@@ -112,7 +149,10 @@ class FastAPIGatewayAdapter:
     def require_admin(self, *requirements: RequirementBase):
         """Create FastAPI dependency that enforces requirements with throttling bypass"""
         async def dependency(request: Request) -> UserSession:
-            return await self.process_request(request, list(requirements), bypass_throttling=True)
+            return await self.process_request(request,
+                                              list(requirements),
+                                              bypass_throttling=True,
+                                              bypass_gate=True)
         return dependency
 
     def require(self, *requirements: RequirementBase):
@@ -137,74 +177,49 @@ class FastAPIGatewayAdapter:
                 return existing
 
             # Otherwise process once here and mark
-            session = await self.process_request(request, [])
+            # session = await self.process_request(request, [])
+            session = await self.resolve_session(request)
             setattr(request.state, STATE_SESSION, session)
             setattr(request.state, STATE_USER_TYPE, session.user_type.value)
             setattr(request.state, STATE_FLAG, True)
             return session
         return dependency
 
-    def auth_without_pressure(self, requirements: Optional[Iterable] = None):
+    def auth_without_pressure(self, requirements: Optional[Iterable[RequirementBase]] = None):
         """
-        Authenticate + authorize for admin endpoints, bypass throttling for privileged users
+        Authenticate + authorize for admin endpoints.
+        Always bypass throttling + gate.
+        Reuse cached session only if we know admin checks were already applied.
         """
-        DEFAULT_ADMIN_REQUIREMENTS = [
+        DEFAULT_ADMIN_REQUIREMENTS: List[RequirementBase] = [
             RequireUser(),
             RequireRoles("kdcube:role:super-admin"),
         ]
-        reqs = requirements if requirements else DEFAULT_ADMIN_REQUIREMENTS
-        async def dependency(request: Request) -> UserSession:
+        reqs = list(requirements) if requirements is not None else DEFAULT_ADMIN_REQUIREMENTS
 
+        async def dependency(request: Request) -> UserSession:
             existing: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
-            if existing is not None:
+            admin_checked: bool = getattr(request.state, STATE_ADMIN_CHECKED, False)
+
+            # Only reuse if this request already ran admin auth
+            if existing is not None and admin_checked:
                 return existing
 
-            # Use admin bypass for monitoring/admin endpoints
             session = await self.process_request(
                 request,
                 reqs,
-                bypass_throttling=True
+                bypass_throttling=True,
+                bypass_gate=True,
             )
+
             setattr(request.state, STATE_SESSION, session)
             setattr(request.state, STATE_USER_TYPE, session.user_type.value)
             setattr(request.state, STATE_FLAG, True)
+            setattr(request.state, STATE_ADMIN_CHECKED, True)
 
             return session
+
         return dependency
-
-    async def middleware(self, request: Request, call_next):
-        """FastAPI middleware that adds session to request state"""
-        # Skip processing for excluded paths
-        excluded_paths = ["/profile", "/health", "/monitoring", "/docs", "/openapi.json", "/favicon.ico"]
-
-        if any(request.url.path.startswith(path) for path in excluded_paths):
-            return await call_next(request)
-
-        try:
-            # Process request through gateway (no requirements at middleware level)
-            session = await self.process_request(request, [])
-
-            # Add session to request state
-            request.state.user_session = session
-            request.state.user_type = session.user_type.value
-
-            # Process request
-            response = await call_next(request)
-
-            # Add useful headers
-            response.headers["X-User-Type"] = session.user_type.value
-            response.headers["X-Session-ID"] = session.session_id
-
-            return response
-
-        except HTTPException as e:
-            # Return proper error response
-            headers = getattr(e, 'headers', {})
-            return JSONResponse(
-                status_code=e.status_code,
-                content={"detail": e.detail},
-                headers=headers
-            )
 
     async def get_system_status(self) -> dict:
         """Get system status"""
@@ -272,7 +287,8 @@ class AccountingContextBinder:
         Use in FastAPI endpoints:
             session: UserSession = Depends(binder.http_dependency("chat-rest"))
         """
-        base_dep = self.gateway_adapter.get_session(bypass_gate=True)
+        # base_dep = self.gateway_adapter.get_session(bypass_gate=True)
+        base_dep = self.gateway_adapter.get_session_light()
         comp = component or self.default_component
 
         async def dep(request: Request, session: UserSession = Depends(base_dep)) -> UserSession:

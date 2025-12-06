@@ -368,20 +368,32 @@ class QueueAwareCircuitBreaker(CircuitBreaker):
                     logger.info(f"Circuit Breaker [{self.name}]: Fast close due to low queue pressure")
 
     async def record_failure(self, error_type: str = "general"):
-        """Enhanced failure recording that considers queue pressure"""
-        await super().record_failure(error_type)
+        """
+        Enhanced failure recording that considers queue pressure.
 
-        # For backpressure failures, don't open the circuit if queue is actually empty
+        For backpressure_exceeded when queue pressure is very low,
+        we ignore the failure (likely config/false positive).
+        """
         if self.name == "backpressure" and error_type == "backpressure_exceeded":
             current_time = time.time()
             await self._update_queue_pressure_cache(current_time)
 
-            # If queue pressure is very low despite backpressure error,
-            # it might be a configuration issue - be more lenient
             if self.cached_queue_pressure < 0.1:
-                logger.warning(f"Backpressure error with low queue pressure ({self.cached_queue_pressure:.2f})")
-                # Don't count this failure as heavily
+                logger.warning(
+                    f"Backpressure error with low queue pressure "
+                    f"({self.cached_queue_pressure:.2f}); ignoring failure"
+                )
+                # TODO: "soft record" option
+                # We may want to *count lightly* instead of ignoring completely:
+                #   - increment total_requests / total_failures for observability
+                #   - maybe track a separate "soft_backpressure_failures" metric
+                #   - BUT do NOT update sliding window
+                #   - AND do NOT trigger OPEN transition
+                # This would preserve monitoring signal without destabilizing the CB logic.
                 return
+
+        await super().record_failure(error_type)
+
 
 class CircuitBreakerManager:
     """Manages multiple circuit breakers and integrates with your throttling monitor"""

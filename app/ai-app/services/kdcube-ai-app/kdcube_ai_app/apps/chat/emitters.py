@@ -8,7 +8,7 @@ import traceback
 from datetime import datetime
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple
+from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple, Set
 import os, logging, time
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -85,19 +85,39 @@ class ChatRelayCommunicator:
         )
         self._channel = channel
 
+        self._callbacks: Set[Callable[[dict], Awaitable[None]]] = set()
+        self._session_refcounts: Dict[str, int] = {}
+        self._listener_started = False
+
     # ---------- publish ----------
+    def _session_channel(self, session_id: str) -> str:
+        # base channel is "chat.events"
+        return f"{self._channel}.{session_id}"
+
+    def _derive_session_id(self, env: ChatEnvelope, explicit: str | None) -> str | None:
+        if explicit:
+            return explicit
+
+        # Try to read from the envelope's conversation
+        try:
+            conv = getattr(env, "conversation", None)
+            if isinstance(conv, dict):
+                return conv.get("session_id")
+            return getattr(conv, "session_id", None)
+        except Exception:
+            return None
 
     async def _pub(self, env: ChatEnvelope, *, target_sid: Optional[str], session_id: Optional[str]):
         # Always publish TYPE-MAPPED event so the relay only emits
         event = _EVENT_MAP[env.type]
+        sid = self._derive_session_id(env, session_id)
         await self._comm.pub(
             event=event,
             data=env.dump_model(),
             target_sid=target_sid,
-            session_id=session_id,
+            session_id=sid,
             channel=self._channel,
         )
-
     async def emit_envelope(self, env: ChatEnvelope, *, target_sid: Optional[str] = None, session_id: Optional[str] = None):
         """Low-level: publish a prebuilt envelope."""
         await self._pub(env, target_sid=target_sid, session_id=session_id)
@@ -159,6 +179,83 @@ class ChatRelayCommunicator:
             session_id=session_id,
             channel=self._channel,
         )
+
+    def add_listener(self, cb: Callable[[dict], Awaitable[None]]):
+        if cb:
+            self._callbacks.add(cb)
+
+    # optional, if you want symmetry
+    def remove_listener(self, cb: Callable[[dict], Awaitable[None]]):
+        try:
+            self._callbacks.discard(cb)
+        except Exception:
+            pass
+
+    async def _ensure_listener(self):
+        if self._listener_started:
+            return
+        await self._comm.start_listener(self._dispatch)
+        self._listener_started = True
+
+
+    async def _dispatch(self, message: dict):
+        # Fan-out to every registered transport callback
+        for cb in list(self._callbacks):
+            try:
+                await cb(message)
+            except Exception:
+                logger.exception("Relay callback failed")
+
+    async def acquire_session_channel(
+            self,
+            session_id: str,
+            *,
+            callback: Callable[[dict], Awaitable[None]] | None = None,
+    ):
+        """
+        Refcounted subscribe to per-session Redis channel.
+        Also registers callback into the shared dispatcher.
+        """
+        if not session_id:
+            return
+
+        if callback:
+            self.add_listener(callback)
+
+        count = self._session_refcounts.get(session_id, 0)
+        if count == 0:
+            await self._comm.subscribe_add(self._session_channel(session_id))
+
+        self._session_refcounts[session_id] = count + 1
+
+        await self._ensure_listener()
+
+    async def release_session_channel(self, session_id: str):
+        """
+        Refcounted unsubscribe from per-session Redis channel.
+        """
+        if not session_id:
+            return
+
+        count = self._session_refcounts.get(session_id, 0)
+        if count <= 1:
+            self._session_refcounts.pop(session_id, None)
+            await self._comm.unsubscribe_some(self._session_channel(session_id))
+        else:
+            self._session_refcounts[session_id] = count - 1
+
+    async def subscribe(self, callback):
+        """
+        Legacy: global subscribe.
+        """
+        self.add_listener(callback)
+        await self._comm.subscribe(self._channel)
+        await self._ensure_listener()
+
+    async def unsubscribe(self):
+        await self._comm.stop_listener()
+        self._listener_started = False
+        self._callbacks.clear()
 
     async def emit_conversation_status(
             self,
@@ -258,12 +355,12 @@ class ChatRelayCommunicator:
 
     # ---------- subscribe / relay ----------
 
-    async def subscribe(self, callback):
-        await self._comm.subscribe(self._channel)
-        await self._comm.start_listener(callback)
-
-    async def unsubscribe(self):
-        await self._comm.stop_listener()
+    # async def subscribe(self, callback):
+    #     await self._comm.subscribe(self._channel)
+    #     await self._comm.start_listener(callback)
+    #
+    # async def unsubscribe(self):
+    #     await self._comm.stop_listener()
 
 @dataclass
 class ChatCommunicator:

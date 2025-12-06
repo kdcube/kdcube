@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency
+from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
@@ -131,22 +132,13 @@ class SSEHub:
     async def register(self, client: Client):
         async with self._lock:
             lst = self._by_session.setdefault(client.session_id, [])
-            was_empty = not lst
             lst.append(client)
 
-        if was_empty:
-            # First client for this session on this worker → subscribe to its channel
-            session_ch = f"chat.events.{client.session_id}"
-            await self.chat_comm._comm.subscribe_add(session_ch)
-            logger.info(
-                "[SSEHub] subscribe for session=%s channel=%s",
-                client.session_id,
-                session_ch,
-            )
-
-            # Ensure Redis listener is running.
-            # Safe to call many times; start_listener() returns immediately if already running.
-            await self.chat_comm._comm.start_listener(self._on_relay)
+        # Acquire per-session channel via central refcounting
+        await self.chat_comm.acquire_session_channel(
+            client.session_id,
+            callback=self._on_relay,
+        )
 
         logger.info(
             "[SSEHub] register session=%s total=%d",
@@ -155,22 +147,22 @@ class SSEHub:
         )
 
     async def unregister(self, client: Client):
+        last_for_session = False
 
-        remove_channel = None
         async with self._lock:
             lst = self._by_session.get(client.session_id, [])
             new = [c for c in lst if c is not client]
             if new:
                 self._by_session[client.session_id] = new
-                logger.info("[SSEHub] unregister session=%s total=%d", client.session_id, len(new))
             else:
                 self._by_session.pop(client.session_id, None)
-                remove_channel = f"chat.events.{client.session_id}"
-                logger.info("[SSEHub] unregister session=%s total=0 -> removed", client.session_id)
+                last_for_session = True
 
-        if remove_channel:
-            await self.chat_comm._comm.unsubscribe_some(remove_channel)
-            logger.info("[SSEHub] unsubscribed from channel=%s", remove_channel)
+        if last_for_session:
+            await self.chat_comm.release_session_channel(client.session_id)
+
+        logger.info("[SSEHub] unregister session=%s last=%s", client.session_id, last_for_session)
+
 
     # Relay callback invoked by ChatRelayCommunicator
     async def _on_relay(self, message: dict):
@@ -279,16 +271,19 @@ def create_sse_router(
 
         # Gateway protections for opening a stream
         ctx = build_sse_request_context(request, bearer_token=bearer_token, id_token=id_token, session=session)
-        session = await upgrade_session_from_tokens(
-            session=session,
-            ctx=ctx,
-            bearer_token=bearer_token,
-            id_token=id_token,
-            gateway_adapter=gateway_adapter,
-            chat_comm=chat_comm,
-            stream_id=stream_id,
-            endpoint="/sse/stream",
-        )
+        try:
+            session = await upgrade_session_from_tokens(
+                session=session,
+                ctx=ctx,
+                bearer_token=bearer_token,
+                id_token=id_token,
+                gateway_adapter=gateway_adapter,
+                chat_comm=chat_comm,
+                stream_id=stream_id,
+            )
+        except AuthenticationError as e:
+            raise HTTPException(status_code=401, detail="Invalid token") from e
+
         if os.environ.get("CHAT_SSE_REJECT_ANONYMOUS", "1") == "1":
             await _reject_anonymous(
                 endpoint="/sse/stream",
@@ -296,31 +291,31 @@ def create_sse_router(
                 stream_id=stream_id,
                 chat_comm=chat_comm,
             )
-        gw_res = await run_gateway_checks(
-            gateway_adapter=gateway_adapter,
-            session=session,
-            context=ctx,
-            endpoint="/sse/stream",
-        )
-        if gw_res.kind != "ok":
-            mapped = map_gateway_error(gw_res)
-            svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id)
-            conv = ConversationCtx(
-                session_id=session.session_id,
-                conversation_id=session.session_id,
-                turn_id=f"turn_{uuid.uuid4().hex[:8]}",
-            )
-            await chat_comm.emit_error(
-                svc,
-                conv,
-                error=mapped["message"],
-                target_sid=stream_id,
-                session_id=session.session_id,
-            )
-            detail = {"error": mapped["message"]}
-            if mapped.get("retry_after") is not None:
-                detail["retry_after"] = mapped["retry_after"]
-            raise HTTPException(status_code=mapped["status"], detail=detail)
+        # gw_res = await run_gateway_checks(
+        #     gateway_adapter=gateway_adapter,
+        #     session=session,
+        #     context=ctx,
+        #     endpoint="/sse/stream",
+        # )
+        # if gw_res.kind != "ok":
+        #     mapped = map_gateway_error(gw_res)
+        #     svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id)
+        #     conv = ConversationCtx(
+        #         session_id=session.session_id,
+        #         conversation_id=session.session_id,
+        #         turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+        #     )
+        #     await chat_comm.emit_error(
+        #         svc,
+        #         conv,
+        #         error=mapped["message"],
+        #         target_sid=stream_id,
+        #         session_id=session.session_id,
+        #     )
+        #     detail = {"error": mapped["message"]}
+        #     if mapped.get("retry_after") is not None:
+        #         detail["retry_after"] = mapped["retry_after"]
+        #     raise HTTPException(status_code=mapped["status"], detail=detail)
 
         # Prepare per-connection queue (bounded)
         max_q = int(os.getenv("SSE_CLIENT_QUEUE", "100"))

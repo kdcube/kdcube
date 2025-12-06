@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+from kdcube_ai_app.apps.middleware.gateway_policy import GatewayPolicyResolver
 # Import centralized configuration
 from kdcube_ai_app.infra.gateway.config import (
     GatewayConfigFactory,
@@ -224,7 +225,9 @@ def create_request_gateway():
 def create_fastapi_gateway_adapter():
     """Create FastAPI adapter for the gateway"""
     gateway = create_request_gateway()
-    return FastAPIGatewayAdapter(gateway)
+    gateway_policy = GatewayPolicyResolver()
+    return FastAPIGatewayAdapter(gateway=gateway,
+                                 policy_resolver=gateway_policy)
 
 # ================================
 # CONFIGURATION ACCESS FUNCTIONS

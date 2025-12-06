@@ -231,7 +231,7 @@ async def get_total_usage(
         app_bundle_id: Optional[str] = Query(None, description="App bundle ID"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query total usage for all users in given timeframe.
@@ -302,7 +302,7 @@ async def get_usage_by_user(
         app_bundle_id: Optional[str] = Query(None, description="App bundle ID"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage broken down by user.
@@ -365,7 +365,7 @@ async def get_conversation_usage(
         app_bundle_id: Optional[str] = Query(None, description="App bundle ID"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage for a specific conversation.
@@ -440,7 +440,7 @@ async def get_turn_usage(
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(5000, description="Max files to scan"),
         use_memory_cache: bool = Query(False, description="Use in-memory cache if available"),
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage for a specific turn (async).
@@ -533,7 +533,7 @@ async def get_agent_usage(
         app_bundle_id: Optional[str] = Query(None, description="App bundle ID"),
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(None, description="Max files to scan"),
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query usage broken down by agent.
@@ -601,7 +601,7 @@ async def get_turn_usage_by_agent(
         service_types: Optional[str] = Query(None, description="Comma-separated service types"),
         hard_file_limit: Optional[int] = Query(5000, description="Max files to scan"),
         use_memory_cache: bool = Query(False, description="Use in-memory cache if available"),
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(auth_without_pressure())
 ):
     """
     Query turn usage broken down by agent (highly optimized with prefix filtering).

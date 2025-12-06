@@ -12,14 +12,13 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Literal
-from fastapi import Request, HTTPException  # only if you put this in a place where FastAPI is available
+from fastapi import Request  # only if you put this in a place where FastAPI is available
 
-from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
+from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskPayload, ChatTaskMeta, ChatTaskRouting, ChatTaskActor, ChatTaskUser,
-    ChatTaskRequest, ChatTaskConfig, ChatTaskAccounting,
-    ServiceCtx, ConversationCtx,
+    ChatTaskRequest, ChatTaskConfig, ChatTaskAccounting, ServiceCtx, ConversationCtx
 )
 from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session
 from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError
@@ -28,13 +27,10 @@ from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.safe_preflight import PreflightConfig, preflight_async
 from kdcube_ai_app.infra.namespaces import CONFIG
 from kdcube_ai_app.tools.file_text_extractor import DocumentTextExtractor
-from kdcube_ai_app.apps.chat.api.resolvers import get_tenant
+from kdcube_ai_app.apps.chat.api.resolvers import get_tenant, get_auth_manager
 from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
 
-from kdcube_ai_app.apps.chat.api.resolvers import get_auth_manager
 from kdcube_ai_app.auth.AuthManager import AuthenticationError, PRIVILEGED_ROLES
-from kdcube_ai_app.auth.sessions import UserType, UserSession
-from kdcube_ai_app.apps.chat.sdk.protocol import ServiceCtx, ConversationCtx
 
 logger = logging.getLogger(__name__)
 
@@ -647,15 +643,6 @@ async def get_conversation_status(
         "current_turn_id": current_turn_id,
     }
 
-def _extract_bearer_from_auth_header(auth_header: Optional[str]) -> Optional[str]:
-    if not auth_header:
-        return None
-    parts = auth_header.split(" ", 1)
-    if len(parts) == 2 and parts[0].lower() == "bearer":
-        token = parts[1].strip()
-        return token or None
-    return None
-
 def build_sse_request_context(
         request: Request,
         session: UserSession,
@@ -721,15 +708,19 @@ def build_ws_connect_request_context(
         environ: dict,
         auth: Optional[dict],
 ) -> RequestContext:
-    client_ip = environ.get("REMOTE_ADDR") or environ.get("HTTP_X_FORWARDED_FOR") or "unknown"
+
+    xff = environ.get("HTTP_X_FORWARDED_FOR")
+    client_ip = (xff.split(",")[0].strip() if xff else None) or environ.get("REMOTE_ADDR") or "unknown"
     user_agent = environ.get("HTTP_USER_AGENT", "")
     bearer = (auth or {}).get("bearer_token")
+    id_token = (auth or {}).get("id_token")
     auth_header = f"Bearer {bearer}" if bearer else None
 
     return RequestContext(
         client_ip=client_ip,
         user_agent=user_agent,
         authorization_header=auth_header,
+        id_token=id_token
     )
 
 
@@ -751,7 +742,6 @@ async def upgrade_session_from_tokens(
         gateway_adapter,
         chat_comm: ChatRelayCommunicator,
         stream_id: Optional[str],
-        endpoint: str,
 ) -> UserSession:
     # No tokens → nothing to do
     if not bearer_token and not id_token:
@@ -775,6 +765,7 @@ async def upgrade_session_from_tokens(
             conversation_id=session.session_id,
             turn_id=f"turn_{uuid.uuid4().hex[:8]}",
         )
+        # This won't work if this is the connection flow because the relay is not connected.
         await chat_comm.emit_error(
             svc,
             conv,
@@ -782,7 +773,7 @@ async def upgrade_session_from_tokens(
             target_sid=stream_id,
             session_id=session.session_id,
         )
-        raise HTTPException(status_code=401, detail="Invalid token") from e
+        raise e
 
     roles = user.roles or []
     if any(r in PRIVILEGED_ROLES for r in roles):

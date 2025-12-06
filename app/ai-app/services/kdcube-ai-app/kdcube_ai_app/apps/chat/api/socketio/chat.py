@@ -11,19 +11,17 @@ uses a standardized ChatTaskPayload schema (chat/sdk/protocol.py).
 from __future__ import annotations
 import os
 import uuid
-import time
+from pathlib import Path
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import hashlib
 import re
 
 import socketio
 
+from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
-from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError
-from kdcube_ai_app.infra.gateway.backpressure import BackpressureError
-from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
@@ -38,10 +36,39 @@ from kdcube_ai_app.apps.chat.api.ingress.chat_core import (
     extract_attachments_text,
     merge_attachments_into_message,
     process_chat_message,
-    get_conversation_status, build_ws_connect_request_context,
+    get_conversation_status, build_ws_connect_request_context, upgrade_session_from_tokens,
+    build_ws_chat_request_context,
 )
 
 logger = logging.getLogger(__name__)
+
+async def _reject_anonymous(
+        *,
+        endpoint: str,
+        session: UserSession,
+        chat_comm,
+        sid: Optional[str],
+):
+    if session.user_type != UserType.ANONYMOUS:
+        return
+
+    svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id or session.fingerprint)
+    conv = ConversationCtx(
+        session_id=session.session_id,
+        conversation_id=session.session_id,
+        turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+    )
+    err_detail = f"Anonymous sessions are not allowed for {endpoint}"
+
+    # keep error payload consistent with your other emit_error usage
+    await chat_comm.emit_error(
+        svc,
+        conv,
+        error=err_detail,
+        target_sid=sid,
+        session_id=session.session_id,
+    )
+    return False
 
 
 class SocketIOChatHandler:
@@ -77,6 +104,10 @@ class SocketIOChatHandler:
 
         self._session_refcounts: Dict[str, int] = {}
         self._sid_to_session_id: Dict[str, str] = {}
+
+        # TODO: remove!
+        self.upload_dir = Path(os.environ.get("CHAT_UPLOAD_DIR", "/tmp/chat_uploads"))
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------- Socket.IO core ----------
 
@@ -215,12 +246,13 @@ class SocketIOChatHandler:
                 logger.warning("WS connect rejected: origin '%s' not allowed", origin)
                 return False
 
-        user_session_id = (auth or {}).get("user_session_id")
+        auth = auth or {}
+        user_session_id = auth.get("user_session_id")
         if not user_session_id:
             logger.warning("WS connect rejected: missing user_session_id")
             return False
 
-        # load session
+        # 1) load base session
         try:
             session = await self.gateway_adapter.gateway.session_manager.get_session_by_id(user_session_id)
             if not session:
@@ -230,56 +262,75 @@ class SocketIOChatHandler:
             logger.error("WS connect failed to load session %s: %s", user_session_id, e)
             return False
 
-        # optional bearer validation (registered/privileged)
+        # 2) extract tokens from Socket.IO auth payload
+        bearer_token = auth.get("bearer_token")
+        id_token = auth.get("id_token")
+
+        # 3) build connect RequestContext from transport
+        ctx = build_ws_connect_request_context(environ, auth)
+        # 4) upgrade session if tokens present (mirrors SSE)
         try:
-            bearer_token = (auth or {}).get("bearer_token")
-            id_token = (auth or {}).get("id_token")
-            if bearer_token and session.user_type.value != "anonymous":
-                user = await self.gateway_adapter.gateway.auth_manager.authenticate_with_both(bearer_token, id_token)
-                claimed_user_id = getattr(user, "sub", None) or user.username
-                if session.user_id and claimed_user_id and session.user_id != claimed_user_id:
-                    logger.warning(
-                        "WS connect rejected: bearer user_id '%s' != session user_id '%s'",
-                        claimed_user_id, session.user_id
-                    )
-                    return False
+            session = await upgrade_session_from_tokens(
+                session=session,
+                ctx=ctx,
+                bearer_token=bearer_token,
+                id_token=id_token,
+                gateway_adapter=self.gateway_adapter,
+                chat_comm=self._comm,
+                stream_id=sid,
+            )
+        except AuthenticationError:
+            # upgrade_session_from_tokens already emitted an error
+            return False
         except Exception as e:
-            logger.error("WS bearer validation failed: %s", e)
+            logger.error("WS session upgrade failed: %s", e)
             return False
 
-        # gateway protections (rate-limit + backpressure) — tracked on this endpoint
-        context = build_ws_connect_request_context(environ, auth)
-        gw_res = await run_gateway_checks(
-            gateway_adapter=self.gateway_adapter,
-            session=session,
-            context=context,
-            endpoint="/socket.io/connect",
-        )
-        if gw_res.kind != "ok":
-            mapped = map_gateway_error(gw_res)
-            try:
-                await self.sio.emit("chat_error", {
-                    "error": mapped["message"],
-                    "retry_after": mapped.get("retry_after"),
-                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                }, to=sid)
-            finally:
+        # 5) optional policy gate for anonymous
+        if os.environ.get("CHAT_WS_REJECT_ANONYMOUS", "0") == "1":
+            ok = await _reject_anonymous(endpoint="/socket.io/connect", session=session, sid=sid, chat_comm=self._comm)
+            if ok is False:
                 return False
 
-        # save socket session & join per-session room
+        # # 6) gateway protections
+        # gw_res = await run_gateway_checks(
+        #     gateway_adapter=self.gateway_adapter,
+        #     session=session,
+        #     context=ctx,
+        #     endpoint="/socket.io/connect",
+        # )
+        # if gw_res.kind != "ok":
+        #     mapped = map_gateway_error(gw_res)
+        #     try:
+        #         await self.sio.emit("chat_error", {
+        #             "error": mapped["message"],
+        #             "retry_after": mapped.get("retry_after"),
+        #             "timestamp": datetime.utcnow().isoformat() + "Z",
+        #         }, to=sid)
+        #     finally:
+        #         return False
+
+        # 7) save socket session metadata (store ctx too!)
         try:
             socket_meta = {
                 "user_session": session.serialize_to_dict(),
+                "request_context": ctx.model_dump() if hasattr(ctx, "model_dump") else ctx.__dict__,  # safe bridge
                 "authenticated": session.user_type.value != "anonymous",
-                "project": (auth or {}).get("project"),
-                "tenant": (auth or {}).get("tenant"),
+                "project": auth.get("project"),
+                "tenant": auth.get("tenant"),
             }
+
             await self.sio.save_session(sid, socket_meta)
+
+            # join room for *current* session (could be upgraded)
             await self.sio.enter_room(sid, session.session_id)
 
             # track sid → session_id and ensure Redis subscription
             self._sid_to_session_id[sid] = session.session_id
-            await self._ensure_session_subscription(session.session_id)
+            await self._comm.acquire_session_channel(
+                session.session_id,
+                callback=self._on_pubsub_message,
+            )
 
             await self.sio.emit("session_info", {
                 "session_id": session.session_id,
@@ -302,7 +353,7 @@ class SocketIOChatHandler:
         logger.info("Chat client disconnected: %s", sid)
         session_id = self._sid_to_session_id.pop(sid, None)
         if session_id:
-            await self._release_session_subscription(session_id)
+            await self._comm.release_session_channel(session_id)
 
 
     # ---------- CHAT MESSAGE with GATING (restored) ----------
@@ -341,7 +392,6 @@ class SocketIOChatHandler:
 
         data = args[0]
         message_data = data.get("message", {}) or {}
-
         logger.info(
             "chat_message sid=%s '%s'...",
             sid,
@@ -350,6 +400,8 @@ class SocketIOChatHandler:
 
         try:
             socket_session = await self.sio.get_session(sid)
+            ctx_data = (socket_session or {}).get("request_context")
+
             user_session_data = (socket_session or {}).get("user_session", {})
 
             # Rebuild lightweight UserSession
@@ -363,12 +415,17 @@ class SocketIOChatHandler:
                 permissions=user_session_data.get("permissions", []),
             )
 
-            # ---------- gateway checks (shared) ----------
-            context = RequestContext(
-                client_ip="socket.io",
-                user_agent="socket.io-client",
-                authorization_header=None,
-            )
+            # rebuild ctx if we stored it on connect; else fallback
+            if ctx_data:
+                context = RequestContext(**ctx_data)
+            else:
+                context = build_ws_chat_request_context()
+
+            # optional anonymous gate for message-level parity
+            if os.environ.get("CHAT_WS_REJECT_ANONYMOUS", "0") == "1":
+                ok = await _reject_anonymous(endpoint="/socket.io/chat", session=session, sid=sid, chat_comm=self._comm)
+                if ok is False:
+                    return
             gw_res = await run_gateway_checks(
                 gateway_adapter=self.gateway_adapter,
                 session=session,

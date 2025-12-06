@@ -117,7 +117,6 @@ class RateLimiter:
                     }
                 }
             )
-
             raise RateLimitError(
                 f"Burst limit exceeded ({burst_count}/{config.burst_limit})",
                 config.burst_window,
