@@ -812,12 +812,28 @@ class ModelRouter:
 # Usage metadata helpers
 # =========================
 def ms_provider_extractor(model_service, client, *args, **kw) -> str:
-    cfg = kw.get("client_cfg") or model_service.describe_client(client)
-    return getattr(cfg, "provider", "unknown")
+    cfg = kw.get("client_cfg")
+    if not cfg and model_service and client:
+        try:
+            cfg = model_service.describe_client(client, role=kw.get("role"))
+        except TypeError:
+            cfg = model_service.describe_client(client)
+        except Exception:
+            cfg = None
+    return getattr(cfg, "provider", "unknown") if cfg else "unknown"
+
 
 def ms_model_extractor(model_service, client, *args, **kw) -> str:
-    cfg = kw.get("client_cfg") or model_service.describe_client(client)
-    return getattr(cfg, "model_name", "unknown")
+    cfg = kw.get("client_cfg")
+    if not cfg and model_service and client:
+        try:
+            cfg = model_service.describe_client(client, role=kw.get("role"))
+        except TypeError:
+            cfg = model_service.describe_client(client)
+        except Exception:
+            cfg = None
+    return getattr(cfg, "model_name", "unknown") if cfg else "unknown"
+
 
 def ms_structured_meta_extractor(model_service, _client, system_prompt: str, user_message: str, response_format, **kw):
     client_cfg = kw.get("client_cfg")
@@ -828,16 +844,18 @@ def ms_structured_meta_extractor(model_service, _client, system_prompt: str, use
         "prompt_chars": len(system_prompt or "") + len(user_message or ""),
         "temperature": kw.get("temperature"),
         "max_tokens": kw.get("max_tokens"),
+        "role": kw.get("role"),
     }
 
-# def ms_freeform_meta_extractor(model_service, _client, messages, *a, **kw):
-def ms_freeform_meta_extractor(model_service, _client = None, messages = None, *a, **kw):
+
+def ms_freeform_meta_extractor(model_service, _client=None, messages=None, *a, **kw):
     try:
         if not messages:
             messages = kw.get("messages") or []
         prompt_chars = sum(len(getattr(m, "content", "") or "") for m in (messages or []))
     except Exception:
         prompt_chars = 0
+
     client_cfg = kw.get("client_cfg")
 
     return {
@@ -846,6 +864,7 @@ def ms_freeform_meta_extractor(model_service, _client = None, messages = None, *
         "prompt_chars": prompt_chars,
         "temperature": kw.get("temperature"),
         "max_tokens": kw.get("max_tokens"),
+        "role": kw.get("role"),
     }
 
 # =========================
@@ -1186,18 +1205,32 @@ class ModelServiceBase:
 
     # ---------- freeform ----------
     @staticmethod
-    def _freeform_usage_extractor(result, *_a, **_kw) -> ServiceUsage:
+    def _freeform_usage_extractor(result: Any = None, *_a, **_kw) -> ServiceUsage:
+        """
+        Accounting-safe usage extractor for freeform returns:
+        expects result dict like:
+          {"text": ..., "usage": {...}, ...}
+        but never assumes it exists.
+        """
         try:
-            u = _norm_usage_dict(result.get("usage") or {})
-            return ServiceUsage(input_tokens=u["prompt_tokens"],
-                                output_tokens=u["completion_tokens"],
-                                total_tokens=u["total_tokens"],
-                                cache_creation_tokens=u.get("cache_creation_input_tokens") or 0,
-                                cache_read_tokens=u.get("cache_read_input_tokens") or 0,
-                                cache_creation=u.get("cache_creation"),
-                                requests=1)
+            if isinstance(result, dict):
+                u = _norm_usage_dict(result.get("usage") or {})
+                return ServiceUsage(
+                    input_tokens=u.get("prompt_tokens", 0) or 0,
+                    output_tokens=u.get("completion_tokens", 0) or 0,
+                    thinking_tokens=u.get("thinking_tokens", 0) or 0,
+                    cache_creation_tokens=u.get("cache_creation_input_tokens", 0) or 0,
+                    cache_read_tokens=u.get("cache_read_input_tokens", 0) or 0,
+                    cache_creation=u.get("cache_creation") or {},
+                    total_tokens=u.get("total_tokens", 0) or (
+                            (u.get("prompt_tokens", 0) or 0) + (u.get("completion_tokens", 0) or 0)
+                    ),
+                    requests=1
+                )
         except Exception:
-            return ServiceUsage(requests=1)
+            pass
+
+        return ServiceUsage(requests=1)
 
     @track_llm(
         provider_extractor=ms_provider_extractor,

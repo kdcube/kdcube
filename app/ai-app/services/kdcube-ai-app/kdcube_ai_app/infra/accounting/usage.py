@@ -156,23 +156,46 @@ def _parse_queries_arg(queries: Any) -> List[str]:
     return [s]
 
 def ws_usage_extractor(
-        result: Any,
-        _self,
-        queries: Any,
+        result: Any = None,
+        _self: Any = None,
+        queries: Any = None,
         objective: Optional[str] = None,
         refinement: str = "balanced",
         n: int = 8,
+        *args,
         **_kw
-) -> ServiceUsage:
+) -> "ServiceUsage":
+    """
+    Signature-agnostic usage extractor.
+
+    Works with both decoration styles:
+      - method: ws_usage_extractor(result, self, queries, ...)
+      - function: ws_usage_extractor(result, _SERVICE, queries, ...)
+
+    Also tolerates:
+      - result passed as kw
+      - queries passed as kw
+      - missing/shifted positional args
+    """
+    if result is None and "result" in _kw:
+        result = _kw.get("result")
+
+    # If queries not provided explicitly, try to recover from positional args.
+    # For both method and function backends, the wrapped callable signature is effectively:
+    #   (self_or_service, queries, objective, refinement, n, ...)
+    # So in extractor calls that receive original args, queries is usually at index 1.
+    if queries is None:
+        if len(args) >= 2:
+            queries = args[1]
+        else:
+            queries = _kw.get("queries")
+
     q_list = _parse_queries_arg(queries)
 
     # count results
     search_results = 0
     try:
-        if isinstance(result, str):
-            data = json.loads(result)
-        else:
-            data = result
+        data = json.loads(result) if isinstance(result, str) else result
         if isinstance(data, list):
             search_results = len(data)
     except Exception:
@@ -184,9 +207,10 @@ def ws_usage_extractor(
         requests=1
     )
 
+
 def ws_meta_extractor(
-        _self,
-        queries: Any,
+        _self: Any = None,
+        queries: Any = None,
         objective: Optional[str] = None,
         refinement: str = "balanced",
         n: int = 8,
@@ -195,9 +219,54 @@ def ws_meta_extractor(
         safesearch: str = "moderate",
         reconciling: bool = True,
         fetch_content: bool = True,
+        *args,
         **_kw
 ) -> Dict[str, Any]:
+    """
+    Signature-agnostic metadata extractor.
+
+    Tries to recover args by position if not passed by name.
+    """
+    # recover positional where possible
+    if queries is None:
+        if len(args) >= 2:
+            queries = args[1]
+        else:
+            queries = _kw.get("queries")
+
+    if objective is None:
+        if len(args) >= 3:
+            objective = args[2]
+        else:
+            objective = _kw.get("objective")
+
+    if refinement == "balanced":
+        # only override if explicitly provided in args/kw
+        if len(args) >= 4 and args[3]:
+            refinement = args[3]
+        else:
+            refinement = _kw.get("refinement", refinement)
+
+    if n == 8:
+        if len(args) >= 5 and args[4]:
+            try:
+                n = int(args[4])
+            except Exception:
+                pass
+        else:
+            try:
+                n = int(_kw.get("n", n))
+            except Exception:
+                pass
+
+    freshness = _kw.get("freshness", freshness)
+    country = _kw.get("country", country)
+    safesearch = _kw.get("safesearch", safesearch)
+    reconciling = bool(_kw.get("reconciling", reconciling))
+    fetch_content = bool(_kw.get("fetch_content", fetch_content))
+
     q_list = _parse_queries_arg(queries)
+
     return {
         "objective": objective,
         "refinement": refinement,
@@ -210,15 +279,62 @@ def ws_meta_extractor(
         "query_variants": q_list,
     }
 
-def ws_provider_extractor(_self, *a, **kw) -> str:
-    # Prefer an attribute you set on the instance or backend
-    backend = getattr(_self, "search_backend", None)
-    if backend:
-        return str(getattr(backend, "provider", None) or getattr(backend, "name", None) or "unknown")
+
+def ws_provider_extractor(result: Any = None, *_a, **_kw) -> str:
+    try:
+        # If web_search returns list[dict]
+        if isinstance(result, list) and result:
+            # try direct fields first
+            p = result[0].get("provider") or result[0].get("vendor")
+            if p:
+                return str(p)
+
+            # optional: majority vote if mixed
+            counts = {}
+            for r in result:
+                pv = r.get("provider") or r.get("vendor")
+                if not pv:
+                    continue
+                counts[pv] = counts.get(pv, 0) + 1
+            if counts:
+                return str(max(counts.items(), key=lambda kv: kv[1])[0])
+    except Exception:
+        pass
+
+    # fallback to explicit kw
+    p = _kw.get("provider")
+    if p:
+        return str(p)
+
     return "unknown"
 
-def ws_model_extractor(_self, *a, **kw) -> str:
-    backend = getattr(_self, "search_backend", None)
-    if backend:
-        return str(getattr(backend, "name", None) or "web-search")
+
+def ws_model_extractor(
+        _self: Any = None,
+        *args,
+        **kwargs
+) -> str:
+    """
+    Signature-agnostic model extractor for web search.
+
+    Goal here is usually 'which search backend' rather than an LLM model.
+    """
+    # 1) explicit kw override
+    model = kwargs.get("model") or kwargs.get("backend_name")
+    if model:
+        return str(model)
+
+    # 2) try _self.search_backend (method style)
+    try:
+        backend = getattr(_self, "search_backend", None)
+        if backend:
+            return str(getattr(backend, "name", None) or "web-search")
+    except Exception:
+        pass
+
+    # 3) infer from provider kw if present
+    provider = kwargs.get("provider")
+    if provider:
+        return str(provider)
+
     return "web-search"

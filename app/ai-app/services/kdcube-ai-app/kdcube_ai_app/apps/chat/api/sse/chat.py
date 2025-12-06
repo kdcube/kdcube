@@ -147,21 +147,16 @@ class SSEHub:
         )
 
     async def unregister(self, client: Client):
-        last_for_session = False
-
         async with self._lock:
             lst = self._by_session.get(client.session_id, [])
-            new = [c for c in lst if c is not client]
-            if new:
-                self._by_session[client.session_id] = new
-            else:
+            self._by_session[client.session_id] = [c for c in lst if c is not client]
+            if not self._by_session[client.session_id]:
                 self._by_session.pop(client.session_id, None)
-                last_for_session = True
 
-        if last_for_session:
-            await self.chat_comm.release_session_channel(client.session_id)
+        # IMPORTANT: release per client (not only last)
+        await self.chat_comm.release_session_channel(client.session_id)
 
-        logger.info("[SSEHub] unregister session=%s last=%s", client.session_id, last_for_session)
+        logger.info("[SSEHub] unregister session=%s", client.session_id)
 
 
     # Relay callback invoked by ChatRelayCommunicator

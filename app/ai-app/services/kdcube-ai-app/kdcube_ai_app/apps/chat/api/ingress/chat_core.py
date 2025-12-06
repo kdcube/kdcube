@@ -631,7 +631,7 @@ async def get_conversation_status(
             state=state,
             updated_at=updated_at,
             current_turn_id=current_turn_id,
-            target_sid=stream_id,
+            # target_sid=stream_id,
         )
     except Exception as e:
         logger.error("emit_conv_status failed: %s", e)

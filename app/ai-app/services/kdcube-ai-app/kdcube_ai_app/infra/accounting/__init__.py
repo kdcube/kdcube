@@ -429,16 +429,26 @@ class AccountingTracker:
         self.usage_extractor = usage_extractor
         self.metadata_extractor = metadata_extractor
 
-    def _extract_provider(self, *a, **kw) -> str:
-        """Extract provider name"""
-        if self.provider_extractor: return self.provider_extractor(*a, **kw)
+    def _extract_provider(self, result: Any, *a, **kw) -> str:
+        if self.provider_extractor:
+            # backward compatible:
+            # - new extractors can accept (result, *args, **kwargs)
+            # - old extractors that only accept (*args, **kwargs) still work
+            try:
+                return self.provider_extractor(result, *a, **kw)
+            except TypeError:
+                return self.provider_extractor(*a, **kw)
+
+        # existing fallback logic
         for arg in a:
             if hasattr(arg, "provider") and hasattr(arg.provider, "provider"):
                 pv = arg.provider.provider
                 return pv.value if hasattr(pv, "value") else str(pv)
+
         if "model" in kw and hasattr(kw["model"], "provider"):
             pv = kw["model"].provider.provider
             return pv.value if hasattr(pv, "value") else str(pv)
+
         return "unknown"
 
     def _extract_model(self, *args, **kwargs) -> str:
@@ -497,7 +507,7 @@ class AccountingTracker:
         enrich = context.event_enrichment or {}
 
         # Extract information
-        provider = self._extract_provider(*args, **kwargs)
+        provider = self._extract_provider(result, *args, **kwargs)
         model = self._extract_model(*args, **kwargs)
         usage = self._extract_usage(result, *args, **kwargs)
         meta = self._extract_metadata(*args, **kwargs)
