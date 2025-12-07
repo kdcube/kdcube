@@ -41,8 +41,8 @@ REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
 REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
 os.environ["REDIS_URL"] = REDIS_URL
 
-TENANT_ID = os.environ.get("TENANT_ID", "home")
-INSTANCE_ID = os.environ.get("INSTANCE_ID", "home-instance-1")
+# TENANT_ID = os.environ.get("TENANT_ID", "home")
+# INSTANCE_ID = os.environ.get("INSTANCE_ID", "home-instance-1")
 CHAT_APP_PORT = int(os.environ.get("CHAT_APP_PORT", 8010))
 
 # Gateway Profile Selection
@@ -54,8 +54,9 @@ GATEWAY_PRESET = os.environ.get("GATEWAY_PRESET", None)  # Optional preset overr
 _settings = get_settings()
 # STORAGE_PATH = os.environ.get("KDCUBE_STORAGE_PATH")
 STORAGE_PATH = _settings.STORAGE_PATH
-
-DEFAULT_PROJECT = os.environ.get("DEFAULT_PROJECT_NAME", None)
+DEFAULT_PROJECT = _settings.PROJECT
+TENANT_ID = _settings.TENANT
+INSTANCE_ID = _settings.INSTANCE_ID
 
 def get_project(request: Request) -> str:
     """Look for a `project` path-param; if absent, return default_project."""
@@ -71,7 +72,6 @@ def get_tenant_dep(request: Request) -> str:
 
 # Your existing storage, orchestrator, and model configurations
 from kdcube_ai_app.storage.storage import create_storage_backend
-from kdcube_ai_app.infra.orchestration.orchestration import IOrchestrator, OrchestratorFactory
 
 # Storage setup (your existing logic)
 STORAGE_KWARGS = {}
@@ -82,21 +82,6 @@ def workdir(tenant: str, project: str):
     w = f"{STORAGE_PATH}/cb/tenants/{tenant}/projects/{project}/chat"
     logger.info(f"Project workdir: {w}")
     return w
-
-# Orchestrator setup (your existing logic)
-# ORCHESTRATOR_TYPE = os.environ.get("CB_ORCHESTRATOR_TYPE", "dramatiq")
-# DEFAULT_ORCHESTRATOR_IDENTITY = f"kdcube_orchestrator_{ORCHESTRATOR_TYPE}"
-# ORCHESTRATOR_IDENTITY = os.environ.get("ORCHESTRATOR_IDENTITY", DEFAULT_ORCHESTRATOR_IDENTITY)
-#
-# orchestrator: IOrchestrator = OrchestratorFactory.create_orchestrator(
-#     orchestrator_type=ORCHESTRATOR_TYPE,
-#     redis_url=REDIS_URL,
-#     orchestrator_identity=ORCHESTRATOR_IDENTITY
-# )
-
-# def get_orchestrator() -> IOrchestrator:
-#     """Singleton orchestrator instance."""
-#     return orchestrator
 
 # Database setup (your existing logic)
 ENABLE_DATABASE = os.environ.get("ENABLE_DATABASE", "true").lower() == "true"
@@ -138,6 +123,7 @@ def create_gateway_configuration() -> GatewayConfiguration:
         config.redis_url = REDIS_URL
         config.instance_id = INSTANCE_ID
         config.tenant_id = TENANT_ID
+        config.project_id = DEFAULT_PROJECT
 
         return config
 
@@ -156,6 +142,7 @@ def create_gateway_configuration() -> GatewayConfiguration:
     config.redis_url = REDIS_URL
     config.instance_id = INSTANCE_ID
     config.tenant_id = TENANT_ID
+    config.project_id = DEFAULT_PROJECT
 
     return config
 
@@ -374,7 +361,7 @@ def get_heartbeats_mgr_and_middleware(service_type: str = "chat",
     )
 
     instance_id = instance_id or INSTANCE_ID
-    middleware = MultiprocessDistributedMiddleware(REDIS_URL, instance_id)
+    middleware = MultiprocessDistributedMiddleware(REDIS_URL, instance_id=instance_id, tenant=TENANT_ID, project=DEFAULT_PROJECT)
     heartbeat_manager = ProcessHeartbeatManager(
         middleware=middleware,
         service_type=service_type,

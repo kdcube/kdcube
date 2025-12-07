@@ -17,7 +17,8 @@ from dramatiq.middleware import AgeLimit, TimeLimit, Retries, Callbacks, AsyncIO
 from dramatiq.results import Results
 from dramatiq.results.backends import RedisBackend
 
-from kdcube_ai_app.infra.orchestration.app.dramatiq.resolver import INSTANCE_ID, REDIS_URL, HEARTBEAT_INTERVAL
+from kdcube_ai_app.infra.orchestration.app.dramatiq.resolver import INSTANCE_ID, REDIS_URL, HEARTBEAT_INTERVAL, \
+    TENANT_ID, PROJECT_ID
 
 # Load environment
 load_dotenv(find_dotenv())
@@ -146,7 +147,7 @@ class WorkerHeartbeatManager:
         from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware
 
         # Initialize Redis connection in this thread
-        middleware = MultiprocessDistributedMiddleware(REDIS_URL, INSTANCE_ID)
+        middleware = MultiprocessDistributedMiddleware(REDIS_URL, instance_id=INSTANCE_ID, tenant=TENANT_ID, project=PROJECT_ID)
         await middleware.init_redis()
         await self.heartbeat_manager.start_heartbeat(interval=HEARTBEAT_INTERVAL)
 
@@ -176,7 +177,7 @@ def worker_main(worker_id: int):
     from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, ProcessHeartbeatManager
 
     # Create heartbeat manager
-    middleware = MultiprocessDistributedMiddleware(REDIS_URL, INSTANCE_ID)
+    middleware = MultiprocessDistributedMiddleware(REDIS_URL, instance_id=INSTANCE_ID, tenant=TENANT_ID, project=PROJECT_ID)
     pid = os.getpid()
 
     # Use "chat" service type since these are orchestrator workers for chat processing

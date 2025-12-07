@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse
 
 from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 
@@ -85,6 +86,8 @@ async def _reject_anonymous(
 
 @dataclass(frozen=True)
 class Client:
+    tenant: Optional[str]
+    project: Optional[str]
     session_id: str
     stream_id: Optional[str]
     queue: asyncio.Queue[str]      # queue of SSE frames (strings)
@@ -138,11 +141,14 @@ class SSEHub:
         await self.chat_comm.acquire_session_channel(
             client.session_id,
             callback=self._on_relay,
+            tenant=client.tenant,
+            project=client.project,
         )
 
         logger.info(
-            "[SSEHub] register session=%s total=%d",
+            "[SSEHub] register session=%s stream_id=%s total=%d",
             client.session_id,
+            client.stream_id,
             len(self._by_session[client.session_id]),
         )
 
@@ -154,9 +160,12 @@ class SSEHub:
                 self._by_session.pop(client.session_id, None)
 
         # IMPORTANT: release per client (not only last)
-        await self.chat_comm.release_session_channel(client.session_id)
+        await self.chat_comm.release_session_channel(client.session_id,
+                                                     tenant=client.tenant,
+                                                     project=client.project,
+                                                     )
 
-        logger.info("[SSEHub] unregister session=%s", client.session_id)
+        logger.info("[SSEHub] unregister session=%s stream_id=%s", client.session_id, client.stream_id)
 
 
     # Relay callback invoked by ChatRelayCommunicator
@@ -171,7 +180,10 @@ class SSEHub:
             room = message.get("session_id")
 
             if not event or not room:
+                logger.warning(f"[SSEHub._on_relay] unrouted message {message}")
                 return  # we only fan-out messages scoped to a session room. ignore malformed / global messages
+
+            # logger.debug("[SSEHub._on_relay] received message for session session=%s stream_id=%s", room, target_sid)
 
             # First check if we even have listeners for this session
             async with self._lock:
@@ -179,6 +191,7 @@ class SSEHub:
 
             if not recipients:
                 # Nothing to do on this worker
+                logger.warning("[SSEHub._on_relay] no recipients found for message for session session=%s stream_id=%s", room, target_sid)
                 return
 
             # Only now build the SSE frame
@@ -188,10 +201,15 @@ class SSEHub:
                 # DM: only client with matching stream_id
                 for c in recipients:
                     if c.stream_id and c.stream_id == target_sid:
+                        # logger.debug("[SSEHub._on_relay] DIRECT SEND the message for session session=%s stream_id=%s to recipient session=%s stream_id=%s", room, target_sid, c.session_id, c.stream_id)
                         self._enqueue(c, frame)
+                    else:
+                        # logger.debug("[SSEHub._on_relay] SKIP DIRECT SEND the message for session session=%s stream_id=%s to recipient session=%s stream_id=%s", room, target_sid, c.session_id, c.stream_id)
+                        pass
             else:
                 # Broadcast to all clients in the same session
                 for c in recipients:
+                    # logger.debug("[SSEHub._on_relay] BROADCAST the message for session session=%s stream_id=%s to recipient session=%s stream_id=%s", room, target_sid, c.session_id, c.stream_id)
                     self._enqueue(c, frame)
 
         except Exception as e:
@@ -220,7 +238,6 @@ def create_sse_router(
     chat_queue_manager,
     instance_id: str,
     redis_url: str,
-    chat_comm: ChatRelayCommunicator,
 ) -> APIRouter:
     """
     Mount with:
@@ -232,23 +249,31 @@ def create_sse_router(
     router = APIRouter()
     app.state.sse_enabled = True
 
+    chat_comm = ChatRelayCommunicator(
+        redis_url=redis_url,
+        channel="chat.events",
+        orchestrator_identity=os.getenv("CB_RELAY_IDENTITY"),
+    )
+
     # Ensure hub exists on app
     if not hasattr(app.state, "sse_hub"):
         app.state.sse_hub = SSEHub(chat_comm)
+
+    settings = get_settings()
 
     # ---------- STREAM ----------
     @router.get("/stream")
     async def sse_stream(
         request: Request,
+        stream_id: str,
         session: UserSession = Depends(get_user_session_dependency()),
+        # direct-message id for this connection
         # Query auth (parity with Socket.IO connect)
         user_session_id: Optional[str] = None,
         bearer_token: Optional[str] = None,
         id_token: Optional[str] = None,
         project: Optional[str] = None,
         tenant: Optional[str] = None,
-        # direct-message id for this connection
-        stream_id: Optional[str] = None,
     ):
 
         # --- Resolve session exactly like WS connect ---
@@ -263,6 +288,7 @@ def create_sse_router(
             except Exception as e:
                 logger.error("SSE load session failed for id=%s: %s", user_session_id, e)
                 raise HTTPException(status_code=401, detail="Invalid session")
+        logger.info(f"[sse_stream]. user_session_id={user_session_id}; session.session_id={session.session_id}; stream_id={stream_id}")
 
         # Gateway protections for opening a stream
         ctx = build_sse_request_context(request, bearer_token=bearer_token, id_token=id_token, session=session)
@@ -278,7 +304,7 @@ def create_sse_router(
             )
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail="Invalid token") from e
-
+        logger.info(f"[sse_stream]. After upgrade: user_session_id={user_session_id}; session.session_id={session.session_id}; stream_id={stream_id};")
         if os.environ.get("CHAT_SSE_REJECT_ANONYMOUS", "1") == "1":
             await _reject_anonymous(
                 endpoint="/sse/stream",
@@ -313,9 +339,15 @@ def create_sse_router(
         #     raise HTTPException(status_code=mapped["status"], detail=detail)
 
         # Prepare per-connection queue (bounded)
-        max_q = int(os.getenv("SSE_CLIENT_QUEUE", "100"))
+        max_q = int(os.getenv("SSE_CLIENT_QUEUE", "1000"))
         q: asyncio.Queue[str] = asyncio.Queue(maxsize=max_q)
-        client = Client(session_id=session.session_id, stream_id=stream_id, queue=q)
+
+        tenant = tenant or settings.TENANT
+        project = project or settings.PROJECT
+        client = Client(session_id=session.session_id,
+                        stream_id=stream_id, queue=q,
+                        tenant=tenant,
+                        project=project,)
 
         # Register client
         await app.state.sse_hub.register(client)
@@ -337,13 +369,13 @@ def create_sse_router(
                 while True:
                     # 1) if server is shutting down, exit
                     if getattr(app.state, "shutting_down", False):
-                        logger.info("[sse_stream] Server shutting down; closing SSE for session=%s", session.session_id)
+                        logger.info(f"[sse_stream] Server shutting down; closing SSE for session={session.session_id} stream_id={stream_id}")
                         break
 
                     # 2) if client disconnected, exit
                     try:
                         if await request.is_disconnected():
-                            logger.info("[sse_stream] Client disconnected; closing SSE for session=%s", session.session_id)
+                            logger.info(f"[sse_stream] Client disconnected; closing SSE for session={session.session_id} stream_id={stream_id}")
                             break
                     except RuntimeError:
                         # request might be finalized already in some edge cases
@@ -356,19 +388,19 @@ def create_sse_router(
                     except asyncio.TimeoutError:
                         # On timeout, if shutting down, don't send keepalive, just break
                         if getattr(app.state, "shutting_down", False):
-                            logger.info("[sse_stream] Timeout during shutdown; closing SSE for session=%s", session.session_id)
+                            logger.info(f"[sse_stream] Timeout during shutdown; closing SSE for session={session.session_id} stream_id={stream_id}")
                             break
                         # No frames in this window → send keepalive
                         yield ": keepalive\n\n"
 
             except asyncio.CancelledError:
                 # Uvicorn/gunicorn is cancelling us as part of shutdown
-                logger.info("[sse_stream] Cancelled; closing SSE for session=%s", session.session_id)
+                logger.info(f"[sse_stream] Cancelled; closing SSE for session={session.session_id} stream_id={stream_id}")
                 # Re-raise so Uvicorn/Starlette know this request is done
                 raise
             finally:
                 await app.state.sse_hub.unregister(client)
-                logger.info("[sse_stream] Cleaned up: session=%s", session.session_id)
+                logger.info(f"[sse_stream] Cleaned up: for session={session.session_id} stream_id={stream_id}")
 
         return StreamingResponse(
             gen(),
@@ -384,9 +416,8 @@ def create_sse_router(
     @router.post("/chat")
     async def sse_chat(
             request: Request,
+            stream_id: str,
             session: UserSession = Depends(get_user_session_dependency()),
-            stream_id: Optional[str] = None,
-
             # multipart support (attachments)
             message: Optional[str] = Form(None),
             attachment_meta: Optional[str] = Form(None),
@@ -401,6 +432,7 @@ def create_sse_router(
                 stream_id=stream_id,
                 chat_comm=chat_comm,
             )
+        # Check conversation status
         gw_res = await run_gateway_checks(
             gateway_adapter=gateway_adapter,
             session=session,
@@ -572,10 +604,17 @@ def create_sse_router(
     async def sse_conv_status_get(
             data: Dict[str, Any],
             session: UserSession = Depends(get_user_session_dependency()),
-            stream_id: Optional[str] = None,
     ):
         conv_id = (data or {}).get("conversation_id") or session.session_id
         bundle_id = data.get("bundle_id")
+        stream_id = data.get("stream_id")
+        hub = router.state.sse_hub
+        client = next(iter(hub._by_session.get(session.session_id) or []), None) or {}
+        logger.info(f"[/conv_status.get] Received request for session={session.session_id} stream_id={stream_id}")
+
+        settings = get_settings()
+        tenant = client.tenant if client else settings.TENANT
+        project = client.project if client else settings.PROJECT
 
         status = await get_conversation_status(
             app=app,
@@ -584,7 +623,10 @@ def create_sse_router(
             bundle_id=bundle_id,
             conversation_id=conv_id,
             stream_id=stream_id,
+            tenant=tenant,
+            project=project,
         )
+        logger.info(f"[/conv_status.get] Completed request for session={session.session_id} stream_id={stream_id}")
         return status
 
     return router

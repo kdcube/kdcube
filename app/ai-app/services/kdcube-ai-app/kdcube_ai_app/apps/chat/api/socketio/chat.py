@@ -85,7 +85,6 @@ class SocketIOChatHandler:
         allowed_origins,
         instance_id: str,
         redis_url: str,
-        chat_comm: ChatRelayCommunicator,   # ← SAME communicator used by processor
     ):
         self.app = app
         self.gateway_adapter = gateway_adapter
@@ -94,7 +93,11 @@ class SocketIOChatHandler:
         self.instance_id = instance_id
         self.redis_url = redis_url
 
-        self._comm = chat_comm
+        self._comm = ChatRelayCommunicator(
+            redis_url=redis_url,
+            channel="chat.events",
+            orchestrator_identity=os.getenv("CB_RELAY_IDENTITY"),
+        )
         self._listener_started = False
 
         self.max_upload_mb = int(os.environ.get("CHAT_MAX_UPLOAD_MB", "20"))
@@ -104,6 +107,7 @@ class SocketIOChatHandler:
 
         self._session_refcounts: Dict[str, int] = {}
         self._sid_to_session_id: Dict[str, str] = {}
+        self._sid_to_tenant_project: Dict[str, dict] = {}
 
         # TODO: remove!
         self.upload_dir = Path(os.environ.get("CHAT_UPLOAD_DIR", "/tmp/chat_uploads"))
@@ -312,12 +316,14 @@ class SocketIOChatHandler:
 
         # 7) save socket session metadata (store ctx too!)
         try:
+            tenant = auth.get("tenant")
+            project = auth.get("project")
             socket_meta = {
                 "user_session": session.serialize_to_dict(),
                 "request_context": ctx.model_dump() if hasattr(ctx, "model_dump") else ctx.__dict__,  # safe bridge
                 "authenticated": session.user_type.value != "anonymous",
-                "project": auth.get("project"),
-                "tenant": auth.get("tenant"),
+                "project": project,
+                "tenant": tenant,
             }
 
             await self.sio.save_session(sid, socket_meta)
@@ -327,9 +333,12 @@ class SocketIOChatHandler:
 
             # track sid → session_id and ensure Redis subscription
             self._sid_to_session_id[sid] = session.session_id
+            self._sid_to_tenant_project[sid] = {"tenant": tenant, "project": project}
             await self._comm.acquire_session_channel(
                 session.session_id,
                 callback=self._on_pubsub_message,
+                tenant=tenant,
+                project=project,
             )
 
             await self.sio.emit("session_info", {
@@ -337,8 +346,8 @@ class SocketIOChatHandler:
                 "user_type": session.user_type.value,
                 "user_id": session.user_id,
                 "username": session.username,
-                "project": socket_meta.get("project"),
-                "tenant": socket_meta.get("tenant"),
+                "project": project,
+                "tenant": tenant,
                 "connected_at": datetime.utcnow().isoformat() + "Z"
             }, to=sid)
 
@@ -352,8 +361,12 @@ class SocketIOChatHandler:
     async def _handle_disconnect(self, sid):
         logger.info("Chat client disconnected: %s", sid)
         session_id = self._sid_to_session_id.pop(sid, None)
+        self._sid_to_tenant_project.pop(sid, None)
         if session_id:
-            await self._comm.release_session_channel(session_id)
+            tenant_project = self._sid_to_tenant_project.get(sid) or {}
+            await self._comm.release_session_channel(session_id,
+                                                     tenant=tenant_project["tenant"],
+                                                     project=tenant_project["project"])
 
 
     # ---------- CHAT MESSAGE with GATING (restored) ----------
@@ -557,6 +570,7 @@ class SocketIOChatHandler:
         conv_id = (data or {}).get("conversation_id") or session.session_id
         bundle_id = (data or {}).get("bundle_id")
 
+        tenant_project = self._sid_to_tenant_project.get(sid) or {}
         status = await get_conversation_status(
             app=self.app,
             chat_comm=self._comm,
@@ -564,6 +578,8 @@ class SocketIOChatHandler:
             bundle_id=bundle_id,
             conversation_id=conv_id,
             stream_id=sid,
+            tenant=tenant_project.get("tenant"),
+            project=tenant_project.get("project"),
         )
         # We don't send a separate WS ACK; conv_status event itself is enough.
         return status
@@ -591,5 +607,4 @@ def create_socketio_chat_handler(
         allowed_origins=allowed_origins,
         instance_id=instance_id,
         redis_url=redis_url,
-        chat_comm=chat_comm,
     )

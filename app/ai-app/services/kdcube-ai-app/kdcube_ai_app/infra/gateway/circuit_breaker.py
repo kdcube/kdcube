@@ -15,11 +15,12 @@ from typing import Dict, Optional
 import redis.asyncio as aioredis
 import logging
 
+from kdcube_ai_app.infra.gateway.config import GatewayConfiguration
 from kdcube_ai_app.infra.gateway.definitions import GatewayError
 from kdcube_ai_app.auth.sessions import UserSession, RequestContext
 
 from kdcube_ai_app.infra.gateway.thorttling import ThrottlingMonitor, ThrottlingReason
-from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 logger = logging.getLogger(__name__)
 
@@ -68,22 +69,29 @@ class CircuitBreakerError(GatewayError):
 class CircuitBreaker:
     """Individual circuit breaker for a specific service/operation"""
 
-    def __init__(self, name: str, config: CircuitBreakerConfig, redis_url: str):
+    def __init__(self,
+                 name: str,
+                 gateway_config: GatewayConfiguration,
+                 config: CircuitBreakerConfig):
         self.name = name
         self.config = config
-        self.redis_url = redis_url
+        self.gateway_config = gateway_config
+        self.redis_url = gateway_config.redis_url
         self.redis = None
 
         # Redis keys using your namespace pattern
-        self.state_key = f"kdcube:circuit_breaker:{name}:state"
-        self.stats_key = f"kdcube:circuit_breaker:{name}:stats"
-        self.window_key = f"kdcube:circuit_breaker:{name}:window"
-        self.half_open_key = f"kdcube:circuit_breaker:{name}:half_open_calls"
+        self.state_key = self.ns(f"kdcube:circuit_breaker:{name}:state")
+        self.stats_key = self.ns(f"kdcube:circuit_breaker:{name}:stats")
+        self.window_key = self.ns(f"kdcube:circuit_breaker:{name}:window")
+        self.half_open_key = self.ns(f"kdcube:circuit_breaker:{name}:half_open_calls")
 
         # In-memory state (cached from Redis)
         self._cached_state = CircuitState.CLOSED
         self._last_cache_update = 0
         self._cache_ttl = 5  # seconds
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def init_redis(self):
         if not self.redis:
@@ -294,8 +302,8 @@ class CircuitBreaker:
 class QueueAwareCircuitBreaker(CircuitBreaker):
     """Circuit breaker that considers queue pressure for backpressure decisions"""
 
-    def __init__(self, name: str, config: CircuitBreakerConfig, redis_url: str, backpressure_manager=None):
-        super().__init__(name, config, redis_url)
+    def __init__(self, name: str, config: CircuitBreakerConfig, gateway_config: GatewayConfiguration, backpressure_manager=None):
+        super().__init__(name, config=config, gateway_config=gateway_config)
         self.backpressure_manager = backpressure_manager
 
         # Queue-specific settings
@@ -398,8 +406,9 @@ class QueueAwareCircuitBreaker(CircuitBreaker):
 class CircuitBreakerManager:
     """Manages multiple circuit breakers and integrates with your throttling monitor"""
 
-    def __init__(self, redis_url: str, throttling_monitor: ThrottlingMonitor):
-        self.redis_url = redis_url
+    def __init__(self, gateway_config: GatewayConfiguration, throttling_monitor: ThrottlingMonitor):
+        self.redis_url = gateway_config.redis_url
+        self.gateway_config = gateway_config
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
         self.throttling_monitor = throttling_monitor
         self.default_config = CircuitBreakerConfig()
@@ -441,7 +450,7 @@ class CircuitBreakerManager:
         """Get or create a circuit breaker"""
         if name not in self.circuit_breakers:
             circuit_config = config or self.default_config
-            self.circuit_breakers[name] = CircuitBreaker(name, circuit_config, self.redis_url)
+            self.circuit_breakers[name] = CircuitBreaker(name, config=circuit_config, gateway_config=self.gateway_config)
 
         return self.circuit_breakers[name]
 
@@ -504,8 +513,8 @@ class CircuitBreakerManager:
 class QueueAwareCircuitBreakerManager(CircuitBreakerManager):
     """Circuit breaker manager with queue-aware backpressure CB"""
 
-    def __init__(self, redis_url: str, throttling_monitor, backpressure_manager=None):
-        super().__init__(redis_url, throttling_monitor)
+    def __init__(self, gateway_config: GatewayConfiguration, throttling_monitor, backpressure_manager=None):
+        super().__init__(gateway_config, throttling_monitor)
         self.backpressure_manager = backpressure_manager
 
     def get_circuit_breaker(self, name: str, config: Optional[CircuitBreakerConfig] = None) -> CircuitBreaker:
@@ -516,10 +525,10 @@ class QueueAwareCircuitBreakerManager(CircuitBreakerManager):
             if name == "backpressure" and self.backpressure_manager:
                 # Use queue-aware circuit breaker for backpressure
                 self.circuit_breakers[name] = QueueAwareCircuitBreaker(
-                    name, circuit_config, self.redis_url, self.backpressure_manager
+                    name, config=circuit_config, gateway_config=self.gateway_config, backpressure_manager=self.backpressure_manager
                 )
             else:
                 # Standard circuit breaker for others
-                self.circuit_breakers[name] = CircuitBreaker(name, circuit_config, self.redis_url)
+                self.circuit_breakers[name] = CircuitBreaker(name, config=circuit_config, gateway_config=self.gateway_config)
 
         return self.circuit_breakers[name]

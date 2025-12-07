@@ -121,8 +121,8 @@ class ServiceCommunicator:
 
         # Shard chat events by session
         logical_channel = channel
-        if session_id and channel == "chat.events":
-            logical_channel = f"{channel}.{session_id}"
+        # if session_id and channel == "chat.events":
+        #     logical_channel = f"{channel}.{session_id}"
 
         full_channel = self._fmt_channel(logical_channel)
 

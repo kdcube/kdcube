@@ -210,7 +210,7 @@ def get_heartbeats_mgr_and_middleware(service_type: str = "kb",
                                       port: int = 8000):
 
     instance_id = instance_id or os.getenv("INSTANCE_ID")
-    middleware = MultiprocessDistributedMiddleware(REDIS_URL, instance_id)
+    middleware = MultiprocessDistributedMiddleware(REDIS_URL, instance_id=instance_id, tenant=TENANT_ID, project=DEFAULT_PROJECT)
     process_id = os.getpid()
     heartbeat_manager = ProcessHeartbeatManager(middleware, service_type, service_name, process_id, port=port)
     return middleware, heartbeat_manager
@@ -272,6 +272,8 @@ def create_auth_manager():
 # Singleton auth manager and adapter
 session_manager = SessionManager(
     REDIS_URL,
+    tenant=DEFAULT_TENANT_ID,
+    project=DEFAULT_PROJECT
 )
 _auth_manager = None
 _base_auth = None

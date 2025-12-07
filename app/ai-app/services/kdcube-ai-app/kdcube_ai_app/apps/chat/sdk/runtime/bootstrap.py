@@ -122,7 +122,9 @@ def make_chat_comm(spec: PortableSpec) -> Optional[ChatCommunicator]:
         return None
     # ChatRelayCommunicator will pick redis URL from env (REDIS_URL) if not overridden
     relay = ChatRelayCommunicator(channel=spec.comm.channel)
-    emitter = _RelayEmitterAdapter(relay)
+    emitter = _RelayEmitterAdapter(relay,
+                                   tenant=spec.model_config.tenant,
+                                   project=spec.model_config.project,)
     return ChatCommunicator(
         emitter=emitter,
         service=spec.comm.service,

@@ -5,6 +5,15 @@ import os
 
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
 
+def tp_prefix(tenant: str | None = None, project: str | None = None) -> str:
+    from kdcube_ai_app.apps.chat.sdk.config import get_settings
+    s = get_settings()
+    t = tenant or s.TENANT
+    p = project or s.PROJECT
+    return f"{t}:{p}"
+
+def ns_key(base: str, *, tenant: str | None = None, project: str | None = None) -> str:
+    return f"{tp_prefix(tenant, project)}:{base}"
 
 class REDIS:
     class CHAT:

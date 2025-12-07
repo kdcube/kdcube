@@ -13,7 +13,8 @@ from typing import Optional, Dict, List
 from redis import asyncio as aioredis
 import logging
 from kdcube_ai_app.auth.sessions import UserSession, RequestContext
-from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.gateway.config import GatewayConfiguration
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +64,20 @@ class ThrottlingStats:
 class ThrottlingMonitor:
     """Lightweight throttling monitor that integrates with your existing gateway"""
 
-    def __init__(self, redis_url: str):
+    def __init__(self, redis_url: str, gateway_config: GatewayConfiguration):
         self.redis_url = redis_url
         self.redis = None
-        self.events_key = REDIS.THROTTLING.EVENTS_KEY
-        self.stats_key = REDIS.THROTTLING.STATS_KEY
-        self.session_counters_key = REDIS.THROTTLING.SESSION_COUNTERS_KEY
+        self.gateway_config = gateway_config
+        self.events_key = self.ns(REDIS.THROTTLING.EVENTS_KEY)
+        self.stats_key = self.ns(REDIS.THROTTLING.STATS_KEY)
+        self.session_counters_key = self.ns(REDIS.THROTTLING.SESSION_COUNTERS_KEY)
 
         # In-memory tracking for performance
         self.recent_events = deque(maxlen=100)
         self.request_counter = 0
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def init_redis(self):
         if not self.redis:
@@ -140,17 +145,17 @@ class ThrottlingMonitor:
 
         # Increment counters
         pipe = self.redis.pipeline()
-        pipe.incr(REDIS.THROTTLING.TOTAL_THROTTLED_REQUESTS_KEY)
-        pipe.hincrby(REDIS.THROTTLING.BY_REASON, event.reason.value, 1)
+        pipe.incr(self.ns(REDIS.THROTTLING.TOTAL_THROTTLED_REQUESTS_KEY))
+        pipe.hincrby(self.ns(REDIS.THROTTLING.BY_REASON), event.reason.value, 1)
 
         if event.http_status == 429:
-            pipe.incr(REDIS.THROTTLING.RATE_LIMIT_429)
+            pipe.incr(self.ns(REDIS.THROTTLING.RATE_LIMIT_429))
         else:
-            pipe.incr(REDIS.THROTTLING.BACKPRESSURE_503)
+            pipe.incr(self.ns(REDIS.THROTTLING.BACKPRESSURE_503))
 
         # Hourly breakdown
         hour_key = time.strftime("%Y-%m-%d_%H", time.localtime(event.timestamp))
-        pipe.hincrby(REDIS.THROTTLING.HOURLY, hour_key, 1)
+        pipe.hincrby(self.ns(REDIS.THROTTLING.HOURLY), hour_key, 1)
 
         await pipe.execute()
 

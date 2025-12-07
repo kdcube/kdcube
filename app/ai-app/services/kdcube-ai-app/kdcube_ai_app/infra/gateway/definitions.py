@@ -11,6 +11,7 @@ import json
 from typing import Optional, List, Dict, Any
 
 from kdcube_ai_app.auth.sessions import UserSession
+from kdcube_ai_app.infra.namespaces import ns_key, REDIS
 
 logger = logging.getLogger(__name__)
 
@@ -229,8 +230,11 @@ class DynamicCapacityCalculator:
         self._cache_ttl = 10  # Cache for 10 seconds
 
         # Redis keys for heartbeat data
-        self.PROCESS_HEARTBEAT_PREFIX = "kdcube:heartbeat:process"
-        self.INSTANCE_STATUS_PREFIX = "kdcube:heartbeat:instance"
+        self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
+        self.INSTANCE_STATUS_PREFIX = self.ns(REDIS.INSTANCE.HEARTBEAT_PREFIX)
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def get_actual_process_info(self) -> Dict[str, List[ActualProcessInfo]]:
         """Get actual process information from Redis heartbeats"""

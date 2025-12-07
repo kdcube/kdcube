@@ -13,7 +13,8 @@ from typing import Optional, Dict, List
 from redis import asyncio as aioredis
 
 from kdcube_ai_app.auth.AuthManager import User
-from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
+
 
 @dataclass
 class RequestContext:
@@ -91,12 +92,21 @@ class UserSession:
 class SessionManager:
     """Simple session management"""
 
-    def __init__(self, redis_url: str, session_ttl: int = 86400):
+    def __init__(self,
+                 redis_url: str,
+                 tenant: str,
+                 project: str,
+                 session_ttl: int = 86400):
         self.redis_url = redis_url
         self.redis = None
-        self.SESSION_PREFIX = REDIS.SESSION
+        self.tenant = tenant
+        self.project = project
+        self.SESSION_PREFIX = self.ns(REDIS.SESSION)
         self.SESSION_TTL = session_ttl
         self.SESSION_INDEX_PREFIX = f"{self.SESSION_PREFIX}:index"
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.tenant, project=self.project)
 
     async def init_redis(self):
         if not self.redis:

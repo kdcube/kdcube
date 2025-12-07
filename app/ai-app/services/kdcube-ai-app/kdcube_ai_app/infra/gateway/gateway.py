@@ -37,10 +37,13 @@ class RequestGateway:
         self.auth_manager = auth_manager
 
         # Initialize components with centralized config
-        self.throttling_monitor = ThrottlingMonitor(gateway_config.redis_url)
+        self.throttling_monitor = ThrottlingMonitor(gateway_config.redis_url,
+                                                    gateway_config=gateway_config)
         self.session_manager = SessionManager(
             gateway_config.redis_url,
-            gateway_config.redis.session_ttl
+            tenant=gateway_config.tenant_id,
+            project=gateway_config.project_id,
+            session_ttl=gateway_config.redis.session_ttl
         )
         self.rate_limiter = RateLimiter(
             gateway_config.redis_url,
@@ -56,9 +59,9 @@ class RequestGateway:
 
         # Circuit breaker manager with config
         self.circuit_manager = QueueAwareCircuitBreakerManager(
-            gateway_config.redis_url,
-            self.throttling_monitor,
-            self.backpressure_manager  # Pass backpressure manager
+            gateway_config=gateway_config,
+            throttling_monitor=self.throttling_monitor,
+            backpressure_manager=self.backpressure_manager  # Pass backpressure manager
         )
         self._setup_circuit_breakers()
 

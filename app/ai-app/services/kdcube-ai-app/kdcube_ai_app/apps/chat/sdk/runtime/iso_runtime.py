@@ -743,8 +743,9 @@ def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
     print(f"Redis url: {redis_url_safe}")
     channel   = (spec or {}).get("channel")   or "chat.events"
     relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
-    emitter = _RelayEmitterAdapter(relay)
     svc = ServiceCtx(**(spec.get("service") or {}))
+    emitter = _RelayEmitterAdapter(relay, tenant=svc.tenant, project=svc.project)
+    
     conv = ConversationCtx(**(spec.get("conversation") or {}))
     comm = ChatCommunicator(
         emitter=emitter,

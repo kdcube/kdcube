@@ -46,7 +46,6 @@ from kdcube_ai_app.auth.sessions import UserType, UserSession
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
 
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest
-# from kdcube_ai_app.infra.orchestration.orchestration import IOrchestrator
 
 from kdcube_ai_app.apps.chat.api.socketio.chat import create_socketio_chat_handler
 from kdcube_ai_app.apps.chat.api.sse.chat import create_sse_router, SSEHub
@@ -211,8 +210,8 @@ async def lifespan(app: FastAPI):
             chat_queue_manager=app.state.chat_queue_manager,
             instance_id=INSTANCE_ID,
             redis_url=REDIS_URL,
-            chat_comm=app.state.chat_comm,
         )
+        sse_router.state = app.state
         app.include_router(sse_router, prefix="/sse", tags=["SSE"])
         logger.info("SSE routes mounted at /sse")
         app.state.sse_enabled = True

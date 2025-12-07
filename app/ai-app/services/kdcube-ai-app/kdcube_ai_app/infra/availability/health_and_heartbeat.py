@@ -17,7 +17,7 @@ import redis.asyncio as aioredis
 import logging
 from enum import Enum
 
-from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +60,29 @@ class InstanceServiceStatus:
 class MultiprocessDistributedMiddleware:
     """Enhanced middleware for multiprocess deployments"""
 
-    def __init__(self, redis_url: str, instance_id: str = None):
+    def __init__(self,
+                 redis_url: str,
+                 tenant: str, project: str,
+                 instance_id: str = None,):
         self.redis_url = redis_url
         self.instance_id = instance_id or str(uuid.uuid4())
+        self.tenant = tenant
+        self.project = project
         self.redis = None
 
         # Redis namespaces
-        self.PROCESS_HEARTBEAT_PREFIX = REDIS.PROCESS.HEARTBEAT_PREFIX
-        self.INSTANCE_STATUS_PREFIX = REDIS.INSTANCE.HEARTBEAT_PREFIX
-        self.QUEUE_PREFIX = REDIS.CHAT.PROMPT_QUEUE_PREFIX
-        self.CAPACITY_PREFIX = REDIS.SYSTEM.CAPACITY
-        self.LOCK_PREFIX = REDIS.SYNCHRONIZATION.LOCK
-        self.SERVICE_REGISTRY_PREFIX = REDIS.DISCOVERY.REGISTRY
+        self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
+        self.INSTANCE_STATUS_PREFIX = self.ns(REDIS.INSTANCE.HEARTBEAT_PREFIX)
+        self.QUEUE_PREFIX = self.ns(REDIS.CHAT.PROMPT_QUEUE_PREFIX)
+        self.CAPACITY_PREFIX = self.ns(REDIS.SYSTEM.CAPACITY)
+        self.LOCK_PREFIX = self.ns(REDIS.SYNCHRONIZATION.LOCK)
+        self.SERVICE_REGISTRY_PREFIX = self.ns(REDIS.DISCOVERY.REGISTRY)
 
         self.HEARTBEAT_TTL = 30
         self.PROCESS_TIMEOUT = 45  # Consider process dead after 45s
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.tenant, project=self.project)
 
     async def init_redis(self):
         if not self.redis:

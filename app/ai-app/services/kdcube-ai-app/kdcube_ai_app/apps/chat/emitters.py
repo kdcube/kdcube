@@ -90,10 +90,18 @@ class ChatRelayCommunicator:
         self._listener_started = False
         self._sub_lock = asyncio.Lock()
 
+    def _base_channel(self, tenant: str | None = None, project: str | None = None) -> str:
+        # keep old behavior if tenant/project not provided
+        if tenant or project:
+            t = tenant or "-"
+            p = project or "-"
+            return f"{t}:{p}:{self._channel}"
+        return self._channel
+
     # ---------- publish ----------
-    def _session_channel(self, session_id: str) -> str:
-        # base channel is "chat.events"
-        return f"{self._channel}.{session_id}"
+    def _session_channel(self, session_id: str, tenant: str | None = None, project: str | None = None) -> str:
+        base = self._base_channel(tenant, project)
+        return f"{base}.{session_id}"
 
     def _derive_session_id(self, env: ChatEnvelope, explicit: str | None) -> str | None:
         if explicit:
@@ -117,7 +125,10 @@ class ChatRelayCommunicator:
             data=env.dump_model(),
             target_sid=target_sid,
             session_id=sid,
-            channel=self._channel,
+            # channel=self._channel,
+            channel=self._session_channel(sid,
+                                          tenant=env.service.tenant,
+                                          project=env.service.project),
         )
     async def emit_envelope(self, env: ChatEnvelope, *, target_sid: Optional[str] = None, session_id: Optional[str] = None):
         """Low-level: publish a prebuilt envelope."""
@@ -153,10 +164,10 @@ class ChatRelayCommunicator:
             "type": "conv.status",
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "service": {
-                "request_id": getattr(svc, "request_id", None),
-                "tenant": getattr(svc, "tenant", None),
-                "project": getattr(svc, "project", None),
-                "user": getattr(svc, "user", None),
+                "request_id": svc.request_id,
+                "tenant": svc.tenant,
+                "project": svc.project,
+                "user": svc.user,
                 "bundle_id": routing.bundle_id
             },
             "conversation": {
@@ -178,7 +189,10 @@ class ChatRelayCommunicator:
             data=payload,
             target_sid=target_sid,
             session_id=session_id,
-            channel=self._channel,
+            channel=self._session_channel(session_id,
+                                          tenant=svc.tenant,
+                                          project=svc.project),
+
         )
 
     def add_listener(self, cb: Callable[[dict], Awaitable[None]]):
@@ -207,7 +221,7 @@ class ChatRelayCommunicator:
             except Exception:
                 logger.exception("Relay callback failed")
 
-    async def acquire_session_channel(self, session_id: str, *, callback=None):
+    async def acquire_session_channel(self, session_id: str, tenant: str, project: str, *, callback=None):
         if not session_id:
             return
         async with self._sub_lock:
@@ -216,19 +230,19 @@ class ChatRelayCommunicator:
 
             count = self._session_refcounts.get(session_id, 0)
             if count == 0:
-                await self._comm.subscribe_add(self._session_channel(session_id))
+                await self._comm.subscribe_add(self._session_channel(session_id, tenant=tenant, project=project))
 
             self._session_refcounts[session_id] = count + 1
             await self._ensure_listener()
 
-    async def release_session_channel(self, session_id: str):
+    async def release_session_channel(self, session_id: str, tenant: str, project: str):
         if not session_id:
             return
         async with self._sub_lock:
             count = self._session_refcounts.get(session_id, 0)
             if count <= 1:
                 self._session_refcounts.pop(session_id, None)
-                await self._comm.unsubscribe_some(self._session_channel(session_id))
+                await self._comm.unsubscribe_some(self._session_channel(session_id, tenant=tenant, project=project))
             else:
                 self._session_refcounts[session_id] = count - 1
 
@@ -582,7 +596,7 @@ class ChatCommunicator:
         env["data"] = data or {}
         if markdown:
             env["event"]["markdown"] = markdown
-        await self.emit("chat_step", env, broadcast=True)
+        await self.emit("chat_step", env, broadcast=False)
 
     async def delta(self, *, text: str, index: int,
                     marker: str = "answer", agent: str = "assistant",
@@ -603,7 +617,7 @@ class ChatCommunicator:
         except Exception:
             pass
 
-        await self.emit("chat_delta", env, broadcast=True)
+        await self.emit("chat_delta", env, broadcast=False)
 
     async def complete(self, *, data: dict):
         env = self._base_env("chat.complete")
@@ -707,8 +721,10 @@ class _RelayEmitterAdapter:
     Async adapter that lets ChatCommunicator 'await emitter.emit(...)' while
     internally publishing via ChatRelayCommunicator's ServiceCommunicator.
     """
-    def __init__(self, relay: ChatRelayCommunicator):
+    def __init__(self, relay: ChatRelayCommunicator, tenant: str, project: str):
         self._relay = relay
+        self.tenant = tenant
+        self.project = project
 
     async def emit(self, event: str, data: dict, *, room: Optional[str] = None,
                    target_sid: Optional[str] = None, session_id: Optional[str] = None):
@@ -719,7 +735,9 @@ class _RelayEmitterAdapter:
                 data=data,
                 target_sid=target_sid,
                 session_id=session_id or room,
-                channel=self._relay._channel,
+                channel=self._relay._session_channel(session_id=session_id or room,
+                                                     tenant=self.tenant,
+                                                     project=self.project),
             )
         except Exception as e:
             logger.error(f"Relay emit failed for event '{event}': {e}")

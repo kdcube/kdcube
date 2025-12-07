@@ -153,6 +153,7 @@ class GatewayConfiguration:
     """Complete gateway configuration"""
     profile: GatewayProfile
     instance_id: str
+    project_id: str
     tenant_id: str
 
     # Core settings
@@ -269,6 +270,7 @@ class GatewayConfigFactory:
 
         instance_id = os.getenv("INSTANCE_ID", "default-instance")
         tenant_id = os.getenv("TENANT_ID", "default-tenant")
+        project_id = os.getenv("DEFAULT_PROJECT_NAME", "default-tenant")
 
         # Rate limiting from environment
         rate_limits = RateLimitSettings(
@@ -302,7 +304,8 @@ class GatewayConfigFactory:
             redis=RedisSettings(),
             redis_url=redis_url,
             instance_id=instance_id,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            project_id=project_id
         )
 
     @staticmethod
@@ -668,7 +671,8 @@ PRESET_CONFIGURATIONS = {
         redis=RedisSettings(),
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
         instance_id=os.getenv("INSTANCE_ID", "chat-prod"),
-        tenant_id=os.getenv("TENANT_ID", "production")
+        tenant_id=os.getenv("TENANT_ID", "production"),
+        project_id=os.getenv("DEFAULT_PROJECT_NAME", "demo"),
     ),
     "api_high_throughput": lambda: GatewayConfigFactory.create_for_api_service(),
     "load_test_heavy": lambda: GatewayConfiguration(
@@ -681,7 +685,8 @@ PRESET_CONFIGURATIONS = {
         redis=RedisSettings(),
         redis_url=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
         instance_id=os.getenv("INSTANCE_ID", "load-test"),
-        tenant_id=os.getenv("TENANT_ID", "testing")
+        tenant_id=os.getenv("TENANT_ID", "testing"),
+        project_id=os.getenv("DEFAULT_PROJECT_NAME", "demo"),
     )
 }
 

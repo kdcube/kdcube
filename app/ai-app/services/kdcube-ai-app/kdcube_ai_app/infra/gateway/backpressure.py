@@ -16,7 +16,7 @@ from kdcube_ai_app.infra.gateway.definitions import GatewayError, DynamicCapacit
 import logging
 
 from kdcube_ai_app.infra.gateway.thorttling import ThrottlingMonitor, ThrottlingReason
-from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,10 @@ class BackpressureError(GatewayError):
 class BackpressureManager:
     """Simple backpressure management"""
 
-    def __init__(self, redis_url: str, gateway_config: GatewayConfiguration, monitor: ThrottlingMonitor):
+    def __init__(self,
+                 redis_url: str,
+                 gateway_config: GatewayConfiguration,
+                 monitor: ThrottlingMonitor):
         self.redis_url = redis_url
         self.redis = None
         self.gateway_config = gateway_config
@@ -39,23 +42,24 @@ class BackpressureManager:
         # Dynamic capacity calculator (will be injected)
         self.capacity_calculator = None
 
-        self.QUEUE_PREFIX = REDIS.CHAT.PROMPT_QUEUE_PREFIX
-        self.PROCESS_HEARTBEAT_PREFIX = REDIS.PROCESS.HEARTBEAT_PREFIX
-        self.INSTANCE_STATUS_PREFIX = REDIS.INSTANCE.HEARTBEAT_PREFIX
-        # For compatibility with both patterns
-        self.PROCESS_HEARTBEAT_PREFIX = REDIS.PROCESS.HEARTBEAT_PREFIX
+        self.QUEUE_PREFIX = self.ns(REDIS.CHAT.PROMPT_QUEUE_PREFIX)
+        self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
+        self.INSTANCE_STATUS_PREFIX = self.ns(REDIS.INSTANCE.HEARTBEAT_PREFIX)
 
         # NEW: Atomic capacity tracking
-        self.CAPACITY_COUNTER_KEY = f"{REDIS.SYSTEM.CAPACITY}:counter"
-        self.CAPACITY_LOCK_PREFIX = f"{REDIS.SYNCHRONIZATION.LOCK}:capacity"
+        self.CAPACITY_COUNTER_KEY = self.ns(f"{REDIS.SYSTEM.CAPACITY}:counter")
+        self.CAPACITY_LOCK_PREFIX = self.ns(f"{REDIS.SYNCHRONIZATION.LOCK}:capacity")
 
         # Queue analytics keys
-        self.QUEUE_ANALYTICS_PREFIX = f"{REDIS.CHAT.PROMPT_QUEUE_PREFIX}:analytics"
+        self.QUEUE_ANALYTICS_PREFIX = self.ns(f"{REDIS.CHAT.PROMPT_QUEUE_PREFIX}:analytics")
 
         # Cache for performance
         self._last_instance_check = 0
         # self._cached_instances = set()
         # self._instance_cache_ttl = gateway_config.monitoring.instance_cache_ttl_seconds
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def init_redis(self):
         if not self.redis:
@@ -540,13 +544,13 @@ class AtomicBackpressureManager:
         self.capacity_calculator = None
 
         # Redis keys (keep same as existing)
-        self.QUEUE_PREFIX = REDIS.CHAT.PROMPT_QUEUE_PREFIX
-        self.PROCESS_HEARTBEAT_PREFIX = REDIS.PROCESS.HEARTBEAT_PREFIX
-        self.INSTANCE_STATUS_PREFIX = REDIS.INSTANCE.HEARTBEAT_PREFIX
-        self.CAPACITY_COUNTER_KEY = f"{REDIS.SYSTEM.CAPACITY}:counter"
+        self.QUEUE_PREFIX = self.ns(REDIS.CHAT.PROMPT_QUEUE_PREFIX)
+        self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
+        self.INSTANCE_STATUS_PREFIX = self.ns(REDIS.INSTANCE.HEARTBEAT_PREFIX)
+        self.CAPACITY_COUNTER_KEY = self.ns(f"{REDIS.SYSTEM.CAPACITY}:counter")
 
         # Queue analytics keys
-        self.QUEUE_ANALYTICS_PREFIX = f"{REDIS.CHAT.PROMPT_QUEUE_PREFIX}:analytics"
+        self.QUEUE_ANALYTICS_PREFIX = self.ns(f"{REDIS.CHAT.PROMPT_QUEUE_PREFIX}:analytics")
 
         # Lua script for atomic capacity check (without enqueueing)
         self.ATOMIC_CAPACITY_CHECK_SCRIPT = """
@@ -623,6 +627,9 @@ class AtomicBackpressureManager:
             return {0, rejection_reason, total_queue, actual_capacity, healthy_processes}
         end
         """
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def init_redis(self):
         if not self.redis:
@@ -1040,9 +1047,9 @@ class AtomicChatQueueManager:
         self.monitor = monitor
 
         # Redis keys
-        self.QUEUE_PREFIX = REDIS.CHAT.PROMPT_QUEUE_PREFIX
-        self.PROCESS_HEARTBEAT_PREFIX = REDIS.PROCESS.HEARTBEAT_PREFIX
-        self.CAPACITY_COUNTER_KEY = f"{REDIS.SYSTEM.CAPACITY}:counter"
+        self.QUEUE_PREFIX = self.ns(REDIS.CHAT.PROMPT_QUEUE_PREFIX)
+        self.PROCESS_HEARTBEAT_PREFIX = self.ns(REDIS.PROCESS.HEARTBEAT_PREFIX)
+        self.CAPACITY_COUNTER_KEY = self.ns(f"{REDIS.SYSTEM.CAPACITY}:counter")
 
         # Lua script for atomic capacity check and task enqueue
         self.ATOMIC_CHAT_ENQUEUE_SCRIPT = """
@@ -1127,6 +1134,9 @@ class AtomicChatQueueManager:
             return {0, rejection_reason, total_queue, actual_capacity, healthy_processes}
         end
         """
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def init_redis(self):
         if not self.redis:

@@ -13,7 +13,7 @@ from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
 from kdcube_ai_app.infra.gateway.config import GatewayConfiguration
 from kdcube_ai_app.infra.gateway.definitions import GatewayError
 from kdcube_ai_app.infra.gateway.thorttling import ThrottlingMonitor, ThrottlingReason
-from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,10 @@ class RateLimitConfig:
 class RateLimiter:
     """Simple rate limiter"""
 
-    def __init__(self, redis_url: str, gateway_config: GatewayConfiguration, monitor: ThrottlingMonitor):
+    def __init__(self, redis_url: str,
+                 gateway_config: GatewayConfiguration,
+                 monitor: ThrottlingMonitor):
+
         self.redis_url = redis_url
         self.redis = None
         self.gateway_config = gateway_config
@@ -59,6 +62,9 @@ class RateLimiter:
                 burst_window=gateway_config.rate_limits.privileged_burst_window
             )
         }
+
+    def ns(self, base: str) -> str:
+        return ns_key(base, tenant=self.gateway_config.tenant_id, project=self.gateway_config.project_id)
 
     async def init_redis(self):
         if not self.redis:

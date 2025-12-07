@@ -267,16 +267,28 @@ async def process_chat_message(
     RequestContext + IngressConfig.
     """
     text = (message_text or "").strip()
+    task_id = str(uuid.uuid4())
+    turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
+    conversation_id = message_data.get("conversation_id") or session.session_id
+    # Tenant / project
+    tenant_id = (
+            message_data.get("tenant")
+            or message_data.get("tenant_id")
+            or get_tenant()
+    )
+    project_id = message_data.get("project")
 
+    request_id = str(uuid.uuid4())
+    provided_bundle_id = message_data.get("bundle_id")
+
+    svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
+    conv = ConversationCtx(
+        session_id=session.session_id,
+        conversation_id=conversation_id,
+        turn_id=turn_id,
+    )
     # Empty message → emit error via relay + let transport map to HTTP/WS
     if not text:
-        svc = ServiceCtx(request_id=str(uuid.uuid4()))
-        conv_id = message_data.get("conversation_id") or session.session_id
-        conv = ConversationCtx(
-            session_id=session.session_id,
-            conversation_id=conv_id,
-            turn_id=f"turn_{uuid.uuid4().hex[:8]}",
-        )
         await chat_comm.emit_error(
             svc,
             conv,
@@ -291,26 +303,8 @@ async def process_chat_message(
             http_status=400,
         )
 
-    # Tenant / project
-    tenant_id = (
-            message_data.get("tenant")
-            or message_data.get("tenant_id")
-            or get_tenant()
-    )
-    project_id = message_data.get("project")
-
-    request_id = str(uuid.uuid4())
-    provided_bundle_id = message_data.get("bundle_id")
-
     spec_resolved = resolve_bundle(provided_bundle_id, override=None)
     if not spec_resolved:
-        svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
-        conv_id = message_data.get("conversation_id") or session.session_id
-        conv = ConversationCtx(
-            session_id=session.session_id,
-            conversation_id=conv_id,
-            turn_id=f"turn_{uuid.uuid4().hex[:8]}",
-        )
         err = f"Unknown bundle_id '{provided_bundle_id}'"
         await chat_comm.emit_error(
             svc,
@@ -327,7 +321,6 @@ async def process_chat_message(
         )
 
     bundle_id = spec_resolved.id
-
     metadata = dict(ingress.metadata or {})
     acct_env = build_envelope_from_session(
         session=session,
@@ -339,22 +332,12 @@ async def process_chat_message(
         metadata=metadata,
     ).to_dict()
 
-    task_id = str(uuid.uuid4())
-    turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
-    conversation_id = message_data.get("conversation_id") or session.session_id
-
     ext_config = (message_data.get("config") or {}).copy()
     if "tenant" not in ext_config:
         ext_config["tenant"] = tenant_id
     if "project" not in ext_config and project_id:
         ext_config["project"] = project_id
 
-    svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
-    conv = ConversationCtx(
-        session_id=session.session_id,
-        conversation_id=conversation_id,
-        turn_id=turn_id,
-    )
     routing = ChatTaskRouting(
         session_id=session.session_id,
         conversation_id=conversation_id,
@@ -415,12 +398,20 @@ async def process_chat_message(
             bundle_id=payload.routing.bundle_id,
         )
     except Exception as e:
-        logger.error("conversation state update failed: %s", e)
+        conv_state_update_error = f"conversation state update failed: {e}"
+        logger.error(conv_state_update_error)
         conv_exists = True
-        set_res = {"ok": True, "updated_at": _iso(), "current_turn_id": turn_id}
+        set_res = {"ok": False,
+                   "error": conv_state_update_error,
+                   "updated_at": _iso(),
+                   "current_turn_id": turn_id,
+                   "error_type": "conversation_state_update_error"
+                   }
 
     if not set_res.get("ok", True):
         active_turn = set_res.get("current_turn_id")
+        error = set_res.get("error") or "Conversation is busy (another tab/process is answering)."
+        error_type = set_res.get("error_type") or "conversation_busy"
         try:
             await chat_comm.emit_conv_status(
                 svc,
@@ -434,7 +425,7 @@ async def process_chat_message(
             await chat_comm.emit_error(
                 svc,
                 conv,
-                error="Conversation is busy (another tab/process is answering).",
+                error=error,
                 target_sid=ingress.stream_id,
                 session_id=payload.routing.session_id,
             )
@@ -443,14 +434,15 @@ async def process_chat_message(
 
         return IngressResult(
             ok=False,
-            error_type="conversation_busy",
-            error="Conversation is busy (another tab/process is answering).",
+            error_type=error_type,
+            error=error,
             http_status=409,
         )
 
     # Emit conv_status created / in_progress
     try:
         if not conv_exists:
+            # broadcast. client can update the conversation list
             await chat_comm.emit_conv_status(
                 svc,
                 conv,
@@ -459,6 +451,7 @@ async def process_chat_message(
                 updated_at=set_res["updated_at"],
                 current_turn_id=payload.routing.turn_id,
             )
+        # broadcast
         await chat_comm.emit_conv_status(
             svc,
             conv,
@@ -510,8 +503,7 @@ async def process_chat_message(
             if session.user_type == UserType.REGISTERED
             else 60
         )
-
-        try:
+        try: # broadcast
             await chat_comm.emit_conv_status(
                 svc,
                 conv,
@@ -519,7 +511,6 @@ async def process_chat_message(
                 state="idle",
                 updated_at=res_reset.get("updated_at", _iso()),
                 current_turn_id=res_reset.get("current_turn_id"),
-                target_sid=ingress.stream_id,
             )
             await chat_comm.emit_error(
                 svc,
@@ -573,9 +564,12 @@ async def get_conversation_status(
         app,
         chat_comm: ChatRelayCommunicator,
         session: UserSession,
+        tenant: str,
+        project: str,
         bundle_id: Optional[str],
         conversation_id: Optional[str],
         stream_id: Optional[str],
+        publish: bool = True,
 ) -> Dict[str, Any]:
     """
     Shared implementation for conv_status.get for SSE + WS.
@@ -606,35 +600,35 @@ async def get_conversation_status(
         updated_at = ts.isoformat() + "Z" if ts else _iso()
         payload_row = row.get("payload") or {}
         current_turn_id = payload_row.get("last_turn_id")
+    if publish:
+        spec_resolved = resolve_bundle(bundle_id, override=None)
 
-    spec_resolved = resolve_bundle(bundle_id, override=None)
-
-    routing = ChatTaskRouting(
-        session_id=session.session_id,
-        conversation_id=conv_id,
-        turn_id=current_turn_id,
-        socket_id=stream_id,
-        bundle_id=spec_resolved.id if spec_resolved else None,
-    )
-    svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id)
-    conv = ConversationCtx(
-        session_id=session.session_id,
-        conversation_id=conv_id,
-        turn_id=current_turn_id or f"turn_{uuid.uuid4().hex[:8]}",
-    )
-
-    try:
-        await chat_comm.emit_conv_status(
-            svc,
-            conv,
-            routing=routing,
-            state=state,
-            updated_at=updated_at,
-            current_turn_id=current_turn_id,
-            # target_sid=stream_id,
+        routing = ChatTaskRouting(
+            session_id=session.session_id,
+            conversation_id=conv_id,
+            turn_id=current_turn_id,
+            socket_id=stream_id,
+            bundle_id=spec_resolved.id if spec_resolved else None,
         )
-    except Exception as e:
-        logger.error("emit_conv_status failed: %s", e)
+        svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id, tenant=tenant, project=project)
+        conv = ConversationCtx(
+            session_id=session.session_id,
+            conversation_id=conv_id,
+            turn_id=current_turn_id or f"turn_{uuid.uuid4().hex[:8]}",
+        )
+
+        try:
+            await chat_comm.emit_conv_status(
+                svc,
+                conv,
+                routing=routing,
+                state=state,
+                updated_at=updated_at,
+                current_turn_id=current_turn_id,
+                target_sid=stream_id,
+            )
+        except Exception as e:
+            logger.error("emit_conv_status failed: %s", e)
 
     return {
         "conversation_id": conv_id,

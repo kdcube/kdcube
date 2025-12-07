@@ -327,7 +327,9 @@ class EnhancedChatRequestProcessor:
         )
 
         # 3) ChatCommunicator (async) over the relay
-        emitter = _RelayEmitterAdapter(self._relay)
+        emitter = _RelayEmitterAdapter(self._relay,
+                                       tenant=payload.actor.tenant_id,
+                                       project=payload.actor.project_id,)
         comm = ChatCommunicator(
             emitter=emitter,
             service=svc.model_dump(),
@@ -342,7 +344,6 @@ class EnhancedChatRequestProcessor:
 
         envelope = AccountingEnvelope.from_dict(payload.accounting.envelope)
         _settings = get_settings()
-        # storage_backend = create_storage_backend(os.environ.get("KDCUBE_STORAGE_PATH"), **{})
         storage_backend = create_storage_backend(_settings.STORAGE_PATH, **{})
 
         # 5) Announce start (async)
@@ -411,6 +412,7 @@ class EnhancedChatRequestProcessor:
                         user_type=payload.user.user_type,
                         bundle_id=payload.routing.bundle_id,
                     )
+                    # broadcast to session
                     await self._relay.emit_conv_status(svc, conv,
                                                      routing=payload.routing,
                                                      state=("idle" if success else "error"),
