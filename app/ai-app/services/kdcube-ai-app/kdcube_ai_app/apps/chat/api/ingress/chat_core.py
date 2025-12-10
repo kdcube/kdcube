@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Literal
 from fastapi import Request  # only if you put this in a place where FastAPI is available
 
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -27,7 +28,7 @@ from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.safe_preflight import PreflightConfig, preflight_async
 from kdcube_ai_app.infra.namespaces import CONFIG
 from kdcube_ai_app.tools.file_text_extractor import DocumentTextExtractor
-from kdcube_ai_app.apps.chat.api.resolvers import get_tenant, get_auth_manager
+from kdcube_ai_app.apps.chat.api.resolvers import get_auth_manager
 from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError, PRIVILEGED_ROLES
@@ -271,12 +272,13 @@ async def process_chat_message(
     turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
     conversation_id = message_data.get("conversation_id") or session.session_id
     # Tenant / project
+    settings = get_settings()
     tenant_id = (
             message_data.get("tenant")
             or message_data.get("tenant_id")
-            or get_tenant()
+            or settings.TENANT
     )
-    project_id = message_data.get("project")
+    project_id = message_data.get("project") or settings.PROJECT
 
     request_id = str(uuid.uuid4())
     provided_bundle_id = message_data.get("bundle_id")
@@ -364,6 +366,8 @@ async def process_chat_message(
             fingerprint=session.fingerprint,
             roles=session.roles,
             permissions=session.permissions,
+            timezone=getattr(request_context, "user_timezone", None),
+            utc_offset_min=getattr(request_context, "user_utc_offset_min", None),
         ),
         request=ChatTaskRequest(
             message=text,
@@ -371,6 +375,7 @@ async def process_chat_message(
             operation=message_data.get("operation") or message_data.get("command"),
             invocation=message_data.get("invocation"),
             payload=message_data.get("payload") or {},
+            request_id=request_id,
         ),
         config=ChatTaskConfig(values=ext_config),
         accounting=ChatTaskAccounting(envelope=acct_env),

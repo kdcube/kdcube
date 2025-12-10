@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
-
+import uuid
 from dataclasses import asdict
 from typing import Optional, Dict, Any
 import logging
@@ -16,8 +16,10 @@ from fastapi import Depends, HTTPException, Request, APIRouter
 
 from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency, auth_without_pressure, REDIS_URL
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest
-from kdcube_ai_app.apps.chat.sdk.protocol import ServiceCtx, ConversationCtx, ChatTaskUser
+from kdcube_ai_app.apps.chat.sdk.protocol import ServiceCtx, ConversationCtx, ChatTaskUser, ChatTaskPayload, \
+    ChatTaskActor, ChatTaskRequest, ChatTaskRouting
 from kdcube_ai_app.auth.sessions import UserSession
 
 import kdcube_ai_app.infra.namespaces as namespaces
@@ -199,7 +201,7 @@ async def admin_reset_bundles_from_env(
     }
 
 @router.post("/integrations/bundles/{tenant}/{project}/operations/{operation}")
-async def get_bundle_suggestions(
+async def call_bundle_op(
         tenant: str,
         project: str,
         payload: BundleSuggestionsRequest,
@@ -216,6 +218,7 @@ async def get_bundle_suggestions(
     from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec, get_workflow_instance
 
     config_data = {}
+    settings = get_settings()
 
     config_request = ConfigRequest(**config_data)
     if not config_request.selected_model:
@@ -229,8 +232,15 @@ async def get_bundle_suggestions(
     if payload and payload.bundle_id:
         config_request.agentic_bundle_id = payload.bundle_id
 
+    tenant_id = payload.config_request.tenant if payload and payload.config_request and payload.config_request.tenant else settings.TENANT
+    project_id = payload.config_request.project if payload and payload.config_request and payload.config_request.project else settings.PROJECT
+    request_id = str(uuid.uuid4())
+
     # 1) Resolve bundle from the in-process registry (keeps processor-owned semantics)
     spec_resolved = resolve_bundle(config_request.agentic_bundle_id, override=None)
+    if not spec_resolved:
+        raise HTTPException(status_code=404, detail=f"Bundle {config_request.agentic_bundle_id} not found")
+
     # 2) Build minimal workflow config (project-aware; defaults elsewhere)
     try:
         wf_config = create_workflow_config(ConfigRequest())
@@ -238,48 +248,37 @@ async def get_bundle_suggestions(
         # If ConfigRequest signature changes, be defensive
         wf_config = create_workflow_config(ConfigRequest.model_validate({"project": project}))
 
-    chat_comm = _ensure_chat_communicator(request.app)
-    user = ChatTaskUser(
-        user_type=session.user_type.value,
-        user_id=session.user_id,
-        username=session.username,
-        fingerprint=session.fingerprint,
-        roles=session.roles,
-        permissions=session.permissions,
-    )
-    svc_ctx = ServiceCtx(
-        request_id=str(uuid4()),
-        tenant=tenant,
-        project=project,
-        user=session.user_id or session.fingerprint,
-        user_obj=user
-    )
-    conv_ctx = ConversationCtx(
-        session_id=session.session_id,
-        conversation_id=payload.conversation_id or session.session_id,
-        turn_id=f"turn_{uuid4().hex[:8]}",
-    )
-
-    # Bind to this session/thread; no socket_id in REST call (target_sid=None)
-    bound_comm = chat_comm.bind(
-        service=svc_ctx.model_dump(),
-        conversation=conv_ctx.model_dump(),
-        session_id=session.session_id,
-        target_sid=None,
-    )
-
-    # --- Instantiate workflow with the bound communicator (new-style) ---
     spec = AgenticBundleSpec(
         path=spec_resolved.path,
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
     )
+    routing = ChatTaskRouting(
+        session_id=session.session_id,
+        bundle_id=spec_resolved.id,
+    )
+    comm_context = ChatTaskPayload(
+        request=ChatTaskRequest(request_id=request_id),
+        routing=routing,
+        actor=ChatTaskActor(
+            tenant_id=tenant_id,
+            project_id=project_id,
+        ),
+        user=ChatTaskUser(
+            user_type=session.user_type.value,
+            user_id=session.user_id,
+            username=session.username,
+            fingerprint=session.fingerprint,
+            roles=session.roles,
+            permissions=session.permissions,
+            timezone=session.request_context.user_timezone,
+            utc_offset_min=session.request_context.user_utc_offset_min,
+        ),
+    )
     try:
-        # I need to create communicator here:
         wf_config.ai_bundle_spec = spec_resolved
-        communicator = None #
         workflow, _init_state, _mod = get_workflow_instance(
-            spec, wf_config, communicator=bound_comm,
+            spec, wf_config, comm_context=comm_context,
         )
     except Exception as e:
         logger.exception(f"[get_bundle_suggestions.{tenant}.{project}] Failed to load bundle {asdict(spec)}")
@@ -287,16 +286,6 @@ async def get_bundle_suggestions(
 
     # 4) Call op() if available (support sync/async)
     if not hasattr(workflow, operation) or not callable(getattr(workflow, operation)):
-        # Graceful, generic reply if not implemented
-        # return {
-        #     "status": "ok",
-        #     "tenant": tenant,
-        #     "project": project,
-        #     "bundle_id": spec_resolved.id,
-        #     "conversation_id": payload.conversation_id,
-        #     operation: None,
-        #     "error": f"bundle does not support operation {operation}"
-        # }
         raise HTTPException(status_code=404, detail=f"Bundle does not support operation {operation}")
 
     try:

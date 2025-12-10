@@ -10,15 +10,14 @@ import logging
 import os
 
 from contextlib import asynccontextmanager
-from datetime import datetime
-from typing import Dict, Optional, List
 
 from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
 from dotenv import load_dotenv, find_dotenv
+
+from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec
 
 load_dotenv(find_dotenv())
 
@@ -100,7 +99,7 @@ async def lifespan(app: FastAPI):
     port = CHAT_APP_PORT
     process_id = os.getpid()
 
-    async def agentic_app_func(task: "ChatTaskPayload", *, comm: ChatCommunicator | None = None, **_):
+    async def agentic_app_func(comm_context: "ChatTaskPayload"):
         """
         Entry-point invoked by the processor. We do NOT bind a relay here.
         We receive a ready-to-use ChatCommunicator and pass it into the workflow.
@@ -110,56 +109,52 @@ async def lifespan(app: FastAPI):
         from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance
         from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
 
-        if comm is None:
-            raise RuntimeError("agentic_app_func: ChatCommunicator is required")
-
         # config & bundle
-        cfg_req = ConfigRequest(**(task.config.values or {}))
+        cfg_req = ConfigRequest(**(comm_context.config.values or {}))
         wf_config = create_workflow_config(cfg_req)
-        bundle_id = (task.routing.bundle_id)
+        bundle_id = comm_context.routing.bundle_id
         spec_resolved = resolve_bundle(bundle_id, override=None)
 
-        if not spec_resolved:
-            from kdcube_ai_app.apps.chat.default_app.agentic_app import ChatWorkflow as _Fallback
-            workflow = _Fallback(wf_config, communicator=comm)
-            create_initial_state_fn = lambda _ctx: {}
-        else:
-            wf_config.ai_bundle_spec = spec_resolved
-            spec = dict(path=spec_resolved.path, module=spec_resolved.module, singleton=bool(spec_resolved.singleton))
-            workflow, create_initial_state_fn, _ = get_workflow_instance(
-                type("Spec", (), spec),
-                wf_config,
-                communicator=comm,
-                pg_pool=app.state.pg_pool,
-                redis=app.state.middleware.redis
-            )
+        wf_config.ai_bundle_spec = spec_resolved
+        spec = AgenticBundleSpec(
+            path=spec_resolved.path,
+            module=spec_resolved.module,
+            singleton=bool(spec_resolved.singleton),
+        )
+        workflow, create_initial_state_fn, _ = get_workflow_instance(
+            spec=spec,
+            config=wf_config,
+            comm_context=comm_context,
+            pg_pool=app.state.pg_pool,
+            redis=app.state.middleware.redis
+        )
 
         # set workflow state (no emits here; processor already announced start)
         state = {
-            "request_id": (task.accounting.envelope or {}).get("request_id", task.meta.task_id),
-            "tenant": task.actor.tenant_id,
-            "project": task.actor.project_id,
-            "user": task.user.user_id,
-            "user_type": task.user.user_type,
-            "session_id": task.routing.session_id,
-            "conversation_id": (task.routing.conversation_id or task.routing.session_id),
-            "text": task.request.message or (task.request.payload or {}).get("text") or "",
-            "turn_id": task.routing.turn_id,
-            "history": task.request.chat_history or [],
+            "request_id": comm_context.request.request_id,
+            "tenant": comm_context.actor.tenant_id,
+            "project": comm_context.actor.project_id,
+            "user": comm_context.user.user_id,
+            "user_type": comm_context.user.user_type,
+            "session_id": comm_context.routing.session_id,
+            "conversation_id": (comm_context.routing.conversation_id or comm_context.routing.session_id),
+            "text": comm_context.request.message or (comm_context.request.payload or {}).get("text") or "",
+            "turn_id": comm_context.routing.turn_id,
+            "history": comm_context.request.chat_history or [],
             "final_answer": "",
             "followups": [],
             "step_logs": [],
-            "start_time": task.meta.created_at,
+            "start_time": comm_context.meta.created_at,
         }
         if hasattr(workflow, "set_state"):
             maybe = workflow.set_state(state)
             if inspect.isawaitable(maybe):
                 await maybe
 
-        params = dict(task.request.payload or {})
-        if "text" not in params and task.request.message:
-            params["text"] = task.request.message
-        command = task.request.operation or params.pop("command", None)
+        params = dict(comm_context.request.payload or {})
+        if "text" not in params and comm_context.request.message:
+            params["text"] = comm_context.request.message
+        command = comm_context.request.operation or params.pop("command", None)
 
         try:
             result = await (getattr(workflow, command)(**params) if (command and hasattr(workflow, command))
@@ -168,7 +163,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             # Let processor send the error envelope; we just surface the message up.
             return { "error_message": str(e), "final_answer": "An error occurred." }
-
 
     # ================================
     # SOCKET.IO SETUP
@@ -316,10 +310,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create orchestrator instance
-# orchestrator: IOrchestrator = get_orchestrator()
-
-
 # ================================
 # MIDDLEWARE
 # ================================
@@ -337,15 +327,21 @@ async def gateway_middleware(request: Request, call_next):
         if request.url.path.startswith("/sse/"):
             bearer_token = request.query_params.get("bearer_token")
             id_token = request.query_params.get("id_token")
+            user_timezone = request.query_params.get("user_timezone")
+            user_utc_offset_min = request.query_params.get("user_utc_offset_min")
 
             # Inject into headers so gateway adapter can process normally
             if bearer_token and "authorization" not in request.headers:
                 request._headers = dict(request.headers)
                 request._headers["authorization"] = f"Bearer {bearer_token}"
+            request._headers = dict(request.headers) if not hasattr(request, '_headers') else request._headers
             if id_token:
-                request._headers = dict(request.headers) if not hasattr(request, '_headers') else request._headers
-                id_token_header = CONFIG.ID_TOKEN_HEADER_NAME
-                request._headers[id_token_header.lower()] = id_token
+                # request._headers[id_token_header.lower()] = id_token
+                request._headers[CONFIG.ID_TOKEN_HEADER_NAME] = id_token
+            if user_timezone:
+                request._headers[CONFIG.USER_TIMEZONE_HEADER_NAME] = user_timezone
+            if user_utc_offset_min:
+                request._headers[CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME] = user_utc_offset_min
 
         # session = await app.state.gateway_adapter.process_request(request, [])
         session = await app.state.gateway_adapter.process_by_policy(request)
@@ -367,52 +363,8 @@ async def gateway_middleware(request: Request, call_next):
         )
 
 # ================================
-# REQUEST/RESPONSE MODELS
-# ================================
-
-class ChatMessage(BaseModel):
-    role: str  # "user" or "assistant"
-    content: str
-    timestamp: Optional[str] = None
-
-
-class ChatRequest(BaseModel):
-    bundle_id: Optional[str] = None
-    message: str
-    session_id: Optional[str] = None
-    config: Optional[ConfigRequest] = None
-    chat_history: List[ChatMessage] = Field(default_factory=list)
-
-
-class ChatResponse(BaseModel):
-    status: str
-    task_id: str
-    session_id: str
-    user_type: str
-    message: str
-
-
-# ================================
-# UTILITY FUNCTIONS
-# ================================
-
-def convert_chat_history(chat_history: List[ChatMessage]) -> List[Dict[str, str]]:
-    """Convert Pydantic chat history to dict format"""
-    return [
-        {
-            "role": msg["role"] if isinstance(msg, dict) else msg.role,
-            "content": msg["content"] if isinstance(msg, dict) else msg.content,
-            "timestamp": msg.get("timestamp") if isinstance(msg, dict) else (
-                        msg.timestamp or datetime.now().isoformat())
-        }
-        for msg in (chat_history or [])
-    ]
-
-
-# ================================
 # ENDPOINTS
 # ================================
-
 @app.get("/")
 async def root():
     """Root endpoint with API information"""
@@ -488,7 +440,6 @@ async def get_available_models(session: UserSession = Depends(get_user_session_d
         "default_model": "gpt-4o"
     }
 
-
 @app.get("/landing/embedders")
 async def get_available_embedders(session: UserSession = Depends(get_user_session_dependency())):
     """Get available embedding configurations"""
@@ -520,7 +471,6 @@ async def get_available_embedders(session: UserSession = Depends(get_user_sessio
         }
     }
     return available_embedders
-
 
 # ================================
 # MONITORING ENDPOINTS

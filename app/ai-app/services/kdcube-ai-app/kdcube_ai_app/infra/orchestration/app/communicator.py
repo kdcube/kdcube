@@ -22,13 +22,6 @@ load_dotenv(find_dotenv())
 # Logging
 logger = logging.getLogger("ServiceCommunicator")
 
-
-# Configuration
-# REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
-# REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
-# REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
-# REDIS_URL = os.environ.get("REDIS_URL", f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0")
-
 # Queue prefix to match web server expectations
 KDCUBE_ORCHESTRATOR_QUEUES_PREFIX = "kdcube_orch_"
 
@@ -137,15 +130,10 @@ class ServiceCommunicator:
 
         # Shard chat events by session
         logical_channel = channel
-        # if session_id and channel == "chat.events":
-        #     logical_channel = f"{channel}.{session_id}"
-
         full_channel = self._fmt_channel(logical_channel)
-
         await self._ensure_async()
 
         payload = json.dumps(message, ensure_ascii=False)
-
         logger.debug(
             "Publishing event '%s' to '%s' (sid=%s, session=%s): %s",
             event,
@@ -154,7 +142,6 @@ class ServiceCommunicator:
             session_id,
             data,
         )
-
         try:
             await self._aioredis.publish(full_channel, payload)
         except Exception as e:

@@ -199,45 +199,6 @@ class SocketIOChatHandler:
         self._listener_started = False
         logger.info("Socket.IO chat handler stopped")
 
-    # ---------- Subscription ----------------------------
-    async def _ensure_session_subscription(self, session_id: str):
-        """
-        Ensure we are subscribed to this session's chat events channel in Redis.
-        Called on WS connect.
-        """
-        if not session_id:
-            return
-
-        count = self._session_refcounts.get(session_id, 0)
-        if count == 0:
-            session_ch = f"chat.events.{session_id}"
-            # Subscribe this process to the per-session channel
-            await self._comm._comm.subscribe_add(session_ch)
-            # Ensure the shared listener is running and our WS callback is registered
-            await self._comm._comm.start_listener(self._on_pubsub_message)
-            logger.info("[WS] Subscribed to channel %s for session %s", session_ch, session_id)
-
-        self._session_refcounts[session_id] = count + 1
-
-    async def _release_session_subscription(self, session_id: str | None):
-        """
-        Decrement session refcount and unsubscribe from Redis if this was the last WS subscriber.
-        Called on WS disconnect.
-        """
-        if not session_id:
-            return
-
-        count = self._session_refcounts.get(session_id, 0)
-        if count <= 1:
-            # Last WS for this session on this worker
-            self._session_refcounts.pop(session_id, None)
-            chan = f"chat.events.{session_id}"
-            await self._comm._comm.unsubscribe_some(chan)
-            logger.info("[WS] Unsubscribed from channel %s for session %s", chan, session_id)
-        else:
-            self._session_refcounts[session_id] = count - 1
-
-
     # ---------- CONNECT with GATING (restored) ----------
 
     async def _handle_connect(self, sid, environ, auth):
@@ -361,7 +322,6 @@ class SocketIOChatHandler:
     async def _handle_disconnect(self, sid):
         logger.info("Chat client disconnected: %s", sid)
         session_id = self._sid_to_session_id.pop(sid, None)
-        self._sid_to_tenant_project.pop(sid, None)
         if session_id:
             tenant_project = self._sid_to_tenant_project.get(sid) or {}
             await self._comm.release_session_channel(session_id,
@@ -426,6 +386,7 @@ class SocketIOChatHandler:
                 username=user_session_data.get("username"),
                 roles=user_session_data.get("roles", []),
                 permissions=user_session_data.get("permissions", []),
+                timezone=user_session_data.get("timezone", "unknown"),
             )
 
             # rebuild ctx if we stored it on connect; else fallback
@@ -565,6 +526,7 @@ class SocketIOChatHandler:
             username=user_session.get("username"),
             roles=user_session.get("roles", []),
             permissions=user_session.get("permissions", []),
+            timezone=user_session.get("timezone", "Europe/Berlin"),
         )
 
         conv_id = (data or {}).get("conversation_id") or session.session_id

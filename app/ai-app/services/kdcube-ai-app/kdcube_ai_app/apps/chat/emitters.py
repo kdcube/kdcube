@@ -8,11 +8,13 @@ import asyncio
 from datetime import datetime
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple, Set
+from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple, Set, Iterable
 import os, logging, time
 
+from kdcube_ai_app.apps.chat.sdk.comm.event_filter import IEventFilter, EventFilterInput
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.protocol import (
-    ChatEnvelope, ServiceCtx, ConversationCtx, ChatTaskRouting, _iso_now
+    ChatEnvelope, ServiceCtx, ConversationCtx, ChatTaskRouting, _iso_now, ChatTaskPayload
 )
 from kdcube_ai_app.apps.chat.sdk.util import ensure_event_markdown
 from kdcube_ai_app.infra.orchestration.app.communicator import ServiceCommunicator
@@ -364,31 +366,36 @@ class ChatRelayCommunicator:
         async def emit_complete(self, data: Any | None = None): await self._p.emit_complete(self._svc, self._conv, data=data or {}, target_sid=self._sid, session_id=self._room)
         async def emit_error(self, error: str, *, title: Optional[str] = "Workflow Error", step: str = "workflow"): await self._p.emit_error(self._svc, self._conv, error=error, title=title, step=step, target_sid=self._sid, session_id=self._room)
 
-        def make_emitters(self) -> tuple[Callable[[str, str, Dict[str, Any] | None], Awaitable[None]], Callable[[str, int, Dict[str, Any] | None], Awaitable[None]]]:
-            """
-            Returns (step_emitter, delta_emitter) that workflows expect.
-            """
-            async def step_emitter(step: str, status: str, payload: Dict[str, Any] | None = None):
-                p = payload or {}
-                await self.emit_step(step, status, title=p.get("title"), data=p.get("data") if "data" in p else p, agent=p.get("agent"))
-
-            async def delta_emitter(text: str, idx: int, meta: Dict[str, Any] | None = None):
-                marker = (meta or {}).get("marker", "answer")
-                await self.emit_delta(text, idx, marker=marker)
-
-            return step_emitter, delta_emitter
-
     def bind(self, *, service: ServiceCtx, conversation: ConversationCtx, target_sid: Optional[str] = None, session_id: Optional[str] = None) -> "_Bound":
         return ChatRelayCommunicator._Bound(self, service, conversation, target_sid=target_sid, session_id=session_id)
 
-    # ---------- subscribe / relay ----------
+    async def emit(
+            self,
+            *,
+            event: str,
+            data: dict,
+            tenant: str,
+            project: str,
+            room: Optional[str] = None,
+            target_sid: Optional[str] = None,
+            session_id: Optional[str] = None,
+    ):
+        sid = session_id or room
+        if not sid:
+            # best-effort fallback; your system seems to expect session sharding
+            try:
+                sid = ((data or {}).get("conversation") or {}).get("session_id")
+            except Exception:
+                sid = None
 
-    # async def subscribe(self, callback):
-    #     await self._comm.subscribe(self._channel)
-    #     await self._comm.start_listener(callback)
-    #
-    # async def unsubscribe(self):
-    #     await self._comm.stop_listener()
+        await self._comm.pub(
+            event=event,
+            data=data,
+            target_sid=target_sid,
+            session_id=sid,
+            channel=self._session_channel(sid, tenant=tenant, project=project),
+        )
+
 
 @dataclass
 class ChatCommunicator:
@@ -398,26 +405,64 @@ class ChatCommunicator:
       - builds standard envelopes
       - publishes via a transport emitter (relay/socket/etc)
     """
-    emitter: Any                             # ChatRelayEmitter | SocketIOEmitter | NoopEmitter
+    emitter: ChatRelayCommunicator
+    tenant: str
+    project: str
+    user_id: str
+    user_type: str
     service: Dict[str, Any]                  # {request_id, tenant, project, user}
     conversation: Dict[str, Any]             # {session_id, conversation_id, turn_id, socket_id?}
     room: Optional[str] = None               # default fan-out room (session_id)
     target_sid: Optional[str] = None         # optional exact socket target
+    event_filter: Optional[IEventFilter] = None
 
     def __post_init__(self):
         # default room = session_id
         self.room = self.room or self.conversation.get("session_id")
         self.target_sid = self.target_sid or self.conversation.get("socket_id")
         self._delta_cache: dict[Tuple[str, str, str, str, str, str], _DeltaAggregate] = {}
+        # self.event_filter: IEventFilter = self.event_filter or DefaultEventFilter()
 
     # ---------- low-level ----------
+    def _build_filter_input(self, socket_event: str, data: dict | None, broadcast: bool) -> EventFilterInput:
+        # tolerant extraction: works for enveloped and semi-enveloped payloads
+        d = data or {}
+        ev = d.get("event") or {}
+
+        return EventFilterInput(
+            socket_event=socket_event,
+            type=d.get("type") or ev.get("type"),
+            agent=ev.get("agent"),
+            step=ev.get("step"),
+            status=ev.get("status"),
+            broadcast=broadcast,
+            route=d.get("route")
+        )
     async def emit(self, event: str, data: dict, broadcast: bool = False):
+        # Single choke point
+        try:
+            if self.event_filter:
+                ev_in = self._build_filter_input(event, data, broadcast)
+
+                if not self.event_filter.allow_event(
+                    user_type=self.user_type,
+                    user_id=self.user_id,
+                    event=ev_in,
+                    data=data,
+                ):
+                    return
+        except Exception:
+            # fail-open: don't break runtime if a custom filter crashes
+            pass
+
         await self.emitter.emit(
             event=event,
             data=data,
             room=self.room,
             target_sid=None if broadcast else self.target_sid,
             session_id=self.conversation.get("session_id"),
+            tenant=self.tenant,
+            project=self.project,
         )
 
     # ----- internal buffer helpers -----
@@ -561,11 +606,12 @@ class ChatCommunicator:
             p = Path(path)
             if not p.exists():
                 return
-            data = _json.loads(p.read_text(encoding="utf-8")) or {}
-            items = data.get("items") or []
-            self.merge_delta_cache(items)
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            items = data.get("items") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                self.merge_delta_cache(items)
         except Exception:
-            pass
+            return
 
     # ---------- envelopes ----------
     def _base_env(self, typ: str) -> Dict[str, Any]:
@@ -609,7 +655,7 @@ class ChatCommunicator:
         await self.emit(route, env)
 
     # ---------- high-level helpers ----------
-    async def start(self, *, message: str, queue_stats: Optional[dict] = None):
+    async def start(self, *, message: str, queue_stats: Optional[dict] = None) -> None:
         env = self._base_env("chat.start")
         env["event"] = {"step": "turn", "status": "started", "title": "Turn Started"}
         env["data"] = {"message": message, "queue_stats": queue_stats or {}}
@@ -695,7 +741,9 @@ class ChatCommunicator:
                 import traceback
                 print(traceback.format_exc())
 
-        socket_event = route or "chat_step"
+        socket_event = _EVENT_MAP.get(route) or "chat_step"
+        if route:
+            env["route"] = route
         await self.emit(event=socket_event, data=env, broadcast=broadcast)
 
     def _export_comm_spec_for_runtime(self) -> dict:
@@ -711,6 +759,10 @@ class ChatCommunicator:
         conversation = {}
         room = None
         target_sid = None
+        user_id = None
+        user_type = None
+        tenant = None
+        project = None
 
         if comm is not None:
             # payloads for identity
@@ -724,6 +776,10 @@ class ChatCommunicator:
                 pass
             room = getattr(comm, "room", None)
             target_sid = getattr(comm, "target_sid", None)
+            user_id = getattr(comm, "user_id", None)
+            user_type = getattr(comm, "user_type", None)
+            tenant = getattr(comm, "tenant", None)
+            project = getattr(comm, "project", None)
 
             # Try to extract redis details from Relay adapter
             try:
@@ -741,30 +797,55 @@ class ChatCommunicator:
             "conversation": conversation,
             "room": room,
             "target_sid": target_sid,
+            "user_id": user_id,
+            "user_type": user_type,
+            "tenant": tenant,
+            "project": project,
         }
 
-class _RelayEmitterAdapter:
-    """
-    Async adapter that lets ChatCommunicator 'await emitter.emit(...)' while
-    internally publishing via ChatRelayCommunicator's ServiceCommunicator.
-    """
-    def __init__(self, relay: ChatRelayCommunicator, tenant: str, project: str):
-        self._relay = relay
-        self.tenant = tenant
-        self.project = project
+def build_relay_from_env() -> ChatRelayCommunicator:
 
-    async def emit(self, event: str, data: dict, *, room: Optional[str] = None,
-                   target_sid: Optional[str] = None, session_id: Optional[str] = None):
-        try:
-            # Route to the relay’s pub/sub channel. 'session_id' takes priority, else fall back to room.
-            await self._relay._comm.pub(  # underlying transport publisher
-                event=event,
-                data=data,
-                target_sid=target_sid,
-                session_id=session_id or room,
-                channel=self._relay._session_channel(session_id=session_id or room,
-                                                     tenant=self.tenant,
-                                                     project=self.project),
-            )
-        except Exception as e:
-            logger.error(f"Relay emit failed for event '{event}': {e}")
+    settings = get_settings()
+    redis_url = settings.REDIS_URL
+    channel = os.getenv("CHAT_RELAY_CHANNEL", "chat.events")
+    return ChatRelayCommunicator(redis_url=redis_url, channel=channel)
+
+def build_comm_from_comm_context(
+        task: ChatTaskPayload,
+        *,
+        relay: Optional[ChatRelayCommunicator] = None,
+        event_filter: Optional[IEventFilter] = None,
+) -> ChatCommunicator:
+    # if not provided, create a NEW relay instance
+    relay = relay or build_relay_from_env()
+
+    session_id = task.routing.session_id
+    socket_id = task.routing.socket_id
+    request_id = task.request.request_id
+
+    svc = ServiceCtx(
+        request_id=request_id,
+        tenant=task.actor.tenant_id,
+        project=task.actor.project_id,
+        user=task.user.user_id or task.user.fingerprint,
+        user_obj=task.user,
+    )
+
+    conv = ConversationCtx(
+        session_id=session_id,
+        conversation_id=(task.routing.conversation_id or session_id),
+        turn_id=task.routing.turn_id,
+    )
+    # IMPORTANT: new communicator instance every time
+    return ChatCommunicator(
+        emitter=relay,
+        service=svc.model_dump(),
+        conversation=conv.model_dump(),
+        room=session_id,
+        target_sid=socket_id,
+        tenant=task.actor.tenant_id,
+        project=task.actor.project_id,
+        user_id=task.user.user_id,
+        user_type=task.user.user_type,
+        event_filter=event_filter,
+    )

@@ -20,7 +20,6 @@ from contextvars import ContextVar
 from kdcube_ai_app.apps.chat.emitters import (
     ChatRelayCommunicator,
     ChatCommunicator,
-    _RelayEmitterAdapter,
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.portable_spec import PortableSpec
@@ -122,15 +121,16 @@ def make_chat_comm(spec: PortableSpec) -> Optional[ChatCommunicator]:
         return None
     # ChatRelayCommunicator will pick redis URL from env (REDIS_URL) if not overridden
     relay = ChatRelayCommunicator(channel=spec.comm.channel)
-    emitter = _RelayEmitterAdapter(relay,
-                                   tenant=spec.model_config.tenant,
-                                   project=spec.model_config.project,)
     return ChatCommunicator(
-        emitter=emitter,
+        emitter=relay,
         service=spec.comm.service,
         conversation=spec.comm.conversation,
         room=spec.comm.room,
         target_sid=spec.comm.target_sid,
+        user_id=spec.comm.user_id,
+        user_type=spec.comm.user_type,
+        tenant=spec.comm.tenant,
+        project=spec.comm.project,
     )
 
 def make_registry(spec: PortableSpec) -> Dict[str, Any]:

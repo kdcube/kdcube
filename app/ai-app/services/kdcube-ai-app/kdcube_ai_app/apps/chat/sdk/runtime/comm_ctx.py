@@ -25,10 +25,6 @@ async def delta(text: str, index: int, marker: str = "answer", completed: bool =
     comm = get_comm()
     if comm is None:
         return
-    # if marker == "canvas":
-    #     # mirror to thinking for now
-    #     await comm.delta(text=text, index=index, marker="thinking", completed=completed, **kwargs)
-
     await comm.delta(text=text, index=index, marker=marker, completed=completed, **kwargs)
 
 async def step(step: str, status: str, **payload) -> None:

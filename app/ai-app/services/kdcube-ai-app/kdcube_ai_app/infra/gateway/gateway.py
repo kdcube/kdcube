@@ -10,7 +10,8 @@ from dataclasses import asdict
 from typing import Dict, Any, Optional, List, Tuple
 import logging
 
-from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, RequirementBase, PRIVILEGED_ROLES
+from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, RequirementBase, PRIVILEGED_ROLES, \
+    PAYED_ROLES
 from kdcube_ai_app.infra.gateway.backpressure import BackpressureError, BackpressureManager, \
     create_atomic_backpressure_manager
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError, CircuitState, \
@@ -239,7 +240,12 @@ class RequestGateway:
             token = parts[1]
             user = await self.auth_manager.authenticate_with_both(token, id_token)
 
-            user_type = UserType.PRIVILEGED if PRIVILEGED_ROLES & set(user.roles) else UserType.REGISTERED
+            if PRIVILEGED_ROLES & set(user.roles):
+                user_type = UserType.PRIVILEGED
+            elif PAYED_ROLES & set(user.roles):
+                user_type = UserType.PAYED
+            else:
+                user_type = UserType.REGISTERED
             return user_type, {
                 "user_id": getattr(user, 'sub', None) or user.username,
                 "username": user.username,

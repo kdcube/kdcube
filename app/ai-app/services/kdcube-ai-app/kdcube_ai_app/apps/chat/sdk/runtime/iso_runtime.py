@@ -726,7 +726,7 @@ atexit.register(_sync_shutdown_all)
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatEnvelope, ServiceCtx, ConversationCtx
 )
-from kdcube_ai_app.apps.chat.emitters import (ChatRelayCommunicator, ChatCommunicator, _RelayEmitterAdapter)
+from kdcube_ai_app.apps.chat.emitters import (ChatRelayCommunicator, ChatCommunicator)
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm, get_comm
 
 def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
@@ -744,15 +744,20 @@ def _rebuild_communicator_from_spec(spec: dict) -> ChatCommunicator:
     channel   = (spec or {}).get("channel")   or "chat.events"
     relay = ChatRelayCommunicator(redis_url=redis_url, channel=channel)
     svc = ServiceCtx(**(spec.get("service") or {}))
-    emitter = _RelayEmitterAdapter(relay, tenant=svc.tenant, project=svc.project)
     
     conv = ConversationCtx(**(spec.get("conversation") or {}))
     comm = ChatCommunicator(
-        emitter=emitter,
+        emitter=relay,
         service=svc.model_dump() if hasattr(svc, "model_dump") else dict(svc),
         conversation=conv.model_dump() if hasattr(conv, "model_dump") else dict(conv),
         room=spec.get("room"),
         target_sid=spec.get("target_sid"),
+        # tenant=svc.tenant,
+        # project=svc.project,
+        user_id=spec.get("user_id"),
+        user_type=spec.get("user_type"),
+        tenant=spec.get("tenant"),
+        project=spec.get("project"),
     )
     return comm
 
@@ -1105,7 +1110,7 @@ class _InProcessRuntime:
             if name and name not in sys.modules:
                 sys.modules[name] = mod
 
-    async def run_main_py_subprocess(
+    async def execute_py_code(
             self,
             *,
             workdir: pathlib.Path,
@@ -1232,7 +1237,7 @@ class _InProcessRuntime:
             timeout_s: int = 90,
     ) -> Dict[str, Any]:
         """
-        Wrap a single tool call into main.py and execute it via run_main_py_subprocess.
+        Wrap a single tool call into main.py and execute it via execute_py_code.
 
         docker=False → local subprocess
         docker=True  → py-code-exec docker container
@@ -1287,9 +1292,9 @@ asyncio.run(_main())
 """
         (workdir / "main.py").write_text(main_py, encoding="utf-8")
 
-        # keep the same subprocess plumbing as run_main_py_subprocess (header injection, bootstrap, alias maps, etc.)
+        # keep the same subprocess plumbing as execute_py_code (header injection, bootstrap, alias maps, etc.)
         g = dict(globals or {})
-        res = await self.run_main_py_subprocess(
+        res = await self.execute_py_code(
             workdir=workdir,
             output_dir=output_dir,
             bundle_root=bundle_root,
@@ -1317,7 +1322,7 @@ async def run_py_code(
       - WORKDIR / OUTPUT_DIR are container paths (/workspace, /output)
       - RUNTIME_GLOBALS_JSON and RUNTIME_TOOL_MODULES have been provided via env
 
-    It mirrors the behavior of _InProcessRuntime.run_main_py_subprocess, but:
+    It mirrors the behavior of _InProcessRuntime.execute_py_code, but:
       - assumes we are already in an isolated Docker container
       - optionally disables bwrap (if SANDBOX_FS is 0 in globals)
       - writes runtime.out.log / runtime.err.log into OUTPUT_DIR

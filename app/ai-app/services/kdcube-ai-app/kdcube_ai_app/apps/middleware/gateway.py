@@ -60,11 +60,19 @@ class FastAPIGatewayAdapter:
 
     def _extract_context(self, request: Request) -> RequestContext:
         """Extract request context from FastAPI request"""
+        def _parse_int(v):
+            try:
+                return int(v) if v is not None else None
+            except Exception:
+                return None
+
         return RequestContext(
             client_ip=request.client.host if request.client else "unknown",
             user_agent=request.headers.get("user-agent", ""),
             authorization_header=request.headers.get("authorization"),
-            id_token=request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME),
+            id_token=request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME) or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
+            user_timezone= request.headers.get(CONFIG.USER_TIMEZONE_HEADER_NAME) or request.headers.get(CONFIG.USER_TIMEZONE_HEADER_NAME.lower()),
+            user_utc_offset_min=_parse_int(request.headers.get(CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME) or request.headers.get(CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME.lower()),)
         )
 
     async def resolve_session(self, request: Request) -> UserSession:
@@ -299,6 +307,7 @@ class AccountingContextBinder:
                 tenant_id=self.get_tenant(),
                 request_id=request.headers.get("X-Request-ID", str(uuid.uuid4())),
                 component=comp,
+                timezone=getattr(session, "timezone", None),
             )
             # optional convenience for code that expects request.state.user
             request.state.user = {

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Any, Dict, List
 
+from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
+
 # --------------------------------------------------------------------------------------
 # Public decorators — the ONLY way to mark workflow factory/class and optional init
 # --------------------------------------------------------------------------------------
@@ -241,7 +243,7 @@ def get_workflow_instance(
         spec: AgenticBundleSpec,
         config: Any,
         *,
-        communicator: Optional[Any] = None,        # ← optional unified communicator
+        comm_context: ChatTaskPayload,        # ← optional unified communicator
         pg_pool: Optional[Any] = None,             # ← optional DB pools
         redis: Optional[Any] = None,               # ← optional DB pools
 ) -> Tuple[Any, Optional[Callable[[str], Any]], types.ModuleType]:
@@ -276,8 +278,7 @@ def get_workflow_instance(
 
     # instantiate
     extra_kwargs = {
-        "communicator": communicator,
-        "comm": communicator,
+        "comm_context": comm_context,
         "pg_pool": pg_pool,
         "redis": redis,
     }

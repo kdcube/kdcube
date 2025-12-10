@@ -9,17 +9,17 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import time
 import os
 import traceback
 from typing import Optional, Dict, Any, Iterable
 
+from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload, ServiceCtx, ConversationCtx
-from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator, _RelayEmitterAdapter
+from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 
 
 def _utc_now_iso() -> str:
@@ -325,19 +325,18 @@ class EnhancedChatRequestProcessor:
             conversation_id=(payload.routing.conversation_id or session_id),
             turn_id=payload.routing.turn_id,
         )
-
         # 3) ChatCommunicator (async) over the relay
-        emitter = _RelayEmitterAdapter(self._relay,
-                                       tenant=payload.actor.tenant_id,
-                                       project=payload.actor.project_id,)
         comm = ChatCommunicator(
-            emitter=emitter,
+            emitter=self._relay,
             service=svc.model_dump(),
             conversation=conv.model_dump(),
             room=session_id,
             target_sid=socket_id,
+            tenant=payload.actor.tenant_id,
+            project=payload.actor.project_id,
+            user_id=payload.user.user_id,
+            user_type=payload.user.user_type,
         )
-
         # 4) accounting + storage
         from kdcube_ai_app.infra.accounting.envelope import AccountingEnvelope, bind_accounting
         from kdcube_ai_app.infra.accounting import with_accounting
@@ -377,8 +376,6 @@ class EnhancedChatRequestProcessor:
                         result = await asyncio.wait_for(
                             self.chat_handler(
                                 payload,
-                                comm=comm,     # << pass the async ChatCommunicator to handler
-                                task_id=task_id
                             ),
                             timeout=self.task_timeout_sec,
                         )

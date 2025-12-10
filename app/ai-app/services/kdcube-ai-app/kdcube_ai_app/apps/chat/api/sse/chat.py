@@ -165,7 +165,7 @@ class SSEHub:
                                                      )
 
         logger.info(
-            "[SSEHub] register session=%s stream_id=%s tenant=%s project=%s total_now=%s hub_id=%s relay_id=%s",
+            "[SSEHub] unregister session=%s stream_id=%s tenant=%s project=%s total_now=%s hub_id=%s relay_id=%s",
             client.session_id, client.stream_id, client.tenant, client.project,
             len(self._by_session.get(client.session_id, [])),
             id(self), id(self.chat_comm)

@@ -35,6 +35,10 @@ class CommSpec:
     conversation: Dict[str, Any]
     room: Optional[str] = None
     target_sid: Optional[str] = None
+    user_id: Optional[str] = None
+    user_type: Optional[str] = None
+    tenant: Optional[str] = None
+    project: Optional[str] = None
 
 @dataclass
 class IntegrationsSpec:

@@ -299,20 +299,20 @@ graph TD
 
 ```mermaid
 sequenceDiagram
-  participant Worker as Orchestrator / Worker
-  participant Comm as ServiceCommunicator
-  participant Redis as Redis Pub/Sub
-  participant Hub as SSEHub
-  participant Client as SSE /sse/stream
+    participant Worker as Orchestrator / Worker
+    participant Comm as ServiceCommunicator
+    participant Redis as Redis Pub/Sub
+    participant Hub as SSEHub
+    participant Client as SSE /sse/stream
 
-  Note over Client,Hub: Client connects, SSEHub.register()<br>→ subscribe_add("chat.events.S")<br>→ start_listener()
+    Note over Client,Hub: Client connects, SSEHub.register()<br>→ subscribe_add("chat.events.S")<br>→ start_listener()
 
-  Worker->>Comm: pub("conv_status", session_id=S)
-  Comm->>Redis: PUBLISH kdcube.relay.chatbot.chat.events.S {message}
-  Redis-->>Comm: message on kdcube.relay.chatbot.chat.events.S
-  Comm-->>Hub: on_message(payload)
-  Hub->>Client: enqueue SSE frame into queue
-  Client->>Client: Browser receives event via /sse/stream
+    Worker->>Comm: pub("conv_status", session_id=S)
+    Comm->>Redis: PUBLISH kdcube.relay.chatbot.chat.events.S {message}
+    Redis-->>Comm: message on kdcube.relay.chatbot.chat.events.S
+    Comm-->>Hub: on_message(payload)
+    Hub->>Client: enqueue SSE frame into queue
+    Client->>Client: Browser receives event via /sse/stream
 ```
 
 ---

@@ -331,6 +331,10 @@ def _now_str() -> str:
     # UTC; full timestamp with microseconds
     return datetime.now(timezone.utc).isoformat()
 
+def _now_up_to_minutes() -> str:
+    # UTC; full timestamp with microseconds
+    return datetime.now(timezone.utc).replace(second=0, microsecond=0).isoformat()
+
 def _shorten(s: str, n: int) -> str:
     s = (s or "").strip()
     return s if len(s) <= n else (s[:n-1] + "…")

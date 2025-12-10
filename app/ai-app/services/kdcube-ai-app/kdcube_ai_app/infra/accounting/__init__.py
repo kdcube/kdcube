@@ -31,7 +31,7 @@ from typing import Set
 # keys we want at the event root (others can remain nested under "context" if you prefer)
 CONTEXT_EXPORT_KEYS: Set[str] = {
     "user_id", "session_id", "project_id", "tenant_id",
-    "request_id", "component", "app_bundle_id"
+    "request_id", "component", "app_bundle_id", "timezone"
 }
 
 def register_context_keys(*keys: str) -> None:
@@ -176,6 +176,11 @@ class AccountingContext:
     def user_id(self) -> Optional[str]: return self._ctx.get("user_id")
     @user_id.setter
     def user_id(self, v): self._ctx["user_id"] = v
+
+    @property
+    def timezone(self) -> Optional[str]: return self._ctx.get("timezone")
+    @timezone.setter
+    def timezone(self, v): self._ctx["timezone"] = v
 
     @property
     def session_id(self) -> Optional[str]: return self._ctx.get("session_id")

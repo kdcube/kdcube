@@ -19,6 +19,7 @@ class AccountingEnvelope:
     request_id: Optional[str]
     component: Optional[str]
     app_bundle_id: Optional[str]
+    timezone: Optional[str]
 
     # optional enrichment you might want to carry
     metadata: Dict[str, Any] = field(default_factory=dict)
@@ -60,6 +61,7 @@ class AccountingEnvelope:
             metadata=d.get("metadata") or {},
             seed_system_resources=seeds,
             app_bundle_id=d.get("app_bundle_id"),
+            timezone=d.get("timezone"),
         )
 
 def build_envelope_from_session(session, *, tenant_id,
@@ -74,7 +76,8 @@ def build_envelope_from_session(session, *, tenant_id,
         component=component,
         metadata=metadata or {},
         seed_system_resources=seeds or [],
-        app_bundle_id=app_bundle_id
+        app_bundle_id=app_bundle_id,
+        timezone=getattr(session, "timezone", None),
     )
 
 @asynccontextmanager
@@ -95,6 +98,7 @@ async def bind_accounting(envelope: AccountingEnvelope, storage_backend, *, enab
         request_id=envelope.request_id,
         component=envelope.component,
         app_bundle_id=envelope.app_bundle_id,
+        timezone=envelope.timezone
     )
     # Push it with a ContextVar token so we can restore precisely
     ctx_token = _context_var.set(ctx)
@@ -126,6 +130,7 @@ def bind_accounting_sync(envelope: AccountingEnvelope, storage_backend, *, enabl
         request_id=envelope.request_id,
         component=envelope.component,
         app_bundle_id=envelope.app_bundle_id,
+        timezone=envelope.timezone
     )
     from kdcube_ai_app.infra.accounting import _get_context
     _get_context().event_enrichment = {

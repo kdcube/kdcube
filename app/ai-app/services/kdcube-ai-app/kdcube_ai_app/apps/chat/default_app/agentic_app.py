@@ -20,7 +20,7 @@ from langgraph.graph.message import add_messages
 from datetime import datetime
 import textwrap
 
-from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+from kdcube_ai_app.apps.chat.emitters import ChatCommunicator, build_comm_from_comm_context, build_relay_from_env
 from kdcube_ai_app.infra.service_hub.inventory import Config, AgentLogger, _mid
 from kdcube_ai_app.apps.chat.sdk.util import _json_schema_of
 from kdcube_ai_app.infra.accounting import with_accounting
@@ -32,6 +32,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     agentic_workflow,
 )
 from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters, DeltaPayload, StepPayload
+from ..sdk.protocol import ChatTaskPayload
 
 # Local bundle imports
 try:
@@ -490,13 +491,36 @@ INSTRUCTIONS:
 
 
 class AnswerGeneratorAgent:
-    def __init__(self, config: Config, model_service: ThematicBotModelService,
-                 emit: AIBEmitters, streaming: bool = True):
+    def __init__(self, config: Config,
+                 model_service: ThematicBotModelService,
+                 comm_context: ChatTaskPayload = None,
+                 streaming: bool = True):
         self.config = config
         self.logger = AgentLogger(f"{BUNDLE_ID}.AnswerGeneratorAgent", config.log_level)
         self.model_service = model_service
-        self.emit = emit
+        self.comm_context = comm_context
         self.streaming = streaming
+
+        self._comm = None
+        self._emi = None
+
+    @property
+    def comm(self):
+        if self._comm:
+            return self._comm
+
+        if not self.comm_context:
+            raise RuntimeError("Workflow cannot build communicator: task missing")
+        self._comm = build_comm_from_comm_context(self.comm_context, relay=build_relay_from_env())
+        return self._comm
+
+    @property
+    def emit(self):
+        if self._emi:
+            return self._emi
+
+        self._emi = AIBEmitters(comm=self.comm)
+        return self._emi
 
     async def emit_file(self):
         """

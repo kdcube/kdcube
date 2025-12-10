@@ -62,6 +62,8 @@ class REDIS:
 
 class CONFIG:
     ID_TOKEN_HEADER_NAME = os.getenv("ID_TOKEN_HEADER_NAME", "X-ID-Token")
+    USER_TIMEZONE_HEADER_NAME = os.getenv("USER_TIMEZONE_HEADER_NAME", "X-User-Timezone")
+    USER_UTC_OFFSET_MIN_HEADER_NAME = os.getenv("USER_UTC_OFFSET_MIN_HEADER_NAME", "X-User-UTC-Offset")
 
     class BUNDLES:
         BUNDLE_MAPPING_KEY_FMT = "kdcube:config:bundles:mapping:{tenant}:{project}"

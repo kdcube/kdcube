@@ -138,11 +138,12 @@ class ChatEnvelope(_ProtoBase):
 # ---- queue payload used between web and processor ----
 
 class ChatTaskRequest(_ProtoBase):
-    message: str
+    message: Optional[str] = None
     chat_history: List[Dict[str, Any]] = []
     operation: Optional[str] = None
     invocation: Optional[Literal["sync", "async"]] = None
     payload: Any | None = None   # ← generic pass-through to bundle
+    request_id: Optional[str] = None
 
 
 class ChatTaskRouting(_ProtoBase):
@@ -165,6 +166,8 @@ class ChatTaskUser(_ProtoBase):
     fingerprint: Optional[str] = None
     roles: List[str] = []
     permissions: List[str] = []
+    timezone: Optional[str] = None
+    utc_offset_min: Optional[int] = None
 
 
 class ChatTaskConfig(_ProtoBase):
@@ -182,11 +185,11 @@ class ChatTaskAccounting(_ProtoBase):
 
 
 class ChatTaskPayload(_ProtoBase):
-    meta: ChatTaskMeta
+    meta: Optional[ChatTaskMeta] = None
     routing: ChatTaskRouting
     actor: ChatTaskActor
     user: ChatTaskUser
-    request: ChatTaskRequest
-    config: ChatTaskConfig
-    accounting: ChatTaskAccounting
+    request: Optional[ChatTaskRequest] = None
+    config: Optional[ChatTaskConfig] = None
+    accounting: Optional[ChatTaskAccounting] = None
 
