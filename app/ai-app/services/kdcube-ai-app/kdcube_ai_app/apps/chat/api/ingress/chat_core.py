@@ -366,7 +366,7 @@ async def process_chat_message(
             fingerprint=session.fingerprint,
             roles=session.roles,
             permissions=session.permissions,
-            timezone=getattr(request_context, "user_timezone", None),
+            timezone=session.timezone,
             utc_offset_min=getattr(request_context, "user_utc_offset_min", None),
         ),
         request=ChatTaskRequest(
