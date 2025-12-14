@@ -482,20 +482,20 @@ class ContextRAGClient:
                 continue
 
             # role == 'artifact'
-            if "artifact:codegen.program.presentation" in tags:
-                if presentation_item is None:
-                    presentation_item = item
-                continue
+            # if "artifact:codegen.program.presentation" in tags:
+            #     if presentation_item is None:
+            #         presentation_item = item
+            #     continue
 
             if "artifact:codegen.program.out.deliverables" in tags:
                 if deliverables_item is None:
                     deliverables_item = item
                 continue
 
-            if "artifact:solver:failure" in tags:
-                if solver_failure_item is None:
-                    solver_failure_item = item
-                continue
+            # if "artifact:solver:failure" in tags:
+            #     if solver_failure_item is None:
+            #         solver_failure_item = item
+            #     continue
 
             if "artifact:codegen.program.citables" in tags:
                 if citables_item is None:

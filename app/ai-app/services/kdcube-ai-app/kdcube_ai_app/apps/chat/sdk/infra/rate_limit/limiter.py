@@ -5,8 +5,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
-from typing import Optional, Dict, Any, Tuple
+from dataclasses import dataclass, asdict
+from typing import Optional, Dict, Any, Tuple, List
 from datetime import datetime, timedelta, timezone
 
 from redis.asyncio import Redis
@@ -290,3 +290,153 @@ class RateLimiter:
 
 def subject_id_of(tenant: str, project: str, user_id: str, session_id: Optional[str] = None) -> str:
     return f"{tenant}:{project}:{user_id}" if not session_id else f"{tenant}:{project}:{user_id}:{session_id}"
+
+@dataclass(frozen=True)
+class QuotaInsight:
+    """
+    Infra-level view of quotas & current usage.
+
+    Pure numbers / machine-friendly; no UI strings.
+    """
+    limits: Dict[str, Optional[int]]
+    remaining: Dict[str, Optional[int]]
+    violations: List[str]
+    messages_remaining: Optional[int]
+    retry_after_sec: Optional[int]
+    retry_scope: Optional[str]   # "hour" | "day" | "month" | None
+
+def _remaining_from_policy(policy: QuotaPolicy, snapshot: Dict[str, int]) -> Dict[str, Optional[int]]:
+    """
+    Compute remaining budget for each quota dimension from policy + snapshot.
+
+    snapshot keys:
+      req_day, req_month, req_total, tok_hour, tok_day, tok_month, in_flight
+    """
+    def rem(limit: Optional[int], used: int) -> Optional[int]:
+        if limit is None:
+            return None
+        return max(limit - int(used or 0), 0)
+
+    return {
+        "requests_per_day": rem(policy.requests_per_day, snapshot.get("req_day", 0)),
+        "requests_per_month": rem(policy.requests_per_month, snapshot.get("req_month", 0)),
+        "total_requests": rem(policy.total_requests, snapshot.get("req_total", 0)),
+        "tokens_per_hour": rem(policy.tokens_per_hour, snapshot.get("tok_hour", 0)),
+        "tokens_per_day": rem(policy.tokens_per_day, snapshot.get("tok_day", 0)),
+        "tokens_per_month": rem(policy.tokens_per_month, snapshot.get("tok_month", 0)),
+    }
+
+
+def _messages_remaining_from_remaining(remaining: Dict[str, Optional[int]]) -> Optional[int]:
+    """
+    Single “messages remaining” number.
+
+    We take the minimum across all *request* quotas that are configured:
+      - daily
+      - monthly
+      - total_requests (if used)
+
+    That’s the tightest bound on "how many more requests can I safely send?".
+    """
+    candidates = [
+        remaining.get("requests_per_day"),
+        remaining.get("requests_per_month"),
+        remaining.get("total_requests"),
+    ]
+    candidates = [v for v in candidates if v is not None]
+    if not candidates:
+        return None
+    return min(candidates)
+
+
+def _retry_after_from_violations(violations: List[str], *, now: Optional[datetime] = None) -> Tuple[Optional[int], Optional[str]]:
+    """
+    Given violated quota names (matching the strings from RateLimiter.admit),
+    compute TTL until the user is allowed again.
+
+    If multiple windows are violated (e.g. tokens_per_hour + tokens_per_day),
+    you must wait for *all* of them, so we take the MAX TTL.
+
+    Returns: (retry_after_sec, scope) where scope ∈ {"hour","day","month"} or None.
+    """
+    if not violations:
+        return None, None
+
+    now = (now or datetime.utcnow()).replace(tzinfo=timezone.utc)
+    now_ts = int(now.timestamp())
+    candidates: List[Tuple[str, int]] = []
+
+    for v in violations:
+        if v in ("requests_per_day", "tokens_per_day"):
+            ttl = max(_eod(now) - now_ts, 0)
+            candidates.append(("day", ttl))
+        elif v in ("requests_per_month", "tokens_per_month"):
+            ttl = max(_eom(now) - now_ts, 0)
+            candidates.append(("month", ttl))
+        elif v == "tokens_per_hour":
+            ttl = max(_eoh(now) - now_ts, 0)
+            candidates.append(("hour", ttl))
+        # total_requests has no reset; concurrency is not a quota window → ignore
+
+    if not candidates:
+        return None, None
+
+    scope, ttl = max(candidates, key=lambda it: it[1])
+    return ttl, scope
+
+
+def compute_quota_insight(
+        *,
+        policy: QuotaPolicy,
+        snapshot: Dict[str, int],
+        reason: Optional[str],
+        now: Optional[datetime] = None,
+) -> QuotaInsight:
+    """
+    Single entrypoint: QuotaPolicy + snapshot + reason -> QuotaInsight.
+    """
+    limits = asdict(policy)   # includes max_concurrent; that’s fine infra-wise
+    remaining = _remaining_from_policy(policy, snapshot)
+    violations: List[str] = (reason or "").split("|") if reason else []
+
+    retry_after_sec, retry_scope = _retry_after_from_violations(violations, now=now)
+    messages_remaining = _messages_remaining_from_remaining(remaining)
+
+    return QuotaInsight(
+        limits=limits,
+        remaining=remaining,
+        violations=violations,
+        messages_remaining=messages_remaining,
+        retry_after_sec=retry_after_sec,
+        retry_scope=retry_scope,
+    )
+
+"""
+rom rate_limit in the service event:
+
+"rate_limit": {
+  "limits": { ... },             // asdict(policy), includes max_concurrent, requests_per_day, ...
+  "remaining": { ... },          // per-dimension remaining
+  "violations": ["requests_per_day"],
+  "messages_remaining": 0,
+  "retry_after_sec": 43200,
+  "retry_scope": "day",
+  "retry_after_hours": 12        // added in run()
+}
+
+
+The client can render:
+
+“You have N messages remaining”
+→ use messages_remaining from any event (including early warning).
+
+“You are out of quota, please come in N hours”
+→ when you see rate_limit.messages_remaining == 0 and retry_after_hours not None.
+
+And if reason == "concurrency" (no window violations):
+
+violations is ["concurrency"]
+
+retry_after_sec / retry_after_hours is None
+→ show a different message, like “Too many parallel requests, please retry in a moment”, without talking about quota.
+"""

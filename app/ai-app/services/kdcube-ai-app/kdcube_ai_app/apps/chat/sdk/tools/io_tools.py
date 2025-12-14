@@ -278,12 +278,45 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
       - text: for files, the textual surrogate
       - citable: bool (inline URLs default to True)
       - description: str
-      - draft: bool (optional; True = incomplete/partial deliverable)  # ✅ NEW
+      - draft: bool (optional; True = incomplete/partial deliverable)
+      - gaps: str (optional; missing parts / TODOs)
+      - summary: str (optional; short slot summary)
+      - content_inventorization: dict (optional; structured inventory/schema payload)
       - input: {}   # reserved, empty for program slots
       - sources_used: list of citation dicts (optional)
       - sources_used_sids: list of int SIDs (optional)
     """
     artifacts: List[Dict[str, Any]] = []
+
+    def _norm_opt_str(x: Any, *, limit: int = 2000) -> Optional[str]:
+        """
+        Best-effort stringify for optional human text fields (gaps/summary).
+        Backward compatible: returns None if empty/None/unusable.
+        """
+        if x is None:
+            return None
+
+        if isinstance(x, str):
+            s = x.strip()
+            return s or None
+            # return (s[:limit] + "...") if len(s) > limit else s
+
+        if isinstance(x, (dict, list, tuple)):
+            try:
+                s = json.dumps(x, ensure_ascii=False)
+                s = s.strip()
+                # return (s[:limit] + "...") if len(s) > limit else s
+                return s or None
+            except Exception:
+                s = str(x).strip()
+                return s or None
+                # return (s[:limit] + "...") if len(s) > limit else s
+
+        s = str(x).strip()
+        return s or None
+        # if not s:
+        #     return None
+        # return (s[:limit] + "...") if len(s) > limit else s
 
     def _unify_sources(parsed_sids: List[int], explicit_sources: Any) -> Tuple[List[Dict[str, Any]], List[int]]:
         """
@@ -316,8 +349,19 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         final_sids = [s for s in sorted([k for k in by_sid.keys() if isinstance(k, int)])]
         return filled_list, final_sids
 
-    def push_inline(slot: str, value: Any, *, fmt: Optional[str], desc: str, citable: bool,
-                    sources_used: Any = None, draft: bool = False):
+    def push_inline(
+        slot: str,
+        value: Any,
+        *,
+        fmt: Optional[str],
+        desc: str,
+        citable: bool,
+        sources_used: Any = None,
+        draft: bool = False,
+        gaps: Any = None,
+        summary: Any = None,
+        content_inventorization: Any = None,
+    ):
         v, use_fmt = _coerce_value_and_format(value, fmt)
         if not use_fmt:
             use_fmt = _detect_format_from_value(v)
@@ -336,9 +380,19 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
             "input": {},
         }
 
-        # Include draft flag if True
         if draft:
             row["draft"] = True
+
+        gaps_s = _norm_opt_str(gaps, limit=1200)
+        if gaps_s:
+            row["gaps"] = gaps_s
+
+        summary_s = _norm_opt_str(summary, limit=2000)
+        if summary_s:
+            row["summary"] = summary_s
+
+        if isinstance(content_inventorization, dict) and content_inventorization:
+            row["content_inventorization"] = content_inventorization
 
         if use_fmt:
             row["format"] = use_fmt
@@ -349,8 +403,22 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
 
         artifacts.append(row)
 
-    def push_file(slot: str, relpath: str, *, mime: Optional[str], desc: str, text: str,
-                  citable: bool = False, sources_used: Any = None, draft: bool = False):  # ✅ NEW parameter
+    def push_file(
+        slot: str,
+        relpath: str,
+        *,
+        mime: Optional[str],
+        desc: str,
+        text: str,
+        citable: bool = False,
+        sources_used: Any = None,
+        draft: bool = False,
+        gaps: Any = None,
+        summary: Any = None,
+        content_inventorization: Any = None,
+    ):
+        relpath = (relpath or "").strip()
+
         parsed_sids = extract_citation_sids_from_text(text or "")
         filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
 
@@ -365,9 +433,19 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
             "input": {},
         }
 
-        # Include draft flag if True
         if draft:
             row["draft"] = True
+
+        gaps_s = _norm_opt_str(gaps, limit=1200)
+        if gaps_s:
+            row["gaps"] = gaps_s
+
+        summary_s = _norm_opt_str(summary, limit=2000)
+        if summary_s:
+            row["summary"] = summary_s
+
+        if isinstance(content_inventorization, dict) and content_inventorization:
+            row["content_inventorization"] = content_inventorization
 
         if filled_sources:
             row["sources_used"] = filled_sources
@@ -377,6 +455,8 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         artifacts.append(row)
 
     for slot, val in (out_dyn or {}).items():
+        if not isinstance(val, dict):
+            continue
 
         slot_type = val.get("type")
         desc = val.get("description") or val.get("desc") or ""
@@ -385,21 +465,44 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         draft = bool(val.get("draft", False))
         sources_used = val.get("sources_used")
 
+        gaps = val.get("gaps")
+        summary = val.get("summary")
+        content_inventorization = val.get("content_inventorization")
+
         if slot_type == "file":
             mime = val.get("mime") or None
-            text_surrogate = val.get("text") or "" # may be None; program SHOULD have set this
-            if sources_used:
-                print(f"File Slot {slot}; {sources_used}")
-            filepath = val.get("path")
-            push_file(slot, filepath, mime=mime, desc=desc, text=text_surrogate, sources_used=sources_used, draft=draft)
+            text_surrogate = val.get("text") or ""
+            filepath = val.get("path") or ""
+            push_file(
+                slot,
+                filepath,
+                mime=mime,
+                desc=desc,
+                text=text_surrogate,
+                sources_used=sources_used,
+                draft=draft,
+                gaps=gaps,
+                summary=summary,
+                content_inventorization=content_inventorization,
+            )
             continue
+
         if slot_type == "inline":
-            if "value" in val:
-                if sources_used:
-                    # print(f"Inline Slot {slot}; {sources_used}")
-                    pass
-                push_inline(slot, val["value"], fmt=fmt, desc=desc, citable=citable, sources_used=sources_used, draft=draft)
-                continue
+            if ("value" in val) or ("text" in val):
+                vv = val.get("value", val.get("text"))
+                push_inline(
+                    slot,
+                    vv,
+                    fmt=fmt,
+                    desc=desc,
+                    citable=citable,
+                    sources_used=sources_used,
+                    draft=draft,
+                    gaps=gaps,
+                    summary=summary,
+                    content_inventorization=content_inventorization,
+                )
+            continue
 
     return artifacts
 

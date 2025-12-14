@@ -10,12 +10,14 @@ import itertools
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple, Literal
 
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.presentation import SolverPresenter, SolverPresenterConfig, \
+    build_runtime_inventory_from_artifact, ProgramBrief, program_brief_from_contract
 from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_url, enrich_canonical_sources_with_favicons
 from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable
 
 log = logging.getLogger(__name__)
 
-SERVICE_LOG_SLOT = "project_log"   # a.k.a. "turn_log" (normalized to project_log)
+SERVICE_LOG_SLOT = "project_log"
 
 def _service_log_contract_entry() -> dict:
     # Hidden service slot: text-only, markdown, filled by set_progress()
@@ -26,51 +28,6 @@ def _service_log_contract_entry() -> dict:
         "content_guidance": "",
         "_hidden": True,
     }
-
-class ProgramInputs(BaseModel):
-    objective: str = ""
-    topics: List[str] = Field(default_factory=list)
-    policy_summary: str = ""
-    constraints: Dict[str, object] = Field(default_factory=dict)
-    tools_selected: List[str] = Field(default_factory=list)
-
-class Deliverable(BaseModel):
-    # Contract slot id (snake_case)
-    slot: str
-    description: str = ""
-    content_guidance: Optional[str] = None
-
-    # Contract typing
-    _type: Optional[str] = None             # "inline" | "file" (normalized)
-    format: Optional[str] = None            # inline only (markdown|text|json|url|xml|yaml|mermaid)
-    mime: Optional[str] = None              # file only
-
-    # Artifact text surrogate (mandatory for files in runtime)
-    text: Optional[str] = None
-
-    # Optional tool provenance for files
-    tool_id: Optional[str] = None
-
-class FileRef(Deliverable):
-    filename: str
-    filename_hint: Optional[str] = None
-    key: Optional[str] = None               # conversation-store key (if rehosted)
-    size: Optional[int] = None
-    _type: str = "file"
-
-class InlineRef(Deliverable):
-    citable: bool = False
-    value_preview: str = ""                 # short preview for indexing/UX
-    _type: str = "inline"
-
-
-class ProgramBrief(BaseModel):
-    title: str = "Codegen Program"
-    language: str = "python"
-    codegen_run_id: Optional[str] = None
-    inputs: ProgramInputs = Field(default_factory=ProgramInputs)
-    deliverables: List[Deliverable] = Field(default_factory=list)
-    notes: List[Any] = Field(default_factory=list)
 
 # ---------- Data ----------
 
@@ -100,6 +57,12 @@ class SlotSpec(BaseModel):
             "source-text & rendering hints; citation policy."
         ),
     )
+    # structured content inventory hint/payload for this slot
+    content_inventorization: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional structured content inventory/schema for this slot.",
+    )
+
 
 @dataclass
 class SolutionPlan:
@@ -236,25 +199,16 @@ class SolveResult:
 
     @property
     def program_presentation(self):
-        return _build_program_presentation_for_answer_agent(
-            sr=self,
-            citations=None,  # self.citations(),
-            codegen_run_id=self.run_id(),
-            include_unused_citations=False,  # ← Filter unused
-        )
+        presenter = SolverPresenter(self, codegen_run_id=self.run_id())
+        return presenter.full_view(include_reasoning=True, extended=False)
 
     @property
     def program_presentation_ext(self):
-        return _build_program_presentation_for_answer_agent(
-            sr=self,
-            citations=None,
-            codegen_run_id=self.run_id(),
-            extended=True,
-            include_unused_citations=False,  # ← Filter unused
-        )
+        presenter = SolverPresenter(self, codegen_run_id=self.run_id())
+        return presenter.full_view(include_reasoning=True, extended=True)
 
     def program_brief(self, rehosted_files: List[dict]) -> Tuple[str, ProgramBrief]:
-        return _program_brief_from_contract(self, rehosted_files=rehosted_files)
+        return program_brief_from_contract(self, rehosted_files=rehosted_files)
 
     @property
     def failure_presentation(self):
@@ -544,340 +498,7 @@ class SolveResult:
         # Enrich in-place using shared instance
         return await enrich_canonical_sources_with_favicons(sources_to_enrich, log=log)
 
-def _program_brief_from_contract(sr: SolveResult,
-                                 rehosted_files: List[dict]) -> Tuple[str, ProgramBrief]:
-    """
-    Returns: (brief_text, ProgramBrief)
 
-    - Reads artifacts exactly as produced by io_tools normalization (execution.deliverables[slot]['value']).
-    - Uses plan.output_contract only for human-facing description and optional content_guidance.
-    - Does NOT infer or require any coordinator/unified-only fields inside artifacts.
-    """
-    sr = sr or {}
-    codegen = sr.codegen or {}
-    plan = sr.plan
-    execution = sr.execution
-
-    contract = (plan.output_contract if plan else {}) or {}
-    deliverables_map = (execution.deliverables if execution else {}) or {}
-
-    # ---- program metadata
-    program = (codegen.get("program") or {})
-    title = (program.get("title") or "").strip() or "Codegen Program"
-    language = (program.get("language") or "python").strip() or "python"
-
-    rounds = (codegen.get("rounds") or [])
-    latest_round = next((r for r in reversed(rounds) if isinstance(r, dict)), {}) if rounds else {}
-    if not title:
-        nt = (latest_round.get("notes") or "")
-        if isinstance(nt, str) and nt.strip():
-            title = nt.strip()[:120]
-
-    inputs_raw = (latest_round.get("inputs") or {})
-    inputs = ProgramInputs(
-        objective=inputs_raw.get("objective") or "",
-        topics=list(inputs_raw.get("topics") or []),
-        policy_summary=inputs_raw.get("policy_summary") or "",
-        constraints=dict(inputs_raw.get("constraints") or {}),
-        tools_selected=list(inputs_raw.get("tools_selected") or []),
-    )
-
-    # ---- fold deliverables into the typed list for ProgramBrief (view only)
-    struct_delivs: List[Deliverable] = []
-    for slot, row in (deliverables_map.items() if isinstance(deliverables_map, dict) else []):
-        spec = row or {}
-        art = spec.get("value") or {}
-        slot_type = (art.get("type") or spec.get("type") or "inline").strip().lower()
-        desc = spec.get("description") or (contract.get(slot, {}) or {}).get("description") or ""
-        guidance = spec.get("content_guidance") or (contract.get(slot, {}) or {}).get("content_guidance")
-
-        # inline
-        if slot_type == "inline":
-            text = ((art.get("output") or {}).get("text") or "")
-            struct_delivs.append(InlineRef(
-                slot=slot,
-                description=desc,
-                content_guidance=guidance,
-                citable=bool(art.get("citable")),
-                value_preview=(str(text)[:280] if isinstance(text, str) else ""),
-                text=str(text) if isinstance(text, (str, int, float)) else json.dumps(text, ensure_ascii=False),
-                tool_id=art.get("tool_id"),
-                mime="application/json",  # presentation value only
-                _type="inline",
-            ))
-            continue
-
-        # file
-        if slot_type == "file":
-            output = art.get("output") or {}
-            path = output.get("path") or ""
-            filename = path.split("/")[-1] if path else (art.get("filename") or slot)
-            struct_delivs.append(FileRef(
-                slot=slot,
-                description=desc,
-                content_guidance=guidance,
-                tool_id=art.get("tool_id"),
-                mime=art.get("mime"),
-                text=output.get("text") or "",
-                filename=filename,
-                key=art.get("key"),
-                size=art.get("size"),
-                _type="file",
-            ))
-            continue
-
-        # fallback (treat unknown as inline text)
-        text = ((art.get("output") or {}).get("text") or "")
-        struct_delivs.append(InlineRef(
-            slot=slot,
-            description=desc,
-            content_guidance=guidance,
-            citable=bool(art.get("citable")),
-            value_preview=(str(text)[:280] if isinstance(text, str) else ""),
-            text=str(text) if isinstance(text, (str, int, float)) else json.dumps(text, ensure_ascii=False),
-            tool_id=art.get("tool_id"),
-            mime="application/json",
-            _type="inline",
-        ))
-
-    # (optional) include rehosted files metadata for UX/debug — kept as FileRef but this
-    # does not alter the authoritative artifacts; it's additive for the brief only.
-    for rf in (rehosted_files or []):
-        struct_delivs.append(FileRef(
-            slot=rf.get("slot") or "",
-            description=rf.get("description") or "",
-            content_guidance=rf.get("content_guidance"),
-            tool_id=rf.get("tool_id"),
-            mime=rf.get("mime"),
-            text=rf.get("text") or "",
-            filename=rf.get("filename") or "",
-            key=rf.get("key"),
-            size=rf.get("size"),
-            _type="file",
-        ))
-
-    brief_struct = ProgramBrief(
-        title=title[:120],
-        language=language,
-        codegen_run_id=codegen.get("run_id"),
-        inputs=inputs,
-        deliverables=struct_delivs,
-        notes=list(latest_round.get("notes") or [] if isinstance(latest_round.get("notes"), list)
-                   else ([latest_round.get("notes")] if latest_round.get("notes") else []))
-    )
-
-    # ---- compact, deterministic text
-    lines: List[str] = []
-    lines.append(f"# {brief_struct.title}")
-    lines.append(f"- Language: {brief_struct.language}")
-    if brief_struct.codegen_run_id:
-        lines.append(f"- Run: {brief_struct.codegen_run_id}")
-
-    # Inputs
-    lines.append("- Objective:" + (f" {inputs.objective}" if inputs.objective else ""))
-    lines.append("- Topics:")
-    for t in inputs.topics:
-        lines.append(f"  - {t}")
-    lines.append("- Policy Summary:" + (f" {inputs.policy_summary}" if inputs.policy_summary else ""))
-    lines.append("- Constraints:")
-    if inputs.constraints:
-        for k in sorted(inputs.constraints):
-            v = inputs.constraints[k]
-            try:
-                vv = json.dumps(v, ensure_ascii=False) if not isinstance(v, (str, int, float, bool)) else v
-            except Exception:
-                vv = str(v)
-            lines.append(f"  - {k}: {vv}")
-    lines.append("- Tools Selected:")
-    for tool in inputs.tools_selected:
-        lines.append(f"  - {tool}")
-
-    lines.append("\n## Notes:")
-    for note in brief_struct.notes:
-        lines.append(f"  - {note}")
-
-    # Deliverables section (reflect what was actually produced)
-    if deliverables_map:
-        lines.append("\n## Deliverables")
-        for slot, spec in deliverables_map.items():
-            art = (spec or {}).get("value") or {}
-            desc = (spec or {}).get("description") or ""
-            slot_type = (art.get("type") or spec.get("type") or "inline")
-            is_draft = bool(art.get("draft"))
-            gap = art.get("gaps")
-            has_gap = bool(gap)
-
-            lines.append(f"- {slot}{' [DRAFT]' if is_draft else ''}: {desc}")
-
-            guidance = (spec or {}).get("content_guidance")
-            if guidance:
-                lines.append(f"  - guidance: {guidance}")
-            if has_gap:
-                lines.append(f"  - gap: {gap}")
-
-            if slot_type == "file":
-                out = art.get("output") or {}
-                fname = (out.get("path") or "").split("/")[-1]
-                parts = []
-                if fname:
-                    parts.append(f"file={fname}")
-                if art.get("mime"):
-                    parts.append(f"mime={art.get('mime')}")
-                if parts:
-                    lines.append("  - " + "; ".join(parts))
-            elif slot_type == "inline":
-                fmt = art.get("format")
-                if fmt:
-                    lines.append(f"  - format: {fmt}")
-
-    brief_text = "\n".join(lines).rstrip()
-    return brief_text, brief_struct
-
-def _last_non_empty_note(notes) -> str:
-    if isinstance(notes, list):
-        for s in reversed(notes):
-            if isinstance(s, str) and s.strip():
-                return s.strip()
-    if isinstance(notes, str):
-        return notes.strip()
-    return ""
-
-def _build_program_presentation_for_answer_agent(
-        *,
-        sr: SolveResult,
-        citations: Optional[List[Dict[str, Any]]] = None,
-        codegen_run_id: Optional[str] = None,
-        include_reasoning: bool = True,
-        extended: bool = False,
-        include_unused_citations: bool = False,  # control unused citations
-) -> str:
-    def _artifact_text(art: Dict[str, Any]) -> str:
-        if not isinstance(art, dict):
-            return ""
-        output = art.get("output") or {}
-        return (output.get("text") or "").strip()
-
-    def _first_round_note() -> str:
-        r0 = (sr.rounds() or [{}])[0]
-        return _last_non_empty_note(r0.get("notes"))
-
-    lines: List[str] = []
-    lines.append("# Program Presentation")
-    if codegen_run_id:
-        lines.append(f"_Run ID: `{codegen_run_id}`_")
-
-    # Optional reasoning
-    if include_reasoning:
-        reasoning = sr.round_reasoning()
-        if reasoning:
-            lines.append("\n## Solver reasoning (for this turn)")
-            lines.append(reasoning)
-
-    # Pull deliverables map once
-    dmap = sr.deliverables_map() or {}
-    contract = (sr.plan.output_contract if sr.plan else {}) or {}
-
-    # --- Project Log ---
-    log_spec = dmap.get("project_log") or {}
-    # TODO!!
-    log_art = (log_spec.get("value") if isinstance(log_spec, dict) else None) or {}
-    # log_art = (log_spec.get("output") if isinstance(log_spec, dict) else None) or {}
-    log_body = _artifact_text(log_art)
-    lines.append("\n## Solver project log")
-    lines.append("```")
-    lines.append(log_body if log_body else "(empty)")
-    lines.append("```")
-
-    # --- Produced Slots (exclude canvas/log) ---
-    lines.append("\n### Produced slots")
-    is_there_draft = False
-    for slot, spec in (dmap.items() if isinstance(dmap, dict) else []):
-        if slot in {"project_canvas", "project_log"}:
-            continue
-        spec = spec or {}
-        desc = spec.get("description") or ""
-        art = spec.get("value")
-        art = art if isinstance(art, dict) else {}
-        slot_type = (art.get("type") or spec.get("type") or "inline").strip().lower()
-        is_draft = bool(art.get("draft"))  # Check draft status
-        gap = art.get("gaps")
-        has_gap = bool(gap)
-        is_there_draft = is_there_draft or is_draft
-        # optional planner-only guidance for display
-        guidance = spec.get("content_guidance") or (contract.get(slot, {}) or {}).get("content_guidance") or ""
-
-        # Mark drafts clearly in header
-        draft_marker = " [DRAFT — INCOMPLETE]" if is_draft else ""
-        lines.append(f"\n### {slot} ({slot_type}){draft_marker}")
-        lines.append(f"Description: {desc}" if desc else "Description:")
-        if guidance:
-            lines.append(f"Content guidance: {guidance}")
-
-        if slot_type == "file":
-            fname = (art.get("path") or art.get("filename") or "").split("/")[-1]
-            mime = art.get("mime") or ""
-            if fname:
-                lines.append(f"Filename: {fname}")
-            if mime:
-                lines.append(f"Mime: {mime}")
-            # Note for drafts
-            if is_draft:
-                lines.append("Status: File rendering incomplete; text representation available below")
-            if has_gap:
-                lines.append(f"Gap: {gap}")
-        else:
-            if art.get("format"):
-                lines.append(f"Format: {art.get('format')}")
-        # Add draft explanation for answer agent
-        if is_there_draft:
-            lines.append("⚠️ Deliverables marked with [DRAFT — INCOMPLETE] mean that that deliverable is incomplete.** Its content represents partial progress; final rendering/processing was not completed.")
-
-        if extended:
-            lines.append("#### Text repr")
-            body = _artifact_text(art)
-            lines.append("```")
-            lines.append(body if body else "(empty)")
-            lines.append("```")
-
-    # How to interpret
-    rii = sr.interpretation_instruction()
-    if rii:
-        lines.append("\n## How to interpret these results")
-        lines.append(rii.strip())
-
-    # Notes
-    last_note = _first_round_note()
-    if last_note:
-        lines.append("\n## Solver notes")
-        lines.append(last_note)
-
-    # Citations (up to 50) — keep as compact bullets for navigation
-    # Citations - filter by usage
-    citations_to_show = citations if citations else sr.citations_with_usage()
-    # Filter out unused if requested
-    if not include_unused_citations:
-        citations_to_show = [c for c in citations_to_show if c.get("used", True)]
-
-    if citations_to_show:
-        uniq = {}
-        for c in citations_to_show:
-            u = (c or {}).get("url") or ""
-            sid = c.get("sid")
-            if u and u not in uniq and sid is not None:
-                # Store both title and sid
-                uniq[u] = {
-                    "title": (c or {}).get("title") or "",
-                    "sid": sid
-                }
-        if uniq:
-            lines.append("\n## Citations")
-            for url, info in itertools.islice(uniq.items(), 50):
-                title = info["title"]
-                sid = info["sid"]
-                # Include the citation token so answer agent can reference it
-                lines.append(f"- [{title}]({url}) [[S:{sid}]]")
-
-    return "\n".join(lines).strip()
 
 def _sd(d: Any) -> Dict[str, Any]:
     return d if isinstance(d, dict) else {}
@@ -976,7 +597,6 @@ def solve_result_from_full_payload(full: Dict[str, Any]) -> SolveResult:
     }
     return SolveResult(raw=raw)
 
-
 def build_full_solver_payload(sr) -> Dict[str, Any]:
     """
     Produce a 'solver' block that embeds the full, JSON-safe SolveResult,
@@ -1065,5 +685,3 @@ def _filter_execution(execution: Any) -> Any:
     if "calls" in exec_copy:
         del exec_copy["calls"]
     return exec_copy
-
-

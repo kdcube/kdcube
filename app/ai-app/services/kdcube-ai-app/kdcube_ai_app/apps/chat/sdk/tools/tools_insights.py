@@ -75,6 +75,7 @@ GENERATIVE_TOOL_IDS = {
 
 CITABLE_TOOL_IDS = {
     "generic_tools.web_search",
+    "sdk_tools.kb_search",
     "ctx_tools.merge_sources",
 }
 

@@ -7,12 +7,15 @@ from __future__ import annotations
 import asyncio, copy
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Dict, Any, Iterable
+from typing import List, Literal, Optional, Dict, Any, Iterable, TypeVar, Type
 from pydantic import BaseModel, Field
 from datetime import datetime
 import json, re
+from abc import ABC, abstractmethod
 
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import Ticket
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.contracts import build_full_solver_payload, SolveResult
+from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable, _shorten
 
 LINE_RE = re.compile(r'^(?P<time>\d{2}:\d{2}:\d{2})\s+\[(?P<tag>[^\]]+)\]\s*(?P<content>.*)$')
 
@@ -120,11 +123,11 @@ class TurnScratchpad:
         # solver outcome
         self.turn_artifact = None
         self.solver_status = None
+        # Solver output object (SolveResult) – may be None if no solver
+        self.solver_result = None
+
         self.context_stack = []
         self.turn_stack = []
-
-        # exact-reference
-        self.relevant_turn_ids: List[str] = []
 
         # ticket flow
         self.open_ticket: Optional[dict|Ticket] = None
@@ -168,6 +171,53 @@ class TurnScratchpad:
 
         self.agents_responses = dict()
         self.current_phase: Optional[TurnPhase] = None
+
+        # Welcome here
+        # Shortened preview of user text (used in logging / streaming headers)
+        self.short_text = _shorten(text or "", 220)
+
+        # Routing & gate-related, but not tied to GateOut type itself
+        self.route: Optional[str] = None
+
+        # "Gate package" / guess_ctx used by multiple agents (gate, ctx_reranker, etc.)
+        self.guess_ctx_str: Optional[str] = None
+        self.guess_ctx: Optional[dict] = None
+
+        # IDs the pipeline chose to materialize in depth (logs + artifacts)
+        self.materialize_turn_ids: List[str] = []
+
+        # exact-reference / context search
+        self.relevant_turn_ids: List[str] = []
+
+        # Topics for this turn (plain + rich)
+        self.turn_topics_plain: Optional[List[str]] = None
+        self.topic_tags: Optional[List[str]] = None
+        self.turn_topics_with_confidence: Optional[List[dict]] = None
+
+        # exact-ref agent decision (RAG targeting only)
+        self.exact_ref_decision: Optional[dict] = None
+
+        # Long-lived objective memories (reconciled every N turns)
+        self.objective_memories: Optional[dict] = None
+        self.objective_memory_logs: Optional[dict] = None
+
+        # Current turn fingerprint object (TurnFingerprintV1)
+        self.turn_fp = None
+
+        # Subset of local memories selected as relevant for this turn
+        self.selected_turns_local_mem_entries: List[dict] = []
+
+        # Bucket cards for selected long memories (active objectives)
+        self.selected_memory_bucket_cards: Optional[List[dict]] = None
+
+        # Turn IDs from which local memories were selected
+        self.selected_local_memories_turn_ids: Optional[List[str]] = None
+
+        # IDs of selected memory buckets (long memories)
+        self.selected_memory_bucket_ids: Optional[List[str]] = None
+
+        # Timelines for objective buckets keyed by bucket_id
+        self.objective_memory_timelines: Dict[str, Any] = {}
 
     def set_phase(self, name: str, *, agent: str | None = None, **meta):
         self.current_phase = TurnPhase(name=name, agent=agent, meta=meta)
@@ -213,6 +263,94 @@ class TurnScratchpad:
             **({"structured_content": structured_content} if structured_content else {})
         })
 
+    def register_agentic_response(self,
+                                  agent_name: str,
+                                  response: Dict[str, Any]|BaseModel,):
+        self.agents_responses[agent_name] = response
+
+    @property
+    def turn_log(self):
+        tl: Dict[str, Any] = {
+            a: _to_jsonable(d)
+            for a, d in (self.agents_responses or {}).items()
+        }
+        if self.solver_result:
+            tl["solver_result"] = build_full_solver_payload(self.solver_result)
+        if self.turn_summary:
+            tl["turn_summary"] = _to_jsonable(self.turn_summary)
+        return tl
+
+T = TypeVar('T', bound='BaseTurnView')
+class BaseTurnView(ABC):
+    """
+    Minimal interface for turn renderers.
+
+    Anything that can render a compressed search view and a solver-centric
+    presentation should implement this. Other modules can type against
+    BaseTurnView instead of the concrete TurnView.
+    """
+
+    turn_id: str
+    timestamp: str
+    user_raw: str
+    assistant_raw: str
+    solver: Optional[SolveResult]
+
+    @abstractmethod
+    def to_compressed_search_view(
+            self,
+            *,
+            user_prompt_limit: int = 400,
+            attachment_text_limit: int = 300,
+            deliverable_desc_limit: int = 200,
+            include_turn_summary: bool = True,
+            include_context_used: bool = True,
+            include_turn_info: bool = True,
+    ) -> str:
+        ...
+
+    @abstractmethod
+    def generate_one_liner(self) -> str:
+        ...
+
+    @abstractmethod
+    def to_solver_presentation(
+            self,
+            *,
+            user_prompt_limit: Optional[int] = 10_000,
+            program_log_limit: Optional[int] = None,
+            include_base_summary: bool = True,
+            include_program_log: bool = True,
+            include_deliverable_meta: bool = True,
+            include_assistant_response: bool = True,
+    ) -> str:
+        ...
+
+    @classmethod
+    @abstractmethod
+    def from_saved_payload(
+        cls: Type[T],
+        *,
+        turn_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        tlog: Any = None,
+        payload: Optional[Dict[str, Any]] = None,
+        user_text: Optional[str] = None,
+        assistant_text: Optional[str] = None,
+        **kwargs
+    ) -> T:
+        """Construct from saved payload."""
+        ...
+
+    @classmethod
+    @abstractmethod
+    def from_turn_log_dict(
+            cls: Type[T],
+            payload: Optional[Dict[str, Any]] = None,
+    ) -> T:
+        """Construct from turn log dict."""
+        ...
 
 # ============================================================================
 # TurnLog - Structured logging
@@ -233,7 +371,6 @@ class TurnLogEntry(BaseModel):
         if self.level != "info":
             base += f"  !{self.level}"
         return base
-
 
 class TurnLog(BaseModel):
     user_id: str
@@ -513,7 +650,6 @@ class TurnLog(BaseModel):
     ) -> str:
         return "\n".join(self.lines_for_area(area, exclude_contains=exclude_contains))
 
-
 def new_turn_log(user_id: str, conversation_id: str, turn_id: str) -> TurnLog:
     return TurnLog(
         user_id=user_id,
@@ -754,7 +890,6 @@ def turn_to_user_message(turn: CompressedTurn) -> str:
 
     return "\n".join(parts)
 
-
 def turn_to_assistant_message(turn: CompressedTurn) -> str:
     """
     Format the ASSISTANT side of a turn for LLM context.
@@ -828,7 +963,6 @@ def turn_to_assistant_message(turn: CompressedTurn) -> str:
             parts.append(f"• {risk}")
 
     return "\n".join(parts)
-
 
 def turn_to_pair(turn: CompressedTurn) -> Dict[str, str]:
     """

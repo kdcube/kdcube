@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -443,14 +444,54 @@ def create_sse_router(
             context=ctx,
             endpoint="/sse/chat",
         )
+        hub = router.state.sse_hub
+        client = next(iter(hub._by_session.get(session.session_id) or []), None) or {}
+        logger.info(f"[/conv_status.get] Received request for session={session.session_id} stream_id={stream_id}")
+
+        settings = get_settings()
+        tenant = client.tenant if client else settings.TENANT
+        project = client.project if client else settings.PROJECT
         if gw_res.kind != "ok":
             mapped = map_gateway_error(gw_res)
-            svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id)
+            svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id, tenant=tenant, project=project)
             conv = ConversationCtx(
                 session_id=session.session_id,
                 conversation_id=session.session_id,
                 turn_id=f"turn_{uuid.uuid4().hex[:8]}",
             )
+            # 1) New chat_service event
+            env = {
+                "type": f"gateway.{gw_res.kind}",  # e.g. "gateway.rate_limit"
+                "timestamp": _iso(),
+                "ts": int(time.time() * 1000),
+                "service": svc.model_dump(),
+                "conversation": conv.model_dump(),
+                "event": {
+                    "step": "gateway",
+                    "status": "error",
+                    "title": "Gateway rejected request",
+                    "agent": "gateway",
+                },
+                "data": {
+                    "message": mapped["message"],
+                    "error_type": mapped["error_type"],
+                    "http_status": mapped["status"],
+                    "retry_after": mapped.get("retry_after"),
+                    "endpoint": "/sse/chat",
+                },
+                "route": "chat_service",
+            }
+
+            await chat_comm.emit(
+                event="chat_service",
+                data=env,
+                tenant=svc.tenant,
+                project=svc.project,
+                session_id=session.session_id,
+                target_sid=stream_id,
+            )
+
+            # 2) Legacy chat_error. We can remove this after clients migrate to chat_service event
             await chat_comm.emit_error(
                 svc,
                 conv,
@@ -458,6 +499,7 @@ def create_sse_router(
                 target_sid=stream_id,
                 session_id=session.session_id,
             )
+            # 3) HTTP error response
             detail = {"error": mapped["message"]}
             if mapped.get("retry_after") is not None:
                 detail["retry_after"] = mapped["retry_after"]

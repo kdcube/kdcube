@@ -13,7 +13,6 @@ import os
 import traceback
 from typing import Optional, Dict, Any, Iterable
 
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger

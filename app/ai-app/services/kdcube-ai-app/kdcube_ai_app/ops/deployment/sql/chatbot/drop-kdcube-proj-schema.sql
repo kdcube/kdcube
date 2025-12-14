@@ -39,10 +39,6 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_scope_ts;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_value_gin;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_tags_gin;
 
--- ---------- Indexes: conv_pref_exceptions ----------
-DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cpe_user_conv_rule_ts;
-DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cpe_value_gin;
-
 -- ---------- Indexes: rag_chunks ----------
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_uni;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_corpus_created;

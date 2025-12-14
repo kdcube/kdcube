@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Callable, Awaitable, Dict, List, Tuple, Set, Iterable
 import os, logging, time
 
+from numpy._core._multiarray_umath import broadcast
+
 from kdcube_ai_app.apps.chat.sdk.comm.event_filter import IEventFilter, EventFilterInput
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -28,6 +30,7 @@ _EVENT_MAP = {
     "chat.delta": "chat_delta",
     "chat.complete": "chat_complete",
     "chat.error": "chat_error",
+    "chat.service": "chat_service",
 }
 
 # inside chat/emitters.py (anywhere above ChatCommunicator)
@@ -745,6 +748,54 @@ class ChatCommunicator:
         if route:
             env["route"] = route
         await self.emit(event=socket_event, data=env, broadcast=broadcast)
+
+    async def service_event(
+            self,
+            *,
+            type: str,                      # logical type, e.g. "accounting.usage"
+            step: str,                      # e.g. "accounting" / "workflow"
+            status: str,                    # "started" | "running" | "completed" | "error" | "skipped"
+            title: str | None = None,
+            data: dict | None = None,
+            agent: str | None = None,
+            markdown: str | None = None,
+            auto_markdown: bool = True,
+            broadcast: bool = False,
+    ) -> None:
+        """
+        Emit a service-level event over the `chat_service` socket route, using the
+        communicator's own service / conversation context.
+
+        This is intentionally minimal: you only provide semantic bits (type, step, status, etc.);
+        tenant/project/user/session/turn are taken from `self`.
+        """
+        # base envelope with timestamp, ts, service, conversation, event
+        env = self._base_env(type)
+        env["event"].update({
+            "agent": agent,
+            "title": title,
+            "status": status,
+            "step": step,
+        })
+        env["data"] = data or {}
+
+        if markdown:
+            env["event"]["markdown"] = markdown
+        elif auto_markdown:
+            try:
+                ensure_event_markdown(env)
+            except Exception:
+                import traceback
+                print(traceback.format_exc())
+
+        # let downstream know which socket route this came through
+        env["route"] = "chat_service"
+
+        await self.emit(
+            event="chat_service",   # actual Socket.IO / pubsub event name
+            data=env,
+            broadcast=broadcast,
+        )
 
     def _export_comm_spec_for_runtime(self) -> dict:
         """

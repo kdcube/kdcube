@@ -402,7 +402,7 @@ class ContextTools:
                 continue
 
         # Build result
-        from kdcube_ai_app.apps.chat.sdk.runtime.solution.project_retrieval import reconcile_citations_for_context
+        from kdcube_ai_app.apps.chat.sdk.runtime.solution.context_browser import reconcile_citations_for_context
 
         mini_history = []
         for tid in ids[:10]:

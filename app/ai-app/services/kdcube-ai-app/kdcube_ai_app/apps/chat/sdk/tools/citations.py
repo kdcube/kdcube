@@ -1337,3 +1337,28 @@ async def enrich_canonical_sources_with_favicons(
     except Exception as e:
         log.exception("enrich_favicons: failed")
         return 0
+
+def _rewrite_md_citation_tokens(md: str, sid_map: dict[int,int]) -> str:
+    """
+    Replace [[S:1,2]] with [[S:a,b]] using sid_map.
+    If none of the numbers in a token map, drop the token entirely.
+    """
+    if not md or not sid_map:
+        return md or ""
+
+    def repl(m):
+        body = m.group(1)
+        nums = []
+        for p in body.split(","):
+            p = p.strip()
+            if not p.isdigit():
+                continue
+            old = int(p)
+            new = sid_map.get(old)
+            if new:
+                nums.append(str(new))
+        if not nums:
+            return ""  # drop token
+        return f"[[S:{','.join(nums)}]]"
+
+    return re.sub(r"\[\[S:([0-9,\s]+)\]\]", repl, md)

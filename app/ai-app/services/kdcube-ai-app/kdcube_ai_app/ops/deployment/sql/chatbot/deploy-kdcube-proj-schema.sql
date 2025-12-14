@@ -64,6 +64,36 @@ CREATE OR REPLACE VIEW <SCHEMA>.conv_messages_expired AS
 SELECT * FROM <SCHEMA>.conv_messages
 WHERE ts + (ttl_days || ' days')::interval < now();
 
+CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_tickets (
+                                                           ticket_id   TEXT PRIMARY KEY,
+                                                           track_id    TEXT NOT NULL,
+                                                           user_id     TEXT NOT NULL,
+                                                           conversation_id TEXT NOT NULL,
+                                                           turn_id     TEXT,
+                                                           title       TEXT NOT NULL,
+                                                           description TEXT NOT NULL DEFAULT '',
+                                                           status      TEXT NOT NULL DEFAULT 'open',
+                                                           priority    SMALLINT NOT NULL DEFAULT 3,
+                                                           assignee    TEXT,
+                                                           tags        TEXT[] NOT NULL DEFAULT '{}',
+                                                           created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    embedding   VECTOR(1536),
+    data JSONB NOT NULL DEFAULT '{}'::jsonb
+    );
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_track
+  ON <SCHEMA>.conv_track_tickets (track_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_status
+  ON <SCHEMA>.conv_track_tickets (status, priority DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_embedding
+  ON <SCHEMA>.conv_track_tickets USING ivfflat (embedding vector_cosine_ops) WITH (lists=50);
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_conv_user
+  ON <SCHEMA>.conv_track_tickets (conversation_id, user_id, updated_at DESC);  -- NEW
+
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_turn
+  ON <SCHEMA>.conv_track_tickets (turn_id);
+
 
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_artifact_edges (
                                                             from_id    BIGINT NOT NULL REFERENCES <SCHEMA>.conv_messages(id) ON DELETE CASCADE,
@@ -76,17 +106,6 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_artifact_edges (
 -- (edges)
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_edge_from_id ON <SCHEMA>.conv_artifact_edges (from_id);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_edge_to_id   ON <SCHEMA>.conv_artifact_edges (to_id);
-
--- ---------- Artifact dependency edges (you already join this in ConvIndex.search_context) ----------
-CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_artifact_edges (
-                                                            from_id   BIGINT NOT NULL REFERENCES <SCHEMA>.conv_messages(id) ON DELETE CASCADE,
-    to_id     BIGINT NOT NULL REFERENCES <SCHEMA>.conv_messages(id) ON DELETE CASCADE,
-    policy    TEXT NOT NULL DEFAULT 'none',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (from_id, to_id)
-    );
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_edges_to_id    ON <SCHEMA>.conv_artifact_edges (to_id);
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_edges_policy   ON <SCHEMA>.conv_artifact_edges (policy);
 
 -- ---------- User memory (stable, consented facts/preferences) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.user_memory (
@@ -134,23 +153,6 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cp_value_gin
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cp_tags_gin
   ON <SCHEMA>.conv_prefs USING gin (tags);
 
-CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_pref_exceptions (
-                                                             id               BIGSERIAL PRIMARY KEY,
-                                                             user_id          TEXT NOT NULL,
-                                                             conversation_id  TEXT NOT NULL,
-                                                             turn_id          TEXT,
-                                                             rule_key         TEXT NOT NULL,                -- which assertion this carves out
-                                                             value_json       JSONB,
-                                                             scope            TEXT NOT NULL DEFAULT 'conversation',
-                                                             confidence       REAL NOT NULL DEFAULT 0.60,
-                                                             reason           TEXT NOT NULL DEFAULT 'nl-extracted',
-                                                             ts               TIMESTAMPTZ NOT NULL DEFAULT now(),
-    expires_at       TIMESTAMPTZ
-    );
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cpe_user_conv_rule_ts
-  ON <SCHEMA>.conv_pref_exceptions (user_id, conversation_id, rule_key, ts DESC);
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cpe_value_gin
-  ON <SCHEMA>.conv_pref_exceptions USING gin (value_json);
 
 -- ---------- RAG index (hybrid: vector + BM25 + filters) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.rag_chunks (
@@ -197,34 +199,3 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_programs (
     );
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_programs_track_updated
   ON <SCHEMA>.conv_track_programs (track_id, updated_at DESC);
-
-
-CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_tickets (
-   ticket_id   TEXT PRIMARY KEY,
-   track_id    TEXT NOT NULL,
-   user_id     TEXT NOT NULL,
-   conversation_id TEXT NOT NULL,
-   turn_id     TEXT,
-   title       TEXT NOT NULL,
-   description TEXT NOT NULL DEFAULT '',
-   status      TEXT NOT NULL DEFAULT 'open',
-   priority    SMALLINT NOT NULL DEFAULT 3,
-   assignee    TEXT,
-   tags        TEXT[] NOT NULL DEFAULT '{}',
-   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    embedding   VECTOR(1536),
-    data JSONB NOT NULL DEFAULT '{}'::jsonb
-    );
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_track
-  ON <SCHEMA>.conv_track_tickets (track_id, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_status
-  ON <SCHEMA>.conv_track_tickets (status, priority DESC);
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_embedding
-  ON <SCHEMA>.conv_track_tickets USING ivfflat (embedding vector_cosine_ops) WITH (lists=50);
-
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_conv_user
-  ON <SCHEMA>.conv_track_tickets (conversation_id, user_id, updated_at DESC);  -- NEW
-
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_turn
-  ON <SCHEMA>.conv_track_tickets (turn_id);

@@ -76,7 +76,7 @@ class ChatEnvelope(_ProtoBase):
     """
     Unified protocol envelope used everywhere on the server and sent to the client as-is.
     """
-    type: Literal["chat.start", "chat.step", "chat.delta", "chat.complete", "chat.error"]
+    type: Literal["chat.start", "chat.step", "chat.delta", "chat.complete", "chat.error", "chat.service"]
     timestamp: str = Field(default_factory=_iso_now)
     service: ServiceCtx
     conversation: ConversationCtx
@@ -186,9 +186,9 @@ class ChatTaskAccounting(_ProtoBase):
 
 class ChatTaskPayload(_ProtoBase):
     meta: Optional[ChatTaskMeta] = None
-    routing: ChatTaskRouting
-    actor: ChatTaskActor
-    user: ChatTaskUser
+    routing: Optional[ChatTaskRouting] = None
+    actor: Optional[ChatTaskActor] = None
+    user: Optional[ChatTaskUser] = None
     request: Optional[ChatTaskRequest] = None
     config: Optional[ChatTaskConfig] = None
     accounting: Optional[ChatTaskAccounting] = None

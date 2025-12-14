@@ -508,7 +508,7 @@ async def process_chat_message(
             if session.user_type == UserType.REGISTERED
             else 60
         )
-        try: # broadcast
+        try: # broadcast conv state rollback
             await chat_comm.emit_conv_status(
                 svc,
                 conv,
@@ -518,12 +518,45 @@ async def process_chat_message(
                 current_turn_id=res_reset.get("current_turn_id"),
                 completion="rollback",
             )
+            # legacy error for compat
             await chat_comm.emit_error(
                 svc,
                 conv,
                 error=f"System under pressure - request rejected ({reason})",
                 target_sid=ingress.stream_id,
                 session_id=payload.routing.session_id,
+            )
+            # chat_service event (minimal inline env)
+            env = {
+                "type": "queue.enqueue_rejected",   # logical type
+                "timestamp": _iso(),
+                "ts": int(time.time() * 1000),
+                "service": svc.model_dump(),
+                "conversation": conv.model_dump(),
+                "event": {
+                    "step": "enqueue",
+                    "status": "error",
+                    "title": "Request rejected by queue",
+                    "agent": "queue",
+                },
+                "data": {
+                    "message": f"System under pressure - request rejected ({reason})",
+                    "error_type": "enqueue_rejected",
+                    "http_status": 503,
+                    "retry_after": retry_after,
+                    "reason": reason,
+                    "queue_stats": stats,
+                },
+                "route": "chat_service",
+            }
+
+            await chat_comm.emit(
+                event="chat_service",
+                data=env,
+                tenant=svc.tenant,
+                project=svc.project,
+                session_id=payload.routing.session_id,
+                target_sid=ingress.stream_id,
             )
         except Exception:
             pass
