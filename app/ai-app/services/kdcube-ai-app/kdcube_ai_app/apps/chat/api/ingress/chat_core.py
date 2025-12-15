@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Literal
 from fastapi import Request  # only if you put this in a place where FastAPI is available
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.util import _iso
 from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -36,11 +37,14 @@ from kdcube_ai_app.auth.AuthManager import AuthenticationError, PRIVILEGED_ROLES
 logger = logging.getLogger(__name__)
 
 
-def _iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"
-
-
 TransportKind = Literal["sse", "socket"]
+
+# Hard limit for input text length (including any inlined attachment text).
+# Chosen so that we can embed it with OpenAI embeddings without chunking.
+try:
+    MAX_EMBED_TEXT_CHARS: int = int(os.getenv("CHAT_MAX_MESSAGE_CHARS", "32000"))
+except Exception:
+    MAX_EMBED_TEXT_CHARS = 32000
 
 # -----------------------------
 # Gateway checks (shared)
@@ -289,6 +293,7 @@ async def process_chat_message(
         conversation_id=conversation_id,
         turn_id=turn_id,
     )
+
     # Empty message → emit error via relay + let transport map to HTTP/WS
     if not text:
         await chat_comm.emit_error(
@@ -320,6 +325,27 @@ async def process_chat_message(
             error_type="unknown_bundle",
             error=err,
             http_status=400,
+        )
+
+    # Input too long → emit error and do NOT enqueue
+    if len(text) > MAX_EMBED_TEXT_CHARS:
+        err = (
+            f"Input is too long ({len(text)} characters). "
+            f"Maximum allowed is {MAX_EMBED_TEXT_CHARS} characters."
+        )
+        await chat_comm.emit_error(
+            svc,
+            conv,
+            error=err,
+            target_sid=ingress.stream_id,
+            session_id=session.session_id,
+        )
+        return IngressResult(
+            ok=False,
+            error_type="input_too_long",
+            error=err,
+            http_status=400,
+            reason="input_too_long",
         )
 
     bundle_id = spec_resolved.id

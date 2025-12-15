@@ -19,6 +19,7 @@ from fastapi.responses import StreamingResponse
 
 from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.util import _iso
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 
@@ -40,7 +41,6 @@ from kdcube_ai_app.apps.chat.api.ingress.chat_core import (
 logger = logging.getLogger(__name__)
 
 KEEPALIVE_SECONDS = 3
-def _iso() -> str: return datetime.utcnow().isoformat() + "Z"
 
 def _sse_frame(event: str, data: Dict[str, Any], *, event_id: Optional[str] = None) -> str:
     payload = json.dumps(data, ensure_ascii=False)
@@ -631,6 +631,8 @@ def create_sse_router(
                 detail = result.error or "Unknown bundle_id"
             elif error_type == "conversation_busy":
                 detail = result.error or "Conversation is busy"
+            elif error_type == "input_too_long":
+                detail = result.error or "Input is too long"
             else:
                 detail = result.error or "Chat request failed"
 
