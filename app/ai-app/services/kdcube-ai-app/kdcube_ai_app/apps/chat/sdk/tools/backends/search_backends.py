@@ -45,7 +45,7 @@ import aiohttp
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import sources_reconciler, \
     filter_search_results_by_content, filter_fetch_results
-from kdcube_ai_app.infra.accounting import track_web_search
+from kdcube_ai_app.infra.accounting import track_web_search, with_accounting
 from kdcube_ai_app.infra.accounting.usage import ws_provider_extractor, ws_model_extractor, ws_usage_extractor, \
     ws_meta_extractor
 from .fetch_backends import fetch_search_results_content
@@ -710,6 +710,8 @@ async def web_search(
         freshness: Annotated[Optional[str], "Canonical freshness: 'day'|'week'|'month'|'year' or null."] = None,
         country: Annotated[Optional[str], "Canonical country ISO2, e.g. 'DE', 'US'."] = None,
         safesearch: Annotated[str, "Canonical safesearch: 'off'|'moderate'|'strict'."] = "moderate",
+        bundle_id: str = None,
+        artifact_id: str = None
 ) -> Annotated[List[dict]|None, (
         "JSON array: [{sid, title, url, text, objective_relevance?, query_relevance?, content?}, ...]. "
         "Relevance fields present only when reconciliation runs successfully. Content field is present if fetched."
@@ -782,17 +784,18 @@ async def web_search(
 
     comm = get_comm()
 
-    # Unique-ish, human-readable agent name
-    if objective and objective.strip():
-        agent_name = f"web search for {objective.strip()}"
-    else:
-        joined = ", ".join(q_list)
-        agent_name = f"web search for {joined}" if joined else "web search"
-    agent_name = agent_name[:120]  # keep it bounded
-
     artifact_thinking = "Web Search Trace"
     think_idx = 0
     finish_thinking_is_sent = False
+
+    if not artifact_id:
+        # Unique-ish, human-readable artifact_id name
+        if objective and objective.strip():
+            artifact_id = f"web search for {objective.strip()}"
+        else:
+            joined = ", ".join(q_list)
+            artifact_id = f"web search for {joined}" if joined else "web search"
+        artifact_id = artifact_id[:120]  # keep it bounded
 
     async def emit_thinking(text: str, completed: bool = False, **kwargs):
         """Wrapper to emit thinking deltas."""
@@ -807,7 +810,7 @@ async def web_search(
             text=text,
             index=think_idx,
             marker="thinking",
-            agent=agent_name,
+            agent=artifact_id,
             format="markdown",
             artifact_name=artifact_thinking,
             completed=completed,
@@ -847,14 +850,28 @@ async def web_search(
     # We treat this as "do_segment path still allowed".
     use_external_refinement = bool(getattr(search_backend, "default_use_external_refinement", True))
 
-    per_query_results: List[List[Dict[str, Any]]] = await search_backend.search_many(
-        q_list,
-        per_query_max=per_query_max,
-        freshness=freshness,
-        country=country,
-        safesearch=safesearch,
-        concurrency=8,
-    )
+    track_id = "A"
+    async with with_accounting(
+            bundle_id,
+            track_id=track_id,
+            agent=provider_name,
+            artifact_id=artifact_id,
+            provider=provider_name,
+            metadata={
+                "track_id": track_id,
+                "agent": provider_name,
+                "provider": provider_name,
+                "artifact_id": artifact_id,
+            }
+    ):
+        per_query_results: List[List[Dict[str, Any]]] = await search_backend.search_many(
+            q_list,
+            per_query_max=per_query_max,
+            freshness=freshness,
+            country=country,
+            safesearch=safesearch,
+            concurrency=8,
+        )
     if not per_query_results:
         # Nothing found: avoid LLM reconciliation + content fetch.
         base = _claim_sid_block(0)  # no-op but consistent
@@ -1028,7 +1045,7 @@ async def web_search(
             html_view,
             index=html_idx,
             marker="tool",
-            agent=agent_name,
+            agent=artifact_id,
             format="html",
             artifact_name=artifact_html,
         )
@@ -1038,7 +1055,7 @@ async def web_search(
             completed=True,
             index=html_idx,
             marker="tool",
-            agent=agent_name,
+            agent=artifact_id,
             format="html",
             artifact_name=artifact_html,
         )

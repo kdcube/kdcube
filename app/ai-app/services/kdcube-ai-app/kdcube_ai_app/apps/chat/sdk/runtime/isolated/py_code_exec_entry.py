@@ -32,7 +32,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
-from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import run_py_code
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec import run_py_code
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.supervisor_entry import PrivilegedSupervisor
 import kdcube_ai_app.apps.utils.logging_config as logging_config
 
@@ -277,7 +277,6 @@ def _dump_delta_cache_file(outdir: pathlib.Path, logger: AgentLogger) -> None:
         # best-effort only
         pass
 
-
 async def _shutdown_supervisor_modules(tool_module_names: list[str], logger: AgentLogger) -> None:
     """
     Best-effort async shutdown of modules that might hold resources (KB clients, etc.).
@@ -313,7 +312,6 @@ async def _shutdown_supervisor_modules(tool_module_names: list[str], logger: Age
 
     for m in mods:
         await _async_shutdown_mod(m)
-
 
 async def _supervisor_loop(sup: PrivilegedSupervisor, stop_event: asyncio.Event, log: AgentLogger) -> None:
     """

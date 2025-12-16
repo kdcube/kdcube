@@ -843,10 +843,12 @@ async def generate_content_llm(
                 bundle_id,
                 track_id=track_id,
                 agent=role_name,
+                artifact_name=artifact_name,
                 metadata={
                     "track_id": track_id,
                     "agent": role_name,
-                    "agent_name": agent_name
+                    "agent_name": agent_name,
+                    "artifact_name": artifact_name,
                 }
         ):
             ret = await _SERVICE.stream_model_text_tracked(
