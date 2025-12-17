@@ -5,6 +5,8 @@
 """
 FastAPI chat application with modular Socket.IO integration and gateway protection
 """
+import traceback
+
 import time
 import logging
 import os
@@ -162,6 +164,7 @@ async def lifespan(app: FastAPI):
             return result or {}
         except Exception as e:
             # Let processor send the error envelope; we just surface the message up.
+            logger.error(traceback.format_exc())
             return { "error_message": str(e), "final_answer": "An error occurred." }
 
     # ================================

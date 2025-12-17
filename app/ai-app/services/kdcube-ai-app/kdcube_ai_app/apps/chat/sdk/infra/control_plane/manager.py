@@ -52,6 +52,8 @@ class UserQuotaPolicy:
     tokens_per_month: Optional[int] = None
 
     # Metadata
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
     active: bool = True
@@ -83,6 +85,8 @@ class ApplicationBudgetPolicy:
     usd_per_month: Optional[float] = None
 
     # Metadata
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     created_by: Optional[str] = None
     notes: Optional[str] = None
     active: bool = True
