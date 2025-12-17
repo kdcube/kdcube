@@ -19,6 +19,8 @@ import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.strategy_and_budget import BudgetState, format_budget_for_llm
 
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.contracts import SlotSpec
+from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable
+
 _SUMMARY_MAX = 600
 
 log = logging.getLogger(__name__)
@@ -723,7 +725,9 @@ class ReactContext:
 
             # 1) Leaf-first (preferred)
             val, owner = self.resolve_path(art_path, mode="full") if art_path else (None, None)
-            if isinstance(val, str) and val.strip():
+            if val:
+                if not isinstance(val, str):
+                    val = json.dumps(_to_jsonable(val).strip())
                 sources_used = (owner or {}).get("sources_used") or []
                 tool_id = (owner or {}).get("tool_id")
 

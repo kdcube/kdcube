@@ -13,9 +13,9 @@ from kdcube_ai_app.infra.accounting.calculator import (
     _spent_seed,
     _accumulate_compact,
     _extract_usage,
-    price_table,
     _calculate_agent_costs,
 )
+from kdcube_ai_app.infra.accounting.usage import price_table
 
 
 def iter_events(root_dir: str):

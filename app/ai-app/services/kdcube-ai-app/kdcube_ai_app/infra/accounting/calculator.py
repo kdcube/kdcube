@@ -26,6 +26,7 @@ from datetime import datetime, date, timedelta
 from typing import Any, Dict, Iterable, List, Optional, Tuple, AsyncIterator
 
 from kdcube_ai_app.infra.accounting import get_turn_events
+from kdcube_ai_app.infra.accounting.usage import price_table, _USAGE_KEYS, _BUCKETS
 from kdcube_ai_app.storage.storage import IStorageBackend, create_storage_backend
 
 logger = logging.getLogger("AccountingCalculator")
@@ -136,19 +137,6 @@ def _build_filename_prefix(
 
     return prefix
 
-
-# -----------------------------
-# Usage accumulation helpers
-# -----------------------------
-_BUCKETS = {
-    "1m": 60,
-    "5m": 300,
-    "15m": 900,
-    "1h": 3600,
-    "1d": 86400,
-}
-
-
 def _floor_bucket(ts: datetime, granularity: str) -> str:
     s = _BUCKETS.get(granularity)
     if not s:
@@ -156,7 +144,6 @@ def _floor_bucket(ts: datetime, granularity: str) -> str:
     epoch = int(ts.timestamp())
     start = epoch - (epoch % s)
     return datetime.utcfromtimestamp(start).isoformat(timespec="seconds") + "Z"
-
 
 def _spent_seed(service_type: str) -> Dict[str, int]:
     """Create initial spent dict with all possible token types."""
@@ -172,11 +159,16 @@ def _spent_seed(service_type: str) -> Dict[str, int]:
         }
     if service_type == "embedding":
         return {"tokens": 0}
+    if service_type == "web_search":
+        return {
+            "search_queries": 0,
+            "search_results": 0,
+        }
     return {}
 
 
 def _accumulate_compact(spent: Dict[str, int], ev_usage: Dict[str, Any], service_type: str) -> None:
-    """Accumulate token usage including detailed cache breakdowns."""
+    """Accumulate token usage including detailed cache breakdowns and web_search."""
     if service_type == "llm":
         spent["input"] = int(spent.get("input", 0)) + int(ev_usage.get("input_tokens") or 0)
         spent["output"] = int(spent.get("output", 0)) + int(ev_usage.get("output_tokens") or 0)
@@ -200,25 +192,10 @@ def _accumulate_compact(spent: Dict[str, int], ev_usage: Dict[str, Any], service
     elif service_type == "embedding":
         spent["tokens"] = int(spent.get("tokens", 0)) + int(ev_usage.get("embedding_tokens") or 0)
 
-
-_USAGE_KEYS = [
-    "input_tokens",
-    "output_tokens",
-    "thinking_tokens",
-    "cache_creation_tokens",
-    "cache_read_tokens",
-    "cache_creation",
-    "total_tokens",
-    "embedding_tokens",
-    "embedding_dimensions",
-    "search_queries",
-    "search_results",
-    "image_count",
-    "image_pixels",
-    "audio_seconds",
-    "requests",
-    "cost_usd",
-]
+    elif service_type == "web_search":
+        # NEW: accumulate web search metrics
+        spent["search_queries"] = int(spent.get("search_queries", 0)) + int(ev_usage.get("search_queries") or 0)
+        spent["search_results"] = int(spent.get("search_results", 0)) + int(ev_usage.get("search_results") or 0)
 
 
 def _new_usage_acc() -> Dict[str, Any]:
@@ -255,7 +232,6 @@ def _extract_usage(ev: Dict[str, Any]) -> Dict[str, Any] | None:
 
     return out
 
-
 def _accumulate(acc: Dict[str, Any], usage: Dict[str, Any]) -> None:
     for k in _USAGE_KEYS:
         if k == "cache_creation":
@@ -266,7 +242,6 @@ def _accumulate(acc: Dict[str, Any], usage: Dict[str, Any]) -> None:
             acc[k] = float(acc.get(k, 0.0)) + float(usage.get(k, 0.0))
         else:
             acc[k] = int(acc.get(k, 0)) + int(usage.get(k, 0))
-
 
 def _finalize_cost(acc: Dict[str, Any]) -> None:
     pass
@@ -298,6 +273,11 @@ def _group_key(ev: Dict[str, Any], group_by: List[str]) -> Tuple[Any, ...]:
                     or ev.get("agent")
                     or ev.get("agent_name")
             )
+            if not agent:
+                service_type = ev.get("service_type")
+                provider = ev.get("provider")
+                if service_type and provider:
+                    agent = f"{service_type}:{provider}"
             out.append(agent)
             continue
         out.append(ev.get(g) if g in ev else ctx.get(g))
@@ -2148,6 +2128,14 @@ class RateCalculator(AccountingCalculator):
                     or ev.get("agent_name")
                     or "unknown"
             )
+            if not agent:
+                service_type = ev.get("service_type")
+                provider = ev.get("provider")
+                if service_type and provider:
+                    agent = f"{service_type}:{provider}"
+
+            if not agent:
+                agent = "unknown"
 
             service = str(ev.get("service_type") or "").strip()
             if not service:
@@ -2202,184 +2190,34 @@ class RateCalculator(AccountingCalculator):
 
         return result
 
-# -----------------------------
-# Price calculation helpers
-# -----------------------------
-def price_table():
-    """Enhanced price table with separate cache type pricing."""
-    sonnet_45 = "claude-sonnet-4-5-20250929"
-    haiku_4 = "claude-haiku-4-5-20251001"
-
-    return {
-        "llm": [
-            {
-                "model": sonnet_45,
-                "provider": "anthropic",
-                "input_tokens_1M": 3.00,
-                "output_tokens_1M": 15.00,
-                "cache_pricing": {
-                    "5m": {
-                        "write_tokens_1M": 3.00,
-                        "read_tokens_1M": 0.30,
-                    },
-                    "1h": {
-                        "write_tokens_1M": 3.75,
-                        "read_tokens_1M": 0.30,
-                    },
-                },
-                "cache_write_tokens_1M": 3.00,
-                "cache_read_tokens_1M": 0.30,
-            },
-            {
-                "model": haiku_4,
-                "provider": "anthropic",
-                "input_tokens_1M": 1,
-                "output_tokens_1M": 5,
-                "cache_pricing": {
-                    "5m": {
-                        "write_tokens_1M": 1,
-                        "read_tokens_1M": 0.1,
-                    },
-                    "1h": {
-                        "write_tokens_1M": 2,
-                        "read_tokens_1M": 0.1,
-                    },
-                },
-                "cache_write_tokens_1M": 2,
-                "cache_read_tokens_1M": 0.1,
-            },
-            {
-                "model": "claude-3-5-haiku-20241022",
-                "provider": "anthropic",
-                "input_tokens_1M": 0.80,
-                "output_tokens_1M": 4.00,
-                "cache_pricing": {
-                    "5m": {
-                        "write_tokens_1M": 0.80,
-                        "read_tokens_1M": 0.08,
-                    },
-                    "1h": {
-                        "write_tokens_1M": 1.00,
-                        "read_tokens_1M": 0.08,
-                    },
-                },
-                "cache_write_tokens_1M": 0.80,
-                "cache_read_tokens_1M": 0.08,
-            },
-            {
-                "model": "claude-3-haiku-20240307",
-                "provider": "anthropic",
-                "input_tokens_1M": 0.25,
-                "output_tokens_1M": 1.25,
-                "cache_pricing": {
-                    "5m": {
-                        "write_tokens_1M": 0.25,
-                        "read_tokens_1M": 0.03,
-                    },
-                    "1h": {
-                        "write_tokens_1M": 0.30,
-                        "read_tokens_1M": 0.03,
-                    },
-                },
-                "cache_write_tokens_1M": 0.25,
-                "cache_read_tokens_1M": 0.03,
-            },
-            {
-                "model": "gpt-4o",
-                "provider": "openai",
-                "input_tokens_1M": 2.50,
-                "output_tokens_1M": 10.00,
-                "cache_write_tokens_1M": 0.00,
-                "cache_read_tokens_1M": 1.25,
-            },
-            {
-                "model": "gpt-4o-mini",
-                "provider": "openai",
-                "input_tokens_1M": 0.15,
-                "output_tokens_1M": 0.60,
-                "cache_write_tokens_1M": 0.00,
-                "cache_read_tokens_1M": 0.075,
-            },
-            {
-                "model": "o1",
-                "provider": "openai",
-                "input_tokens_1M": 15.00,
-                "output_tokens_1M": 60.00,
-                "cache_write_tokens_1M": 0.00,
-                "cache_read_tokens_1M": 7.50,
-            },
-            {
-                "model": "o3-mini",
-                "provider": "openai",
-                "input_tokens_1M": 1.10,
-                "output_tokens_1M": 4.40,
-                "cache_write_tokens_1M": 0.00,
-                "cache_read_tokens_1M": 0.55,
-            },
-            {
-                "model": "gemini-2.5-pro",
-                "provider": "google",
-                # prompts <= 200k tokens
-                "input_tokens_1M": 1.25,          # normal input price
-                "output_tokens_1M": 10.00,        # includes thinking tokens when enabled
-                "thinking_output_tokens_1M": 10.00,  # same bucket; explicit for clarity
-                "cache_write_tokens_1M": 0.0,
-                "cache_read_tokens_1M": 0.0,
-            },
-            {
-                "model": "gemini-2.5-pro-long",
-                "provider": "google",
-                # prompts > 200k tokens
-                "input_tokens_1M": 2.50,
-                "output_tokens_1M": 15.00,        # includes thinking tokens when enabled
-                "thinking_output_tokens_1M": 15.00,
-                "cache_write_tokens_1M": 0.0,
-                "cache_read_tokens_1M": 0.0,
-            },
-            {
-                "model": "gemini-2.5-flash",
-                "provider": "google",
-                "input_tokens_1M": 0.15,
-                # non-thinking output price
-                "output_tokens_1M": 0.60,
-                # effective output price when thinking is enabled
-                "thinking_output_tokens_1M": 3.50,
-                "cache_write_tokens_1M": 0.0,
-                "cache_read_tokens_1M": 0.0,
-            },
-            {
-                "model": "gemini-2.5-flash-lite",
-                "provider": "google",
-                "input_tokens_1M": 0.10,
-                "output_tokens_1M": 0.40,
-                # Google docs and community posts do not list a separate higher rate
-                # for thinking mode on Flash Lite as of late 2025, so mirror output.
-                "thinking_output_tokens_1M": 0.40,
-                "cache_write_tokens_1M": 0.0,
-                "cache_read_tokens_1M": 0.0,
-            },
-        ],
-        "embedding": [
-            {
-                "model": "text-embedding-3-small",
-                "provider": "openai",
-                "tokens_1M": 0.02,
-            },
-            {
-                "model": "text-embedding-3-large",
-                "provider": "openai",
-                "tokens_1M": 0.13,
-            },
-        ],
-    }
-
-
 def _calculate_agent_costs(
         agent_usage: Dict[str, List[Dict[str, Any]]],
         llm_pricelist: List[Dict[str, Any]],
         emb_pricelist: List[Dict[str, Any]],
+        web_search_pricelist: List[Dict[str, Any]],
+        accounting_services_config: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    """Calculate costs per agent, including thinking tokens where priced."""
+    """
+    Calculate costs per agent, including thinking tokens and web_search.
+
+    Args:
+        agent_usage: Dict mapping agent_name -> list of usage items
+        llm_pricelist: LLM pricing from price_table()
+        emb_pricelist: Embedding pricing from price_table()
+        web_search_pricelist: Web search pricing from price_table()
+        accounting_services_config: Service tier configuration
+
+    Returns:
+        Dict mapping agent_name -> {total_cost_usd, breakdown, tokens}
+    """
+
+    if accounting_services_config is None:
+        # Load from environment
+        config_str = os.environ.get("ACCOUNTING_SERVICES", "{}")
+        try:
+            accounting_services_config = json.loads(config_str)
+        except json.JSONDecodeError:
+            accounting_services_config = {}
 
     def _find_llm_price(provider: str, model: str) -> Optional[Dict[str, Any]]:
         for p in llm_pricelist:
@@ -2392,6 +2230,19 @@ def _calculate_agent_costs(
             if p.get("provider") == provider and p.get("model") == model:
                 return p
         return None
+
+    def _find_web_search_price(provider: str, tier: str) -> Optional[Dict[str, Any]]:
+        for p in web_search_pricelist:
+            if p.get("provider") == provider and p.get("tier") == tier:
+                return p
+        return None
+
+    def _get_web_search_tier(provider: str) -> str:
+        """Get tier for web_search provider from config."""
+        web_search_config = accounting_services_config.get("web_search", {})
+        provider_config = web_search_config.get(provider, {})
+        defaults = {"brave": "base", "duckduckgo": "free"}
+        return provider_config.get("tier", defaults.get(provider, "free"))
 
     agent_costs: Dict[str, Dict[str, Any]] = {}
 
@@ -2406,6 +2257,8 @@ def _calculate_agent_costs(
             "cache_1h_write": 0,
             "cache_read": 0,
             "embedding": 0,
+            "search_queries": 0,
+            "search_results": 0,
         }
 
         for item in items:
@@ -2415,6 +2268,7 @@ def _calculate_agent_costs(
             spent = item.get("spent", {}) or {}
 
             cost_usd = 0.0
+            tier = None  # for web_search
 
             if service == "llm":
                 pr = _find_llm_price(provider, model)
@@ -2491,12 +2345,26 @@ def _calculate_agent_costs(
                     )
                     token_summary["embedding"] += int(spent.get("tokens", 0) or 0)
 
+            elif service == "web_search":
+                # NEW: web_search cost calculation
+                tier = _get_web_search_tier(provider)
+                pr = _find_web_search_price(provider, tier)
+
+                if pr:
+                    search_queries = float(spent.get("search_queries", 0))
+                    cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
+                    cost_usd = (search_queries / 1000.0) * cost_per_1k
+
+                    token_summary["search_queries"] += int(spent.get("search_queries", 0) or 0)
+                    token_summary["search_results"] += int(spent.get("search_results", 0) or 0)
+
             total_cost += cost_usd
             breakdown.append(
                 {
                     "service": service,
                     "provider": provider,
                     "model": model,
+                    "tier": tier,
                     "cost_usd": cost_usd,
                 }
             )

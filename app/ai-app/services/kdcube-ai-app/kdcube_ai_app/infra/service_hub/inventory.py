@@ -425,10 +425,10 @@ class AgentLogger:
     def start_operation(self, operation: str, **kwargs):
         self.start_time = time.time()
         log_data = {"operation": operation, "timestamp": datetime.now().isoformat(), "inputs": kwargs}
-        self._emit("info", f"🚀 Starting {operation} - ", obj=log_data)
+        self._emit("debug", f"🚀 Starting {operation} - ", obj=log_data)
         return log_data
 
-    def log_step(self, step: str, data: Any = None, level: str = "INFO"):
+    def log_step(self, step: str, data: Any = None, level: str = "DEBUG"):
         entry = {"step": step, "timestamp": datetime.now().isoformat(), "data": data or "No data"}
         if self.start_time:
             entry["elapsed_time"] = f"{time.time() - self.start_time:.2f}s"
@@ -461,7 +461,7 @@ class AgentLogger:
             "success": success, "total_time": f"{total:.2f}s", "result_summary": result_summary,
             "total_steps": len(self.execution_logs), "timestamp": datetime.now().isoformat(), **kwargs
         }
-        self._emit("info", ("🎉" if success else "💥") + " Operation Complete - ", obj=summary)
+        self._emit("debug", ("🎉" if success else "💥") + " Operation Complete - ", obj=summary)
         self.start_time = None
         self.execution_logs = []
         return summary

@@ -1235,6 +1235,11 @@ class AccountingAggregator:
                 or ev.get("agent")
                 or ev.get("agent_name")
         )
+        if not agent:
+            service_type = ev.get("service_type")
+            provider = ev.get("provider")
+            if service_type and provider:
+                agent = f"{service_type}:{provider}"
         return str(agent) if agent is not None else "unknown"
 
 

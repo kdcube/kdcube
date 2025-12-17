@@ -4,9 +4,244 @@
 # infra/accounting/usage.py
 from dataclasses import dataclass
 from typing import Dict, Any, Optional, List
-import logging, json
+import logging, json, os
 
 logger = logging.getLogger(__name__)
+
+# -----------------------------
+# Price calculation helpers
+# -----------------------------
+def price_table():
+    """Enhanced price table with separate cache type pricing."""
+    sonnet_45 = "claude-sonnet-4-5-20250929"
+    haiku_4 = "claude-haiku-4-5-20251001"
+
+    return {
+        "llm": [
+            {
+                "model": sonnet_45,
+                "provider": "anthropic",
+                "input_tokens_1M": 3.00,
+                "output_tokens_1M": 15.00,
+                "cache_pricing": {
+                    "5m": {
+                        "write_tokens_1M": 3.00,
+                        "read_tokens_1M": 0.30,
+                    },
+                    "1h": {
+                        "write_tokens_1M": 3.75,
+                        "read_tokens_1M": 0.30,
+                    },
+                },
+                "cache_write_tokens_1M": 3.00,
+                "cache_read_tokens_1M": 0.30,
+            },
+            {
+                "model": haiku_4,
+                "provider": "anthropic",
+                "input_tokens_1M": 1,
+                "output_tokens_1M": 5,
+                "cache_pricing": {
+                    "5m": {
+                        "write_tokens_1M": 1,
+                        "read_tokens_1M": 0.1,
+                    },
+                    "1h": {
+                        "write_tokens_1M": 2,
+                        "read_tokens_1M": 0.1,
+                    },
+                },
+                "cache_write_tokens_1M": 2,
+                "cache_read_tokens_1M": 0.1,
+            },
+            {
+                "model": "claude-3-5-haiku-20241022",
+                "provider": "anthropic",
+                "input_tokens_1M": 0.80,
+                "output_tokens_1M": 4.00,
+                "cache_pricing": {
+                    "5m": {
+                        "write_tokens_1M": 0.80,
+                        "read_tokens_1M": 0.08,
+                    },
+                    "1h": {
+                        "write_tokens_1M": 1.00,
+                        "read_tokens_1M": 0.08,
+                    },
+                },
+                "cache_write_tokens_1M": 0.80,
+                "cache_read_tokens_1M": 0.08,
+            },
+            {
+                "model": "claude-3-haiku-20240307",
+                "provider": "anthropic",
+                "input_tokens_1M": 0.25,
+                "output_tokens_1M": 1.25,
+                "cache_pricing": {
+                    "5m": {
+                        "write_tokens_1M": 0.25,
+                        "read_tokens_1M": 0.03,
+                    },
+                    "1h": {
+                        "write_tokens_1M": 0.30,
+                        "read_tokens_1M": 0.03,
+                    },
+                },
+                "cache_write_tokens_1M": 0.25,
+                "cache_read_tokens_1M": 0.03,
+            },
+            {
+                "model": "gpt-4o",
+                "provider": "openai",
+                "input_tokens_1M": 2.50,
+                "output_tokens_1M": 10.00,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 1.25,
+            },
+            {
+                "model": "gpt-4o-mini",
+                "provider": "openai",
+                "input_tokens_1M": 0.15,
+                "output_tokens_1M": 0.60,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 0.075,
+            },
+            {
+                "model": "o1",
+                "provider": "openai",
+                "input_tokens_1M": 15.00,
+                "output_tokens_1M": 60.00,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 7.50,
+            },
+            {
+                "model": "o3-mini",
+                "provider": "openai",
+                "input_tokens_1M": 1.10,
+                "output_tokens_1M": 4.40,
+                "cache_write_tokens_1M": 0.00,
+                "cache_read_tokens_1M": 0.55,
+            },
+            {
+                "model": "gemini-2.5-pro",
+                "provider": "google",
+                # prompts <= 200k tokens
+                "input_tokens_1M": 1.25,          # normal input price
+                "output_tokens_1M": 10.00,        # includes thinking tokens when enabled
+                "thinking_output_tokens_1M": 10.00,  # same bucket; explicit for clarity
+                "cache_write_tokens_1M": 0.0,
+                "cache_read_tokens_1M": 0.0,
+            },
+            {
+                "model": "gemini-2.5-pro-long",
+                "provider": "google",
+                # prompts > 200k tokens
+                "input_tokens_1M": 2.50,
+                "output_tokens_1M": 15.00,        # includes thinking tokens when enabled
+                "thinking_output_tokens_1M": 15.00,
+                "cache_write_tokens_1M": 0.0,
+                "cache_read_tokens_1M": 0.0,
+            },
+            {
+                "model": "gemini-2.5-flash",
+                "provider": "google",
+                "input_tokens_1M": 0.15,
+                # non-thinking output price
+                "output_tokens_1M": 0.60,
+                # effective output price when thinking is enabled
+                "thinking_output_tokens_1M": 3.50,
+                "cache_write_tokens_1M": 0.0,
+                "cache_read_tokens_1M": 0.0,
+            },
+            {
+                "model": "gemini-2.5-flash-lite",
+                "provider": "google",
+                "input_tokens_1M": 0.10,
+                "output_tokens_1M": 0.40,
+                # Google docs and community posts do not list a separate higher rate
+                # for thinking mode on Flash Lite as of late 2025, so mirror output.
+                "thinking_output_tokens_1M": 0.40,
+                "cache_write_tokens_1M": 0.0,
+                "cache_read_tokens_1M": 0.0,
+            },
+        ],
+        "embedding": [
+            {
+                "model": "text-embedding-3-small",
+                "provider": "openai",
+                "tokens_1M": 0.02,
+            },
+            {
+                "model": "text-embedding-3-large",
+                "provider": "openai",
+                "tokens_1M": 0.13,
+            },
+        ],
+        "web_search": [
+            # Brave Search tiers
+            {
+                "provider": "brave",
+                "tier": "free",
+                "cost_per_1k_requests": 0.00,
+                "limits": {
+                    "requests_per_second": 1,
+                    "requests_per_month": 2000
+                }
+            },
+            {
+                "provider": "brave",
+                "tier": "base",
+                "cost_per_1k_requests": 3.00,
+                "limits": {
+                    "requests_per_second": 20,
+                    "requests_per_month": 20000000
+                }
+            },
+            {
+                "provider": "brave",
+                "tier": "pro",
+                "cost_per_1k_requests": 5.00,
+                "limits": {
+                    "requests_per_second": 50,
+                    "requests_per_month": None  # unlimited
+                }
+            },
+            # DuckDuckGo (free)
+            {
+                "provider": "duckduckgo",
+                "tier": "free",
+                "cost_per_1k_requests": 0.00,
+                "limits": {
+                    "requests_per_second": None,  # no hard limit
+                    "requests_per_month": None   # no hard limit
+                }
+            }
+        ]
+    }
+
+def load_accounting_services_config() -> Dict[str, Any]:
+    """Load ACCOUNTING_SERVICES from environment variable."""
+    config_str = os.environ.get("ACCOUNTING_SERVICES", "{}")
+    try:
+        return json.loads(config_str)
+    except json.JSONDecodeError:
+        return {}
+
+def get_web_search_tier(provider: str, config: Optional[Dict[str, Any]] = None) -> str:
+    """Get the tier for a web_search provider."""
+    if config is None:
+        config = load_accounting_services_config()
+
+    web_search_config = config.get("web_search", {})
+    provider_config = web_search_config.get(provider, {})
+
+    # Default tiers
+    defaults = {
+        "brave": "base",
+        "duckduckgo": "free"
+    }
+
+    return provider_config.get("tier", defaults.get(provider, "free"))
 
 @dataclass(frozen=True)
 class ClientConfigHint:
@@ -225,3 +460,33 @@ def ws_meta_extractor(*args, **kwargs) -> Dict[str, Any]:
         "country": country,
         "safesearch": safesearch,
     }
+
+_USAGE_KEYS = [
+    "input_tokens",
+    "output_tokens",
+    "thinking_tokens",
+    "cache_creation_tokens",
+    "cache_read_tokens",
+    "cache_creation",
+    "total_tokens",
+    "embedding_tokens",
+    "embedding_dimensions",
+    "search_queries",
+    "search_results",
+    "image_count",
+    "image_pixels",
+    "audio_seconds",
+    "requests",
+    "cost_usd",
+]
+
+# -----------------------------
+# Usage accumulation helpers
+# -----------------------------
+_BUCKETS = {
+    "1m": 60,
+    "5m": 300,
+    "15m": 900,
+    "1h": 3600,
+    "1d": 86400,
+}
