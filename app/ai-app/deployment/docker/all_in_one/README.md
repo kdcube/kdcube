@@ -349,6 +349,11 @@ docker compose stop chat && docker compose rm chat -f && docker compose up chat 
 docker compose stop web-ui && docker compose rm web-ui -f && docker compose up web-ui -d --build
 ```
 
+**ProxyLogin:**
+```bash
+docker compose stop proxylogin && docker compose rm proxylogin -f && docker compose build proxylogin --no-cache && docker compose up proxylogin -d
+```
+
 **Proxy:**
 ```bash
 docker compose stop web-proxy && docker compose rm web-proxy -f && docker compose up web-proxy -d --build

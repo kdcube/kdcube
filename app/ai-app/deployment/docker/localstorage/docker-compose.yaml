@@ -105,6 +105,22 @@ services:
     ports:
       - "3310:3310"
 
+  proxylogin:
+    image: proxylogin:latest
+    build:
+      context: ../all_in_one
+      dockerfile: ./Dockerfile_ProxyLogin
+    env_file:
+      - path: ./.env.proxylogin
+        required: false
+    ports:
+      - "8384:80"
+    volumes:
+      - type: bind
+        source: ${HOME}/.aws
+        target: /home/proxylogin/.aws
+        read_only: true
+
 volumes:
   postgres-data:
     driver: local
