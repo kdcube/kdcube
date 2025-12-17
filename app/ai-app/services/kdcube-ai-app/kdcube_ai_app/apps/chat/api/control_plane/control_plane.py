@@ -1105,6 +1105,226 @@ async def set_budget_policy(
 # Health & Admin Utilities
 # ============================================================================
 
+@router.get("/users/{user_id}/quota-breakdown")
+async def get_user_quota_breakdown(
+        user_id: str,
+        request: Request,
+        user_type: str = Query(..., description="User type (free, paid, premium, etc.)"),
+        bundle_id: str = Query("*", description="Bundle ID"),
+        session: UserSession = Depends(auth_without_pressure())
+):
+    """
+    Get detailed quota breakdown for a user showing:
+    - Base policy (from user type/tier)
+    - Replenishment (purchased/granted credits)
+    - Effective policy (base + replenishment)
+    - Current usage
+    - Remaining quota
+
+    **Use Cases:**
+    1. **User Support**: Show customer exactly what they have
+    2. **Admin Dashboard**: Monitor user quota status
+    3. **Transparency**: Clear breakdown of tier vs. purchased credits
+
+    **Example Response:**
+    ```json
+    {
+        "user_id": "user123",
+        "user_type": "free",
+        "bundle_id": "*",
+        "base_policy": {
+            "max_concurrent": 1,
+            "requests_per_day": 10,
+            "tokens_per_day": 1000000
+        },
+        "replenishment": {
+            "additional_requests_per_day": 50,
+            "additional_tokens_per_day": 5000000,
+            "expires_at": "2025-01-24T00:00:00Z"
+        },
+        "effective_policy": {
+            "max_concurrent": 1,
+            "requests_per_day": 60,
+            "tokens_per_day": 6000000
+        },
+        "current_usage": {
+            "requests_today": 5,
+            "tokens_today": 300000,
+            "concurrent": 0
+        },
+        "remaining": {
+            "requests_today": 55,
+            "tokens_today": 5700000,
+            "percentage_used": 8.3
+        }
+    }
+    ```
+
+    **Admin only.** Requires authentication.
+    """
+    try:
+        mgr = _get_control_plane_manager(router)
+        settings = get_settings()
+
+        tenant = settings.TENANT
+        project = settings.PROJECT
+
+        # 1. Get base policy
+        base_policy = await mgr.get_user_quota_policy(
+            tenant=tenant,
+            project=project,
+            user_type=user_type,
+            bundle_id=bundle_id,
+        )
+
+        if not base_policy:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No policy found for user_type={user_type}, bundle_id={bundle_id}"
+            )
+
+        # 2. Get replenishment
+        replenishment = await mgr.get_replenishment(
+            tenant=tenant,
+            project=project,
+            user_id=user_id,
+            bundle_id=bundle_id,
+        )
+
+        # 3. Compute effective policy
+        from kdcube_ai_app.apps.chat.sdk.infra.rate_limit.limiter import subject_id_of
+        subject_id = subject_id_of(tenant, project, user_id)
+
+        # Get current usage from Redis
+        from kdcube_ai_app.apps.chat.sdk.infra.rate_limit.limiter import RateLimiter
+        from datetime import datetime, timezone
+
+        # Build rate limiter to read counters
+        redis = getattr(request.app.state.middleware, "redis", None)
+        if not redis:
+            raise HTTPException(status_code=503, detail="Redis not available")
+
+        rl = RateLimiter(redis)
+
+        # Read current counters
+        now = datetime.now(timezone.utc)
+        ymd = now.strftime("%Y%m%d")
+        ym = now.strftime("%Y%m")
+
+        k_req_d = f"kdcube:rl:{bundle_id}:{subject_id}:reqs:day:{ymd}"
+        k_req_m = f"kdcube:rl:{bundle_id}:{subject_id}:reqs:month:{ym}"
+        k_req_t = f"kdcube:rl:{bundle_id}:{subject_id}:reqs:total"
+        k_tok_d = f"kdcube:rl:{bundle_id}:{subject_id}:toks:day:{ymd}"
+        k_tok_m = f"kdcube:rl:{bundle_id}:{subject_id}:toks:month:{ym}"
+        k_locks = f"kdcube:rl:{bundle_id}:{subject_id}:locks"
+
+        vals = await redis.mget(k_req_d, k_req_m, k_req_t, k_tok_d, k_tok_m)
+        req_day = int(vals[0] or 0)
+        req_month = int(vals[1] or 0)
+        req_total = int(vals[2] or 0)
+        tok_day = int(vals[3] or 0)
+        tok_month = int(vals[4] or 0)
+
+        # Get concurrent count
+        concurrent = await redis.zcard(k_locks)
+
+        # Helper to add limits
+        def add_limit(base, additional):
+            if base is None:
+                return None
+            if additional is None:
+                return base
+            return base + additional
+
+        # Build effective policy
+        effective_requests_per_day = add_limit(
+            base_policy.requests_per_day,
+            replenishment.additional_requests_per_day if replenishment else None
+        )
+        effective_requests_per_month = add_limit(
+            base_policy.requests_per_month,
+            replenishment.additional_requests_per_month if replenishment else None
+        )
+        effective_tokens_per_day = add_limit(
+            base_policy.tokens_per_day,
+            replenishment.additional_tokens_per_day if replenishment else None
+        )
+        effective_tokens_per_month = add_limit(
+            base_policy.tokens_per_month,
+            replenishment.additional_tokens_per_month if replenishment else None
+        )
+        effective_max_concurrent = add_limit(
+            base_policy.max_concurrent,
+            replenishment.additional_max_concurrent if replenishment else None
+        )
+
+        # Calculate remaining
+        def calc_remaining(limit, used):
+            if limit is None:
+                return None
+            return max(limit - used, 0)
+
+        remaining_req_day = calc_remaining(effective_requests_per_day, req_day)
+        remaining_req_month = calc_remaining(effective_requests_per_month, req_month)
+        remaining_tok_day = calc_remaining(effective_tokens_per_day, tok_day)
+        remaining_tok_month = calc_remaining(effective_tokens_per_month, tok_month)
+
+        # Calculate percentage used (for primary quotas)
+        percentage_used = None
+        if effective_requests_per_day and effective_requests_per_day > 0:
+            percentage_used = round((req_day / effective_requests_per_day) * 100, 1)
+
+        return {
+            "status": "ok",
+            "user_id": user_id,
+            "user_type": user_type,
+            "bundle_id": bundle_id,
+            "base_policy": {
+                "max_concurrent": base_policy.max_concurrent,
+                "requests_per_day": base_policy.requests_per_day,
+                "requests_per_month": base_policy.requests_per_month,
+                "tokens_per_day": base_policy.tokens_per_day,
+                "tokens_per_month": base_policy.tokens_per_month,
+            },
+            "replenishment": {
+                "has_credits": replenishment is not None and replenishment.is_valid(),
+                "additional_max_concurrent": replenishment.additional_max_concurrent if replenishment else None,
+                "additional_requests_per_day": replenishment.additional_requests_per_day if replenishment else None,
+                "additional_requests_per_month": replenishment.additional_requests_per_month if replenishment else None,
+                "additional_tokens_per_day": replenishment.additional_tokens_per_day if replenishment else None,
+                "additional_tokens_per_month": replenishment.additional_tokens_per_month if replenishment else None,
+                "expires_at": replenishment.expires_at.isoformat() if replenishment and replenishment.expires_at else None,
+                "purchase_notes": replenishment.purchase_notes if replenishment else None,
+            } if replenishment else None,
+            "effective_policy": {
+                "max_concurrent": effective_max_concurrent,
+                "requests_per_day": effective_requests_per_day,
+                "requests_per_month": effective_requests_per_month,
+                "tokens_per_day": effective_tokens_per_day,
+                "tokens_per_month": effective_tokens_per_month,
+            },
+            "current_usage": {
+                "requests_today": req_day,
+                "requests_this_month": req_month,
+                "requests_total": req_total,
+                "tokens_today": tok_day,
+                "tokens_this_month": tok_month,
+                "concurrent": concurrent,
+            },
+            "remaining": {
+                "requests_today": remaining_req_day,
+                "requests_this_month": remaining_req_month,
+                "tokens_today": remaining_tok_day,
+                "tokens_this_month": remaining_tok_month,
+                "percentage_used": percentage_used,
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"[get_user_quota_breakdown] Failed for user {user_id}")
+        raise HTTPException(status_code=500, detail=f"Failed to get quota breakdown: {str(e)}")
+
 @router.get("/health")
 async def health_check(
         request: Request,
