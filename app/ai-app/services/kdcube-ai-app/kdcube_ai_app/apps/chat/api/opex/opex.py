@@ -3,7 +3,7 @@
 
 # # kdcube_ai_app/apps/chat/api/opex/opex.py
 from typing import Optional, List
-import logging, asyncio
+import logging, asyncio, os, json
 
 from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Request, APIRouter, Query, FastAPI
@@ -12,11 +12,11 @@ from contextlib import asynccontextmanager
 from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency, auth_without_pressure
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.sessions import UserSession
+from kdcube_ai_app.infra.accounting.usage import price_table
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.infra.accounting.calculator import (
     RateCalculator,
     AccountingQuery,
-    price_table,
     _calculate_agent_costs
 )
 
@@ -143,10 +143,20 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
     """
     Compute cost estimates from rollup data using price table.
     Returns cost breakdown and total.
+
+    NOW SUPPORTS: llm, embedding, web_search
     """
     configuration = price_table()
     llm_pricelist = configuration.get("llm", [])
     emb_pricelist = configuration.get("embedding", [])
+    web_search_pricelist = configuration.get("web_search", [])  # NEW
+
+    # Load tier configuration from environment
+    config_str = os.environ.get("ACCOUNTING_SERVICES", "{}")
+    try:
+        accounting_services_config = json.loads(config_str)
+    except json.JSONDecodeError:
+        accounting_services_config = {}
 
     def _find_llm_price(provider: str, model: str):
         for p in llm_pricelist:
@@ -160,6 +170,20 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
                 return p
         return None
 
+    def _find_web_search_price(provider: str, tier: str):
+        """Find web_search price entry by provider and tier."""
+        for p in web_search_pricelist:
+            if p.get("provider") == provider and p.get("tier") == tier:
+                return p
+        return None
+
+    def _get_web_search_tier(provider: str) -> str:
+        """Get tier for web_search provider from config."""
+        web_search_config = accounting_services_config.get("web_search", {})
+        provider_config = web_search_config.get(provider, {})
+        defaults = {"brave": "base", "duckduckgo": "free"}
+        return provider_config.get("tier", defaults.get(provider, "free"))
+
     total_cost = 0.0
     breakdown = []
 
@@ -170,6 +194,8 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
         spent = item.get("spent", {}) or {}
 
         cost_usd = 0.0
+        tier = None  # for web_search
+        pr = {}
 
         if service == "llm":
             pr = _find_llm_price(provider, model)
@@ -204,13 +230,34 @@ def _compute_cost_estimate(rollup: List[dict]) -> dict:
             if pr:
                 cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
 
+        elif service == "web_search":
+            # NEW: web_search cost calculation
+            tier = _get_web_search_tier(provider)
+            pr = _find_web_search_price(provider, tier)
+
+            if pr:
+                search_queries = float(spent.get("search_queries", 0))
+                cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
+                cost_usd = (search_queries / 1000.0) * cost_per_1k
+
         total_cost += cost_usd
-        breakdown.append({
+
+        # Include tier in breakdown for web_search
+        breakdown_item = {
             "service": service,
             "provider": provider,
             "model": model,
             "cost_usd": cost_usd,
-        })
+        }
+
+        if service == "web_search" and tier:
+            breakdown_item["tier"] = tier
+            breakdown_item["search_queries"] = spent.get("search_queries", 0)
+            breakdown_item["search_results"] = spent.get("search_results", 0)
+            if pr:
+                breakdown_item["cost_per_1k_requests"] = pr.get("cost_per_1k_requests", 0.0)
+
+        breakdown.append(breakdown_item)
 
     return {
         "total_cost_usd": total_cost,
@@ -244,36 +291,36 @@ async def get_total_usage(
         - cost_estimate: Estimated costs based on price table
     """
     try:
-        # calc = _get_calculator(request)
-        #
-        # service_types_list = None
-        # if service_types:
-        #     service_types_list = [s.strip() for s in service_types.split(",")]
-        #
-        # result = await calc.usage_all_users(
-        #     tenant_id=tenant,
-        #     project_id=project,
-        #     date_from=date_from,
-        #     date_to=date_to,
-        #     app_bundle_id=app_bundle_id,
-        #     service_types=service_types_list,
-        #     hard_file_limit=hard_file_limit,
-        #     require_aggregates=True # never triggers a big raw scan
-        # )
-        #
-        # # Add cost estimate
-        # cost_estimate = None
-        # if result.get("rollup"):
-        #     cost_estimate = _compute_cost_estimate(result["rollup"])
+        calc = _get_calculator(request)
+
+        service_types_list = None
+        if service_types:
+            service_types_list = [s.strip() for s in service_types.split(",")]
+
+        result = await calc.usage_all_users(
+            tenant_id=tenant,
+            project_id=project,
+            date_from=date_from,
+            date_to=date_to,
+            app_bundle_id=app_bundle_id,
+            service_types=service_types_list,
+            hard_file_limit=hard_file_limit,
+            require_aggregates=True # never triggers a big raw scan
+        )
+
+        # Add cost estimate
+        cost_estimate = None
+        if result.get("rollup"):
+            cost_estimate = _compute_cost_estimate(result["rollup"])
 
         # MOCK
-        result = {
-            "total": 0,
-            "rollup": 0,
-            "user_count": 0,
-            "event_count": 0
-        }
-        cost_estimate = 0
+        # result = {
+        #     "total": 0,
+        #     "rollup": 0,
+        #     "user_count": 0,
+        #     "event_count": 0
+        # }
+        # cost_estimate = 0
         # MOCK
 
         return {
@@ -314,32 +361,32 @@ async def get_usage_by_user(
     """
     try:
         # TODO: get back when we have scheduled aggregates!
-        # calc = _get_calculator(request)
-        #
-        # service_types_list = None
-        # if service_types:
-        #     service_types_list = [s.strip() for s in service_types.split(",")]
-        #
-        # by_user = await calc.usage_by_user(
-        #     tenant_id=tenant,
-        #     project_id=project,
-        #     date_from=date_from,
-        #     date_to=date_to,
-        #     app_bundle_id=app_bundle_id,
-        #     service_types=service_types_list,
-        #     hard_file_limit=hard_file_limit
-        # )
-        #
-        # # Add cost estimates per user
-        # user_costs = {}
-        # for user_id, user_data in by_user.items():
-        #     if user_data.get("rollup"):
-        #         user_costs[user_id] = _compute_cost_estimate(user_data["rollup"])
+        calc = _get_calculator(request)
+
+        service_types_list = None
+        if service_types:
+            service_types_list = [s.strip() for s in service_types.split(",")]
+
+        by_user = await calc.usage_by_user(
+            tenant_id=tenant,
+            project_id=project,
+            date_from=date_from,
+            date_to=date_to,
+            app_bundle_id=app_bundle_id,
+            service_types=service_types_list,
+            hard_file_limit=hard_file_limit
+        )
+
+        # Add cost estimates per user
+        user_costs = {}
+        for user_id, user_data in by_user.items():
+            if user_data.get("rollup"):
+                user_costs[user_id] = _compute_cost_estimate(user_data["rollup"])
 
         # END OF TODO: get back when we have scheduled aggregates!
-        # MOCK
-        by_user = dict()
-        user_costs = dict()
+        # # MOCK
+        # by_user = dict()
+        # user_costs = dict()
         # MOCK
 
         return {
@@ -379,38 +426,38 @@ async def get_conversation_usage(
     """
     try:
         # TODO: get back when we have scheduled aggregates!
-        # calc = _get_calculator(request)
-        #
-        # service_types_list = None
-        # if service_types:
-        #     service_types_list = [s.strip() for s in service_types.split(",")]
-        #
-        # result = await calc.usage_user_conversation(
-        #     tenant_id=tenant,
-        #     project_id=project,
-        #     user_id=user_id,
-        #     conversation_id=conversation_id,
-        #     date_from=date_from,
-        #     date_to=date_to,
-        #     app_bundle_id=app_bundle_id,
-        #     service_types=service_types_list,
-        #     hard_file_limit=hard_file_limit
-        # )
-        #
-        # # Add cost estimate
-        # cost_estimate = None
-        # if result.get("rollup"):
-        #     cost_estimate = _compute_cost_estimate(result["rollup"])
+        calc = _get_calculator(request)
+
+        service_types_list = None
+        if service_types:
+            service_types_list = [s.strip() for s in service_types.split(",")]
+
+        result = await calc.usage_user_conversation(
+            tenant_id=tenant,
+            project_id=project,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            date_from=date_from,
+            date_to=date_to,
+            app_bundle_id=app_bundle_id,
+            service_types=service_types_list,
+            hard_file_limit=hard_file_limit
+        )
+
+        # Add cost estimate
+        cost_estimate = None
+        if result.get("rollup"):
+            cost_estimate = _compute_cost_estimate(result["rollup"])
         # END OF TODO: get back when we have scheduled aggregates!
 
         # MOCK
-        result = {
-            "total": 0,
-            "rollup": 0,
-            "turns": {},
-            "event_count": 0
-        }
-        cost_estimate = 0
+        # result = {
+        #     "total": 0,
+        #     "rollup": 0,
+        #     "turns": {},
+        #     "event_count": 0
+        # }
+        # cost_estimate = 0
         # MOCK
 
         return {
@@ -545,35 +592,35 @@ async def get_agent_usage(
     """
     try:
         # TODO: get back when we have scheduled aggregates!
-        # calc = _get_calculator(request)
-        #
-        # service_types_list = None
-        # if service_types:
-        #     service_types_list = [s.strip() for s in service_types.split(",")]
-        #
-        # by_agent = await calc.usage_by_agent(
-        #     tenant_id=tenant,
-        #     project_id=project,
-        #     date_from=date_from,
-        #     date_to=date_to,
-        #     user_id=user_id,
-        #     conversation_id=conversation_id,
-        #     turn_id=turn_id,
-        #     app_bundle_id=app_bundle_id,
-        #     service_types=service_types_list,
-        #     hard_file_limit=hard_file_limit
-        # )
-        #
-        # # Add cost estimates per agent
-        # agent_costs = {}
-        # for agent_name, agent_data in by_agent.items():
-        #     if agent_data.get("rollup"):
-        #         agent_costs[agent_name] = _compute_cost_estimate(agent_data["rollup"])
+        calc = _get_calculator(request)
+
+        service_types_list = None
+        if service_types:
+            service_types_list = [s.strip() for s in service_types.split(",")]
+
+        by_agent = await calc.usage_by_agent(
+            tenant_id=tenant,
+            project_id=project,
+            date_from=date_from,
+            date_to=date_to,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            app_bundle_id=app_bundle_id,
+            service_types=service_types_list,
+            hard_file_limit=hard_file_limit
+        )
+
+        # Add cost estimates per agent
+        agent_costs = {}
+        for agent_name, agent_data in by_agent.items():
+            if agent_data.get("rollup"):
+                agent_costs[agent_name] = _compute_cost_estimate(agent_data["rollup"])
         # END OF TODO: get back when we have scheduled aggregates!
 
         # MOCK
-        by_agent = dict()
-        agent_costs = dict()
+        # by_agent = dict()
+        # agent_costs = dict()
         # MOCK
 
         return {
@@ -729,6 +776,7 @@ async def admin_run_aggregation_range(
             description="End date (YYYY-MM-DD, inclusive). "
                         "If omitted, defaults to yesterday in Europe/Berlin."
         ),
+        include_today: bool = Query(False),
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
@@ -764,8 +812,11 @@ async def admin_run_aggregation_range(
                 detail="Invalid end_date, expected format YYYY-MM-DD",
             )
     else:
-        # default: yesterday in ACCOUNTING_TZ
-        end = (datetime.now(routines.ACCOUNTING_TZ) - timedelta(days=1)).date()
+        if include_today:
+            end = (datetime.now(routines.ACCOUNTING_TZ)).date()
+        else:
+            # default: yesterday in ACCOUNTING_TZ
+            end = (datetime.now(routines.ACCOUNTING_TZ) - timedelta(days=1)).date()
 
     if end < start:
         raise HTTPException(

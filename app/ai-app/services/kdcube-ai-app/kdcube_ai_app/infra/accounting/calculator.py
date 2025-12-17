@@ -2126,7 +2126,6 @@ class RateCalculator(AccountingCalculator):
                     or context.get("agent")
                     or ev.get("agent")
                     or ev.get("agent_name")
-                    or "unknown"
             )
             if not agent:
                 service_type = ev.get("service_type")
@@ -2189,6 +2188,298 @@ class RateCalculator(AccountingCalculator):
                 result[agent] = items
 
         return result
+
+    async def calculate_turn_costs(
+            self,
+            *,
+            tenant_id: str,
+            project_id: str,
+            conversation_id: str,
+            turn_id: str,
+            app_bundle_id: Optional[str] = None,
+            user_id: Optional[str] = None,
+            date_from: Optional[str] = None,
+            date_to: Optional[str] = None,
+            service_types: Optional[List[str]] = None,
+            use_memory_cache: bool = False,
+            accounting_services_config: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Complete turn cost calculation with both overall breakdown and per-agent costs.
+
+        This is a high-level method that combines:
+        - turn_usage_rollup_compact() for overall service/provider/model breakdown
+        - turn_usage_by_agent() for per-agent breakdown
+        - Cost calculation using price_table() and ACCOUNTING_SERVICES config
+        - Token summary calculations
+
+        Args:
+            tenant_id: Tenant identifier
+            project_id: Project identifier
+            conversation_id: Conversation identifier
+            turn_id: Turn identifier
+            app_bundle_id: Optional app bundle filter
+            user_id: Optional user filter
+            date_from: Start date (ISO format YYYY-MM-DD)
+            date_to: End date (ISO format YYYY-MM-DD)
+            service_types: Optional list of service types to include
+            use_memory_cache: Use Redis turn cache if True
+            accounting_services_config: Optional config dict (loads from env if None)
+
+        Returns:
+            {
+                "cost_total_usd": float,
+                "cost_breakdown": [               # Per service/provider/model with details
+                    {
+                        "service": "llm",
+                        "provider": "anthropic",
+                        "model": "claude-sonnet-4-5-20250929",
+                        "cost_usd": 0.123,
+                        "input_tokens": 1000,
+                        "output_tokens": 500,
+                        ...
+                    },
+                    ...
+                ],
+                "agent_costs": {                  # Per agent (from _calculate_agent_costs)
+                    "answer.generator": {
+                        "total_cost_usd": 0.034,
+                        "breakdown": [...],
+                        "tokens": {...}
+                    },
+                    ...
+                },
+                "token_summary": {                # LLM token counts for rate limiting
+                    "llm_input_sum": 1000,
+                    "llm_cache_creation_sum": 500,
+                    "llm_cache_read_sum": 200,
+                    "llm_output_sum": 300,
+                    "total_input_tokens": 1700,
+                    "weighted_tokens": 980,       # For rate limiting: input*0.4 + output*1.0
+                },
+            }
+        """
+        # 1. Get overall rollup (service/provider/model aggregation)
+        rollup = await self.turn_usage_rollup_compact(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            app_bundle_id=app_bundle_id,
+            user_id=user_id,
+            date_from=date_from,
+            date_to=date_to,
+            service_types=service_types,
+            use_memory_cache=use_memory_cache,
+        )
+
+        # 2. Get agent-level breakdown
+        agent_usage = await self.turn_usage_by_agent(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            app_bundle_id=app_bundle_id,
+            user_id=user_id,
+            date_from=date_from,
+            date_to=date_to,
+            service_types=service_types,
+            use_memory_cache=use_memory_cache,
+        )
+
+        # 3. Calculate token summary (for rate limiting)
+        llm_input_sum = sum(
+            int(item.get("spent", {}).get("input", 0))
+            for item in rollup if item.get("service") == "llm"
+        )
+        llm_cache_creation_sum = sum(
+            int(item.get("spent", {}).get("cache_creation", 0))
+            for item in rollup if item.get("service") == "llm"
+        )
+        llm_cache_read_sum = sum(
+            int(item.get("spent", {}).get("cache_read", 0))
+            for item in rollup if item.get("service") == "llm"
+        )
+        llm_output_sum = sum(
+            int(item.get("spent", {}).get("output", 0))
+            for item in rollup if item.get("service") == "llm"
+        )
+
+        total_input_tokens = llm_input_sum + llm_cache_creation_sum + llm_cache_read_sum
+        weighted_tokens = int(total_input_tokens * 0.4 + llm_output_sum * 1.0)
+
+        # 4. Get price lists
+        acct_cfg = price_table()
+        llm_pricelist = acct_cfg.get("llm", []) or []
+        emb_pricelist = acct_cfg.get("embedding", []) or []
+        web_search_pricelist = acct_cfg.get("web_search", []) or []
+
+        # 5. Calculate per-agent costs (reuses existing _calculate_agent_costs)
+        agent_costs = _calculate_agent_costs(
+            agent_usage,
+            llm_pricelist=llm_pricelist,
+            emb_pricelist=emb_pricelist,
+            web_search_pricelist=web_search_pricelist,
+            accounting_services_config=accounting_services_config,
+        )
+
+        # 6. Calculate overall cost breakdown
+        # Load ACCOUNTING_SERVICES config if not provided
+        if accounting_services_config is None:
+            config_str = os.environ.get("ACCOUNTING_SERVICES", "{}")
+            try:
+                accounting_services_config = json.loads(config_str)
+            except json.JSONDecodeError:
+                accounting_services_config = {}
+
+        # Helper functions (same logic as in _calculate_agent_costs)
+        def _find_llm_price(provider: str, model: str) -> Optional[Dict[str, Any]]:
+            for p in llm_pricelist:
+                if p.get("provider") == provider and p.get("model") == model:
+                    return p
+            return None
+
+        def _find_emb_price(provider: str, model: str) -> Optional[Dict[str, Any]]:
+            for p in emb_pricelist:
+                if p.get("provider") == provider and p.get("model") == model:
+                    return p
+            return None
+
+        def _find_web_search_price(provider: str, tier: str) -> Optional[Dict[str, Any]]:
+            for p in web_search_pricelist:
+                if p.get("provider") == provider and p.get("tier") == tier:
+                    return p
+            return None
+
+        def _get_web_search_tier(provider: str) -> str:
+            """Get tier for web_search provider from ACCOUNTING_SERVICES config."""
+            web_search_config = accounting_services_config.get("web_search", {})
+            provider_config = web_search_config.get(provider, {})
+            defaults = {"brave": "base", "duckduckgo": "free"}
+            return provider_config.get("tier", defaults.get(provider, "free"))
+
+        # Cost calculation loop
+        cost_total_usd = 0.0
+        cost_breakdown = []
+
+        for item in rollup:
+            service = item.get("service")
+            provider = item.get("provider")
+            model = item.get("model")
+            spent = item.get("spent", {}) or {}
+
+            cost_usd = 0.0
+            cost_details = {}
+
+            if service == "llm":
+                pr = _find_llm_price(provider, model)
+                if pr:
+                    input_cost = (float(spent.get("input", 0)) / 1_000_000.0) * float(pr.get("input_tokens_1M", 0.0))
+                    output_cost = (float(spent.get("output", 0)) / 1_000_000.0) * float(pr.get("output_tokens_1M", 0.0))
+                    cache_read_cost = (float(spent.get("cache_read", 0)) / 1_000_000.0) * float(pr.get("cache_read_tokens_1M", 0.0))
+
+                    cache_write_cost = 0.0
+                    cache_pricing = pr.get("cache_pricing")
+
+                    if cache_pricing and isinstance(cache_pricing, dict):
+                        cache_5m_tokens = float(spent.get("cache_5m_write", 0))
+                        cache_1h_tokens = float(spent.get("cache_1h_write", 0))
+
+                        if cache_5m_tokens > 0:
+                            price_5m = float(cache_pricing.get("5m", {}).get("write_tokens_1M", 0.0))
+                            cache_write_cost += (cache_5m_tokens / 1_000_000.0) * price_5m
+
+                        if cache_1h_tokens > 0:
+                            price_1h = float(cache_pricing.get("1h", {}).get("write_tokens_1M", 0.0))
+                            cache_write_cost += (cache_1h_tokens / 1_000_000.0) * price_1h
+
+                        cost_details = {
+                            "input_tokens": spent.get("input", 0),
+                            "output_tokens": spent.get("output", 0),
+                            "cache_5m_write_tokens": spent.get("cache_5m_write", 0),
+                            "cache_1h_write_tokens": spent.get("cache_1h_write", 0),
+                            "cache_read_tokens": spent.get("cache_read", 0),
+                            "total_input_tokens": (
+                                    spent.get("input", 0) +
+                                    spent.get("cache_5m_write", 0) +
+                                    spent.get("cache_1h_write", 0) +
+                                    spent.get("cache_read", 0)
+                            ),
+                            "input_cost_usd": input_cost,
+                            "output_cost_usd": output_cost,
+                            "cache_5m_write_cost_usd": (cache_5m_tokens / 1_000_000.0) * price_5m if cache_5m_tokens > 0 else 0.0,
+                            "cache_1h_write_cost_usd": (cache_1h_tokens / 1_000_000.0) * price_1h if cache_1h_tokens > 0 else 0.0,
+                            "cache_read_cost_usd": cache_read_cost,
+                        }
+                    else:
+                        cache_write_tokens = float(spent.get("cache_creation", 0))
+                        cache_write_price = float(pr.get("cache_write_tokens_1M", 0.0))
+                        cache_write_cost = (cache_write_tokens / 1_000_000.0) * cache_write_price
+
+                        cost_details = {
+                            "input_tokens": spent.get("input", 0),
+                            "output_tokens": spent.get("output", 0),
+                            "cache_creation_tokens": spent.get("cache_creation", 0),
+                            "cache_read_tokens": spent.get("cache_read", 0),
+                            "total_input_tokens": (
+                                    spent.get("input", 0) +
+                                    spent.get("cache_creation", 0) +
+                                    spent.get("cache_read", 0)
+                            ),
+                            "input_cost_usd": input_cost,
+                            "output_cost_usd": output_cost,
+                            "cache_write_cost_usd": cache_write_cost,
+                            "cache_read_cost_usd": cache_read_cost,
+                        }
+
+                    cost_usd = input_cost + output_cost + cache_write_cost + cache_read_cost
+
+            elif service == "embedding":
+                pr = _find_emb_price(provider, model)
+                if pr:
+                    cost_usd = (float(spent.get("tokens", 0)) / 1_000_000.0) * float(pr.get("tokens_1M", 0.0))
+                    cost_details = {
+                        "tokens": spent.get("tokens", 0),
+                    }
+
+            elif service == "web_search":
+                tier = _get_web_search_tier(provider)
+                pr = _find_web_search_price(provider, tier)
+
+                if pr:
+                    search_queries = float(spent.get("search_queries", 0))
+                    cost_per_1k = float(pr.get("cost_per_1k_requests", 0.0))
+                    cost_usd = (search_queries / 1000.0) * cost_per_1k
+
+                    cost_details = {
+                        "search_queries": spent.get("search_queries", 0),
+                        "search_results": spent.get("search_results", 0),
+                        "tier": tier,
+                    }
+
+            cost_total_usd += cost_usd
+            cost_breakdown.append({
+                "service": service,
+                "provider": provider,
+                "model": model,
+                "cost_usd": cost_usd,
+                **cost_details
+            })
+
+        # 7. Return complete result
+        return {
+            "cost_total_usd": cost_total_usd,
+            "cost_breakdown": cost_breakdown,
+            "agent_costs": agent_costs,
+            "token_summary": {
+                "llm_input_sum": llm_input_sum,
+                "llm_cache_creation_sum": llm_cache_creation_sum,
+                "llm_cache_read_sum": llm_cache_read_sum,
+                "llm_output_sum": llm_output_sum,
+                "total_input_tokens": total_input_tokens,
+                "weighted_tokens": weighted_tokens,
+            },
+        }
 
 def _calculate_agent_costs(
         agent_usage: Dict[str, List[Dict[str, Any]]],
@@ -2376,6 +2667,7 @@ def _calculate_agent_costs(
         }
 
     return agent_costs
+
 
 # ----
 # Examples

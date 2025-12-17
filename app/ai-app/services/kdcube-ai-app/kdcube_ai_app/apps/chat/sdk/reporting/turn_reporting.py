@@ -36,7 +36,6 @@ def _format_ms_table_markdown(rows: List[Dict[str, int]], headers: Tuple[str, st
     md_table = "\n".join(lines)
     return md_table
 
-# Add these to base_workflow.py or a separate formatting module
 
 def _format_cost_table_markdown(cost_breakdown: List[Dict[str, Any]],
                                 total_cost: float,
@@ -47,7 +46,7 @@ def _format_cost_table_markdown(cost_breakdown: List[Dict[str, Any]],
     Args:
         cost_breakdown: List of cost items with service, provider, model, tokens, costs
         total_cost: Total cost in USD
-        show_detailed: If True, show separate tables for LLM and embedding with token details
+        show_detailed: If True, show separate tables for LLM, embedding, and web_search with details
     """
     if not cost_breakdown:
         return f"**Total Cost:** ${total_cost:.6f} USD\n\n_No usage recorded._"
@@ -55,6 +54,7 @@ def _format_cost_table_markdown(cost_breakdown: List[Dict[str, Any]],
     # Separate by service type
     llm_items = [item for item in cost_breakdown if item.get("service") == "llm"]
     emb_items = [item for item in cost_breakdown if item.get("service") == "embedding"]
+    web_search_items = [item for item in cost_breakdown if item.get("service") == "web_search"]
 
     sections = []
 
@@ -72,6 +72,10 @@ def _format_cost_table_markdown(cost_breakdown: List[Dict[str, Any]],
     if emb_items:
         sections.append("\n### 📊 Embedding Usage\n")
         sections.append(_format_embedding_table(emb_items))
+
+    if web_search_items:
+        sections.append("\n### 🔍 Web Search Usage\n")
+        sections.append(_format_web_search_table(web_search_items))
 
     return "\n".join(sections)
 
@@ -163,6 +167,28 @@ def _format_embedding_table(emb_items: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_web_search_table(web_search_items: List[Dict[str, Any]]) -> str:
+    """Format web search cost table with tier and query metrics."""
+    lines = [
+        "| Provider | Tier | Queries | Results | Cost/1K | Cost (USD) |",
+        "|---|---|---:|---:|---:|---:|"
+    ]
+
+    for item in web_search_items:
+        provider = item.get("provider", "unknown")
+        tier = item.get("tier", "unknown")
+        queries = _format_number(item.get("search_queries", 0))
+        results = _format_number(item.get("search_results", 0))
+        cost_per_1k = item.get("cost_per_1k_requests", 0.0)
+        cost = f"${item.get('cost_usd', 0):.6f}"
+
+        lines.append(
+            f"| {provider} | {tier} | {queries} | {results} | ${cost_per_1k:.2f} | {cost} |"
+        )
+
+    return "\n".join(lines)
+
+
 def _format_number(n: int) -> str:
     """Format large numbers with comma separators."""
     return f"{n:,}"
@@ -178,6 +204,7 @@ def _format_cost_summary_compact(cost_breakdown: List[Dict[str, Any]],
     """
     llm_count = sum(1 for item in cost_breakdown if item.get("service") == "llm")
     emb_count = sum(1 for item in cost_breakdown if item.get("service") == "embedding")
+    search_count = sum(1 for item in cost_breakdown if item.get("service") == "web_search")
 
     parts = [
         f"**${total_cost:.6f} USD**",
@@ -190,8 +217,11 @@ def _format_cost_summary_compact(cost_breakdown: List[Dict[str, Any]],
         parts.append(f"• {llm_count} LLM call{'s' if llm_count > 1 else ''}")
     if emb_count:
         parts.append(f"• {emb_count} embed call{'s' if emb_count > 1 else ''}")
+    if search_count:
+        parts.append(f"• {search_count} search call{'s' if search_count > 1 else ''}")
 
     return " ".join(parts)
+
 
 def _format_agent_breakdown_markdown(
         agent_costs: Dict[str, Dict[str, Any]],
@@ -214,8 +244,8 @@ def _format_agent_breakdown_markdown(
 
     # Summary table
     lines = [
-        "| Agent | LLM Tokens | Cost (USD) | % of Turn |",
-        "|---|---:|---:|---:|"
+        "| Agent | LLM Tokens | Searches | Cost (USD) | % of Turn |",
+        "|---|---:|---:|---:|---:|"
     ]
 
     for agent in sorted(agent_costs.keys(), key=lambda a: agent_costs[a]["total_cost_usd"], reverse=True):
@@ -225,9 +255,10 @@ def _format_agent_breakdown_markdown(
 
         tokens = data["tokens"]
         llm_total = tokens["input"] + tokens["output"] + tokens["cache_5m_write"] + tokens["cache_1h_write"] + tokens["cache_read"]
+        search_total = tokens.get("search_queries", 0)
 
         lines.append(
-            f"| {agent} | {_format_number(llm_total)} | ${cost:.6f} | {pct:.1f}% |"
+            f"| {agent} | {_format_number(llm_total)} | {_format_number(search_total)} | ${cost:.6f} | {pct:.1f}% |"
         )
 
     sections.append("\n".join(lines))
@@ -256,6 +287,10 @@ def _format_agent_breakdown_markdown(
             token_lines.append(f"- Cache Read: {_format_number(tokens['cache_read'])}")
         if tokens["embedding"] > 0:
             token_lines.append(f"- Embedding: {_format_number(tokens['embedding'])}")
+        if tokens.get("search_queries", 0) > 0:
+            token_lines.append(f"- Search Queries: {_format_number(tokens['search_queries'])}")
+        if tokens.get("search_results", 0) > 0:
+            token_lines.append(f"- Search Results: {_format_number(tokens['search_results'])}")
 
         if token_lines:
             sections.append("\n".join(token_lines))
