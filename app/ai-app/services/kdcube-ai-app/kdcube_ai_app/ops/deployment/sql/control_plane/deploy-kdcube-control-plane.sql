@@ -304,6 +304,7 @@ CREATE TABLE IF NOT EXISTS kdcube_control_plane.tenant_project_budget_reservatio
     expires_at  TIMESTAMPTZ NOT NULL,
     committed_at TIMESTAMPTZ DEFAULT NULL,
     released_at  TIMESTAMPTZ DEFAULT NULL,
+    notes        TEXT  DEFAULT NULL,
 
     CONSTRAINT fk_cp_budget_resv_budget
       FOREIGN KEY (tenant, project)

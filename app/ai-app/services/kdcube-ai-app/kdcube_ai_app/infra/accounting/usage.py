@@ -9,13 +9,17 @@ from decimal import Decimal, ROUND_FLOOR
 
 logger = logging.getLogger(__name__)
 
+sonnet_45 = "claude-sonnet-4-5-20250929"
+haiku_4 = "claude-haiku-4-5-20251001"
+
+openai = "openai"
+anthropic = "anthropic"
 # -----------------------------
 # Price calculation helpers
 # -----------------------------
 def price_table():
     """Enhanced price table with separate cache type pricing."""
-    sonnet_45 = "claude-sonnet-4-5-20250929"
-    haiku_4 = "claude-haiku-4-5-20251001"
+
 
     return {
         "llm": [

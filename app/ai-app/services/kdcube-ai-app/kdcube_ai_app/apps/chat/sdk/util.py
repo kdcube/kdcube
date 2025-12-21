@@ -535,3 +535,8 @@ def _sanitize_no_unserializable_data(v):
         return out
     # Reject everything else (classes, clients, pools, datetimes, etc.)
     return None
+
+def safe_frac(num: float, den: float) -> float:
+    if den <= 0:
+        return 0.0
+    return float(num) / float(den)

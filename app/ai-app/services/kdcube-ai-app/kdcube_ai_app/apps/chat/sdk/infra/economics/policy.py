@@ -22,6 +22,15 @@ class QuotaPolicy:
     tokens_per_day: Optional[int] = None
     tokens_per_month: Optional[int] = None
 
+    def effective_allowed_tokens(self):
+        if self.tokens_per_hour is not None:
+            return self.tokens_per_hour, "hour"
+        if self.tokens_per_day is not None:
+            return self.tokens_per_day, "day"
+        if self.tokens_per_month is not None:
+            return self.tokens_per_month, "month"
+        return None, None
+
 @dataclass
 class PolicyTable:
     by_user_type: Dict[str, QuotaPolicy]
@@ -116,3 +125,9 @@ def paid_policy(base_policy: QuotaPolicy, tier_balance) -> QuotaPolicy:
         tokens_per_day=None,
         tokens_per_month=None,
     )
+
+class EconomicsLimitException(RuntimeError):
+    def __init__(self, message: str, *, code: str, data: dict | None = None):
+        super().__init__(message)
+        self.code = code
+        self.data = data or {}

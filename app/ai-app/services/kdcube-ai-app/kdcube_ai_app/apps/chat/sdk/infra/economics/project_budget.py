@@ -308,13 +308,14 @@ class ProjectBudgetLimiter:
         self,
         *,
         bundle_id: Optional[str],
-        provider: Optional[str],
         amount_usd: float,
         user_id: Optional[str] = None,
+        provider: Optional[str] = None,
         request_id: Optional[str] = None,
         reservation_id: Optional[UUID] = None,
         ttl_sec: int = 300,
         now: Optional[datetime] = None,
+        notes: Optional[str] = None,
     ) -> ReservationResult:
         """
         Reserve project funds for an in-flight request (estimate).
@@ -358,10 +359,10 @@ class ProjectBudgetLimiter:
                     INSERT INTO {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations (
                         reservation_id, tenant, project,
                         bundle_id, provider, user_id, request_id,
-                        amount_cents, status, expires_at
-                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9)
+                        amount_cents, status, expires_at, notes
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'active',$9, $10)
                     ON CONFLICT (reservation_id) DO NOTHING
-                """, rid, self.tenant, self.project, bundle_id, provider, user_id, request_id, amount_cents, expires_at)
+                """, rid, self.tenant, self.project, bundle_id, provider, user_id, request_id, amount_cents, expires_at, notes)
 
                 if not inserted.endswith("1"):
                     raise ValueError(f"reservation_id already exists: {rid}")
@@ -440,7 +441,7 @@ class ProjectBudgetLimiter:
                         kind="reserve_release",
                         note=note,
                         reservation_id=reservation_id,
-                        user_id=row["user_id"]
+                        user_id=r["user_id"]
                     )
 
                 return self._snapshot_from_row(row)
@@ -450,7 +451,6 @@ class ProjectBudgetLimiter:
         *,
         reservation_id: UUID,
         spent_usd: float,
-        note: Optional[str] = None,
         now: Optional[datetime] = None,
     ) -> BudgetSnapshot:
         """
@@ -510,7 +510,12 @@ class ProjectBudgetLimiter:
                 new_bal = bal - spent_cents
                 available_after = new_bal - new_res_total
 
-                self._check_overdraft(available_after_cents=available_after, overdraft_limit_cents=od_lim_c)
+                # self._check_overdraft(available_after_cents=available_after, overdraft_limit_cents=od_lim_c)
+                # Soft overdraft detection: committing a FACT should not be blocked.
+                # Reserve() is the planning gate; commit must record reality and then alert.
+                overdraft_excess_cents: int | None = None
+                if od_lim_c is not None and available_after < -int(od_lim_c):
+                    overdraft_excess_cents = (-int(available_after)) - int(od_lim_c)
 
                 await conn.execute(f"""
                     UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
@@ -536,15 +541,31 @@ class ProjectBudgetLimiter:
                     conn,
                     amount_cents=-spent_cents,
                     kind="spend",
-                    note=note,
+                    note=r["notes"],
                     reservation_id=reservation_id,
                     bundle_id=r["bundle_id"],
                     provider=r["provider"],
                     user_id=r["user_id"],
                     request_id=r["request_id"],
                 )
+                if overdraft_excess_cents and overdraft_excess_cents > 0:
+                    await self._insert_ledger(
+                        conn,
+                        amount_cents=0,
+                        kind="overdraft_exceeded",
+                        note=f"overdraft_excess_cents={int(overdraft_excess_cents)}; commit_reserved_spend",
+                        reservation_id=reservation_id,
+                        bundle_id=r["bundle_id"],
+                        provider=r["provider"],
+                        user_id=r["user_id"],
+                        request_id=r["request_id"],
+                    )
+                    logger.error(
+                        "Budget overdraft exceeded on commit_reserved_spend: tenant=%s project=%s reservation=%s excess_cents=%s",
+                        self.tenant, self.project, str(reservation_id), int(overdraft_excess_cents)
+                    )
 
-                return self._snapshot_from_row(row)
+        return self._snapshot_from_row(row)
 
     async def reap_expired_reservations(self, *, limit: int = 500, now: Optional[datetime] = None) -> int:
         """
@@ -780,3 +801,85 @@ class ProjectBudgetLimiter:
             "day": int(vals[1] or 0) / 100.0,
             "month": int(vals[2] or 0) / 100.0,
         }
+
+    async def record_budget_analytics_only(self, *, bundle_id: str, provider: str, spent_usd: float, now: datetime):
+        """
+        Updates Redis hour/day/month spend counters WITHOUT touching PG balance.
+        This matches ProjectBudgetLimiter.commit() Redis part but avoids double-deducting PG.
+        """
+        if spent_usd <= 0:
+            return
+        now = now.astimezone(timezone.utc)
+        ymd, ym, ymdh = _ymd(now), _ym(now), _ymdh(now)
+
+        k_spend_h = self._k(bundle_id, provider, "spend:hour", ymdh)
+        k_spend_d = self._k(bundle_id, provider, "spend:day", ymd)
+        k_spend_m = self._k(bundle_id, provider, "spend:month", ym)
+        k_last_u  = self._k(bundle_id, provider, "last_spend_usd")
+        k_last_a  = self._k(bundle_id, provider, "last_spend_at")
+
+        await self.r.eval(
+            _LUA_COMMIT_SPEND, 5,
+            *_strs(k_spend_h, k_spend_d, k_spend_m, k_last_u, k_last_a),
+            *_strs(float(spent_usd), _eoh(now), _eod(now), _eom(now), int(now.timestamp())),
+        )
+
+    async def force_project_spend(
+            self,
+            *,
+            spent_usd: float,
+            bundle_id: Optional[str],
+            provider: Optional[str],
+            request_id: Optional[str],
+            user_id: Optional[str],
+            note: Optional[str],
+    ) -> None:
+        """
+        Force-deduct from PG budget WITHOUT any overdraft checks.
+        This is explicitly used for post-fact reality settlement (fact risk),
+        including "user underfunded" deltas.
+
+        Uses ProjectBudgetLimiter internals (private helpers) intentionally.
+        """
+        if spent_usd <= 0:
+            return
+
+        spent_cents = int(round(float(spent_usd) * 100))
+        if spent_cents <= 0:
+            return
+
+        async with self.pg_pool.acquire() as conn:
+            async with conn.transaction():
+                # Ensure row exists
+                await self._ensure_budget_row(conn)
+
+                # Lock budget row
+                b = await conn.fetchrow(f"""
+                    SELECT *
+                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    WHERE tenant=$1 AND project=$2
+                    FOR UPDATE
+                """, self.tenant, self.project)
+
+                # Apply delta (no overdraft guard)
+                await conn.execute(f"""
+                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    SET
+                        balance_cents = balance_cents - $3,
+                        lifetime_spent_cents = lifetime_spent_cents + $3,
+                        updated_at = NOW()
+                    WHERE tenant=$1 AND project=$2
+                """, self.tenant, self.project, int(spent_cents))
+
+                # Ledger
+                await self._insert_ledger(
+                    conn,
+                    amount_cents=-int(spent_cents),
+                    kind="spend",
+                    note=note,
+                    reservation_id=None,
+                    bundle_id=bundle_id,
+                    provider=provider,
+                    user_id=user_id,
+                    request_id=request_id,
+                )

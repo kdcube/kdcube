@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 
 from dotenv import load_dotenv, find_dotenv
 
+from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
 from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec
 
 load_dotenv(find_dotenv())
@@ -165,7 +166,9 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             # Let processor send the error envelope; we just surface the message up.
             logger.error(traceback.format_exc())
-            return { "error_message": str(e), "final_answer": "An error occurred." }
+            if not isinstance(e, EconomicsLimitException):
+                return { "error_message": str(e), "final_answer": "An error occurred." }
+
 
     # ================================
     # SOCKET.IO SETUP

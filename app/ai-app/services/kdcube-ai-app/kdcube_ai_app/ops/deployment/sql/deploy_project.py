@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     import os
     # 5435
-    # os.environ["POSTGRES_PORT"] = "5435"
+    os.environ["POSTGRES_PORT"] = "5436"
     project = os.environ.get("DEFAULT_PROJECT_NAME", None)
     tenant = os.environ.get("DEFAULT_TENANT", None)
 
@@ -51,6 +51,6 @@ if __name__ == "__main__":
     # deprovision_control_plane()
 
     # Deploy project schemas
-    # step_provision(tenant, project, "chatbot")
-    # step_provision(tenant, project, "knowledge_base")
+    step_provision(tenant, project, "chatbot")
+    step_provision(tenant, project, "knowledge_base")
     # step_deprovision(tenant, project, "knowledge_base")
