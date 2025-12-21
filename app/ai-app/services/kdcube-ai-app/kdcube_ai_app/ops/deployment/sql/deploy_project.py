@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     import os
     # 5435
-    os.environ["POSTGRES_PORT"] = "5436"
+    # os.environ["POSTGRES_PORT"] = "5436"
     project = os.environ.get("DEFAULT_PROJECT_NAME", None)
     tenant = os.environ.get("DEFAULT_TENANT", None)
 
