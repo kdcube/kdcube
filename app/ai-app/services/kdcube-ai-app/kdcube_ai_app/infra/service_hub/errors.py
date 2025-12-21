@@ -6,6 +6,7 @@
 from enum import Enum
 from typing import Optional, Any, Dict
 from pydantic import BaseModel, Field
+import asyncio
 
 from kdcube_ai_app.infra.accounting.usage import (
     ClientConfigHint,
@@ -73,6 +74,16 @@ class ServiceError(BaseModel):
         description="Free-form extra data (request id, role, operation, etc)."
     )
 
+class ServiceException(Exception):
+    """
+    Raise this to bubble a ServiceError through normal exception handling.
+    """
+    def __init__(self, err: ServiceError, *, cause: Exception | None = None):
+        super().__init__(err.message)
+        self.err = err
+        if cause is not None:
+            self.__cause__ = cause
+
 def mk_llm_error(
         exc: Exception,
         stage: str,
@@ -86,8 +97,8 @@ def mk_llm_error(
     return ServiceError(
         kind=ServiceKind.llm,
         service_name=service_name,
-        provider=cfg.provider,
-        model_name=cfg.model_name,
+        provider=getattr(cfg, "provider", None),
+        model_name=getattr(cfg, "model_name", None),
         error_type=type(exc).__name__,
         message=str(exc),
         stage=stage,

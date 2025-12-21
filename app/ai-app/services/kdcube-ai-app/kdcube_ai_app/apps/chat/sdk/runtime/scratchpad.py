@@ -110,6 +110,7 @@ class TurnScratchpad:
         # Answer section
         self.answer = None
         self.avec = None
+        self.service_error = None
         self.turn_summary = None
         self.final_internal_thinking = None
 

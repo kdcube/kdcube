@@ -1281,7 +1281,7 @@ class QuotaInsight:
     retry_after_sec: Optional[int]
     retry_scope: Optional[str]   # "hour" | "day" | "month" | None
     used_tier_override: bool = False  # Whether tier override was applied
-    total_token_remaining: Optional[int] = 0
+    total_token_remaining: Optional[int] = None
     usage_percentage: Optional[float] = 0.0
     approaching_limit_type: Optional[str] = None
 
@@ -1403,6 +1403,24 @@ def _get_approaching_limit_type(limits, remaining) -> Optional[str]:
 
     return closest_key
 
+def _first_token_scope(policy: QuotaPolicy) -> Optional[str]:
+    # "first set rule"
+    if getattr(policy, "tokens_per_hour", None) is not None:
+        return "hour"
+    if getattr(policy, "tokens_per_day", None) is not None:
+        return "day"
+    if getattr(policy, "tokens_per_month", None) is not None:
+        return "month"
+    return None
+
+
+def _tier_token_remaining_first_rule(policy: QuotaPolicy, remaining: Dict[str, Optional[int]]) -> Optional[int]:
+    scope = _first_token_scope(policy)
+    if not scope:
+        return None
+    return remaining.get(f"tokens_per_{scope}")
+
+
 def compute_quota_insight(
         *,
         policy: QuotaPolicy,
@@ -1411,6 +1429,7 @@ def compute_quota_insight(
         user_budget_tokens: Optional[int] = None,  # User's purchased token balance
         used_tier_override: bool = False,
         now: Optional[datetime] = None,
+        est_tokens_per_turn = 133_333
 ) -> QuotaInsight:
     """
     Compute quota insight considering BOTH tier limits AND user token budget.
@@ -1439,29 +1458,24 @@ def compute_quota_insight(
     # Calculate messages_remaining from REQUEST quotas
     request_remaining = _messages_remaining_from_remaining(remaining)
 
-    # Calculate messages_remaining from TOKEN BUDGET
-    # Tier tokens remaining
-    tier_token_remaining = remaining.get("tokens_per_month")
+    # Tier tokens remaining: "first set rule" (same semantics as the limiter/reservation plan)
+    tier_token_remaining = _tier_token_remaining_first_rule(policy, remaining)
 
-    # Total available tokens = tier + user budget
-    total_token_remaining = tier_token_remaining
-    if total_token_remaining is not None and user_budget_tokens is not None:
-        total_token_remaining = total_token_remaining + user_budget_tokens
-    elif total_token_remaining is None and user_budget_tokens is not None:
-        total_token_remaining = user_budget_tokens
+    ub = int(user_budget_tokens or 0)
+    total_token_remaining = None
+    if tier_token_remaining is not None:
+        total_token_remaining = int(tier_token_remaining) + ub
+
 
     # Estimate messages from token budget (assuming ~100K tokens per request)
     token_based_messages = None
     if total_token_remaining is not None:
-        token_based_messages = max(total_token_remaining // 100_000, 0)
+        token_based_messages = max(int(total_token_remaining) // int(est_tokens_per_turn), 0)
 
-    # Final messages_remaining is the MINIMUM (most restrictive)
     messages_remaining = request_remaining
     if token_based_messages is not None:
-        if messages_remaining is None:
-            messages_remaining = token_based_messages
-        else:
-            messages_remaining = min(messages_remaining, token_based_messages)
+        messages_remaining = token_based_messages if messages_remaining is None else min(messages_remaining, token_based_messages)
+
     usage_percentage = _calculate_usage_percentage(limits, remaining)
     approaching_limit_type = _get_approaching_limit_type(limits, remaining)
     qi = QuotaInsight(
