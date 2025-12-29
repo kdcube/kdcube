@@ -16,6 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     normalize_citation_item,
     normalize_url, _rewrite_md_citation_tokens,
 )
+from kdcube_ai_app.apps.chat.sdk.util import ts_key
 
 PROJECT_LOG_SLOTS = { "project_log" }
 
@@ -345,7 +346,7 @@ async def build_program_history_from_turn_ids(self, *,
         materialized_canvas = {}
         try:
             glue = project_log.get("value","") if project_log else ""
-            from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.presentation import _materialize_glue_canvas
+            from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.journal import _materialize_glue_canvas
             mat = _materialize_glue_canvas(glue, d_items)
             if mat and mat != glue:
                 materialized_canvas = {"format": "markdown", "text": mat}
@@ -384,7 +385,10 @@ async def build_program_history_from_turn_ids(self, *,
         out.append({exec_id: ret})
 
     # newest first
-    out.sort(key=lambda e: next(iter(e.values())).get("ts","") or "", reverse=True)
+    out.sort(
+        key=lambda e: ts_key((next(iter(e.values()), {}) or {}).get("ts")),
+        reverse=True
+    )
     return out
 
 # ---------------------------------------------------------------------------

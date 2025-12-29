@@ -15,17 +15,20 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.strategy_and_budget impo
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 
 import kdcube_ai_app.apps.chat.sdk.runtime.solution.context.retrieval as ctx_retrieval_module
-from kdcube_ai_app.apps.chat.sdk.util import _truncate, _turn_id_from_tags_safe, _to_jsonable
+from kdcube_ai_app.apps.chat.sdk.util import _truncate, _turn_id_from_tags_safe, _to_jsonable, ts_key
 
 
-def build_solver_playbook(*,
-                          context: ReactContext,
-                          output_contract: Dict[str, Any],
-                          max_prior_turns: int = 5,
-                          max_sources_per_turn: int = 20,
-                          turn_view_class: Type[BaseTurnView] = BaseTurnView, )-> str:
+def build_turn_session_journal(*,
+                               context: ReactContext,
+                               output_contract: Dict[str, Any],
+                               max_prior_turns: int = 5,
+                               max_sources_per_turn: int = 20,
+                               turn_view_class: Type[BaseTurnView] = BaseTurnView,
+                               fetch_context_tool_retrieval_example: Optional[str] = "ctx_tools.fetch_turn_artifacts([turn_id])",
+                               show_artifacts: Optional[List[Dict[str, Any]]] = None,
+                               coordinator_turn_line: Optional[str] = None) -> str:
     """
-    Unified, LLM-friendly Operational Playbook used by the Decision node.
+    Unified, LLM-friendly Turn Session Journal used by the Decision node.
 
     ORDER (strict oldest → newest):
       1) Prior turns (historical), strictly oldest → newest
@@ -33,6 +36,7 @@ def build_solver_playbook(*,
          • User Request (what we knew at session start) — comes from scratchpad via `current_user_markdown`
          • Events timeline (appended as the session progresses; short timestamps)
          • Current snapshot (contract/slots/tool results)
+      3) Full artifacts (optional): explicit list of context artifacts to show in full
     """
     import traceback
     from urllib.parse import urlparse
@@ -49,11 +53,89 @@ def build_solver_playbook(*,
         remaining = len(text) - limit
         return f"{text[:limit]}... (...{remaining} more chars)"
 
+    def _format_full_value(val: Any) -> str:
+        if val is None:
+            return ""
+        if isinstance(val, str):
+            return val
+        try:
+            return json.dumps(val, ensure_ascii=False, indent=2)
+        except Exception:
+            return str(val)
+
+    def _render_full_artifact(item: Dict[str, Any]) -> List[str]:
+        lines_local: list[str] = []
+        ctx_path = (item.get("context_path") or "").strip()
+        art_type = (item.get("artifact_type") or "").strip()
+        ts = (item.get("timestamp") or item.get("ts_human") or item.get("time") or "").strip()
+        art = item.get("artifact") or {}
+        if not isinstance(art, dict):
+            art = {"value": art}
+
+        kind = (art.get("kind") or art.get("type") or "").strip()
+        fmt = (art.get("format") or "").strip()
+        mime = (art.get("mime") or "").strip()
+        filename = (art.get("filename") or art.get("path") or "").strip()
+
+        header = f"### {ctx_path}" if ctx_path else "### (unknown context path)"
+        if art_type:
+            header += f" [{art_type}]"
+        lines_local.append(header)
+
+        meta_parts = []
+        if ts:
+            meta_parts.append(f"time={ts}")
+        if kind:
+            meta_parts.append(f"kind={kind}")
+        if fmt:
+            meta_parts.append(f"format={fmt}")
+        if mime:
+            meta_parts.append(f"mime={mime}")
+        if filename:
+            meta_parts.append(f"filename={filename}")
+        if meta_parts:
+            lines_local.append("meta: " + "; ".join(meta_parts))
+
+        text_val = (
+            art.get("text")
+            if art.get("text") is not None
+            else art.get("value")
+        )
+        if text_val is None and art.get("content") is not None:
+            text_val = art.get("content")
+
+        full_text = _format_full_value(text_val if text_val is not None else art)
+        if full_text:
+            lines_local.append("content:")
+            lines_local.append("```text")
+            lines_local.append(full_text)
+            lines_local.append("```")
+        else:
+            lines_local.append("content: (empty)")
+
+        lines_local.append("")
+        return lines_local
+
+    def _slot_kind(name: Optional[str]) -> Optional[str]:
+        if not name or not isinstance(output_contract, dict):
+            return None
+        spec = output_contract.get(name)
+        if spec is None:
+            return None
+        t = spec.get("type") if isinstance(spec, dict) else None
+        if isinstance(t, str):
+            t = t.strip().lower()
+            if t in {"inline", "file"}:
+                return t
+        return None
+
     lines: list[str] = []
-    lines.append("#The Program History PLAYBOOK / Operational Digest (Current turn). **Strictly ordered from oldest → newest** for prior turns.")
+    lines.append("# The Turn Session Journal / Operational Digest (Current turn). **Strictly ordered from oldest → newest** for prior turns.")
     lines.append("")
+    if fetch_context_tool_retrieval_example:
+        fetch_context_tool_retrieval_example = f"Use {fetch_context_tool_retrieval_example} to pull artifact"
     # lines.append("Previews are truncated. Use ctx_tools.fetch_turn_artifacts([turn_ids]) for full content.")
-    lines.append("Within turn, User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown. If available, only their content summary is shown. Use ctx_tools.fetch_turn_artifacts([turn_ids]) to explore full content.")
+    lines.append(f"Within turn, User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown. If available, only their content summary is shown. {fetch_context_tool_retrieval_example}")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -64,12 +146,12 @@ def build_solver_playbook(*,
     if not context.history_turns:
         lines.append("(none)")
     else:
-        # Sort history_turns oldest → newest
-        history_sorted = sorted(
-            context.history_turns[:max_prior_turns],
-            key=lambda turn_rec: (next(iter(turn_rec.values())) if turn_rec else {}).get("ts", "")
-        )
 
+        # 1) pick most recent N (descending, newest → oldest)
+        recent = (context.history_turns or [])[:max_prior_turns]
+
+        # 2) display oldest → newest (ascending)
+        history_sorted = list(reversed(recent))
         for idx, turn_rec in enumerate(history_sorted, 1):
             # Extract inner metadata dict from {execution_id: meta}
             try:
@@ -78,7 +160,7 @@ def build_solver_playbook(*,
                 continue
 
             turn_id = meta.get("turn_id") or execution_id
-            ts_full = (meta.get("ts") or "").strip()
+            ts_full = str(meta.get("ts") or "").strip()
             ts_disp = ts_full[:16].replace("T", " ") if len(ts_full) >= 16 else (ts_full[:10] or "(no date)")
 
             # Build TurnView from meta payload
@@ -91,7 +173,7 @@ def build_solver_playbook(*,
 
             # Header
             lines.append(f"### Turn {turn_id} — {ts_disp} [HISTORICAL]")
-            lines.append(f"Fetch with: ctx_tools.fetch_turn_artifacts([\"{turn_id}\"])")
+            lines.append(f"Fetch from this turn with: ctx_tools.fetch_ctx(\"{turn_id}\")")
             lines.append("")
 
             # Complete turn presentation from TurnView (delegates to SolverPresenter)
@@ -139,7 +221,7 @@ def build_solver_playbook(*,
 
                 if src_lines:
                     lines.append("")
-                    lines.append(f"[Turn Sources:** ({len(sources)} total)]")
+                    lines.append(f"[**Turn Sources:** ({len(sources)} total)]")
                     lines.extend(src_lines)
                     lines.append("")
 
@@ -150,32 +232,398 @@ def build_solver_playbook(*,
     lines.append("## Current Turn (live — oldest → newest events) [CURRENT TURN]")
     try:
         tv = turn_view_class.from_turn_log_dict(context.scratchpad.turn_view)
+        current_turn_presentation = tv.to_solver_presentation(
+            is_current_turn=True,
+            user_prompt_limit=1000,
+            program_log_limit=0,
+            include_base_summary=True,  # ← Includes user prompt!
+            include_program_log=False,
+            include_deliverable_meta=False,
+            include_assistant_response=False,
+        )
+        lines.append(current_turn_presentation)
+
     except Exception as ex:
         print(f"Failed to build TurnView for current_turn: {ex}")
         print(traceback.format_exc())
-    current_turn_presentation = tv.to_solver_presentation(is_current_turn=True,
-                                                          user_prompt_limit=1000,
-                                                          program_log_limit=0,
-                                                          include_base_summary=True,  # ← Includes user prompt!
-                                                          include_program_log=False,
-                                                          include_deliverable_meta=False,
-                                                          include_assistant_response=False,)
-    lines.append(current_turn_presentation)
-    # 1) What we knew at start: user request for this turn (from scratchpad via param)
-    # cur_user_msg = (current_user_markdown or "").strip()
-    # lines.append("**User Request (markdown):**")
-    # lines.append(_short_with_count(cur_user_msg, 600) if cur_user_msg else "(not recorded)")
-    # lines.append("")
+        lines.append("(failed to render current turn view)")
 
-    lines.append("[CONTRACT SLOTS (to fill)]")
+    if coordinator_turn_line:
+        lines.append("[COORDINATOR TURN DECISION]")
+        lines.append(coordinator_turn_line)
+        lines.append("")
+    lines.append("[CURRENT TURN CONTRACT SLOTS (to fill)]")
     lines.append(json.dumps(_to_jsonable(output_contract or {}), ensure_ascii=False, indent=2),)
+    lines.append("")
+    lines.append("---")
+
+    # 3) Events timeline (short timestamps)
+    lines.append("[EVENTS (oldest → newest)]")
+    if not context.events:
+        lines.append("(no events yet)")
+    else:
+        for e in context.events:
+            ts = time.strftime("%H:%M:%S", time.localtime(e.get("ts", 0)))
+            kind = e.get("kind")
+
+            if kind == "protocol_verify":
+                ok = e.get("ok")
+                tool_id = (e.get("tool_id") or "").strip()
+                codes = e.get("violation_codes") or []
+                codes_s = ", ".join([str(c) for c in codes[:4]]) if isinstance(codes, list) else ""
+                lines.append(
+                    f"- {ts} — protocol_verify: ok={bool(ok)}"
+                    + (f" tool={tool_id}" if tool_id else "")
+                    + (f" codes=[{codes_s}]" if codes_s else "")
+                    + (f" (n={int(e.get('violations_count') or 0)})" if e.get("violations_count") is not None else "")
+                )
+                continue
+
+            if kind == "tool_call_invalid":
+                tool_id = (e.get("tool_id") or "").strip()
+                viols = e.get("violations") or []
+                codes = []
+                if isinstance(viols, list):
+                    for v in viols:
+                        if isinstance(v, dict) and v.get("code"):
+                            codes.append(str(v.get("code")))
+                codes_s = ", ".join(codes[:4])
+                lines.append(
+                    f"- {ts} — tool_call_invalid:"
+                    + (f" tool={tool_id}" if tool_id else "")
+                    + (f" codes=[{codes_s}]" if codes_s else "")
+                )
+                continue
+
+            if kind == "best_effort_mapping":
+                when = e.get("when")
+                applied = e.get("applied") or []
+                requested = e.get("requested")
+                accepted = e.get("accepted")
+                pre_drop = e.get("pre_filter_dropped")
+                dropped = e.get("dropped") or []
+                errs = e.get("errors") or []
+                show = []
+                if isinstance(applied, list) and applied:
+                    show = [str(x) for x in applied[:4]]
+                show_s = ", ".join(show)
+                lines.append(
+                    f"- {ts} — mapping({when}):"
+                    + (f" req={requested}" if requested is not None else "")
+                    + (f" acc={accepted}" if accepted is not None else "")
+                    + (f" pre_drop={pre_drop}" if pre_drop is not None else "")
+                    + f" applied={len(applied) if isinstance(applied, list) else 0}"
+                    + f" dropped={len(dropped) if isinstance(dropped, list) else 0}"
+                    + f" err={len(errs) if isinstance(errs, list) else 0}"
+                    + (f" slots=[{show_s}]" if show_s else "")
+                )
+                continue
+            if kind in ("mapping_dropped_future_artifact", "mapping_dropped_not_in_round_snapshot", "mapping_dropped_unseen_artifact"):
+                slot = e.get("slot") or ""
+                sp = e.get("source_path") or ""
+                lines.append(f"- {ts} — {kind}: slot={slot} ← {sp[:140]}")
+                continue
+
+            if kind == "decision":
+                nxt = e.get("next_step")
+                strat = e.get("strategy")
+                focus = e.get("focus_slot")
+
+                tc = e.get("tool_call") or {}
+                tool_id = (tc.get("tool_id") or "").strip() if isinstance(tc, dict) else ""
+
+                # declared artifacts for this tool call (protocol: list of dicts with "name")
+                art_specs = tc.get("tool_res_artifacts") or []
+                art_labels: list[str] = []
+
+                for spec in art_specs:
+                    if not isinstance(spec, dict):
+                        continue  # protocol says dict; ignore anything else
+                    art_id = (spec.get("name") or "").strip()
+                    if not art_id:
+                        continue
+
+                    stored = (context.artifacts or {}).get(art_id) or {}
+                    ak = (stored.get("artifact_kind") or "").strip()   # file / inline
+                    at = (stored.get("artifact_type") or "").strip()   # often empty
+                    tag = f"{ak}/{at}" if ak and at else (ak or at)
+
+                    art_labels.append(f"{art_id}({tag})" if tag else art_id)
+
+                # concise artifacts preview
+                arts_s = ""
+                if art_labels:
+                    max_show = 10
+                    shown = art_labels[:max_show]
+                    rest = len(art_labels) - len(shown)
+                    arts_s = ", ".join(shown) + (f", +{rest} more" if rest > 0 else "")
+
+                # keep important decision signals
+                fetch_n = 0
+                if e.get("fetch_context_count") is not None:
+                    try:
+                        fetch_n = int(e.get("fetch_context_count") or 0)
+                    except Exception:
+                        fetch_n = 0
+                else:
+                    fetch_ctx = e.get("fetch_context") or []
+                    fetch_n = len(fetch_ctx) if isinstance(fetch_ctx, list) else 0
+
+                map_slots = e.get("map_slots") or []
+                mapped_pairs: list[str] = []
+                def _extract_aid(sp: str) -> str:
+                    prefix = "current_turn.artifacts."
+                    if isinstance(sp, str) and sp.startswith(prefix):
+                        rest = sp[len(prefix):]
+                        return (rest.split(".", 1)[0] or "").strip()
+                    return ""
+                if isinstance(map_slots, list):
+                    for ms in map_slots:
+                        if isinstance(ms, dict):
+                            sn = (ms.get("slot_name") or "").strip()
+                            sp = (ms.get("source_path") or "").strip()
+                            if not sn:
+                                continue
+                            aid = _extract_aid(sp)
+                            mapped_pairs.append(f"{sn}<-{aid}" if aid else f"{sn}<-path")
+
+                maps_s = ""
+                if mapped_pairs:
+                    max_map = 4
+                    shown = mapped_pairs[:max_map]
+                    rest = len(mapped_pairs) - len(shown)
+                    maps_s = ", ".join(shown) + (f", +{rest} more" if rest > 0 else "")
+
+                reason = (e.get("reasoning") or "").replace("\n", " ").strip()
+                # if len(reason) > 140:
+                #     reason = reason[:137] + "..."
+
+                tool_piece = None
+                if tool_id:
+                    # If this ever happens, it’s a protocol violation we WANT to see.
+                    if not art_labels:
+                        arts_s = "MISSING_ARTIFACTS"
+                    tool_piece = f"tool={tool_id}->{arts_s}"
+
+                pieces = [
+                    f"next={nxt}",
+                    f"strategy={strat}" if strat else None,
+                    f"focus={focus}" if focus else None,
+                    tool_piece,
+                    f"map={maps_s}" if maps_s else None,
+                    f"fetch={fetch_n}" if fetch_n else None,
+                    f"reason={reason}" if reason else None,
+                ]
+                pieces = [p for p in pieces if p]
+                lines.append(f"- {ts} — decision: " + " — ".join(pieces))
+                continue
+
+            if kind == "tool_started":
+                sig = e.get("signature")
+                art_ids = e.get("artifact_ids") or []
+                art_ids_s = ",".join([str(x) for x in art_ids]) if isinstance(art_ids, list) else str(art_ids)
+                if sig:
+                    lines.append(f"- {ts} — tool_started: {sig} → {art_ids_s}")
+                else:
+                    lines.append(f"- {ts} — tool_started: tool={e.get('tool_id')} → {art_ids_s}")
+                continue
+
+            if kind == "tool_finished":
+                art_ids = e.get("artifact_ids") or []
+                planned_ids = e.get("planned_artifact_ids") or []
+                produced_ids = e.get("produced_artifact_ids") or []
+                tool_id = e.get("tool_id")
+                tool_call_id = e.get("tool_call_id")
+                if tool_call_id and not planned_ids:
+                    call_rec = (context.tool_call_index or {}).get(tool_call_id) or {}
+                    planned_ids = call_rec.get("declared_artifact_ids") or []
+                if tool_call_id and not produced_ids:
+                    call_rec = (context.tool_call_index or {}).get(tool_call_id) or {}
+                    produced_ids = call_rec.get("produced_artifact_ids") or []
+                if not produced_ids:
+                    produced_ids = art_ids
+                if not planned_ids:
+                    planned_ids = art_ids
+
+                produced_set = set([str(x) for x in produced_ids])
+                planned_set = [str(x) for x in planned_ids]
+                if planned_set:
+                    status_marks = []
+                    for aid in planned_set:
+                        mark = "✓" if aid in produced_set else "✗"
+                        art = (context.artifacts or {}).get(aid)
+                        art_kind = art.get("artifact_kind") if isinstance(art, dict) else None
+                        if not art_kind:
+                            art_kind = _slot_kind(aid)
+                        if isinstance(art_kind, str) and art_kind.strip():
+                            status_marks.append(f"{mark} {aid}[{art_kind.strip()}]")
+                        else:
+                            status_marks.append(f"{mark} {aid}")
+                    status_marks_s = ", ".join(status_marks)
+                else:
+                    status_marks_s = ""
+                marks_part = f" {status_marks_s}" if status_marks_s else ""
+                lines.append(f"- {ts} — tool_finished: {tool_id} →{marks_part}")
+                err = e.get("error")
+                if isinstance(err, dict):
+                    err_code = err.get("code") or err.get("error") or "error"
+                    err_msg = (err.get("message") or err.get("description") or "").strip()
+                    if err_msg:
+                        lines.append(f"  ---tool error: {err_code}: {err_msg}")
+                    else:
+                        lines.append(f"  ---tool error: {err_code}")
+                continue
+
+            if kind in ("code_proj_log", "exec_proj_log"):
+                proj = e.get("project_log") or {}
+                txt = ""
+                if isinstance(proj, dict):
+                    txt = proj.get("value") or proj.get("text") or ""
+                elif isinstance(proj, str):
+                    txt = proj
+                preview = _short_with_count(txt.replace("\n", " "), 400) if txt else "(empty)"
+                lines.append(f"- {ts} — tool_exec_log: {preview}")
+                continue
+
+            payload = {k: v for k, v in e.items() if k != "ts"}
+            # lines.append(f"- {ts} — {kind}: {json.dumps(payload, ensure_ascii=False)[:400]}")
+            lines.append(f"- {ts} — {kind}: {json.dumps(payload, ensure_ascii=False)[:400]}")
+
+    lines.append("")
+
+    if context.artifacts:
+        items_raw = [(k, v) for k, v in (context.artifacts or {}).items() if isinstance(v, dict)]
+
+        # Oldest→newest by timestamp if present; stable fallback to insertion order.
+        indexed = list(enumerate(items_raw))
+        indexed_sorted = sorted(
+            indexed,
+            key=lambda iv: (
+                float((iv[1][1] or {}).get("timestamp") or 0.0),
+                iv[0],
+            ),
+        )
+        items = [pair for _idx, pair in indexed_sorted]
+
+        def _search_context_from_inputs(art: Dict[str, Any]) -> tuple[str, str]:
+            inputs = art.get("inputs") or {}
+            if not isinstance(inputs, dict):
+                return "", ""
+
+            raw_q = inputs.get("queries")
+            q_list: list[str] = []
+            if isinstance(raw_q, list):
+                q_list = [str(q) for q in raw_q if isinstance(q, (str, int, float))]
+            elif isinstance(raw_q, str):
+                try:
+                    parsed = json.loads(raw_q)
+                    if isinstance(parsed, list):
+                        q_list = [str(q) for q in parsed if isinstance(q, (str, int, float))]
+                    else:
+                        q_list = [raw_q]
+                except Exception:
+                    q_list = [raw_q]
+
+            queries_preview = ""
+            if q_list:
+                q2 = q_list[:2]
+                queries_preview = "; ".join([f"\"{q.strip()}\"" for q in q2 if str(q).strip()])
+                if len(q_list) > 2:
+                    queries_preview += f"; …+{len(q_list) - 2} more"
+
+            obj = inputs.get("objective")
+            objective_preview = ""
+            if isinstance(obj, str) and obj.strip():
+                objective_preview = obj.strip()
+                if len(objective_preview) > 160:
+                    objective_preview = objective_preview[:157] + "…"
+
+            return queries_preview, objective_preview
+
+        lines.append("#### Current artifacts (oldest→newest)")
+        if not items:
+            lines.append("(none)")
+            lines.append("")
+        else:
+            for idx, (art_id, art) in enumerate(items, 1):
+                tid = art.get("tool_id", "?")
+                error = art.get("error")
+                status = "FAILED" if error else "success"
+                summ = (art.get("summary") or "").replace("\n", " ")
+                value = art.get("value")
+                value_dict = value if isinstance(value, dict) else {}
+                art_kind = art.get("artifact_kind")
+                if not art_kind:
+                    art_kind = _slot_kind(art_id)
+                fmt = value_dict.get("format") if isinstance(value_dict.get("format"), str) else None
+                mime = value_dict.get("mime") if isinstance(value_dict.get("mime"), str) else None
+                filename = value_dict.get("filename") if isinstance(value_dict.get("filename"), str) else None
+                meta_parts = []
+                if isinstance(art_kind, str) and art_kind.strip():
+                    meta_parts.append(f"kind={art_kind.strip()}")
+                if fmt:
+                    meta_parts.append(f"format={fmt}")
+                if mime:
+                    meta_parts.append(f"mime={mime}")
+                if filename:
+                    meta_parts.append(f"filename={filename}")
+
+                if error:
+                    lines.append(
+                        f"- {idx:02d}. {art_id} ← {tid}: {status} - "
+                        f"{error.get('code')}: {error.get('message', '')[:150]}"
+                    )
+                    if summ:
+                        lines.append(f"    summary: {summ}")
+                else:
+                    lines.append(
+                        f"- {idx:02d}. {art_id} ← {tid}: {status} — summary: {summ}"
+                    )
+                if meta_parts:
+                    lines.append("    meta: " + "; ".join(meta_parts))
+
+                if tools_insights.is_search_tool(tid):
+                    q_prev, obj_prev = _search_context_from_inputs(art)
+                    if q_prev or obj_prev:
+                        lines.append("    search_context:")
+                        if q_prev:
+                            lines.append(f"      queries  : {q_prev}")
+                        if obj_prev:
+                            lines.append(f"      objective: \"{obj_prev}\"")
+
+        lines.append("")
+
+        # py dict save the items in the order they've been added
+        # latest_tool_call = next(reversed(context.tool_call_index.values()), None) or {}
+        # artifact_ids =  latest_tool_call.get("artifact_ids") or []
+        # latest_artifacts = None
+        # if artifact_ids:
+        #     latest_artifacts = [context.artifacts.get(aid) for aid in artifact_ids if context.artifacts.get(aid)]
+        # if latest_artifacts and latest_tool_call and not latest_tool_call.get("error"):
+        #     latest_sig = latest_tool_call.get("signature")
+        #
+        #     if latest_sig:
+        #         lines.append("##### Latest Tool Call — Invocation")
+        #         lines.append(latest_sig)
+        #         lines.append("")
+        #
+        #     lines.append("##### Latest Artifacts — Summaries")
+        #     for a in latest_artifacts:
+        #         if not isinstance(a, dict):
+        #             continue
+        #         lines.append(a.get("artifact_id") or "Unnamed Artifact")
+        #         summ = (a.get("summary") or "").strip()
+        #         if summ:
+        #             lines.append(summ)
+        #         lines.append("")
 
     # 2) Live snapshot (current contract/slots/tool results)
-    declared = sorted(list((output_contract or {}).keys()))
-    filled = sorted(list((context.current_slots or {}).keys()))
-    pending = [s for s in declared if s not in filled]
+    declared = list((output_contract or {}).keys())
+    filled = list((context.current_slots or {}).keys())
+    filled_set = set(filled)
+    pending = [s for s in declared if s not in filled_set]
 
-    lines.append("[CURRENT SNAPSHOT]")
+    lines.append("[CURRENT TURN PROGRESS SNAPSHOT]")
     lines.append("")
     lines.append("# Contract Status")
     lines.append(f"- Declared slots: {len(declared)}")
@@ -190,157 +638,13 @@ def build_solver_playbook(*,
             slots=context.current_slots,
             contract=output_contract,
             grouping="flat",  # or "status" if you want grouping
-            slot_attrs={"description", "gaps"},
+            slot_attrs={"description", "gaps", "artifact_id", "filename"},
         )
 
         lines.append("# Current Slots")
         lines.append("")
         lines.append(slots_md)
         lines.append("")
-
-    # 3) Events timeline (short timestamps)
-    lines.append("[EVENTS (oldest → newest)]")
-    if not context.events:
-        lines.append("(no events yet)")
-    else:
-        for e in context.events:
-            ts = time.strftime("%H:%M:%S", time.localtime(e.get("ts", 0)))
-            kind = e.get("kind")
-
-            if kind == "decision":
-                nxt = e.get("next_step")
-                strat = e.get("strategy")
-                focus = e.get("focus_slot")
-                tc = e.get("tool_call") or {}
-                tool_id = tc.get("tool_id")
-                art = tc.get("tool_res_artifact") or {}
-                art_name = art.get("name") if isinstance(art, dict) else art
-                reason = (e.get("reasoning") or "").replace("\n", " ")
-                if len(reason) > 140:
-                    reason = reason[:137] + "..."
-                pieces = [
-                    f"next={nxt}",
-                    f"strategy={strat}" if strat else None,
-                    f"focus={focus}" if focus else None,
-                    f"tool={tool_id}->{art_name}" if tool_id or art_name else None,
-                    f"reason={reason}" if reason else None,
-                ]
-                pieces = [p for p in pieces if p]
-                lines.append(f"- {ts} — decision: " + " — ".join(pieces))
-                continue
-
-            if kind == "tool_started":
-                sig = e.get("signature")
-                art = e.get("artifact_name")
-                if sig:
-                    lines.append(f"- {ts} — tool_started: {sig} → {art}")
-                else:
-                    payload = {k: v for k, v in e.items() if k != "ts"}
-                    lines.append(f"- {ts} — tool_started: {json.dumps(payload, ensure_ascii=False)[:400]}")
-                continue
-
-            if kind == "tool_finished":
-                summ = (e.get("summary") or "")
-                lines.append(f"- {ts} — tool_finished: {e.get('tool_id')} → {e.get('status')} "
-                             f"[{e.get('artifact_name','?')}] — {summ[:220]}")
-                continue
-
-            payload = {k: v for k, v in e.items() if k != "ts"}
-            lines.append(f"- {ts} — {kind}: {json.dumps(payload, ensure_ascii=False)[:400]}")
-
-    lines.append("")
-
-    if context.current_tool_results:
-        items = sorted(
-            ((k, v) for k, v in context.current_tool_results.items() if isinstance(v, dict)),
-            key=lambda kv: float(kv[1].get("timestamp") or 0.0),
-        )
-
-        def _search_context_from_inputs(art: Dict[str, Any]) -> tuple[str, str]:
-            inputs = art.get("inputs") or {}
-            if not isinstance(inputs, dict):
-                return "", ""
-
-            raw_q = inputs.get("queries")
-            q_list: list[str] = []
-            if isinstance(raw_q, list):
-                q_list = [str(q) for q in raw_q if isinstance(q, (str, int, float))]
-            elif isinstance(raw_q, str):
-                try:
-                    parsed = json.loads(raw_q)
-                    if isinstance(parsed, list):
-                        q_list = [str(q) for q in parsed if isinstance(q, (str, int, float))]
-                    else:
-                        q_list = [raw_q]
-                except Exception:
-                    q_list = [raw_q]
-
-            queries_preview = ""
-            if q_list:
-                q2 = q_list[:2]
-                queries_preview = "; ".join([f"\"{q.strip()}\"" for q in q2 if str(q).strip()])
-                if len(q_list) > 2:
-                    queries_preview += f"; …+{len(q_list) - 2} more"
-
-            obj = inputs.get("objective")
-            objective_preview = ""
-            if isinstance(obj, str) and obj.strip():
-                objective_preview = obj.strip()
-                if len(objective_preview) > 160:
-                    objective_preview = objective_preview[:157] + "…"
-
-            return queries_preview, objective_preview
-
-        lines.append("#### Current Turn Tool Results — all artifacts (oldest→newest)")
-        if not items:
-            lines.append("(none)")
-            lines.append("")
-        else:
-            for idx, (art_id, art) in enumerate(items, 1):
-                tid = art.get("tool_id", "?")
-                error = art.get("error")
-                status = "FAILED" if error else "success"
-                summ = (art.get("summary") or "").replace("\n", " ")
-
-                if error:
-                    lines.append(
-                        f"- {idx:02d}. {art_id} ← {tid}: {status} - "
-                        f"{error.get('code')}: {error.get('message', '')[:150]}"
-                    )
-                else:
-                    lines.append(
-                        f"- {idx:02d}. {art_id} ← {tid}: {status} — {summ}"
-                    )
-
-                if tools_insights.is_search_tool(tid):
-                    q_prev, obj_prev = _search_context_from_inputs(art)
-                    if q_prev or obj_prev:
-                        lines.append("    search_context:")
-                        if q_prev:
-                            lines.append(f"      queries  : {q_prev}")
-                        if obj_prev:
-                            lines.append(f"      objective: \"{obj_prev}\"")
-
-        lines.append("")
-
-        latest_art_id: str | None = items[-1][0] if items else None
-        latest_art: Dict[str, Any] | None = items[-1][1] if items else None
-
-        if latest_art and not latest_art.get("error"):
-            call_meta = (context.tool_call_index or {}).get(latest_art_id, {})
-            latest_sig = call_meta.get("signature")
-
-            if latest_sig:
-                lines.append("##### Latest Tool Call — Invocation")
-                lines.append(latest_sig)
-                lines.append("")
-
-            summ = (latest_art.get("summary") or "").strip()
-            if summ:
-                lines.append("##### Latest Tool Result — Summary")
-                lines.append(summ)
-                lines.append("")
-
     # ---------- Budget snapshot ----------
     try:
         if hasattr(context, "budget_state") and context.budget_state is not None:
@@ -351,377 +655,359 @@ def build_solver_playbook(*,
     except Exception:
         pass
 
+    if show_artifacts:
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("## Full Context Artifacts (show_artifacts)")
+        lines.append("")
+        for item in show_artifacts:
+            if not isinstance(item, dict):
+                lines.append("### (invalid show_artifacts entry)")
+                lines.append("content:")
+                lines.append("```text")
+                lines.append(_format_full_value(item))
+                lines.append("```")
+                lines.append("")
+                continue
+            lines.extend(_render_full_artifact(item))
+
     return "\n".join(lines)
 
-
-
-
-# ----------------- moved from react.context.py
-def build_react_playbook(
-        *,
-        context: ReactContext,
-        output_contract: Dict[str, Any],
-        max_prior_turns: int = 5,
-        max_sources_per_turn: int = 20,
-        turn_view_class: Type[BaseTurnView] = BaseTurnView,
-) -> str:
+def build_session_log_summary(session_log: List[Dict[str, Any]],
+                              slot_specs: Optional[Dict[str, Any]] = None) -> List[str]:
     """
-    Unified, LLM-friendly Operational Playbook used by the Decision node.
+    Build session log summary (informative "mind map" + quick stats).
 
-    ORDER (strict oldest → newest):
-      1) Prior turns (historical), strictly oldest → newest
-      2) Current turn (live):
-         • User Request (what we knew at session start) — comes from scratchpad via `current_user_markdown`
-         • Events timeline (appended as the session progresses; short timestamps)
-         • Current snapshot (contract/slots/tool results)
+    Design goals:
+    - Timeline is oldest → newest and grows only by APPENDING lines.
+      This makes it prefix-cache-friendly across iterations.
+    - A single stats snapshot line is appended at the END (suffix),
+      so it can change each round without invalidating the prefix.
     """
-    import traceback
-    from urllib.parse import urlparse
 
-    def _size(s: Optional[str]) -> int:
-        return len(s or "")
-
-    def _short_with_count(text: str, limit: int) -> str:
-        if not text:
+    # --- Helpers ---------------------------------------------------------
+    def _short(s: str | None, n: int) -> str:
+        if not s:
             return ""
-        text = str(text)
-        if len(text) <= limit:
-            return text
-        remaining = len(text) - limit
-        return f"{text[:limit]}... (...{remaining} more chars)"
+        s = str(s)
+        return s if len(s) <= n else s[:n] + "..."
 
-    lines: list[str] = []
-    lines.append("# Program History / Operational View")
-    lines.append("")
-    # lines.append("Previews are truncated. Use ctx_tools.fetch_turn_artifacts([turn_ids]) for full content.")
-    lines.append("User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown, instead content summary is shown (if available). If available, only content summary is shown. Use ctx_tools.fetch_turn_artifacts([turn_ids]) to explore full content.")
-    lines.append("")
-    lines.append("---")
-    lines.append("")
+    def _slot_kind(name: Optional[str]) -> Optional[str]:
+        if not name or not isinstance(slot_specs, dict):
+            return None
+        spec = slot_specs.get(name)
+        if spec is None:
+            return None
+        # SlotSpec or dict
+        t = getattr(spec, "type", None)
+        if t is None and isinstance(spec, dict):
+            t = spec.get("type")
+        if isinstance(t, str):
+            t = t.strip().lower()
+            if t in {"inline", "file"}:
+                return t
+        return None
 
-    # ---------- Prior Turns (oldest first) ----------
-    lines.append("## Prior Turns (oldest first)")
+    def _artifact_kind_from_tool_id(tool_id: Optional[str]) -> Optional[str]:
+        if not isinstance(tool_id, str):
+            return None
+        tid = tool_id.strip()
+        # Heuristic: all format-specific writers and write_file → (file)
+        if tid.startswith("generic_tools.write_"):
+            return "file"
+        # Most non-writer tools produce inline content (e.g., LLM gen, web search digests)
+        return "inline"
 
-    if not context.history_turns:
-        lines.append("(none)")
+    def _norm_tool_res_artifacts(tc: Any) -> List[Dict[str, Any]]:
+        if not isinstance(tc, dict):
+            return []
+        tras = tc.get("tool_res_artifacts")
+
+        # accept dict -> list
+        if isinstance(tras, dict):
+            tras = [tras]
+        if not isinstance(tras, list):
+            return []
+
+        return [a for a in tras if isinstance(a, dict)]
+
+    def _fmt_res_artifacts(tras: List[Dict[str, Any]]) -> str:
+        if not tras:
+            return "-"
+        parts = []
+        for a in tras:
+            n = (a.get("name") or "").strip() or "?"
+            t = (a.get("type") or "").strip()
+            k = (a.get("kind") or "").strip()
+            parts.append(f"{n}{(':' + t) if t else ''}[{k}]")
+        return ", ".join(parts)
+
+    # --- grouping helpers ---------------
+    def _tool_group_key(e: Dict[str, Any]) -> Optional[str]:
+        return e.get("tool_call_id")
+
+    def _same_tool_group(a: Dict[str, Any], b: Dict[str, Any]) -> bool:
+        if a.get("type") != "tool_execution" or b.get("type") != "tool_execution":
+            return False
+        if (a.get("tool_id") or None) != (b.get("tool_id") or None):
+            return False
+
+        ka = _tool_group_key(a)
+        kb = _tool_group_key(b)
+
+        return ka == kb
+
+
+    def _call_status(group: List[Dict[str, Any]]) -> str:
+        # Aggregate status similarly to old semantics but aware of multi-artifact calls.
+        if any(isinstance(g.get("error"), dict) and g.get("error") for g in group):
+            return "FAILED"
+        sts = [str(g.get("status", "")).strip() for g in group if str(g.get("status", "")).strip()]
+        if not sts:
+            return "ok"
+        uniq: List[str] = []
+        for s in sts:
+            if s not in uniq:
+                uniq.append(s)
+        if len(uniq) == 1:
+            return uniq[0]
+        return "mixed:" + ",".join(uniq[:3]) + ("..." if len(uniq) > 3 else "")
+
+    def _artifact_fields_from_entry(e: Dict[str, Any]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], str]:
+        tool_id = e.get("tool_id")
+        artifact_id = e.get("artifact_id")
+        art_type = e.get("artifact_type")
+        art_kind = e.get("artifact_kind")
+        res_summ = e.get("result_summary") or ""
+        return tool_id, artifact_id, art_type, art_kind, res_summ
+
+    # --- Stats (unchanged semantics) ------------------------------------
+    total_decisions = sum(1 for e in (session_log or []) if e.get("type") == "decision")
+    tool_execs = [e for e in (session_log or []) if e.get("type") == "tool_execution"]
+    total_tools = len(tool_execs)
+    ok_set = {"ok", "success", "succeeded", "completed", "exit", "done"}
+    ok_tools = sum(1 for e in tool_execs if str(e.get("status", "")).lower() in ok_set)
+    fail_tools = total_tools - ok_tools
+    distinct_tool_ids = sorted({e.get("tool_id") for e in tool_execs if e.get("tool_id")})
+
+    log_summary: List[str] = []
+
+    # --- Timeline (prefix-friendly, oldest → newest) ---------------------
+    log_summary.append("Timeline (oldest→newest)")
+    if not session_log:
+        log_summary.append("(empty)")
     else:
-        # Sort history_turns oldest → newest
-        history_sorted = sorted(
-            context.history_turns[:max_prior_turns],
-            key=lambda turn_rec: (next(iter(turn_rec.values())) if turn_rec else {}).get("ts", "")
-        )
+        i = 0
+        while i < len(session_log):
+            entry = session_log[i]
+            t = entry.get("type")
+            it = entry.get("iteration")
 
-        for idx, turn_rec in enumerate(history_sorted, 1):
-            # Extract inner metadata dict from {execution_id: meta}
-            try:
-                execution_id, meta = next(iter(turn_rec.items()))
-            except Exception:
-                continue
-
-            turn_id = meta.get("turn_id") or execution_id
-            ts_full = (meta.get("ts") or "").strip()
-            ts_disp = ts_full[:16].replace("T", " ") if len(ts_full) >= 16 else (ts_full[:10] or "(no date)")
-
-            # ✅ Build TurnView from meta payload
-            try:
-                tv = turn_view_class.from_turn_log_dict(meta)
-            except Exception as ex:
-                print(f"Failed to build TurnView for turn {turn_id}: {ex}")
-                print(traceback.format_exc())
-                continue
-
-            # Header
-            lines.append(f"### Turn {turn_id} — {ts_disp} [HISTORICAL]")
-            lines.append(f"Fetch with: ctx_tools.fetch_turn_artifacts([\"{turn_id}\"])")
-            lines.append("")
-
-            # ✅ Complete turn presentation from TurnView (delegates to SolverPresenter)
-            # This includes:
-            # - [TURN OUTCOME] status
-            # - User prompt (from base summary)
-            # - Solver details (project_log, deliverables)
-            # - Assistant response (if direct answer)
-            turn_presentation = tv.to_solver_presentation(
-                user_prompt_limit=600,
-                program_log_limit=5000,
-                include_base_summary=True,  # ← Includes user prompt!
-                include_program_log=True,
-                include_deliverable_meta=True,
-                include_assistant_response=True,
-            )
-
-            if turn_presentation.strip():
-                lines.append(turn_presentation.strip())
-                lines.append("")
-
-            # Sources (NOT part of solver, formatted separately)
-            sources = ((meta.get("web_links_citations") or {}).get("items") or [])
-            if sources:
-                src_lines = []
-                for i, src in enumerate(sources, 1):
-                    if not isinstance(src, dict):
-                        continue
-                    title = (src.get("title") or "").strip()
-                    url = (src.get("url") or "").strip()
-                    domain = ""
-                    if url:
-                        try:
-                            domain = urlparse(url).netloc or ""
-                        except Exception:
-                            domain = url[:30]
-
-                    if title and domain:
-                        src_lines.append(f"  {i}. {_short_with_count(title, 80)} ({domain})")
-                    elif title:
-                        src_lines.append(f"  {i}. {_short_with_count(title, 80)}")
-                    elif url:
-                        src_lines.append(f"  {i}. {_short_with_count(url, 100)}")
-
-                if src_lines:
-                    lines.append(f"**Sources:** ({len(sources)} total)")
-                    lines.extend(src_lines)
-                    lines.append("")
-
-    lines.append("")
-
-    # ---------- Current Turn (live) ----------
-    lines.append("## Current Turn (live — oldest → newest)")
-    try:
-        tv = turn_view_class.from_turn_log_dict(context.scratchpad.turn_view)
-    except Exception as ex:
-        print(f"Failed to build TurnView for current_turn: {ex}")
-        print(traceback.format_exc())
-    current_turn_presentation = tv.to_solver_presentation(is_current_turn=True,
-                                                          user_prompt_limit=1000,
-                                                          program_log_limit=0,
-                                                          include_base_summary=True,  # ← Includes user prompt!
-                                                          include_program_log=False,
-                                                          include_deliverable_meta=False,
-                                                          include_assistant_response=False,)
-    lines.append(current_turn_presentation)
-    # 1) What we knew at start: user request for this turn (from scratchpad via param)
-    # cur_user_msg = (current_user_markdown or "").strip()
-    # lines.append("**User Request (markdown):**")
-    # lines.append(_short_with_count(cur_user_msg, 600) if cur_user_msg else "(not recorded)")
-    # lines.append("")
-
-    # 2) Events timeline (short timestamps)
-    lines.append("### Events (oldest → newest)")
-    if not context.events:
-        lines.append("(no events yet)")
-    else:
-        for e in context.events:
-            ts = time.strftime("%H:%M:%S", time.localtime(e.get("ts", 0)))
-            kind = e.get("kind")
-
-            if kind == "decision":
-                nxt = e.get("next_step")
-                strat = e.get("strategy")
-                focus = e.get("focus_slot")
-                tc = e.get("tool_call") or {}
+            if t == "decision":
+                dec = entry.get("decision", {}) or {}
+                nxt = dec.get("next_step")
+                tc = dec.get("tool_call") or {}
                 tool_id = tc.get("tool_id")
-                art = tc.get("tool_res_artifact") or {}
-                art_name = art.get("name") if isinstance(art, dict) else art
-                reason = (e.get("reasoning") or "").replace("\n", " ")
-                if len(reason) > 140:
-                    reason = reason[:137] + "..."
-                pieces = [
-                    f"next={nxt}",
-                    f"strategy={strat}" if strat else None,
-                    f"focus={focus}" if focus else None,
-                    f"tool={tool_id}->{art_name}" if tool_id or art_name else None,
-                    f"reason={reason}" if reason else None,
-                ]
-                pieces = [p for p in pieces if p]
-                lines.append(f"- {ts} — decision: " + " — ".join(pieces))
+
+                tras = _norm_tool_res_artifacts(tc)
+                tras_s = _fmt_res_artifacts(tras)
+
+                call_reason = tc.get("reasoning") or dec.get("reasoning") or ""
+                fetch_n = len(dec.get("fetch_context") or [])
+                map_slots_list = dec.get("map_slots") or []
+                strategy = dec.get("strategy")
+                focus_slot = dec.get("focus_slot")
+
+                segs = [f"[{it}] Decision: {nxt}"]
+                if strategy:
+                    segs.append(f"strategy:{strategy}")
+                if focus_slot:
+                    segs.append(f"focus:{focus_slot}")
+
+                if tool_id or tras:
+                    segs.append(f"{tool_id or '-'} → {tras_s}")
+
+                if map_slots_list:
+                    mapped_names = [
+                        ms.get("slot_name") for ms in map_slots_list if isinstance(ms, dict)
+                    ]
+                    for name in mapped_names:
+                        sk = _slot_kind(name)
+                        segs.append(f"map:{name}{(' (' + sk + ')') if sk else ''}")
+
+                if fetch_n:
+                    segs.append(f"fetch:{fetch_n}")
+                if call_reason:
+                    segs.append(f"reason: {_short(call_reason, 120)}") # 180
+
+                # Handle non-tool decisions explicitly
+                if nxt in ("complete", "exit") and dec.get("completion_summary"):
+                    segs.append(f"done: {_short(dec.get('completion_summary'), 200)}")
+                if nxt == "clarify" and dec.get("clarification_questions"):
+                    qs = dec.get("clarification_questions") or []
+                    segs.append("clarify: " + _short("; ".join(qs), 200))
+
+                log_summary.append(" — ".join(segs))
+                i += 1
                 continue
 
-            if kind == "tool_started":
-                sig = e.get("signature")
-                art = e.get("artifact_name")
-                if sig:
-                    lines.append(f"- {ts} — tool_started: {sig} → {art}")
-                else:
-                    payload = {k: v for k, v in e.items() if k != "ts"}
-                    lines.append(f"- {ts} — tool_started: {json.dumps(payload, ensure_ascii=False)[:400]}")
-                continue
+            elif t == "tool_execution":
+                # ---  group consecutive tool_execution entries for same tool call ---
+                group: List[Dict[str, Any]] = [entry]
+                j = i + 1
+                while j < len(session_log):
+                    nxt_e = session_log[j]
+                    if nxt_e.get("type") != "tool_execution":
+                        break
+                    if not _same_tool_group(entry, nxt_e):
+                        break
+                    group.append(nxt_e)
+                    j += 1
 
-            if kind == "tool_finished":
-                summ = (e.get("summary") or "")
-                lines.append(f"- {ts} — tool_finished: {e.get('tool_id')} → {e.get('status')} "
-                             f"[{e.get('artifact_name','?')}] — {summ[:220]}")
-                continue
+                tool_id0, _, _, _, _ = _artifact_fields_from_entry(group[0])
+                tool_id0 = tool_id0 or "?"
+                call_status = _call_status(group)
 
-            payload = {k: v for k, v in e.items() if k != "ts"}
-            lines.append(f"- {ts} — {kind}: {json.dumps(payload, ensure_ascii=False)[:400]}")
+                # Determine a stable-ish kind tag for the *call header* (optional)
+                kinds: List[str] = []
+                for g in group:
+                    _, _, _, ak, _ = _artifact_fields_from_entry(g)
+                    kk = ak or _artifact_kind_from_tool_id(tool_id0) or ""
+                    if kk and kk not in kinds:
+                        kinds.append(kk)
+                header_kind = kinds[0] if len(kinds) == 1 else ""
+                kind_tag = f" ({header_kind})" if header_kind else ""
 
-    lines.append("")
+                def _fmt_art_ref(art_name: Optional[str], art_type: Optional[str]) -> str:
+                    name = (art_name or "").strip() or "?"
+                    typ = (art_type or "").strip()
+                    return f"[{name}:{typ}]" if typ else f"[{name}]"
 
-    # 3) Live snapshot (current contract/slots/tool results)
-    declared = sorted(list((output_contract or {}).keys()))
-    filled = sorted(list((context.current_slots or {}).keys()))
-    pending = [s for s in declared if s not in filled]
+                if len(group) == 1:
+                    # Preserve EXACT old single-line behavior
+                    g = group[0]
+                    tool_id, art_name, art_type, art_kind, res_summ = _artifact_fields_from_entry(g)
+                    status = g.get("status") or _call_status([g])
+                    error = g.get("error")
 
-    lines.append("### Current Snapshot")
-    lines.append("")
-    lines.append("#### Contract Status")
-    lines.append(f"- Declared slots: {len(declared)}")
-    lines.append(f"- Filled slots  : {len(filled)}  ({', '.join(filled) if filled else '-'})")
-    lines.append(f"- Pending slots : {len(pending)}  ({', '.join(pending) if pending else '-'})")
-    lines.append("")
+                    kind = art_kind or _artifact_kind_from_tool_id(tool_id)
+                    kind_tag_single = f" ({kind})" if kind else ""
 
-    if context.current_slots:
-        from kdcube_ai_app.apps.chat.sdk.runtime.solution.presentation import format_live_slots
-
-        slots_md = format_live_slots(
-            slots=context.current_slots,
-            contract=output_contract,
-            grouping="flat",  # or "status" if you want grouping
-            slot_attrs={"description", "gaps"},
-        )
-
-        lines.append("#### Current Slots")
-        lines.append("")
-        lines.append(slots_md)
-        lines.append("")
-
-    if context.current_tool_results:
-        items = sorted(
-            ((k, v) for k, v in context.current_tool_results.items() if isinstance(v, dict)),
-            key=lambda kv: float(kv[1].get("timestamp") or 0.0),
-        )
-
-        def _search_context_from_inputs(art: Dict[str, Any]) -> tuple[str, str]:
-            inputs = art.get("inputs") or {}
-            if not isinstance(inputs, dict):
-                return "", ""
-
-            raw_q = inputs.get("queries")
-            q_list: list[str] = []
-            if isinstance(raw_q, list):
-                q_list = [str(q) for q in raw_q if isinstance(q, (str, int, float))]
-            elif isinstance(raw_q, str):
-                try:
-                    parsed = json.loads(raw_q)
-                    if isinstance(parsed, list):
-                        q_list = [str(q) for q in parsed if isinstance(q, (str, int, float))]
+                    if error:
+                        log_summary.append(
+                            f"[{it}] Tool: {tool_id}{kind_tag_single} → FAILED "
+                            f"{_fmt_art_ref(art_name, art_type)} "
+                            f"— ERROR: {error.get('code')}: {error.get('message', '')[:200]}"
+                        )
                     else:
-                        q_list = [raw_q]
-                except Exception:
-                    q_list = [raw_q]
-
-            queries_preview = ""
-            if q_list:
-                q2 = q_list[:2]
-                queries_preview = "; ".join([f"\"{q.strip()}\"" for q in q2 if str(q).strip()])
-                if len(q_list) > 2:
-                    queries_preview += f"; …+{len(q_list) - 2} more"
-
-            obj = inputs.get("objective")
-            objective_preview = ""
-            if isinstance(obj, str) and obj.strip():
-                objective_preview = obj.strip()
-                if len(objective_preview) > 160:
-                    objective_preview = objective_preview[:157] + "…"
-
-            return queries_preview, objective_preview
-
-        lines.append("#### Current Turn Tool Results — all artifacts (oldest→newest)")
-        if not items:
-            lines.append("(none)")
-            lines.append("")
-        else:
-            for idx, (art_id, art) in enumerate(items, 1):
-                tid = art.get("tool_id", "?")
-                error = art.get("error")
-                status = "FAILED" if error else "success"
-                summ = (art.get("summary") or "").replace("\n", " ")
-
-                if error:
-                    lines.append(
-                        f"- {idx:02d}. {art_id} ← {tid}: {status} - "
-                        f"{error.get('code')}: {error.get('message', '')[:150]}"
-                    )
+                        log_summary.append(
+                            f"[{it}] Tool: {tool_id}{kind_tag_single} → {status} "
+                            f"{_fmt_art_ref(art_name, art_type)} — {_short(res_summ, 80)}"
+                        )
                 else:
-                    lines.append(
-                        f"- {idx:02d}. {art_id} ← {tid}: {status} — {summ}"
+                    # Grouped rendering: 1 header + per-artifact indented lines
+                    log_summary.append(
+                        f"[{it}] Tool: {tool_id0}{kind_tag} → {call_status} "
+                        f"({len(group)} artifacts)"
                     )
 
-                if tools_insights.is_search_tool(tid):
-                    q_prev, obj_prev = _search_context_from_inputs(art)
-                    if q_prev or obj_prev:
-                        lines.append("    search_context:")
-                        if q_prev:
-                            lines.append(f"      queries  : {q_prev}")
-                        if obj_prev:
-                            lines.append(f"      objective: \"{obj_prev}\"")
+                    for n, g in enumerate(group, 1):
+                        tool_id, art_name, art_type, art_kind, res_summ = _artifact_fields_from_entry(g)
+                        status = g.get("status")
+                        error = g.get("error")
 
-        lines.append("")
+                        kind = art_kind or _artifact_kind_from_tool_id(tool_id0)
+                        kind_s = f"{kind}" if kind else ""
 
-        latest_art_id: str | None = items[-1][0] if items else None
-        latest_art: Dict[str, Any] | None = items[-1][1] if items else None
+                        if error:
+                            log_summary.append(
+                                f"  ({n}) {_fmt_art_ref(art_name, art_type)}"
+                                f"{(' (' + kind_s + ')') if kind_s else ''}"
+                                f" — FAILED — ERROR: {error.get('code')}: {str(error.get('message', ''))[:200]}"
+                            )
+                        else:
+                            log_summary.append(
+                                f"  ({n}) {_fmt_art_ref(art_name, art_type)}"
+                                f"{(' (' + kind_s + ')') if kind_s else ''}"
+                                f" — {status} — {_short(res_summ, 80)}"
+                            )
 
-        if latest_art and not latest_art.get("error"):
-            call_meta = (context.tool_call_index or {}).get(latest_art_id, {})
-            latest_sig = call_meta.get("signature")
+                i = j
+                continue
 
-            if latest_sig:
-                lines.append("##### Latest Tool Call — Invocation")
-                lines.append(latest_sig)
-                lines.append("")
+            else:
+                # Fallback for any other event types (unchanged)
+                log_summary.append(f"[{it or '?'}] {t}")
+                i += 1
+                continue
 
-            summ = (latest_art.get("summary") or "").strip()
-            if summ:
-                lines.append("##### Latest Tool Result — Summary")
-                lines.append(summ)
-                lines.append("")
+    # --- Stats snapshot at the END (suffix, can change per round) --------
+    log_summary.append("")  # blank line as separator
+    log_summary.append(
+        f"Stats: decisions={total_decisions};tools={total_tools}  "
+        f"ok={ok_tools};fail={fail_tools};unique_tools={len(distinct_tool_ids)}"
+    )
 
-    # ---------- Budget snapshot ----------
-    try:
-        if hasattr(context, "budget_state") and context.budget_state is not None:
-            lines.append("")
-            lines.append("## Budget Snapshot")
-            lines.append("")
-            lines.append(format_budget_for_llm(context.budget_state))
-    except Exception:
-        pass
+    return log_summary
 
-    return "\n".join(lines)
+def build_tool_catalog(adapters: Optional[List[Dict[str, Any]]] = None,
+                       *,
+                       exclude_tool_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    tool_catalog: List[Dict[str, Any]] = []
+    exclude = set(exclude_tool_ids or [])
+    for a in (adapters or []):
+        tool_id = a.get("id")
+        if tool_id in exclude:
+            continue
+        doc = a.get("doc") or {}
+        item = {
+            "id": tool_id,
+            # "import": a.get("import"),
+            "call_template": a.get("call_template"),
+            "purpose": doc.get("purpose", ""),
+            "is_async": bool(a.get("is_async")),
+            "args": doc.get("args", {}),
+            "returns": doc.get("returns", ""),
+        }
+        # Include constraints and examples only if they exist in the original doc
+        if "constraints" in doc:
+            item["constraints"] = doc["constraints"]
+        if "examples" in doc:
+            item["examples"] = doc["examples"]
+        tool_catalog.append(item)
+    return tool_catalog
 
-# ----------------- moved from sdk.runtime.solution.project_retrieval.py
-
-# def _compose_last_materialized_canvas_block(history: list[dict]) -> str:
-#     """
-#     Return a compact, self-sufficient block that coordinator can read.
-#     Prefers materialized canvas; falls back to raw canvas, then program presentation.
-#     """
-#     if not history:
-#         return "(no prior project work)"
-#
-#     try:
-#         run_id, meta = next(iter(history[0].items()))
-#     except Exception:
-#         return "(no prior project work)"
-#
-#     # 1) Prefer materialized canvas
-#     mat = (meta.get("project_log_materialized") or {})
-#     txt = (mat.get("text") or "").strip()
-#     if txt:
-#         return f"# Project Log (materialized)\n\n{txt}"
-#
-#     # 2) Fallback to non-materialized canvas
-#     raw = (meta.get("project_log") or {})
-#     txt = (raw.get("text") or raw.get("value") or "").strip()
-#     if txt:
-#         return f"# Project Log\n\n{txt}"
-#
-#     # 3) Fallback to last program presentation
-#     prez = (meta.get("program_presentation") or "").strip()
-#     if prez:
-#         return f"# Program Presentation (fallback)\n\n{prez}"
-#
-#     # 4) Nothing available
-#     return "(no prior project work)"
+def build_operational_digest(*,
+                             turn_session_journal: str,
+                             session_log: List[Dict[str, Any]],
+                             slot_specs: Optional[Dict[str, Any]] = None,
+                             adapters: Optional[List[Dict[str, Any]]] = None,
+                             exclude_tool_ids: Optional[List[str]] = None) -> str:
+    """
+    Combine the turn session journal with a session log summary.
+    The journal must remain the prefix to preserve cache behavior across agents.
+    """
+    playbook_text = (turn_session_journal or "").strip()
+    tool_catalog = build_tool_catalog(adapters, exclude_tool_ids=exclude_tool_ids)
+    tool_block = ""
+    if tool_catalog:
+        tool_block = "\n".join([
+            "## Available Common Tools",
+            json.dumps(tool_catalog or [], ensure_ascii=False, indent=2),
+        ])
+    log_summary = build_session_log_summary(session_log=session_log, slot_specs=slot_specs)
+    log_block = "\n".join([
+        "## Session Log (recent events, summary)",
+        "\n".join(log_summary) if log_summary else "(empty)",
+    ])
+    parts = []
+    if tool_block:
+        parts.append(tool_block)
+    if playbook_text:
+        parts.append(playbook_text)
+    parts.append(log_block)
+    return "\n\n".join(parts)
 
 
 def _short_with_count(text: str, limit: int) -> str:
@@ -853,25 +1139,6 @@ def _turn_id_from_tags(tags: List[str]) -> Optional[str]:
         if isinstance(t, str) and t.startswith("turn:"):
             return t.split(":", 1)[1]
     return None
-
-
-def _ts_key(ts) -> float:
-    if hasattr(ts, "timestamp"):
-        return float(ts.timestamp())
-    if isinstance(ts, (int, float)):
-        return ts / 1000.0 if ts > 1e12 else float(ts)
-    if isinstance(ts, str):
-        s = ts.strip()
-        try:
-            if s.endswith("Z"): s = s[:-1] + "+00:00"
-            return _dt.datetime.fromisoformat(s).timestamp()
-        except Exception:
-            try:
-                v = float(s)
-                return v / 1000.0 if v > 1e12 else v
-            except Exception:
-                return float("-inf")
-    return float("-inf")
 
 
 def _is_clarification_turn(saved_payload: Dict[str, Any]) -> bool:
@@ -1329,7 +1596,7 @@ async def retrospective_context_view(
         tid = _turn_id_from_tags_safe(list(item.get("tags") or [])) or f"id:{item.get('id') or ''}"
         ts = item.get("ts") or item.get("timestamp") or ""
         cur = by_tid.get(tid)
-        if not cur or _ts_key(ts) >= _ts_key(cur.get("ts") or cur.get("timestamp") or ""):
+        if not cur or ts_key(ts) >= ts_key(cur.get("ts") or cur.get("timestamp") or ""):
             by_tid[tid] = item
 
     raw_items = list(by_tid.values())
@@ -1468,7 +1735,7 @@ async def retrospective_context_view(
     earlier_turns_insights: List[dict] = []
     orphan_insights: List[dict] = []
     if delta_fps:
-        ub = _ts_key(oldest_included_ts) if oldest_included_ts else float("inf")
+        ub = ts_key(oldest_included_ts) if oldest_included_ts else float("inf")
         sel = set(selected_local_memories_turn_ids or [])
         for fp_doc in delta_fps:
             tid = (fp_doc or {}).get("turn_id")
@@ -1503,7 +1770,7 @@ async def retrospective_context_view(
             }
             earlier_turns_insights.append(rec)
 
-            if not oldest_included_ts or _ts_key(made_at) < ub:
+            if not oldest_included_ts or ts_key(made_at) < ub:
                 orphan_insights.append(rec)
 
         if orphan_insights:

@@ -135,118 +135,204 @@ def make_chat_openai(*, model: str, api_key: str,
 from langchain_core.messages import SystemMessage
 from typing import List, Union
 
+def _build_blocks_with_modality(content: Union[str, List[dict]], cache_last: bool = False) -> Union[str, dict]:
+    """
+    Helper: convert content to blocks with optional caching.
+    Supports text, images, and documents.
+
+    Args:
+        content: str OR list of block dicts
+        cache_last: cache entire message (if str) or last block (if list)
+
+    Returns:
+        Plain string OR {"message_blocks": [...]}
+
+    Supported block types and MIME types:
+        • text: {"type": "text", "text": "...", "cache": bool}
+          No MIME type needed
+
+        • image: {"type": "image", "data": base64_str, "media_type": "...", "cache": bool}
+          Supported MIME types:
+            - image/jpeg (JPEG)
+            - image/png (PNG)
+            - image/gif (GIF)
+            - image/webp (WebP)
+          Default: image/png
+          Max size: 5MB per image (before base64 encoding)
+
+        • document: {"type": "document", "data": base64_str, "media_type": "...", "cache": bool}
+          Supported MIME types:
+            - application/pdf (PDF only)
+          Default: application/pdf
+          Note: Anthropic renders PDFs as images internally (~10k chars/page limit)
+
+    Examples:
+        # Simple text with caching
+        _build_blocks_with_modality("Hello", cache_last=True)
+
+        # Mixed content with selective caching
+        _build_blocks_with_modality([
+            {"type": "text", "text": "Analyze:"},
+            {"type": "document", "data": pdf_b64, "media_type": "application/pdf", "cache": True},
+            {"type": "image", "data": img_b64, "media_type": "image/jpeg"},
+        ])
+    """
+    if isinstance(content, str):
+        if cache_last:
+            return {"message_blocks": [{"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}]}
+        return content  # Plain string
+
+    # Multi-part content (text/image/document)
+    blocks = []
+    for i, block in enumerate(blocks_list := content):
+        btype = block.get("type", "text")
+        should_cache = block.get("cache", False) or (cache_last and i == len(blocks_list) - 1)
+
+        # Build block
+        if btype == "text":
+            blk = {"type": "text", "text": block["text"]}
+        elif btype in ("image", "document"):
+            default_media = "image/png" if btype == "image" else "application/pdf"
+            blk = {
+                "type": btype,
+                "source": {
+                    "type": "base64",
+                    "media_type": block.get("media_type", default_media),
+                    "data": block["data"]
+                }
+            }
+        else:
+            blk = block  # Pass through
+
+        # Apply cache
+        if should_cache:
+            blk["cache_control"] = {"type": "ephemeral"}
+
+        blocks.append(blk)
+
+    return {"message_blocks": blocks}
+
 def create_cached_system_message(content: Union[str, List[dict]], cache_last: bool = False) -> SystemMessage:
     """
-    Create a SystemMessage with caching enabled for Anthropic.
+    SystemMessage with text/images/documents and optional caching.
 
     Args:
-        content: Either a string (entire message cached) or list of dicts with text/cache info
-        cache_last: If True and content is string, mark it for caching
+        content: str OR list of blocks:
+            - {"type": "text", "text": "...", "cache": bool}
+            - {"type": "image", "data": b64, "media_type": "image/png", "cache": bool}
+            - {"type": "document", "data": b64, "media_type": "application/pdf", "cache": bool}
+        cache_last: cache entire message (if str) or last block (if list)
 
     Examples:
-        # Cache entire system message:
-        msg = create_cached_system_message("You are a helpful assistant.", cache_last=True)
+        # Simple text
+        create_cached_system_message("You are helpful.", cache_last=True)
 
-        # Cache specific parts:
-        msg = create_cached_system_message([
-            {"text": "You are a helpful assistant.", "cache": False},
-            {"text": "Very long context here...", "cache": True},  # This part cached
-            {"text": "Final instructions.", "cache": False}
+        # Multi-part with KB context
+        create_cached_system_message([
+            {"type": "text", "text": "You are an analyst.", "cache": False},
+            {"type": "document", "data": kb_pdf_b64, "media_type": "application/pdf", "cache": True},
+            {"type": "text", "text": "Answer based on the document above.", "cache": False}
         ])
     """
-    if isinstance(content, str):
-        if cache_last:
-            # Mark for caching via additional_kwargs
-            return SystemMessage(
-                content=content,
-                additional_kwargs={"cache_control": {"type": "ephemeral"}}
-            )
-        return SystemMessage(content=content)
+    result = _build_blocks_with_modality(content, cache_last)
+    if isinstance(result, str):
+        return SystemMessage(content=result)
+    return SystemMessage(content="", additional_kwargs=result)
 
-    # Multi-part system message with selective caching
-    # Store structure in additional_kwargs for Anthropic conversion
-    return SystemMessage(
-        content="",  # Will be ignored; blocks used instead
-        additional_kwargs={
-            "message_blocks": [
-                {
-                    "type": "text",
-                    "text": block["text"],
-                    **({"cache_control": {"type": "ephemeral"}} if block.get("cache") else {})
-                }
-                for block in content
-            ]
-        }
-    )
+
 def create_cached_human_message(content: Union[str, List[dict]], cache_last: bool = False) -> HumanMessage:
     """
-    Create a HumanMessage with caching enabled for Anthropic.
+    HumanMessage with text/images/documents and optional caching.
 
-    Args:
-        content: Either a string (entire message cached) or list of dicts with text/cache info
-        cache_last: If True and content is string, mark it for caching
+    Same API as create_cached_system_message.
 
     Examples:
-        # Cache entire system message:
-        msg = create_cached_human_message("Bla.", cache_last=True)
+        # Simple text
+        create_cached_human_message("What's 2+2?")
 
-        # Cache specific parts:
-        msg = create_cached_human_message([
-            {"text": "Bla.", "cache": False},
-            {"text": "Bla", "cache": True},  # This part cached
+        # Image with question
+        create_cached_human_message([
+            {"type": "image", "data": img_b64, "media_type": "image/jpeg", "cache": True},
+            {"type": "text", "text": "What's in this image?"}
+        ])
+
+        # Multiple documents
+        create_cached_human_message([
+            {"type": "text", "text": "Compare these reports:"},
+            {"type": "document", "data": report1_b64, "cache": False},
+            {"type": "document", "data": report2_b64, "cache": True},
+            {"type": "text", "text": "What changed?"}
         ])
     """
-    if isinstance(content, str):
-        if cache_last:
-            # Mark for caching via additional_kwargs
-            return HumanMessage(
-                content=content,
-                additional_kwargs={"cache_control": {"type": "ephemeral"}}
-            )
-        return HumanMessage(content=content)
+    result = _build_blocks_with_modality(content, cache_last)
+    if isinstance(result, str):
+        return HumanMessage(content=result)
+    return HumanMessage(content="", additional_kwargs=result)
 
-    # Multi-part system message with selective caching
-    # Store structure in additional_kwargs for Anthropic conversion
-    return HumanMessage(
-        content="",  # Will be ignored; blocks used instead
-        additional_kwargs={
-            "message_blocks": [
-                {
-                    "type": "text",
-                    "text": block["text"],
-                    **({"cache_control": {"type": "ephemeral"}} if block.get("cache") else {})
-                }
-                for block in content
-            ]
-        }
-    )
+def create_modal_message(blocks: List[dict], cache_last: bool = False) -> HumanMessage:
+    """
+    HumanMessage with text/images/documents. Alias for create_cached_human_message with list input.
+
+    Examples:
+        create_modal_message([
+            {"type": "text", "text": "Analyze:"},
+            {"type": "document", "data": pdf_b64, "cache": True}
+        ])
+    """
+    return create_cached_human_message(blocks, cache_last)
+
+
+def create_document_message(text: str, document_data: str, media_type: str = "application/pdf",
+                            cache_document: bool = False, cache_text: bool = False) -> HumanMessage:
+    """Convenience: HumanMessage with single document + text."""
+    return create_cached_human_message([
+        {"type": "document", "data": document_data, "media_type": media_type, "cache": cache_document},
+        {"type": "text", "text": text, "cache": cache_text}
+    ])
+
+
+def create_image_message(text: str, image_data: str, media_type: str = "image/png",
+                         cache_image: bool = False, cache_text: bool = False) -> HumanMessage:
+    """Convenience: HumanMessage with single image + text."""
+    return create_cached_human_message([
+        {"type": "image", "data": image_data, "media_type": media_type, "cache": cache_image},
+        {"type": "text", "text": text, "cache": cache_text}
+    ])
+
+
+create_multimodal_message = create_modal_message
+
 # --- helper: normalize anthropic blocks (text-only; extend for img/audio if needed) ---
 def _normalize_anthropic_blocks(blocks: list, default_cache_ctrl: dict | None = None) -> list:
+    """Normalize blocks to Anthropic format (text/image/document)."""
     norm = []
+
     for b in blocks:
+        # Handle raw strings
         if not isinstance(b, dict):
-            # treat raw strings as text blocks
             norm.append({"type": "text", "text": str(b)})
             continue
 
-        btype = b.get("type") or "text"
-        if btype != "text":
-            # pass-through non-text blocks untouched (extend here if you support more)
-            norm.append(b)
+        btype = b.get("type", "text")
+
+        # Build normalized block
+        if btype == "text":
+            text = b.get("text") or b.get("content", "")
+            blk = {"type": "text", "text": str(text)}
+        elif btype in ("image", "document"):
+            blk = {"type": btype, "source": b.get("source", {})}
+        else:
+            norm.append(b)  # Unknown type - pass through
             continue
 
-        text = b.get("text")
-        if text is None:
-            # tolerate {"type":"text","content": "..."} or similar
-            text = b.get("content", "")
-        blk = {"type": "text", "text": str(text)}
-
-        # preserve explicit cache_control on the block, else apply default if provided
+        # Apply cache control (block-level overrides default)
         if "cache_control" in b:
             blk["cache_control"] = b["cache_control"]
         elif default_cache_ctrl:
             blk["cache_control"] = default_cache_ctrl
+
         norm.append(blk)
+
     return norm
 
 
@@ -1654,8 +1740,23 @@ class ModelServiceBase:
         # helpful context + previews
         def _msg_preview(ms: List[BaseMessage]) -> dict:
             try:
-                sys = next((m.content for m in ms if isinstance(m, SystemMessage)), "")[:200]
-                usr = next((m.content for m in ms if isinstance(m, HumanMessage)), "")[:200]
+                def _preview_text(m: BaseMessage) -> str:
+                    addkw = getattr(m, "additional_kwargs", {}) or {}
+                    blocks = addkw.get("message_blocks")
+                    if not blocks and isinstance(getattr(m, "content", None), list):
+                        blocks = m.content
+                    if blocks:
+                        norm_blocks = _normalize_anthropic_blocks(blocks)
+                        joined = "\n\n".join(
+                            b.get("text", "")
+                            for b in norm_blocks
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                        return joined
+                    return str(getattr(m, "content", "") or "")
+
+                sys = _preview_text(next((m for m in ms if isinstance(m, SystemMessage)), SystemMessage("")))[:200]
+                usr = _preview_text(next((m for m in ms if isinstance(m, HumanMessage)), HumanMessage("")))[:200]
             except Exception:
                 sys, usr = "", ""
             return {"system_preview": sys, "user_preview": usr}

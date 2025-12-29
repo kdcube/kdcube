@@ -264,7 +264,9 @@ def _stringify_for_format(v: Any, fmt: Optional[str]) -> str:
     return str(v)
 
 
-def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[int, Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+def normalize_contract_deliverables(out_dyn: Dict[str, Any],
+                                    canonical_by_sid: Optional[Dict[int, Dict[str, Any]]] = None,
+                                    artifact_lvl: Optional[str] = "slot") -> List[Dict[str, Any]]:
     """
     Canonicalize dynamic contract dict {slot: VALUE} → list of artifacts for result['out'].
 
@@ -361,6 +363,7 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         gaps: Any = None,
         summary: Any = None,
         content_inventorization: Any = None,
+        artifact_lvl: Optional[str] = "slot",
     ):
         v, use_fmt = _coerce_value_and_format(value, fmt)
         if not use_fmt:
@@ -371,7 +374,7 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
 
         row = {
-            "resource_id": f"slot:{slot}",
+            "resource_id": f"{artifact_lvl}:{slot}",
             "type": "inline",
             "tool_id": "program",
             "output": {"text": text_str},
@@ -416,25 +419,49 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
         gaps: Any = None,
         summary: Any = None,
         content_inventorization: Any = None,
+        artifact_lvl: Optional[str] = "slot",
     ):
+        invalid_path = False
+        invalid_path_type = None
+        if not isinstance(relpath, str):
+            invalid_path = True
+            invalid_path_type = type(relpath).__name__
+            relpath = ""
         relpath = (relpath or "").strip()
 
-        parsed_sids = extract_citation_sids_from_text(text or "")
+        if text is None:
+            text_str = ""
+        elif isinstance(text, str):
+            text_str = text
+        else:
+            try:
+                if isinstance(text, (dict, list, tuple)):
+                    text_str = json.dumps(text, ensure_ascii=False)
+                else:
+                    text_str = str(text)
+            except Exception:
+                text_str = str(text)
+
+        parsed_sids = extract_citation_sids_from_text(text_str)
         filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
 
         row = {
-            "resource_id": f"slot:{slot}",
+            "resource_id": f"{artifact_lvl}:{slot}",
             "type": "file",
             "tool_id": "program",
-            "output": {"path": relpath, "text": text or ""},
+            "output": {"path": relpath, "text": text_str},
             "mime": (mime or _guess_mime(relpath)),
             "citable": False,
             "description": desc or "",
             "input": {},
         }
 
-        if draft:
+        if draft or invalid_path:
             row["draft"] = True
+
+        if invalid_path:
+            gaps_msg = f"Invalid file path type: {invalid_path_type or 'unknown'}"
+            gaps = (str(gaps).strip() + "; " + gaps_msg).strip("; ") if gaps else gaps_msg
 
         gaps_s = _norm_opt_str(gaps, limit=1200)
         if gaps_s:
@@ -484,6 +511,7 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
                 gaps=gaps,
                 summary=summary,
                 content_inventorization=content_inventorization,
+                artifact_lvl=artifact_lvl
             )
             continue
 
@@ -501,6 +529,7 @@ def _normalize_out_dyn(out_dyn: Dict[str, Any], canonical_by_sid: Optional[Dict[
                     gaps=gaps,
                     summary=summary,
                     content_inventorization=content_inventorization,
+                    artifact_lvl=artifact_lvl
                 )
             continue
 
@@ -864,6 +893,7 @@ class AgentIO:
             self,
             data: Annotated[str, "JSON-encoded object to write."],
             filename: Annotated[str, "Relative filename (defaults to 'result.json')."] = "result.json",
+            artifact_lvl: Annotated[Optional[str], "Level prefix for resource_id in artifacts (e.g., 'slot' or 'artifact')."] = "slot",
     ) -> Annotated[str, "Saved relative filename"]:
         od = _outdir()
         rel = filename or "result.json"
@@ -901,7 +931,9 @@ class AgentIO:
 
         # 4) Normalize dynamic contract deliverables with access to canonical_by_sid
         out_dyn = obj.get("out_dyn") or {}
-        normalized_out = _normalize_out_dyn(out_dyn, canonical_by_sid=canonical_by_sid) if isinstance(out_dyn, dict) else []
+        normalized_out = normalize_contract_deliverables(out_dyn,
+                                                         canonical_by_sid=canonical_by_sid,
+                                                         artifact_lvl=artifact_lvl) if isinstance(out_dyn, dict) else []
 
         # 5) Merge normalized slots with promoted artifacts (de-dup)
         def _key(a: Dict[str, Any]):

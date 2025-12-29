@@ -16,7 +16,7 @@ async def sources_reconciler(
         sources_list: Annotated[List[Dict[str, Any]], 'Array of {"sid": int, "title": str, "text": str}'],
         max_items: Annotated[int, "Optional: cap of kept sources (default 12)."] = 12,
         reasoning: bool = False
-) -> Annotated[str, 'JSON array of kept sources: [{sid, verdict, o_relevance, q_relevance:[{qid,score}], reasoning}]']:
+) -> Annotated[List[Dict[str, Any]], 'List of kept sources: [{sid, verdict, o_relevance, q_relevance:[{qid,score}], reasoning}]']:
 
     assert _SERVICE, "ReconcileTools not bound to service"
 
@@ -127,7 +127,7 @@ async def sources_reconciler(
         input_context=json.dumps(input_ctx, ensure_ascii=False),
         target_format="json",
         schema_json=schema_str,
-        sources_json=json.dumps(prepared_sources, ensure_ascii=False),
+        sources_list=prepared_sources,
         cite_sources=False,
         citation_embed="none",
         max_rounds=2,
@@ -142,11 +142,14 @@ async def sources_reconciler(
     )
 
     # --- Parse tool envelope ---
-    try:
-        env = json.loads(llm_resp_s) if llm_resp_s else {}
-    except Exception:
-        logger.exception("sources_reconciler: cannot parse LLM envelope")
-        env = {}
+    if isinstance(llm_resp_s, dict):
+        env = llm_resp_s
+    else:
+        try:
+            env = json.loads(llm_resp_s) if llm_resp_s else {}
+        except Exception:
+            logger.exception("sources_reconciler: cannot parse LLM envelope")
+            env = {}
 
     ok = bool(env.get("ok"))
     content_str = env.get("content") or ""
@@ -217,7 +220,7 @@ async def sources_reconciler(
         objective or "", len(kept), kept_sids, stats
     )
 
-    return json.dumps(kept, ensure_ascii=False)
+    return kept
 
 async def sources_content_filter(
         _SERVICE,
@@ -330,7 +333,7 @@ You will see an "objective" and "queries" below in INPUT CONTEXT section. This i
             target_format="json",
             citation_embed="none",
             schema_json=schema_str,
-            sources_json=json.dumps(prepared_sources, ensure_ascii=False),
+            sources_list=prepared_sources,
             cite_sources=False,
             max_rounds=1,
             max_tokens=300,
@@ -348,11 +351,14 @@ You will see an "objective" and "queries" below in INPUT CONTEXT section. This i
         return [s["sid"] for s in prepared_sources]
 
     # Parse response
-    try:
-        env = json.loads(llm_resp_s) if llm_resp_s else {}
-    except Exception:
-        logger.exception("sources_content_filter: cannot parse LLM envelope")
-        return [s["sid"] for s in prepared_sources]
+    if isinstance(llm_resp_s, dict):
+        env = llm_resp_s
+    else:
+        try:
+            env = json.loads(llm_resp_s) if llm_resp_s else {}
+        except Exception:
+            logger.exception("sources_content_filter: cannot parse LLM envelope")
+            return [s["sid"] for s in prepared_sources]
 
     content_str = (env.get("content") or "").strip()
     if content_str.startswith("```"):
@@ -508,7 +514,7 @@ async def sources_filter_and_segment(
                         raw_dict = {}
 
                 import kdcube_ai_app.apps.chat.sdk.viz.logging_helpers as logging_helpers
-                logging_helpers.log_agent_packet("ctx.reconciler", "ctx", result)
+                logging_helpers.log_agent_packet("filter.segmenter", "web-filter", result)
 
             else:
                 # ===== NON-ANTHROPIC: Use traditional generate_content_llm =====
@@ -533,7 +539,7 @@ You will see an "objective" and "queries" below in INPUT CONTEXT section. This i
                     input_context=json.dumps(input_ctx, ensure_ascii=False),
                     target_format="json",
                     schema_json="",
-                    sources_json=json.dumps(prepared_sources, ensure_ascii=False),
+                    sources_list=prepared_sources,
                     citation_embed="none",
                     cite_sources=False,
                     max_rounds=1,
@@ -551,11 +557,14 @@ You will see an "objective" and "queries" below in INPUT CONTEXT section. This i
                     include_url_in_source_digest=True
                 )
 
-                try:
-                    env = json.loads(llm_resp_s) if llm_resp_s else {}
-                except Exception:
-                    logger.exception("sources_filter_and_segment: cannot parse LLM envelope")
-                    return {}
+                if isinstance(llm_resp_s, dict):
+                    env = llm_resp_s
+                else:
+                    try:
+                        env = json.loads(llm_resp_s) if llm_resp_s else {}
+                    except Exception:
+                        logger.exception("sources_filter_and_segment: cannot parse LLM envelope")
+                        return {}
 
                 content_str = (env.get("content") or "").strip()
                 if content_str.startswith("```"):

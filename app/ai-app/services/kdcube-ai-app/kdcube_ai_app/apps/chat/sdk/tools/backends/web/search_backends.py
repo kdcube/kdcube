@@ -735,10 +735,9 @@ async def web_search(
             return rows
 
         # Map sid -> relevance from reconciler output (sid are ephemeral here)
-        try:
-            kept = json.loads(recon_json) if recon_json else []
-        except Exception:
-            logger.exception("web_search: invalid reconciler JSON; returning raw rows")
+        kept = recon_json if isinstance(recon_json, list) else []
+        if not kept:
+            logger.exception("web_search: reconciler returned empty/invalid list; returning raw rows")
             base = _claim_sid_block(len(rows))
             for i, r in enumerate(rows):
                 r["sid"] = base + i

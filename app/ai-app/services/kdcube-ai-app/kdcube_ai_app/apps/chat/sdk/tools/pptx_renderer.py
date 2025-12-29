@@ -19,6 +19,7 @@ from pptx.enum.shapes import MSO_SHAPE
 
 from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
 import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
+from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any
 
 
 # ============================================================================
@@ -1826,7 +1827,7 @@ def render_pptx(
         *,
         title: Optional[str] = None,
         base_dir: Optional[str] = None,
-        sources: Optional[str] = None,
+        sources: Optional[list[dict] | dict] = None,
         resolve_citations: bool = False,
         include_sources_slide: bool = False
 ) -> str:
@@ -1857,22 +1858,8 @@ def render_pptx(
         sources_map: Dict[int, Dict[str, str]] = {}
         order: List[int] = []
         if sources:
-            try:
-                sources_map, order = md_utils._normalize_sources(sources)
-            except Exception:
-                # very defensive fallback
-                try:
-                    raw = json.loads(sources)
-                    if isinstance(raw, dict):
-                        sources_map = {int(k): v for k, v in raw.items() if str(k).isdigit()}
-                        order = sorted(sources_map.keys())
-                    elif isinstance(raw, list):
-                        for rec in raw:
-                            sid = int(rec.get("id"))
-                            sources_map[sid] = {"title": rec.get("title",""), "url": rec.get("url","")}
-                        order = sorted(sources_map.keys())
-                except Exception:
-                    pass
+            norm_sources = normalize_sources_any(sources)
+            sources_map, order = md_utils._normalize_sources(norm_sources)
 
         # normalize <sup class='cite'> → [[S:...]]
         normalized_html = _normalize_html_citations(content_html)

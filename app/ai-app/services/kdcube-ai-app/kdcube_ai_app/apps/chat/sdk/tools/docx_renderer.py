@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 import re
 import json
+import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
+from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -357,7 +359,7 @@ def render_docx(
         content_md: str,
         *,
         title: Optional[str] = None,
-        sources: Optional[str] = None,
+        sources: Optional[list[dict] | dict] = None,
         resolve_citations: bool = True,
         include_sources_section: bool = True
 ) -> str:
@@ -372,8 +374,8 @@ def render_docx(
     sources_map: Dict[int, Dict[str, str]] = {}
     order: List[int] = []
     if sources:
-        # sources_map, order = md_utils._normalize_sources(sources)
-        pass  # Placeholder for source normalization
+        norm_sources = normalize_sources_any(sources)
+        sources_map, order = md_utils._normalize_sources(norm_sources)
 
     sections = _split_markdown_sections(content_md or "")
     doc = Document()

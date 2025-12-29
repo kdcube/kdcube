@@ -4,9 +4,11 @@
 # kdcube_ai_app/apps/chat/sdk/runtime/docker/docker.py
 
 import asyncio
+import datetime as _dt
 import json
 import os
 import pathlib
+import time
 from typing import Dict, Any, Optional
 
 from kdcube_ai_app.apps.chat.sdk.runtime.docker.detect_aws_env import check_and_apply_cloud_environment
@@ -142,6 +144,11 @@ async def run_py_in_docker(
     workdir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    exec_id = (extra_env or {}).get("EXECUTION_ID") or runtime_globals.get("EXECUTION_ID") or runtime_globals.get("RESULT_FILENAME")
+    if not exec_id:
+        exec_id = f"run-{int(time.time() * 1000)}"
+    base_env["EXECUTION_ID"] = exec_id
+
     # This will be the *directory name* under /bundles in the container
     bundle_dir: Optional[str] = None
 
@@ -189,6 +196,7 @@ async def run_py_in_docker(
     base_env["WORKDIR"]               = "/workspace/work"
     base_env["OUTPUT_DIR"]            = "/workspace/out"
     base_env["LOG_DIR"]               = "/workspace/out/logs"
+    base_env["LOG_FILE_PREFIX"]       = "supervisor"
 
     img = image or _DEFAULT_IMAGE
     to = timeout_s or _DEFAULT_TIMEOUT_S
@@ -249,19 +257,38 @@ async def run_py_in_docker(
             out += out2
             err += err2
 
-    # Optionally persist Docker-level stdout/err for debugging
+    # Persist Docker-level stdout/err under logs/
     try:
-        out_path = outdir / "docker.out.log"
-        err_path = outdir / "docker.err.log"
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        if out:
-            with open(out_path, "ab") as f:
+        log_dir = outdir / "logs"
+        out_path = log_dir / "docker.out.log"
+        err_path = log_dir / "docker.err.log"
+        errlog_path = log_dir / "errors.log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+        header = f"\n===== EXECUTION {exec_id} START {ts} =====\n".encode("utf-8")
+        with open(out_path, "ab") as f:
+            f.write(header)
+            if out:
                 f.write(out)
-                f.write(b"\n")
-        if err:
-            with open(err_path, "ab") as f:
+                if not out.endswith(b"\n"):
+                    f.write(b"\n")
+        with open(err_path, "ab") as f:
+            f.write(header)
+            if err:
                 f.write(err)
-                f.write(b"\n")
+                if not err.endswith(b"\n"):
+                    f.write(b"\n")
+        if timed_out or proc.returncode != 0:
+            reason = "timeout" if timed_out else f"returncode={proc.returncode}"
+            err_txt = err.decode("utf-8", errors="ignore")
+            tail = err_txt[-4000:] if err_txt else ""
+            with open(errlog_path, "ab") as f:
+                f.write(header)
+                f.write(f"[docker] {reason}\n".encode("utf-8"))
+                if tail:
+                    f.write(tail.encode("utf-8", errors="ignore"))
+                    if not tail.endswith("\n"):
+                        f.write(b"\n")
     except Exception:
         # Best-effort only
         pass

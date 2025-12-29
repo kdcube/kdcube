@@ -149,6 +149,7 @@ def _validate_sidecar(payload: Any, path: str, valid_sids: Set[int]) -> Tuple[bo
     arr = _json_pointer_get(payload, path)
     if not isinstance(arr, list) or not arr:
         return False, "sidecar_missing_or_empty"
+    missing_targets = False
     for it in arr:
         if not isinstance(it, dict):
             return False, "sidecar_item_not_object"
@@ -162,9 +163,9 @@ def _validate_sidecar(payload: Any, path: str, valid_sids: Set[int]) -> Tuple[bo
         # Optional: ensure pointer resolves to a string (best-effort)
         target = _json_pointer_get(payload, p)
         if target is None and p != "/":
-            # we allow missing for minimal robustness but flag it
-            return False, "sidecar_target_not_string"
-    return True, "sidecar_ok"
+            missing_targets = True
+            continue
+    return (True, "sidecar_targets_missing") if missing_targets else (True, "sidecar_ok")
 
 def _parse_json(text: str) -> Tuple[Optional[Any], Optional[str]]:
     try:

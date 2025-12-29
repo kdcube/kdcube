@@ -25,8 +25,8 @@ class LLMTools:
     """
     LLM-backed summarizer with TWO explicit modes:
 
-    1) input_mode="text"    → Summarize the `text` argument. Ignores sources_json and cite_sources.
-    2) input_mode="sources" → Summarize a list of sources passed via `sources_json`
+    1) input_mode="text"    → Summarize the `text` argument. Ignores sources_list and cite_sources.
+    2) input_mode="sources" → Summarize a list of sources passed via `sources_list`
                               and (optionally) insert inline citation tokens [[S:<sid>]].
 
     Source schema (each item):
@@ -54,7 +54,7 @@ class LLMTools:
             self,
             input_mode: Annotated[str, "text|sources", {"enum": ["text", "sources"]}] = "text",
             text: Annotated[str, "When input_mode='text': the text to summarize (≤10k chars)."] = "",
-            sources_json: Annotated[str, "When input_mode='sources': JSON array of {sid,int; title,str; url,str; text,str}."] = "[]",
+            sources_list: Annotated[List[Dict[str, Any]], "When input_mode='sources': list of {sid,int; title,str; url,str; text,str}."] = None,
             style: Annotated[str, "brief|bullets|one_line", {"enum": ["brief","bullets","one_line"]}] = "brief",
             cite_sources: Annotated[bool, "In sources mode: insert [[S:<sid>]] tokens after claims."] = False,
             max_tokens: Annotated[int, "LLM output cap.", {"min": 64, "max": 800}] = 300,
@@ -93,11 +93,8 @@ class LLMTools:
 
         else:
             # Summarize provided sources; optionally emit [[S:<sid>]] tokens
-            # Parse sources_json and build a compact, bounded digest
-            try:
-                raw_sources = json.loads(sources_json) if sources_json else []
-            except Exception:
-                raw_sources = []
+            # Parse sources_list and build a compact, bounded digest
+            raw_sources = sources_list or []
 
             # Normalize source rows
             rows: List[Dict[str, Any]] = []
@@ -174,7 +171,7 @@ class LLMTools:
             instruction: Annotated[str, "Editing goal, e.g., 'add security section and shorten intro'"],
             tone: Annotated[str, "Optional tone/style, e.g., 'professional'"] = "",
             keep_formatting: Annotated[bool, "Keep Markdown structure (headings, lists, code blocks)."] = True,
-            sources_json: Annotated[str, "JSON array of sources: {sid:int, title:str, url:str, text:str}"] = "[]",
+            sources_list: Annotated[List[Dict[str, Any]], "List of sources: {sid:int, title:str, url:str, text:str}"] = None,
             cite_sources: Annotated[bool, "If true, add tokens [[S:<sid>]] after NEW/CHANGED claims only."] = True,
             forbid_new_facts_without_sources: Annotated[bool, "If true, any NEW claim MUST be grounded in provided sources."] = True,
             max_tokens: Annotated[int, "LLM output cap.", {"min": 64, "max": 1600}] = 900,
@@ -186,10 +183,7 @@ class LLMTools:
         import json as _json
 
         # ---- Parse/normalize sources (bounded) ----
-        try:
-            raw = _json.loads(sources_json) if sources_json else []
-        except Exception:
-            raw = []
+        raw = sources_list or []
         rows = []
         total_budget = 10000
         per = max(600, total_budget // max(1, len(raw))) if raw else 0

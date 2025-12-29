@@ -30,13 +30,46 @@ from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
-from kdcube_ai_app.infra.accounting.usage import llm_output_price_usd_per_token, quote_tokens_for_usd, quote_usd_for_tokens
+from kdcube_ai_app.infra.accounting.usage import (
+    llm_output_price_usd_per_token,
+    quote_tokens_for_usd,
+    quote_usd_for_tokens,
+    anthropic,
+    sonnet_45,
+)
 
 
 logger = logging.getLogger(__name__)
 
 # Create router
 router = APIRouter()
+
+REF_PROVIDER = anthropic
+REF_MODEL = sonnet_45
+
+def _tokens_from_usd(usd_amount: Optional[float]) -> Optional[int]:
+    if usd_amount is None:
+        return None
+    tokens, _ = quote_tokens_for_usd(
+        usd_amount=float(usd_amount),
+        ref_provider=REF_PROVIDER,
+        ref_model=REF_MODEL,
+    )
+    return int(tokens)
+
+def _usd_from_tokens(tokens: Optional[int]) -> Optional[float]:
+    if tokens is None:
+        return None
+    return round(
+        float(
+            quote_usd_for_tokens(
+                tokens=int(tokens),
+                ref_provider=REF_PROVIDER,
+                ref_model=REF_MODEL,
+            )
+        ),
+        2,
+    )
 
 # ============================================================================
 # Request/Response Models
@@ -76,8 +109,12 @@ class GrantTrialRequest(BaseModel):
     days: int = Field(7, description="Trial duration in days")
     requests_per_day: int = Field(100, description="Requests/day during trial (OVERRIDES base)")
     requests_per_month: Optional[int] = Field(None, description="Requests/month during trial")
+    tokens_per_hour: Optional[int] = Field(None, description="Tokens/hour during trial (OVERRIDES base)")
     tokens_per_day: Optional[int] = Field(None, description="Tokens/day during trial (OVERRIDES base)")
     tokens_per_month: Optional[int] = Field(None, description="Tokens/month during trial")
+    usd_per_hour: Optional[float] = Field(None, description="USD/hour (converted to tokens, overrides tokens_per_hour)")
+    usd_per_day: Optional[float] = Field(None, description="USD/day (converted to tokens, overrides tokens_per_day)")
+    usd_per_month: Optional[float] = Field(None, description="USD/month (converted to tokens, overrides tokens_per_month)")
     max_concurrent: Optional[int] = Field(None, description="Max concurrent during trial")
     notes: Optional[str] = Field(None, description="Notes")
 
@@ -94,8 +131,12 @@ class UpdateTierBudgetRequest(BaseModel):
     user_id: str = Field(..., description="User ID")
     requests_per_day: Optional[int] = Field(None, description="Requests/day (OVERRIDES base)")
     requests_per_month: Optional[int] = Field(None, description="Requests/month (OVERRIDES base)")
+    tokens_per_hour: Optional[int] = Field(None, description="Tokens/hour (OVERRIDES base)")
     tokens_per_day: Optional[int] = Field(None, description="Tokens/day (OVERRIDES base)")
     tokens_per_month: Optional[int] = Field(None, description="Tokens/month (OVERRIDES base)")
+    usd_per_hour: Optional[float] = Field(None, description="USD/hour (converted to tokens, overrides tokens_per_hour)")
+    usd_per_day: Optional[float] = Field(None, description="USD/day (converted to tokens, overrides tokens_per_day)")
+    usd_per_month: Optional[float] = Field(None, description="USD/month (converted to tokens, overrides tokens_per_month)")
     max_concurrent: Optional[int] = Field(None, description="Max concurrent (OVERRIDES base)")
     expires_in_days: Optional[int] = Field(30, description="Days until expiration (None = never)")
     notes: Optional[str] = Field(None, description="Notes")
@@ -126,6 +167,9 @@ class SetQuotaPolicyRequest(BaseModel):
     tokens_per_hour: Optional[int] = Field(None, description="Tokens per hour")
     tokens_per_day: Optional[int] = Field(None, description="Tokens per day")
     tokens_per_month: Optional[int] = Field(None, description="Tokens per month")
+    usd_per_hour: Optional[float] = Field(None, description="USD per hour (converted to tokens)")
+    usd_per_day: Optional[float] = Field(None, description="USD per day (converted to tokens)")
+    usd_per_month: Optional[float] = Field(None, description="USD per month (converted to tokens)")
     notes: Optional[str] = Field(None, description="Notes")
 
 
@@ -206,14 +250,19 @@ async def grant_trial_bonus(
 
         expires_at = datetime.now(timezone.utc) + timedelta(days=payload.days)
 
+        tokens_per_hour = _tokens_from_usd(payload.usd_per_hour) if payload.usd_per_hour is not None else payload.tokens_per_hour
+        tokens_per_day = _tokens_from_usd(payload.usd_per_day) if payload.usd_per_day is not None else payload.tokens_per_day
+        tokens_per_month = _tokens_from_usd(payload.usd_per_month) if payload.usd_per_month is not None else payload.tokens_per_month
+
         tier_balance = await mgr.update_user_tier_budget(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=payload.user_id,
             requests_per_day=payload.requests_per_day,
             requests_per_month=payload.requests_per_month,
-            tokens_per_day=payload.tokens_per_day,
-            tokens_per_month=payload.tokens_per_month,
+            tokens_per_hour=tokens_per_hour,
+            tokens_per_day=tokens_per_day,
+            tokens_per_month=tokens_per_month,
             max_concurrent=payload.max_concurrent,
             expires_at=expires_at,
             purchase_notes=payload.notes or f"{payload.days}-day trial",
@@ -230,7 +279,12 @@ async def grant_trial_bonus(
             "tier_balance": {
                 "user_id": tier_balance.user_id,
                 "requests_per_day": tier_balance.requests_per_day,
+                "tokens_per_hour": tier_balance.tokens_per_hour,
                 "tokens_per_day": tier_balance.tokens_per_day,
+                "tokens_per_hour_usd": _usd_from_tokens(tier_balance.tokens_per_hour),
+                "tokens_per_day_usd": _usd_from_tokens(tier_balance.tokens_per_day),
+                "tokens_per_month_usd": _usd_from_tokens(tier_balance.tokens_per_month),
+                "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
                 "expires_at": tier_balance.expires_at.isoformat() if tier_balance.expires_at else None,
             }
         }
@@ -271,14 +325,19 @@ async def update_tier_budget(
         if payload.expires_in_days:
             expires_at = datetime.now(timezone.utc) + timedelta(days=payload.expires_in_days)
 
+        tokens_per_hour = _tokens_from_usd(payload.usd_per_hour) if payload.usd_per_hour is not None else payload.tokens_per_hour
+        tokens_per_day = _tokens_from_usd(payload.usd_per_day) if payload.usd_per_day is not None else payload.tokens_per_day
+        tokens_per_month = _tokens_from_usd(payload.usd_per_month) if payload.usd_per_month is not None else payload.tokens_per_month
+
         tier_balance = await mgr.update_user_tier_budget(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=payload.user_id,
             requests_per_day=payload.requests_per_day,
             requests_per_month=payload.requests_per_month,
-            tokens_per_day=payload.tokens_per_day,
-            tokens_per_month=payload.tokens_per_month,
+            tokens_per_hour=tokens_per_hour,
+            tokens_per_day=tokens_per_day,
+            tokens_per_month=tokens_per_month,
             max_concurrent=payload.max_concurrent,
             expires_at=expires_at,
             purchase_notes=payload.notes or "Admin tier budget update",
@@ -292,7 +351,12 @@ async def update_tier_budget(
             "tier_balance": {
                 "user_id": tier_balance.user_id,
                 "requests_per_day": tier_balance.requests_per_day,
+                "tokens_per_hour": tier_balance.tokens_per_hour,
                 "tokens_per_day": tier_balance.tokens_per_day,
+                "tokens_per_hour_usd": _usd_from_tokens(tier_balance.tokens_per_hour),
+                "tokens_per_day_usd": _usd_from_tokens(tier_balance.tokens_per_day),
+                "tokens_per_month_usd": _usd_from_tokens(tier_balance.tokens_per_month),
+                "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
                 "expires_at": tier_balance.expires_at.isoformat() if tier_balance.expires_at else None,
             }
         }
@@ -354,7 +418,7 @@ async def get_user_tier_balance(
 
             reserved = max(gross_remaining - available, 0)
 
-            usd_per_token = llm_output_price_usd_per_token("anthropic", "claude-sonnet-4-5-20250929")
+            usd_per_token = llm_output_price_usd_per_token(REF_PROVIDER, REF_MODEL)
             available_usd = round(available * usd_per_token, 2)
 
             lifetime_payload = {
@@ -367,7 +431,7 @@ async def get_user_tier_balance(
                 # last purchase snapshot (credits purchase)
                 "purchase_amount_usd": float(tier_balance.last_purchase_amount_usd)
                 if tier_balance.last_purchase_amount_usd else None,
-                "reference_model": "anthropic/claude-sonnet-4-5-20250929",
+                "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
             }
 
         return {
@@ -378,13 +442,18 @@ async def get_user_tier_balance(
             "tier_override": {
                 "requests_per_day": tier_balance.requests_per_day,
                 "requests_per_month": tier_balance.requests_per_month,
+                "tokens_per_hour": tier_balance.tokens_per_hour,
                 "tokens_per_day": tier_balance.tokens_per_day,
                 "tokens_per_month": tier_balance.tokens_per_month,
+                "usd_per_hour": _usd_from_tokens(tier_balance.tokens_per_hour),
+                "usd_per_day": _usd_from_tokens(tier_balance.tokens_per_day),
+                "usd_per_month": _usd_from_tokens(tier_balance.tokens_per_month),
                 "max_concurrent": tier_balance.max_concurrent,
                 "expires_at": tier_balance.expires_at.isoformat() if tier_balance.expires_at else None,
                 # override notes are grant_notes now
                 "notes": tier_balance.grant_notes,
                 "is_expired": override_expired,
+                "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
             } if (override_active or include_expired) else None,
             "lifetime_budget": lifetime_payload,
         }
@@ -520,8 +589,8 @@ async def get_lifetime_balance(
         # Convert to USD
         balance_usd = quote_usd_for_tokens(
             tokens=int(balance_tokens or 0),
-            ref_provider="anthropic",
-            ref_model="claude-sonnet-4-5-20250929",
+            ref_provider=REF_PROVIDER,
+            ref_model=REF_MODEL,
         )
 
         return {
@@ -751,8 +820,13 @@ async def list_quota_policies(
                 "max_concurrent": p.max_concurrent,
                 "requests_per_day": p.requests_per_day,
                 "requests_per_month": p.requests_per_month,
+                "tokens_per_hour": p.tokens_per_hour,
                 "tokens_per_day": p.tokens_per_day,
                 "tokens_per_month": p.tokens_per_month,
+                "usd_per_hour": _usd_from_tokens(p.tokens_per_hour),
+                "usd_per_day": _usd_from_tokens(p.tokens_per_day),
+                "usd_per_month": _usd_from_tokens(p.tokens_per_month),
+                "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
                 "notes": p.notes,
             })
 
@@ -781,6 +855,10 @@ async def set_quota_policy(
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
 
+        tokens_per_hour = _tokens_from_usd(payload.usd_per_hour) if payload.usd_per_hour is not None else payload.tokens_per_hour
+        tokens_per_day = _tokens_from_usd(payload.usd_per_day) if payload.usd_per_day is not None else payload.tokens_per_day
+        tokens_per_month = _tokens_from_usd(payload.usd_per_month) if payload.usd_per_month is not None else payload.tokens_per_month
+
         policy = await mgr.set_tenant_project_user_quota_policy(
             tenant=settings.TENANT,
             project=settings.PROJECT,
@@ -789,9 +867,9 @@ async def set_quota_policy(
             requests_per_day=payload.requests_per_day,
             requests_per_month=payload.requests_per_month,
             total_requests=payload.total_requests,
-            tokens_per_hour=payload.tokens_per_hour,
-            tokens_per_day=payload.tokens_per_day,
-            tokens_per_month=payload.tokens_per_month,
+            tokens_per_hour=tokens_per_hour,
+            tokens_per_day=tokens_per_day,
+            tokens_per_month=tokens_per_month,
             created_by=session.username or session.user_id,
             notes=payload.notes,
         )
@@ -808,6 +886,8 @@ async def set_quota_policy(
                 "user_type": policy.user_type,
                 "requests_per_day": policy.requests_per_day,
                 "tokens_per_day": policy.tokens_per_day,
+                "tokens_per_day_usd": _usd_from_tokens(policy.tokens_per_day),
+                "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
             }
         }
     except Exception as e:
@@ -1181,6 +1261,24 @@ async def health_check(
             "service": "control_plane",
             "error": str(e)
         }
+
+
+@router.get("/economics/reference")
+async def get_economics_reference(
+        session: UserSession = Depends(auth_without_pressure())
+):
+    """Return USD/token reference for admin UI conversions."""
+    try:
+        usd_per_token = llm_output_price_usd_per_token(REF_PROVIDER, REF_MODEL)
+        return {
+            "status": "ok",
+            "reference_provider": REF_PROVIDER,
+            "reference_model": REF_MODEL,
+            "usd_per_token": float(usd_per_token),
+        }
+    except Exception as e:
+        logger.exception("[get_economics_reference] Failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/clear-cache")

@@ -197,7 +197,7 @@ We then keep only those sources in the pipeline.
 
 `generate_content_llm` is the general LLM wrapper that:
 
-* Takes `sources_json` (array of sources).
+* Takes `sources_list` (list of sources).
 * Builds a **sources digest** to feed into the prompt.
 * Enforces:
 
@@ -210,7 +210,7 @@ We then keep only those sources in the pipeline.
 Relevant part (simplified):
 
 ```python
-raw_sources = json.loads(sources_json) if sources_json else []
+raw_sources = sources_list or []
 
 rows = []
 for s in raw_sources or []:
@@ -264,7 +264,7 @@ Inline tokens of the form:
 
     * `[[S:1,3]]` → sources 1 and 3
     * `[[S:2-4]]` → sources 2,3,4
-* Never use SIDs not present in `sources_json`.
+* Never use SIDs not present in `sources_list`.
 
 **Code blocks rule:**
 
@@ -364,7 +364,7 @@ At the end of `generate_content_llm`, the wrapper returns an envelope:
 }
 ```
 
-Currently we populate `sources_used` from `build_citation_map_from_sources(sources_json)`, with:
+Currently we populate `sources_used` from `build_citation_map_from_sources(sources_list)`, with:
 
 ```python
 sources_used.append({

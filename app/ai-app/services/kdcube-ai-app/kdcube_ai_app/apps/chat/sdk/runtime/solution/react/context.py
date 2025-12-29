@@ -9,7 +9,7 @@ from __future__ import annotations
 import time, json, logging
 import pathlib
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Optional
 
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.tools.citations import (
@@ -147,7 +147,7 @@ def _extract_text_and_sources(obj: Dict[str, Any]) -> tuple[str, List[Dict[str, 
 
     return txt or "", su
 
-from typing import Dict, Any, Iterable, Optional
+from typing import Dict, Any, Iterable
 
 
 def _to_str(value: Any) -> str:
@@ -187,7 +187,7 @@ class ReactContext:
     prior_turns: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # Current turn artifacts
     current_slots: Dict[str, Dict[str, Any]] = field(default_factory=dict)          # current_turn.slots.<slot_name> -> artifact
-    current_tool_results: Dict[str, Dict[str, Any]] = field(default_factory=dict)   # current_turn.tool_results.<artifact_id> -> artifact
+    artifacts: Dict[str, Dict[str, Any]] = field(default_factory=dict)   # current_turn.tool_results.<artifact_id> -> artifact
     # Session timeline (chronological, oldest → newest)
     events: List[Dict[str, Any]] = field(default_factory=list)
     tool_call_index: Dict[str, Dict[str, Any]] = field(default_factory=dict)
@@ -210,13 +210,235 @@ class ReactContext:
     user_text: Optional[str] = None
     started_at: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
     budget_state: BudgetState = field(default_factory=BudgetState)
+    context_bundle: Optional["ContextBundle"] = None
 
     scratchpad: TurnScratchpad = None
+    operational_digest: Optional[str] = None
+
+    # ---------- Playbook helpers ----------
+    def _human_ts(self, ts_val: Any) -> str:
+        if isinstance(ts_val, (int, float)):
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts_val))
+        if isinstance(ts_val, str) and ts_val.strip():
+            ts_s = ts_val.strip()
+            if "T" in ts_s:
+                ts_s = ts_s.replace("T", " ")
+            return ts_s[:16]
+        return ""
+
+    def _turn_timestamp(self, turn_id: str) -> str:
+        if turn_id == "current_turn":
+            return self._human_ts(self.started_at or "")
+        turn = (self.prior_turns or {}).get(turn_id) or {}
+        return self._human_ts(turn.get("ts") or "")
+
+    def _normalize_show_artifact(self, obj: Any, *, default_format: str = "text") -> Optional[Dict[str, Any]]:
+        if obj is None:
+            return None
+
+        def _compact_search_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            compact: List[Dict[str, Any]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                compact.append({
+                    "sid": item.get("sid"),
+                    "title": item.get("title"),
+                    "url": item.get("url"),
+                    "published_time_iso": item.get("published_time_iso"),
+                    "authority": item.get("authority"),
+                    "content": (item.get("content") or item.get("text") or "").strip(),
+                })
+            return compact
+
+        if isinstance(obj, dict):
+            if obj.get("type") in ("inline", "file"):
+                out = dict(obj)
+                out["kind"] = obj.get("type")
+                if out["kind"] == "inline" and not out.get("format"):
+                    out["format"] = default_format
+                return out
+
+            if obj.get("artifact_kind") in ("inline", "file"):
+                kind = obj.get("artifact_kind")
+                val = obj.get("value")
+                out: Dict[str, Any] = {"kind": kind}
+                if kind == "inline":
+                    out["format"] = obj.get("format") or default_format
+                    if obj.get("tool_id") in ("generic_tools.web_search", "generic_tools.fetch_url_contents") and isinstance(val, list):
+                        out["format"] = "json"
+                        out["text"] = json.dumps(_compact_search_items(val), ensure_ascii=False, indent=2)
+                    elif isinstance(val, (str, int, float, bool)):
+                        out["text"] = str(val)
+                    elif val is None:
+                        out["text"] = ""
+                    else:
+                        out["format"] = "json"
+                        out["text"] = json.dumps(val, ensure_ascii=False, indent=2)
+                else:
+                    if isinstance(val, dict) and val.get("type") == "file":
+                        out.update(val)
+                        out["kind"] = "file"
+                    elif isinstance(val, dict):
+                        out.update(val)
+                    elif isinstance(val, str):
+                        out["path"] = val
+                        out.setdefault("text", "")
+                    else:
+                        out["text"] = json.dumps(val, ensure_ascii=False, indent=2)
+                for k in (
+                    "artifact_id", "tool_id", "summary", "sources_used", "error",
+                    "inputs", "description", "content_inventorization", "content_lineage",
+                    "timestamp",
+                ):
+                    if k in obj and k not in out:
+                        out[k] = obj[k]
+                return out
+
+            val = obj.get("value")
+            if obj.get("tool_id") in ("generic_tools.web_search", "generic_tools.fetch_url_contents") and isinstance(val, list):
+                return {
+                    "kind": "inline",
+                    "format": "json",
+                    "text": json.dumps(_compact_search_items(val), ensure_ascii=False, indent=2),
+                }
+            if isinstance(val, dict) and val.get("type") in ("inline", "file"):
+                out = dict(val)
+                out["kind"] = val.get("type")
+                if out["kind"] == "inline" and not out.get("format"):
+                    out["format"] = default_format
+                for k in (
+                    "artifact_id", "tool_id", "summary", "sources_used", "error",
+                    "inputs", "description", "content_inventorization", "content_lineage",
+                    "timestamp",
+                ):
+                    if k in obj and k not in out:
+                        out[k] = obj[k]
+                return out
+
+            if isinstance(val, str):
+                return {"kind": "inline", "format": default_format, "text": val}
+            if isinstance(val, list):
+                return {
+                    "kind": "inline",
+                    "format": "json",
+                    "text": json.dumps(val, ensure_ascii=False, indent=2),
+                }
+            if isinstance(val, dict):
+                return {
+                    "kind": "inline",
+                    "format": "json",
+                    "text": json.dumps(val, ensure_ascii=False, indent=2),
+                }
+
+        if isinstance(obj, str):
+            return {"kind": "inline", "format": default_format, "text": obj}
+
+        return None
+
+    def materialize_show_artifacts(self, show_paths: List[str]) -> List[Dict[str, Any]]:
+        """
+        Materialize full artifacts for the playbook from show_artifacts paths.
+        """
+        items: List[Dict[str, Any]] = []
+        for raw_path in (show_paths or []):
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                continue
+            path = raw_path.strip()
+            parts = path.split(".")
+            turn_id = parts[0] if parts else ""
+
+            if path.endswith(".user") or path.endswith(".assistant"):
+                val = None
+                if path == "current_turn.user":
+                    val = self.user_text or ""
+                elif path == "current_turn.assistant":
+                    val = (self.scratchpad.answer or "") if self.scratchpad else ""
+                else:
+                    val, _owner = self.resolve_path(path, mode="full")
+
+                if not isinstance(val, str) or not val.strip():
+                    continue
+                art_type = "user_prompt" if path.endswith(".user") else "assistant_completion"
+                items.append({
+                    "context_path": path,
+                    "artifact_type": art_type,
+                    "timestamp": self._turn_timestamp(turn_id),
+                    "artifact": {
+                        "kind": "inline",
+                        "format": "markdown",
+                        "text": val,
+                    },
+                })
+                continue
+
+            base_path = path
+            if len(parts) >= 3 and parts[1] in ("slots", "artifacts"):
+                base_path = ".".join(parts[:3])
+
+            obj = self.resolve_object(base_path)
+            if obj is None:
+                continue
+
+            art_type = "slot" if ".slots." in base_path else "artifact"
+            art = self._normalize_show_artifact(obj)
+            if art is None:
+                continue
+
+            items.append({
+                "context_path": base_path,
+                "artifact_type": art_type,
+                "timestamp": self._turn_timestamp(turn_id),
+                "artifact": art,
+            })
+
+        return items
 
     # ---------- Persistence ----------
     def bind_storage(self, outdir: pathlib.Path) -> "ReactContext":
         self.outdir = outdir
         self.persist()
+        return self
+
+    @staticmethod
+    def load_from_dict(payload: Dict[str, Any]) -> "ReactContext":
+        """
+        Restore ReactContext from a persisted context.json payload (dict).
+        No truncation, no transformation of user/assistant text.
+        Also applies small compatibility shims for older schemas.
+        """
+        payload = payload or {}
+
+        self = ReactContext()
+        self.prior_turns = payload.get("prior_turns") or {}
+
+        cur = payload.get("current_turn") or {}
+        if not isinstance(cur, dict):
+            cur = {}
+
+        self.turn_id = cur.get("turn_id") or self.turn_id
+        self.user_text = ((cur.get("user") or {}).get("prompt")) if isinstance(cur.get("user"), dict) else self.user_text
+        self.started_at = cur.get("ts") or self.started_at
+
+        self.current_slots = cur.get("slots") or {}
+        self.artifacts = cur.get("artifacts") or {}
+        self.events = cur.get("events") or self.events
+        self.tool_result_counter = cur.get("tool_result_counter") or self.tool_result_counter
+
+        self.max_sid = payload.get("max_sid") or self.max_sid
+        self.sources_pool = payload.get("sources_pool") or self.sources_pool
+        self.tool_call_index = payload.get("tool_call_index") or self.tool_call_index
+
+        # ---- Compatibility: prior turns may store slots under "slots" not "deliverables"
+        try:
+            for tid, turn in (self.prior_turns or {}).items():
+                if not isinstance(turn, dict):
+                    continue
+                if "deliverables" not in turn and isinstance(turn.get("slots"), dict):
+                    turn["deliverables"] = turn["slots"]
+        except Exception:
+            pass
+
         return self
 
     def _ctx_path(self) -> pathlib.Path:
@@ -263,7 +485,6 @@ class ReactContext:
         status = self._slot_mapping_status(one_map)
         return self._format_slot_mapping_log(label, status)
 
-
     def persist(self) -> None:
         """Write the entire session context to context.json."""
         if not self.outdir:
@@ -278,7 +499,7 @@ class ReactContext:
                 },
                 "ts": self.started_at,
                 "slots": self.current_slots,
-                "tool_results": self.current_tool_results,
+                "artifacts": self.artifacts,
                 "events": self.events,
                 "tool_result_counter": self.tool_result_counter,
             },
@@ -367,15 +588,21 @@ class ReactContext:
         }
         self.events.append(evt)
 
-        # index tool_started → artifact_name
+        # index tool_started → artifact_ids
         if kind == "tool_started":
-            art_name = (data.get("artifact_name") or "").strip()
-            if art_name:
-                self.tool_call_index[art_name] = {
+            tool_call_id = (data.get("tool_call_id") or "").strip()
+            if tool_call_id:
+                self.tool_call_index[tool_call_id] = {
                     "signature": data.get("signature"),
                     "tool_id": data.get("tool_id"),
                     "started_ts": evt["ts"],
+                    "declared_artifact_ids": data.get("artifact_ids") or [],
+                    "produced_artifact_ids": [],
                 }
+        if kind == "tool_finished":
+            tool_call_id = (data.get("tool_call_id") or "").strip()
+            if tool_call_id and tool_call_id in self.tool_call_index:
+                self.tool_call_index[tool_call_id]["produced_artifact_ids"] = data.get("produced_artifact_ids") or []
 
         self.persist()
 
@@ -392,9 +619,12 @@ class ReactContext:
             call_record_rel: str | None = None,
             call_record_abs: str | None = None,
             artifact_type: Optional[str] = None,
+            artifact_kind: Optional[str] = None,
             error: Optional[Dict[str, Any]] = None,
             content_inventorization: Optional[Any] = None,
             content_lineage: List[str] | None = None,
+            tool_call_id: str|None=None,
+            tool_call_item_index: int|None=None
     ) -> Dict[str, Any]:
         """
         Store a current-turn tool result as an artifact object.
@@ -452,6 +682,7 @@ class ReactContext:
                     })
 
         artifact = {
+            "artifact_id": artifact_id,
             "tool_id": tool_id,
             "value": value_norm,
             "summary": str(summary or ""),
@@ -463,7 +694,12 @@ class ReactContext:
                 "abs": call_record_abs,
             },
             "artifact_type": artifact_type,
+            "artifact_kind": artifact_kind,
         }
+        if tool_call_id is not None:
+            artifact["tool_call_id"] = tool_call_id
+        if tool_call_item_index is not None:
+            artifact["tool_call_item_index"] = tool_call_item_index
 
         # Add lineage if present (just store it, no computation here)
         if content_lineage:
@@ -474,7 +710,7 @@ class ReactContext:
             artifact["error"] = error
         if content_inventorization is not None:
             artifact["content_inventorization"] = content_inventorization
-        self.current_tool_results[artifact_id] = artifact
+        self.artifacts[artifact_id] = artifact
         self.persist()
         return artifact
 
@@ -590,7 +826,7 @@ class ReactContext:
         Resolve an OBJECT path (not a leaf). Returns the artifact dict or None.
 
         Supported:
-          - current_turn.tool_results.<artifact_id>
+          - current_turn.artifacts.<artifact_id>
           - current_turn.slots.<slot_name>
           - <turn_id>.slots.<slot_name>
         """
@@ -598,9 +834,9 @@ class ReactContext:
             return None
 
         parts = path.split(".")
-        # current turn: tool_results.<id>
-        if len(parts) == 3 and parts[0] == "current_turn" and parts[1] == "tool_results":
-            return self.current_tool_results.get(parts[2])
+        # current turn: artifacts.<id>
+        if len(parts) == 3 and parts[0] == "current_turn" and parts[1] == "artifacts":
+            return self.artifacts.get(parts[2])
 
         # current turn: slots.<slot>
         if len(parts) == 3 and parts[0] == "current_turn" and parts[1] == "slots":
@@ -640,7 +876,7 @@ class ReactContext:
         # 2) Fallback: scan latest 5 results for a single unambiguous write_* path
         candidates = []
         items = sorted(
-            ((k, v) for k, v in self.current_tool_results.items() if isinstance(v, dict)),
+            ((k, v) for k, v in self.artifacts.items() if isinstance(v, dict)),
             key=lambda kv: float(kv[1].get("timestamp") or 0.0),
             reverse=True
         )[:5]
@@ -670,7 +906,7 @@ class ReactContext:
         Apply decision.map_slot.
 
         INLINE:
-          - Prefer mapping from a LEAF textual path (e.g., ...tool_results.<id>.value.content).
+          - Prefer mapping from a LEAF textual path (e.g., ...artifacts.<id>.value.content).
           - Fallback: map from an OBJECT (extracting value.content/value.text).
 
         FILE:
@@ -718,8 +954,7 @@ class ReactContext:
             _log("mapping_skipped", {"slot": slot_name, "reason": "slot_spec_missing", "artifact": art_path})
             return None
         slot_type = (slot_spec.type or "inline").lower()
-        summary = None
-        content_inventorization = None
+
         # ---------- INLINE ----------
         if slot_type == "inline":
 
@@ -727,15 +962,18 @@ class ReactContext:
             val, owner = self.resolve_path(art_path, mode="full") if art_path else (None, None)
             if val:
                 if not isinstance(val, str):
-                    val = json.dumps(_to_jsonable(val).strip())
+                    val = json.dumps(_to_jsonable(val), ensure_ascii=False)
                 sources_used = (owner or {}).get("sources_used") or []
                 tool_id = (owner or {}).get("tool_id")
 
-                # If leaf is under current_turn.tool_results.*, also look into .value.sources_used
-                if art_path.startswith("current_turn.tool_results."):
-                    rel = art_path[len("current_turn.tool_results."):]
+                content_inventorization = (owner or {}).get("content_inventorization")
+                summary = (owner or {}).get("summary")
+
+                # If leaf is under current_turn.artifacts.*, also look into .value.sources_used
+                if art_path.startswith("current_turn.artifacts."):
+                    rel = art_path[len("current_turn.artifacts."):]
                     art_id = rel.split(".", 1)[0]
-                    tr_obj = self.current_tool_results.get(art_id) or {}
+                    tr_obj = self.artifacts.get(art_id) or {}
                     if not sources_used:
                         v_su = ((tr_obj.get("value") or {}).get("sources_used") or [])
                         if isinstance(v_su, list) and v_su:
@@ -832,13 +1070,6 @@ class ReactContext:
                     # Fallback to direct summary if tracing fails
                     art["summary"] = src_obj.get("summary")
 
-            # summary = src_obj.get("summary")
-            # if summary:
-            #     art["summary"] = summary
-            # inv = src_obj.get("content_inventorization")
-            # if inv is not None:
-            #     art["content_inventorization"] = inv
-
             self.current_slots[slot_name] = art
             _log("mapping_applied_file", {
                 "slot": slot_name,
@@ -915,11 +1146,11 @@ class ReactContext:
 
         Valid leaves (general): .text, .value, .summary, .path, .format, .mime, .filename, <message-string>
 
-        SPECIAL CASE (tool_results with structured values):
+        SPECIAL CASE (artifacts with structured values):
           - You may traverse INSIDE .value via dotted keys, e.g.:
-              current_turn.tool_results.<id>.value.content
-              current_turn.tool_results.<id>.value.format
-              current_turn.tool_results.<id>.value.stats.rounds
+              current_turn.artifacts.<id>.value.content
+              current_turn.artifacts.<id>.value.format
+              current_turn.artifacts.<id>.value.stats.rounds
             If .value is a JSON STRING, it will be auto-parsed for traversal.
             The final resolved item must be primitive (string/number/bool) or bytes;
             otherwise it will be serialized upstream when binding (as today).
@@ -949,11 +1180,11 @@ class ReactContext:
                 return val, {"_kind": "message", "turn_id": turn_id}
 
         # ---------- Current turn tool results ----------
-        if path.startswith("current_turn.tool_results."):
-            rel = path.replace("current_turn.tool_results.", "")
+        if path.startswith("current_turn.artifacts."):
+            rel = path.replace("current_turn.artifacts.", "")
 
             # 1) Simple known leaves first (value/summary/text/path/format/mime/filename)
-            maybe = _dig(self.current_tool_results, rel)
+            maybe = _dig(self.artifacts, rel)
             if isinstance(maybe, tuple):
                 val, parent = maybe
                 leaf = rel.split(".")[-1]
@@ -961,10 +1192,10 @@ class ReactContext:
                 return _summarize_if_needed(val, mode, leaf=leaf), parent
 
             # 2) Structured traversal under ".value.*"
-            #    Support: current_turn.tool_results.<id>.value.<nested.dotted.path>
+            #    Support: current_turn.artifacts.<id>.value.<nested.dotted.path>
             parts = rel.split(".", 2)  # at most three: <id>, "value", "<rest>"
             if len(parts) >= 2 and parts[1] == "value":
-                art = self.current_tool_results.get(parts[0])
+                art = self.artifacts.get(parts[0])
                 if isinstance(art, dict):
                     parent = art
                     v = art.get("value")
@@ -1042,8 +1273,8 @@ class ReactContext:
                                 },
                             )
 
-            # 3) Fallback: try resolving as a normal leaf within current_turn.tool_results
-            leaf_val, parent = _resolve_leaf_path(self.current_tool_results, rel, mode)
+            # 3) Fallback: try resolving as a normal leaf within current_turn.artifacts
+            leaf_val, parent = _resolve_leaf_path(self.artifacts, rel, mode)
             return leaf_val, parent
 
         # ---------- Current turn slots ----------
@@ -1063,7 +1294,7 @@ class ReactContext:
 
         # ---------- Fallback: generic leaf resolution over current turn namespaces ----------
         leaf_val, parent = _resolve_leaf_path(
-            {"tool_results": self.current_tool_results, "slots": self.current_slots},
+            {"artifacts": self.artifacts, "slots": self.current_slots},
             path.replace("current_turn.", ""),
             mode,
         )
@@ -1086,15 +1317,14 @@ class ReactContext:
 
         Special behavior for tools that declare sources params:
           - If tools_insights.wants_sources_param(tool_id) or
-            tools_insights.wants_sources_json(tool_id) is true, then params
-            named "sources" / "sources_json" are treated as JSON lists:
-              * Inline value (base_params[...] or params[...]) is parsed as JSON
-                (list or dict).
-              * Each fetched contribution is also parsed as JSON if string,
-                or used directly if it's list/dict.
+            tools_insights.wants_sources_list(tool_id) is true, then params
+            named "sources" / "sources_list" are treated as lists:
+              * Inline value (base_params[...] or params[...]) is used directly
+                if it's list/dict.
+              * Each fetched contribution is used directly if list/dict.
               * All rows are flattened into one list, normalized & deduped via
                 _reconcile_sources_lists (materializing into pool + SIDs).
-              * The final param is stored as a single JSON string.
+              * The final param is stored as a list.
 
         Returns:
             (bound_params, content_lineage): content_lineage is list of paths to
@@ -1103,12 +1333,12 @@ class ReactContext:
         params: Dict[str, Any] = dict(base_params or {})
 
         # Which special behavior do we need?
-        wants_sources_json = tools_insights.wants_sources_json(tool_id=tool_id)
+        wants_sources_list = tools_insights.wants_sources_list(tool_id=tool_id)
         wants_sources_param = tools_insights.wants_sources_param(tool_id=tool_id)
 
         # Buckets:
         # - normal_buckets → string concatenation
-        # - sources_buckets → raw contributions for "sources"/"sources_json"
+        # - sources_buckets → raw contributions for "sources"/"sources_list"
         normal_buckets: Dict[str, List[str]] = {}
         sources_buckets: Dict[str, List[Any]] = {}
 
@@ -1121,7 +1351,7 @@ class ReactContext:
             mode = (fd or {}).get("mode") or "summary"
             if not (p and name):
                 continue
-            if (wants_sources_json or wants_sources_param) and name in {"sources", "sources_json"} and mode == "summary":
+            if (wants_sources_list or wants_sources_param) and name in {"sources", "sources_list"} and mode == "summary":
                 log.warning(
                     f"[bind_params] Overriding fetch mode 'summary' → 'full' "
                     f"for sources-like param '{name}' of tool '{tool_id}'"
@@ -1134,11 +1364,11 @@ class ReactContext:
 
             # NEW: Extract content lineage (single pass with binding)
             # Only track artifact paths (not messages)
-            if p.startswith("current_turn.tool_results."):
-                # Extract artifact_id from path like "current_turn.tool_results.gen_1.value.content"
+            if p.startswith("current_turn.artifacts."):
+                # Extract artifact_id from path like "current_turn.artifacts.gen_1.value.content"
                 parts = p.split(".")
                 if len(parts) >= 3:
-                    artifact_path = ".".join(parts[:3])  # current_turn.tool_results.gen_1
+                    artifact_path = ".".join(parts[:3])  # current_turn.artifacts.gen_1
                     if isinstance(parent, dict):
                         source_tool = parent.get("tool_id")
                         # Only track content producers (not write_* tools)
@@ -1180,7 +1410,7 @@ class ReactContext:
                         log.debug(
                             "[bind_params] Skipping fetch_uri_content artifact "
                             f"for input_context (path={p}, src_tool={src_tool_id}) "
-                            "to avoid duplicating content already passed via sources_json."
+                            "to avoid duplicating content already passed via sources_list."
                         )
                         # IMPORTANT: we only skip *text* binding; the directive itself
                         # stays in fetch_directives and will still be visible to
@@ -1191,8 +1421,8 @@ class ReactContext:
                     pass
 
             # Special handling only for tools that actually accept sources params
-            if name in {"sources", "sources_json"} and (
-                    (name == "sources_json" and wants_sources_json)
+            if name in {"sources", "sources_list"} and (
+                    (name == "sources_list" and wants_sources_list)
                     or (name == "sources" and wants_sources_param)
             ):
                 # For sources params we keep raw values (list/dict/str) and
@@ -1218,7 +1448,7 @@ class ReactContext:
             else:
                 params[k] = joined
 
-        # 2) Special merging for sources / sources_json
+        # 2) Special merging for sources / sources_list
         def _gather_sources_for_param(param_name: str) -> List[Dict[str, Any]]:
             """
             Collect inline + fetched contribution for a single sources-like param,
@@ -1232,17 +1462,6 @@ class ReactContext:
                 rows.extend(inline)
             elif isinstance(inline, dict):
                 rows.append(inline)
-            elif isinstance(inline, str) and inline.strip():
-                # Inline string is expected to be JSON list or dict
-                try:
-                    parsed = json.loads(inline)
-                    if isinstance(parsed, list):
-                        rows.extend(parsed)
-                    elif isinstance(parsed, dict):
-                        rows.append(parsed)
-                except Exception:
-                    # If inline is garbage, we ignore it for safety
-                    pass
 
             # Fetched contributions
             for v in sources_buckets.get(param_name, []):
@@ -1250,33 +1469,23 @@ class ReactContext:
                     rows.extend(v)
                 elif isinstance(v, dict):
                     rows.append(v)
-                elif isinstance(v, str):
-                    try:
-                        parsed = json.loads(v)
-                        if isinstance(parsed, list):
-                            rows.extend(parsed)
-                        elif isinstance(parsed, dict):
-                            rows.append(parsed)
-                    except Exception:
-                        # Ignore non-JSON strings for sources
-                        pass
 
             # Filter to dicts only — _reconcile_sources_lists will do further normalization
             return [r for r in rows if isinstance(r, dict)]
 
         # Only apply special logic for tools that declare they want these params
         # AND when there is something to merge.
-        if wants_sources_json:
-            flat = _gather_sources_for_param("sources_json")
+        if wants_sources_list:
+            flat = _gather_sources_for_param("sources_list")
             if flat:
                 merged = self._reconcile_sources_lists([flat])
-                params["sources_json"] = json.dumps(merged, ensure_ascii=False)
+                params["sources_list"] = merged
 
         if wants_sources_param:
             flat = _gather_sources_for_param("sources")
             if flat:
                 merged = self._reconcile_sources_lists([flat])
-                params["sources"] = json.dumps(merged, ensure_ascii=False)
+                params["sources"] = merged
 
         # Log event
         bound_keys = list(normal_buckets.keys()) + list(sources_buckets.keys())
@@ -1342,31 +1551,15 @@ class ReactContext:
 
     def _parse_sources_param_value(self, raw: Any) -> list[dict]:
         """
-        Parse 'sources*' params (string or list) into a flat list[dict].
-
-        Accepts:
-          - JSON string for a list or dict
-          - multiple JSON chunks concatenated with two newlines
-          - already a list of dicts
+        Parse 'sources*' params (list or dict) into a flat list[dict].
 
         Drops items that do not have a string 'url'.
         """
         rows: list[Any] = []
         if isinstance(raw, list):
             rows = list(raw)
-        elif isinstance(raw, str):
-            # bind_params concatenates with two newlines, so split on that,
-            # but also handle the single-chunk case.
-            segments = [seg for seg in raw.split("\n\n") if seg.strip()] or [raw]
-            for seg in segments:
-                try:
-                    parsed = json.loads(seg)
-                except Exception:
-                    continue
-                if isinstance(parsed, list):
-                    rows.extend(parsed)
-                elif isinstance(parsed, dict):
-                    rows.append(parsed)
+        elif isinstance(raw, dict):
+            rows.append(raw)
         else:
             return []
 
@@ -1393,10 +1586,10 @@ class ReactContext:
     ) -> tuple[dict[str, Any], list[str]]:
         """
         1) Do the regular text binding (concatenate leaves into params).
-        2) For citations-aware tools or when sources/sources_json is explicitly present:
+        2) For citations-aware tools or when sources/sources_list is explicitly present:
            - Gather sources from fetched artifacts' owners
            - Merge with any caller-provided sources
-           - Insert as correct param ('sources_json' for LLM generator, 'sources' for write tools), stringified
+           - Insert as correct param ('sources_list' for LLM generator, 'sources' for write tools), as list
         3) Extract content lineage via bind_params (paths to non-write_* artifacts used as inputs)
 
         Returns:
@@ -1412,13 +1605,13 @@ class ReactContext:
         is_citation_aware = tools_insights.does_tool_accept_sources(tool_id)
 
         # choose which param this tool expects
-        wants_sources_json = tools_insights.wants_sources_json(tool_id=tool_id)
+        wants_sources_list = tools_insights.wants_sources_list(tool_id=tool_id)
         wants_sources_param = tools_insights.wants_sources_param(tool_id=tool_id)
 
         # detect explicit mapping
         explicitly_requests_sources = any(
-            (fd or {}).get("param_name") in {"sources", "sources_json"} for fd in (fetch_directives or [])
-        ) or ("sources" in (base_params or {})) or ("sources_json" in (base_params or {}))
+            (fd or {}).get("param_name") in {"sources", "sources_list"} for fd in (fetch_directives or [])
+        ) or ("sources" in (base_params or {})) or ("sources_list" in (base_params or {}))
 
         if not (is_citation_aware or explicitly_requests_sources):
             return params, content_lineage
@@ -1428,8 +1621,8 @@ class ReactContext:
 
         # gather any provided sources
         provided_list: List[Dict[str, Any]] = []
-        if "sources_json" in params:
-            provided_list = self._parse_sources_param_value(params["sources_json"])
+        if "sources_list" in params:
+            provided_list = self._parse_sources_param_value(params["sources_list"])
         elif "sources" in params:
             provided_list = self._parse_sources_param_value(params["sources"])
 
@@ -1438,18 +1631,17 @@ class ReactContext:
 
         if merged:
             # For LLM + writer tools, normalize into a clean shape
-            if wants_sources_json or wants_sources_param:
+            if wants_sources_list or wants_sources_param:
                 merged = [adapt_source_for_llm(s) for s in merged if isinstance(s, dict)]
 
-            payload = json.dumps(merged, ensure_ascii=False)
-            if wants_sources_json:
-                params["sources_json"] = payload
+            if wants_sources_list:
+                params["sources_list"] = merged
             elif wants_sources_param:
-                params["sources"] = payload
+                params["sources"] = merged
             else:
                 # fallback: prefer 'sources' if tool unknown but asked explicitly
-                target_key = "sources_json" if ("sources_json" in (base_params or {})) else "sources"
-                params[target_key] = payload
+                target_key = "sources_list" if ("sources_list" in (base_params or {})) else "sources"
+                params[target_key] = merged
 
             self.add_event(kind="param_binding_sources", data={
                 "tool": tool_id,
@@ -1468,7 +1660,7 @@ class ReactContext:
         For content-producing artifacts: return own summary.
 
         Args:
-            artifact_path: Path like "current_turn.tool_results.pdf_render_1"
+            artifact_path: Path like "current_turn.artifacts.pdf_render_1"
             visited: Cycle detection (internal use)
 
         Returns:
@@ -1539,7 +1731,7 @@ def _resolve_leaf_path(namespace: Dict[str, Any], rel_path: str, mode: str) -> T
         return _summarize_if_needed(val, mode, leaf=rel_path.split(".")[-1]), parent
 
     # Next, permit root access ONLY when it’s a message-like string (safety)
-    # For slots and tool_results, root is an object → NOT allowed as a leaf.
+    # For slots and artifacts, root is an object → NOT allowed as a leaf.
     parts = rel_path.split(".")
     if len(parts) == 1:
         obj = namespace.get(parts[0])
@@ -1618,5 +1810,3 @@ def _text_repr(val: Any) -> str:
         return json.dumps(val, ensure_ascii=False, indent=2)
     except Exception:
         return str(val)
-
-

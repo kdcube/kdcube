@@ -145,8 +145,10 @@ class ToolSubsystem:
             for e in self._filter_entries(allowed_plugins, allowed_ids)
         ]
 
-    def adapters_for_codegen(self, *, allowed_plugins: Optional[List[str]] = None,
-                             allowed_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def adapters_for_codegen(self, *,
+                             allowed_plugins: Optional[List[str]] = None,
+                             allowed_ids: Optional[List[str]] = None,
+                             denied_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         # ensure io/ctx are always present
         ap = set(allowed_plugins or [])
         ap.update({"io_tools", "ctx_tools"})
@@ -157,7 +159,7 @@ class ToolSubsystem:
             "call_template": e["call_template"],
             "is_async": bool(e.get("is_async")),
             "doc": e["doc"],
-        } for e in self._filter_entries(allowed_plugins, allowed_ids)]
+        } for e in self._filter_entries(allowed_plugins, allowed_ids, denied_ids)]
 
     def get_alias_maps(self) -> Tuple[Dict[str, str], Dict[str, Optional[str]]]:
         """Returns (alias->dyn_module_name, alias->file_path)."""
@@ -286,7 +288,8 @@ class ToolSubsystem:
         return mod.__name__, mod
 
     def _filter_entries(self, allowed_plugins: Optional[List[str]] = None,
-                        allowed_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                        allowed_ids: Optional[List[str]] = None,
+                        denied_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
         ents = list(self.tools_info)
         system_tool = lambda e: (e.get("plugin_alias") or "") in ["io_tools"]
         if allowed_plugins:
@@ -295,6 +298,9 @@ class ToolSubsystem:
         if allowed_ids:
             allow_ids = set(allowed_ids)
             ents = [e for e in ents if system_tool(e) or e["id"] in allow_ids]
+        if denied_ids:
+            deny_ids = set(denied_ids)
+            ents = [e for e in ents if e["id"] not in deny_ids]
         return ents
 
     def _introspect_module(self, mod, mod_name: str, alias: str, use_sk: bool) -> List[Dict[str, Any]]:

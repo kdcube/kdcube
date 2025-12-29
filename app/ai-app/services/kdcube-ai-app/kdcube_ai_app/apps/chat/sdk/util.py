@@ -391,30 +391,6 @@ def _turn_id_from_tags_safe(tags: List[str]) -> Optional[str]:
             return t.split(":", 1)[1]
     return None
 
-# def _to_jsonable(obj: Any) -> Any:
-#     """
-#     Convert dataclasses and pydantic/BaseModel (if any) to plain dicts.
-#     Leaves basic types as-is. Avoids truncation and keeps all fields.
-#     """
-#     # dataclasses
-#     if is_dataclass(obj):
-#         return {k: _to_jsonable(v) for k, v in asdict(obj).items()}
-#     # pydantic BaseModel (e.g., ProgramBrief, Deliverable subclasses)
-#     try:
-#         from pydantic import BaseModel  # type: ignore
-#         if isinstance(obj, BaseModel):
-#             return json.loads(obj.model_dump_json())  # full, including defaults
-#     except Exception:
-#         pass
-#     # dict
-#     if isinstance(obj, dict):
-#         return {k: _to_jsonable(v) for k, v in obj.items()}
-#     # list/tuple
-#     if isinstance(obj, (list, tuple)):
-#         return [_to_jsonable(v) for v in obj]
-#     # everything else
-#     return obj
-
 def _to_jsonable(obj: Any, *, _seen: set[int] | None = None) -> Any:
     if _seen is None:
         _seen = set()
@@ -483,6 +459,24 @@ def isoz(ts: str | None) -> str:
         return _dt.datetime.fromisoformat(s.replace("Z","+00:00")).astimezone(_dt.timezone.utc).isoformat().replace("+00:00","Z")
     except Exception:
         return ts
+
+def ts_key(ts) -> float:
+    if hasattr(ts, "timestamp"):
+        return float(ts.timestamp())
+    if isinstance(ts, (int, float)):
+        return ts / 1000.0 if ts > 1e12 else float(ts)
+    if isinstance(ts, str):
+        s = ts.strip()
+        try:
+            if s.endswith("Z"): s = s[:-1] + "+00:00"
+            return _dt.datetime.fromisoformat(s).timestamp()
+        except Exception:
+            try:
+                v = float(s)
+                return v / 1000.0 if v > 1e12 else v
+            except Exception:
+                return float("-inf")
+    return float("-inf")
 
 import tiktoken
 

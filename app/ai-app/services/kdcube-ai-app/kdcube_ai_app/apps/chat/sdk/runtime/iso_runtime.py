@@ -7,6 +7,7 @@ import io
 import json
 import os, sys
 import asyncio
+import time
 import pathlib
 import tokenize
 from typing import Dict, Any, List, Tuple, Optional, Literal
@@ -40,7 +41,7 @@ def build_current_tool_imports(alias_map: dict[str, str]) -> str:
 
 def build_packages_installed_block() -> str:
     return (
-        "## Available Packages\n"
+        "[AVAILABLE PACKAGES]\n"
         "- Data: pandas, numpy, openpyxl, xlsxwriter\n"
         "- Files: python-docx, python-pptx, pymupdf, pypdf, reportlab, Pillow\n"
         "- Web: requests, aiohttp, httpx, playwright, beautifulsoup4, lxml\n"
@@ -198,7 +199,8 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
                           env: dict,
                           timeout_s: int,
                           outdir: pathlib.Path,
-                          allow_network: bool = True) -> Dict[str, Any]:
+                          allow_network: bool = True,
+                          exec_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Environment toggles (per-call via env, or global via os.environ):
       - allow_network: True (default) -> network allowed
@@ -283,17 +285,40 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
             err += err2
     finally:
         try:
-            out_path = outdir / "runtime.out.log"
-            err_path = outdir / "runtime.err.log"
-            out_path.parent.mkdir(parents=True, exist_ok=True)
+            log_dir = outdir / "logs"
+            out_path = log_dir / "runtime.out.log"
+            err_path = log_dir / "runtime.err.log"
+            errlog_path = log_dir / "errors.log"
+            log_dir.mkdir(parents=True, exist_ok=True)
+
+            ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+            eid = (exec_id or env.get("EXECUTION_ID") or "unknown")
+            header = f"\n===== EXECUTION {eid} START {ts} =====\n".encode("utf-8")
+
             with open(out_path, "ab") as f:
+                f.write(header)
                 if out:
                     f.write(out)
-                    f.write(b"\n")
+                    if not out.endswith(b"\n"):
+                        f.write(b"\n")
             with open(err_path, "ab") as f:
+                f.write(header)
                 if err:
                     f.write(err)
-                    f.write(b"\n")
+                    if not err.endswith(b"\n"):
+                        f.write(b"\n")
+
+            if timed_out or proc.returncode != 0:
+                reason = "timeout" if timed_out else f"returncode={proc.returncode}"
+                err_txt = err.decode("utf-8", errors="ignore")
+                tail = err_txt[-4000:] if err_txt else ""
+                with open(errlog_path, "ab") as f:
+                    f.write(header)
+                    f.write(f"[runtime] {reason}\n".encode("utf-8"))
+                    if tail:
+                        f.write(tail.encode("utf-8", errors="ignore"))
+                        if not tail.endswith("\n"):
+                            f.write(b"\n")
         except Exception:
             pass
 
@@ -301,7 +326,6 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
         return {"error": "timeout", "seconds": timeout_s}
 
     return {"ok": proc.returncode == 0, "returncode": proc.returncode}
-
 
 def _build_injected_header(*, globals_src: str, imports_src: str) -> str:
     from textwrap import dedent
@@ -324,6 +348,8 @@ OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
 if not OUTPUT_DIR:
     raise RuntimeError("OUTPUT_DIR missing in run context")
 OUTPUT = Path(OUTPUT_DIR)
+_EXEC_ID = os.environ.get("EXECUTION_ID") or "unknown"
+logger.info(f"===== EXECUTION {_EXEC_ID} START =====")
 
 # Ensure ContextVars are set even if only env was provided
 try:
@@ -383,6 +409,12 @@ _bootstrap_child()
 
 # --- Globals provided by parent (must come before alias imports) ---
 <GLOBALS_SRC>
+
+result_filename = (
+    globals().get("RESULT_FILENAME")
+    or os.environ.get("RESULT_FILENAME")
+    or "result.json"
+)
 
 # --- Dyn tool modules pre-registration (by file path) ---
 # The parent passes:
@@ -552,7 +584,7 @@ async def _write_checkpoint(reason: str = "checkpoint", managed: bool = True):
         }
         await agent_io_tools.save_ret(
             data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
+            filename=result_filename,
         )
     except Exception:
         # best-effort only
@@ -578,7 +610,7 @@ async def done():
         _dump_delta_cache_file()
     finally:
         pass
-    return await agent_io_tools.save_ret(data=_json.dumps(payload, ensure_ascii=False), filename="result.json")
+    return await agent_io_tools.save_ret(data=_json.dumps(payload, ensure_ascii=False), filename=result_filename)
 
 async def fail(description: str,
                where: str = "",
@@ -613,7 +645,7 @@ async def fail(description: str,
         _dump_delta_cache_file()
     finally:
         pass
-    return await agent_io_tools.save_ret(data=_json.dumps(payload, ensure_ascii=False), filename="result.json")
+    return await agent_io_tools.save_ret(data=_json.dumps(payload, ensure_ascii=False), filename=result_filename)
 
 def _on_term(signum, frame):
     """Handle SIGTERM/SIGINT by checkpointing and exiting."""
@@ -683,6 +715,8 @@ def _on_atexit():
     DO NOT do async operations here - event loop is closed.
     """
     try:
+        if os.environ.get("EXEC_NO_UNEXPECTED_EXIT") == "1":
+            return
         # Persist deltas even if we didn't call done()/fail() (e.g., tool-only exec)
         try:
             _dump_delta_cache_file()
@@ -824,6 +858,12 @@ except Exception:
 
 # --- Globals provided by parent (must come before alias imports) ---
 <GLOBALS_SRC>
+
+result_filename = (
+    globals().get("RESULT_FILENAME")
+    or os.environ.get("RESULT_FILENAME")
+    or "result.json"
+)
 
 # --- Dyn tool modules pre-registration (by file path) ---
 # CRITICAL: Load dynamic modules before import statements try to use them
@@ -984,7 +1024,7 @@ async def _write_checkpoint(reason: str = "checkpoint", managed: bool = True):
         }
         await agent_io_tools.save_ret(
             data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
+            filename=result_filename,
         )
     except Exception:
         # best-effort only
@@ -1008,7 +1048,7 @@ async def done():
     try:
         return await agent_io_tools.save_ret(
             data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
+            filename=result_filename,
         )
     except Exception:
         # nothing more we can do here
@@ -1045,7 +1085,7 @@ async def fail(description: str,
     try:
         return await agent_io_tools.save_ret(
             data=_json.dumps(payload, ensure_ascii=False),
-            filename="result.json",
+            filename=result_filename,
         )
     except Exception:
         return None
@@ -1073,6 +1113,8 @@ def _on_atexit():
     DO NOT do async operations here - event loop may be closed.
     """
     try:
+        if os.environ.get("EXEC_NO_UNEXPECTED_EXIT") == "1":
+            return
         if globals().get("_FINALIZED", False):
             return
 
@@ -1099,6 +1141,397 @@ atexit.register(_on_atexit)
 # === END HEADER ===
 ''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
 
+def _build_iso_injected_header_step_artifacts(*, globals_src: str, imports_src: str) -> str:
+    """
+    Build the executor-side runtime header.
+
+    IMPORTANT:
+    - No bootstrap of ModelService / KB / communicator here.
+    - No _dump_delta_cache_file here.
+      All privileged state (COMM, KB, secrets) lives in the supervisor.
+    - Executor owns only:
+        * OUTDIR / WORKDIR (via ContextVars or env)
+        * _PROGRESS + project_log
+        * set_progress / done / fail that proxy to supervisor via io_tools.save_ret.
+    """
+    from textwrap import dedent
+    return dedent('''\
+# === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
+from pathlib import Path
+import json as _json
+import os, asyncio, atexit, signal, sys, importlib
+from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
+from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
+
+import logging
+import kdcube_ai_app.apps.utils.logging_config as logging_config
+
+logging_config.configure_logging()
+logger = logging.getLogger("agent.runtime")
+
+# --- Directories / CV fallbacks ---
+OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
+if not OUTPUT_DIR:
+    raise RuntimeError("OUTPUT_DIR missing in run context")
+OUTPUT = Path(OUTPUT_DIR)
+
+# Ensure ContextVars are set even if only env was provided
+try:
+    if not OUTDIR_CV.get(""):
+        od = os.environ.get("OUTPUT_DIR")
+        if od:
+            OUTDIR_CV.set(od)
+    if not WORKDIR_CV.get(""):
+        wd = os.environ.get("WORKDIR")
+        if wd:
+            WORKDIR_CV.set(wd)
+except Exception:
+    pass
+
+# --- Globals provided by parent (must come before alias imports) ---
+<GLOBALS_SRC>
+
+result_filename = (
+    globals().get("RESULT_FILENAME")
+    or os.environ.get("RESULT_FILENAME")
+    or "result.json"
+)
+print(f"Effective result filename: {result_filename}")
+
+# --- Dyn tool modules pre-registration (by file path) ---
+# CRITICAL: Load dynamic modules before import statements try to use them
+_ALIAS_TO_DYN  = globals().get("TOOL_ALIAS_MAP", {}) or {}
+_ALIAS_TO_FILE = globals().get("TOOL_MODULE_FILES", {}) or {}
+_RAW_TOOL_SPECS = globals().get("RAW_TOOL_SPECS", []) or []
+
+# Build alias -> module map for library modules (optional)
+_alias_to_module: dict[str, str] = {}
+for _spec in _RAW_TOOL_SPECS:
+    if isinstance(_spec, dict) and _spec.get("alias") and _spec.get("module"):
+        _alias_to_module[_spec["alias"]] = _spec["module"]
+
+# Preload dyn alias modules
+for _alias, _dyn_name in (_ALIAS_TO_DYN or {}).items():
+    _path = (_ALIAS_TO_FILE or {}).get(_alias)
+    
+    # If path is None, try to resolve from RAW_TOOL_SPECS module name
+    if not _path and _alias in _alias_to_module:
+        _module_name = _alias_to_module[_alias]
+        try:
+            _spec_obj = importlib.util.find_spec(_module_name)
+            if _spec_obj and _spec_obj.origin:
+                _path = _spec_obj.origin
+                logger.info(
+                    f"[executor] resolved library module: "
+                    f"{_alias} → {_module_name} → {_path}"
+                )
+        except Exception as _e:
+            logger.error(
+                f"[executor] failed to resolve module {_module_name}: {_e}",
+                exc_info=True
+            )
+            continue
+    
+    if not _path:
+        logger.warning(f"[executor] no path for alias {_alias}, skipping dyn load")
+        continue
+        
+    try:
+        _spec = importlib.util.spec_from_file_location(_dyn_name, _path)
+        if _spec is None or _spec.loader is None:
+            logger.error(f"[executor] Could not create spec for {_dyn_name} from {_path}")
+            continue
+        _mod = importlib.util.module_from_spec(_spec)
+        sys.modules[_dyn_name] = _mod
+        _spec.loader.exec_module(_mod)
+        logger.info(f"[executor] Loaded dynamic module {_dyn_name} from {_path}")
+    except Exception as e:
+        logger.error(f"[executor] Failed to load {_dyn_name} from {_path}: {e}", exc_info=True)
+        print(f"[ERROR] Module load failed: {_alias} -> {_dyn_name}: {e}", file=sys.stderr)
+
+# --- Tool alias imports (auto-injected) ---
+<TOOL_IMPORTS_SRC>
+
+# -------- Live progress cache (executor-local) --------
+_PROGRESS = {
+    "objective": "",
+    "status": "In progress",
+    "story": [],          # list[str]
+    "out_dyn": {},        # artifact_id -> artifact payload (inline/file)
+}
+_FINALIZED = False  # prevents late checkpoints from overwriting the final result
+
+def _build_project_log_md() -> str:
+    lines = []
+    lines.append("# Project Log")
+    lines.append("")
+    lines.append("## Objective")
+    lines.append(str(_PROGRESS.get("objective", "")))
+    lines.append("")
+    lines.append("## Status")
+    lines.append(str(_PROGRESS.get("status", "")))
+    lines.append("")
+    lines.append("## Story")
+    story = " ".join(_PROGRESS.get("story") or [])
+    lines.append(story)
+    lines.append("")
+    lines.append("## Produced Artifacts")
+
+    for name, data in (_PROGRESS.get("out_dyn") or {}).items():
+        if name == "project_log":
+            continue
+        t = (data.get("type") or "inline")
+        desc = data.get("description", "")
+        is_draft = bool(data.get("draft", False))
+        draft_marker = " [DRAFT]" if is_draft else ""
+
+        lines.append(f"### {name} ({t}){draft_marker}")
+        if desc:
+            lines.append(desc)
+        if t == "file":
+            mime = data.get("mime", "")
+            path = data.get("path", "")
+            if not isinstance(path, str) or not path:
+                path = data.get("filename", "")
+                if not isinstance(path, str):
+                    path = ""
+            if mime:
+                lines.append(f"**Mime:** {mime}")
+            if path:
+                lines.append(f"**Filename:** {path}")
+        else:
+            fmt = data.get("format", "")
+            if fmt:
+                lines.append(f"**Format:** {fmt}")
+
+    return "\\n".join(lines).strip()
+
+def _refresh_project_log_slot():
+    """Keep 'project_log' as a first-class slot in _PROGRESS['out_dyn']."""
+    od = _PROGRESS["out_dyn"]
+    md = _build_project_log_md()
+    od["project_log"] = {
+        "type": "inline",
+        "format": "markdown",
+        "description": "Live run log",
+        "value": md,
+    }
+
+def _apply_artifact_update(artifact):
+    """
+    Accept either:
+      A) Single artifact dict with ('name' or 'artifact_id') and 'type'
+         -> stored under that id (without the name fields)
+      B) Mapping dict: {artifact_id: artifact_payload, ...}
+         -> each stored as-is
+    """
+    if artifact is None:
+        return
+
+    if not isinstance(artifact, dict):
+        raise TypeError("artifact must be a dict")
+
+    def _coerce_file_path(val):
+        if isinstance(val, Path):
+            return str(val)
+        return val
+
+    od = _PROGRESS["out_dyn"]
+
+    # Case A: looks like a single artifact object
+    if ("type" in artifact) and (("name" in artifact) or ("artifact_id" in artifact)):
+        aid = artifact.get("name") or artifact.get("artifact_id")
+        if not aid:
+            raise ValueError("artifact missing name/artifact_id")
+        obj = dict(artifact)
+        obj.pop("name", None)
+        obj.pop("artifact_id", None)
+        if obj.get("type") == "file" and "path" in obj:
+            obj["path"] = _coerce_file_path(obj.get("path"))
+        od[str(aid)] = obj
+        return
+
+    # Case B: treat as mapping patch
+    for k, v in artifact.items():
+        if isinstance(v, dict) and v.get("type") == "file" and "path" in v:
+            v = dict(v)
+            v["path"] = _coerce_file_path(v.get("path"))
+        od[str(k)] = v
+    print(f"[Runtime] Applied artifact update: {artifact}")
+
+async def _write_checkpoint(reason: str = "checkpoint", managed: bool = True):
+    if globals().get("_FINALIZED", False):
+        return
+    try:
+        _refresh_project_log_slot()
+        g = globals()
+        payload = {
+            "ok": False,
+            "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
+            "contract": (g.get("CONTRACT") or {}),
+            "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
+            "error": {
+                "where": "runtime",
+                "details": "",
+                "error": reason,
+                "description": reason,
+                "managed": bool(managed),
+            },
+        }
+        out_dyn = dict(_PROGRESS.get("out_dyn") or {})
+        print(f"[Runtime] Writing checkpoint.out_dyn={out_dyn}")
+        await agent_io_tools.save_ret(
+            data=_json.dumps(payload, ensure_ascii=False),
+            filename=result_filename,
+            artifact_lvl="artifact",
+        )
+    except Exception:
+        # best-effort only
+        pass
+
+async def set_progress(*, objective=None, status=None, story_append=None, artifact=None, flush: bool = False):
+    if objective is not None:
+        _PROGRESS["objective"] = str(objective)
+    if status is not None:
+        print(f"[Runtime] Progress status updated: {status}")
+        _PROGRESS["status"] = str(status)
+
+    if story_append:
+        if isinstance(story_append, (list, tuple)):
+            _PROGRESS["story"].extend([str(s) for s in story_append])
+        else:
+            _PROGRESS["story"].append(str(story_append))
+
+    if artifact is not None:
+        print(f"[Runtime] artifact update: {artifact}")
+        _apply_artifact_update(artifact)
+        print(f"[Runtime] artifact update completed: {artifact}")
+
+    _refresh_project_log_slot()
+
+    if flush and not globals().get("_FINALIZED", False):
+        await _write_checkpoint(reason="progress", managed=True)
+
+# ensure project_log exists from the start
+_refresh_project_log_slot()
+
+async def done():
+    print("[Runtime] done() called, finalizing result")
+    # ensure latest log
+    _refresh_project_log_slot()
+    g = globals()
+    status = (_PROGRESS.get("status") or "Completed")
+    if status.lower().startswith("in progress"):
+        _PROGRESS["status"] = "Completed"
+        _refresh_project_log_slot()
+    out_dyn = dict(_PROGRESS.get("out_dyn") or {})
+    payload = {
+        "ok": True,
+        "objective": str(_PROGRESS.get("objective") or g.get("objective") or g.get("OBJECTIVE") or ""),
+        "contract": (g.get("CONTRACT") or {}),
+        "out_dyn": out_dyn,
+    }
+    print(f"[Runtime] done(). out_dyn={out_dyn}")
+    globals()["_FINALIZED"] = True  # set BEFORE writing final file
+    try:
+        return await agent_io_tools.save_ret(
+            data=_json.dumps(payload, ensure_ascii=False),
+            filename=result_filename,
+            artifact_lvl="artifact",
+        )
+        print(f"[Runtime] done(). ret saved to {result_filename}")
+    except Exception:
+        # nothing more we can do here
+        import traceback
+        print(traceback.format_exc(), file=sys.stderr)
+        return None
+
+async def fail(description: str,
+               where: str = "",
+               error: str = "",
+               details: str = "",
+               managed: bool = True):
+    """
+    Managed failure helper. Always writes result.json with a normalized envelope.
+    Uses the canonical _PROGRESS['out_dyn'] which already contains 'project_log'.
+    """
+    _PROGRESS["status"] = "Failed"
+    _refresh_project_log_slot()
+
+    g = globals()
+    payload = {
+        "ok": False,
+        "objective": str(_PROGRESS.get("objective") or description),
+        "contract": (g.get("CONTRACT") or {}),
+        "out_dyn": dict(_PROGRESS.get("out_dyn") or {}),
+        "error": {
+            "where": (where or "runtime"),
+            "details": str(details or ""),
+            "error": str(error or ""),
+            "description": description,
+            "managed": bool(managed),
+        },
+    }
+    globals()["_FINALIZED"] = True  # set BEFORE writing final file
+    try:
+        return await agent_io_tools.save_ret(
+            data=_json.dumps(payload, ensure_ascii=False),
+            filename=result_filename,
+            artifact_lvl="artifact",
+        )
+    except Exception:
+        return None
+
+def _on_term(signum, frame):
+    """
+    Handle SIGTERM/SIGINT by best-effort checkpoint and exit.
+    Done/Fail remain executor responsibilities; supervisor is not involved here.
+    """
+    try:
+        if globals().get("_FINALIZED", False):
+            sys.exit(0)
+
+        try:
+            asyncio.run(_write_checkpoint(reason=f"signal:{signum}", managed=True))
+        except Exception:
+            pass
+    finally:
+        # standard Unix convention for "terminated by signal"
+        sys.exit(128 + signum)
+
+def _on_atexit():
+    """
+    Atexit marker. Should only run if done()/fail() wasn't called.
+    DO NOT do async operations here - event loop may be closed.
+    """
+    try:
+        if os.environ.get("EXEC_NO_UNEXPECTED_EXIT") == "1":
+            return
+        if globals().get("_FINALIZED", False):
+            return
+
+        marker_path = Path(os.environ.get("OUTPUT_DIR", ".")) / "unexpected_exit.txt"
+        details = [
+            "Process exiting without explicit done()/fail() call",
+            f"_FINALIZED={globals().get('_FINALIZED', 'not set')}",
+        ]
+        marker_path.write_text("\\n".join(details), encoding="utf-8")
+        print("[Runtime] " + details[0], file=sys.stderr)
+    except Exception:
+        # avoid raising from atexit
+        pass
+
+try:
+    signal.signal(signal.SIGTERM, _on_term)
+    signal.signal(signal.SIGINT, _on_term)
+except Exception:
+    # e.g., not allowed in some embedding environments
+    pass
+
+atexit.register(_on_atexit)
+
+# === END HEADER ===
+''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
 
 class _InProcessRuntime:
     def __init__(self, logger: AgentLogger):
@@ -1120,11 +1553,18 @@ class _InProcessRuntime:
             globals: Dict[str, Any] | None = None,
             isolation: Optional[Literal["none", "local_network", "docker", "local"]] = "none",
             timeout_s: int = 90,
+            extra_env: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Execute workdir/main.py in an isolated runtime."""
 
         # Make a working copy so we don't mutate caller's dict
         g = dict(globals or {})
+        exec_id = (extra_env or {}).get("EXECUTION_ID") or g.get("EXECUTION_ID") or g.get("RESULT_FILENAME")
+        if not exec_id:
+            exec_id = f"run-{int(time.time() * 1000)}"
+        if extra_env is None:
+            extra_env = {}
+        extra_env.setdefault("EXECUTION_ID", exec_id)
 
         # Compute tool module names (needed by both docker and local)
         alias_map = g.get("TOOL_ALIAS_MAP") or {}
@@ -1147,7 +1587,7 @@ class _InProcessRuntime:
                 logger=self.log,
                 timeout_s=timeout_s,
                 bundle_root=pathlib.Path(bundle_root).resolve() if bundle_root else None,
-                extra_env={},  # Don't duplicate PORTABLE_SPEC in extra_env
+                extra_env=extra_env,  # propagate explicit env (e.g., EXECUTION_MODE)
                 network_mode=network_mode
             )
 
@@ -1184,6 +1624,13 @@ class _InProcessRuntime:
         child_env = os.environ.copy()
         child_env["OUTPUT_DIR"] = str(output_dir)
         child_env["WORKDIR"] = str(workdir)
+        child_env["LOG_DIR"] = str(output_dir / "logs")
+        child_env["LOG_FILE_PREFIX"] = "executor"
+        if extra_env:
+            for k, v in extra_env.items():
+                if k in {"WORKDIR", "OUTPUT_DIR"}:
+                    continue
+                child_env[k] = v
 
         # Serialize runtime_globals (KEEP PORTABLE_SPEC in it for bootstrap to use)
         ps = g.get("PORTABLE_SPEC_JSON") or g.get("PORTABLE_SPEC")
@@ -1219,7 +1666,8 @@ class _InProcessRuntime:
             env=child_env,
             timeout_s=timeout_s,
             outdir=output_dir,
-            allow_network=isolation != "local_network"
+            allow_network=isolation != "local_network",
+            exec_id=exec_id,
         )
 
     async def run_tool_in_isolation(

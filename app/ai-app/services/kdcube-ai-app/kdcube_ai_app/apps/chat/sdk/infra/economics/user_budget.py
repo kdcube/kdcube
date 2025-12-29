@@ -1020,6 +1020,13 @@ class UserBudgetBreakdownService:
             tenant=tenant, project=project, user_id=user_id, include_expired=False
         )
 
+        usd_per_token = float(llm_output_price_usd_per_token(reference_provider, reference_model))
+
+        def _usd(tokens: Optional[int]) -> Optional[float]:
+            if tokens is None:
+                return None
+            return round(float(tokens) * usd_per_token, 2)
+
         # -------- usage counters from RL (Redis) --------
         rl = UserEconomicsRateLimiter(self._redis)
         usage_breakdown = await rl.breakdown(
@@ -1067,6 +1074,9 @@ class UserBudgetBreakdownService:
                         "tokens_per_hour": tier_full.tokens_per_hour,
                         "tokens_per_day": tier_full.tokens_per_day,
                         "tokens_per_month": tier_full.tokens_per_month,
+                        "usd_per_hour": _usd(tier_full.tokens_per_hour),
+                        "usd_per_day": _usd(tier_full.tokens_per_day),
+                        "usd_per_month": _usd(tier_full.tokens_per_month),
                     },
                     "grant": {
                         "id": tier_full.grant_id,
@@ -1092,7 +1102,6 @@ class UserBudgetBreakdownService:
 
             available = gross_remaining - int(reserved_sum)
 
-            usd_per_token = float(llm_output_price_usd_per_token(reference_provider, reference_model))
             available_usd = round(float(available) * usd_per_token, 2)
 
             # list reservations (limited)
@@ -1131,20 +1140,29 @@ class UserBudgetBreakdownService:
                 "reference_model": f"{reference_provider}/{reference_model}",
             }
 
+        base_policy_payload = self._policy_to_dict(base_policy)
+        effective_policy_payload = self._policy_to_dict(effective_policy)
+        for payload in (base_policy_payload, effective_policy_payload):
+            payload["usd_per_hour"] = _usd(payload.get("tokens_per_hour"))
+            payload["usd_per_day"] = _usd(payload.get("tokens_per_day"))
+            payload["usd_per_month"] = _usd(payload.get("tokens_per_month"))
+
         return {
             "status": "ok",
             "user_id": user_id,
             "user_type": user_type,
             "bundle_breakdown": usage_breakdown.get("bundles"),
-            "base_policy": self._policy_to_dict(base_policy),
+            "base_policy": base_policy_payload,
             "tier_override": tier_override_payload,
-            "effective_policy": self._policy_to_dict(effective_policy),
+            "effective_policy": effective_policy_payload,
             "current_usage": {
                 "requests_today": req_day,
                 "requests_this_month": req_month,
                 "requests_total": req_total,
                 "tokens_today": tok_day,
                 "tokens_this_month": tok_month,
+                "tokens_today_usd": _usd(tok_day),
+                "tokens_this_month_usd": _usd(tok_month),
                 "concurrent": 0,
             },
             "remaining": {
@@ -1152,8 +1170,11 @@ class UserBudgetBreakdownService:
                 "requests_this_month": remaining_req_month,
                 "tokens_today": remaining_tok_day,
                 "tokens_this_month": remaining_tok_month,
+                "tokens_today_usd": _usd(remaining_tok_day),
+                "tokens_this_month_usd": _usd(remaining_tok_month),
                 "percentage_used": percentage_used,
             },
             "lifetime_credits": credits_payload,
             "active_reservations": reservations_payload,
+            "reference_model": f"{reference_provider}/{reference_model}",
         }

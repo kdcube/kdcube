@@ -4,7 +4,7 @@
 # chat/sdk/tools/citations.py
 #
 # Unified citations utilities:
-# - Map builders (from sources_json or citations[])
+# - Map builders (from sources_list or citations[])
 # - Token expansion [[S:n]], [[S:1,3]], [[S:2-5]]
 # - Rendering (links by default, optional superscripts or image embedding)
 # - Streaming-safe helpers (don’t cut tokens across chunk boundaries)
@@ -22,7 +22,7 @@
 # replace_citation_tokens_batch(full_text, cmap, CitationRenderOptions(...))
 #
 # Map building:
-# From sources_json: build_citation_map_from_sources(sources_json)
+# From sources_list: build_citation_map_from_sources(sources_list)
 # From citations[]: build_citation_map_from_citations(citations)
 
 from __future__ import annotations
@@ -635,55 +635,43 @@ def _expand_ids(ids_str: str) -> List[int]:
             uniq.append(i)
     return uniq
 
-def _normalize_sources(sources_json: Optional[str]) -> Tuple[Dict[int, Dict[str, Any]], List[int]]:
+def _normalize_sources(sources_list: Optional[list[dict]]) -> Tuple[Dict[int, Dict[str, Any]], List[int]]:
     """
     Accepts:
-      - JSON array: [{sid?, title?, url?, ...}, ...] (sid is 1-based; if missing, index+1 is used)
-      - or JSON object: { "1": {...}, "2": {...}, ... }
+      - list of dicts: [{sid?, title?, url?, ...}, ...] (sid is 1-based; if missing, index+1 is used)
 
     Returns: (by_id, order_ids)
     """
-    if not sources_json:
-        return {}, []
-    try:
-        src = json.loads(sources_json)
-    except Exception:
+    if not sources_list:
         return {}, []
 
     by_id: Dict[int, Dict[str, Any]] = {}
     order: List[int] = []
 
-    if isinstance(src, list):
-        for i, row in enumerate(src):
-            if not isinstance(row, dict):
-                continue
-            sid = row.get("sid", i + 1)
-            try:
-                sid = int(sid)
-            except Exception:
-                continue
-            by_id[sid] = row
-            order.append(sid)
-    elif isinstance(src, dict):
-        for k, row in src.items():
-            try:
-                sid = int(k)
-            except Exception:
-                continue
-            if isinstance(row, dict):
-                by_id[sid] = row
-                order.append(sid)
+    if not isinstance(sources_list, list):
+        return {}, []
+
+    for i, row in enumerate(sources_list):
+        if not isinstance(row, dict):
+            continue
+        sid = row.get("sid", i + 1)
+        try:
+            sid = int(sid)
+        except Exception:
+            continue
+        by_id[sid] = row
+        order.append(sid)
     return by_id, order
 
 # ---------------------------------------------------------------------------
 # Map builders
 # ---------------------------------------------------------------------------
 
-def build_citation_map_from_sources(sources_json: Optional[str]) -> Dict[int, Dict[str, str]]:
+def build_citation_map_from_sources(sources_list: Optional[list[dict]]) -> Dict[int, Dict[str, str]]:
     """
-    Build map {sid: {"title": ..., "url": ...}} from sources_json.
+    Build map {sid: {"title": ..., "url": ...}} from sources_list.
     """
-    by_id, _ = _normalize_sources(sources_json)
+    by_id, _ = _normalize_sources(sources_list)
     out: Dict[int, Dict[str, str]] = {}
     for sid, row in by_id.items():
         out[sid] = {
@@ -713,9 +701,9 @@ def build_citation_map_from_citations(citations: Iterable[Dict[str, Any]]) -> Di
         }
     return out
 
-def extract_sids(sources_json: Optional[str]) -> List[int]:
+def extract_sids(sources_list: Optional[list[dict]]) -> List[int]:
     """Convenience for validation layers."""
-    by_id, order = _normalize_sources(sources_json)
+    by_id, order = _normalize_sources(sources_list)
     return order or list(by_id.keys())
 
 # ---------------------------------------------------------------------------

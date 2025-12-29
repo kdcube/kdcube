@@ -41,12 +41,19 @@ async def generate_content_llm(
             )
         ] = "",
         sys_instruction: Annotated[Optional[str], "System instruction."] = "",
-        input_context: Annotated[Optional[str], "Optional text or data to use as a base."] = "",
+        input_context: Annotated[
+            Optional[str],
+            "Optional text or data to use as a base. Do NOT embed sources here; use sources_list only."
+        ] = "",
         target_format: Annotated[str, "html|markdown|json|yaml|text|managed_json_artifact",
             {"enum": ["html", "markdown", "mermaid", "json", "yaml", "text", "xml", "managed_json_artifact"]}] = "markdown",        schema_json: Annotated[str,
         "Optional JSON Schema. If provided (and target_format is json|yaml), "
         "the schema is inserted into the prompt and the model MUST produce an output that validates against it."] = "",
-        sources_json: Annotated[str, "JSON array of sources: {sid:int, title:str, url?:str, text:str, content?: str}."] = "[]",
+        sources_list: Annotated[
+            list[dict],
+            "List of sources: {sid:int, title:str, url?:str, text:str, content?: str}. "
+            "Sources must be passed ONLY here (never inside input_context)."
+        ] = None,
         cite_sources: Annotated[bool, "If true and sources provided, require citations (inline for Markdown/HTML; sidecar for JSON/YAML)."] = False,
         citation_embed: Annotated[str, "auto|inline|sidecar|none",
         {"enum": ["auto", "inline", "sidecar", "none"]}] = "auto",
@@ -67,9 +74,9 @@ async def generate_content_llm(
         on_thinking_fn = None,
         infra_call: bool = False,
         include_url_in_source_digest: bool = False
-) -> Annotated[str, 'JSON string: {ok, content, format, finished, retries, reason, stats, sources_used: [ { "sid": 1, "url": "...", "title": "...", "text": "..." }, ... ]}']:
+) -> Annotated[dict, 'Object: {ok, content, format, finished, retries, reason, stats, sources_used: [ { "sid": 1, "url": "...", "title": "...", "text": "..." }, ... ]}']:
     """
-    Returns JSON string:
+    Returns object:
       {
         "ok": true/false,
         "content": "<final text>",
@@ -174,7 +181,43 @@ async def generate_content_llm(
     if max_tokens < 5500:
         if tgt in ("html", "xml"):
             max_tokens = 5500
-    sids = extract_sids(sources_json)
+    if sources_list is None:
+        sources_list = []
+    if not isinstance(sources_list, list):
+        raise ValueError("sources_list must be a list of dicts")
+
+    def _looks_like_sources_payload(val: Any) -> bool:
+        if not isinstance(val, list) or not val:
+            return False
+        score = 0
+        for row in val[:5]:
+            if not isinstance(row, dict):
+                continue
+            has_sid = isinstance(row.get("sid"), int)
+            has_url = isinstance(row.get("url"), str)
+            has_text = isinstance(row.get("text"), str) or isinstance(row.get("content"), str)
+            has_title = isinstance(row.get("title"), str)
+            if has_sid or has_url:
+                score += 1
+            if has_text or has_title:
+                score += 1
+        return score >= 2
+
+    if sources_list and isinstance(input_context, str) and input_context.strip():
+        ic_strip = input_context.strip()
+        if ic_strip.startswith(("[", "{")):
+            try:
+                parsed_ic = json.loads(ic_strip)
+                if _looks_like_sources_payload(parsed_ic):
+                    logger.warning(
+                        "generate_content_llm: input_context looks like sources payload; "
+                        "dropping it to avoid duplication."
+                    )
+                    input_context = ""
+            except Exception:
+                pass
+
+    sids = extract_sids(sources_list)
     have_sources = bool(sids)
 
     end_marker: Annotated[str, "Completion marker appended by the model at the very end."] = "<<<GENERATION FINISHED>>>"
@@ -435,7 +478,7 @@ async def generate_content_llm(
     """]
 
     # Citation rules  and not infra_call
-    if sources_json:
+    if sources_list:
         sys_lines += [
             "",
             "SOURCE & CONTEXT USAGE POLICY:",
@@ -529,7 +572,7 @@ async def generate_content_llm(
                 "- Do not cite a source unless it substantively supports the sentence you attach it to.\n"
                 "- Prefer primary/official documents and regulator/standards bodies over tertiary blogs or low-quality aggregators.\n"
                 "- If most results are off-topic, state this briefly and proceed without those sources (or ask for better sources in minimal wording).\n"
-                "- Keep sources_json restricted to sources actually used for claims; never force citations just to satisfy a requirement.\n"
+                "- Keep sources_list restricted to sources actually used for claims; never force citations just to satisfy a requirement.\n"
             )
         ]
 
@@ -596,7 +639,7 @@ async def generate_content_llm(
 
     if have_sources:
         try:
-            raw_sources = json.loads(sources_json) if sources_json else []
+            raw_sources = sources_list or []
         except Exception:
             raw_sources = []
 
@@ -647,7 +690,7 @@ async def generate_content_llm(
     emitted_count = 0  # global index for all emitted chunks in this call
 
     # Build citation map once (we’ll only use it if tgt == "markdown")
-    citation_map = build_citation_map_from_sources(sources_json)
+    citation_map = build_citation_map_from_sources(sources_list)
 
     def _should_replace_citations_in_stream() -> bool:
         if not citation_map:
@@ -1277,9 +1320,9 @@ async def generate_content_llm(
     combined_used_sids = sorted(set((artifact_used_sids or []) + (usage_sids or [])))
 
     sources_used: List[Dict[str, Any]] = []
-    if combined_used_sids and sources_json:
+    if combined_used_sids and sources_list:
         try:
-            raw_sources = json.loads(sources_json)
+            raw_sources = sources_list
         except Exception:
             raw_sources = []
 
@@ -1354,4 +1397,4 @@ async def generate_content_llm(
         },
         "sources_used": sources_used,
     }
-    return json.dumps(out, ensure_ascii=False)
+    return out

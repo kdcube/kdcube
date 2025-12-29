@@ -183,7 +183,7 @@ class SolverPresenterConfig:
     # None = auto (rich set for extended, minimal for base)
     # Supported: "description", "content_guidance", "format", "mime",
     #            "tool_id", "citable", "sources_used_sids",
-    #            "gaps", "summary", "slot_value_inventorization"
+    #            "gaps", "summary", "slot_value_inventorization", "artifact_id", "mapped_from"
 
     # --- Filters ---
     exclude_slots: Optional[List[str]] = None
@@ -330,6 +330,11 @@ def _format_produced_slots_grouped_by_status(
     """
     Render a compact, status-grouped overview of produced/expected slots.
 
+    Pareto / cache-friendly ordering:
+      - Preserve contract insertion order first (stable across rounds).
+      - Then append extra produced slots in dmap insertion order.
+      - Group by status (missing, draft, completed) but preserve the stable slot order inside groups.
+
     Groups:
       - ❌ Missing   (declared in contract, no artifact)
       - ⚠️ Draft     (artifact exists with draft=True)
@@ -338,7 +343,8 @@ def _format_produced_slots_grouped_by_status(
     slot_attr_keys controls which per-slot metadata we show. Supported keys:
       "description", "content_guidance", "format", "mime",
       "tool_id", "citable", "sources_used_sids",
-      "gaps", "summary", "slot_value_inventorization"
+      "gaps", "summary", "slot_value_inventorization", "filename",
+      "artifact_id", "mapped_from"
 
     Returns:
       (markdown, has_any_draft)
@@ -360,6 +366,8 @@ def _format_produced_slots_grouped_by_status(
                 "gaps",
                 "summary",
                 "slot_value_inventorization",
+                "artifact_id",
+                "mapped_from",
             }
         else:
             slot_attr_keys = {
@@ -367,20 +375,37 @@ def _format_produced_slots_grouped_by_status(
                 "content_guidance",
                 "sources_used_sids",
                 "slot_value_inventorization",
+                "artifact_id",
+                "mapped_from",
             }
     else:
         slot_attr_keys = set(slot_attr_keys)
 
-    # Union of contract-defined and actually produced slots
-    all_slots: Set[str] = set(
-        k for k in (contract or {}).keys()
-        if k not in excluded
-    )
-    for k in (dmap or {}).keys():
-        if k not in excluded and k not in {SERVICE_LOG_SLOT, "project_canvas"}:
-            all_slots.add(k)
+    # ---- Pareto-friendly stable slot ordering ----
+    # 1) contract order (stable)
+    # 2) then any extra produced slots in dmap insertion order
+    ordered_slots: List[str] = []
+    seen: Set[str] = set()
 
-    if not all_slots:
+    if isinstance(contract, dict):
+        for k in contract.keys():  # preserves insertion order
+            if k in excluded:
+                continue
+            ordered_slots.append(k)
+            seen.add(k)
+
+    if isinstance(dmap, dict):
+        for k in dmap.keys():  # preserves insertion order
+            if k in excluded:
+                continue
+            if k in {SERVICE_LOG_SLOT}:
+                continue
+            if k in seen:
+                continue
+            ordered_slots.append(k)
+            seen.add(k)
+
+    if not ordered_slots:
         return "\n".join([
             "## Produced slots",
             "",
@@ -394,7 +419,7 @@ def _format_produced_slots_grouped_by_status(
     }
 
     slots_by_status: Dict[str, List[str]] = {"missing": [], "draft": [], "completed": []}
-    for slot in sorted(all_slots):
+    for slot in ordered_slots:
         st = _slot_status_for_presentation(slot, dmap)
         slots_by_status[st].append(slot)
 
@@ -404,6 +429,15 @@ def _format_produced_slots_grouped_by_status(
         spec = (dmap or {}).get(slot) or {}
         art = spec.get("value") if isinstance(spec, dict) else None
         art = art if isinstance(art, dict) else None
+
+        aid = (
+                (art or {}).get("artifact_id")
+                or (art or {}).get("mapped_artifact_id")
+                or (art or {}).get("id")
+                or (art or {}).get("name")
+                or ""
+        )
+        aid = str(aid).strip()
 
         c_spec = (contract or {}).get(slot) or {}
         desc = (
@@ -438,18 +472,32 @@ def _format_produced_slots_grouped_by_status(
 
         # primary type descriptor
         if slot_type == "file":
-            if mime:
-                type_desc = f"file, {mime}"
-            else:
-                type_desc = "file"
+            type_desc = f"file, {mime}" if mime else "file"
         else:
-            if fmt:
-                type_desc = f"inline, {fmt}"
-            else:
-                type_desc = slot_type or "inline"
+            type_desc = f"inline, {fmt}" if fmt else (slot_type or "inline")
 
         icon = status_icon.get(status, "•")
         lines: List[str] = [f"- {icon} `{slot}` ({type_desc})"]
+
+        # artifact id (compact)
+        if "artifact_id" in slot_attr_keys and aid:
+            lines[0] = lines[0] + f" ← `{aid}`"
+
+        # mapped_from (truncate left as-is; caller may truncate later)
+        if "mapped_from" in slot_attr_keys:
+            mp = (art or {}).get("mapped_from")
+            if isinstance(mp, str) and mp.strip():
+                lines.append(f"  - Mapped from: `{mp.strip()}`")
+
+        if "filename" in slot_attr_keys and art is not None:
+            fpath = (
+                    (art or {}).get("path")
+                    or (art or {}).get("filename")
+                    or (spec.get("filename") if isinstance(spec, dict) else None)
+                    or c_spec.get("filename")
+            )
+            if fpath:
+                lines.append(f"  - Filename: {fpath}")
 
         # description / guidance
         if "description" in slot_attr_keys:
@@ -506,15 +554,16 @@ def _format_produced_slots_grouped_by_status(
         ("completed", "✅ Completed slots"),
     ]:
         slots = slots_by_status[status]
-        if not slots:
-            continue
-
         lines.append(f"### {group_title} ({len(slots)})")
         lines.append("")
 
-        for slot in slots:
-            for ln in _format_one_slot(slot, status):
-                lines.append(ln)
+        if slots:
+            for slot in slots:
+                for ln in _format_one_slot(slot, status):
+                    lines.append(ln)
+        else:
+            lines.append("_(none)_")
+
         lines.append("")
 
     if has_any_draft:
@@ -532,6 +581,7 @@ def _format_deliverables_flat_with_icons(
         content_len: int = 0,
         slot_attr_keys: Optional[Set[str]] = None,
         exclude_slots: Optional[List[str]] = None,
+        slot_order: Optional[List[str]] = None,
 ) -> Tuple[str, bool]:
     """
     Flat list with inline status icons.
@@ -567,7 +617,8 @@ def _format_deliverables_flat_with_icons(
 
     any_draft = False
 
-    for slot in sorted(dmap.keys()):
+    order = slot_order or sorted(dmap.keys())
+    for slot in order:
         if slot in excluded:
             continue
 
@@ -619,7 +670,38 @@ def _format_deliverables_flat_with_icons(
         status_suffix = " (missing)" if status == "missing" else ""
 
         # Main line
-        lines.append(f"- {icon} `{slot}` ({type_desc}){draft_marker}{status_suffix}")
+        main_line = f"- {icon} `{slot}` ({type_desc}){draft_marker}{status_suffix}"
+        if status != "missing" and art is not None and "artifact_id" in slot_attr_keys:
+            aid = (
+                    (art or {}).get("artifact_id")
+                    or (art or {}).get("mapped_artifact_id")
+                    or (art or {}).get("id")
+                    or (art or {}).get("name")
+                    or ""
+            )
+            aid = str(aid).strip()
+            if aid:
+                main_line += f" ← `{aid}`"
+
+        lines.append(main_line)
+
+        if status != "missing" and art is not None and "mapped_from" in slot_attr_keys:
+            mp = (art or {}).get("mapped_from")
+            if isinstance(mp, str) and mp.strip():
+                mp2 = mp.strip()
+                # if len(mp2) > 160:
+                #     mp2 = mp2[:157] + "…"
+                lines.append(f"  Mapped from: `{mp2}`")
+
+        if status != "missing" and art is not None and "filename" in slot_attr_keys:
+            fpath = (
+                (art or {}).get("path")
+                or (art or {}).get("filename")
+                or (spec.get("filename") if isinstance(spec, dict) else None)
+                or c_spec.get("filename")
+            )
+            if fpath:
+                lines.append(f"  Filename: {fpath}")
 
         # Description
         if "description" in slot_attr_keys and desc:
@@ -1179,12 +1261,15 @@ def format_live_slots(
     if not dmap:
         return "_(no slots yet)_"
 
+    slot_order = list(dmap.keys())  # preserves insertion order of context.current_slots
+
     # Default attributes for live view
     if slot_attrs is None:
         slot_attrs = {
             "description",
             "gaps",
             "summary",
+            "filename",
         }
 
     # Use existing formatters
@@ -1203,6 +1288,7 @@ def format_live_slots(
             content_len=0,  # No content preview in live view
             slot_attr_keys=slot_attrs,
             exclude_slots=["project_log", "project_canvas"],
+            slot_order=slot_order,
         )
 
     return md

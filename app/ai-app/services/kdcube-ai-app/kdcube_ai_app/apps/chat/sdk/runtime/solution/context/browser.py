@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Type
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import BaseTurnView, TurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.retrieval import reconcile_citations_for_context
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
-import kdcube_ai_app.apps.chat.sdk.runtime.solution.context.presentation as ctx_representation_module
 import kdcube_ai_app.apps.chat.sdk.runtime.solution.context.retrieval as ctx_retrieval_module
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext  # used only by make_react_context
 
@@ -27,6 +26,16 @@ class ContextBundle:
     program_history: List[Dict[str, Any]]
     program_history_reconciled: List[Dict[str, Any]]
     canonical_sources: List[Dict[str, Any]]
+
+    user_id: Optional[str] = None
+
+    conversation_id: Optional[str] = None
+    turn_id: Optional[str] = None
+    track_id: Optional[str] = None
+
+    session_id: Optional[str] = None
+    bundle_id: Optional[str] = None
+    user_type: Optional[str] = None
 
 
 class ContextBrowser:
@@ -182,6 +191,7 @@ class ContextBrowser:
         ctx.user_text = getattr(scratchpad, "user_text", "")
         ctx.started_at = getattr(scratchpad, "started_at", None)
         ctx.bundle_id = bundle_id
+        ctx.context_bundle = bundle
 
         return ctx
 

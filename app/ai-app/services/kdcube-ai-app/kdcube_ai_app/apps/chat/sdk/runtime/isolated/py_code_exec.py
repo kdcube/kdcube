@@ -7,7 +7,7 @@ import pathlib, os, json
 from typing import Optional, Dict, Any
 
 from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import _fix_json_bools, _validate_and_report_fstring_issues, \
-    _build_iso_injected_header, _inject_header_after_future, _run_subprocess
+    _build_iso_injected_header, _inject_header_after_future, _run_subprocess, _build_iso_injected_header_step_artifacts
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 
@@ -149,6 +149,9 @@ async def run_py_code(
         "LOG_LEVEL",
         "LOG_MAX_MB",
         "LOG_BACKUP_COUNT",
+        "RESULT_FILENAME",
+        "EXECUTION_MODE",
+        "EXEC_NO_UNEXPECTED_EXIT"
     }
     for k in SAFE_KEYS:
         v = base_env.get(k)
@@ -174,7 +177,12 @@ async def run_py_code(
     for alias, mod_name in (alias_map or {}).items():
         imports_src += f"\nfrom {mod_name} import tools as {alias}\n"
 
-    injected_header = _build_iso_injected_header(globals_src=globals_src, imports_src=imports_src)
+    mode = child_env.get("EXECUTION_MODE") or "STANDALONE"
+    if mode == "STANDALONE":
+        injected_header = _build_iso_injected_header(globals_src=globals_src, imports_src=imports_src)
+    else:
+        injected_header = _build_iso_injected_header_step_artifacts(globals_src=globals_src, imports_src=imports_src)
+
     src = _inject_header_after_future(src, injected_header)
     main_path.write_text(src, encoding="utf-8")
 
@@ -209,7 +217,7 @@ async def run_py_code(
 
     log.log(
         f"[py_code_exec] Running main.py in-container: workdir={workdir}, outdir={output_dir}, "
-        f"runtime_modules={tool_module_names}",
+        f"run_mode={mode}; runtime_modules={tool_module_names}",
         level="INFO",
     )
     log.log(f"[py_code_exec] About to call _run_subprocess", level="INFO")

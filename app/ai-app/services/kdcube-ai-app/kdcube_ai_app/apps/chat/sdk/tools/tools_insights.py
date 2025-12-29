@@ -15,12 +15,15 @@ BUILTIN_TOOLS = {
     "generic_tools.write_png",
     "generic_tools.write_xlsx",
     "generic_tools.write_file",
+    "codegen_tools.codegen_python",
+    "exec_tools.execute_code_python",
 }
 
 INFRA_TOOL_IDS = {
     "io_tools.save_ret",
     "io_tools.tool_call",
     "ctx_tools.fetch_turn_artifacts",
+    "ctx_tools.fetch_ctx",
     "ctx_tools.merge_sources",
 }
 
@@ -37,7 +40,7 @@ CITATION_AWARE_TOOL_IDS = {
     "generic_tools.write_pptx",
 }
 
-CITATION_AWARE_WANT_SOURCES_JSON_TOOL_IDS = {
+CITATION_AWARE_WANT_SOURCES_LIST_TOOL_IDS = {
     "llm_tools.generate_content_llm"
 }
 CITATION_AWARE_WANT_SOURCES_PARAM_TOOL_IDS = {
@@ -58,7 +61,7 @@ WRITE_TOOLS = {
 }
 
 CODEGEN_TOOLS = {
-    "codegen_tools.codegen_python"
+    "codegen_tools.codegen_python",
 }
 
 # Which tools produce *raw source lists* that must be merged into the pool and re-SID'd
@@ -85,11 +88,17 @@ def is_write_tool(tool_id: str) -> bool:
 def is_codegen_tool(tool_id: str) -> bool:
     return tool_id in CODEGEN_TOOLS
 
+def is_exec_tool(tool_id: str) -> bool:
+    return tool_id in EXEC_TOOLS
+
+def is_code_tool(tool_id: str) -> bool:
+    return is_exec_tool(tool_id) or is_codegen_tool(tool_id)
+
 def does_tool_accept_sources(tool_id: str) -> bool:
     return tool_id in CITATION_AWARE_TOOL_IDS
 
-def wants_sources_json(tool_id: str) -> bool:
-    return tool_id in CITATION_AWARE_WANT_SOURCES_JSON_TOOL_IDS
+def wants_sources_list(tool_id: str) -> bool:
+    return tool_id in CITATION_AWARE_WANT_SOURCES_LIST_TOOL_IDS
 
 def wants_sources_param(tool_id: str) -> bool:
     return tool_id in CITATION_AWARE_WANT_SOURCES_PARAM_TOOL_IDS
@@ -112,7 +121,8 @@ def should_isolate_tool_execution(tool_id: str) -> bool:
 
 def should_isolate_in_docker(tool_id: str) -> bool:
     # return tool_id == "generic_tools.write_file" or is_codegen_tool(tool_id)
-    return is_codegen_tool(tool_id)
+    # return is_codegen_tool(tool_id)
+    return False
     # return tool_id in ("generic_tools.write_file", "llm_tools.generate_content_llm") or is_codegen_tool(tool_id)
 
 def tool_isolation(tool_id: str) -> Literal["none", "docker", "local_network", "local"]:
@@ -122,6 +132,7 @@ def tool_isolation(tool_id: str) -> Literal["none", "docker", "local_network", "
         return "local"
     else:
         return "none"
+
 
 def default_mime_for_write_tool(tool_id: str) -> str:
     return {

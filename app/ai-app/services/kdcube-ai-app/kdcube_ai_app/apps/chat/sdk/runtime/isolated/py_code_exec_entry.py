@@ -29,6 +29,7 @@ import pathlib
 import signal
 import importlib
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
@@ -51,6 +52,22 @@ except ImportError:  # pragma: no cover
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm, get_comm
 from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all, bootstrap_from_spec  # type: ignore[assignment]
+
+def _append_errors_log(message: str) -> None:
+    try:
+        log_dir = pathlib.Path(os.environ.get("LOG_DIR", "logs"))
+        log_dir.mkdir(parents=True, exist_ok=True)
+        errlog_path = log_dir / "errors.log"
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+        exec_id = os.environ.get("EXECUTION_ID") or "unknown"
+        header = f"\n===== EXECUTION {exec_id} START {ts} =====\n"
+        with open(errlog_path, "a", encoding="utf-8") as f:
+            f.write(header)
+            f.write(message)
+            if not message.endswith("\n"):
+                f.write("\n")
+    except Exception:
+        pass
 
 
 def _load_runtime_globals() -> Dict[str, Any]:
@@ -348,6 +365,9 @@ async def _async_main() -> int:
            - exit with the same return code.
     """
     logger = AgentLogger("py_code_exec_entry")
+    exec_id = os.environ.get("EXECUTION_ID") or "unknown"
+    ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    logger.log(f"[entry] ===== EXECUTION {exec_id} START {ts} =====", level="INFO")
 
     workdir = pathlib.Path(os.environ.get("WORKDIR", "/workspace/work")).resolve()
     outdir = pathlib.Path(os.environ.get("OUTPUT_DIR", "/workspace/out")).resolve()
@@ -475,6 +495,7 @@ def main() -> None:
     except Exception as e:
         # last-resort log to stderr; Inventory logger may not be available
         print(f"[py_code_exec_entry] fatal error: {e}", file=sys.stderr)
+        _append_errors_log(f"[py_code_exec_entry] fatal error: {e}")
         rc = 1
     sys.exit(rc)
 

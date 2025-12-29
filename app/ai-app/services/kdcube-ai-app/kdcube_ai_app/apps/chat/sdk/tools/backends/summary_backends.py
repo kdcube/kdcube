@@ -17,6 +17,63 @@ from kdcube_ai_app.infra.service_hub.inventory import create_cached_system_messa
 
 log = logging.getLogger(__name__)
 
+_SUMMARY_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+_SUMMARY_DOC_MIME = {"application/pdf"}
+
+def _artifact_block_for_summary(artifact: Optional[Dict[str, Any]]) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
+    if not isinstance(artifact, dict):
+        return None, None, None
+
+    art_type = (artifact.get("type") or "").strip().lower()
+    mime = (artifact.get("mime") or "").strip().lower()
+    text = artifact.get("text") or ""
+    base64_data = artifact.get("base64")
+    size_bytes = artifact.get("size_bytes")
+    filename = artifact.get("filename")
+    read_error = artifact.get("read_error")
+
+    block = None
+    modality_kind = None
+    if base64_data and mime in _SUMMARY_IMAGE_MIME:
+        modality_kind = "image"
+        block = {"type": "image", "data": base64_data, "media_type": mime}
+    elif base64_data and mime in _SUMMARY_DOC_MIME:
+        modality_kind = "document"
+        block = {"type": "document", "data": base64_data, "media_type": mime}
+
+    meta_lines = [
+        "### Attached artifact (for validation)",
+        f"- type: {art_type or 'unknown'}",
+        f"- mime: {mime or 'unknown'}",
+        f"- filename: {filename or 'unknown'}",
+        f"- size_bytes: {size_bytes if isinstance(size_bytes, int) else 'unknown'}",
+        f"- base64_attached: {'yes' if block else 'no'}",
+        f"- text_surrogate_len: {len(text)}",
+    ]
+    if read_error:
+        meta_lines.append(f"- read_error: {read_error}")
+    if art_type == "file" and not block and mime and mime not in _SUMMARY_IMAGE_MIME and mime not in _SUMMARY_DOC_MIME:
+        meta_lines.append("- note: mime not supported for vision; using text surrogate only")
+
+    return block, "\n".join(meta_lines), modality_kind
+
+def _modality_system_instructions(modality_kind: Optional[str]) -> str:
+    if modality_kind == "image":
+        return (
+            "\nMULTIMODAL INPUT (image attached):\n"
+            "- You MUST verify the image visually; do not trust text surrogates alone.\n"
+            "- Call out obvious render failures: blank/empty, corrupted, truncated, low-res, or missing expected elements.\n"
+            "- If the image contradicts the expectations from tool output or seems wrong, mark completeness/adequacy as partial/poor.\n"
+        )
+    if modality_kind == "document":
+        return (
+            "\nMULTIMODAL INPUT (PDF attached):\n"
+            "- You MUST verify the PDF visually; do not trust text surrogates alone.\n"
+            "- Call out render failures or unreadable pages; treat empty/garbled pages as partial/failed output.\n"
+            "- If the document contradicts the expectations from tool output or seems wrong, mark completeness/adequacy as partial/poor.\n"
+        )
+    return ""
+
 def _render_param_bindings_for_summary(
         base_params: Dict[str, Any],
         fetch_ctx: List[Dict[str, Any]],
@@ -26,7 +83,7 @@ def _render_param_bindings_for_summary(
     Build a human-readable description of how each param was populated:
       - which values came inline from the decision node
       - which values came from bound context artifacts (paths only)
-      - which params exist only in final_params (e.g. sources_json)
+      - which params exist only in final_params (e.g. sources_list)
     This is fed to the LLM summarizer so it understands invocation context
     without seeing large bound texts.
     """
@@ -60,7 +117,7 @@ def _render_param_bindings_for_summary(
         meta = per_param.setdefault(name, {"inline": None, "bound_paths": [], "final_only": False})
         meta.setdefault("bound_paths", []).append(path)
 
-    # Params that only appear after binding (e.g. sources_json)
+    # Params that only appear after binding (e.g. sources_list)
     for name, v in (final_params or {}).items():
         if name in per_param:
             continue
@@ -156,6 +213,7 @@ async def _generate_llm_summary(
         param_bindings_for_summary: Optional[str] = None,
         tool_inputs: Optional[Dict[str, Any]] = None,
         tool_doc_for_summary: Optional[str] = None,
+        summary_artifact: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     if service is None:
         return None
@@ -187,6 +245,8 @@ async def _generate_llm_summary(
         if timezone:
             time_evidence_reminder += f"The user's timezone is {timezone}."
         time_evidence_reminder += f"Current UTC timestamp: {now}. Current UTC date: {today}. Any dates before this are in the past, and any dates after this are in the future. When dealing with modern entities/companies/people, and the user asks for the 'latest', 'most recent', 'today's', etc. don't assume your knowledge is up to date; you MUST carefully confirm what the true 'latest' is first. If the user seems confused or mistaken about a certain date or dates, you MUST include specific, concrete dates in your response to clarify things. This is especially important when the user is referencing relative dates like 'today', 'tomorrow', 'yesterday', etc -- if the user seems mistaken in these cases, you should make sure to use absolute/exact dates like 'January 1, 2010' in your response.\n"
+        artifact_block, artifact_meta, modality_kind = _artifact_block_for_summary(summary_artifact)
+
         system_prompt = (
             "You are summarizing ONE TOOL CALL inside a multi-step ReAct plan.\n"
             f"{time_evidence}\n"
@@ -265,6 +325,7 @@ async def _generate_llm_summary(
         if tool_id == "llm_tools.generate_content_llm":
             system_prompt += (
                 "\nEXTRA FOR llm_tools.generate_content_llm:\n"
+                "- Sources must be passed via sources_list only; input_context must NOT include sources.\n"
                 "- Use the instruction/inputs to infer required structure (e.g. 'comparison table', "
                 "'columns: provider/pricing/rate limits') and required behaviors (e.g. 'all numbers must have citations').\n"
                 "- In Output: say explicitly whether that structure *actually* appears "
@@ -275,6 +336,7 @@ async def _generate_llm_summary(
                 "uncited numeric values, or providers absent compared to the inputs.\n"
             )
 
+        system_prompt += _modality_system_instructions(modality_kind)
         system_prompt += "\n" + time_evidence_reminder
         system_msg = create_cached_system_message([
             {"text": system_prompt, "cache": True},
@@ -303,14 +365,21 @@ async def _generate_llm_summary(
             f"### Param bindings (for reference; pick only what's important)\n{pb}\n\n"
             "### Tool raw output (object to summarize)\n"
             f"{content}\n\n"
-            "Now produce the three sections EXACTLY as required in the system instructions."
         )
-        user_message = create_cached_human_message(
-            [
-                {"text": tool_doc, "cache": True},
-                {"text": operational_msg, "cache": False}
-            ]
-        )
+        user_blocks = [
+            {"type": "text", "text": tool_doc, "cache": True},
+            {"type": "text", "text": operational_msg, "cache": False},
+        ]
+        if artifact_meta:
+            user_blocks.append({"type": "text", "text": artifact_meta, "cache": False})
+        if artifact_block:
+            user_blocks.append({**artifact_block, "cache": False})
+        user_blocks.append({
+            "type": "text",
+            "text": "Now produce the three sections EXACTLY as required in the system instructions.",
+            "cache": False,
+        })
+        user_message = create_cached_human_message(user_blocks)
         role = "solver.react.summary"
         async with with_accounting(
                 bundle_id,
@@ -348,6 +417,7 @@ async def generate_llm_summary_json(
         param_bindings_for_summary: Optional[str] = None,
         tool_inputs: Optional[Dict[str, Any]] = None,
         tool_doc_for_summary: Optional[str] = None,
+        summary_artifact: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[ToolCallSummaryJSON], Optional[str]]:
     """
     Compact JSON tool-call summarizer.
@@ -394,6 +464,8 @@ async def generate_llm_summary_json(
         )
 
 # ---- SYSTEM PROMPT (compact schema; no giant JSON examples) ----
+        artifact_block, artifact_meta, modality_kind = _artifact_block_for_summary(summary_artifact)
+
         system_prompt = (
             "You are summarizing ONE TOOL CALL inside a multi-step ReAct plan.\n"
             f"{time_evidence}\n"
@@ -481,6 +553,7 @@ async def generate_llm_summary_json(
                 "    uncited numeric values, providers absent compared to the inputs.\n"
             )
 
+        system_prompt += _modality_system_instructions(modality_kind)
         system_prompt += "\n" + time_evidence_reminder
 
         system_msg = create_cached_system_message([
@@ -510,16 +583,23 @@ async def generate_llm_summary_json(
             f"### Param bindings (for reference; pick only what's important)\n{pb}\n\n"
             "### Tool raw output (object to summarize)\n"
             f"{content}\n\n"
-            "Now fill the JSON fields exactly as required in the system instructions.\n"
-            "Do NOT invent extra top-level fields; use only the schema shown above.\n"
         )
+        user_blocks = [
+            {"type": "text", "text": tool_doc, "cache": True},
+            {"type": "text", "text": operational_msg, "cache": False},
+        ]
+        if artifact_meta:
+            user_blocks.append({"type": "text", "text": artifact_meta, "cache": False})
+        if artifact_block:
+            user_blocks.append({**artifact_block, "cache": False})
+        user_blocks.append({
+            "type": "text",
+            "text": "Now fill the JSON fields exactly as required in the system instructions.\n"
+                    "Do NOT invent extra top-level fields; use only the schema shown above.\n",
+            "cache": False,
+        })
 
-        user_message = create_cached_human_message(
-            [
-                {"text": tool_doc, "cache": True},
-                {"text": operational_msg, "cache": False},
-            ]
-        )
+        user_message = create_cached_human_message(user_blocks)
         role = "solver.react.summary"
 
         from kdcube_ai_app.infra.accounting import with_accounting
@@ -866,6 +946,7 @@ async def build_summary_for_tool_output(
         call_signature: Optional[str] = None,
         param_bindings_for_summary: Optional[str] = None,
         tool_doc_for_summary: Optional[str] = None,
+        summary_artifact: Optional[Dict[str, Any]] = None,
         structured: bool = False,
 ) -> Tuple[Union[str, ToolCallSummaryJSON], Optional[str]]:
     """
@@ -907,6 +988,7 @@ async def build_summary_for_tool_output(
                 param_bindings_for_summary=param_bindings_for_summary,
                 tool_inputs=tool_inputs,
                 tool_doc_for_summary=tool_doc_for_summary,
+                summary_artifact=summary_artifact,
             )
             return summary_json, summary
 
@@ -924,6 +1006,7 @@ async def build_summary_for_tool_output(
             param_bindings_for_summary=param_bindings_for_summary,
             tool_inputs=tool_inputs,
             tool_doc_for_summary=tool_doc_for_summary,
+            summary_artifact=summary_artifact,
         )
         if llm_summary:
             return llm_summary, llm_summary

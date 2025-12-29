@@ -21,9 +21,9 @@ class StageCaps:
     Turn-level per-stage budget hints.
 
     All values are in *decision rounds* for that stage:
-      - min_*: preferred minimum number of rounds (advisory)
+      - min_*: derived minimum number of rounds (advisory)
       - max_*: advisory upper bound for that strategy
-      - max_render: max number of render/write rounds for this slot
+      - render: max number of render/write rounds for this slot
 
     Runtime enforces only global caps; per-stage caps are for guidance + logging
     and for the decision agent to read in BUDGET_STATE.
@@ -32,7 +32,8 @@ class StageCaps:
     max_explore: int = 2
     min_exploit: int = 0
     max_exploit: int = 3
-    max_render: int = 2
+    render: int = 2
+    ctx_reads: int = 1
 
 
 @dataclass
@@ -40,6 +41,7 @@ class StageUsage:
     explore_used: int = 0
     exploit_used: int = 0
     render_used: int = 0
+    context_reads_used: int = 0
 
 
 @dataclass
@@ -66,6 +68,9 @@ class StageBudget:
             self.usage.render_used += 1
         # "finish" does not affect per-stage usage directly
 
+    def note_context_read(self) -> None:
+        self.usage.context_reads_used += 1
+
 # ---------- Global budget ----------
 
 @dataclass
@@ -88,11 +93,25 @@ class GlobalBudget:
     max_render_rounds: int = 0
     render_rounds_used: int = 0
 
+    # Decision rerun budget (show_artifacts -> decision loop)
+    max_decision_reruns: int = 2
+    decision_reruns_used: int = 0
+
+    # Full-context reads (show_artifacts)
+    ctx_reads: int = 0
+    context_reads_used: int = 0
+
     def remaining_decision_rounds(self) -> int:
         return max(0, self.max_decision_rounds - self.decision_rounds_used)
 
     def remaining_tool_calls(self) -> int:
         return max(0, self.max_tool_calls - self.tool_calls_used)
+
+    def remaining_decision_reruns(self) -> int:
+        return max(0, self.max_decision_reruns - self.decision_reruns_used)
+
+    def remaining_context_reads(self) -> int:
+        return max(0, self.ctx_reads - self.context_reads_used)
 
     def can_continue(self) -> bool:
         """
@@ -162,46 +181,55 @@ class BudgetState:
         """
         return not self.global_budget.can_continue()
 
+    def note_decision_rerun(self) -> None:
+        """Track a decision rerun (show_artifacts -> decision)."""
+        self.global_budget.decision_reruns_used += 1
+
+    def note_context_read(self) -> None:
+        """Track a full-context read (show_artifacts)."""
+        self.global_budget.context_reads_used += 1
+        st = self.current_stage()
+        if st is not None:
+            st.note_context_read()
+
 # ---------- Helpers ----------
-def _normalize_min_max(pair: Any, default_min: int, default_max: int) -> tuple[int, int]:
+def _normalize_max(value: Any, default_max: int) -> int:
     try:
-        if isinstance(pair, (list, tuple)) and len(pair) == 2:
-            lo = int(pair[0])
-            hi = int(pair[1])
-            if hi < lo:
-                hi = lo
-            return max(0, lo), max(0, hi)
+        if value is None:
+            return max(0, default_max)
+        return max(0, int(value))
     except Exception:
-        pass
-    return max(0, default_min), max(0, default_max)
+        return max(0, default_max)
 
 
 def _derive_stage_caps_for_slot(slot_id: str, raw_hint: Any) -> StageCaps:
     """
-    Map thin per-slot solve_budget hint into StageCaps.
+    Map thin per-slot sb hint into StageCaps.
     raw_hint is expected to be a dict with:
-      min_max_explore: [min, max]
-      min_max_exploit: [min, max]
-      max_render: int
+      explore: int
+      exploit: int
+      render: int
+      ctx_reads: int
     All values are best-effort; missing/invalid → defaults.
     """
     h = raw_hint or {}
     if not isinstance(h, dict):
         h = {}
 
-    min_explore, max_explore = _normalize_min_max(h.get("min_max_explore"), 0, 2)
-    min_exploit, max_exploit = _normalize_min_max(h.get("min_max_exploit"), 0, 3)
-    try:
-        max_render = int(h.get("max_render") or 0)
-    except Exception:
-        max_render = 0
+    max_explore = _normalize_max(h.get("explore"), 2)
+    max_exploit = _normalize_max(h.get("exploit"), 3)
+    render = _normalize_max(h.get("render"), 0)
+    ctx_reads = _normalize_max(h.get("ctx_reads"), 0)
+    min_explore = 1 if max_explore > 0 else 0
+    min_exploit = 1 if max_exploit > 0 else 0
 
     return StageCaps(
         min_explore=min_explore,
         max_explore=max_explore,
         min_exploit=min_exploit,
         max_exploit=max_exploit,
-        max_render=max_render,
+        render=render,
+        ctx_reads=ctx_reads,
     )
 
 
@@ -214,16 +242,17 @@ def _derive_global_caps_from_stage_caps(
     """
     Aggregate per-stage caps into global caps.
 
-    global_max_decision_rounds = sum(max_explore + max_exploit + max_render) over all stages.
+    global_max_decision_rounds = sum(max_explore + max_exploit + render) over all stages.
     global_max_explore_rounds  = sum(max_explore)
     global_max_exploit_rounds  = sum(max_exploit)
-    global_max_render_rounds   = sum(max_render)
+    global_max_render_rounds   = sum(render)
 
     If totals are 0, fall back to defaults.
     """
     total_max_explore = sum(c.max_explore for c in caps_by_stage.values())
     total_max_exploit = sum(c.max_exploit for c in caps_by_stage.values())
-    total_max_render = sum(c.max_render for c in caps_by_stage.values())
+    total_max_render = sum(c.render for c in caps_by_stage.values())
+    total_max_context_reads = sum(c.ctx_reads for c in caps_by_stage.values())
 
     max_decision_rounds = total_max_explore + total_max_exploit + total_max_render
     if max_decision_rounds <= 0:
@@ -238,6 +267,7 @@ def _derive_global_caps_from_stage_caps(
         max_explore_rounds=total_max_explore,
         max_exploit_rounds=total_max_exploit,
         max_render_rounds=total_max_render,
+        ctx_reads=total_max_context_reads,
     )
     return gb
 
@@ -246,7 +276,7 @@ def init_budget_state_for_turn(
         output_contract: Dict[str, SlotSpec],
         primary_stage_ids: Optional[List[str]] = None,
         *,
-        solve_budget_hint: Optional[Dict[str, Any]] = None,
+        sb_hint: Optional[Dict[str, Any]] = None,
         default_global_max_decision_rounds: int = 12,
         default_global_max_tool_calls: int = 20,
 ) -> BudgetState:
@@ -255,20 +285,21 @@ def init_budget_state_for_turn(
 
     primary_stage_ids: optional explicit order; otherwise uses output_contract.keys().
 
-    solve_budget_hint:
+    sb_hint:
       Coordinator-provided thin budgets, shape:
         {
           "<slot_id>": {
-            "min_max_explore": [min, max],
-            "min_max_exploit": [min, max],
-            "max_render": int
+            "explore": int,
+            "exploit": int,
+            "render": int,
+            "ctx_reads": int
           },
           ...
         }
       All global caps are derived from these per-slot hints.
     """
     stage_ids = primary_stage_ids or list(output_contract.keys())
-    raw = solve_budget_hint or {}
+    raw = sb_hint or {}
     if not isinstance(raw, dict):
         raw = {}
 
@@ -346,6 +377,18 @@ def format_budget_for_llm(budget: BudgetState) -> str:
         render_left_g = max_render_g - used_render_g
         global_parts.append(f"render left { _rem(render_left_g, max_render_g) }")
 
+    max_rerun = getattr(gb, "max_decision_reruns", 0) or 0
+    used_rerun = getattr(gb, "decision_reruns_used", 0) or 0
+    if max_rerun > 0:
+        rerun_left = max_rerun - used_rerun
+        global_parts.append(f"decision_reruns left { _rem(rerun_left, max_rerun) }")
+
+    max_ctx = getattr(gb, "ctx_reads", 0) or 0
+    used_ctx = getattr(gb, "context_reads_used", 0) or 0
+    if max_ctx > 0:
+        ctx_left = max_ctx - used_ctx
+        global_parts.append(f"context_reads left { _rem(ctx_left, max_ctx) }")
+
     lines.append("BUDGET_STATE: " + "global(" + ", ".join(global_parts) + ")")
 
     # ---- Current stage line ----
@@ -369,22 +412,24 @@ def format_budget_for_llm(budget: BudgetState) -> str:
             max_exploit = getattr(caps, "exploit_hard_cap", 0) or getattr(caps, "exploit_soft_cap", 0)
 
         # Render max (only exists in new model; else 0)
-        max_render = getattr(caps, "max_render", 0) or 0
+        render = getattr(caps, "render", 0) or 0
 
         explore_left = max(0, (max_explore or 0) - getattr(usage, "explore_used", 0))
         exploit_left = max(0, (max_exploit or 0) - getattr(usage, "exploit_used", 0))
-        render_left = max(0, (max_render or 0) - getattr(usage, "render_used", 0))
+        render_left = max(0, (render or 0) - getattr(usage, "render_used", 0))
+        max_ctx = getattr(caps, "ctx_reads", 0) or 0
+        ctx_left = max(0, max_ctx - getattr(usage, "context_reads_used", 0))
 
         stage_parts: list[str] = []
         if max_explore:
             stage_parts.append(f"explore left { _rem(explore_left, max_explore) }")
         if max_exploit:
             stage_parts.append(f"exploit left { _rem(exploit_left, max_exploit) }")
-        if max_render:
-            stage_parts.append(f"render left { _rem(render_left, max_render) }")
+        if render:
+            stage_parts.append(f"render left { _rem(render_left, render) }")
+        if max_ctx:
+            stage_parts.append(f"context_reads left { _rem(ctx_left, max_ctx) }")
 
         lines.append(f"        stage[{cur.stage_id}](" + ", ".join(stage_parts) + ")")
 
     return "\n".join(lines)
-
-
