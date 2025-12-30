@@ -368,6 +368,8 @@ async def _async_main() -> int:
     exec_id = os.environ.get("EXECUTION_ID") or "unknown"
     ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
     logger.log(f"[entry] ===== EXECUTION {exec_id} START {ts} =====", level="INFO")
+    # Ensure group-writable files across shared volumes (chat user is gid 1000)
+    os.umask(0o002)
 
     workdir = pathlib.Path(os.environ.get("WORKDIR", "/workspace/work")).resolve()
     outdir = pathlib.Path(os.environ.get("OUTPUT_DIR", "/workspace/out")).resolve()

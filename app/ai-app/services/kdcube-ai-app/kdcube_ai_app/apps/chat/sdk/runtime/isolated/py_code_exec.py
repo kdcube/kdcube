@@ -47,6 +47,12 @@ def _prepare_workspace_for_executor(
         )
         # Ensure shared workspace remains writable across containers/users
         try:
+            subprocess.run(
+                ["chmod", "-R", "g+rwX", str(output_dir)],
+                check=True,
+                capture_output=True,
+                timeout=5,
+            )
             os.chmod(output_dir, 0o777)
             os.chmod(logs_dir, 0o777)
         except Exception as chmod_err:
@@ -62,6 +68,15 @@ def _prepare_workspace_for_executor(
             level="WARNING"
         )
         try:
+            try:
+                subprocess.run(
+                    ["chmod", "-R", "g+rwX", str(output_dir)],
+                    check=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+            except Exception:
+                pass
             os.chmod(output_dir, 0o777)
             os.chmod(logs_dir, 0o777)
             log.log(
