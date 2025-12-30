@@ -212,8 +212,9 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
     log = logging.getLogger("agent.runtime")
 
     CLONE_NEWNET = 0x40000000
-    EXECUTOR_UID = 1001
-    EXECUTOR_GID = 1001
+    EXECUTOR_UID = int(os.environ.get("EXECUTOR_UID", "1001"))
+    # Use chat's GID so executor-created files are group-writable by appuser (UID/GID 1000)
+    EXECUTOR_GID = int(os.environ.get("EXECUTOR_GID", "1000"))
 
     def preexec_fn():
         """This runs in the child process BEFORE exec.
@@ -225,6 +226,8 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
                 raise OSError(f"unshare(CLONE_NEWNET) failed")
 
             # 2. Drop to unprivileged user
+            # Ensure group-writable files so chat (gid 1000) can update context.json
+            os.umask(0o002)
             os.setgid(EXECUTOR_GID)
             os.setuid(EXECUTOR_UID)
 

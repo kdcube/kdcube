@@ -45,5 +45,8 @@ fi
 
 echo "[entrypoint] Switching to user $APPUSER (UID $APPUSER_UID)"
 
+# Ensure appuser owns the exec workspace (volume overrides image ownership)
+chown -R appuser:appuser /exec-workspace || true
+
 # Execute the main application as appuser
 exec gosu "$APPUSER" "$@"
