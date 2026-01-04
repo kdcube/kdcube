@@ -142,6 +142,7 @@ async def lifespan(app: FastAPI):
             "session_id": comm_context.routing.session_id,
             "conversation_id": (comm_context.routing.conversation_id or comm_context.routing.session_id),
             "text": comm_context.request.message or (comm_context.request.payload or {}).get("text") or "",
+            "attachments": (comm_context.request.payload or {}).get("attachments") or [],
             "turn_id": comm_context.routing.turn_id,
             "history": comm_context.request.chat_history or [],
             "final_answer": "",

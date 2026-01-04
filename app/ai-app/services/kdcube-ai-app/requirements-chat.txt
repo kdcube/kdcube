@@ -1,18 +1,24 @@
 aiohttp==3.12.15
 fastapi==0.116.1
-langchain==0.3.27
-langchain-community==0.3.27
-langchain-core==0.3.72
-langchain-openai==0.3.28
-langgraph==0.6.1
-langmem>=0.0.4,<0.1.0
+# langchain==0.3.27
+# langchain-community==0.3.27
+# langchain-core==0.3.72
+# langchain-openai==0.3.28
+langchain==1.2.0
+langchain-community==0.4.1
+langchain-openai==1.1.6
+langchain-core==1.2.6
+# langgraph==0.6.1
+# langmem>=0.0.4,<0.1.0
+langgraph==1.0.5
+langmem==0.0.30
 dramatiq==1.18.0
 PyJWT[crypto]==2.10.1
 pydantic==2.11.7
 python-dotenv==1.1.1
 python-socketio==5.13.0
 redis==6.2.0
-requests==2.32.4
+requests==2.32.5
 uvicorn==0.35.0
 networkx
 neo4j

@@ -104,7 +104,7 @@ EMBEDDERS = {
 _SEEDED_FALSE = [
     (re.compile(r"^o3", re.I), {"temperature": False, "top_p": False, "tools": False}),  # o3, o3-mini, etc.
     (re.compile(r"^o4", re.I), {"temperature": False, "top_p": False, "tools": False, "reasoning": True}),  # o4-* reasoning models
-    (re.compile(r"^gpt-5", re.I), {"temperature": False, "top_p": False, "tools": True, "reasoning": True}),  # o4-* reasoning models
+    (re.compile(r"^gpt-5", re.I), {"temperature": False, "top_p": False, "tools": True, "reasoning": True}),  # gpt-5-* reasoning models
     (re.compile(r"^gpt-4o", re.I), {"temperature": True, "top_p": False, "tools": True}),
 ]
 

@@ -192,6 +192,29 @@ def is_html_mime_type(mime_type: str) -> bool:
 
     return mime_type in html_mime_types
 
+def extension_from_mime(mime_type: str) -> str:
+    """Best-effort file extension for a MIME type."""
+    mime_type = (mime_type or "").lower().strip()
+    if mime_type == "application/pdf":
+        return "pdf"
+    if mime_type == "image/png":
+        return "png"
+    if mime_type == "image/jpeg":
+        return "jpg"
+    if mime_type == "image/gif":
+        return "gif"
+    if mime_type == "image/webp":
+        return "webp"
+    if mime_type == "text/plain":
+        return "txt"
+    if mime_type == "text/markdown":
+        return "md"
+    if mime_type == "text/csv":
+        return "csv"
+    if mime_type == "application/json":
+        return "json"
+    return "bin"
+
 def extract_title_from_html(html_content: str) -> str:
     """Extract title from HTML content."""
     try:

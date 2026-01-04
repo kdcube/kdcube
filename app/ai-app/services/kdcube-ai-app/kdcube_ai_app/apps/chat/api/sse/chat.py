@@ -32,8 +32,6 @@ from kdcube_ai_app.apps.chat.api.ingress.chat_core import (
     RawAttachment,
     run_gateway_checks,
     map_gateway_error,
-    extract_attachments_text,
-    merge_attachments_into_message,
     process_chat_message,
     get_conversation_status, build_sse_request_context, upgrade_session_from_tokens,
 )
@@ -541,6 +539,11 @@ def create_sse_router(
 
         base_text = str(base_text).strip()
 
+        turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
+        message_data["turn_id"] = turn_id
+        conversation_id = message_data.get("conversation_id") or session.session_id
+        message_data["conversation_id"] = conversation_id
+
         # ---------- attachments (transport → RawAttachment) ----------
         raw_attachments: List[RawAttachment] = []
         max_mb = 20
@@ -581,15 +584,77 @@ def create_sse_router(
                     )
                 )
 
-        attachments_text: List[Dict[str, Any]] = []
+        attachments: List[Dict[str, Any]] = []
         if raw_attachments:
-            attachments_text = await extract_attachments_text(
-                raw_attachments,
-                max_mb=max_mb,
-            )
+            max_bytes = max_mb * 1024 * 1024
+            store = getattr(app.state, "conversation_store", None)
+            enable_av = os.getenv("APP_AV_SCAN", "1") == "1"
+            av_timeout = float(os.getenv("APP_AV_TIMEOUT_S", "3.0"))
+            from kdcube_ai_app.infra.gateway.safe_preflight import PreflightConfig, preflight_async
+            cfg = PreflightConfig(av_scan=enable_av, av_timeout_s=av_timeout)
+            for a in raw_attachments:
+                if not a.content:
+                    continue
+                if len(a.content) > max_bytes:
+                    logger.warning("attachment '%s' rejected: %d > max %d", a.name, len(a.content), max_bytes)
+                    continue
+                if not store:
+                    logger.warning("attachment '%s' skipped: conversation_store missing", a.name)
+                    continue
+                if enable_av:
+                    try:
+                        pf = await preflight_async(
+                            a.content,
+                            a.name or "file",
+                            a.mime or "application/octet-stream",
+                            cfg,
+                        )
+                    except Exception as ex:
+                        logger.warning("attachment '%s' preflight failed: %s", a.name, ex)
+                        continue
+                    if not pf.allowed:
+                        logger.warning("attachment '%s' rejected by preflight", a.name)
+                        continue
+                try:
+                    uri, key, rn_f = await store.put_attachment(
+                        tenant=tenant,
+                        project=project,
+                        user=session.user_id,
+                        fingerprint=session.fingerprint,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        track_id="A",
+                        role="user",
+                        filename=a.name or "file",
+                        data=a.content,
+                        mime=a.mime or "application/octet-stream",
+                        user_type=session.user_type.value,
+                        origin="user",
+                    )
+                except Exception as ex:
+                    logger.warning("attachment '%s' failed to host: %s", a.name, ex)
+                    continue
+                attachments.append({
+                    "filename": a.name or "file",
+                    "mime": a.mime or "application/octet-stream",
+                    "size": len(a.content),
+                    "meta": a.meta or {},
+                    "hosted_uri": uri,
+                    "key": key,
+                    "rn": rn_f,
+                    "role": "user",
+                    "origin": "user",
+                })
 
-        # Merge into final message text
-        text = merge_attachments_into_message(base_text, attachments_text)
+        payload = message_data.get("payload")
+        if not isinstance(payload, dict):
+            payload = {}
+        if attachments:
+            payload["attachments"] = attachments
+        message_data["payload"] = payload
+
+        # Final message text (attachments handled downstream)
+        text = base_text
 
         # ---------- delegate to core business logic ----------
         ingress_cfg = IngressConfig(

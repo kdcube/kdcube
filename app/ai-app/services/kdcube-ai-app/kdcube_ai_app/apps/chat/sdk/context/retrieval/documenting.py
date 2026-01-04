@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
 import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
+from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message
+from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import attachment_blocks
 
 @dataclass
 class ViewConfig:
@@ -183,7 +185,10 @@ def _messages_with_context(
         current_user_text: str,
         current_context_items: list[dict],
         turn_artifact: dict,
-        current_turn_id: str = None
+        current_turn_id: str = None,
+        current_user_blocks: Optional[List[dict]] = None,
+        current_user_attachments: Optional[List[Dict[str, Any]]] = None,
+        attachment_mode: Optional[str] = None,
 ) -> list:
     """
     Build message history with clear attribution and proper formatting.
@@ -240,8 +245,18 @@ def _messages_with_context(
 
         # === HUMAN (prior user) ===
         u_text = (u.get("text") or "").strip()
-
-        user_parts: List[str] = [u_text]
+        u_blocks = u.get("blocks") if isinstance(u.get("blocks"), list) else None
+        u_attachments = u.get("attachments") if isinstance(u.get("attachments"), list) else []
+        if attachment_mode and u_attachments and not u_blocks:
+            include_text = attachment_mode == "multimodal"
+            include_modal = attachment_mode == "multimodal"
+            u_blocks = [{"type": "text", "text": u_text, "cache": False}]
+            u_blocks.extend(attachment_blocks(
+                u_attachments,
+                include_summary_text=True,
+                include_text=include_text,
+                include_modal=include_modal,
+            ))
 
         # Add service metadata section AFTER user message
         metadata_parts = ["", "---", "# Service metadata"]
@@ -250,9 +265,13 @@ def _messages_with_context(
         if ts_u:
             metadata_parts.append(f"Timestamp: {ts_u}")
 
-        user_parts.extend(metadata_parts)
-
-        msgs.append(HumanMessage(content="\n".join(user_parts)))
+        if u_blocks:
+            u_blocks = list(u_blocks) + [{"type": "text", "text": "\n".join(metadata_parts)}]
+            msgs.append(create_cached_human_message(u_blocks))
+        else:
+            user_parts: List[str] = [u_text]
+            user_parts.extend(metadata_parts)
+            msgs.append(HumanMessage(content="\n".join(user_parts)))
 
         # === ASSISTANT (prior assistant) ===
         assistant_parts: List[str] = []
@@ -383,5 +402,22 @@ def _messages_with_context(
             payload_parts.append("")
             payload_parts.append(earlier_block)
 
-    msgs.append(HumanMessage(content="\n".join([p for p in payload_parts if p])))
+    if current_user_blocks:
+        blocks = list(current_user_blocks)
+        blocks.append({"type": "text", "text": "\n".join([p for p in payload_parts if p]), "cache": False})
+        msgs.append(create_cached_human_message(blocks))
+    elif attachment_mode and current_user_attachments:
+        include_text = attachment_mode == "multimodal"
+        include_modal = attachment_mode == "multimodal"
+        blocks = [{"type": "text", "text": current_user_text.strip(), "cache": False}]
+        blocks.extend(attachment_blocks(
+            current_user_attachments,
+            include_summary_text=True,
+            include_text=include_text,
+            include_modal=include_modal,
+        ))
+        blocks.append({"type": "text", "text": "\n".join([p for p in payload_parts if p]), "cache": False})
+        msgs.append(create_cached_human_message(blocks))
+    else:
+        msgs.append(HumanMessage(content="\n".join([p for p in payload_parts if p])))
     return msgs

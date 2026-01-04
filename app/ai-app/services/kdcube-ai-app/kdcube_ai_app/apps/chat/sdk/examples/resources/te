@@ -1,0 +1,446 @@
+## Available Common Tools
+[
+  {
+    "id": "llm_tools.generate_content_llm",
+    "call_template": "llm_tools.generate_content_llm(agent_name={$agent_name$}, instruction={$instruction$}, artifact_name={$artifact_name$}, input_context={$input_context$}, target_format={$target_format$}, schema_json={$schema_json$}, sources_list={$sources_list$}, cite_sources={$cite_sources$}, citation_container_path={$citation_container_path$}, max_tokens={$max_tokens$}, code_fences={$code_fences$}, strict={$strict$})",
+    "purpose": "Generate HTML/Markdown/JSON/YAML (or plain text) with multi-round continuation and format/schema validation.\n\nBEHAVIOR:\n- If `schema_json` is provided (JSON Schema) AND target_format is json|yaml, the schema is   INCLUDED in the prompt and the model is REQUIRED to conform; output is validated post-hoc.\n- If `cite_sources=true` and `sources_list` is non-empty, the model MUST use citations:\n    • inline [[S:n]] for Markdown/HTML,\n    • sidecar at `citation_container_path` for JSON/YAML and managed_json_artifact.\n- The result envelope ALWAYS includes `sources_used`   (list of {sid,url,title,text?}), even if the content itself has no inline tokens.   Downstream code must persist this list into the target slot as `sources_used`.\n\nTOKEN BUDGET POLICY (MANDATORY — READ BEFORE SETTING max_tokens):\n- `max_tokens` is a HARD SAFETY CAP, NOT a cost-optimization knob.\n- Billing is based on tokens ACTUALLY GENERATED; unused headroom is NOT billed.\n- Setting `max_tokens` \"low to save money\" usually BACKFIRES:\n  truncated/invalid HTML/JSON/XML/YAML => validation fails => repair/retry rounds => MORE total tokens and latency.\n- Therefore: setting `max_tokens` too low is considered a correctness bug.\n\nSTRUCTURED OUTPUTS REQUIRE HEADROOM (avoid retries):\n- HTML/XML are the most fragile. Do NOT set low caps.\n- Note: the runtime may silently FLOOR some formats (e.g. HTML) to a minimum; lowering below that DOES NOT save money.\n\nIMPORTANT: Do NOT try to control output size ONLY via max_tokens.\nLLMs are poor token estimators (and you are probably an LLM as well); a low cap will often produce broken markup/structures.\nInstead, steer the generator using `instruction` so the output naturally fits the quota:\n- Specify depth/detail level (brief vs detailed), number of sections/items/rows, max bullets per section,\n  maximum table rows, maximum card count, whether to omit optional fields, and preferred concision.\n- Example: \"Generate 20 cards max, short 1–2 sentence descriptions, no long prose, keep HTML minimal\".\n- Example: \"Return JSON with at most 30 items; keep descriptions <= 120 chars; omit optional fields\".\nIf you need to reduce cost, REDUCE OUTPUT SIZE via instruction (fewer items / less detail), not by lowering max_tokens.\n\nSPECIAL FORMAT: managed_json_artifact\n- Use `target_format=\"managed_json_artifact\"` when you want ONE top-level JSON object whose\n  string-valued fields are multiple nested artifacts (summary, table, HTML view, etc.).\n- In this mode, `artifact_name` MUST be a JSON object mapping top-level field names to\n  nested artifact formats, for example:\n      {\"summary_md\": \"markdown\", \"details_html\": \"html\"}\n  Each value must be one of: markdown,text,html,json,yaml,mermaid (xml is NOT supported).\n- The model then returns a single JSON object with those keys; each value is a string in that\n  nested format. The streaming layer decodes each string and streams it as a separate canvas\n  artifact named exactly by the key, with its declared format.\n\nCRITICAL RULES ABOUT INPUT CHANNELS (for planners / ReAct agents):\n1) `sources_list` is the ONLY channel for raw evidence (search results, fetched pages,    pricing docs, evidence lists). It should contain structured items, not prose.\n2) NEVER paste raw search/fetch JSON or the same artifact that you map into `sources_list`    into `input_context` or `instruction`. Doing so doubles tokens and leaks noisy markup    into the prompt.\n3) `input_context` is ONLY for human-scale context: short summaries, prior drafts,    user-provided notes, or small structured snippets. It must stay relatively compact.",
+    "is_async": true,
+    "args": {
+      "agent_name": "string, Short name of this content creator, to distinguish this author in the sequence of generative calls.",
+      "instruction": "string, What to produce (goal/contract). If the result of this tool will be rendered further (e.g. md→pptx/docx), describe desired structure and layout.",
+      "artifact_name": "string, Logical name of the artifact being produced (for tracking in logs).\n- For normal formats (html|markdown|json|yaml|text), this is just a string label.\n- For target_format=\"managed_json_artifact\", this MUST instead be a JSON object\n  mapping top-level JSON field names to nested artifact formats, e.g.:\n    {\"summary_md\": \"markdown\", \"details_html\": \"html\"}\n  Each value must be one of: markdown,text,html,json,yaml,mermaid (xml is NOT supported).",
+      "input_context": "['string', 'null'], Optional base text or data to use. MUST NOT contain raw search results JSON or the same leaf that you pass as `sources_list`. (default=)",
+      "target_format": "string, html|markdown|json|yaml|text|managed_json_artifact (default=markdown)",
+      "schema_json": "string, Optional JSON Schema. If provided (and target_format is json|yaml), the schema is inserted into the prompt and the model MUST produce an output that validates against it. (default=)",
+      "sources_list": "array, List of sources: [{sid:int, title?:str, url?:str, text?:str, content?:str, ...}]. This is the ONLY channel for raw search results and citations. Do not also repeat the copy of these sources objects in `input_context`. (default=[])",
+      "cite_sources": "boolean, If true and sources provided, require citations (inline for Markdown/HTML; sidecar for JSON/YAML). (default=False)",
+      "citation_container_path": "string, JSON Pointer used for sidecar citations in json/yaml outputs. (default=/_citations)",
+      "max_tokens": "integer, HARD safety cap, not a cost knob. Billing is based on tokens actually generated (unused headroom is not billed).\nDo NOT set low max_tokens to 'save money' — for structured outputs it causes truncation, invalid markup/JSON, validation failures, and repair/retry rounds that cost MORE. Setting max_tokens too low is a correctness bug.\nDo NOT rely on max_tokens alone to fit a budget: steer output size via `instruction` (depth/detail/items/rows/limits) so the model naturally fits within the quota. (default=7000)",
+      "code_fences": "boolean, Allow triple-backtick fenced blocks in output. (default=True)",
+      "strict": "boolean, If true, enforce format correctness, schema validity (if schema_json is set), and presence of citations (when cite_sources=true). (default=True)"
+    },
+    "returns": "string — JSON string envelope: {ok:bool, content:str, format:str, finished:bool, retries:int, reason?:str, stats?:object, sources_used:[{ \"sid\": int, \"url\"?: str, \"title\"?: str, \"text\"?: str }] }",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "llm_tools.sources_reconciler",
+    "call_template": "llm_tools.sources_reconciler(objective={$objective$}, queries={$queries$}, sources_list={$sources_list$}, max_items={$max_items$})",
+    "purpose": "Filter web/KB sources down to those relevant to an objective and queries. Returns JSON array of kept items with per-query and overall relevance and short reasoning.",
+    "is_async": true,
+    "args": {
+      "objective": "string, Objective (what we are trying to achieve with these sources).",
+      "queries": "array, Array of queries [q1, q2, ...]. Each will be assigned a qid.",
+      "sources_list": "array, Array of {\"sid\": int, \"title\": str, \"body\": str}",
+      "max_items": "integer, Optional: cap of kept sources (default 12). (default=12)"
+    },
+    "returns": "string — JSON array of kept sources: [{sid, verdict, o_relevance, q_relevance:[{qid,score}], reasoning}]",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.fetch_url_contents",
+    "call_template": "generic_tools.fetch_url_contents(urls={$urls$}, objective={$objective$}, refinement={$refinement$})",
+    "purpose": "Fetch-only URL dereferencer (no search). Returns main text + status + date metadata for each URL.\n\n⚠️ TOOL SELECTION RULES:\n- Use ONLY when you already have concrete HTTP/HTTPS URLs.\n- Never performs search or discovery.\n- If you need to FIND pages, use web_search / web_search_links.\n- Do not call web_search and fetch_url_contents for the same discovery task.\n\nObjective-aware refinement is optional and best-effort: URLs are never dropped; pages without reliable spans keep full content (recall-first).\nRefinement modes:\n- 'none': full pages\n- 'balanced': target + context (50-70%)\n- 'recall': most body/min chrome (80-95%)\n- 'precision': direct answers (20-50%, requires objective)\nWithout objective, refinement is ignored and full content is returned.",
+    "is_async": true,
+    "args": {
+      "urls": "string, JSON array of absolute HTTP/HTTPS URLs you already know, or a single URL string.",
+      "objective": "['string', 'null'], Optional objective (goal / task / question). Enables refinement. Without it, content stays full.",
+      "refinement": "string, Post-fetch content refinement (requires objective):\n- 'none': Return full page content (default, fast)\n- 'balanced': Extract target + supporting context (50-70% coverage)\n- 'recall': Extract full content bodies, remove chrome (80-95% coverage)\n- 'precision': Extract only directly relevant sections (20-50% coverage)\nNever drops URLs; no/invalid spans => keep full content. (default=none)"
+    },
+    "returns": "string — JSON object mapping each input URL to a result object:\n{\n  \"https://example.com/article\": {\n    \"status\": \"success|timeout|paywall|error|...\",\n    \"content\": \"<text>\",\n    \"content_length\": 1234,\n    \"published_time_iso\": \"...\" | null,\n    \"modified_time_iso\": \"...\" | null,\n    ...\n  }\n}\nIf refined, content may be trimmed; otherwise full.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.read_file",
+    "call_template": "generic_tools.read_file(path={$path$}, n={$n$})",
+    "purpose": "Read text from a file path; returns first n chars. Please only use with text files!",
+    "is_async": false,
+    "args": {
+      "path": "string, Path to a readable text file. '~' is expanded.",
+      "n": "integer, Num of first char to return (default=4000)"
+    },
+    "returns": "string — First n characters of the file contents.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.web_search",
+    "call_template": "generic_tools.web_search(queries={$queries$}, objective={$objective$}, refinement={$refinement$}, n={$n$}, fetch_content={$fetch_content$}, freshness={$freshness$}, country={$country$}, safesearch={$safesearch$})",
+    "purpose": "Web discovery tool (multi-query). Finds and deduplicates pages across query variants. If an objective is provided (and the backend supports it), the tool scores snippet relevance to the objective/queries and may drop clearly irrelevant results. If fetch_content is true, it fetches page text and can refine it to reduce boilerplate while preserving recall.\n\nUse when you need to FIND pages. For known URLs only, use fetch_url_contents.\nRefinement modes (post-fetch, objective-guided, best-effort): - 'none': full pages (exploratory)\n- 'balanced': target + context, 50-70% (default)\n- 'recall': content bodies, 80-95% (comprehensive)\n- 'precision': direct answers only, 20-50% (narrow questions)",
+    "is_async": true,
+    "args": {
+      "queries": "string, JSON array of string queries (rephrases/synonyms) or a signle query string. Variants improve recall/diversity.",
+      "objective": "['string', 'null'], Optional search objective (goal/question). Used for snippet relevance scoring and content refinement.",
+      "refinement": "string, Post-fetch content refinement: 'none'|'balanced'|'recall'|'precision' (default=balanced)",
+      "n": "integer, Max unique results (1-20) (default=8)",
+      "fetch_content": "boolean, If true, fetch full page content according to 'refinement' option. Increase tokens as stated in refinement modes. Use False if you need to decide the fetch on your own. If false, return ranked snippets/URLs only (no content attr). (default=True)",
+      "freshness": "['string', 'null'], Canonical freshness: 'day'|'week'|'month'|'year' or null.",
+      "country": "['string', 'null'], Canonical country ISO2, e.g. 'DE', 'US'.",
+      "safesearch": "string, Canonical safesearch: 'off'|'moderate'|'strict'. (default=moderate)"
+    },
+    "returns": "string — JSON array of results: [{sid,title,url,text,objective_relevance?,query_relevance?,content?,...date/meta...}]. Scores (0..1) from snippet reconciliation when enabled by backend. Content present only if fetched; may be refined per mode.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.web_search_links",
+    "call_template": "generic_tools.web_search_links(queries={$queries$}, objective={$objective$}, n={$n$}, freshness={$freshness$}, country={$country$}, safesearch={$safesearch$})",
+    "purpose": "Search web with multiple query variants and return ranked snippets and URLs.\n\nUse this when you want to explore results before fetching full pages.\nFor full content of selected URLs, call `fetch_url_contents`.",
+    "is_async": true,
+    "args": {
+      "queries": "string, JSON array of rephrases/synonyms or a single string.",
+      "objective": "['string', 'null'], Optional objective for snippet relevance scoring.",
+      "n": "integer, Max results (1-20) (default=8)",
+      "freshness": "['string', 'null'], Canonical freshness: 'day'|'week'|'month'|'year' or null.",
+      "country": "['string', 'null'], Canonical country ISO2, e.g. 'DE', 'US'.",
+      "safesearch": "string, Canonical safesearch: 'off'|'moderate'|'strict'. (default=moderate)"
+    },
+    "returns": "string — JSON array: [{sid, title, url, text, objective_relevance?, query_relevance?}, ...]. No `content` field. Pre-sorted by relevance.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.write_docx",
+    "call_template": "generic_tools.write_docx(path={$path$}, content={$content$}, title={$title$}, sources={$sources$}, resolve_citations={$resolve_citations$}, include_sources_section={$include_sources_section$})",
+    "purpose": "Render Markdown into a modern, well-styled DOCX. Returns the saved filename (basename only).",
+    "is_async": true,
+    "args": {
+      "path": "string, Destination .docx filename (name or path; directories ignored — saved in OUTPUT_DIR).",
+      "content": "string, Markdown to render. Use headings (#/##/###), bullets (-/*/1.), code fences, blockquotes, pipe tables.",
+      "title": "['string', 'null'], Optional document title (top of first page).",
+      "sources": "['string', 'null'], JSON array/object of sources used to resolve [[S:n]] and build a References section.",
+      "resolve_citations": "boolean, Resolve [[S:n]] tokens into inline links (title→URL) where possible. (default=True)",
+      "include_sources_section": "boolean, Append a References section listing all provided sources. (default=True)"
+    },
+    "returns": "string — Saved DOCX filename (basename).",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.write_file",
+    "call_template": "generic_tools.write_file(path={$path$}, content={$content$}, source_path={$source_path$}, encoding={$encoding$}, mime={$mime$}, content_description={$content_description$})",
+    "purpose": "General-purpose file writer. Use when no specific write_* tool fits.\n\nTwo modes:\n1. Direct: Pass content (str/bytes)\n2. Copy: Pass source_path (for files that already exist and must be 'registered')\n\nFor BINARY content, mandatory are:\n• full human-readable `content_description` of what's in the file.\n• `mime`.\nCommon use: Register files created by openpyxl/PIL/pandas via source_path.Required for binary: mime + content_description\n\nThis tool also must be used to write the binary image data.",
+    "is_async": false,
+    "args": {
+      "path": "string, Destination file path. '~' is expanded; parent dirs are created.Extension should match content type: .txt/.json/.csv for text, .png/.xlsx/.pdf for binary.",
+      "content": "any",
+      "source_path": "['string', 'null'], Copy from path (mode 2, for 'registering' preexisting files)",
+      "encoding": "string, Text encoding (mode 1 only and if used when content is str). Default: 'utf-8'. (default=utf-8)",
+      "mime": "['string', 'null'], MIME type for file. Mandatory if BINARY content",
+      "content_description": "['string', 'null'], Full human-readable description of what the file contains. Required if file is BINARY in both modes"
+    },
+    "returns": "string — Absolute path that was written.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.write_html",
+    "call_template": "generic_tools.write_html(path={$path$}, content={$content$}, title={$title$}, sources={$sources$}, resolve_citations={$resolve_citations$}, first_only={$first_only$})",
+    "purpose": "Write an HTML file. Optionally resolves citations so [[S:n]] tokens and <sup class=\"cite\" data-sids=\"...\">...</sup> placeholders become clickable links (target=_blank). Returns saved path.",
+    "is_async": false,
+    "args": {
+      "path": "string, Destination .html filename (directories ignored — saved in OUTPUT_DIR).",
+      "content": "string, HTML content to write. Can contain [[S:n]] tokens or <sup class='cite' ...> placeholders.",
+      "title": "['string', 'null'], Optional <title> if you pass raw body; ignored if full HTML.",
+      "sources": "['string', 'null'], JSON array/object of sources used to resolve SIDs into URLs.",
+      "resolve_citations": "boolean, Convert [[S:n]] and <sup class='cite'> placeholders into links. (default=True)",
+      "first_only": "boolean, When multiple SIDs given, keep only the first when rendering inline. (default=False)"
+    },
+    "returns": "string — Saved HTML path (absolute).",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.write_pdf",
+    "call_template": "generic_tools.write_pdf(path={$path$}, content={$content$}, format={$format$}, title={$title$}, sources={$sources$}, resolve_citations={$resolve_citations$}, include_sources_section={$include_sources_section$}, embed_images={$embed_images$}, base_dir={$base_dir$}, landscape={$landscape$})",
+    "purpose": "Render Markdown, HTML, or Mermaid diagrams to PDF **using Playwright + headless Chromium** (JavaScript is executed; Chart.js/D3/etc. render). Returns saved path.\n\n=== AUTHORING SPEC (PDF-friendly HTML, Portrait & Landscape) ===\n\n1) PAGE & ORIENTATION\n   • Prefer: <style>@page { size: A4 portrait; }</style> or @page { size: A4 landscape; }\n   • Use centered content column ≤ 800–1000px (portrait) or ≤ 1200–1400px (landscape)\n   • Avoid full-viewport wrappers (100vh/100vw) and fixed-position bars in printable content\n\n2) LAYOUT & BREAKS\n   • Keep headings with next block (add class='keep-with-next' if possible)\n   • Mark no-split blocks with class='avoid-break' (applies to cards, figures, charts)\n   • Insert manual page breaks with class='pdf-break-before' / 'pdf-break-after' when useful\n\n3) TABLES\n   • Provide <thead> and <tbody>. Avoid row/column spans that must split across pages\n   • Prefer narrower columns; allow wrapping (word-break: break-word)\n   • Avoid min-width that forces overflow\n\n4) MEDIA (images/svg/canvas)\n   • Use responsive sizes: max-width:100%; height:auto\n   • For charts/canvas, let them auto-size in CSS and avoid hardcoded pixel heights\n   • Legends should wrap\n\n5) TYPOGRAPHY & WEBFONTS\n   • Include webfonts early; avoid late-loading fonts that reflow the page at print time\n\n6) DON'TS (they cause clipping or overlaps in print)\n   • position: fixed/sticky in the printable area\n   • overflow:hidden on large layout wrappers\n   • transform: scale/translate on containers that may cross a page boundary\n\nFor landscape mode, set landscape=True parameter.",
+    "is_async": true,
+    "args": {
+      "path": "string, Destination .pdf path. '~' is expanded; parent dirs are created.",
+      "content": "string, Content to render (Markdown, HTML, or Mermaid code depending on format).",
+      "format": "string, Content format: 'markdown', 'html', or 'mermaid' (default=markdown)",
+      "title": "['string', 'null'], Optional document title.",
+      "sources": "['string', 'null'], JSON for resolving [[S:n]] tokens when using Markdown mode. Ignored in HTML mode.\nEither an array [{sid?, title, url, ...}, ...] (sid=1..N if omitted) or an object {\"1\":{title,url}, ...}.",
+      "resolve_citations": "boolean, Replace [[S:n]] tokens with inline links. In Markdown mode. Ignored in HTML mode (default=True)",
+      "include_sources_section": "boolean, Append a 'Sources' section listing all passed sources. In Markdown mode. Ignored in HTML mode (default=True)",
+      "embed_images": "boolean, Embed images when possible (Markdown mode). (default=True)",
+      "base_dir": "['string', 'null'], Base directory for resolving relative images/links. Defaults to CWD.",
+      "landscape": "boolean, Render in landscape orientation (default=False)"
+    },
+    "returns": "string — Absolute path to the written PDF.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.write_png",
+    "call_template": "generic_tools.write_png(path={$path$}, content={$content$}, format={$format$}, title={$title$}, base_dir={$base_dir$}, render_delay_ms={$render_delay_ms$}, full_page={$full_page$}, width={$width$}, height={$height$})",
+    "purpose": "Render Markdown, HTML, or Mermaid diagrams to PNG image using Playwright + Chromium. Supports three formats: 'markdown', 'html' (control sizing via CSS), or 'mermaid'. Returns saved path.Fitting guidance: prefer full_page=True; increase width (e.g., 2200–3200) for wide diagrams; use render_delay_ms=1000–2000 to allow Mermaid/layout to settle. File is saved under OUTPUT_DIR.",
+    "is_async": true,
+    "args": {
+      "path": "string, Destination .png path. Directories are ignored; saved in OUTPUT_DIR.",
+      "content": "string, Renderable content. If format='mermaid', supply RAW Mermaid text (no ``` fences). If 'markdown', supply Markdown (use ```mermaid blocks for diagrams). If 'html', supply an HTML snippet.",
+      "format": "string, Content format: 'markdown', 'html', or 'mermaid' (default=mermaid)",
+      "title": "['string', 'null'], Optional title (for Markdown mode).",
+      "base_dir": "['string', 'null'], Base directory for resolving relative assets.",
+      "render_delay_ms": "integer, Extra delay for JS rendering (useful for charts/diagrams). (default=1000)",
+      "full_page": "boolean, Capture full scrollable page vs viewport only. (default=True)",
+      "width": "['integer', 'null'], Viewport width in pixels (defaults to 1200). (default=3000)",
+      "height": "['integer', 'null'], Viewport height in pixels (only used if full_page=False). (default=2000)"
+    },
+    "returns": "string — Absolute path to the written PNG.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "generic_tools.write_pptx",
+    "call_template": "generic_tools.write_pptx(path={$path$}, content={$content$}, title={$title$}, sources={$sources$}, resolve_citations={$resolve_citations$}, include_sources_slide={$include_sources_slide$})",
+    "purpose": "Render HTML into a PPTX deck. Returns the saved filename (basename only).\n\nAUTHORING SPEC (PPT-friendly, compact):\n• Slides: one <section id=\"slide-N\"> per slide (N can be any id).\n• Title & subtitle (optional):\n    <h1>Slide Title</h1>\n    <p class=\"subtitle\">Short subtitle</p>\n• Body blocks supported inside a section:\n    Headings: <h2>, <h3>\n    Paragraphs: <p>\n    Lists: <ul>/<ol> with <li>\n    Callouts: <div class=\"highlight-box\">…</div> (or a <div> with background/border-left/padding)\n    Two columns:\n        <div class=\"two-column\">\n          <div class=\"column\">… (h3/p/ul/callout) …</div>\n          <div class=\"column\">…</div>\n        </div>\n    Tables: <table> with optional <thead> and <tbody>\n• Inline formatting: <strong>, <em>, <span class=\"…\"> (color from CSS class), and citations with <sup class=\"cite\"> (see below).\n\nSUPPORTED CSS (others are ignored—do not generate):\n• color, background/background-color (hex #RRGGBB/#RGB only)\n• font-size (px/pt/em), line-height (number like 1.2)\n• padding (px/pt/in) incl. padding-left/right/top/bottom\n• border-bottom (used under <h1>), border-left (accent bars)\n• .two-column { gap: <length>; }  and  .column { background; padding; border-left }\n• Tables: th { background-color; color }, td { color }, tr:nth-child(even) { background-color }\n\nDO NOT USE / WILL BE IGNORED (avoid bloating HTML):\n• min-height/100vh, page-breaks, flex/grid beyond .two-column\n• gradients, box-shadow, border-radius, complex layout wrappers\n• global resets like * { … }, giant .content-wrapper containers\n\nCITATIONS (HTML — same rule as the generator):\n• Add inline citations immediately after the sentence/phrase with the factual claim:\n    <sup class=\"cite\" data-sids=\"1,3\">[S:1,3]</sup>\n  Use only numeric SIDs you were given; multiple SIDs may be comma-separated (e.g., 1,3) or an inclusive range (e.g., 2-4).\n  The text inside <sup> MUST mirror data-sids as [S:…].\n• Alternative (also accepted): a footnotes block containing [S:n] markers inside an element with class=\"footnotes\", or under a heading titled \"Sources\".\n\nCONTENT BUDGET (to ensure it fits—renderer won’t split slides):\n• Standard slide: 1 heading (h2/h3) + up to 6 short bullets OR up to 2 short paragraphs OR 1 callout (~25–40 words).\n• Two-column slide: each .column ≤ 1 h3 + 3 short bullets OR ≤ 2 short paragraphs; ~12 lines max per column.\n• Tables: ≤ 6 columns, ≤ 8 rows, no merged cells.\n• Keep titles concise; subtitles one sentence max.\n\nLAYOUT & FITTING:\n• Content auto-scales down if needed (not below ~70%); it won’t spill to the next slide—trim content to fit budgets.\n• Lists indent ~0.25in; text wraps automatically.\n• Two-column renders side-by-side; each .column is a single block honoring its background, padding, and border-left.\n\nMINIMAL EXAMPLES:\n  <section id=\"slide-1\">\n    <h1>Executive Summary</h1>\n    <p class=\"subtitle\">One-line subtitle</p>\n    <h2>Why Now</h2>\n    <ul>\n      <li><strong>Risk:</strong> short bullet</li>\n      <li><strong>ROI:</strong> short bullet</li>\n    </ul>\n  </section>\n  <section id=\"slide-2\">\n    <h1>Key Metrics</h1>\n    <div class=\"two-column\">\n      <div class=\"column\">\n        <h3>Left</h3>\n        <ul><li>3 bullets max</li></ul>\n      </div>\n      <div class=\"column\">\n        <h3>Right</h3>\n        <p>Short paragraph.</p>\n      </div>\n    </div>\n  </section>\n  <!-- Minimal example WITH citation -->\n  <section id=\"slide-3\">\n    <h1>Market Overview</h1>\n    <h2>Key Fact</h2>\n    <p>Global EV sales grew ~35% YoY in 2024 <sup class=\"cite\" data-sids=\"1,3\">[S:1,3]</sup>.</p>\n  </section>",
+    "is_async": true,
+    "args": {
+      "path": "string, Destination .pptx filename (name or path; directories ignored — saved in OUTPUT_DIR).",
+      "content": "string, HTML (only HTML) to render. Use <section> per slide. (default=)",
+      "title": "['string', 'null'], Optional deck title (title slide).",
+      "sources": "['string', 'null'], JSON array of {sid,title,url,text}.",
+      "resolve_citations": "boolean, Convert [[S:n]] tokens into hyperlinks. (default=False)",
+      "include_sources_slide": "boolean, Append a 'Sources' slide if sources are given. (default=False)"
+    },
+    "returns": "string — Saved PPTX filename (basename).",
+    "constraints": [],
+    "examples": []
+  }
+]
+
+# The Program History PLAYBOOK / Operational Digest (Current turn). **Strictly ordered from oldest → newest** for prior turns.
+
+Within turn, User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown. If available, only their content summary is shown.
+
+---
+
+## Prior Turns (oldest first)
+(none)
+
+---
+
+## Current Turn (live — oldest → newest events) [CURRENT TURN]
+[USER PROMPT]
+Please find the recent top 3 advances in science in medicine and in math. One of the topics among found we need to show in details so search on it more. Make the nice dashboard out of this and 5-6 slides pptx. Make the diagram with this data, Then make an excel with this data and do not forget cite sources.
+[COORDINATOR TURN DECISION]
+Turn Objective=Research recent top 3 advances in medicine and mathematics, deep-dive one topic, create dashboard HTML, 5-6 slide PPTX, diagram, and Excel workbook with citations | turn_scope=new_request | project_mode=single_deliverable | context_use=never | scope_notes=Comprehensive research and multi-format reporting in single turn | avoid=["superficial research without verification", "missing citations"] | turn_scope_contract={"unit_of_work": "stage_solution", "max_depth": "deep", "notes": "Full research, synthesis, and multi-format delivery"} | sb={"dashboard_html": {"explore": 4, "exploit": 3, "render": 2, "ctx_reads": 2}, "slides_pptx": {"explore": 1, "exploit": 2, "render": 2, "ctx_reads": 2}, "advances_xlsx": {"explore": 0, "exploit": 2, "render": 1, "ctx_reads": 2}} | solvable=True | confidence=0.85 | reasoning=Clear research task with multiple deliverable formats; tools available for search, generation, and rendering | next_step=react_loop | context_use_decision=False | instructions_for_downstream=1) Search for recent (2024-2025) top advances in medicine and mathematics using multiple query variants. 2) Reconcile sources to identify the most relevant and credible findings. 3) Select one topic for deep-dive and perform additional focused search. 4) Generate dashboard HTML with citations using sources_list. 5) Generate presentation HTML (5-6 sections) with citations. 6) Create Mermaid diagram code showing all 6 advances, render to PNG. 7) Use Python codegen to create Excel workbook with openpyxl: organize data into sheets, apply formatting, include all sources with URLs. 8) Render presentation HTML to PPTX with source citations. Ensure all outputs reference the same source list for consistency.
+
+[CURRENT TURN CONTRACT SLOTS (to fill)]
+{
+  "dashboard_html": {
+    "name": "dashboard_html",
+    "type": "file",
+    "description": "Interactive HTML dashboard showing top 3 advances in medicine and math with deep-dive section",
+    "format": null,
+    "mime": "text/html",
+    "filename_hint": "science_advances_dashboard.html",
+    "content_guidance": "Modern responsive dashboard with sections for medicine advances, math advances, and detailed deep-dive on selected topic. Include visual cards, citations, and clean layout. Text surrogate: the HTML source code used to create the dashboard",
+    "content_inventorization": null
+  },
+  "diagram_png": {
+    "name": "diagram_png",
+    "type": "file",
+    "description": "Visual diagram showing the 6 advances (3 medicine + 3 math) with connections or timeline",
+    "format": null,
+    "mime": "image/png",
+    "filename_hint": "advances_diagram.png",
+    "content_guidance": "Mermaid diagram rendered to PNG showing the 6 scientific advances organized by field with key details. Text surrogate: description of diagram structure and content",
+    "content_inventorization": null
+  },
+  "slides_pptx": {
+    "name": "slides_pptx",
+    "type": "file",
+    "description": "5-6 slide presentation covering the advances and deep-dive",
+    "format": null,
+    "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "filename_hint": "science_advances.pptx",
+    "content_guidance": "5-6 slides: title slide, medicine advances (1 slide), math advances (1 slide), deep-dive topic (2 slides), sources slide. Use clean layout with citations. Text surrogate: HTML source used to render the presentation",
+    "content_inventorization": null
+  },
+  "presentation_html": {
+    "name": "presentation_html",
+    "type": "inline",
+    "description": "HTML content for PPTX rendering",
+    "format": "html",
+    "mime": null,
+    "filename_hint": null,
+    "content_guidance": "5-6 sections with <section> tags for slides; include citations as <sup class='cite' data-sids='...'>[S:...]</sup>; keep content concise per slide budget; ~1200-1500 tokens",
+    "content_inventorization": null
+  },
+  "advances_xlsx": {
+    "name": "advances_xlsx",
+    "type": "file",
+    "description": "Excel workbook with structured data on all advances and sources",
+    "format": null,
+    "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "filename_hint": "science_advances_data.xlsx",
+    "content_guidance": "Create via Python with openpyxl: Sheet 1 'Medicine Advances' (columns: Title, Description, Date, Source URL), Sheet 2 'Math Advances' (same structure), Sheet 3 'Deep Dive Details', Sheet 4 'All Sources'. Apply formatting, freeze panes, auto-width columns. Text surrogate: description of workbook structure, sheet names, and data organization",
+    "content_inventorization": null
+  }
+}
+
+---
+[EVENTS (oldest → newest)]
+- 02:15:21 — decision: next=call_tool — strategy=explore — focus=dashboard_html — tool=generic_tools.web_search->medical_math_advances_search_1(inline) — reason=strategy=explore; focus_slot=dashboard_html; plan=search for recent (2024-2025) top advances in medicine and mathematics using multiple q...
+- 02:15:21 — protocol_verify: ok=True tool=generic_tools.web_search (n=0)
+- 02:15:21 — tool_started: generic_tools.web_search(queries="["top medical advances 2024 2025", "breakthrough medicine discoveries 2024", "re...", objective="Find the most significant and recent (2024-2025) advances in medicine and mathem...", refinement="balanced", n=12, fetch_content=true, freshness="year", country=null, safesearch="moderate") → medical_math_advances_search_1
+- 02:15:46 — tool_finished: generic_tools.web_search → None[medical_math_advances_search_1] - ## Role & inputs
+Multi-query web search for recent (2024–2025) medical and mathematical advances; 4 queries, balanced refinement, n=12, fetch enabled, freshness=year.
+
+## Output
+**Partial success.** Retrieved 4/12 results; all medical, zero mathematics. Structural: list of {sid, title, url, content, metadata}. **Medical coverage:** cancer drugs (Enhertu, Tagrisso, GLP-1 agents), gene therapies (CRISPR, lenacapavir HIV prevention), surgical breakthroughs (face/eye transplant, living mitral valve, brain-computer interface), diagnostic advances (skin test for Parkinson's, prion disease targets, cataract protein, hearing restoration via genome editing). **Missing:** mathematics entirely; no results on mathematical breakthroughs, proofs, or computational advances despite objective explicitly requesting both domains.
+
+## Risks, quality & next moves
+- **Adequacy: poor;** medical domain well-covered (9,395–12,684 char per source; recent dates Dec 2024–Dec 2025; NIH, AAMC, GeneOnline authority), but mathematics completely absent—objective unmet by half.
+- **Concrete risks:** (1) Query set likely lacked math-specific terms (no evidence;
+- 02:15:59 — decision: next=call_tool — strategy=explore — focus=dashboard_html — tool=generic_tools.web_search->math_advances_search_1(inline) — reason=strategy=explore; focus_slot=dashboard_html; failure_on=medical_math_advances_search_1; error=partial_coverage; recovery=retry; plan=exec...
+- 02:15:59 — protocol_verify: ok=True tool=generic_tools.web_search (n=0)
+- 02:15:59 — tool_started: generic_tools.web_search(queries="["major mathematics breakthroughs 2024 2025", "recent mathematical discoveries 2...", objective="Find the most significant and recent (2024-2025) advances in mathematics from au...", refinement="balanced", n=8, fetch_content=true, freshness="year", country=null, safesearch="moderate") → math_advances_search_1
+- 02:16:21 — tool_finished: generic_tools.web_search → None[math_advances_search_1] - ## Role & inputs
+Search for recent (2024–2025) mathematics breakthroughs; two query variants; balanced refinement; n=8; fetch_content=true; freshness=year.
+
+## Output
+**Partial success.** Retrieved 5/8 results; all fetched with content. Structure: list of {sid, title, url, text, content, published_time_iso, content_length}. Dominant sources: Reddit thread (curated list), ScienceDaily articles (2), Quanta Magazine video page (Dec 2025), Bukit Timah tutor blog (Sept 2025 roundup). **Coverage:** Major 2024–2025 proofs present (Kakeya conjecture 3D, Brauer Height Zero, Geometric Langlands, Moving Sofa); AI-driven discoveries (GPT-5 Pro, CMU institute); applications (knitting, crowd flow, fruit fly modeling). **Gaps:** No peer-review status confirmation for most claims; Reddit thread lacks citations; Quanta page is video-only (no transcript); ScienceDaily article `B` truncated at ~4.3k tokens (original 9.6k).
+
+## Risks, quality & next moves
+Adequacy: partial; major breakthroughs identified but verification sparse. Concrete risks: Reddit;
+- 02:16:34 — decision: next=call_tool — strategy=explore — focus=dashboard_html — tool=generic_tools.web_search->crispr_deepdive_search_1(inline) — reason=strategy=explore; focus_slot=dashboard_html; plan=select CRISPR gene therapy as deep-dive topic (high impact, recent FDA approvals) and p...
+- 02:16:34 — protocol_verify: ok=True tool=generic_tools.web_search (n=0)
+- 02:16:34 — tool_started: generic_tools.web_search(queries="["CRISPR gene therapy FDA approval 2024 2025", "CRISPR clinical trials breakthro...", objective="Gather detailed information on CRISPR gene therapy advances in 2024-2025 for dee...", refinement="balanced", n=8, fetch_content=true, freshness="year", country=null, safesearch=null) → crispr_deepdive_search_1
+- 02:17:04 — tool_finished: generic_tools.web_search → None[crispr_deepdive_search_1] - ## Role & inputs
+- Searched for CRISPR gene therapy FDA approvals and clinical breakthroughs in 2024–2025 (freshness: past year); 8 results max; balanced refinement with full-page fetch.
+
+## Output
+- **Failed/empty**: zero results returned despite multi-query search (queries truncated in call signature, but objective targets 2024–2025 advances).
+- No pages, snippets, URLs, dates, or content retrieved; cannot assess coverage of FDA approvals, trial outcomes, or mechanism details.
+
+## Risks, quality & next moves
+- **Adequacy: poor**; empty result set blocks all downstream analysis. Possible causes: overly restrictive freshness filter ('year' may exclude pre-2024 content if indexing lag exists), query syntax error, or genuine absence of indexed CRISPR 2024–2025 pages in backend.
+- **Next move**: retry with `freshness=null` and `n=10`; if still empty, verify query strings are complete and consider site-specific search (e.g., `site:fda.gov CRISPR 2024` or `site:clinicaltrials.gov CRISPR`).;
+- 02:17:28 — decision: next=call_tool — strategy=exploit — focus=dashboard_html — tool=llm_tools.generate_content_llm->dashboard_html_gen_1(inline/string) — fetch=3 — reason=strategy=exploit; focus_slot=dashboard_html; failure_on=crispr_deepdive_search_1; error=empty_results; recovery=pivot; plan=pivot deep-di...
+- 02:17:28 — protocol_verify: ok=True tool=llm_tools.generate_content_llm (n=0)
+- 02:17:28 — param_binding: {"kind": "param_binding", "params_bound": ["input_context", "sources_list"]}
+- 02:17:28 — param_binding_sources: {"kind": "param_binding_sources", "tool": "llm_tools.generate_content_llm", "merged_sources": 9, "from_fetch": 0, "from_params": 9}
+- 02:17:28 — tool_started: llm_tools.generate_content_llm(agent_name="Dashboard generator", instruction="Generate a modern, responsive HTML dashboard showing:
+1) Header: 'Recent Scienti...", artifact_name="dashboard_html_gen_1", input_context=<current_turn.user>, target_format="html", schema_json=null, sources_list=<current_turn.artifacts.medical_math_advances_search_1.value> | <current_turn.artifacts.math_advances_search_1.value>, cite_sources=true, citation_container_path=null, max_tokens=4000, code_fences=null, strict=null) → dashboard_html_gen_1
+- 02:18:20 — tool_finished: llm_tools.generate_content_llm → None[dashboard_html_gen_1] - ## Role & inputs
+Generate responsive HTML dashboard: 6 advances (3 medical, 3 math) + Kakeya deep-dive; cite medical_math_advances_search_1 + math_advances_search_1 sources; max_tokens=4000.
+
+## Output
+**Success.** Delivered complete, valid HTML (10.2 KB); modern responsive grid layout with header, two 3-card sections (medical & math), and dedicated Kakeya deep-dive. Structure: semantic HTML5, inline CSS, `[S:n]` citations embedded in card text and deep-dive paragraphs. Medical cards cover Enhertu/Tagrisso, lenacapavir HIV prevention, face/eye transplant; math cards cover Kakeya 3D, Brauer Height Zero, Geometric Langlands. Deep-dive section expands Kakeya with problem history, 2025 Wang–Zahl proof, and implications for harmonic analysis & PDEs. All 4 sources cited (sids 1–4); citations present in content.
+
+## Risks, quality & next moves
+Adequacy: **partial**; structure & citations present, but medical sources sparse—only 1 source (sid 1) covers all 3 medical advances; face/eye transplant (sid 4);
+- 02:19:12 — decision: next=call_tool — strategy=exploit — focus=presentation_html — tool=llm_tools.generate_content_llm->presentation_html_gen_1(inline/string) — fetch=3 — reason=strategy=exploit; focus_slot=presentation_html; plan=generate presentation HTML with 5-6 sections (title, medicine advances, math advance...
+- 02:19:12 — protocol_verify: ok=True tool=llm_tools.generate_content_llm (n=0)
+- 02:19:12 — param_binding: {"kind": "param_binding", "params_bound": ["input_context", "sources_list"]}
+- 02:19:12 — param_binding_sources: {"kind": "param_binding_sources", "tool": "llm_tools.generate_content_llm", "merged_sources": 9, "from_fetch": 0, "from_params": 9}
+- 02:19:12 — tool_started: llm_tools.generate_content_llm(agent_name="Presentation generator", instruction="Generate HTML for 5-6 slides using <section id="slide-N"> tags:
+1) Title slide: ...", artifact_name="presentation_html_gen_1", input_context=<current_turn.user>, target_format="html", schema_json=null, sources_list=<current_turn.artifacts.medical_math_advances_search_1.value> | <current_turn.artifacts.math_advances_search_1.value>, cite_sources=true, citation_container_path=null, max_tokens=3000, code_fences=null, strict=null) → presentation_html_gen_1
+- 02:20:08 — tool_finished: llm_tools.generate_content_llm → None[presentation_html_gen_1] - ## Role & inputs
+Generate 5–6 slide HTML presentation on 2024–2025 medical & math breakthroughs; cite sources; max 3000 tokens; target PPTX rendering with `<section id="slide-N">` tags.
+
+## Output
+**Success.** Delivered complete, valid HTML document (8446 bytes); 6 slides with proper semantic structure. Slides: title (gradient); 2 content slides (medical, math); 2 deep-dive slides (Kakeya history & 2025 proof); 1 sources slide. Inline citations present (`[S:n]` format, `data-sids` attributes). Requested aspects covered: section tags ✓; citations ✓; concise per-slide content ✓; professional styling (gradients, typography, spacing) ✓. Sources list (4 items: Reddit, ScienceDaily, Quanta, Bukit Timah Tutor) embedded in `sources_used` envelope.
+
+## Risks, quality & next moves
+Adequacy: full; all structural and citation requirements met. Minor: slide 6 sources list is prose-formatted (not structured table), reducing machine-readability for downstream PPTX converters—consider requesting JSON-structured citations if converter expects strict schema. No truncation;;
+- 02:24:11 — decision: next=call_tool — strategy=render — focus=diagram_png — tool=codegen_tools.codegen_python->diagram_png_render_1, advances_xlsx_gen_1, dashboard_html_file_1, +1 more — reason=strategy=render; focus_slot=diagram_png; plan=use codegen to: (1) generate Mermaid diagram code showing 6 advances organized by field, (2...
+- 02:24:11 — protocol_verify: ok=True tool=codegen_tools.codegen_python (n=0)
+- 02:24:11 — tool_started: codegen_tools.codegen_python(output_contract=<dict len=4>, instruction="Create 4 file artifacts: (1) Mermaid diagram PNG showing 6 advances (3 medical: ...") → diagram_png_render_1,advances_xlsx_gen_1,dashboard_html_file_1,slides_pptx_render_1
+- 02:26:38 — tool_finished: codegen_tools.codegen_python → unknown
+
+#### Current artifacts (oldest→newest)
+- 01. medical_math_advances_search_1 ← generic_tools.web_search: success — ## Role & inputs Multi-query web search for recent (2024–2025) medical and mathematical advances; 4 queries, balanced refinement, n=12, fetch enabled, freshness=year.  ## Output **Partial success.** Retrieved 4/12 results; all medical, zero mathematics. Structural: list of {sid, title, url, content, metadata}. **Medical coverage:** cancer drugs (Enhertu, Tagrisso, GLP-1 agents), gene therapies (CRISPR, lenacapavir HIV prevention), surgical breakthroughs (face/eye transplant, living mitral valve, brain-computer interface), diagnostic advances (skin test for Parkinson's, prion disease targets, cataract protein, hearing restoration via genome editing). **Missing:** mathematics entirely; no results on mathematical breakthroughs, proofs, or computational advances despite objective explicitly requesting both domains.  ## Risks, quality & next moves - **Adequacy: poor;** medical domain well-covered (9,395–12,684 char per source; recent dates Dec 2024–Dec 2025; NIH, AAMC, GeneOnline authority), but mathematics completely absent—objective unmet by half. - **Concrete risks:** (1) Query set likely lacked math-specific terms (no evidence
+    search_context:
+      queries  : "top medical advances 2024 2025"; "breakthrough medicine discoveries 2024"; …+4 more
+      objective: "Find the most significant and recent (2024-2025) advances in medicine and mathematics from authoritative sources"
+- 02. math_advances_search_1 ← generic_tools.web_search: success — ## Role & inputs Search for recent (2024–2025) mathematics breakthroughs; two query variants; balanced refinement; n=8; fetch_content=true; freshness=year.  ## Output **Partial success.** Retrieved 5/8 results; all fetched with content. Structure: list of {sid, title, url, text, content, published_time_iso, content_length}. Dominant sources: Reddit thread (curated list), ScienceDaily articles (2), Quanta Magazine video page (Dec 2025), Bukit Timah tutor blog (Sept 2025 roundup). **Coverage:** Major 2024–2025 proofs present (Kakeya conjecture 3D, Brauer Height Zero, Geometric Langlands, Moving Sofa); AI-driven discoveries (GPT-5 Pro, CMU institute); applications (knitting, crowd flow, fruit fly modeling). **Gaps:** No peer-review status confirmation for most claims; Reddit thread lacks citations; Quanta page is video-only (no transcript); ScienceDaily article `B` truncated at ~4.3k tokens (original 9.6k).  ## Risks, quality & next moves Adequacy: partial; major breakthroughs identified but verification sparse. Concrete risks: Reddit
+    search_context:
+      queries  : "major mathematics breakthroughs 2024 2025"; "recent mathematical discoveries 2024"; …+2 more
+      objective: "Find the most significant and recent (2024-2025) advances in mathematics from authoritative sources"
+- 03. crispr_deepdive_search_1 ← generic_tools.web_search: success — ## Role & inputs - Searched for CRISPR gene therapy FDA approvals and clinical breakthroughs in 2024–2025 (freshness: past year); 8 results max; balanced refinement with full-page fetch.  ## Output - **Failed/empty**: zero results returned despite multi-query search (queries truncated in call signature, but objective targets 2024–2025 advances). - No pages, snippets, URLs, dates, or content retrieved; cannot assess coverage of FDA approvals, trial outcomes, or mechanism details.  ## Risks, quality & next moves - **Adequacy: poor**; empty result set blocks all downstream analysis. Possible causes: overly restrictive freshness filter ('year' may exclude pre-2024 content if indexing lag exists), query syntax error, or genuine absence of indexed CRISPR 2024–2025 pages in backend. - **Next move**: retry with `freshness=null` and `n=10`; if still empty, verify query strings are complete and consider site-specific search (e.g., `site:fda.gov CRISPR 2024` or `site:clinicaltrials.gov CRISPR`).
+    search_context:
+      queries  : "CRISPR gene therapy FDA approval 2024 2025"; "CRISPR clinical trials breakthrough 2024"; …+1 more
+      objective: "Gather detailed information on CRISPR gene therapy advances in 2024-2025 for deep-dive analysis, including FDA approvals, clinical trial results, and therape…"
+- 04. dashboard_html_gen_1 ← llm_tools.generate_content_llm: success — ## Role & inputs Generate responsive HTML dashboard: 6 advances (3 medical, 3 math) + Kakeya deep-dive; cite medical_math_advances_search_1 + math_advances_search_1 sources; max_tokens=4000.  ## Output **Success.** Delivered complete, valid HTML (10.2 KB); modern responsive grid layout with header, two 3-card sections (medical & math), and dedicated Kakeya deep-dive. Structure: semantic HTML5, inline CSS, `[S:n]` citations embedded in card text and deep-dive paragraphs. Medical cards cover Enhertu/Tagrisso, lenacapavir HIV prevention, face/eye transplant; math cards cover Kakeya 3D, Brauer Height Zero, Geometric Langlands. Deep-dive section expands Kakeya with problem history, 2025 Wang–Zahl proof, and implications for harmonic analysis & PDEs. All 4 sources cited (sids 1–4); citations present in content.  ## Risks, quality & next moves Adequacy: **partial**; structure & citations present, but medical sources sparse—only 1 source (sid 1) covers all 3 medical advances; face/eye transplant (sid 4)
+- 05. presentation_html_gen_1 ← llm_tools.generate_content_llm: success — ## Role & inputs Generate 5–6 slide HTML presentation on 2024–2025 medical & math breakthroughs; cite sources; max 3000 tokens; target PPTX rendering with `<section id="slide-N">` tags.  ## Output **Success.** Delivered complete, valid HTML document (8446 bytes); 6 slides with proper semantic structure. Slides: title (gradient); 2 content slides (medical, math); 2 deep-dive slides (Kakeya history & 2025 proof); 1 sources slide. Inline citations present (`[S:n]` format, `data-sids` attributes). Requested aspects covered: section tags ✓; citations ✓; concise per-slide content ✓; professional styling (gradients, typography, spacing) ✓. Sources list (4 items: Reddit, ScienceDaily, Quanta, Bukit Timah Tutor) embedded in `sources_used` envelope.  ## Risks, quality & next moves Adequacy: full; all structural and citation requirements met. Minor: slide 6 sources list is prose-formatted (not structured table), reducing machine-readability for downstream PPTX converters—consider requesting JSON-structured citations if converter expects strict schema. No truncation;
+
+[CURRENT TURN PROGRESS SNAPSHOT]
+
+# Contract Status
+- Declared slots: 5
+- Filled slots  : 0  (-)
+- Pending slots : 5  (dashboard_html, diagram_png, slides_pptx, presentation_html, advances_xlsx)
+
+
+## Budget Snapshot
+
+BUDGET_STATE: global(decisions left 21/27, tools left 21/27, explore left 6/9, exploit left 11/13, render left 4/5, decision_reruns left 2/2, context_reads left 5/6)
+        stage[diagram_png](explore left 2/2, exploit left 3/3)
+
+## Session Log (recent events, summary)
+Timeline (oldest→newest)
+[1] Decision: call_tool — strategy:explore — focus:dashboard_html — generic_tools.web_search → medical_math_advances_search_1[inline] — reason: Search for recent medical and mathematical advances using multiple query variants to maximize recall and diversity of cr...
+[1] protocol_verify
+[1] Tool: generic_tools.web_search (inline) → None [medical_math_advances_search_1:?] — ## Role & inputs
+Multi-query web search for recent (2024–2025) medical and mathe...
+[2] Decision: call_tool — strategy:explore — focus:dashboard_html — generic_tools.web_search → math_advances_search_1[inline] — reason: Execute targeted search for recent mathematics breakthroughs to complement the medical advances already retrieved. Using...
+[2] protocol_verify
+[2] Tool: generic_tools.web_search (inline) → None [math_advances_search_1:?] — ## Role & inputs
+Search for recent (2024–2025) mathematics breakthroughs; two qu...
+[3] Decision: call_tool — strategy:explore — focus:dashboard_html — generic_tools.web_search → crispr_deepdive_search_1[inline] — reason: Execute targeted search for CRISPR gene therapy advances in 2024-2025 to gather detailed information for the deep-dive s...
+[3] protocol_verify
+[3] Tool: generic_tools.web_search (inline) → None [crispr_deepdive_search_1:?] — ## Role & inputs
+- Searched for CRISPR gene therapy FDA approvals and clinical b...
+[4] Decision: call_tool — strategy:exploit — focus:dashboard_html — llm_tools.generate_content_llm → dashboard_html_gen_1:string[inline] — fetch:3 — reason: Generate comprehensive dashboard HTML with 6 advances organized by field, plus detailed Kakeya conjecture deep-dive sect...
+[4] protocol_verify
+[4] Tool: llm_tools.generate_content_llm (inline) → None [dashboard_html_gen_1:string] — ## Role & inputs
+Generate responsive HTML dashboard: 6 advances (3 medical, 3 ma...
+[5] Decision: call_tool — strategy:exploit — focus:presentation_html — llm_tools.generate_content_llm → presentation_html_gen_1:string[inline] — fetch:3 — reason: Generate slide-structured HTML for PPTX rendering with proper section tags, citations, and concise content per slide bud...
+[5] protocol_verify
+[5] Tool: llm_tools.generate_content_llm (inline) → None [presentation_html_gen_1:string] — ## Role & inputs
+Generate 5–6 slide HTML presentation on 2024–2025 medical & mat...
+[6] Decision: call_tool — strategy:render — focus:diagram_png — codegen_tools.codegen_python → diagram_png_render_1[file], advances_xlsx_gen_1[file], dashboard_html_file_1[file], slides_pptx_render_1[file] — reason: Generate and execute Python program to create all remaining file artifacts: Mermaid diagram PNG, Excel workbook with str...
+[6] protocol_verify
+
+Stats: decisions=6;tools=5  ok=0;fail=5;unique_tools=2
+## Available Infrastructure Tools
+[
+  {
+    "id": "codegen_tools.codegen_python",
+    "call_template": "codegen_tools.codegen_python(output_contract={$output_contract$}, instruction={$instruction$})",
+    "purpose": "Generate + execute a single Python 3.11 program that produces EXACTLY the artifacts described by `output_contract`.\n\nWHEN TO USE\n- Use this tool when the step requires producing one or more concrete deliverables (inline text and/or files)\n  and the work may require multiple tool calls, transformations, or rendering.\n  This includes the cases when the work must be done using the existing artifacts in context (improve, fix, continue, tarnsform, synthetize, etc.).\n Important note on context this tool will receive: this tool is always provided with the same context as you see now. \n This allows you to refer, in the instruction, to named context artifacts that you see by naming the turn and artifacts. \n This allows you to ask codegen to use the context objects as a base for future work according to your instruction and advice. \n Another case is when the data must be retrieved in a pipeline way and stitched between the visible integrations.\n Another case is when the binary data must be synthetized, or for some simulations, or for data analyzis, building the reactive code etc..\n One of the popular cases is to create excel file with data as must come from some research. Another is when there are images (or they should be generated in-round) and some texts, and the pdf must be synthetized. \n- Do NOT use it for simple single-tool lookups.\n\nINPUTS (YOU MUST PROVIDE BOTH)\n1) `instruction` (string): must include the effective objective for THIS step.\n   - Must describe what the artifacts are, what they should contain, and any constraints (tone/length/format).\n   - Must be consistent with `output_contract`.\n   - MUST NOT request extra deliverables beyond what is listed in `output_contract`.\n   - May contain your advices and how to solve the objective, what to avoid, some facts you know shortly. Telegraphic style\n\n2) `output_contract` (JSON object or dict): map of artifact_id -> artifact spec.\n   - Keys (artifact_id) become the artifact names in the result.\n   - You must list ALL artifacts required for this step.\n   - The executor will produce EXACTLY these artifacts (no more).\n\nOUTPUT_CONTRACT SCHEMA\noutput_contract := {\n  \"<artifact_id>\": {\n     \"type\": \"inline\" | \"file\",\n     \"description\": \"human readable description\",\n     \"content_guidance\": \"(optional) short constraints: length/sections/tone\", \n\n     # If type == \"inline\":\n     \"format\": \"markdown\" | \"json\" | \"yaml\" | \"html\" | \"text\",\n\n     # If type == \"file\":\n     \"filename\": \"relative/path/in/OUTPUT_DIR.ext\",\n     \"mime\": \"application/pdf\" | \"text/csv\" | \"application/vnd.openxmlformats-officedocument...\" | ...\n  }\n}\n\nRULES (STRICT)\n- The tool will produce EXACTLY the artifacts listed in the contract.\n- For inline artifacts you MUST specify `format`.\n- For file artifacts you MUST specify both `filename` and `mime`.\n- If you need sources/citations, request them inside `content_guidance`.\n- Tone, structural/semantic expectations - specify in `content_guidance`. Teelgraphic style\n- Keep artifact_ids stable and machine-safe (snake_case recommended).\n\nRETURN VALUE\n- The system returns an envelope like:\n  {\n    \"ok\": true|false,\n    \"out_dyn\": { \"<artifact_id>\": <artifact_payload>, ... },\n    \"out\": [ {\"resource_id\": \"artifact:<artifact_id>\", \"value\": <artifact_payload>}, ... ],\n    \"error\": { ... } | null,\n    \"summary\": \"...\"\n  }\n\nARTIFACT PAYLOAD SHAPES\n- inline: {\"type\":\"inline\",\"format\":\"markdown|json|...\",\"value\":...,\"description\":...,\"sources_used\"?:[...] ,\"draft\"?:true}\n- file:   {\"type\":\"file\",\"path\":\"<relative>\",\"mime\":\"...\",\"text\":\"<surrogate markdown>\",\"description\":...,\"sources_used\"?:[...] ,\"draft\"?:true}\n\nEXAMPLE\n{\n  \"reasoning\": \"Create an executive summary and a PDF brief with citations.\",\n  \"output_contract\": {\n    \"summary_md\": {\n      \"type\": \"inline\",\n      \"format\": \"markdown\",\n      \"description\": \"1-page executive summary\",\n      \"content_guidance\": \"~400 words, 3 bullet sections\"\n    },\n    \"brief_pdf\": {\n      \"type\": \"file\",\n      \"filename\": \"brief.pdf\",\n      \"mime\": \"application/pdf\",\n      \"description\": \"2–3 page PDF brief\",\n      \"content_guidance\": \"include citations; formal, concise(Boardsitzung);avoid fuzziness;concrete numbers + plots\"\n    }\n  }\n}",
+    "is_async": true,
+    "args": {
+      "output_contract": "any",
+      "instruction": "string, Effective objective for THIS step. Must be consistent with output_contract and must not request extra deliverables."
+    },
+    "returns": "object — Envelope: ok/out_dyn/out/error/summary.",
+    "constraints": [],
+    "examples": []
+  },
+  {
+    "id": "exec_tools.execute_code_python",
+    "call_template": "exec_tools.execute_code_python(code={$code$}, artifacts={$artifacts$}, timeout_s={$timeout_s$})",
+    "purpose": "Execute a ready (pre-written) Python 3.11 program in the sandbox using the same\nruntime mechanism as `codegen_tools.codegen_python`, but WITHOUT code generation.\n\nWHEN TO USE\n- Use this tool ONLY when you already have the code and need to run it.\n- The code you pass is a SNIPPET that is inserted inside an async main() wrapper.\n- The snippet SHOULD use async operations (await where needed).\n\nRUNTIME BEHAVIOR\n- The executor wraps your snippet into an async main() and runs it.\n- After execution, the executor checks for the requested output files.\n- For each requested file that exists and is non-empty, an artifact is produced.\n\nINPUTS (REQUIRED)\n1) `code` (string): Python code snippet to run (inserted into async main()).\n2) `artifacts` (list or JSON string): list of artifact specs with fields:\n   - name (artifact id)\n   - filename (relative path in OUTPUT_DIR)\n   - mime\n   - description (text surrogate / promise of content)\n   Each artifact is ALWAYS a file.\n\nFILES & PATHS\n- Input artifacts from context are available by their filenames under OUTPUT_DIR.\n- Write your outputs to the provided `filename` paths under OUTPUT_DIR.\n- `OUTPUT_DIR` is a global string path in the runtime; build paths like:\n  `os.path.join(OUTPUT_DIR, \"my_file.ext\")` or `Path(OUTPUT_DIR) / \"my_file.ext\"`.\n- Network access is disabled in the sandbox; any network calls will fail.\n- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n\nAVAILABLE PACKAGES\n[AVAILABLE PACKAGES]\n- Data: pandas, numpy, openpyxl, xlsxwriter\n- Files: python-docx, python-pptx, pymupdf, pypdf, reportlab, Pillow\n- Web: requests, aiohttp, httpx, playwright, beautifulsoup4, lxml\n- Viz: matplotlib, seaborn, plotly, networkx, graphviz, diagrams, folium\n- Text: markdown-it-py, pygments, jinja2, python-dateutil\n- Utils: pydantic, orjson, python-dotenv, PyJWT, geopy\n\n\nOUTPUT\n- A status dict indicating success/error and the produced file artifacts.",
+    "is_async": true,
+    "args": {
+      "code": "string, Python code snippet (string). Inserted into async main().",
+      "artifacts": "object, List or JSON string of artifact specs (name, filename, mime, description).",
+      "timeout_s": "['integer', 'null'], Execution timeout seconds (default: 600)."
+    },
+    "returns": "object — Envelope: ok/out_dyn/out/error/summary.",
+    "constraints": [],
+    "examples": []
+  }
+]
+
+## Loop Rounds
+- iteration_index (0-based): 6
+- max_iterations: 27
+Produce two channels in order: THINKING CHANNEL (≤240 tokens or '…'), then DECISION JSON CHANNEL (complete ReactDecisionOut JSON).

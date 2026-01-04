@@ -26,9 +26,7 @@ from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session
 from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError
 from kdcube_ai_app.infra.gateway.backpressure import BackpressureError
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
-from kdcube_ai_app.infra.gateway.safe_preflight import PreflightConfig, preflight_async
 from kdcube_ai_app.infra.namespaces import CONFIG
-from kdcube_ai_app.tools.file_text_extractor import DocumentTextExtractor
 from kdcube_ai_app.apps.chat.api.resolvers import get_auth_manager
 from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
 
@@ -39,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 TransportKind = Literal["sse", "socket"]
 
-# Hard limit for input text length (including any inlined attachment text).
+# Hard limit for input text length.
 # Chosen so that we can embed it with OpenAI embeddings without chunking.
 try:
     MAX_EMBED_TEXT_CHARS: int = int(os.getenv("CHAT_MAX_MESSAGE_CHARS", "32000"))
@@ -138,84 +136,6 @@ class RawAttachment:
     name: str
     mime: str
     meta: Optional[Dict[str, Any]] = None
-
-
-async def extract_attachments_text(
-        raw_attachments: List[RawAttachment],
-        *,
-        max_mb: int,
-) -> List[Dict[str, Any]]:
-    """
-    Shared attachment pipeline:
-      - size limit
-      - AV preflight
-      - text extraction
-    """
-    if not raw_attachments:
-        return []
-
-    max_bytes = max_mb * 1024 * 1024
-    enable_av = os.getenv("APP_AV_SCAN", "1") == "1"
-    av_timeout = float(os.getenv("APP_AV_TIMEOUT_S", "3.0"))
-    cfg = PreflightConfig(av_scan=enable_av, av_timeout_s=av_timeout)
-    extractor = DocumentTextExtractor()
-
-    out: List[Dict[str, Any]] = []
-    for a in raw_attachments:
-        if not a.content:
-            continue
-
-        if len(a.content) > max_bytes:
-            logger.warning("attachment '%s' rejected: %d > max %d", a.name, len(a.content), max_bytes)
-            continue
-
-        mime = a.mime or "application/octet-stream"
-        name = a.name or "file"
-
-        pf = await preflight_async(a.content, name, mime, cfg)
-        if not pf.allowed:
-            logger.warning("attachment '%s' rejected by preflight: %s", name, pf.reasons)
-            continue
-
-        try:
-            text, info = extractor.extract(a.content, name, mime)
-        except Exception as ex:
-            logger.error("extract failed for '%s': %s", name, ex)
-            continue
-
-        merged_meta = {**(info.meta or {}), **(a.meta or {})}
-        out.append(
-            {
-                "name": name,
-                "mime": info.mime,
-                "ext": info.ext,
-                "size": len(a.content),
-                "meta": merged_meta,
-                "warnings": info.warnings,
-                "text": text,
-            }
-        )
-
-    return out
-
-
-def merge_attachments_into_message(
-        message: str,
-        attachments_text: List[Dict[str, Any]],
-) -> str:
-    """
-    Produce the final message text seen by the worker (same semantics for SSE & WS).
-    """
-    base = (message or "").strip()
-    if not attachments_text:
-        return base
-
-    lines: List[str] = [base, "ATTACHMENTS:"]
-    for idx, a in enumerate(attachments_text, start=1):
-        lines.append(f"{idx}. Name: {a['name']}; Mime: {a['mime']}")
-        lines.append(a["text"])
-        lines.append("...")
-    return "\n".join(lines)
 
 
 # -----------------------------

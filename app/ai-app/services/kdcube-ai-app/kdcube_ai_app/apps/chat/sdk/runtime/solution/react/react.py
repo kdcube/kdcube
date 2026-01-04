@@ -44,7 +44,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.journal import (
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.infra import emit_event, collect_outputs, get_exec_workspace_root
 
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad, BaseTurnView
-from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
+from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger, _mid
 import kdcube_ai_app.apps.chat.sdk.tools.backends.summary_backends as summary
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.execution import execute_tool
 
@@ -212,6 +212,20 @@ class ReactSolver:
         await browser.rehost_previous_files(bundle=bundle,
                                             workdir=outdir,
                                             ctx="react")
+        await browser.rehost_previous_attachments(bundle=bundle,
+                                                  workdir=outdir,
+                                                  ctx="react")
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.solution import solution_workspace
+            if getattr(self.scratchpad, "user_attachments", None):
+                rehosted = await solution_workspace.rehost_previous_attachments(
+                    self.scratchpad.user_attachments,
+                    outdir,
+                    turn_id=turn_id or "current_turn",
+                )
+                self.scratchpad.user_attachments = rehosted
+        except Exception as e:
+            self.log.log(f"[react] Warning: Failed to rehost current attachments: {e}", level="WARNING")
         context = browser.make_react_context(
             bundle=bundle,
             scratchpad=self.scratchpad,
@@ -731,7 +745,7 @@ class ReactSolver:
             context=context,
             output_contract=state["output_contract"],
             turn_view_class=self.turn_view_class,
-            fetch_context_tool_retrieval_example="",
+            is_codegen_agent=False,
             coordinator_turn_line=state.get("coordinator_turn_line"),
         )
         contract_for_agent = {k: v.model_dump() for k, v in (state["output_contract"] or {}).items()}
@@ -871,7 +885,7 @@ class ReactSolver:
                         output_contract=state["output_contract"],
                         turn_view_class=self.turn_view_class,
                         show_artifacts=show_items or None,
-                        fetch_context_tool_retrieval_example=fetch_context_tool_retrieval_example,
+                        is_codegen_agent=True,
                         coordinator_turn_line=state.get("coordinator_turn_line"),
                     )
                     operational_digest = build_operational_digest(
@@ -1520,7 +1534,9 @@ class ReactSolver:
                 tool_call_id=tool_call_id,
                 tool_call_item_index=tool_call_item_index,
             )
-
+            msg_ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
+            message_id = f"{_mid('artifact', msg_ts)}{'-' + artifact_id}"
+            artifact["message_id"] = message_id
             is_file_artifact = bool(
                 artifact_kind == "file"
                 or (isinstance(artifact.get("value"), dict) and artifact.get("value", {}).get("type") == "file")
@@ -1549,7 +1565,59 @@ class ReactSolver:
                     if hosted_uri:
                         artifact["hosted_uri"] = hosted_uri
                         artifact["rn"] = hosted[0].get("rn")
+
                     hosted_files_to_emit.extend(hosted)
+                    try:
+                        if hasattr(self.scratchpad, "add_produced_file"):
+                            value_obj = artifact.get("value") if isinstance(artifact.get("value"), dict) else {}
+                            summary_text = (artifact.get("summary") or "").strip()
+                            desc = (artifact.get("description") or spec.get("description") or "")
+                            sources_used = artifact.get("sources_used") or []
+                            used_sids = []
+                            if isinstance(sources_used, list):
+                                for s in sources_used:
+                                    if isinstance(s, dict):
+                                        sid = s.get("sid")
+                                        if isinstance(sid, (int, float)) and int(sid) not in used_sids:
+                                            used_sids.append(int(sid))
+                                    elif isinstance(s, (int, float)) and int(s) not in used_sids:
+                                        used_sids.append(int(s))
+                            for h in hosted:
+                                file_item = {
+                                    "mid": message_id,
+                                    "artifact_id": artifact_id,
+                                    "artifact_name": artifact_id or h.get("slot") or h.get("filename"),
+                                    "slot": h.get("slot"),
+                                    "filename": value_obj.get("filename") or h.get("filename") or "",
+                                    "mime": value_obj.get("mime") or h.get("mime") or "",
+                                    "size": h.get("size"),
+                                    "hosted_uri": h.get("hosted_uri"),
+                                    "key": h.get("key"),
+                                    "rn": h.get("rn"),
+                                    "text": value_obj.get("text") or "",
+                                    "summary": summary_text,
+                                    "used_sids": used_sids,
+                                    "tool_id": artifact.get("tool_id") or h.get("tool_id") or "",
+                                    "description": desc or h.get("description") or "",
+                                }
+                                self.scratchpad.add_produced_file(file_item)
+                                try:
+                                    name = (file_item.get("artifact_name") or "file").strip()
+                                    fname = (file_item.get("filename") or "").strip()
+                                    mime = (file_item.get("mime") or "").strip()
+                                    size = file_item.get("size")
+                                    parts = [name]
+                                    if fname:
+                                        parts.append(f"filename={fname}")
+                                    if mime:
+                                        parts.append(f"mime={mime}")
+                                    if size is not None:
+                                        parts.append(f"size={size}")
+                                    self.scratchpad.tlog.solver("FILE: " + " | ".join(parts))
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
 
             # Session log
             log_entry = {
@@ -1698,7 +1766,10 @@ class ReactSolver:
                 level="WARNING",
             )
         else:
-            context.sources_pool = merged
+            try:
+                context.set_sources_pool(merged, persist=False)
+            except Exception:
+                context.sources_pool = merged
         if merged:
             try:
                 mx = max(int(s.get("sid") or 0) for s in merged if isinstance(s, dict))

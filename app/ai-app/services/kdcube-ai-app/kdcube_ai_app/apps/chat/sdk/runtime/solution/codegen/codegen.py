@@ -211,6 +211,7 @@ class CodegenRunner:
             max_prior_turns=5,
             turn_view_class=self.turn_view_class,
             coordinator_turn_line=coordinator_turn_line,
+            is_codegen_agent=True
         )
 
         self.log.log(f"[{self.AGENT_NAME}] turn_session_journal: {json.dumps(program_playbook or {}, indent=2, ensure_ascii=False)}")

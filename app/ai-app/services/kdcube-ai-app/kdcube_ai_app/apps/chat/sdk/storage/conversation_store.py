@@ -10,7 +10,7 @@ from urllib.parse import urlparse, unquote
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.service_hub.inventory import _mid
 from kdcube_ai_app.apps.chat.sdk.storage.rn import (
-    rn_message, rn_attachment, rn_execution_file
+    rn_message, rn_attachment, rn_execution_file, rn_file
 )
 
 MAX_CONCURRENT_ARTIFACT_FETCHES = 16
@@ -27,6 +27,13 @@ async def attachment_rn_and_rel_name(tenant, project, user_or_fp, conversation_i
     safe_name = os.path.basename(filename) or "file.bin"
     rel_name = f"{ts}-{safe_name}"
     rn = rn_attachment(tenant, project, user_or_fp, conversation_id, turn_id, role, rel_name)
+    return rn, rel_name
+
+async def file_rn_and_rel_name(tenant, project, user_or_fp, conversation_id, turn_id, role, filename: str):
+    ts = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+    safe_name = os.path.basename(filename) or "file.bin"
+    rel_name = f"{ts}-{safe_name}"
+    rn = rn_file(tenant, project, user_or_fp, conversation_id, turn_id, role, rel_name)
     return rn, rel_name
 
 class ConversationStore:
@@ -331,6 +338,7 @@ class ConversationStore:
         user_type: Optional[str] = None,
         ttl_days: int = 365,
         request_id: Optional[str] = None,
+        origin: str = "chat",
     ) -> Tuple[str, str, str]:
         """
         Save a binary/text file under /attachments/.../{conversation_id}/{turn_id}/.
@@ -341,13 +349,21 @@ class ConversationStore:
 
         # ts = time.strftime("%Y%m%d%H%M%S", time.gmtime())
         who, user_or_fp = self._who_and_id(user, fingerprint)
+
         base = self._join(
             self.root_prefix, "tenants", tenant, "projects", project,
             "attachments", user_type, user_or_fp, conversation_id, turn_id
         )
         # safe_name = os.path.basename(filename) or "file.bin"
         # rel_name = f"{ts}-{safe_name}"
-        rn, rel_name = await attachment_rn_and_rel_name(tenant, project, user_or_fp, conversation_id, turn_id, role, filename)
+        if origin == "user":
+            rn, rel_name = await attachment_rn_and_rel_name(
+                tenant, project, user_or_fp, conversation_id, turn_id, role, filename
+            )
+        else:
+            rn, rel_name = await file_rn_and_rel_name(
+                tenant, project, user_or_fp, conversation_id, turn_id, role, filename
+            )
         rel = self._join(base, rel_name)
 
         meta = {"ContentType": mime} if mime else None
@@ -357,6 +373,10 @@ class ConversationStore:
         # To keep dereferencing simple, we use the stored name.
         # rn = rn_attachment(tenant, project, user_or_fp, conversation_id, turn_id, role, rel_name)
         return self._uri_for_path(rel), rel, rn
+
+    async def get_blob_bytes(self, uri_or_path: str) -> bytes:
+        rel = self._rel_from_uri_or_path(uri_or_path)
+        return await self.backend.read_bytes_a(rel)
 
     # ---------- execution snapshot (role-aware RNs in manifest) ----------
 

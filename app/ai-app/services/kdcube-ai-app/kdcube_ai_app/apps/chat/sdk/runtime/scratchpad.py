@@ -16,6 +16,8 @@ from abc import ABC, abstractmethod
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import Ticket
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.contracts import build_full_solver_payload, SolveResult
 from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable, _shorten
+import re
+from kdcube_ai_app.apps.chat.sdk.tools.backends.summary_backends import summarize_user_attachment
 
 LINE_RE = re.compile(r'^(?P<time>\d{2}:\d{2}:\d{2})\s+\[(?P<tag>[^\]]+)\]\s*(?P<content>.*)$')
 
@@ -105,6 +107,11 @@ class TurnScratchpad:
         self.user_input_summary = ""
         self.uvec = None
         self.user_attachments = attachments
+        self.user_blocks = []
+        self.produced_files = []
+        self.sources_pool = []
+        self.user_prompt_artifact_persisted = False
+        self.assistant_completion_artifact_persisted = False
 
         self.tlog = new_turn_log(user_id=user, conversation_id=conversation_id, turn_id=turn_id)
 
@@ -158,6 +165,7 @@ class TurnScratchpad:
 
         # preferences and policies
         self.conversation_snapshot: Dict[str, Any] = {}
+
         self.extracted_prefs: Dict[str, Any] = {"assertions": [], "exceptions": []}
         self.policy = None
         self.policy_summary = None
@@ -287,16 +295,248 @@ class TurnScratchpad:
         if self.turn_summary:
             tl["turn_summary"] = _to_jsonable(self.turn_summary)
         tl["assistant"] = {
-            "completion": self.answer
+            "completion": self.answer,
+            "completion_artifact": self._assistant_completion_artifact_payload(),
+            "files": self._compact_assistant_files_for_turn_log(),
         }
         tl["user"] = {
             "prompt": (self.user_text or "").strip(),
             "input_summary": (self.user_input_summary or "").strip(),
             "summary": (self.user_input_summary or "").strip(),
             "inv": (self.user_input_summary or "").strip(),
+            "prompt_artifact": self._user_prompt_artifact_payload(),
+            "attachments": self._compact_user_attachments_for_turn_log(),
         }
+        tl["sources_pool"] = self.sources_pool
         tl["turn_log"] = self.tlog.to_payload()
         return tl
+
+    async def summarize_user_attachments_for_turn_log(
+            self,
+            *,
+            svc,
+            max_ctx_chars: int = 12000,
+            max_tokens: int = 600,
+    ) -> None:
+        items = self.user_attachments or []
+        if not items:
+            return
+
+        self._ensure_attachment_artifact_names(items)
+
+        total_chars = len(self.user_text or "")
+        total_chars += sum(len(a.get("text") or "") for a in items if isinstance(a, dict))
+        include_context = total_chars <= max_ctx_chars
+
+        user_prompt = self.user_text if include_context else ""
+        peers = items if include_context else []
+
+        for a in items:
+            if not isinstance(a, dict):
+                continue
+            if a.get("summary"):
+                continue
+            summary = await summarize_user_attachment(
+                svc=svc,
+                attachment=a,
+                user_prompt=user_prompt,
+                other_attachments=peers,
+                max_tokens=max_tokens,
+            )
+            if summary:
+                a["summary"] = summary
+
+        self._ensure_attachment_artifact_names(items)
+        self.user_attachments = items
+
+    def _extract_tagged_value(self, text: str, key: str) -> str:
+        if not text:
+            return ""
+        m = re.search(rf"(?:^|[|\\s]){re.escape(key)}:([^|\\s]+)", text)
+        if not m:
+            return ""
+        return (m.group(1) or "").strip()
+
+    def _used_sids_from_sources(self, sources: Any) -> List[int]:
+        used: List[int] = []
+        if isinstance(sources, list):
+            for s in sources:
+                if isinstance(s, dict):
+                    sid = s.get("sid")
+                    if isinstance(sid, (int, float)) and int(sid) not in used:
+                        used.append(int(sid))
+                elif isinstance(s, (int, float)):
+                    if int(s) not in used:
+                        used.append(int(s))
+        return used
+
+    def _user_prompt_artifact_payload(self) -> Optional[Dict[str, Any]]:
+        text = (self.user_text or "").strip()
+        return {
+            "artifact_name": "prompt",
+            "summary": (self.user_input_summary or "").strip(),
+            "text": text,
+            "mime": "text/plain",
+            "format": "markdown",
+            "size": len(text),
+            "used_sids": [],
+            "kind": "text",
+        }
+
+    def _assistant_completion_artifact_payload(self) -> Optional[Dict[str, Any]]:
+        if not (self.answer or "").strip():
+            return None
+        summary = ""
+        if isinstance(self.turn_summary, dict):
+            summary = (self.turn_summary.get("assistant_answer") or "").strip()
+        text = (self.answer or "").strip()
+        return {
+            "artifact_name": "completion",
+            "summary": summary,
+            "text": text,
+            "mime": "text/plain",
+            "format": "markdown",
+            "size": len(text),
+            "used_sids": self._used_sids_from_sources(self.citations),
+            "kind": "text",
+        }
+
+    def _ensure_produced_file_artifact_names(self, items: List[Dict[str, Any]]) -> None:
+        used: Dict[str, int] = {}
+        for f in items or []:
+            if not isinstance(f, dict):
+                continue
+            raw_name = (
+                f.get("artifact_name")
+                or f.get("artifact_id")
+                or f.get("slot")
+                or f.get("filename")
+                or "file"
+            )
+            base = str(raw_name).strip() or "file"
+            base = re.sub(r"[\\s./:]+", "_", base)
+            base = re.sub(r"[^A-Za-z0-9_-]+", "", base) or "file"
+            count = used.get(base, 0) + 1
+            used[base] = count
+            f["artifact_name"] = base if count == 1 else f"{base}_{count}"
+
+    def _ensure_attachment_artifact_names(self, items: List[Dict[str, Any]]) -> None:
+        used: Dict[str, int] = {}
+        for a in items or []:
+            if not isinstance(a, dict):
+                continue
+            summary = (a.get("summary") or "").strip()
+            raw_name = (
+                    a.get("artifact_name")
+                    or self._extract_tagged_value(summary, "artifact_name")
+                    or a.get("filename")
+                    or self._extract_tagged_value(summary, "filename")
+                    or "attachment"
+            )
+            base = str(raw_name).strip() or "attachment"
+            base = re.sub(r"[\\s./:]+", "_", base)
+            base = re.sub(r"[^A-Za-z0-9_-]+", "", base) or "attachment"
+            count = used.get(base, 0) + 1
+            used[base] = count
+            a["artifact_name"] = base if count == 1 else f"{base}_{count}"
+
+    def add_produced_file(self, item: Dict[str, Any]) -> None:
+        if not isinstance(item, dict):
+            return
+        items = self.produced_files or []
+        self._ensure_produced_file_artifact_names([item])
+        if "used_sids" not in item:
+            item["used_sids"] = self._used_sids_from_sources(item.get("sources_used"))
+        art_name = (item.get("artifact_name") or "").strip()
+        hosted_uri = (item.get("hosted_uri") or "").strip()
+        rn = (item.get("rn") or "").strip()
+        for f in items:
+            if not isinstance(f, dict):
+                continue
+            if rn and rn == (f.get("rn") or "").strip():
+                return
+            if hosted_uri and hosted_uri == (f.get("hosted_uri") or "").strip():
+                return
+            if art_name and art_name == (f.get("artifact_name") or "").strip():
+                return
+        items.append(item)
+        self.produced_files = items
+
+    def _compact_user_attachments_for_turn_log(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        self._ensure_attachment_artifact_names(self.user_attachments or [])
+        for a in self.user_attachments or []:
+            if not isinstance(a, dict):
+                continue
+            out.append({
+                "mid": a.get("mid"),
+                "filename": (a.get("filename") or "attachment").strip(),
+                "artifact_name": (a.get("artifact_name") or "").strip(),
+                "mime": (a.get("mime") or a.get("mime_type") or "").strip(),
+                "size": a.get("size") or a.get("size_bytes"),
+                "hosted_uri": a.get("hosted_uri") or a.get("source_path") or a.get("path"),
+                "rn": a.get("rn"),
+                "text": (a.get("text") or ""),
+                "base64": a.get("base64"),
+                "summary": (a.get("summary") or "").strip(),
+                "used_sids": [],
+                "kind": "file"
+            })
+        return out
+
+    def _compact_assistant_files_for_turn_log(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        self._ensure_produced_file_artifact_names(self.produced_files or [])
+        for f in self.produced_files or []:
+            if not isinstance(f, dict):
+                continue
+            out.append({
+                "mid": f.get("mid"),
+                "filename": (f.get("filename") or "file").strip(),
+                "artifact_name": (f.get("artifact_name") or "").strip(),
+                "mime": (f.get("mime") or f.get("mime_type") or "").strip(),
+                "size": f.get("size") or f.get("size_bytes"),
+                "hosted_uri": f.get("hosted_uri") or f.get("source_path") or f.get("path"),
+                "rn": f.get("rn"),
+                "key": f.get("key"),
+                "text": (f.get("text") or ""),
+                "summary": (f.get("summary") or "").strip(),
+                "used_sids": f.get("used_sids") or self._used_sids_from_sources(f.get("sources_used")),
+                "tool_id": (f.get("tool_id") or "").strip(),
+                "description": (f.get("description") or "").strip(),
+                "kind": "file",
+            })
+        return out
+    #
+    # def user_attachments_for_fetch(self) -> List[Dict[str, Any]]:
+    #     out: List[Dict[str, Any]] = []
+    #     self._ensure_attachment_artifact_names(self.user_attachments or [])
+    #     for a in self.user_attachments or []:
+    #         if not isinstance(a, dict):
+    #             continue
+    #         out.append({
+    #             "mid": a.get("mid"),
+    #             "filename": (a.get("filename") or "attachment").strip(),
+    #             "artifact_name": (a.get("artifact_name") or "").strip(),
+    #             "mime": (a.get("mime") or a.get("mime_type") or "").strip(),
+    #             "size": a.get("size") or a.get("size_bytes"),
+    #             "hosted_uri": a.get("hosted_uri") or a.get("source_path") or a.get("path"),
+    #             "rn": a.get("rn"),
+    #         })
+    #     return out
+
+    def user_attachments_for_reranker(self) -> List[Dict[str, Any]]:
+        out: List[Dict[str, Any]] = []
+        for a in self.user_attachments or []:
+            if not isinstance(a, dict):
+                continue
+            out.append({
+                "filename": (a.get("filename") or "attachment").strip(),
+                "mime": (a.get("mime") or a.get("mime_type") or "").strip(),
+                "size": a.get("size") or a.get("size_bytes"),
+                "summary": (a.get("summary") or "").strip(),
+            })
+        return out
 
 T = TypeVar('T', bound='BaseTurnView')
 class BaseTurnView(ABC):
@@ -447,7 +687,7 @@ class TurnLog(BaseModel):
         """Log turn summary to structured entries and create summary line."""
         order = [
             "user_inquiry", "user_message_description", "objective", "complexity", "domain", "query_type",
-            "prefs", "assumptions", "done", "not_done", "risks", "notes", "assistant_answer", "answer_agent_output_description"
+            "prefs", "assumptions", "done", "not_done", "risks", "notes", "assistant_answer", "delivered_to_user"
         ]
         turn_summary_entries = []
 
@@ -537,9 +777,9 @@ class TurnLog(BaseModel):
                 artifact = turn_summary[o]
                 turn_summary_entries.append(f"• user message contents description: {artifact} ")
 
-            elif o == "answer_agent_output_description":
+            elif o == "delivered_to_user":
                 artifact = turn_summary[o]
-                turn_summary_entries.append(f"• final answer agent response contents description: {artifact} ")
+                turn_summary_entries.append(f"• delivered to user summary: {artifact} ")
         try:
             if isinstance(turn_summary, dict):
                 for o in order:
@@ -710,7 +950,7 @@ class CompressedTurn:
     # Assistant side
     time_assistant: Optional[str] = None
     assistant_answer_summary: Optional[str] = None
-    answer_agent_output_contents_description: Optional[str] = None
+    delivered_to_user_summary: Optional[str] = None
     user_prompt_contents_description: Optional[str] = None
     solver_mode: Optional[str] = None
     solver_status: Optional[str] = None
@@ -787,7 +1027,7 @@ class CompressedTurn:
 
         # Assistant answer summary from turn_summary
         turn.assistant_answer_summary = turn_summary.get("assistant_answer", "")
-        turn.answer_agent_output_contents_description = turn_summary.get("answer_agent_output_description", "")
+        turn.delivered_to_user_summary = turn_summary.get("delivered_to_user", "")
         turn.user_prompt_contents_description = turn_summary.get("user_message_description", "")
 
         # Solver execution details from turn_log_entries
@@ -943,8 +1183,8 @@ def turn_to_assistant_message(turn: CompressedTurn) -> str:
         parts.append(f"Assistant response summary: {turn.assistant_answer_summary}")
 
     # 2.1. Final answer gen response contents summary
-    if turn.answer_agent_output_contents_description:
-        parts.append(f"Final answer generator own response contents description: {turn.answer_agent_output_contents_description}")
+    if turn.delivered_to_user_summary:
+        parts.append(f"Delivered to user summary: {turn.delivered_to_user_summary}")
 
 
     # 3. Solver execution (if solver ran)

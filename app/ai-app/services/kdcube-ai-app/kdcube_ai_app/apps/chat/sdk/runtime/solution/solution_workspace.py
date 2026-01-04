@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
-
+import time
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/solution_workspace.py
 
 import traceback, pathlib, logging
@@ -179,6 +179,101 @@ async def rehost_previous_files(
 
     logger.info(
         f"[rehost] Turn {turn_id}: processed {len(prev_files)} files, "
+        f"rehosted {sum(1 for a in out if a.get('rehosted'))} successfully"
+    )
+    return out
+
+
+async def rehost_previous_attachments(
+        prev_attachments: list[dict],
+        workdir: pathlib.Path,
+        turn_id: str,
+) -> list[dict]:
+    """
+    Copy attachments from conversation storage into workdir/<turn_id>/attachments/.
+
+    Structure:
+      workdir/
+        turn_<id>/attachments/
+          filename.pdf
+          image.png
+    """
+    from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
+    out: list[dict] = []
+    if not prev_attachments:
+        return out
+
+    turn_dir = workdir / turn_id / "attachments"
+    turn_dir.mkdir(parents=True, exist_ok=True)
+
+    store = ConversationStore(get_settings().STORAGE_PATH)
+
+    for att in prev_attachments:
+        base = {}
+        try:
+            base = dict(att) if isinstance(att, dict) else {}
+            if not base:
+                out.append(base)
+                continue
+
+            filename = (base.get("filename") or "attachment.bin").strip() or "attachment.bin"
+            src = base.get("hosted_uri") or base.get("source_path") or base.get("path") or base.get("key")
+            if not src:
+                out.append({
+                    **base,
+                    "rehosted": False,
+                    "file_exists": False,
+                    "rehost_reason": "no_source_path",
+                })
+                continue
+
+            target = _unique_target(turn_dir, filename)
+            try:
+                content = await store.get_blob_bytes(src)
+                target.write_bytes(content)
+                out.append({
+                    **base,
+                    "source_path": src,
+                    "path": f"{turn_id}/attachments/{target.name}",
+                    "rehosted": True,
+                    "file_exists": True,
+                })
+                logger.info(f"[rehost] ✓ {turn_id}/attachments/{target.name} from {src}")
+            except FileNotFoundError:
+                logger.warning(f"[rehost] Attachment not found in storage: {src}")
+                out.append({
+                    **base,
+                    "rehosted": False,
+                    "file_exists": False,
+                    "rehost_reason": "file_not_found",
+                    "source_path": src,
+                })
+            except Exception as read_err:
+                logger.error(f"[rehost] Failed to read attachment {src}: {read_err}")
+                out.append({
+                    **base,
+                    "rehosted": False,
+                    "file_exists": False,
+                    "rehost_reason": "read_error",
+                    "rehost_error": str(read_err)[:200],
+                    "source_path": src,
+                })
+        except Exception as e:
+            logger.error(
+                f"[rehost] Failed to process attachment: {e}\n"
+                f"{traceback.format_exc()}"
+            )
+            out.append({
+                **base,
+                "rehosted": False,
+                "file_exists": False,
+                "rehost_reason": "processing_error",
+                "rehost_error": str(e)[:200],
+            })
+
+    logger.info(
+        f"[rehost] Turn {turn_id}: processed {len(prev_attachments)} attachments, "
         f"rehosted {sum(1 for a in out if a.get('rehosted'))} successfully"
     )
     return out

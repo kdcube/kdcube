@@ -26,6 +26,7 @@ UI_ARTIFACT_TAGS = {
     "artifact:conv.thinking.stream",
     "artifact:conv.canvas.stream",
     "artifact:conv.timeline_text.stream",
+    "artifact:user.attachment",
     "artifact:turn.log.reaction",
     "artifact:conv.user_shortcuts",
     "chat:user",
@@ -1722,22 +1723,35 @@ class ContextRAGClient:
             turn_ids=turn_ids or None,
         )
 
+        if not occ and not (turn_ids or []):
+            return {"user_id": user_id, "conversation_id": conversation_id, "turns": []}
+
         turns_map: Dict[str, Dict[str, Any]] = {}
         order: List[str] = []
         to_materialize: List[Dict[str, Any]] = []
+        skip_types = {"artifact:user.attachment", "artifact:codegen.program.files"}
+
+        if turn_ids:
+            for tid in turn_ids:
+                if tid in turns_map:
+                    continue
+                turns_map[tid] = {"turn_id": tid, "artifacts": []}
+                order.append(tid)
 
         for r in occ:
             tid = r["turn_id"]
             tags = set(r.get("tags") or [])
+            if tid not in turns_map:
+                turns_map[tid] = {"turn_id": tid, "artifacts": []}
+                order.append(tid)
+
             tag_hits = UI_ARTIFACT_TAGS & tags
             if not tag_hits:
                 continue
 
             tag_type = next(iter(tag_hits))
-
-            if tid not in turns_map:
-                turns_map[tid] = {"turn_id": tid, "artifacts": []}
-                order.append(tid)
+            if tag_type in skip_types:
+                continue
 
             # only user-origin reactions are considered "feedback"
             if "artifact:turn.log.reaction" in tag_hits and "origin:user" not in tags:
@@ -1780,6 +1794,68 @@ class ContextRAGClient:
                     turn["artifacts"] = [
                         a for a in turn["artifacts"] if id(a) not in drop_ids
                     ]
+
+        # 3) Add attachments + produced files from turn log (source of truth)
+        async def _materialize_turn_log_artifacts(tid: str) -> List[Dict[str, Any]]:
+            mat = await self.materialize_turn(
+                turn_id=tid,
+                scope="conversation",
+                days=days,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=True,
+            )
+            turn_log_item = mat.get("turn_log") or {}
+            turn_log_payload = (
+                (turn_log_item.get("payload") or {}).get("payload")
+                if turn_log_item else None
+            )
+            if not isinstance(turn_log_payload, dict):
+                return []
+
+            tl = turn_log_payload.get("turn_log") or {}
+            ts = tl.get("ended_at_iso") or tl.get("started_at_iso") or turn_log_item.get("ts")
+            out: List[Dict[str, Any]] = []
+
+            user = turn_log_payload.get("user") or {}
+            for a in (user.get("attachments") or []):
+                if not isinstance(a, dict):
+                    continue
+                out.append({
+                    "message_id": a.get("message_id"),
+                    "type": "artifact:user.attachment",
+                    "ts": ts,
+                    "hosted_uri": a.get("hosted_uri") or a.get("path") or a.get("source_path"),
+                    "bundle_id": turn_log_item.get("bundle_id"),
+                    "data": {"payload": a, "meta": {"kind": "user.attachment", "turn_id": tid}},
+                })
+
+            assistant = turn_log_payload.get("assistant") or {}
+            for f in (assistant.get("files") or []):
+                if not isinstance(f, dict):
+                    continue
+                out.append({
+                    "message_id": f.get("message_id"),
+                    "type": "artifact:assistant.file",
+                    "ts": ts,
+                    "hosted_uri": f.get("hosted_uri") or f.get("path") or f.get("source_path"),
+                    "bundle_id": turn_log_item.get("bundle_id"),
+                    "data": {"payload": f, "meta": {"kind": "assistant.file", "turn_id": tid}},
+                })
+
+            return out
+
+        if order:
+            sem = asyncio.Semaphore(MAX_CONCURRENT_ARTIFACT_FETCHES)
+
+            async def _build_turn_artifacts(tid: str) -> List[Dict[str, Any]]:
+                async with sem:
+                    return await _materialize_turn_log_artifacts(tid)
+
+            turn_artifacts = await asyncio.gather(*(_build_turn_artifacts(tid) for tid in order))
+            for tid, artifacts in zip(order, turn_artifacts):
+                if artifacts:
+                    turns_map[tid]["artifacts"].extend(artifacts)
 
         return {
             "user_id": user_id,
@@ -2086,7 +2162,7 @@ async def search_context(
                 search_tags = ["artifact:codegen.program.presentation", "artifact:solver.failure"]
             if where == "user":
                 search_roles = ("user", "artifact")
-                search_tags = ["chat:user", "artifact:user.input.summary", "artifact:attachment.summary"]
+                search_tags = ["chat:user", "artifact:user.attachment"]
             else:
                 search_roles = (where,)
             res = await conv_idx.search_turn_logs_via_content(

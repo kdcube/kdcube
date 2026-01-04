@@ -10,6 +10,9 @@ from typing import Optional, Dict, Any, List
 
 # ---------- Config & Result ----------
 
+_SUMMARY_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
+_SUMMARY_DOC_MIME = {"application/pdf"}
+
 @dataclass
 class PreflightConfig:
     # AV
@@ -65,6 +68,14 @@ def sniff_magic(data: bytes, filename: str = "") -> str:
     if data[:2] == b"PK":
         return "application/zip"
     fn = filename.lower()
+    if fn.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if fn.endswith(".png"):
+        return "image/png"
+    if fn.endswith(".gif"):
+        return "image/gif"
+    if fn.endswith(".webp"):
+        return "image/webp"
     if fn.endswith(".txt"):
         return "text/plain"
     if fn.endswith(".md"):
@@ -220,6 +231,11 @@ def preflight_text(data: bytes, cfg: PreflightConfig) -> PreflightResult:
         r.deny(f"Text too large: {len(data)}>{cfg.text_max_bytes}")
     return r
 
+# ---------- Image preflight ----------
+
+def preflight_image(data: bytes, mime: str) -> PreflightResult:
+    return PreflightResult(allowed=True, meta={"type": "image", "mime": mime, "bytes": len(data)})
+
 # ---------- Dispatcher (async) ----------
 
 async def preflight_async(
@@ -237,7 +253,7 @@ async def preflight_async(
         if infected:
             return res.deny(f"AV detected malware: {sig}")
 
-    if mime == "application/pdf" or data.startswith(b"%PDF"):
+    if mime in _SUMMARY_DOC_MIME or data.startswith(b"%PDF"):
         r = preflight_pdf(data, cfg)
         res.meta.update(r.meta)
         if not r.allowed:
@@ -262,6 +278,11 @@ async def preflight_async(
         if not r.allowed:
             res.allowed = False
             res.reasons.extend(r.reasons)
+        return res
+
+    if mime in _SUMMARY_IMAGE_MIME:
+        r = preflight_image(data, mime)
+        res.meta.update(r.meta)
         return res
 
     if mime.startswith("text/"):

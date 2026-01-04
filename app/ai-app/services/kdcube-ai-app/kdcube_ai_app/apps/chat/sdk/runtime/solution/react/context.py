@@ -352,7 +352,7 @@ class ReactContext:
             parts = path.split(".")
             turn_id = parts[0] if parts else ""
 
-            if path.endswith(".user") or path.endswith(".assistant"):
+            if path.endswith(".user") or path.endswith(".assistant") or ".user.prompt." in path or ".assistant.completion." in path:
                 val = None
                 if path == "current_turn.user":
                     val = self.user_text or ""
@@ -363,7 +363,7 @@ class ReactContext:
 
                 if not isinstance(val, str) or not val.strip():
                     continue
-                art_type = "user_prompt" if path.endswith(".user") else "assistant_completion"
+                art_type = "user_prompt" if (path.endswith(".user") or ".user.prompt." in path) else "assistant_completion"
                 items.append({
                     "context_path": path,
                     "artifact_type": art_type,
@@ -563,13 +563,23 @@ class ReactContext:
             acc.extend(normalize_sources_any((turn or {}).get("sources")))
         if acc:
             # Keep as-is (SIDs pre-reconciled by history)
-            self.sources_pool = acc
+            self.set_sources_pool(acc, persist=False)
             try:
                 mx = max(int(s.get("sid") or 0) for s in acc if isinstance(s, dict))
                 if mx > self.max_sid:
                     self.max_sid = mx
             except Exception:
                 pass
+            self.persist()
+
+    def set_sources_pool(self, pool: List[Dict[str, Any]] | None, *, persist: bool = True) -> None:
+        self.sources_pool = pool or []
+        try:
+            if self.scratchpad is not None:
+                self.scratchpad.sources_pool = self.sources_pool
+        except Exception:
+            pass
+        if persist:
             self.persist()
 
     def remap_sources_to_pool_sids(self, tool_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -838,7 +848,8 @@ class ReactContext:
         Supported:
           - current_turn.artifacts.<artifact_id>
           - current_turn.slots.<slot_name>
-          - current_turn.user.attachment.<name>
+          - current_turn.user.attachments.<artifact_name>
+          - <turn_id>.user.attachments.<artifact_name>
           - <turn_id>.slots.<slot_name>
         """
         if not path or not isinstance(path, str):
@@ -863,16 +874,31 @@ class ReactContext:
                 return pack["value"]
             return pack if isinstance(pack, dict) else None
 
-        # current turn: user attachment object
-        if path.startswith("current_turn.user.attachment.") or path.startswith("user.attachment."):
-            rel = path.split("user.attachment.", 1)[1]
+        # user attachment object
+        if (".user.attachments." in path or path.startswith("user.attachments.")
+                or ".user.attachment." in path or path.startswith("user.attachment.")):
+            if (path.startswith("user.attachments.") or path.startswith("current_turn.user.attachments.")
+                    or path.startswith("user.attachment.") or path.startswith("current_turn.user.attachment.")):
+                turn_id = "current_turn"
+                rel = path.split("user.attachments.", 1)[1] if "user.attachments." in path else path.split("user.attachment.", 1)[1]
+            else:
+                if ".user.attachments." in path:
+                    turn_id, _, rel = path.partition(".user.attachments.")
+                else:
+                    turn_id, _, rel = path.partition(".user.attachment.")
             name = (rel.split(".", 1)[0] or "").strip()
             if not name:
                 return None
-            for a in (self.user_attachments or []):
+            if turn_id == "current_turn":
+                attachments = self.user_attachments or []
+            else:
+                turn = self.prior_turns.get(turn_id) or {}
+                user_obj = (turn.get("user") or {}) if isinstance(turn.get("user"), dict) else {}
+                attachments = user_obj.get("attachments") or []
+            for a in attachments:
                 if not isinstance(a, dict):
                     continue
-                if (a.get("name") or a.get("filename")) == name:
+                if (a.get("artifact_name") or a.get("filename")) == name:
                     return a
             return None
 
@@ -1206,30 +1232,47 @@ class ReactContext:
 
                 return val, {"_kind": "message", "turn_id": turn_id}
 
+        if ".assistant." in path:
+            turn_id, _, rest = path.partition(".assistant.")
+            turn = self.prior_turns.get(turn_id) or {}
+            if rest in ("completion.text", "completion"):
+                val = (turn.get("assistant") or "")
+            elif rest in ("completion.summary", "summary"):
+                summary = (turn.get("turn_summary") or {}) if isinstance(turn.get("turn_summary"), dict) else {}
+                val = summary.get("assistant_answer") or ""
+            else:
+                val = (turn.get(rest) or "")
+            return val, {"_kind": "message", "turn_id": turn_id}
+
         # ---------- Current turn user aliases ----------
-        if path == "current_turn.user.prompt" or path == "user.prompt" or path == "current_turn.user":
+        if path in ("current_turn.user.prompt.text", "user.prompt.text", "current_turn.user.prompt", "user.prompt", "current_turn.user"):
             val = self.user_text or ""
             return val, {"_kind": "message", "turn_id": "current_turn"}
 
-        if path in ("current_turn.user.input.summary", "current_turn.user.input_summary",
+        if path in ("current_turn.user.prompt.summary", "user.prompt.summary",
+                    "current_turn.user.input.summary", "current_turn.user.input_summary",
                     "user.input.summary", "user.input_summary"):
             val = self.user_input_summary or ""
             return val, {"_kind": "message", "turn_id": "current_turn"}
 
-        if path.startswith("current_turn.user.attachment.") or path.startswith("user.attachment."):
-            rel = path.split("user.attachment.", 1)[1]
+        # ---------- Current turn attachments ----------
+        if (path.startswith("current_turn.user.attachments.") or path.startswith("user.attachments.")
+                or path.startswith("current_turn.user.attachment.") or path.startswith("user.attachment.")):
+            rel = path.split("user.attachments.", 1)[1] if "user.attachments." in path else path.split("user.attachment.", 1)[1]
             name, _, leaf = rel.partition(".")
-            if not name or not leaf:
+            if not name:
                 return None, None
             match = None
             for a in (self.user_attachments or []):
                 if not isinstance(a, dict):
                     continue
-                if (a.get("name") or a.get("filename")) == name:
+                if (a.get("artifact_name") or a.get("filename")) == name:
                     match = a
                     break
             if not match:
                 return None, None
+            if not leaf:
+                return match, {"_kind": "attachment", "turn_id": "current_turn"}
             if leaf in ("content", "text"):
                 if mode == "summary":
                     val = match.get("summary") or match.get("input_summary") or match.get("text") or ""
@@ -1246,13 +1289,49 @@ class ReactContext:
             turn_id, _, rest = path.partition(".user.")
             turn = self.prior_turns.get(turn_id) or {}
             user_obj = (turn.get("user") or {}) if isinstance(turn.get("user"), dict) else {}
-            if rest in ("prompt",):
+            if rest in ("prompt", "prompt.text"):
                 val = user_obj.get("prompt") or ""
-            elif rest in ("input.summary", "input_summary", "summary"):
+            elif rest in ("prompt.summary", "input.summary", "input_summary", "summary"):
                 val = user_obj.get("input_summary") or user_obj.get("summary") or ""
+            elif rest.startswith("attachments.") or rest.startswith("attachment."):
+                rel = rest.split("attachments.", 1)[1] if rest.startswith("attachments.") else rest.split("attachment.", 1)[1]
+                name, _, leaf = rel.partition(".")
+                attachments = user_obj.get("attachments") or []
+                match = None
+                for a in attachments:
+                    if not isinstance(a, dict):
+                        continue
+                    if (a.get("artifact_name") or a.get("filename")) == name:
+                        match = a
+                        break
+                if not match:
+                    return None, None
+                if not leaf:
+                    return match, {"_kind": "attachment", "turn_id": turn_id}
+                if leaf in ("content", "text"):
+                    if mode == "summary":
+                        val = match.get("summary") or match.get("input_summary") or match.get("text") or ""
+                    else:
+                        val = match.get("text") or ""
+                elif leaf in ("summary", "input_summary"):
+                    val = match.get("summary") or match.get("input_summary") or ""
+                else:
+                    val = match.get(leaf)
+                return val, {"_kind": "attachment", "turn_id": turn_id}
             else:
                 val = user_obj.get(rest)
             return val, {"_kind": "message", "turn_id": turn_id}
+
+        # ---------- Current turn assistant ----------
+        if path in ("current_turn.assistant.completion.text", "assistant.completion.text"):
+            val = (self.scratchpad.answer or "") if self.scratchpad else ""
+            return val, {"_kind": "message", "turn_id": "current_turn"}
+        if path in ("current_turn.assistant.completion.summary", "assistant.completion.summary"):
+            if self.scratchpad and isinstance(self.scratchpad.turn_summary, dict):
+                val = self.scratchpad.turn_summary.get("assistant_answer") or ""
+            else:
+                val = ""
+            return val, {"_kind": "message", "turn_id": "current_turn"}
 
         # ---------- Current turn tool results ----------
         if path.startswith("current_turn.artifacts."):
@@ -1414,8 +1493,10 @@ class ReactContext:
         # Buckets:
         # - normal_buckets → string concatenation
         # - sources_buckets → raw contributions for "sources"/"sources_list"
+        # - attachments_buckets → raw contributions for "attachments"
         normal_buckets: Dict[str, List[str]] = {}
         sources_buckets: Dict[str, List[Any]] = {}
+        attachments_buckets: Dict[str, List[Any]] = {}
 
         # NEW: Track content lineage
         content_lineage: List[str] = []
@@ -1504,6 +1585,9 @@ class ReactContext:
                 # will parse/normalize them later.
                 sources_buckets.setdefault(name, []).append(val)
                 continue
+            if name == "attachments":
+                attachments_buckets.setdefault(name, []).append(val)
+                continue
 
             # Regular param: convert to string and bucket for concatenation
             if not isinstance(val, (str, bytes)):
@@ -1562,8 +1646,31 @@ class ReactContext:
                 merged = self._reconcile_sources_lists([flat])
                 params["sources"] = merged
 
+        # 3) Special merging for attachments
+        def _gather_attachments_for_param(param_name: str) -> List[Dict[str, Any]]:
+            rows: List[Any] = []
+
+            inline = params.get(param_name)
+            if isinstance(inline, list):
+                rows.extend(inline)
+            elif isinstance(inline, dict):
+                rows.append(inline)
+
+            for v in attachments_buckets.get(param_name, []):
+                if isinstance(v, list):
+                    rows.extend(v)
+                elif isinstance(v, dict):
+                    rows.append(v)
+
+            return [r for r in rows if isinstance(r, dict)]
+
+        if attachments_buckets:
+            flat = _gather_attachments_for_param("attachments")
+            if flat:
+                params["attachments"] = flat
+
         # Log event
-        bound_keys = list(normal_buckets.keys()) + list(sources_buckets.keys())
+        bound_keys = list(normal_buckets.keys()) + list(sources_buckets.keys()) + list(attachments_buckets.keys())
         if bound_keys:
             self.add_event(kind="param_binding", data={"params_bound": bound_keys})
 

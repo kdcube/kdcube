@@ -22,6 +22,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.text_proc_utils import _rm_invis, _remove
 from kdcube_ai_app.apps.chat.sdk.util import _today_str, _now_up_to_minutes
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message, create_cached_system_message
+from kdcube_ai_app.apps.chat.sdk.tools.backends.summary_backends import _SUMMARY_IMAGE_MIME, _SUMMARY_DOC_MIME
 
 logger = logging.getLogger("with_llm_backends")
 
@@ -53,6 +54,10 @@ async def generate_content_llm(
             list[dict],
             "List of sources: {sid:int, title:str, url?:str, text:str, content?: str}. "
             "Sources must be passed ONLY here (never inside input_context)."
+        ] = None,
+        attachments: Annotated[
+            list[dict],
+            "Optional multimodal attachments; each item should include {mime, base64, filename?, summary?}."
         ] = None,
         cite_sources: Annotated[bool, "If true and sources provided, require citations (inline for Markdown/HTML; sidecar for JSON/YAML)."] = False,
         citation_embed: Annotated[str, "auto|inline|sidecar|none",
@@ -934,6 +939,40 @@ async def generate_content_llm(
         if input_context:
             # blocks.append({"text": f"INPUT CONTEXT:\n{input_context[:12000]}", "cache": False})
             blocks.append({"text": f"INPUT CONTEXT:\n{input_context}", "cache": False})
+
+        # 3.5) Attachments (multimodal inputs)
+        if attachments:
+            if round_idx == 0:
+                blocks.append({"text": f"ATTACHMENTS ({len(attachments)}):", "cache": False})
+                for a in attachments:
+                    if not isinstance(a, dict):
+                        continue
+                    mime = (a.get("mime") or "").strip()
+                    data_b64 = a.get("base64")
+                    filename = (a.get("filename") or "").strip()
+                    summary = (a.get("summary") or "").strip()
+                    size = a.get("size") or a.get("size_bytes")
+                    if data_b64 and mime in _SUMMARY_IMAGE_MIME:
+                        blocks.append({"type": "image", "data": data_b64, "media_type": mime, "cache": False})
+                    elif data_b64 and mime in _SUMMARY_DOC_MIME:
+                        blocks.append({"type": "document", "data": data_b64, "media_type": mime, "cache": False})
+                    elif data_b64 and mime:
+                        logger.warning("generate_content_llm: skipping unsupported attachment mime=%s", mime)
+                        continue
+                    meta_parts = []
+                    if filename:
+                        meta_parts.append(f"filename={filename}")
+                    if mime:
+                        meta_parts.append(f"mime={mime}")
+                    if size is not None:
+                        meta_parts.append(f"size={size}")
+                    meta_line = " | ".join(meta_parts)
+                    if meta_line:
+                        blocks.append({"text": f"ATTACHMENT META: {meta_line}", "cache": False})
+                    if summary:
+                        blocks.append({"text": f"ATTACHMENT SUMMARY: {summary}", "cache": False})
+            else:
+                blocks.append({"text": "Remember the ATTACHMENTS from earlier in this turn.", "cache": False})
 
         # 4) Sources (sid map + digest), non-cached
         if rows:

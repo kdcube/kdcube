@@ -1,6 +1,11 @@
 from typing import Optional, Dict, Any, List, AsyncIterator
 import aiohttp, json
 from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage, AIMessage, AIMessageChunk
+from kdcube_ai_app.infra.service_hub.message_utils import (
+    extract_message_blocks,
+    blocks_to_text,
+    blocks_to_gemini_parts,
+)
 
 def _anthropic_blocks_to_gemini_parts(blocks, default_cache_ctrl=None) -> list[dict]:
     """
@@ -17,41 +22,7 @@ def _anthropic_blocks_to_gemini_parts(blocks, default_cache_ctrl=None) -> list[d
 
     cache_control is ignored (Gemini has no per-part cache hints).
     """
-    parts: list[dict] = []
-
-    for b in blocks or []:
-        # 1) Raw strings
-        if isinstance(b, str):
-            parts.append({"text": b})
-            continue
-
-        # 2) Non-dict, non-string → just stringify
-        if not isinstance(b, dict):
-            parts.append({"text": str(b)})
-            continue
-
-        # 3) Container blocks with nested content list
-        content = b.get("content")
-        if isinstance(content, list):
-            # e.g. Anthropic tool_result/tool_use blocks:
-            # {"type": "tool_result", "content": [ {...}, {...} ]}
-            parts.extend(_anthropic_blocks_to_gemini_parts(content))
-            continue
-
-        # 4) "Text-like" blocks – we don't care about `type`, only that
-        #    there's something texty we can send to Gemini.
-        text = b.get("text")
-        if text is None and isinstance(content, str):
-            text = content
-
-        if text is not None:
-            parts.append({"text": str(text)})
-            continue
-
-        # 5) Fallback: we have a dict but no obvious text – stringify it
-        parts.append({"text": str(b)})
-
-    return parts
+    return blocks_to_gemini_parts(blocks or [])
 
 class GeminiModelClient:
     """
@@ -105,11 +76,7 @@ class GeminiModelClient:
         Collapse Anthropic-style content blocks into plain text.
         Uses the same normalization as _anthropic_blocks_to_gemini_parts.
         """
-        parts = _anthropic_blocks_to_gemini_parts(blocks)
-        return "\n\n".join(
-            str(p["text"]) for p in parts
-            if isinstance(p, dict) and p.get("text")
-        )
+        return blocks_to_text(blocks)
 
     @staticmethod
     def _convert_langchain_to_gemini(
@@ -127,12 +94,7 @@ class GeminiModelClient:
         contents: list[dict] = []
 
         for msg in messages:
-            addkw = getattr(msg, "additional_kwargs", {}) or {}
-            blocks = addkw.get("message_blocks")
-
-            # Also support LC-style list content as “blocks”
-            if not blocks and isinstance(getattr(msg, "content", None), list):
-                blocks = msg.content
+            blocks = extract_message_blocks(msg)
 
             # ---------- SystemMessage → systemInstruction only ----------
             if isinstance(msg, SystemMessage):
@@ -406,10 +368,10 @@ class GeminiModelClient:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
-                    url,
-                    headers=self._headers(),
-                    json=payload,
-                    timeout=aiohttp.ClientTimeout(total=600),
+                        url,
+                        headers=self._headers(),
+                        json=payload,
+                        timeout=aiohttp.ClientTimeout(total=600),
                 ) as resp:
                     if resp.status != 200:
                         raise Exception(
@@ -513,4 +475,3 @@ class GeminiModelClient:
                 "full_thoughts": full_thoughts,
             }
             raise
-

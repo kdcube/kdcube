@@ -28,7 +28,9 @@ def rn_attachment(tenant: str, project: str,
                   user_id: str,
                   conversation_id: str, turn_id: str,
                   role: str, filename: str) -> str:
-    return rn_file(tenant, project, user_id, conversation_id, turn_id, role, filename)
+    # ef:<tenant>:<project>:chatbot:attachment:<user_id>:<conversation_id>:<turn_id>:<role>:<filename>
+    safe = _safe(filename)
+    return f"ef:{tenant}:{project}:chatbot:attachment:{_safe(user_id)}:{conversation_id}:{turn_id}:{role}:{safe}"
 
 def rn_execution_file(tenant: str, project: str,
                       user_id: str,

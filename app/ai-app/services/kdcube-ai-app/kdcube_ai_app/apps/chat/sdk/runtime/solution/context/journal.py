@@ -24,7 +24,8 @@ def build_turn_session_journal(*,
                                max_prior_turns: int = 5,
                                max_sources_per_turn: int = 20,
                                turn_view_class: Type[BaseTurnView] = BaseTurnView,
-                               fetch_context_tool_retrieval_example: Optional[str] = "ctx_tools.fetch_turn_artifacts([turn_id])",
+                               is_codegen_agent: bool = False, # False for decision, True for codegen
+                               # fetch_context_tool_retrieval_example: Optional[str] = "ctx_tools.fetch_turn_artifacts([turn_id])",
                                show_artifacts: Optional[List[Dict[str, Any]]] = None,
                                coordinator_turn_line: Optional[str] = None) -> str:
     """
@@ -132,8 +133,10 @@ def build_turn_session_journal(*,
     lines: list[str] = []
     lines.append("# The Turn Session Journal / Operational Digest (Current turn). **Strictly ordered from oldest → newest** for prior turns.")
     lines.append("")
-    if fetch_context_tool_retrieval_example:
-        fetch_context_tool_retrieval_example = f"Use {fetch_context_tool_retrieval_example} to pull artifact"
+    if is_codegen_agent:
+        fetch_context_tool_retrieval_example = f"Use ctx_tools.fetch_turn_artifacts([turn_id]) to pull artifact"
+    else:
+        fetch_context_tool_retrieval_example = f"Use 'show_artifacts' to see any artifact in full on next round"
     # lines.append("Previews are truncated. Use ctx_tools.fetch_turn_artifacts([turn_ids]) for full content.")
     lines.append(f"Within turn, User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown. If available, only their content summary is shown. {fetch_context_tool_retrieval_example}")
     lines.append("")
@@ -173,7 +176,10 @@ def build_turn_session_journal(*,
 
             # Header
             lines.append(f"### Turn {turn_id} — {ts_disp} [HISTORICAL]")
-            lines.append(f"Fetch from this turn with: ctx_tools.fetch_ctx(\"{turn_id}\")")
+            if is_codegen_agent:
+                lines.append(f"Fetch from this turn with: ctx_tools.fetch_ctx(\"{turn_id}\")")
+            else:
+                lines.append(f"Artifacts of this turn available under namespace {turn_id}.*")
             lines.append("")
 
             # Complete turn presentation from TurnView (delegates to SolverPresenter)
@@ -581,6 +587,7 @@ def build_turn_session_journal(*,
                     lines.append(
                         f"- {idx:02d}. {art_id} ← {tid}: {status} — summary: {summ}"
                     )
+                lines.append(f"    path: current_turn.artifacts.{art_id}")
                 if meta_parts:
                     lines.append("    meta: " + "; ".join(meta_parts))
 
@@ -904,8 +911,11 @@ def build_session_log_summary(session_log: List[Dict[str, Any]],
                         )
                     else:
                         log_summary.append(
-                            f"[{it}] Tool: {tool_id}{kind_tag_single} → {status} "
-                            f"{_fmt_art_ref(art_name, art_type)} — {_short(res_summ, 80)}"
+                            f"[{it}] Tool: {tool_id} → "
+                            f"{(art_name or '').strip() or '?'}"
+                            f"{(':' + (art_type or '').strip()) if (art_type or '').strip() else ''}"
+                            f"{('(' + (art_kind or _artifact_kind_from_tool_id(tool_id) or '') + ')') if (art_kind or _artifact_kind_from_tool_id(tool_id)) else ''} ✓ "
+                            f"— {_short(res_summ, 80)}"
                         )
                 else:
                     # Grouped rendering: 1 header + per-artifact indented lines
@@ -1473,6 +1483,7 @@ async def retrospective_context_view(
         delta_fps: Optional[List[Dict[str, Any]]] = None,
         current_turn_log: Optional[str] = None,
         current_turn_fp: Optional[TurnFingerprintV1] = None,
+        current_turn_payload: Optional[Dict[str, Any]] = None,
         selected_bucket_cards: Optional[List[dict]] = None,
         objective_memory_timelines: Optional[Dict[str, List[dict]]] = None,
         filter_turn_ids: Optional[List[str]] = None,
@@ -1590,7 +1601,7 @@ async def retrospective_context_view(
         )
 
     # 2.b Current turn (insights from provided current_turn_fp; no loading)
-    if current_turn_log or current_turn_fp:
+    if current_turn_log or current_turn_fp or current_turn_payload:
         ts_now_iso = _dt.datetime.utcnow().isoformat() + "Z"
         one_line = ""
         if isinstance(current_turn_fp, TurnFingerprintV1):
@@ -1609,6 +1620,24 @@ async def retrospective_context_view(
             (current_turn_log or "[turn log]"),
             ""
         ]))
+        if current_turn_payload:
+            try:
+                tv = turn_view_class.from_turn_log_dict(payload=current_turn_payload)
+                current_turn_compressed = tv.to_compressed_search_view(
+                    include_turn_info=False,
+                    user_prompt_limit=600,
+                    include_turn_summary=True,
+                    include_context_used=True,
+                    deliverables_detalization="summary",
+                )
+                if current_turn_compressed:
+                    text_blocks.append("\n".join([
+                        "[CURRENT TURN — COMPRESSED VIEW]",
+                        current_turn_compressed,
+                        ""
+                    ]))
+            except Exception:
+                pass
         items_struct.append({
             "ts": ts_now_iso,
             "turn_id": turn_id,
@@ -2031,6 +2060,7 @@ async def materialize_prior_pairs(
 
         user_text = (user_obj.get("prompt") or "").strip()
         asst_text = (asst_obj.get("completion") or "").strip()
+        attachments = list(user_obj.get("attachments") or [])
 
         if compressed_turn and (not user_text or not asst_text):
             pair = turn_to_pair(compressed_turn)
@@ -2049,7 +2079,7 @@ async def materialize_prior_pairs(
 
         pairs.append({
             "turn_id": tid,
-            "user": {"text": user_text, "ts": user_ts},
+            "user": {"text": user_text, "ts": user_ts, "attachments": attachments},
             "assistant": {"text": asst_text, "ts": asst_ts},
             "artifacts": artifacts,
             "compressed_turn": compressed_turn,

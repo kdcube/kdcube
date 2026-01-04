@@ -36,6 +36,12 @@ from kdcube_ai_app.infra.embedding.embedding import get_embedding
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 import kdcube_ai_app.infra.service_hub.errors as service_errors
 import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
+from kdcube_ai_app.infra.service_hub.message_utils import (
+    extract_message_blocks,
+    normalize_blocks,
+    blocks_to_text,
+)
+from kdcube_ai_app.infra.service_hub.openai import normalize_messages_for_openai
 
 # =========================
 # ids/util
@@ -305,35 +311,7 @@ create_multimodal_message = create_modal_message
 # --- helper: normalize anthropic blocks (text-only; extend for img/audio if needed) ---
 def _normalize_anthropic_blocks(blocks: list, default_cache_ctrl: dict | None = None) -> list:
     """Normalize blocks to Anthropic format (text/image/document)."""
-    norm = []
-
-    for b in blocks:
-        # Handle raw strings
-        if not isinstance(b, dict):
-            norm.append({"type": "text", "text": str(b)})
-            continue
-
-        btype = b.get("type", "text")
-
-        # Build normalized block
-        if btype == "text":
-            text = b.get("text") or b.get("content", "")
-            blk = {"type": "text", "text": str(text)}
-        elif btype in ("image", "document"):
-            blk = {"type": btype, "source": b.get("source", {})}
-        else:
-            norm.append(b)  # Unknown type - pass through
-            continue
-
-        # Apply cache control (block-level overrides default)
-        if "cache_control" in b:
-            blk["cache_control"] = b["cache_control"]
-        elif default_cache_ctrl:
-            blk["cache_control"] = default_cache_ctrl
-
-        norm.append(blk)
-
-    return norm
+    return normalize_blocks(blocks, default_cache_ctrl=default_cache_ctrl)
 
 
 def _extract_system_prompt_text(system_prompt: Union[str, SystemMessage]) -> str:
@@ -346,14 +324,9 @@ def _extract_system_prompt_text(system_prompt: Union[str, SystemMessage]) -> str
 
     if isinstance(system_prompt, SystemMessage):
         # Check for multi-part Anthropic blocks (cached messages)
-        anthro_blocks = (system_prompt.additional_kwargs or {}).get("message_blocks")
+        anthro_blocks = extract_message_blocks(system_prompt)
         if anthro_blocks:
-            # Concatenate all text blocks
-            return "\n\n".join(
-                block.get("text", "")
-                for block in anthro_blocks
-                if block.get("type") == "text"
-            )
+            return blocks_to_text(anthro_blocks)
 
         # Simple SystemMessage - just return content
         return system_prompt.content or ""
@@ -373,29 +346,13 @@ def _flatten_message(msg: BaseMessage) -> BaseMessage:
     - We drop cache_control and other Anthropic-specific metadata.
     - Works for SystemMessage, HumanMessage, AIMessage.
     """
-    addkw = getattr(msg, "additional_kwargs", {}) or {}
-    blocks = addkw.get("message_blocks")
-
-    # Also handle messages whose .content is already a list of blocks
-    if not blocks and isinstance(getattr(msg, "content", None), list):
-        blocks = msg.content
+    blocks = extract_message_blocks(msg)
 
     if not blocks:
         # Nothing special → return as-is
         return msg
 
-    text_parts: List[str] = []
-    for b in blocks:
-        if isinstance(b, dict):
-            if b.get("type") == "text":
-                t = b.get("text") or b.get("content") or ""
-                if t:
-                    text_parts.append(str(t))
-        else:
-            # raw strings (or anything else) → stringify
-            text_parts.append(str(b))
-
-    full_text = "\n\n".join(text_parts)
+    full_text = blocks_to_text(blocks)
 
     # Recreate the same type, but with plain text content, dropping additional_kwargs
     if isinstance(msg, SystemMessage):
@@ -410,6 +367,8 @@ def _flatten_message(msg: BaseMessage) -> BaseMessage:
         return type(msg)(content=full_text)
     except Exception:
         return msg
+
+
 
 
 # =========================
@@ -970,11 +929,11 @@ class FormatFixerService:
             self.logger.log_error(ImportError("anthropic package not available"), "Claude client initialization")
 
     async def fix_format(
-        self,
-        raw_output: str,
-        expected_format: str,
-        input_data: str,
-        system_prompt: Union[str, SystemMessage]
+            self,
+            raw_output: str,
+            expected_format: str,
+            input_data: str,
+            system_prompt: Union[str, SystemMessage]
     ) -> Dict[str, Any]:
         """
         Fix malformed JSON output to match expected format.
@@ -1340,6 +1299,9 @@ class ModelServiceBase:
         provider_message_id = None
 
         try:
+            if isinstance(client, ChatOpenAI):
+                messages = await normalize_messages_for_openai(client, messages)
+
             if provider_name == "anthropic" and hasattr(client, "messages"):
                 # Convert LC messages to Anthropic format
                 sys_prompt = None
@@ -1417,48 +1379,23 @@ class ModelServiceBase:
 
             for m in messages:
                 if isinstance(m, SystemMessage):
-                    # Check for Anthropic-specific block structure
-                    message_blocks = (m.additional_kwargs or {}).get("message_blocks")
+                    message_blocks = extract_message_blocks(m)
+                    cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
 
                     if message_blocks:
-                        # Multi-part system message with selective caching
-                        sys_blocks.extend(message_blocks)
+                        sys_blocks.extend(normalize_blocks(message_blocks, default_cache_ctrl=cache_ctrl))
                     else:
-                        # Single system message - check for cache_control
-                        cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
                         block = {"type": "text", "text": m.content}
                         if cache_ctrl:
                             block["cache_control"] = cache_ctrl
                         sys_blocks.append(block)
 
                 elif isinstance(m, HumanMessage):
-                    message_blocks = (m.additional_kwargs or {}).get("message_blocks")
+                    message_blocks = extract_message_blocks(m)
                     cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
 
                     if message_blocks:
-                        # Use provided blocks (pass-through), but normalize into Anthropic content format
-                        # If you want to apply a default cache_control to text blocks lacking one, set default_cache_ctrl=cache_ctrl
-                        content_blocks = []
-                        for b in message_blocks:
-                            if isinstance(b, dict):
-                                # keep non-text blocks as-is; ensure text blocks have proper shape
-                                if b.get("type") == "text":
-                                    blk = {"type": "text", "text": b.get("text", "")}
-                                    if "cache_control" in b:
-                                        blk["cache_control"] = b["cache_control"]
-                                    elif cache_ctrl:
-                                        # optional: apply message-level cache_control when block doesn't specify one
-                                        blk["cache_control"] = cache_ctrl
-                                    content_blocks.append(blk)
-                                else:
-                                    content_blocks.append(b)
-                            else:
-                                # raw string -> text block
-                                blk = {"type": "text", "text": str(b)}
-                                if cache_ctrl:
-                                    blk["cache_control"] = cache_ctrl
-                                content_blocks.append(blk)
-
+                        content_blocks = normalize_blocks(message_blocks, default_cache_ctrl=cache_ctrl)
                         convo.append({"role": "user", "content": content_blocks})
 
                     else:
@@ -1524,9 +1461,8 @@ class ModelServiceBase:
 
         # OpenAI streaming
         if isinstance(client, ChatOpenAI):
-
-            # ✅ Convert block-based messages to regular messages
-            normalized_messages = [_flatten_message(message) for message in messages]
+            # Convert block-based messages to OpenAI multimodal content
+            normalized_messages = await normalize_messages_for_openai(client, messages)
 
             model_limitations = model_caps(model_name)
             tools_support = model_limitations.get("tools", False)
@@ -1534,13 +1470,24 @@ class ModelServiceBase:
             temperature_supported = model_limitations.get("temperature", False)
 
             stream_kwargs = {
-                "max_output_tokens": max_tokens,
                 "extra_body": {
                     "text": {"format": {"type": "text"}, "verbosity": "medium"},
                 },
             }
+
+            # Use correct token param based on model type
+            if reasoning_support:
+                stream_kwargs["max_output_tokens"] = max_tokens
+                # OPTIONAL: Make thinking configurable
+                # include_thinking = True  # Could be a parameter
+                # if include_thinking:
+                stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
+            else:
+                stream_kwargs["max_tokens"] = max_tokens
+
             if temperature_supported:
                 stream_kwargs["temperature"] = temperature
+
             if tools and tools_support:
                 stream_kwargs["tools"] = tools
                 if tool_choice is not None:
@@ -1548,15 +1495,12 @@ class ModelServiceBase:
                 stream_kwargs["parallel_tool_calls"] = False
                 web_search_tool = next((t for t in (tools or []) if t.get("type") == "web_search"), None)
                 if web_search_tool:
-                   stream_kwargs["extra_body"]["include"] = ["web_search_call.action.sources"]
-            if reasoning_support:
-                stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
+                    stream_kwargs["extra_body"]["include"] = ["web_search_call.action.sources"]
 
             usage, seen_citation_urls = {}, set()
             source_registry: dict[str, dict] = {}
+
             def _norm_url(u: str) -> str:
-                # simple normalization: strip whitespace + trailing slash
-                # (you can expand this: lowercase host, drop utm_* params, etc.)
                 if not u: return u
                 u = u.strip()
                 if u.endswith("/"): u = u[:-1]
@@ -1565,38 +1509,122 @@ class ModelServiceBase:
             async for chunk in client.astream(normalized_messages, **stream_kwargs):
                 from langchain_core.messages import AIMessageChunk
                 index += 1
+
+                # Handle non-AIMessageChunk (legacy format)
                 if not isinstance(chunk, AIMessageChunk):
                     txt = getattr(chunk, "content", "") or getattr(chunk, "text", "")
                     if txt:
-                        yield {"delta": txt, "index": index}
-                        yield {"event": "text.delta", "text": txt, "stage": -1}
+                        yield {"event": "text.delta", "text": txt, "index": index, "stage": -1}
                     continue
+
                 yield {"all_event": chunk, "index": index}  # for debugging
 
-                if getattr(chunk, "usage_metadata", None):
-                    um = chunk.usage_metadata or {}
+                # ====================================================================
+                # ENHANCED USAGE EXTRACTION - Multiple Locations
+                # ====================================================================
+                usage_found = False
+
+                # Location 1: usage_metadata (Chat Completions API standard)
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    um = chunk.usage_metadata
                     usage = {
                         "input_tokens": um.get("input_tokens", 0) or 0,
                         "output_tokens": um.get("output_tokens", 0) or 0,
-                        "cache_read_input_tokens": (um.get("input_token_details") or {}).get("cache_read"),
-                        "input_tokens_details": (um.get("input_token_details") or {}).get("cache_read"), # {'cache_read': 233344}
-                        "output_tokens_details": (um.get("output_token_details") or {}).get("cache_read_input_tokens"), # {'reasoning': 1344}
+                        "total_tokens": (um.get("input_tokens", 0) or 0) + (um.get("output_tokens", 0) or 0),
                     }
-                    usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
 
-                blocks = chunk.content if isinstance(chunk.content, list) else [{"type": "text", "text": chunk.content}]
-                for b in blocks:
+                    # Extract detailed token info
+                    input_details = um.get("input_token_details")
+                    if input_details:
+                        cache_read = input_details.get("cache_read")
+                        if cache_read:
+                            usage["cache_read_input_tokens"] = cache_read
+                        usage["input_tokens_details"] = input_details
+
+                    output_details = um.get("output_token_details")
+                    if output_details:
+                        usage["output_tokens_details"] = output_details
+                        reasoning = output_details.get("reasoning")
+                        if reasoning:
+                            usage["reasoning_tokens"] = reasoning
+
+                    usage_found = True
+
+                # Location 2: response_metadata.token_usage (common fallback)
+                if not usage_found and hasattr(chunk, "response_metadata"):
+                    rm = chunk.response_metadata or {}
+                    token_usage = rm.get("token_usage") or rm.get("usage")
+
+                    if token_usage and isinstance(token_usage, dict):
+                        usage = {
+                            "input_tokens": (
+                                    token_usage.get("prompt_tokens") or
+                                    token_usage.get("input_tokens") or 0
+                            ),
+                            "output_tokens": (
+                                    token_usage.get("completion_tokens") or
+                                    token_usage.get("output_tokens") or 0
+                            ),
+                        }
+                        usage["total_tokens"] = (
+                                token_usage.get("total_tokens") or
+                                usage["input_tokens"] + usage["output_tokens"]
+                        )
+                        usage_found = True
+
+                # Location 3: additional_kwargs.usage (some providers)
+                if not usage_found and hasattr(chunk, "additional_kwargs"):
+                    ak = chunk.additional_kwargs or {}
+                    if "usage" in ak and isinstance(ak["usage"], dict):
+                        token_usage = ak["usage"]
+                        usage = {
+                            "input_tokens": (
+                                    token_usage.get("prompt_tokens") or
+                                    token_usage.get("input_tokens") or 0
+                            ),
+                            "output_tokens": (
+                                    token_usage.get("completion_tokens") or
+                                    token_usage.get("output_tokens") or 0
+                            ),
+                        }
+                        usage["total_tokens"] = (
+                                token_usage.get("total_tokens") or
+                                usage["input_tokens"] + usage["output_tokens"]
+                        )
+                        usage_found = True
+
+                # ====================================================================
+                # CONTENT PROCESSING (same as before)
+                # ====================================================================
+                content = chunk.content
+
+                # Case 1: Simple string content
+                if isinstance(content, str):
+                    if content:
+                        yield {"event": "text.delta", "text": content, "index": index, "stage": 0}
+                    continue
+
+                # Case 2: List of content blocks
+                if not isinstance(content, list):
+                    content = []
+
+                for b in content:
+                    if not isinstance(b, dict):
+                        txt = str(b) if b else ""
+                        if txt:
+                            yield {"event": "text.delta", "text": txt, "index": index, "stage": 0}
+                        continue
+
                     btype = b.get("type")
-                    bid = b.get("index")  # 'stage' number. it's when agentic models / tools nodes interleave
+                    bid = b.get("index", 0)
 
-                    # 1) Handle annotations
+                    # Handle annotations (citations)
                     anns = b.get("annotations") or []
                     for ann in anns:
                         if ann.get("type") == "url_citation":
                             url = _norm_url(ann.get("url"))
                             if not url:
                                 continue
-                            # mark as used in registry
                             rec = source_registry.get(url) or {
                                 "url": url,
                                 "title": ann.get("title"),
@@ -1612,7 +1640,6 @@ class ModelServiceBase:
                                 rec["title"] = ann["title"]
                             source_registry[url] = rec
 
-                            # your existing outward-facing event (optional dedupe)
                             if url not in seen_citation_urls:
                                 seen_citation_urls.add(url)
                                 yield {
@@ -1624,40 +1651,225 @@ class ModelServiceBase:
                                     "index": index,
                                     "stage": bid,
                                 }
-                    # 2) text / output_text deltas
+
+                    # Text output deltas
                     if btype in ("output_text", "text"):
-                        delta = b.get("text") or ""
-                        if delta:
-                            yield {"event": "text.delta", "text": delta, "index": index, "stage": bid}
-                    # 3) Handle reasoning
-                    if btype == "reasoning":
-                        # Ignore encrypted_content; only summaries are visible
+                        delta = b.get("text", "")
+                        yield {"event": "text.delta", "text": delta, "index": index, "stage": bid}
+
+                    # Reasoning/thinking
+                    elif btype == "reasoning":
                         for si in b.get("summary") or []:
                             if si:
                                 order_in_group = 0
                                 if isinstance(si, dict):
                                     s = si.get("text") or si.get("summary_text") or ""
-                                    order_in_group = si.get("index")
-                                else: s = si
-                                yield {"event": "thinking.delta", "text": s, "stage": bid, "index": index, "group_index": order_in_group}
-                    # 4) Handle tool calls
-                    if btype == "web_search_call":
+                                    order_in_group = si.get("index", 0)
+                                else:
+                                    s = str(si)
+                                if s:
+                                    yield {"event": "thinking.delta", "text": s, "stage": bid, "index": index, "group_index": order_in_group}
+
+                    # Tool calls
+                    elif btype == "web_search_call":
                         action = b.get("action") or {}
-                        status = b.get("status")       # "in_progress" | "searching" | "completed"
-                        evt = {
+                        status = b.get("status")
+                        yield {
                             "event": "tool.search",
-                            "id": b.get("id"), # fingerprint of this tool execution. # "stage": bid
+                            "id": b.get("id"),
                             "status": status,
                             "query": action.get("query"),
                             "sources": action.get("sources"),
-                            "index": index
+                            "index": index,
+                            "stage": bid,
                         }
-                        yield evt
 
-            # 5) Finish (emit both rich and legacy finals)
+            # ====================================================================
+            # FINAL EVENT - Usage should be populated now
+            # ====================================================================
             index += 1
+
+            # Log if usage is still empty (for debugging)
+            if not usage or not usage.get("total_tokens"):
+                print(f"⚠️  WARNING: No usage found in any chunk for {model_name}")
+                print(f"   This might indicate stream_usage=True isn't working")
+                print(f"   Run debug_actual_chunks.py to see chunk structure")
+
             yield {"event": "final", "usage": usage, "model_name": model_name, "index": index}
             return
+        # if isinstance(client, ChatOpenAI):
+        #
+        #     # Convert block-based messages to OpenAI multimodal content
+        #     normalized_messages = await normalize_messages_for_openai(client, messages)
+        #
+        #     model_limitations = model_caps(model_name)
+        #     tools_support = model_limitations.get("tools", False)
+        #     reasoning_support = model_limitations.get("reasoning", False)
+        #     temperature_supported = model_limitations.get("temperature", False)
+        #
+        #     stream_kwargs = {
+        #         # "max_output_tokens": max_tokens,
+        #         # "max_tokens": max_tokens,
+        #         "extra_body": {
+        #             "text": {"format": {"type": "text"}, "verbosity": "medium"},
+        #         },
+        #     }
+        #     # Use correct token param based on model type
+        #     if reasoning_support:
+        #         stream_kwargs["max_output_tokens"] = max_tokens
+        #         stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
+        #     else:
+        #         stream_kwargs["max_tokens"] = max_tokens
+        #
+        #     if temperature_supported:
+        #         stream_kwargs["temperature"] = temperature
+        #     if tools and tools_support:
+        #         stream_kwargs["tools"] = tools
+        #         if tool_choice is not None:
+        #             stream_kwargs["tool_choice"] = tool_choice
+        #         stream_kwargs["parallel_tool_calls"] = False
+        #         web_search_tool = next((t for t in (tools or []) if t.get("type") == "web_search"), None)
+        #         if web_search_tool:
+        #            stream_kwargs["extra_body"]["include"] = ["web_search_call.action.sources"]
+        #     # if reasoning_support:
+        #     #    stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
+        #
+        #     usage, seen_citation_urls = {}, set()
+        #     source_registry: dict[str, dict] = {}
+        #     def _norm_url(u: str) -> str:
+        #         # simple normalization: strip whitespace + trailing slash
+        #         # (you can expand this: lowercase host, drop utm_* params, etc.)
+        #         if not u: return u
+        #         u = u.strip()
+        #         if u.endswith("/"): u = u[:-1]
+        #         return u
+        #
+        #     async for chunk in client.astream(normalized_messages, **stream_kwargs):
+        #         from langchain_core.messages import AIMessageChunk
+        #         index += 1
+        #
+        #         # Handle non-AIMessageChunk (legacy format)
+        #         if not isinstance(chunk, AIMessageChunk):
+        #             txt = getattr(chunk, "content", "") or getattr(chunk, "text", "")
+        #             if txt:
+        #                 # yield {"delta": txt, "index": index}
+        #                 # yield {"event": "text.delta", "text": txt, "stage": -1}
+        #                 yield {"event": "text.delta", "text": txt, "index": index, "stage": -1}
+        #             continue
+        #         yield {"all_event": chunk, "index": index}  # for debugging
+        #
+        #         # Extract usage metadata
+        #         if getattr(chunk, "usage_metadata", None):
+        #             um = chunk.usage_metadata or {}
+        #             usage = {
+        #                 "input_tokens": um.get("input_tokens", 0) or 0,
+        #                 "output_tokens": um.get("output_tokens", 0) or 0,
+        #                 "cache_read_input_tokens": (um.get("input_token_details") or {}).get("cache_read"),
+        #                 # "input_tokens_details": (um.get("input_token_details") or {}).get("cache_read"), # {'cache_read': 233344}
+        #                 # "output_tokens_details": (um.get("output_token_details") or {}).get("cache_read_input_tokens"), # {'reasoning': 1344}
+        #                 "input_tokens_details": um.get("input_token_details"),
+        #                 "output_tokens_details": um.get("output_token_details"),
+        #             }
+        #             usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+        #
+        #         # Handle content - check if it's a string first (simple text delta)
+        #         content = chunk.content
+        #
+        #         # Case 1: Simple string content (non-reasoning models, or text deltas)
+        #         if isinstance(content, str):
+        #             if content:  # Only yield non-empty strings
+        #                 yield {"event": "text.delta", "text": content, "index": index, "stage": 0}
+        #             continue
+        #
+        #         # Case 2: List of content blocks (reasoning models, multimodal, etc.)
+        #         if not isinstance(content, list):
+        #             content = []
+        #
+        #         for b in content:
+        #             if not isinstance(b, dict):
+        #                 # Fallback: treat as string
+        #                 txt = str(b) if b else ""
+        #                 if txt:
+        #                     yield {"event": "text.delta", "text": txt, "index": index, "stage": 0}
+        #                 continue
+        #
+        #             btype = b.get("type")
+        #             bid = b.get("index", 0)  # 'stage' number for agentic models
+        #
+        #             # 1) Handle annotations (citations)
+        #             anns = b.get("annotations") or []
+        #             for ann in anns:
+        #                 if ann.get("type") == "url_citation":
+        #                     url = _norm_url(ann.get("url"))
+        #                     if not url:
+        #                         continue
+        #                     # mark as used in registry
+        #                     rec = source_registry.get(url) or {
+        #                         "url": url,
+        #                         "title": ann.get("title"),
+        #                         "first_seen_stage": bid,
+        #                         "tool_ids": set(),
+        #                         "ranks": [],
+        #                         "used_in_output": False,
+        #                         "citations": [],
+        #                     }
+        #                     rec["used_in_output"] = True
+        #                     rec["citations"].append({"start": ann.get("start_index"), "end": ann.get("end_index")})
+        #                     if not rec.get("title") and ann.get("title"):
+        #                         rec["title"] = ann["title"]
+        #                     source_registry[url] = rec
+        #
+        #                     # your existing outward-facing event (optional dedupe)
+        #                     if url not in seen_citation_urls:
+        #                         seen_citation_urls.add(url)
+        #                         yield {
+        #                             "event": "citation",
+        #                             "title": ann.get("title"),
+        #                             "url": url,
+        #                             "start": ann.get("start_index"),
+        #                             "end": ann.get("end_index"),
+        #                             "index": index,
+        #                             "stage": bid,
+        #                         }
+        #
+        #             # 2) Text output deltas (actual response content)
+        #             if btype in ("output_text", "text"):
+        #                 delta = b.get("text", "")
+        #                 # Always yield text deltas, even empty ones (for proper streaming)
+        #                 yield {"event": "text.delta", "text": delta, "index": index, "stage": bid}
+        #
+        #             # 3) Handle reasoning/thinking
+        #             elif btype == "reasoning":
+        #                 for si in b.get("summary") or []:
+        #                     if si:
+        #                         order_in_group = 0
+        #                         if isinstance(si, dict):
+        #                             s = si.get("text") or si.get("summary_text") or ""
+        #                             order_in_group = si.get("index", 0)
+        #                         else:
+        #                             s = str(si)
+        #                         # Only yield non-empty thinking deltas
+        #                         if s:
+        #                             yield {"event": "thinking.delta", "text": s, "stage": bid, "index": index, "group_index": order_in_group}
+        #
+        #             # 4) Handle tool calls (web search, etc.)
+        #             elif btype == "web_search_call":
+        #                 action = b.get("action") or {}
+        #                 status = b.get("status")
+        #                 yield {
+        #                     "event": "tool.search",
+        #                     "id": b.get("id"),
+        #                     "status": status,
+        #                     "query": action.get("query"),
+        #                     "sources": action.get("sources"),
+        #                     "index": index,
+        #                     "stage": bid,
+        #                 }
+        #
+        #     # 5) Final event with usage
+        #     index += 1
+        #     yield {"event": "final", "usage": usage, "model_name": model_name, "index": index}
+        #     return
 
         from kdcube_ai_app.infra.service_hub.gemini import GeminiModelClient
         # Gemini streaming
@@ -1787,6 +1999,7 @@ class ModelServiceBase:
 
         thoughts_grouped: list[str] = []
         _current_thought_parts: list[str] = []
+        events = []
 
         agentic_stage = -1
         def _flush_thought_group():
@@ -1809,6 +2022,7 @@ class ModelServiceBase:
             ):
                 if on_event and "all_event" in ev:
                     await on_event(ev["all_event"].model_dump())
+                events.append(ev)
 
                 # ---- Structured events ----
                 etype = ev.get("event")
@@ -2163,6 +2377,7 @@ class BundleState(TypedDict, total=False):
     session_id: str
     conversation_id: str
     text: Optional[str]
+    attachments: Optional[list[dict]]
     turn_id: str
     final_answer: Optional[str]
     followups: Optional[list[str]]
@@ -2172,7 +2387,7 @@ class BundleState(TypedDict, total=False):
 
 APP_STATE_KEYS = [
     "request_id", "tenant", "project", "user", "session_id",
-    "text", "final_answer", "followups", "error_message", "step_logs"
+    "text", "attachments", "final_answer", "followups", "error_message", "step_logs"
 ]
 
 class FollowupsOutput(BaseModel):

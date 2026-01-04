@@ -8,6 +8,12 @@ from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, ConfigRe
 from kdcube_ai_app.apps.chat.sdk.tools.backends.summary_backends import build_summary_for_tool_output
 
 DEFAULT_MODEL = "claude-3-7-sonnet-20250219"
+CLAUDE_SONNET_3_7 = "claude-3-7-sonnet-20250219"
+CLAUDE_HAIKU45 = "claude-haiku-4-5-20251001"
+OPENAI_O4_MINI = "o4-mini"
+OPENAI_GPT5_MINI = "gpt-5-mini"
+GOOGLE_GEMINI_25_PRO = "gemini-2.5-pro"
+
 ROLE_SUMMARIZER = "solver.react.summary"
 
 TENANT_ID = None
@@ -64,7 +70,9 @@ def configure_env() -> ModelServiceBase:
         google_api_key=settings.GOOGLE_API_KEY,
         selected_model=DEFAULT_MODEL,
         role_models={
-            ROLE_SUMMARIZER: {"provider": "anthropic", "model": "claude-3-5-haiku-20241022"},
+            # ROLE_SUMMARIZER: {"provider": "anthropic", "model": CLAUDE_HAIKU45},
+            ROLE_SUMMARIZER: {"provider": "openai", "model": OPENAI_GPT5_MINI},
+            # ROLE_SUMMARIZER: {"provider": "google", "model": GOOGLE_GEMINI_25_PRO},
         },
     )
     ms = ModelServiceBase(create_workflow_config(req))

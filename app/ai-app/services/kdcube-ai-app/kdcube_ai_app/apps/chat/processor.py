@@ -371,7 +371,7 @@ class EnhancedChatRequestProcessor:
                     "conversation_id": payload.routing.conversation_id,
                     "turn_id": payload.routing.turn_id,
                 }):
-                    async with self._lock_renewer(lock_key):
+                    async with self._lock_renewer(lock_key=lock_key):
                         result = await asyncio.wait_for(
                             self.chat_handler(
                                 payload,

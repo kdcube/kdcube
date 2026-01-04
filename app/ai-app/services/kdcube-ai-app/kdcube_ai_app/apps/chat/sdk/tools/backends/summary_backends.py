@@ -14,11 +14,43 @@ from kdcube_ai_app.apps.chat.sdk.tools.summary.contracts import ToolCallSummaryJ
 from kdcube_ai_app.apps.chat.sdk.util import _now_str, _today_str
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_system_message, create_cached_human_message
+import kdcube_ai_app.apps.chat.sdk.viz.logging_helpers as logging_helpers
+
+def _attachment_summary_system_prompt() -> str:
+    return (
+        "You are summarizing a USER-PROVIDED ATTACHMENT.\n"
+        "Goal: produce a compact, telegraphic, embedding-friendly inventory of the attachment content.\n"
+        "Use any provided context (user prompt and other attachments) to resolve references, but do NOT assume.\n"
+        "\n"
+        "Output a TELEGRAPHIC, SECTIONED TEXT (NO JSON). Use pipes to separate sections.\n"
+        "Format:\n"
+        "semantic:<...> | structural:<...> | inventory:<...> | anomalies:<...> | safety:<...> | lookup_keys:<...> | filename:<...> | artifact_name:<...>\n"
+        "\n"
+        "Fields:\n"
+        "- semantic: what the attachment is about; intent; domains; scope; key facts/samples/schema.\n"
+        "- structural: file type, visible structure (tables/code/JSON/YAML/XML/diagrams), counts if visible.\n"
+        "- inventory: notable fragments or sections to help retrieval.\n"
+        "- anomalies: problems in the content (malformed, ambiguous, missing fields, garbled).\n"
+        "- safety: benign/suspicious (+short reason if suspicious).\n"
+        "- lookup_keys: 5-12 compact key phrases for retrieval.\n"
+        "- filename: a short, unique, filesystem-safe name for this attachment (no spaces).\n"
+        "- artifact_name: short, human-readable ID to use in paths (no spaces, unique enough).\n"
+        "\n"
+        "Rules:\n"
+        "- Keep it short; telegraphic; no prose.\n"
+        "- Mention attachment filename and mime.\n"
+        "- If content is empty/unreadable, say so in structural/anomalies.\n"
+    )
+
+def _attachment_summary_prompt(modality_kind: Optional[str]) -> str:
+    return _attachment_summary_system_prompt() + _modality_system_instructions(modality_kind)
 
 log = logging.getLogger(__name__)
 
 _SUMMARY_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 _SUMMARY_DOC_MIME = {"application/pdf"}
+_SUMMARY_MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+_SUMMARY_MAX_DOC_BYTES = 10 * 1024 * 1024   # 10 MB
 
 def _artifact_block_for_summary(artifact: Optional[Dict[str, Any]]) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
     if not isinstance(artifact, dict):
@@ -40,6 +72,9 @@ def _artifact_block_for_summary(artifact: Optional[Dict[str, Any]]) -> Tuple[Opt
     elif base64_data and mime in _SUMMARY_DOC_MIME:
         modality_kind = "document"
         block = {"type": "document", "data": base64_data, "media_type": mime}
+    elif text:
+        modality_kind = "text"
+        block = {"type": "text", "text": text}
 
     meta_lines = [
         "### Attached artifact (for validation)",
@@ -56,6 +91,101 @@ def _artifact_block_for_summary(artifact: Optional[Dict[str, Any]]) -> Tuple[Opt
         meta_lines.append("- note: mime not supported for vision; using text surrogate only")
 
     return block, "\n".join(meta_lines), modality_kind
+
+
+async def summarize_user_attachment(
+    *,
+    svc: Any,
+    attachment: Dict[str, Any],
+    user_prompt: str = "",
+    other_attachments: Optional[List[Dict[str, Any]]] = None,
+    max_tokens: int = 600,
+    max_attachment_chars: int = 12000,
+    max_peer_chars: int = 2000,
+) -> Optional[str]:
+    if svc is None or not isinstance(attachment, dict):
+        return None
+
+    filename = (attachment.get("filename") or "attachment").strip()
+    mime = (attachment.get("mime") or attachment.get("mime_type") or "application/octet-stream").strip()
+    size = attachment.get("size") or attachment.get("size_bytes") or ""
+    text = attachment.get("text") or ""
+    read_error = attachment.get("read_error")
+    if max_attachment_chars and len(text) > max_attachment_chars:
+        text = text[:max_attachment_chars] + "\n...[truncated]"
+
+    summary_artifact = {
+        "type": "file",
+        "mime": mime,
+        "text": text,
+        "base64": attachment.get("base64"),
+        "filename": filename,
+        "size_bytes": attachment.get("size_bytes") or size,
+        "read_error": read_error,
+    }
+    artifact_block, artifact_meta, modality_kind = _artifact_block_for_summary(summary_artifact)
+
+    meta_line = f"filename={filename}; mime={mime}"
+    if size != "":
+        meta_line += f"; size={size}"
+
+    blocks = [f"ATTACHMENT_META:\n{meta_line}"]
+    if artifact_meta:
+        blocks.append(artifact_meta)
+    if text:
+        blocks.append(f"ATTACHMENT_TEXT:\n{text}")
+    else:
+        blocks.append("ATTACHMENT_TEXT:\n<empty_or_unavailable>")
+    if read_error:
+        blocks.append(f"READ_ERROR:\n{read_error}")
+
+    if user_prompt:
+        blocks.append(f"USER_PROMPT:\n{user_prompt}")
+
+    peers = [p for p in (other_attachments or []) if isinstance(p, dict) and p is not attachment]
+    if peers:
+        peer_lines: List[str] = []
+        for p in peers:
+            pname = (p.get("filename") or "attachment").strip()
+            pmime = (p.get("mime") or p.get("mime_type") or "application/octet-stream").strip()
+            psummary = (p.get("summary") or "").strip()
+            ptext = (p.get("text") or "")
+            if not psummary and ptext:
+                if max_peer_chars and len(ptext) > max_peer_chars:
+                    ptext = ptext[:max_peer_chars] + "\n...[truncated]"
+                psummary = ptext
+            if psummary:
+                peer_lines.append(f"{pname} ({pmime}): {psummary}")
+        if peer_lines:
+            blocks.append("OTHER_ATTACHMENTS:\n" + "\n".join(peer_lines))
+
+    system_prompt = _attachment_summary_prompt(modality_kind)
+    user_msg = "\n\n".join(blocks).strip()
+
+    from kdcube_ai_app.apps.chat.sdk.streaming.streaming import stream_agent_to_json
+
+    message_blocks: List[dict] = []
+    if artifact_block:
+        message_blocks.append({**artifact_block, "cache": True})
+    message_blocks.append({"type": "text", "text": user_msg})
+
+    role = "attachment.summary"
+    result = await stream_agent_to_json(
+        svc,
+        client_name="attachment.summary",
+        client_role="attachment.summary",
+        sys_prompt=create_cached_system_message(system_prompt, cache_last=True),
+        messages=[create_cached_human_message(message_blocks)],
+        temperature=0.2,
+        max_tokens=max_tokens,
+    )
+    logging_helpers.log_agent_packet(role, "summary", result)
+    summary = (result.get("agent_response") or "").strip()
+    if not summary:
+        return None
+    if size != "":
+        summary = f"{summary} | size:{size}"
+    return summary
 
 def _modality_system_instructions(modality_kind: Optional[str]) -> str:
     if modality_kind == "image":
@@ -252,7 +382,7 @@ async def _generate_llm_summary(
             f"{time_evidence}\n"
             "Reader = decision agent that must: (a) judge if this step is safe to build on, "
             "(b) notice hidden problems early, (c) avoid repeating the same bad step.\n\n"
-
+ 
             "HARD CONSTRAINTS:\n"
             f"- Max {token_cap} tokens total; aim for 120–160.\n"
             "- Output EXACTLY three markdown sections, in this order:\n"
@@ -397,6 +527,7 @@ async def _generate_llm_summary(
                 temperature=0.2,
                 max_tokens=token_cap,
             )
+            logging_helpers.log_agent_packet(role, "summary", result)
 
         summary = (result.get("agent_response") or "").strip()
         log.info(f"LLM summary generated ({len(summary)} chars)\n{summary}")
@@ -621,7 +752,7 @@ async def generate_llm_summary_json(
                 temperature=0.2,
                 max_tokens=token_cap,
             )
-
+        logging_helpers.log_agent_packet(role, "summary", result)
         raw = result.get("agent_response") or {}
         raw_data = (result.get("log")  or {}).get("raw_data") or ""
         # Ensure it's validated as our model, then return as plain dict
@@ -1002,7 +1133,7 @@ async def build_summary_for_tool_output(
             bundle_id=bundle_id,
             tool_id=tool_id,
             service=llm_service,
-            max_tokens=300,
+            max_tokens=2000,
             call_reason=call_reason,
             call_signature=call_signature,
             param_bindings_for_summary=param_bindings_for_summary,

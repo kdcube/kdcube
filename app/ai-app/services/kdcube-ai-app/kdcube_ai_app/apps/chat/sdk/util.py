@@ -285,8 +285,8 @@ def _to_json_safe(x):
     return x
 
 def _jd(obj):
-    # dumps with datetime-safe coercion
-    return json.dumps(_to_json_safe(obj), ensure_ascii=False)
+    # dumps with broad JSON-safe coercion (dataclasses, enums, pydantic, etc.)
+    return json.dumps(_to_jsonable(obj), ensure_ascii=False)
 
 # -----------------------------
 # Utilities

@@ -158,7 +158,10 @@ class ContextBrowser:
 
         # Seed source pool with canonical sources if present
         if bundle.canonical_sources:
-            ctx.sources_pool = bundle.canonical_sources
+            try:
+                ctx.set_sources_pool(bundle.canonical_sources, persist=False)
+            except Exception:
+                ctx.sources_pool = bundle.canonical_sources
             try:
                 ctx.max_sid = max(
                     int(s.get("sid") or 0) for s in bundle.canonical_sources if isinstance(s, dict)
@@ -234,4 +237,42 @@ class ContextBrowser:
                 level="WARNING"
             )
 
+    async def rehost_previous_attachments(
+            self,
+            bundle: ContextBundle,
+            workdir: pathlib.Path,
+            ctx: str,
+    ) -> None:
+        """
+        Rehost user attachments referenced in history to workdir, organized by turn.
+        """
+        import kdcube_ai_app.apps.chat.sdk.runtime.solution.solution_workspace as solution_workspace
 
+        try:
+            for history in (bundle.program_history or [], bundle.program_history_reconciled or []):
+                for turn in history:
+                    turn_program = next(iter(turn.values()), {})
+                    if not turn_program:
+                        continue
+                    turn_log = turn_program.get("turn_log")  or {}
+                    turn_id = turn_program.get("turn_id", "unknown_turn")
+                    user = turn_log.get("user") or {}
+                    attachments = user.get("attachments") or []
+                    if not attachments:
+                        continue
+                    rehosted = await solution_workspace.rehost_previous_attachments(
+                        attachments,
+                        workdir,
+                        turn_id=turn_id,
+                    )
+                    user["attachments"] = rehosted
+                    turn_program["user"] = user
+                    self.log.log(
+                        f"[{ctx}] Rehosted {len(attachments)} attachments from turn {turn_id} "
+                        f"to {turn_id}/attachments/ subdirectory"
+                    )
+        except Exception as e:
+            self.log.log(
+                f"[{ctx}] Warning: Failed to rehost previous attachments: {e}",
+                level="WARNING"
+            )
