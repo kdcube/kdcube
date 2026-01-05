@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Literal
 
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.presentation import SolverPresenter, SolverPresenterConfig, \
     build_runtime_inventory_from_artifact, ProgramBrief, program_brief_from_contract
-from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_url, enrich_canonical_sources_with_favicons
+from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_url, enrich_sources_pool_with_favicons
 from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable
 
 log = logging.getLogger(__name__)
@@ -126,7 +126,7 @@ class SolutionExecution:
     calls: Optional[List[dict]] = None  # tool calls made
     deliverables: Optional[Dict[str, Any]] = None  # slot -> {description, value}
     result_interpretation_instruction: Optional[str] = None
-    canonical_sources: Optional[List[Dict[str, Any]]] = None
+    sources_pool: Optional[List[Dict[str, Any]]] = None
 
 @dataclass
 class SolveResult:
@@ -304,29 +304,22 @@ class SolveResult:
         r = self._first_round()
         return (r.get("outdir"), r.get("workdir"))
 
-    def canonical_sources(self) -> List[Dict[str, Any]]:
+    def sources_pool(self) -> List[Dict[str, Any]]:
         """
-        Raw canonical sources.
-
-        NEW: prefer execution.canonical_sources (thin snapshot),
-        fall back to result.json['canonical_sources'] for older payloads.
+        Raw sources_pool from the per-turn execution.
         """
         exec_ = self.execution
-        if exec_ and getattr(exec_, "canonical_sources", None):
-            canon = exec_.canonical_sources or []
-            return [c for c in canon if isinstance(c, dict)]
+        if exec_ and getattr(exec_, "sources_pool", None):
+            pool = exec_.sources_pool or []
+            return [c for c in pool if isinstance(c, dict)]
+        return []
 
-        # Legacy path (old stored payloads)
-        rj = self.result_json() or {}
-        canon = rj.get("canonical_sources") or []
-        return [c for c in canon if isinstance(c, dict)]
-
-    def canonical_sources_map(self) -> Dict[int, Dict[str, Any]]:
+    def sources_pool_map(self) -> Dict[int, Dict[str, Any]]:
         """
-        Convenience map: sid -> canonical source dict.
+        Convenience map: sid -> source dict.
         """
         out: Dict[int, Dict[str, Any]] = {}
-        for rec in self.canonical_sources():
+        for rec in self.sources_pool():
             sid = rec.get("sid")
             if isinstance(sid, int) and sid not in out:
                 out[sid] = rec
@@ -334,44 +327,25 @@ class SolveResult:
 
     def _collect_used_from_deliverables(self) -> Tuple[set, set]:
         """
-        Returns (used_sids, used_urls) gathered from deliverables.
-        - Prefer `sources_used` objects (grab sid + url).
-        - Also consider `sources_used_sids` (SIDs only).
+        Returns (used_sids, used_urls) from sources_pool only.
+        We no longer infer usage from deliverables.
         """
-        dmap = self.deliverables_map() or {}
         used_sids, used_urls = set(), set()
-        slots = 0
-
-        for _, spec in (dmap.items() if isinstance(dmap, dict) else []):
-            slots += 1
-            art = (spec or {}).get("value") or {}
-
-            # objects w/ sid+url
-            for rec in (art.get("sources_used") or []):
-                if not isinstance(rec, dict):
-                    continue
-
-                sid = rec.get("sid")
-                if sid is not None:
-                    try:
-                        used_sids.add(int(sid))
-                    except Exception:
-                        pass
-
-                url_raw = (rec.get("url") or "").strip()
-                if url_raw:
-                    used_urls.add(normalize_url(url_raw))
-
-            # bare sid list
-            for sid in (art.get("sources_used_sids") or []):
-                try:
-                    used_sids.add(int(sid))
-                except Exception:
-                    pass
+        for rec in self.sources_pool():
+            if not isinstance(rec, dict):
+                continue
+            if not rec.get("used"):
+                continue
+            sid = rec.get("sid")
+            if isinstance(sid, int):
+                used_sids.add(sid)
+            url_raw = (rec.get("url") or "").strip()
+            if url_raw:
+                used_urls.add(normalize_url(url_raw))
 
         log.info(
-            "citations/used: from deliverables → slots=%d sids=%d urls=%d",
-            slots, len(used_sids), len(used_urls),
+            "citations/used: from sources_pool → sids=%d urls=%d",
+            len(used_sids), len(used_urls),
         )
         return used_sids, used_urls
 
@@ -379,15 +353,11 @@ class SolveResult:
         """
         Unified view: all canonical citations, each annotated with used: True/False.
 
-        - All citations = result.json['canonical_sources'].
-        - Used = deliverables' sources_used / sources_used_sids.
+        - All citations = execution.sources_pool.
+        - Used = sources_pool entries marked with used=True.
         """
-        all_canonical = self.canonical_sources()
-        used_sids, used_urls = (
-            self._collect_used_from_deliverables()
-            if self.deliverables_map()
-            else (set(), set())
-        )
+        all_canonical = self.sources_pool()
+        used_sids, used_urls = self._collect_used_from_deliverables()
 
         out: List[Dict[str, Any]] = []
         used_count = unused_count = 0
@@ -428,10 +398,10 @@ class SolveResult:
         """
         All citations for this turn, deliverables-agnostic.
 
-        Simply the canonical_sources list (result.json['canonical_sources']),
+        Simply the sources_pool list (execution.sources_pool),
         already normalized and sorted.
         """
-        return self.canonical_sources()
+        return self.sources_pool()
 
     def citations_used_only(self) -> List[Dict[str, Any]]:
         """
@@ -464,13 +434,13 @@ class SolveResult:
         Enrich canonical sources (used ones) with favicons in-place.
 
         Uses the shared module-level link preview instance automatically.
-        This modifies the canonical_sources list directly, so all views
+        This modifies the sources_pool list directly, so all views
         (citations(), citations_used_only(), etc.) will reflect the enrichment.
 
         Returns:
             Number of sources that were newly enriched
         """
-        canonical = self.canonical_sources()
+        canonical = self.sources_pool()
         if not canonical:
             return 0
 
@@ -497,7 +467,7 @@ class SolveResult:
             return 0
 
         # Enrich in-place using shared instance
-        return await enrich_canonical_sources_with_favicons(sources_to_enrich, log=log)
+        return await enrich_sources_pool_with_favicons(sources_to_enrich, log=log)
 
 
 
@@ -573,7 +543,7 @@ def _mk_solution_execution(d: Dict[str, Any]) -> SolutionExecution:
         calls=_sl(d.get("calls")),
         deliverables=_sd(d.get("deliverables")),
         result_interpretation_instruction=d.get("result_interpretation_instruction"),
-        canonical_sources=_sl(d.get("canonical_sources")),
+        sources_pool=_sl(d.get("sources_pool")),
     )
 
 def solve_result_from_full_payload(full: Dict[str, Any]) -> SolveResult:
@@ -609,7 +579,7 @@ def build_full_solver_payload(sr) -> Dict[str, Any]:
 
     plan = _to_jsonable(sr.plan)
     execution = _to_jsonable(sr.execution)
-    # Make sure execution.deliverables no longer has `sources_used`
+    # Keep execution.deliverables sources_used (SIDs only)
     execution = _filter_execution(execution)
 
     failure_presentation = _to_jsonable(sr.failure_presentation)
@@ -650,7 +620,7 @@ def build_full_solver_payload(sr) -> Dict[str, Any]:
 def _filter_execution(execution: Any) -> Any:
     """
     Given JSON-safe `execution`, return a copy where each deliverable's
-    value.sources_used is removed, but sources_used_sids is preserved.
+    value.sources_used is preserved (SIDs only).
 
     Safe to call on the result of _to_jsonable(sr.execution);
     does not mutate sr.execution.
@@ -673,12 +643,6 @@ def _filter_execution(execution: Any) -> Any:
 
         spec_copy = dict(spec)
         art = spec_copy.get("value")
-
-        if isinstance(art, dict):
-            art_copy = dict(art)
-            # Drop heavy duplication; keep SIDs
-            art_copy.pop("sources_used", None)
-            spec_copy["value"] = art_copy
 
         new_delivs[slot] = spec_copy
 

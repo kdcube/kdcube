@@ -69,7 +69,7 @@ def _latest_with_deliverables(history: List[Dict[str, Any]]) -> Tuple[Optional[s
 def _flatten_history_citations(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Returns newest-first flat list of normalized {url,title,text,sid?, run_id}.
-    Uses 'web_links_citations.items' from each turn.
+    Uses per-turn sources_pool from turn logs.
     """
     flat: List[Dict[str, Any]] = []
     for item in (history or []):
@@ -77,8 +77,8 @@ def _flatten_history_citations(history: List[Dict[str, Any]]) -> List[Dict[str, 
             run_id, inner = next(iter(item.items()))
         except Exception:
             continue
-        cites = ((inner.get("web_links_citations") or {}).get("items")) or []
-        for c in cites:
+        pool = inner.get("sources_pool") or (inner.get("turn_log") or {}).get("sources_pool") or []
+        for c in normalize_sources_any(pool):
             if not isinstance(c, dict):
                 continue
             # url = _norm_url(c.get("url") or c.get("href") or "")
@@ -108,8 +108,8 @@ def _reconcile_history_sources(
     a per-run mapping old_sid -> global_sid.
 
     Returns:
-      (canonical_sources, sid_maps)
-        canonical_sources: [{sid,int, url,title,text}]
+      (sources_pool, sid_maps)
+        sources_pool: [{sid,int, url,title,text}]
         sid_maps: { run_id: { old_sid:int -> new_sid:int }, ... }
     """
     flat = _flatten_history_citations(history)  # newest-first
@@ -553,11 +553,11 @@ class ContextTools:
             rewrite_tokens_in_place=True  # This patches [[S:n]] in text
         )
 
-        canonical_sources = reconciled["canonical_sources"]  # [{sid, url, title, text, ...}]
+        sources_pool = reconciled["sources_pool"]  # [{sid, url, title, text, ...}]
         sid_maps = reconciled["sid_maps"]  # {run_id: {old_sid -> global_sid}}
 
         # Quick lookup by global SID
-        sources_by_sid = {s["sid"]: s for s in canonical_sources}
+        sources_by_sid = {s["sid"]: s for s in sources_pool}
         # ===== END KEY ADDITION =====
 
         # Build result (now with reconciled citations)
@@ -577,14 +577,16 @@ class ContextTools:
 
             # Deliverables
             deliverables_list = meta.get("deliverables") or []
-            assistant = (meta.get("assistant") or "").strip()
-            user_msg = (meta.get("user") or {}).get("prompt") or ""
+            assistant_obj = (meta.get("assistant") or {}) if isinstance(meta.get("assistant"), dict) else {}
+            completion_obj = assistant_obj.get("completion") if isinstance(assistant_obj.get("completion"), dict) else {}
+            assistant = (completion_obj.get("text") or "").strip()
+            user_obj = (meta.get("user") or {}) if isinstance(meta.get("user"), dict) else {}
+            prompt_obj = user_obj.get("prompt") if isinstance(user_obj.get("prompt"), dict) else {}
+            user_msg = (prompt_obj.get("text") or "").strip()
             turn_log = meta.get("turn_log") or {}
             deliverables_dict = {}
 
             # Get global sources for this turn
-            # turn_sources = ((meta.get("web_links_citations") or {}).get("items")) or []
-            # sid_to_source = {ts["sid"]: ts for ts in turn_sources}
             for d in deliverables_list:
                 slot_name = d.get("slot")
                 if not slot_name or slot_name in {"project_log", "project_canvas"}:
@@ -614,10 +616,17 @@ class ContextTools:
                     slot_data["gaps"] = gaps
 
                 # ===== Materialize sources_used =====
-                # Extract SIDs used in this slot's text
+                # Extract SIDs used in this slot's text or sources_used fields
                 from kdcube_ai_app.apps.chat.sdk.tools.citations import sids_in_text
 
-                sids_used = sids_in_text(slot_data["text"])
+                sids_used = set(sids_in_text(slot_data["text"]))
+                for sid in (artifact.get("sources_used") or []):
+                    if isinstance(sid, (int, float)):
+                        sids_used.add(int(sid))
+                for sid in (artifact.get("sources_used_sids") or []):
+                    if isinstance(sid, (int, float)):
+                        sids_used.add(int(sid))
+                sids_used = sorted(sids_used)
 
                 slot_data["sources_used"] = [
                     sources_by_sid[sid] for sid in sids_used if sid in sources_by_sid
@@ -657,14 +666,22 @@ class ContextTools:
                 "  {\"ret\": <value|null>, \"err\": <null|{code,message,details?}>}\n"
                 "\n"
                 "IMPORTANT NAMESPACES\n"
+                "• All entities are artifacts (user prompt, assistant completion, attachments, tool results, slots).\n"
                 "• Slots are contract deliverables for a turn (final outputs).\n"
                 "  Paths: <turn_id>.slots...\n"
-                "• artifacts are intermediate artifacts produced by tool calls in the CURRENT TURN ONLY.\n"
+                "• Tool artifacts are intermediate artifacts produced by tool calls in the CURRENT TURN ONLY.\n"
                 "  Paths: current_turn.artifacts...\n"
                 "\n"
                 "PATH FORMAT\n"
                 "• Root: <turn_id> or current_turn -> returns turn view {turn_id,user,assistant,slots,artifacts}\n"
-                "• Messages: <turn_id>.user | <turn_id>.assistant | current_turn.user | current_turn.assistant\n"
+                "• Artifacts (ALL entities):\n"
+                "  - <turn_id>.user.prompt\n"
+                "  - <turn_id>.assistant.completion\n"
+                "  - <turn_id>.user.attachments.<artifact_name>\n"
+                "  - current_turn.artifacts.<artifact_id>\n"
+                "  - <turn_id>.slots.<artifact_name>\n"
+                "  You may append a leaf (.text/.summary/.mime/...) where applicable.\n"
+                "• Messages (compat aliases): <turn_id>.user | <turn_id>.assistant | current_turn.user | current_turn.assistant\n"
                 "Forgiving behavior: if the agent accidentally appends segments (e.g. turn_12.assistant.whatever),\n"
                 "the tool will ignore extra segments and treat it as turn_12.assistant.\n"
                 "• Slots (deliverables): <turn_id>.slots | <turn_id>.slots.<slot> | <turn_id>.slots.<slot>.<leaf>\n"
@@ -710,6 +727,25 @@ class ContextTools:
                 "• For historical turns: artifacts is always {} (not stored historically).\n"
                 "• For current_turn: artifacts can be non-empty.\n"
                 "\n"
+                "CANONICAL ARTIFACT SHAPE (ALL ENTITIES)\n"
+                "{\n"
+                "  \"artifact_name\": \"...\",\n"
+                "  \"artifact_tag\": \"chat:user\"|\"chat:assistant\"|\"artifact:user.attachment\"|\"artifact:assistant.file\"|..., \n"
+                "  \"artifact_kind\": \"inline\"|\"file\",\n"
+                "  \"artifact_type\"?: \"...\",          # optional human-readable type\n"
+                "  \"format\"?: \"markdown\"|\"json\"|\"html\"|...,   # for inline\n"
+                "  \"mime\"?: \"text/plain\"|\"application/pdf\"|...,  # for file\n"
+                "  \"summary\"?: \"...\",                # semantic/structural summary (shown in journal)\n"
+                "  \"sources_used\"?: [sid, sid, ...]\n"
+                "  # payload fields: text/base64/path/filename/hosted_uri/rn/etc.\n"
+                "}\n"
+                "\n"
+                "Common payload fields:\n"
+                "  - text: inline content (prompt/completion/inline artifacts)\n"
+                "  - base64: binary payload for attachments (if available)\n"
+                "  - summary: semantic/structural summary of content\n"
+                "  - artifact_type: optional human-readable type hint\n"
+                "\n"
                 "TYPICAL SLOT OBJECT SHAPE (in turn_view.slots[slot_name])\n"
                 "Slots are produced by solver mapping and look like one of these:\n"
                 "\n"
@@ -719,7 +755,7 @@ class ContextTools:
                 "  \"format\": \"text\"|\"markdown\"|\"json\"|..., \n"
                 "  \"text\": \"...\",                 # authoritative text representation\n"
                 "  \"description\": \"...\",\n"
-                "  \"sources_used\": [ {\"sid\":..., \"url\":..., \"title\":..., \"body\"?:...}, ... ],\n"
+                "  \"sources_used\": [sid, sid, ...],\n"
                 "  \"summary\"?: \"...\",\n"
                 "  \"gaps\"?: \"...\",\n"
                 "  \"draft\"?: true\n"
@@ -733,7 +769,7 @@ class ContextTools:
                 "  \"filename\"?: \"...\",\n"
                 "  \"text\": \"...\",                 # authoritative surrogate text\n"
                 "  \"description\": \"...\",\n"
-                "  \"sources_used\": [ {\"sid\":..., \"url\":..., \"title\":..., \"body\"?:...}, ... ],\n"
+                "  \"sources_used\": [sid, sid, ...],\n"
                 "  \"summary\"?: \"...\",\n"
                 "  \"gaps\"?: \"...\",\n"
                 "  \"draft\"?: true\n"
@@ -744,7 +780,7 @@ class ContextTools:
                 "  \"tool_id\": \"...\",\n"
                 "  \"value\": <any - the shape defined by tool produced it, any nested shape will be clear from playbook>,\n"
                 "  \"summary\": \"...\",\n"
-                "  \"sources_used\": [ ... ],\n"
+                "  \"sources_used\": [sid, sid, ...],\n"
                 "  \"timestamp\": <float>,\n"
                 "  \"inputs\": { ... },\n"
                 "  \"call_record\": {\"rel\":..., \"abs\":...},\n"
@@ -800,10 +836,7 @@ class ContextTools:
 
         def _extract_user(turn_blob: Any) -> Any:
             if isinstance(turn_blob, dict):
-                u = turn_blob.get("user")
-                if isinstance(u, dict):
-                    return u.get("prompt") if u.get("prompt") is not None else u.get("text")
-                return u
+                return turn_blob.get("user")
             return None
 
         def _extract_assistant(turn_blob: Any) -> Any:
@@ -828,6 +861,57 @@ class ContextTools:
                 "slots": _extract_slots(turn_blob),
                 "artifacts": _extract_artifacts(turn_blob) if include_artifacts else {}
             }
+
+        def _sources_pool_for_turn(turn_blob: Dict[str, Any], ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
+            if not isinstance(turn_blob, dict):
+                return ctx.get("sources_pool") or []
+            pool = turn_blob.get("sources_pool")
+            if not pool and isinstance(turn_blob.get("turn_log"), dict):
+                pool = turn_blob["turn_log"].get("sources_pool")
+            if not pool:
+                pool = ctx.get("sources_pool")
+            return pool or []
+
+        def _materialize_sources_used(obj: Any, sources_pool: List[Dict[str, Any]]) -> Any:
+            if not sources_pool:
+                return obj
+            by_sid = {
+                int(s.get("sid")): s
+                for s in sources_pool
+                if isinstance(s, dict) and isinstance(s.get("sid"), (int, float))
+            }
+
+            def _materialize_one(item: Any) -> Any:
+                if isinstance(item, dict):
+                    out = dict(item)
+                    sids: List[int] = []
+                    su = out.get("sources_used")
+                    if isinstance(su, list):
+                        for entry in su:
+                            if isinstance(entry, (int, float)):
+                                sids.append(int(entry))
+                            elif isinstance(entry, dict):
+                                sid = entry.get("sid")
+                                if isinstance(sid, (int, float)):
+                                    sids.append(int(sid))
+                    if not sids:
+                        su_alt = out.get("sources_used_sids")
+                        if isinstance(su_alt, list):
+                            for sid in su_alt:
+                                if isinstance(sid, (int, float)):
+                                    sids.append(int(sid))
+                    if sids:
+                        out["sources_used"] = [
+                            by_sid[sid] for sid in sorted(set(sids)) if sid in by_sid
+                        ]
+                    if isinstance(out.get("value"), (dict, list)):
+                        out["value"] = _materialize_one(out.get("value"))
+                    return out
+                if isinstance(item, list):
+                    return [_materialize_one(x) for x in item]
+                return item
+
+            return _materialize_one(obj)
 
         try:
             if not isinstance(path, str) or not path.strip():
@@ -871,37 +955,42 @@ class ContextTools:
 
             # ---- Root turn fetch ----
             if len(parts) == 1:
-                return {"ret": turn_view, "err": None}
+                sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                return {"ret": _materialize_sources_used(turn_view, sources_pool), "err": None}
 
             # Normalize first segment in the working path
             parts[0] = tid
 
             # ---- Messages: current_turn.user/current_turn.assistant are NOT handled by resolve_path ----
-            if parts[1] in {"user", "assistant"}:
+            if parts[1] in {"user", "assistant"} and len(parts) == 2:
                 leaf = parts[1]
                 if is_current:
                     if leaf == "user":
-                        return {"ret": (turn_view.get("user")), "err": None}
+                        sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                        return {"ret": _materialize_sources_used(turn_view.get("user"), sources_pool), "err": None}
                     if leaf == "assistant":
-                        return {"ret": (turn_view.get("assistant")), "err": None}
+                        sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                        return {"ret": _materialize_sources_used(turn_view.get("assistant"), sources_pool), "err": None}
                 # prior messages: let resolve_path do it (it already knows turn.user / turn.assistant)
                 normalized_path = ".".join(parts[:2])
                 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
                 rctx = ReactContext.load_from_dict(ctx)
-                val, _owner = rctx.resolve_path(normalized_path, mode="full")
+                val, _owner = rctx.resolve_path(normalized_path)
                 if val is None:
                     return {"ret": None, "err": _err("not_found", "Path not found", {"normalized_path": normalized_path})}
-                return {"ret": val, "err": None}
+                sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                return {"ret": _materialize_sources_used(val, sources_pool), "err": None}
 
-            # ---- User nested fields (prompt/input_summary/attachments) ----
+            # ---- User nested fields (prompt/attachments) ----
             if parts[1] == "user" and len(parts) >= 3:
                 normalized_path = ".".join(parts)
                 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
                 rctx = ReactContext.load_from_dict(ctx)
-                val, _owner = rctx.resolve_path(normalized_path, mode="full")
+                val, _owner = rctx.resolve_path(normalized_path)
                 if val is None:
                     return {"ret": None, "err": _err("not_found", "Path not found", {"normalized_path": normalized_path})}
-                return {"ret": val, "err": None}
+                sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                return {"ret": _materialize_sources_used(val, sources_pool), "err": None}
 
             # ---- Tool results: must be current turn; forgive historical prefix by rewriting to current_turn ----
             if parts[1] == "artifacts" and not is_current:
@@ -912,13 +1001,15 @@ class ContextTools:
             if parts[1] == "slots":
                 # <turn>.slots
                 if len(parts) == 2:
-                    return {"ret": turn_view.get("slots") or {}, "err": None}
+                    sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                    return {"ret": _materialize_sources_used(turn_view.get("slots") or {}, sources_pool), "err": None}
                 # <turn>.slots.<slot>
                 if len(parts) == 3:
                     slot_obj = (turn_view.get("slots") or {}).get(parts[2])
                     if slot_obj is None:
                         return {"ret": None, "err": _err("not_found", "Slot not found", {"slot": parts[2], "turn": parts[0]})}
-                    return {"ret": slot_obj, "err": None}
+                    sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                    return {"ret": _materialize_sources_used(slot_obj, sources_pool), "err": None}
 
                 # hard rule: forbid '.value' anywhere under slots
                 i = 1  # index of "slots"
@@ -943,14 +1034,16 @@ class ContextTools:
                     if leaf not in slot_obj:
                         return {"ret": None, "err": _err("not_found", "Slot leaf not found", {"slot": slot_name, "leaf": leaf, "turn": parts[0]})}
 
-                    return {"ret": slot_obj.get(leaf), "err": None}
+                    sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                    return {"ret": _materialize_sources_used(slot_obj.get(leaf), sources_pool), "err": None}
 
             if parts[1] == "artifacts":
                 # current_turn.artifacts
                 if len(parts) == 2:
                     from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
                     rctx = ReactContext().load_from_dict(ctx)
-                    return {"ret": rctx.artifacts or {}, "err": None}
+                    sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                    return {"ret": _materialize_sources_used(rctx.artifacts or {}, sources_pool), "err": None}
                 # current_turn.artifacts.<id>
                 if len(parts) == 3:
                     from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
@@ -958,7 +1051,8 @@ class ContextTools:
                     obj = (rctx.artifacts or {}).get(parts[2])
                     if obj is None:
                         return {"ret": None, "err": _err("not_found", "Tool result not found", {"artifact_id": parts[2]})}
-                    return {"ret": obj, "err": None}
+                    sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+                    return {"ret": _materialize_sources_used(obj, sources_pool), "err": None}
                 # forgive ".summary.*" -> ".summary"
                 if len(parts) > 4 and parts[3] == "summary":
                     parts = parts[:4]
@@ -968,12 +1062,13 @@ class ContextTools:
             # ---- Resolve leaf via ReactContext.resolve_path (full, no truncation) ----
             from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
             rctx = ReactContext.load_from_dict(ctx)
-            val, _owner = rctx.resolve_path(normalized_path, mode="full")
+            val, _owner = rctx.resolve_path(normalized_path)
 
             if val is None:
                 return {"ret": None, "err": _err("not_found", "Path not found", {"normalized_path": normalized_path})}
 
-            return {"ret": val, "err": None}
+            sources_pool = _sources_pool_for_turn(turn_blob, ctx)
+            return {"ret": _materialize_sources_used(val, sources_pool), "err": None}
 
         except Exception as e:
             log.exception("fetch_ctx failed")

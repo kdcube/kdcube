@@ -162,16 +162,17 @@ def _max_sid_from_context(outdir: pathlib.Path) -> int:
             return 0
         import json as _json
         data = _json.loads(p.read_text(encoding="utf-8"))
-        ph = data.get("program_history") or []
         mx = 0
-        for entry in ph:
-            if not isinstance(entry, dict):
-                continue
-            rec = next(iter(entry.values()), {})  # {"<exec_id>": {...}}
-            items = (((rec or {}).get("web_links_citations") or {}).get("items") or [])
-            for it in items:
+        for row in (data.get("sources_pool") or []):
+            try:
+                mx = max(mx, int(row.get("sid") or 0))
+            except Exception:
+                pass
+        for turn in (data.get("prior_turns") or {}).values():
+            pool = (turn or {}).get("sources_pool") or []
+            for row in pool:
                 try:
-                    mx = max(mx, int(it.get("sid") or 0))
+                    mx = max(mx, int(row.get("sid") or 0))
                 except Exception:
                     pass
         return mx

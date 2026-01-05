@@ -5,6 +5,7 @@
 
 import json
 import pathlib
+import traceback
 
 import time
 import uuid
@@ -25,8 +26,6 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.protocol import (
 )
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import (
     _promote_tool_calls,
-    _canonical_sources_from_citable_tools_generators,
-    _enrich_canonical_sources_with_deliverables,
     normalize_contract_deliverables,
 )
 
@@ -527,12 +526,14 @@ class ReactSolver:
         logger: AgentLogger,
         label: str,
         round_snapshot_artifact_ids: Optional[List[str]] = None,
+        planned_artifact_names: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Mandatory best-effort mapping (called only from DECISION node):
           - Apply mapping only once per round (guarded by caller).
           - Mapping allowed ONLY to artifacts that existed before this round:
               for current_turn.artifacts.<ID>... require <ID> in round snapshot.
+          - Do not map to artifacts planned for the *current* tool call.
           - Never hard-fail the run if mapping fails.
         """
         applied: List[str] = []
@@ -540,6 +541,7 @@ class ReactSolver:
         errors: List[Dict[str, Any]] = []
 
         snapshot_set = set(round_snapshot_artifact_ids or [])
+        planned_set = set(planned_artifact_names or [])
 
         for ms in (map_slots or []):
             if not isinstance(ms, dict):
@@ -548,6 +550,15 @@ class ReactSolver:
             sp = (ms.get("source_path") or ms.get("artifact") or "").strip()
             if not slot_name or not sp:
                 dropped.append({"slot_name": slot_name, "source_path": sp, "reason": "missing_slot_or_path"})
+                continue
+
+            # prevent mapping to future artifact(s)
+            if planned_set and any(sp.startswith(f"current_turn.artifacts.{nm}") for nm in planned_set):
+                dropped.append({"slot_name": slot_name, "source_path": sp, "reason": "future_artifact"})
+                try:
+                    context.add_event(kind="mapping_dropped_future_artifact", data={"slot": slot_name, "source_path": sp})
+                except Exception:
+                    pass
                 continue
 
             # # Enforce “artifact existed BEFORE this round” (strict only for current_turn.artifacts.<ID>)
@@ -562,10 +573,11 @@ class ReactSolver:
 
             # Resolvability check (must exist now; decision already saw it)
             try:
-                val, _owner = context.resolve_path(sp, mode="summary")
+                val, _owner = context.resolve_path(sp)
                 obj_now = context.resolve_object(sp)
                 resolvable = (val is not None) or isinstance(obj_now, (dict, list, str))
             except Exception:
+                self.log.log(f"[_safe_apply_mappings_best_effort.resolve_path.failure]. {traceback.format_exc()}", "ERROR")
                 resolvable = False
 
             if not resolvable:
@@ -573,6 +585,7 @@ class ReactSolver:
                 try:
                     context.add_event(kind="mapping_dropped_unseen_artifact", data={"slot": slot_name, "source_path": sp})
                 except Exception:
+                    self.log.log(f"[_safe_apply_mappings_best_effort.event.mapping_dropped_unseen_artifact.failure]. {traceback.format_exc()}", "ERROR")
                     pass
                 continue
 
@@ -595,11 +608,13 @@ class ReactSolver:
                         if aid:
                             art_now.setdefault("mapped_artifact_id", aid)
                 except Exception:
+                    self.log.log(f"[_safe_apply_mappings_best_effort._extract_current_turn_artifact_id]. {traceback.format_exc()}", "ERROR")
                     pass
                 try:
                     line = context.slot_mapping_trace(ms, label=label)
                     self.scratchpad.tlog.solver(line)
                 except Exception:
+                    self.log.log(f"[_safe_apply_mappings_best_effort.slot_mapping_trace]. {traceback.format_exc()}", "ERROR")
                     pass
             except Exception as e:
                 errors.append({"slot_name": slot_name, "source_path": sp, "error": str(e)[:200]})
@@ -684,7 +699,38 @@ class ReactSolver:
     async def _decision_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         it = int(state["iteration"])
         context: ReactContext = state["context"]
+        # Force reload from persisted state
+        # if context.outdir:
+        #     try:
+        #         ctx_path = context.outdir / "context.json"
+        #         if ctx_path.exists():
+        #             payload = json.loads(ctx_path.read_text(encoding="utf-8"))
+        #             context = ReactContext.load_from_dict(payload)
+        #             context.bind_storage(context.outdir)
+        #             state["context"] = context
+        #     except Exception as e:
+        #         self.log.log(f"Failed to reload context: {e}", level="WARNING")
 
+        # === DEBUG: Check context state ===
+        self.log.log(
+            f"[react.decision.{it}] Context check: "
+            f"context_id={id(context)}, "
+            f"artifacts_keys={list(context.artifacts.keys())}, "
+            f"outdir={context.outdir}",
+            level="INFO"
+        )
+        # Also check what's on disk
+        if context.outdir:
+            ctx_path = context.outdir / "context.json"
+            if ctx_path.exists():
+                disk_data = json.loads(ctx_path.read_text(encoding="utf-8"))
+                disk_artifacts = (disk_data.get("current_turn") or {}).get("artifacts") or {}
+                self.log.log(
+                    f"[react.decision.{it}] Disk check: "
+                    f"artifacts_keys={list(disk_artifacts.keys())}",
+                    level="INFO"
+                )
+            # === END DEBUG ===
         # ---------- Budget hard gate ----------
         bs = getattr(context, "budget_state", None)
         if bs is not None and bs.must_finish():
@@ -745,9 +791,12 @@ class ReactSolver:
             context=context,
             output_contract=state["output_contract"],
             turn_view_class=self.turn_view_class,
+            show_artifacts=state.get("show_artifacts"),
             is_codegen_agent=False,
             coordinator_turn_line=state.get("coordinator_turn_line"),
         )
+        if state.get("show_artifacts"):
+            state["show_artifacts"] = None
         contract_for_agent = {k: v.model_dump() for k, v in (state["output_contract"] or {}).items()}
         announced_adapters = [
             a for a in state["adapters"]
@@ -877,6 +926,7 @@ class ReactSolver:
                         level="INFO",
                     )
                     show_items = context.materialize_show_artifacts(show_paths)
+                    state["show_artifacts"] = show_items or []
                     fetch_context_tool_retrieval_example = ""
                     if tool_call_id == "codegen_tools.codegen_python":
                         fetch_context_tool_retrieval_example = "ctx_tools.fetch_ctx([<turn_id>.artifacts.<ID>])"
@@ -920,47 +970,21 @@ class ReactSolver:
         seen = set()
         planned_names = [x for x in planned_names if not (x in seen or seen.add(x))]
 
-        # Only map artifacts that already exist (and not the ones about to be produced)
+        # Normalize map_slots payload only (all gating happens in _safe_apply_mappings_best_effort)
         filtered_maps: List[Dict[str, Any]] = []
         snap_ids = state.get("round_snapshot_artifact_ids") or []
-        snap_set = set(snap_ids)
 
         for ms in requested_maps:
             slot_name = (ms.get("slot_name") or "").strip()
             sp = (ms.get("source_path") or ms.get("artifact") or "").strip()
             if not slot_name or not sp:
                 continue
-            # prevent mapping to future artifact(s)
-            if planned_names and any(sp.startswith(f"current_turn.artifacts.{nm}") for nm in planned_names):
-                context.add_event(kind="mapping_dropped_future_artifact", data={"slot": slot_name, "source_path": sp})
-                continue
-
-            # Enforce “current_turn.artifacts.<ID> must exist in round snapshot”
-            aid = self._extract_current_turn_artifact_id(sp)
-            if aid is not None and aid not in snap_set:
-                context.add_event(kind="mapping_dropped_not_in_round_snapshot", data={"slot": slot_name, "source_path": sp})
-                continue
-
-            # Must be resolvable now (decision saw it)
-            try:
-                val, _owner = context.resolve_path(sp, mode="summary")
-                obj_now = context.resolve_object(sp)
-                resolvable = (val is not None) or isinstance(obj_now, (dict, list, str))
-            except Exception:
-                resolvable = False
-
-            if not resolvable:
-                context.add_event(kind="mapping_dropped_unseen_artifact", data={"slot": slot_name, "source_path": sp})
-                continue
-
             one_map: Dict[str, Any] = {"slot_name": slot_name, "source_path": sp}
             if "draft" in ms:
                 one_map["draft"] = bool(ms.get("draft"))
             gaps = ms.get("gaps")
             if isinstance(gaps, str) and gaps.strip():
-                # keep it short-ish defensively
-                one_map["gaps"] = gaps.strip()[:200]
-
+                one_map["gaps"] = gaps.strip()
             filtered_maps.append(one_map)
 
         if requested_maps:
@@ -1011,6 +1035,7 @@ class ReactSolver:
                 logger=self.log,
                 label="react.map.decision_once",
                 round_snapshot_artifact_ids=snap_ids,
+                planned_artifact_names=planned_names,
             )
             state["mapped_round_index"] = state.get("round_index")
 
@@ -1420,7 +1445,7 @@ class ReactSolver:
 
 
             # Sources handling
-            srcs_for_artifact: List[Dict[str, Any]] = []
+            srcs_for_artifact: List[Any] = []
             if tools_insights.is_search_tool(tool_id):
                 out = tr.get("output")
                 if isinstance(out, list):
@@ -1431,7 +1456,9 @@ class ReactSolver:
                         workdir=workdir,
                         outdir=outdir,
                     )
-                    srcs_for_artifact = context.remap_sources_to_pool_sids(srcs_for_artifact)
+                    srcs_for_artifact = context._extract_source_sids(
+                        context.remap_sources_to_pool_sids(srcs_for_artifact)
+                    )
                     context.add_event(kind="search_sources_merged", data={
                         "tool": tool_id,
                         "tool_call_id": tool_call_id,
@@ -1498,7 +1525,9 @@ class ReactSolver:
                         outdir=outdir,
                     )
                     # Rewrite our rows to use the pool SIDs
-                    srcs_for_artifact = context.remap_sources_to_pool_sids(srcs_for_artifact)
+                    srcs_for_artifact = context._extract_source_sids(
+                        context.remap_sources_to_pool_sids(srcs_for_artifact)
+                    )
                     context.add_event(kind="fetch_sources_merged", data={
                         "tool": tool_id,
                         "added": len(srcs_for_artifact),
@@ -1513,7 +1542,7 @@ class ReactSolver:
 
                 # Optionally reconcile with existing pool SIDs
                 if srcs_for_artifact:
-                    srcs_for_artifact = context._reconcile_sources_lists([srcs_for_artifact])
+                    srcs_for_artifact = context.ensure_sources_in_pool(srcs_for_artifact)
 
             # Register artifact
             tool_call_item_index = tr.get("tool_call_item_index") or None
@@ -1929,10 +1958,13 @@ class ReactSolver:
 
         # -------- 3) Promote tool calls & build canonical citation space --------
         promoted = _promote_tool_calls(raw_files, outdir)
-        canonical_list, canonical_by_sid = _canonical_sources_from_citable_tools_generators(promoted)
-        canonical_list, canonical_by_sid = _enrich_canonical_sources_with_deliverables(
-            canonical_list, canonical_by_sid, out_dyn
-        )
+        sources_pool = [s for s in (context.sources_pool or []) if isinstance(s, dict)]
+        sources_pool.sort(key=lambda s: int(s.get("sid") or 0))
+        canonical_by_sid = {
+            int(s.get("sid")): s
+            for s in sources_pool
+            if isinstance(s.get("sid"), (int, float))
+        }
 
         # -------- 4) Normalize slots with canonical SIDs, then merge with promoted tool artifacts --------
         normalized_slots = normalize_contract_deliverables(out_dyn, canonical_by_sid=canonical_by_sid)
@@ -1962,7 +1994,7 @@ class ReactSolver:
             "ok": ok,
             "out": merged_out,
             "contract": contract_dump,
-            "canonical_sources": canonical_list,
+            "sources_pool": sources_pool,
             "raw_files": raw_files,
             "react_timings": {
                 "rounds": state.get("round_timings") or [],

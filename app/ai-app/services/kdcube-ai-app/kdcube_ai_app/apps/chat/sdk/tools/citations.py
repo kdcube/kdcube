@@ -1242,19 +1242,19 @@ def adapt_source_for_llm(
 
     return out
 
-async def enrich_canonical_sources_with_favicons(
-        canonical_sources: List[Dict[str, Any]],
+async def enrich_sources_pool_with_favicons(
+        sources_pool: List[Dict[str, Any]],
         log
 ) -> int:
     """
-    Enrich canonical sources with favicons in-place (FAST batch operation).
+    Enrich sources_pool with favicons in-place (FAST batch operation).
 
     Uses the shared module-level AsyncLinkPreview instance automatically.
     No need to pass or manage instances - it's handled transparently.
 
     - Single HTTP session for all requests (5-10x faster than individual)
     - Only processes sources without existing 'favicon' key (idempotent)
-    - Updates canonical_sources list in-place
+    - Updates sources_pool list in-place
     - Returns count of newly enriched sources
 
     Performance:
@@ -1262,14 +1262,14 @@ async def enrich_canonical_sources_with_favicons(
     - 50 URLs: ~1-2s
     - 100 URLs: ~2-4s
     """
-    if not canonical_sources:
+    if not sources_pool:
         return 0
 
     # Find sources that need enrichment
     to_enrich = []
     url_to_source = {}
 
-    for src in canonical_sources:
+    for src in sources_pool:
         if not isinstance(src, dict):
             continue
         if "favicon" in src:  # Already enriched
@@ -1283,7 +1283,7 @@ async def enrich_canonical_sources_with_favicons(
         log.debug("enrich_favicons: all sources already enriched")
         return 0
 
-    log.info(f"enrich_favicons: batch enriching {len(to_enrich)}/{len(canonical_sources)} sources")
+    log.info(f"enrich_favicons: batch enriching {len(to_enrich)}/{len(sources_pool)} sources")
 
     # Import and get shared instance
     try:

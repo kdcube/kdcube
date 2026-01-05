@@ -117,6 +117,8 @@ class TurnScratchpad:
 
         # Answer section
         self.answer = None
+        self.answer_raw = None
+        self.answer_used_sids: List[int] = []
         self.avec = None
         self.service_error = None
         self.turn_summary = None
@@ -294,17 +296,14 @@ class TurnScratchpad:
             tl["solver_result"] = build_full_solver_payload(self.solver_result)
         if self.turn_summary:
             tl["turn_summary"] = _to_jsonable(self.turn_summary)
+        prompt_artifact = self._user_prompt_artifact_payload()
+        completion_artifact = self._assistant_completion_artifact_payload()
         tl["assistant"] = {
-            "completion": self.answer,
-            "completion_artifact": self._assistant_completion_artifact_payload(),
+            "completion": completion_artifact,
             "files": self._compact_assistant_files_for_turn_log(),
         }
         tl["user"] = {
-            "prompt": (self.user_text or "").strip(),
-            "input_summary": (self.user_input_summary or "").strip(),
-            "summary": (self.user_input_summary or "").strip(),
-            "inv": (self.user_input_summary or "").strip(),
-            "prompt_artifact": self._user_prompt_artifact_payload(),
+            "prompt": prompt_artifact,
             "attachments": self._compact_user_attachments_for_turn_log(),
         }
         tl["sources_pool"] = self.sources_pool
@@ -374,30 +373,36 @@ class TurnScratchpad:
         text = (self.user_text or "").strip()
         return {
             "artifact_name": "prompt",
+            "artifact_tag": "chat:user",
+            "artifact_kind": "inline",
+            "artifact_type": "user.prompt",
             "summary": (self.user_input_summary or "").strip(),
             "text": text,
             "mime": "text/plain",
             "format": "markdown",
             "size": len(text),
-            "used_sids": [],
+            "sources_used": [],
             "kind": "text",
         }
 
     def _assistant_completion_artifact_payload(self) -> Optional[Dict[str, Any]]:
-        if not (self.answer or "").strip():
+        if not ((self.answer_raw or self.answer) or "").strip():
             return None
         summary = ""
         if isinstance(self.turn_summary, dict):
             summary = (self.turn_summary.get("assistant_answer") or "").strip()
-        text = (self.answer or "").strip()
+        text = (self.answer_raw or self.answer or "").strip()
         return {
             "artifact_name": "completion",
+            "artifact_tag": "chat:assistant",
+            "artifact_kind": "inline",
+            "artifact_type": "assistant.completion",
             "summary": summary,
             "text": text,
             "mime": "text/plain",
             "format": "markdown",
             "size": len(text),
-            "used_sids": self._used_sids_from_sources(self.citations),
+            "sources_used": list(self.answer_used_sids or self._used_sids_from_sources(self.citations)),
             "kind": "text",
         }
 
@@ -445,8 +450,8 @@ class TurnScratchpad:
             return
         items = self.produced_files or []
         self._ensure_produced_file_artifact_names([item])
-        if "used_sids" not in item:
-            item["used_sids"] = self._used_sids_from_sources(item.get("sources_used"))
+        if "sources_used" not in item:
+            item["sources_used"] = self._used_sids_from_sources(item.get("sources_used"))
         art_name = (item.get("artifact_name") or "").strip()
         hosted_uri = (item.get("hosted_uri") or "").strip()
         rn = (item.get("rn") or "").strip()
@@ -472,6 +477,9 @@ class TurnScratchpad:
                 "mid": a.get("mid"),
                 "filename": (a.get("filename") or "attachment").strip(),
                 "artifact_name": (a.get("artifact_name") or "").strip(),
+                "artifact_tag": "artifact:user.attachment",
+                "artifact_kind": "file",
+                "artifact_type": "user.attachment",
                 "mime": (a.get("mime") or a.get("mime_type") or "").strip(),
                 "size": a.get("size") or a.get("size_bytes"),
                 "hosted_uri": a.get("hosted_uri") or a.get("source_path") or a.get("path"),
@@ -479,7 +487,7 @@ class TurnScratchpad:
                 "text": (a.get("text") or ""),
                 "base64": a.get("base64"),
                 "summary": (a.get("summary") or "").strip(),
-                "used_sids": [],
+                "sources_used": [],
                 "kind": "file"
             })
         return out
@@ -494,6 +502,9 @@ class TurnScratchpad:
                 "mid": f.get("mid"),
                 "filename": (f.get("filename") or "file").strip(),
                 "artifact_name": (f.get("artifact_name") or "").strip(),
+                "artifact_tag": "artifact:assistant.file",
+                "artifact_kind": "file",
+                "artifact_type": "assistant.file",
                 "mime": (f.get("mime") or f.get("mime_type") or "").strip(),
                 "size": f.get("size") or f.get("size_bytes"),
                 "hosted_uri": f.get("hosted_uri") or f.get("source_path") or f.get("path"),
@@ -501,7 +512,7 @@ class TurnScratchpad:
                 "key": f.get("key"),
                 "text": (f.get("text") or ""),
                 "summary": (f.get("summary") or "").strip(),
-                "used_sids": f.get("used_sids") or self._used_sids_from_sources(f.get("sources_used")),
+                "sources_used": f.get("sources_used") or self._used_sids_from_sources(f.get("sources_used")),
                 "tool_id": (f.get("tool_id") or "").strip(),
                 "description": (f.get("description") or "").strip(),
                 "kind": "file",
@@ -550,8 +561,6 @@ class BaseTurnView(ABC):
 
     turn_id: str
     timestamp: str
-    user_raw: str
-    assistant_raw: str
     solver: Optional[SolveResult]
 
     @abstractmethod
@@ -597,11 +606,8 @@ class BaseTurnView(ABC):
         turn_id: Optional[str] = None,
         user_id: Optional[str] = None,
         conversation_id: Optional[str] = None,
-        tlog: Any = None,
+        # tlog: Any = None,
         payload: Optional[Dict[str, Any]] = None,
-        user_text: Optional[str] = None,
-        assistant_text: Optional[str] = None,
-        **kwargs
     ) -> T:
         """Construct from saved payload."""
         ...

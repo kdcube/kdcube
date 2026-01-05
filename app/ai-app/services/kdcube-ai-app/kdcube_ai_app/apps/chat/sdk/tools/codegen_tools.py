@@ -153,8 +153,8 @@ async def run_codegen_tool(
         "workdir": str,
         "outdir": str,
         "out_dyn": dict,
-        "out": list,               # normalized artifacts list (slots + promoted tool calls)
-        "canonical_sources": list, # optional
+        "out": list,            # normalized artifacts list (slots + promoted tool calls)
+        "sources_pool": list,   # optional
         "error": dict|None,
         "summary": str
       }
@@ -201,7 +201,7 @@ async def run_codegen_tool(
             "workdir": str(workdir),
             "outdir": str(outdir),
             "artifacts": [],
-            "canonical_sources": [],
+            "sources_pool": [],
             "error": err,
             "summary": "ERROR: missing result file",
         }
@@ -224,7 +224,7 @@ async def run_codegen_tool(
             "workdir": str(workdir),
             "outdir": str(outdir),
             "artifacts": [],
-            "canonical_sources": [],
+            "sources_pool": [],
             "error": err,
             "summary": "ERROR: malformed result.json",
         }
@@ -251,7 +251,6 @@ async def run_codegen_tool(
                     "format": artifact.get("format"),
                     "description": artifact.get("description"),
                     "sources_used": artifact.get("sources_used"),
-                    "sources_used_sids": artifact.get("sources_used_sids"),
                     "draft": artifact.get("draft"),
                     "content_inventorization": artifact.get("content_inventorization"),
                 }
@@ -263,7 +262,7 @@ async def run_codegen_tool(
             if (item.get("resource_id") or item.get("name") or "").startswith(f"{artifact_lvl}:")
             and not (item.get("resource_id") or item.get("name") or "").endswith(":project_log")
         ]
-    canonical_sources = payload.get("canonical_sources") or []
+    sources_pool = payload.get("sources_pool") or []
     error = payload.get("error")
     if error:
         ok = False
@@ -276,7 +275,7 @@ async def run_codegen_tool(
         "workdir": str(workdir),
         "outdir": str(outdir),
         "artifacts": artifacts,
-        "canonical_sources": canonical_sources,
+        "sources_pool": sources_pool,
         "error": error,
         "project_log": project_log,
     }

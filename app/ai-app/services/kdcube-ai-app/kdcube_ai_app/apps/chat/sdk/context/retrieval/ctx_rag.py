@@ -13,6 +13,7 @@ from kdcube_ai_app.apps.chat.sdk.storage.rn import rn_file_from_file_path
 from kdcube_ai_app.apps.chat.sdk.util import _turn_id_from_tags_safe
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnLog
+import kdcube_ai_app.apps.chat.sdk.tools.citations as md_utils
 
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore, MAX_CONCURRENT_ARTIFACT_FETCHES
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
@@ -106,7 +107,15 @@ class ContextRAGClient:
                 data = dict(data)
                 data.pop("embedding", None)
 
-            item[out_field] = data
+            if isinstance(data, dict):
+                # Merge full record (meta, payload, timestamps) onto the item.
+                for key, value in data.items():
+                    item[key] = value
+
+            if isinstance(data, dict) and isinstance(data.get("payload"), dict):
+                item[out_field] = data.get("payload")
+            else:
+                item[out_field] = data
 
         await asyncio.gather(*(_one(it) for it in items if it.get(s3_field)))
 
@@ -536,12 +545,35 @@ class ContextRAGClient:
                 out_field="payload",
             )
 
-            # Turn-log normalization: reconstruct deliverables[*].value.sources_used
-            # from solver_result.execution.canonical_sources + sources_used_sids.
+            # Turn-log normalization: ensure deliverables[*].value.sources_used
+            # is a SID list (no materialized source dicts).
             _enrich_sources_used_to_deliverables(
                 turn_log_item,
                 turn_id=turn_id,
             )
+            # Resolve inline citations in assistant completion using the turn sources pool.
+            try:
+                from kdcube_ai_app.apps.chat.sdk.tools.citations import (
+                    build_citation_map_from_sources,
+                    replace_citation_tokens_batch,
+                )
+                turn_log_payload = (turn_log_item.get("payload") if turn_log_item else None)
+                sources_pool = (turn_log_payload or {}).get("sources_pool") or []
+                citation_map = build_citation_map_from_sources(sources_pool)
+                if citation_map:
+                    if assistant_item and isinstance(assistant_item.get("text"), str):
+                        assistant_item["text"] = replace_citation_tokens_batch(
+                            assistant_item["text"], citation_map
+                        )
+                    if isinstance(turn_log_payload, dict):
+                        asst = turn_log_payload.get("assistant") or {}
+                        completion = asst.get("completion")
+                        if isinstance(completion, dict) and isinstance(completion.get("text"), str):
+                            completion["text"] = replace_citation_tokens_batch(
+                                completion["text"], citation_map
+                            )
+            except Exception:
+                logger.exception("Failed to resolve citations in assistant completion")
 
         return {
             "user": user_item,
@@ -576,7 +608,7 @@ class ContextRAGClient:
             items = existing.get("items") or []
             removed_count = 0
             for item in items:
-                payload = (item.get("payload") or {}).get("payload") or {}
+                payload = item.get("payload") or {}
                 reaction_data = payload.get("reaction") or {}
                 origin = reaction_data.get("origin")
                 if origin == "user":
@@ -627,7 +659,7 @@ class ContextRAGClient:
             return False
 
         turn_log_item = items[0]
-        payload = (turn_log_item.get("payload") or {}).get("payload") or {}
+        payload = turn_log_item.get("payload") or {}
         tl = payload.get("turn_log") or {}
         changed = False
 
@@ -775,7 +807,7 @@ class ContextRAGClient:
                 return None
 
             turn_log_item = items[0]
-            payload = (turn_log_item.get("payload") or {}).get("payload") or {}
+            payload = turn_log_item.get("payload") or {}
 
             # 2) Extract current turn_log array and text
             turn_log_dict = payload.get("turn_log") or {}
@@ -988,7 +1020,7 @@ class ContextRAGClient:
                 tid = it.get("turn_id")
                 if not tid:
                     continue
-                payload = (it.get("payload") or {}).get("payload") or {}
+                payload = it.get("payload") or {}
                 tl = payload.get("turn_log") or {}
                 fbs = tl.get("feedbacks") or []
                 if fbs and tid not in discovered_turn_ids:
@@ -1028,10 +1060,7 @@ class ContextRAGClient:
                 )
 
                 turn_log_item = mat.get("turn_log") or {}
-                turn_log_payload = (
-                    (turn_log_item.get("payload") or {}).get("payload")
-                    if turn_log_item else None
-                )
+                turn_log_payload = (turn_log_item.get("payload") if turn_log_item else None)
 
                 # Extract feedbacks array from the turn log payload (preferred source of truth)
                 feedbacks = []
@@ -1796,7 +1825,7 @@ class ContextRAGClient:
                     ]
 
         # 3) Add attachments + produced files from turn log (source of truth)
-        async def _materialize_turn_log_artifacts(tid: str) -> List[Dict[str, Any]]:
+        async def _materialize_turn_log_artifacts(tid: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
             mat = await self.materialize_turn(
                 turn_id=tid,
                 scope="conversation",
@@ -1806,16 +1835,14 @@ class ContextRAGClient:
                 with_payload=True,
             )
             turn_log_item = mat.get("turn_log") or {}
-            turn_log_payload = (
-                (turn_log_item.get("payload") or {}).get("payload")
-                if turn_log_item else None
-            )
+            turn_log_payload = (turn_log_item.get("payload") if turn_log_item else None)
             if not isinstance(turn_log_payload, dict):
-                return []
+                return [], []
 
             tl = turn_log_payload.get("turn_log") or {}
             ts = tl.get("ended_at_iso") or tl.get("started_at_iso") or turn_log_item.get("ts")
             out: List[Dict[str, Any]] = []
+            sources_pool = turn_log_payload.get("sources_pool") or []
 
             user = turn_log_payload.get("user") or {}
             for a in (user.get("attachments") or []):
@@ -1843,19 +1870,52 @@ class ContextRAGClient:
                     "data": {"payload": f, "meta": {"kind": "assistant.file", "turn_id": tid}},
                 })
 
-            return out
+            return out, sources_pool
 
         if order:
             sem = asyncio.Semaphore(MAX_CONCURRENT_ARTIFACT_FETCHES)
 
-            async def _build_turn_artifacts(tid: str) -> List[Dict[str, Any]]:
+            async def _build_turn_artifacts(tid: str) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
                 async with sem:
                     return await _materialize_turn_log_artifacts(tid)
 
             turn_artifacts = await asyncio.gather(*(_build_turn_artifacts(tid) for tid in order))
-            for tid, artifacts in zip(order, turn_artifacts):
+            sources_pool_by_turn: Dict[str, List[Dict[str, Any]]] = {}
+            for tid, result in zip(order, turn_artifacts):
+                artifacts, sources_pool = result
                 if artifacts:
                     turns_map[tid]["artifacts"].extend(artifacts)
+                if isinstance(sources_pool, list) and sources_pool:
+                    sources_pool_by_turn[tid] = sources_pool
+
+            if materialize and sources_pool_by_turn:
+                for tid in order:
+                    sources_pool = sources_pool_by_turn.get(tid) or []
+                    if not sources_pool:
+                        continue
+                    citation_map = md_utils.build_citation_map_from_sources(sources_pool)
+                    if not citation_map:
+                        continue
+                    for item in (turns_map.get(tid) or {}).get("artifacts") or []:
+                        if item.get("type") != "chat:assistant":
+                            continue
+                        data = item.get("data") or {}
+                        payload = data.get("payload") or {}
+                        inner = payload.get("payload") if isinstance(payload.get("payload"), dict) else payload
+                        if not isinstance(inner, dict):
+                            continue
+                        raw_text = (inner.get("completion") or inner.get("text") or "").strip()
+                        if not raw_text:
+                            continue
+                        opts = md_utils.CitationRenderOptions(
+                            mode="links",
+                            embed_images=False,
+                            keep_unresolved=False,
+                            first_only=False,
+                        )
+                        rendered = md_utils.replace_citation_tokens_batch(raw_text, citation_map, opts)
+                        inner["completion"] = rendered
+                        inner["text"] = rendered
 
         return {
             "user_id": user_id,
@@ -2268,29 +2328,21 @@ def _enrich_sources_used_to_deliverables(
     New-format normalization for turn log:
 
     We now store:
-      solver_result.execution.canonical_sources: [ { sid, ... }, ... ]
-      solver_result.execution.deliverables[slot].value.sources_used_sids: [sid, sid, ...]
-
-    To keep turn logs small, we dropped `sources_used` before persisting.
+      solver_result.execution.sources_pool: [ { sid, ... }, ... ]
+      solver_result.execution.deliverables[slot].value.sources_used: [sid, sid, ...]
 
     This helper runs on READ:
+      - If deliverable.value has sources_used as dicts, normalize to SID list.
+      - If it has only sources_used_sids, copy into sources_used (SID list).
 
-      - If deliverable.value already has `sources_used`, we leave it as-is
-        (old logs / backward-compat).
-      - If it has only `sources_used_sids`, we look up those sids in
-        execution.canonical_sources and reconstruct `sources_used`
-        as a list of full canonical source dicts.
-
-    It mutates turn_log_item["payload"]["payload"] in-place and is best-effort
+    It mutates turn_log_item["payload"] in-place and is best-effort
     (never raises).
     """
     if not isinstance(turn_log_item, dict):
         return
 
     try:
-        store_doc = turn_log_item.get("payload") or {}
-        # This is the stored payload from ConversationStore.put_message(...)
-        root_payload = store_doc.get("payload") or {}
+        root_payload = turn_log_item.get("payload") or {}
         if not isinstance(root_payload, dict):
             return
 
@@ -2302,28 +2354,9 @@ def _enrich_sources_used_to_deliverables(
         if not isinstance(execution, dict):
             return
 
-        canonical_sources = execution.get("canonical_sources") or []
-        if not isinstance(canonical_sources, list) or not canonical_sources:
-            # nothing to hydrate from
-            return
-
-        # Build sid → canonical source map
-        by_sid: Dict[str, Dict[str, Any]] = {}
-        for src in canonical_sources:
-            if not isinstance(src, dict):
-                continue
-
-            sid = (
-                    src.get("sid")
-                    or src.get("id")
-                    or src.get("source_id")
-            )
-            if sid is None:
-                continue
-            by_sid[str(sid)] = src
-
-        if not by_sid:
-            return
+        sources_pool = execution.get("sources_pool") or []
+        if not isinstance(sources_pool, list):
+            sources_pool = []
 
         deliverables = execution.get("deliverables") or {}
         # deliverables can be dict (slot→spec) or list; handle both
@@ -2347,34 +2380,30 @@ def _enrich_sources_used_to_deliverables(
             if not isinstance(art, dict):
                 continue
 
-            # Old logs already had full sources_used → leave alone
-            if "sources_used" in art and isinstance(art["sources_used"], list):
-                continue
+            sids: list[int] = []
+            su = art.get("sources_used")
+            if isinstance(su, list):
+                for item in su:
+                    if isinstance(item, (int, float)):
+                        sids.append(int(item))
+                    elif isinstance(item, dict):
+                        sid = item.get("sid")
+                        if isinstance(sid, (int, float)):
+                            sids.append(int(sid))
 
-            sids = art.get("sources_used_sids")
-            if not isinstance(sids, list) or not sids:
-                continue
+            if not sids:
+                sids_alt = art.get("sources_used_sids")
+                if isinstance(sids_alt, list):
+                    for sid in sids_alt:
+                        if isinstance(sid, (int, float)):
+                            sids.append(int(sid))
 
-            resolved: list[dict] = []
-            seen: set[str] = set()
-
-            for sid in sids:
-                key = str(sid)
-                if key in seen:
-                    continue
-                src_obj = by_sid.get(key)
-                if not src_obj:
-                    continue
-                seen.add(key)
-                resolved.append(src_obj)
-
-            if resolved:
-                # add reconstructed `sources_used` but keep sources_used_sids
-                art["sources_used"] = resolved
+            if sids:
+                art["sources_used"] = sorted(set(sids))
 
     except Exception:
         logger.warning(
-            "Failed to hydrate sources_used from execution.canonical_sources for turn_id=%s",
+            "Failed to hydrate sources_used from execution.sources_pool for turn_id=%s",
             turn_id,
             exc_info=True,
         )

@@ -198,8 +198,8 @@ class CodegenRunner:
             rec = reconcile_citations_for_context(
                 program_history_reconciled, max_sources=60, rewrite_tokens_in_place=True
             )
-            canonical_sources = rec.get("canonical_sources", [])
-            self.log.log(f"[{self.AGENT_NAME}] canonical sources: {len(canonical_sources)}")
+            sources_pool = rec.get("sources_pool", [])
+            self.log.log(f"[{self.AGENT_NAME}] sources pool: {len(sources_pool)}")
 
         # program_playbook = build_program_playbook_codegen(program_history_reconciled, max_turns=5)
         react_context = ReactContext(history_turns=program_history_reconciled,

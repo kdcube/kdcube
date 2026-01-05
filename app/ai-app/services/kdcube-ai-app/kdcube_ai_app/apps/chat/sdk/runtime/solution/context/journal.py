@@ -132,6 +132,7 @@ def build_turn_session_journal(*,
 
     lines: list[str] = []
     lines.append("# The Turn Session Journal / Operational Digest (Current turn). **Strictly ordered from oldest → newest** for prior turns.")
+    lines.append("Events are chronological. Do NOT reinterpret later user feedback or decisions as if they occurred before earlier steps.")
     lines.append("")
     if is_codegen_agent:
         fetch_context_tool_retrieval_example = f"Use ctx_tools.fetch_turn_artifacts([turn_id]) to pull artifact"
@@ -168,6 +169,7 @@ def build_turn_session_journal(*,
 
             # Build TurnView from meta payload
             try:
+                meta["payload"] = meta.get("turn_log") or {}
                 tv = turn_view_class.from_turn_log_dict(meta)
             except Exception as ex:
                 print(f"Failed to build TurnView for turn {turn_id}: {ex}")
@@ -203,7 +205,37 @@ def build_turn_session_journal(*,
                 lines.append("")
 
             # Sources (NOT part of solver, formatted separately)
-            sources = ((meta.get("web_links_citations") or {}).get("items") or [])
+            from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any, sids_in_text
+            sources_pool = normalize_sources_any(
+                # meta.get("sources_pool") or (meta.get("turn_log") or {}).get("sources_pool") or []
+                meta.get("sources_pool") or (meta.get("payload") or {}).get("sources_pool") or []
+            )
+            used_sids: set[int] = set()
+            for d in (meta.get("deliverables") or []):
+                if not isinstance(d, dict):
+                    continue
+                art = d.get("value")
+                if not isinstance(art, dict):
+                    continue
+                for rec in (art.get("sources_used") or []):
+                    if isinstance(rec, (int, float)):
+                        used_sids.add(int(rec))
+                    elif isinstance(rec, dict):
+                        sid = rec.get("sid")
+                        if isinstance(sid, (int, float)):
+                            used_sids.add(int(sid))
+                for sid in (art.get("sources_used_sids") or []):
+                    if isinstance(sid, (int, float)):
+                        used_sids.add(int(sid))
+                text = art.get("text") or ""
+                if isinstance(text, str) and text.strip():
+                    used_sids.update(sids_in_text(text))
+
+            if used_sids:
+                sources = [s for s in sources_pool if isinstance(s.get("sid"), int) and s.get("sid") in used_sids]
+            else:
+                sources = sources_pool
+
             if sources:
                 src_lines = []
                 for i, src in enumerate(sources[:max_sources_per_turn], 1):
@@ -236,6 +268,17 @@ def build_turn_session_journal(*,
     lines.append("")
     # ---------- Current Turn (live) ----------
     lines.append("## Current Turn (live — oldest → newest events) [CURRENT TURN]")
+    try:
+        tlog = getattr(context.scratchpad, "turn_log", None)
+        ts_raw = None
+        if isinstance(tlog, dict):
+            ts_raw = tlog.get("started_at_iso") or tlog.get("ended_at_iso")
+        else:
+            ts_raw = getattr(tlog, "started_at_iso", None) or getattr(tlog, "ended_at_iso", None)
+        if ts_raw:
+            lines.append(_fmt_ts_for_humans(ts_raw))
+    except Exception:
+        pass
     try:
         tv = turn_view_class.from_turn_log_dict(context.scratchpad.turn_view)
         current_turn_presentation = tv.to_solver_presentation(
@@ -1636,7 +1679,9 @@ async def retrospective_context_view(
                         current_turn_compressed,
                         ""
                     ]))
-            except Exception:
+            except Exception as ex:
+                import traceback
+                print(traceback.format_exc())
                 pass
         items_struct.append({
             "ts": ts_now_iso,
@@ -1662,26 +1707,18 @@ async def retrospective_context_view(
         tid = _turn_id_from_tags_safe(list(item.get("tags") or [])) or ""
         ts_raw = item.get("ts") or item.get("timestamp") or ""
 
-        # Extract the double-wrapped payload structure
-        outer_payload = item.get("payload") or {}
-        inner_payload = outer_payload.get("payload") or {}
+        # payload = item.get("payload") or {}
 
         try:
             # Build TurnView from the raw item
-            turn_log_data = inner_payload.get("turn_log") or {}
-            user_data = inner_payload.get("user") or {}
-            asst_data = inner_payload.get("assistant") or {}
+            # turn_log_data = payload.get("turn_log") or {}
 
             tv = turn_view_class.from_saved_payload(
                 turn_id=tid,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                tlog=turn_log_data,
-                payload=item,  # Pass the FULL item (with double-wrapped structure)
-                user_text=user_data.get("prompt"),
-                user_inv=user_data.get("inv") or user_data.get("summary"),
-                assistant_text=asst_data.get("completion"),
-                assistant_inv=asst_data.get("inv"),
+                # tlog=turn_log_data,
+                payload=item,  # Pass the full item (payload already unwrapped)
             )
 
             # Generate compressed view with one-liner and without turn info header
@@ -1711,7 +1748,7 @@ async def retrospective_context_view(
                 "insights_one_liner": one_liner,
                 "insights_json": {},
                 "log": compressed_view,
-                "log_payload": inner_payload,
+                "log_payload": item.get("payload") or {},
             })
             last_turns_mate.append(item)
 

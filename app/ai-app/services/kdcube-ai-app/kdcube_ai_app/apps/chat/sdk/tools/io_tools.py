@@ -123,10 +123,10 @@ def _extract_candidate_sources_from_tool_output(tool_id: str, tool_output: Any) 
 
     return normalize_sources_any(tool_output)
 
-def _canonical_sources_from_citable_tools_generators(promoted: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
+def _sources_pool_from_citable_tools_generators(promoted: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
     """
-    Build the canonical source list (with stable sids) **only** from citable tools' outputs
-    present in `promoted`. Returns (canonical_sources_list, canonical_by_sid_map).
+    Build the sources_pool list (with stable sids) **only** from citable tools' outputs
+    present in `promoted`. Returns (sources_pool, sources_by_sid_map).
     """
     collected: List[Dict[str, Any]] = []
     for it in promoted or []:
@@ -139,26 +139,26 @@ def _canonical_sources_from_citable_tools_generators(promoted: List[Dict[str, An
 
     # Deduplicate by URL and assign/keep SIDs
     unified = dedupe_sources_by_url([], collected)
-    canonical_list: List[Dict[str, Any]] = [
+    sources_pool: List[Dict[str, Any]] = [
         {k: v for k, v in row.items() if k in ("sid", "url", "title", "text") or k in CITATION_OPTIONAL_ATTRS}
         for row in unified if isinstance(row.get("sid"), int) and row.get("url")
     ]
-    canonical_by_sid = { int(r["sid"]): r for r in canonical_list }
-    return canonical_list, canonical_by_sid
+    sources_by_sid = { int(r["sid"]): r for r in sources_pool }
+    return sources_pool, sources_by_sid
 
-def _enrich_canonical_sources_with_deliverables(
-        initial_canonical: List[Dict[str, Any]],
+def _enrich_sources_pool_with_deliverables(
+        initial_pool: List[Dict[str, Any]],
         initial_by_sid: Dict[int, Dict[str, Any]],
         out_dyn: Dict[str, Any]
 ) -> Tuple[List[Dict[str, Any]], Dict[int, Dict[str, Any]]]:
     """
-    Enrich canonical sources with sources from out_dyn deliverables.
+    Enrich sources_pool with sources from out_dyn deliverables.
     This handles cases where artifacts fetched from context bring their own sources.
 
-    Returns (enriched_canonical_list, enriched_canonical_by_sid).
+    Returns (enriched_sources_pool, enriched_sources_by_sid).
     """
     if not isinstance(out_dyn, dict):
-        return initial_canonical, initial_by_sid
+        return initial_pool, initial_by_sid
 
     # Collect sources from deliverables
     deliverable_sources: List[Dict[str, Any]] = []
@@ -166,22 +166,31 @@ def _enrich_canonical_sources_with_deliverables(
         if isinstance(val, dict):
             sources = val.get("sources_used")
             if sources:
-                deliverable_sources.extend(normalize_sources_any(sources))
+                if isinstance(sources, list) and all(isinstance(x, (int, float)) for x in sources):
+                    for sid in sources:
+                        try:
+                            sid_int = int(sid)
+                        except Exception:
+                            continue
+                        if sid_int in initial_by_sid:
+                            deliverable_sources.append(initial_by_sid[sid_int])
+                else:
+                    deliverable_sources.extend(normalize_sources_any(sources))
 
     if not deliverable_sources:
-        return initial_canonical, initial_by_sid
+        return initial_pool, initial_by_sid
 
     # Merge with existing canonical sources using dedupe logic
-    enriched = dedupe_sources_by_url(initial_canonical, deliverable_sources)
+    enriched = dedupe_sources_by_url(initial_pool, deliverable_sources)
 
     # Rebuild canonical list and map
-    enriched_list: List[Dict[str, Any]] = [
+    enriched_pool: List[Dict[str, Any]] = [
         {k: v for k, v in row.items() if k in ("sid", "url", "title", "text") or k in CITATION_OPTIONAL_ATTRS}
         for row in enriched if isinstance(row.get("sid"), int) and row.get("url")
     ]
-    enriched_by_sid = {int(r["sid"]): r for r in enriched_list}
+    enriched_by_sid = {int(r["sid"]): r for r in enriched_pool}
 
-    return enriched_list, enriched_by_sid
+    return enriched_pool, enriched_by_sid
 
 # ---------- formats & normalization ----------
 
@@ -285,8 +294,7 @@ def normalize_contract_deliverables(out_dyn: Dict[str, Any],
       - summary: str (optional; short slot summary)
       - content_inventorization: dict (optional; structured inventory/schema payload)
       - input: {}   # reserved, empty for program slots
-      - sources_used: list of citation dicts (optional)
-      - sources_used_sids: list of int SIDs (optional)
+      - sources_used: list of int SIDs (optional)
     """
     artifacts: List[Dict[str, Any]] = []
 
@@ -320,36 +328,25 @@ def normalize_contract_deliverables(out_dyn: Dict[str, Any],
         #     return None
         # return (s[:limit] + "...") if len(s) > limit else s
 
-    def _unify_sources(parsed_sids: List[int], explicit_sources: Any) -> Tuple[List[Dict[str, Any]], List[int]]:
+    def _unify_sources(parsed_sids: List[int], explicit_sources: Any) -> List[int]:
         """
         Merge SIDs parsed from text with SIDs present in explicit sources_used.
-        Then fill any missing rows from canonical_by_sid. Return (filled_sources_list, sorted_sids).
+        Only SIDs are stored on artifacts; sources are materialized later.
         """
-        norm_explicit = normalize_sources_any(explicit_sources)
-        by_sid: Dict[int, Dict[str, Any]] = {}
+        explicit_sids: List[int] = []
+        if isinstance(explicit_sources, list):
+            for item in explicit_sources:
+                if isinstance(item, (int, float)):
+                    explicit_sids.append(int(item))
+                elif isinstance(item, dict):
+                    sid = item.get("sid")
+                    if isinstance(sid, (int, float)):
+                        explicit_sids.append(int(sid))
 
-        # Seed explicit rows that carry sids
-        for row in norm_explicit:
-            sid = row.get("sid")
-            if isinstance(sid, int) and sid > 0:
-                by_sid[sid] = row
-
-        # Union of sids (parsed + explicit-with-sid)
         unified = set(parsed_sids or [])
-        unified.update([sid for sid in by_sid.keys() if isinstance(sid, int)])
+        unified.update(explicit_sids)
 
-        # Fill gaps from canonical space only
-        if canonical_by_sid:
-            for sid in sorted(unified):
-                if sid not in by_sid and sid in canonical_by_sid:
-                    by_sid[sid] = canonical_by_sid[sid]
-
-        # Keep any explicit rows that have no sid (they do not affect sids list)
-        nosid_rows: List[Dict[str, Any]] = [r for r in norm_explicit if not isinstance(r.get("sid"), int)]
-        sid_rows = [by_sid[s] for s in sorted([k for k in by_sid.keys() if isinstance(k, int)])]
-        filled_list = sid_rows + nosid_rows
-        final_sids = [s for s in sorted([k for k in by_sid.keys() if isinstance(k, int)])]
-        return filled_list, final_sids
+        return [s for s in sorted([k for k in unified if isinstance(k, int)])]
 
     def push_inline(
         slot: str,
@@ -371,7 +368,11 @@ def normalize_contract_deliverables(out_dyn: Dict[str, Any],
 
         text_str = _stringify_for_format(v, use_fmt)
         parsed_sids = extract_citation_sids_from_text(text_str)
-        filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
+        final_sids = _unify_sources(parsed_sids, sources_used)
+        if canonical_by_sid and final_sids:
+            for sid in final_sids:
+                if sid in canonical_by_sid:
+                    canonical_by_sid[sid]["used"] = True
 
         row = {
             "resource_id": f"{artifact_lvl}:{slot}",
@@ -399,10 +400,8 @@ def normalize_contract_deliverables(out_dyn: Dict[str, Any],
 
         if use_fmt:
             row["format"] = use_fmt
-        if filled_sources:
-            row["sources_used"] = filled_sources
         if final_sids:
-            row["sources_used_sids"] = final_sids
+            row["sources_used"] = final_sids
 
         artifacts.append(row)
 
@@ -447,7 +446,11 @@ def normalize_contract_deliverables(out_dyn: Dict[str, Any],
                 text_str = str(text)
 
         parsed_sids = extract_citation_sids_from_text(text_str)
-        filled_sources, final_sids = _unify_sources(parsed_sids, sources_used)
+        final_sids = _unify_sources(parsed_sids, sources_used)
+        if canonical_by_sid and final_sids:
+            for sid in final_sids:
+                if sid in canonical_by_sid:
+                    canonical_by_sid[sid]["used"] = True
 
         row = {
             "resource_id": f"{artifact_lvl}:{slot}",
@@ -486,10 +489,8 @@ def normalize_contract_deliverables(out_dyn: Dict[str, Any],
         if isinstance(content_inventorization, dict) and content_inventorization:
             row["content_inventorization"] = content_inventorization
 
-        if filled_sources:
-            row["sources_used"] = filled_sources
         if final_sids:
-            row["sources_used_sids"] = final_sids
+            row["sources_used"] = final_sids
 
         artifacts.append(row)
 
@@ -618,19 +619,26 @@ def _promote_tool_calls(raw_files: Dict[str, List[str]], outdir: pathlib.Path) -
                 base["type"] = "file"
                 base["mime"] = "application/json"
 
-            # carry sources_used from llm tool outputs
+            # carry sources_used from llm tool outputs (SIDs only)
             try:
                 if isinstance(tool_output, dict):
                     if tool_id.endswith("generate_content_llm"):
                         us = tool_output.get("sources_used")
-                        if us:
-                            base["sources_used"] = us
+                        sids: List[int] = []
+                        if isinstance(us, list):
+                            for item in us:
+                                if isinstance(item, (int, float)):
+                                    sids.append(int(item))
+                                elif isinstance(item, dict):
+                                    sid = item.get("sid")
+                                    if isinstance(sid, (int, float)):
+                                        sids.append(int(sid))
                         # Also add SIDs inferred from content (if any)
                         content = tool_output.get("content")
                         if isinstance(content, str):
-                            sids = extract_citation_sids_from_text(content)
-                            if sids:
-                                base["sources_used_sids"] = sids
+                            sids.extend(extract_citation_sids_from_text(content))
+                        if sids:
+                            base["sources_used"] = sorted({int(s) for s in sids})
             except Exception:
                 pass
 
@@ -938,22 +946,23 @@ class AgentIO:
         promoted = _promote_tool_calls(raw_files, od)
 
         # 3) Build canonical source space from citable tools' outputs
-        canonical_list, canonical_by_sid = _canonical_sources_from_citable_tools_generators(promoted)
+        sources_pool, canonical_by_sid = _sources_pool_from_citable_tools_generators(promoted)
 
         # 3b) Enrich with sources from deliverables (e.g., fetched from context)
         out_dyn = obj.get("out_dyn") or {}
-        canonical_list, canonical_by_sid = _enrich_canonical_sources_with_deliverables(
-            canonical_list, canonical_by_sid, out_dyn
+        sources_pool, canonical_by_sid = _enrich_sources_pool_with_deliverables(
+            sources_pool, canonical_by_sid, out_dyn
         )
-        if canonical_list:
-            # persist for downstream turns (helps reconciliation)
-            obj["canonical_sources"] = canonical_list
+        if sources_pool:
+            obj["sources_pool"] = sources_pool
 
         # 4) Normalize dynamic contract deliverables with access to canonical_by_sid
         out_dyn = obj.get("out_dyn") or {}
-        normalized_out = normalize_contract_deliverables(out_dyn,
-                                                         canonical_by_sid=canonical_by_sid,
-                                                         artifact_lvl=artifact_lvl) if isinstance(out_dyn, dict) else []
+        normalized_out = normalize_contract_deliverables(
+            out_dyn,
+            canonical_by_sid=canonical_by_sid,
+            artifact_lvl=artifact_lvl
+        ) if isinstance(out_dyn, dict) else []
 
         # 5) Merge normalized slots with promoted artifacts (de-dup)
         def _key(a: Dict[str, Any]):

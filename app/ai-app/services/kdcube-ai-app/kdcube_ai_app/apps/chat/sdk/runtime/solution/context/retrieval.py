@@ -13,7 +13,8 @@ from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClie
 from kdcube_ai_app.apps.chat.sdk.tools.tools_insights import CITABLE_TOOL_IDS
 from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     CITATION_OPTIONAL_ATTRS,
-    normalize_citation_item,
+    normalize_sources_any,
+    dedupe_sources_by_url,
     normalize_url, _rewrite_md_citation_tokens,
 )
 from kdcube_ai_app.apps.chat.sdk.util import ts_key
@@ -43,168 +44,88 @@ def reconcile_citations_for_context(history: list[dict], *, max_sources: int = 6
     Input: output of _build_program_history_from_turn_ids (a list of {exec_id: {...}} sorted newest first).
     Output:
       {
-        "canonical_sources": [ { sid, url, title, text } ... ],
+        "sources_pool": [ { sid, url, title, text } ... ],
         "sid_maps": { run_id -> { old_sid -> sid } }
       }
     Side-effect (optional): rewrites [[S:n]] in project_log AND all deliverables with sources_used,
-    and updates web_links_citations per turn to match canonical sources.
+    and updates per-turn sources_pool-derived citations.
     """
-    # 1-4: Build canonical sources and sid_maps (existing logic)
-    flat: list[tuple[str, dict, dict]] = []
-    per_run_rows: dict[str, list[dict]] = {}
-    per_run_out_items: dict[str, list[dict]] = {}
+    def _meta_sources_pool(meta: dict) -> list[dict]:
+        pool = meta.get("sources_pool")
+        if not pool and isinstance(meta.get("turn_log"), dict):
+            pool = meta["turn_log"].get("sources_pool")
+        return normalize_sources_any(pool)
 
-    for rec in (history or []):
-        run_id, meta = next(iter(rec.items()))
-        per_run_out_items[run_id] = meta.get("out_items") or []
-
-    # Synthesize out_items from web_links_citations for extraction
-    for rec in (history or []):
-        run_id, meta = next(iter(rec.items()))
-        citations_list = ((meta.get("web_links_citations") or {}).get("items") or [])
-        faux_out_item = {
-            "type": "inline",
-            "citable": True,
-            "tool_id": "ctx_tools.merge_sources",
-            "resource_id": f"tool:ctx_tools.merge_sources:0",
-            "output": citations_list
-        }
-        out_items = [faux_out_item]
-        per_run_out_items[run_id] = out_items
-
-        ext = _extract_citable_items_from_out_items(out_items)
-        per_run_rows[run_id] = ext
-        for it in ext:
-            flat.append((run_id, meta, it))
-
-    # 2) Determine base ordering
-    latest_run_id = next(iter(history[0].keys())) if history else None
-    base_order_urls: list[str] = []
-    if latest_run_id:
-        base_merge = _latest_merge_sources_row(per_run_out_items.get(latest_run_id, []))
-        if base_merge:
-            base_order_urls = [normalize_url(c.get("url") or "") for c in base_merge if isinstance(c, dict)]
-            base_order_urls = [u for u in base_order_urls if u]
-
-    # 3) Build canonical map
-    by_url: dict[str, dict] = {}
-    ordered_urls: list[str] = []
-
-    for run_id, meta, it in flat:
-        u = it["url"]
-        if u not in by_url:
-            by_url[u] = {
-                "url": u,
-                "title": it["title"],
-                "text": it.get("text") or it.get("body") or ""
-            }
-            for k in CITATION_OPTIONAL_ATTRS:
-                if it.get(k):
-                    by_url[u][k] = it[k]
-            ordered_urls.append(u)
-
-    ordered_urls = ordered_urls[:max_sources]
-    global_sid_of_url: dict[str,int] = {u: i+1 for i,u in enumerate(ordered_urls)}
-
-    canonical_sources = []
-    for u in ordered_urls:
-        src = by_url[u]
-        row = {
-            "sid": global_sid_of_url[u],
-            "url": u,
-            "title": src.get("title") or u,
-            "text": src.get("text") or src.get("body") or "",
-        }
-        for k in CITATION_OPTIONAL_ATTRS:
-            if src.get(k):
-                row[k] = src[k]
-        canonical_sources.append(row)
-
-    # 4) Build per-run sid maps (old → global)
-    sid_maps: dict[str, dict[int,int]] = {}
-    for run_id, rows in per_run_rows.items():
-        m: dict[int,int] = {}
-        for it in rows:
-            u = it["url"]
-            old_sid = it.get("sid")
-            if old_sid is None:
-                continue
-            try:
-                old_sid = int(old_sid)
-            except Exception:
-                continue
-            new_sid = global_sid_of_url.get(u)
-            if new_sid:
-                m[old_sid] = new_sid
-        if m:
-            sid_maps[run_id] = m
-
-    # 5) Rewrite tokens and update web_links_citations
-    if rewrite_tokens_in_place:
+    def _collect_used_sids(meta: dict) -> set[int]:
         from kdcube_ai_app.apps.chat.sdk.tools.citations import sids_in_text
+        used: set[int] = set()
 
-        # Quick lookup by SID
-        canonical_by_sid = {s["sid"]: s for s in canonical_sources}
+        # project log
+        proj = meta.get("project_log") or {}
+        if isinstance(proj, dict):
+            txt = proj.get("text") or proj.get("value") or ""
+            if txt:
+                used.update(sids_in_text(txt))
 
-        for rec in history:
-            run_id, meta = next(iter(rec.items()))
-            sid_map = sid_maps.get(run_id, {})
-            if not sid_map:
+        # deliverables
+        deliverables = meta.get("deliverables") or []
+        for d in deliverables:
+            if not isinstance(d, dict):
                 continue
+            artifact = d.get("value")
+            if not isinstance(artifact, dict):
+                continue
+            for rec in (artifact.get("sources_used") or []):
+                if isinstance(rec, (int, float)):
+                    used.add(int(rec))
+                elif isinstance(rec, dict):
+                    sid = rec.get("sid")
+                    if isinstance(sid, (int, float)):
+                        used.add(int(sid))
+            for sid in (artifact.get("sources_used_sids") or []):
+                if isinstance(sid, (int, float)):
+                    used.add(int(sid))
+            text = artifact.get("text") or ""
+            if isinstance(text, str) and text.strip():
+                used.update(sids_in_text(text))
+        return used
 
-            # Track SIDs used in this turn
-            used_sids_in_turn = set()
+    collected: list[dict] = []
+    per_turn_used: dict[str, set[int]] = {}
 
-            # Rewrite project_log
-            if "project_log" in meta and isinstance(meta["project_log"], dict):
-                val = meta["project_log"].get("text") or meta["project_log"].get("value") or ""
-                if val:
-                    new_val = _rewrite_md_citation_tokens(val, sid_map)
-                    if "text" in meta["project_log"]:
-                        meta["project_log"]["text"] = new_val
-                    else:
-                        meta["project_log"]["value"] = new_val
-                    # Collect SIDs from project_log
-                    used_sids_in_turn.update(sids_in_text(new_val))
+    for rec in (history or []):
+        run_id, meta = next(iter(rec.items()))
+        pool_rows = _meta_sources_pool(meta)
+        used_sids = _collect_used_sids(meta)
+        per_turn_used[run_id] = used_sids
+        if not pool_rows or not used_sids:
+            continue
+        for row in pool_rows:
+            sid = row.get("sid")
+            if isinstance(sid, int) and sid in used_sids:
+                collected.append(row)
 
-            # Rewrite all deliverables
-            deliverables = meta.get("deliverables") or []
-            for d in deliverables:
-                if not isinstance(d, dict):
-                    continue
+    # Deduplicate by URL while preserving existing SIDs
+    merged = dedupe_sources_by_url([], collected)
+    sources_pool = [
+        {k: v for k, v in row.items() if k in ("sid", "url", "title", "text") or k in CITATION_OPTIONAL_ATTRS}
+        for row in merged if isinstance(row.get("sid"), int) and row.get("url")
+    ]
+    sources_pool = sources_pool[:max_sources]
+    canonical_by_sid = {s["sid"]: s for s in sources_pool}
 
-                artifact = d.get("value")
-                if not isinstance(artifact, dict):
-                    continue
-
-                # Check if this deliverable uses sources
-                sources_used = artifact.get("sources_used")
-                if not sources_used:
-                    continue
-
-                # Find text to rewrite
-                text = artifact.get("text") or ""
-                if text:
-                    new_text = _rewrite_md_citation_tokens(text, sid_map)
-                    artifact["text"] = new_text
-                    used_sids_in_turn.update(sids_in_text(new_text))
-
-            # ===== UPDATE web_links_citations =====
-            # Replace with canonical sources that are actually used in this turn
-            if used_sids_in_turn:
-                turn_sources = [
-                    canonical_by_sid[sid]
-                    for sid in sorted(used_sids_in_turn)
-                    if sid in canonical_by_sid
-                ]
-                meta["web_links_citations"] = {"items": turn_sources}
+    if rewrite_tokens_in_place:
+        for rec in (history or []):
+            run_id, meta = next(iter(rec.items()))
+            used = per_turn_used.get(run_id) or set()
+            if used:
+                meta["sources_pool_used"] = [canonical_by_sid[sid] for sid in sorted(used) if sid in canonical_by_sid]
             else:
-                # No citations used in this turn
-                meta["web_links_citations"] = {"items": []}
+                meta["sources_pool_used"] = []
 
     return {
-        "canonical_sources": canonical_sources,
-        "sid_maps": sid_maps,
+        "sources_pool": sources_pool,
+        "sid_maps": {},
     }
 
 def _pick_project_log_slot(d_items: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -301,20 +222,25 @@ async def build_program_history_from_turn_ids(self, *,
         )
 
         # Unpack rich envelopes (payload + ts + tags)
+        from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.journal import unwrap_payload
+
         turn_log_env = mat.get("turn_log") or {}
-        turn_log = ((turn_log_env or {}).get("payload") or {}).get("payload") or {}
+        turn_log = unwrap_payload((turn_log_env or {}).get("payload") or {})
 
         dels_env = mat.get("deliverables") or {}
         assistant_env = mat.get("assistant") or {}
         user_env = mat.get("user") or {}
-        citables_env = mat.get("citables") or {}
         files_env = mat.get("files") or {}
 
-        dels = ((dels_env or {}).get("payload") or {}).get("payload") or {}
-        citables = ((citables_env or {}).get("payload") or {}).get("payload") or {}
-        assistant = ((((assistant_env or {}).get("payload") or {}).get("payload") or {})).get("completion") or ""
-        user = ((user_env or {}).get("payload") or {}).get("payload") or {}
-        files = (((files_env or {}).get("payload") or {}).get("payload") or {}).get("files_by_slot", {})
+        dels = unwrap_payload((dels_env or {}).get("payload") or {})
+        files = (unwrap_payload((files_env or {}).get("payload") or {}).get("files_by_slot", {})) or {}
+
+        user = (turn_log.get("user") if isinstance(turn_log, dict) else None) or {}
+        assistant = (turn_log.get("assistant") if isinstance(turn_log, dict) else None) or {}
+        if not user:
+            user = unwrap_payload((user_env or {}).get("payload") or {})
+        if not assistant:
+            assistant = unwrap_payload((assistant_env or {}).get("payload") or {})
 
         d_items = list((dels or {}).get("items") or [])
         for de in d_items:
@@ -327,18 +253,15 @@ async def build_program_history_from_turn_ids(self, *,
                 artifact["filename"] = file.get("filename")
                 print()
 
-        cite_items =  list((citables or {}).get("items") or [])
         round_reason = (dels or {}).get("round_reasoning") or ""
 
         # Prefer user ts, else assistant ts
-        ts_val = user_env.get("ts") or assistant_env.get("ts")  or ""
+        ts_val = user_env.get("ts") or assistant_env.get("ts") or (turn_log_env.get("ts") if isinstance(turn_log_env, dict) else "") or ""
 
         # codegen_run_id priority: deliverables.payload -> tags -> presentation markdown
         # REMOVE AMBIGUOUS SIGNAL "run id vs turn id"
         codegen_run_id = (dels or {}).get("execution_id") or f"cg-{_uuid.uuid4().hex[:8]}"
 
-        # Citations bundle (if we have run id)
-        cites = {"items": cite_items}
 
         # Extract canvas/log from deliverables items
         # canvas = _pick_canvas_slot(d_items) or {}
@@ -359,6 +282,7 @@ async def build_program_history_from_turn_ids(self, *,
         seen_runs.add(exec_id)
 
         solver_result = turn_log.get("solver_result") or {}
+        sources_pool = turn_log.get("sources_pool") or []
         execution = solver_result.get("execution") or {}
         program_presentation = solver_result.get("program_presentation")
         solver_interpretation_instruction = solver_result.get("interpretation_instruction") or ""
@@ -370,9 +294,9 @@ async def build_program_history_from_turn_ids(self, *,
             **({"solver_interpretation_instruction": solver_interpretation_instruction} if solver_interpretation_instruction else {}),
             **({"project_log": {"format": project_log.get("format","markdown"), "text": project_log.get("value","")}} if project_log else {}),
             **({"turn_log": turn_log} if turn_log else {}),
+            **({"sources_pool": sources_pool} if sources_pool else {}),
             **({"project_log_materialized": materialized_canvas} if materialized_canvas else {}),
             **({"solver_failure": solver_failure_md} if solver_failure_md else {}),
-            **({"web_links_citations": {"items": [normalize_citation_item(c) for c in cites["items"] if normalize_citation_item(c)]}}),
             **{"media": []},
             "ts": ts_val,
             **({"codegen_run_id": codegen_run_id} if codegen_run_id else {}),

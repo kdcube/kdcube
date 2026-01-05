@@ -182,7 +182,7 @@ class SolverPresenterConfig:
     deliverable_attrs: Optional[Set[str]] = None
     # None = auto (rich set for extended, minimal for base)
     # Supported: "description", "content_guidance", "format", "mime",
-    #            "tool_id", "citable", "sources_used_sids",
+    #            "tool_id", "citable", "sources_used",
     #            "gaps", "summary", "slot_value_inventorization", "artifact_id", "mapped_from"
 
     # --- Filters ---
@@ -342,7 +342,7 @@ def _format_produced_slots_grouped_by_status(
 
     slot_attr_keys controls which per-slot metadata we show. Supported keys:
       "description", "content_guidance", "format", "mime",
-      "tool_id", "citable", "sources_used_sids",
+      "tool_id", "citable", "sources_used",
       "gaps", "summary", "slot_value_inventorization", "filename",
       "artifact_id", "mapped_from"
 
@@ -362,7 +362,7 @@ def _format_produced_slots_grouped_by_status(
                 "mime",
                 "tool_id",
                 "citable",
-                "sources_used_sids",
+                "sources_used",
                 "gaps",
                 "summary",
                 "slot_value_inventorization",
@@ -373,7 +373,7 @@ def _format_produced_slots_grouped_by_status(
             slot_attr_keys = {
                 "description",
                 "content_guidance",
-                "sources_used_sids",
+                "sources_used",
                 "slot_value_inventorization",
                 "artifact_id",
                 "mapped_from",
@@ -513,7 +513,7 @@ def _format_produced_slots_grouped_by_status(
         summary = art.get("summary")
         tool_id = art.get("tool_id") or (spec.get("tool_id") if isinstance(spec, dict) else None)
         citable = art.get("citable")
-        sources_sids = art.get("sources_used_sids") or []
+        sources_sids = art.get("sources_used") or art.get("sources_used_sids") or []
 
         if "gaps" in slot_attr_keys and gaps:
             lines.append(f"  - Gaps: {gaps}")
@@ -527,7 +527,7 @@ def _format_produced_slots_grouped_by_status(
             lines.append(f"  - Format: {fmt}")
         if "mime" in slot_attr_keys and mime:
             lines.append(f"  - MIME: {mime}")
-        if "sources_used_sids" in slot_attr_keys and sources_sids:
+        if "sources_used" in slot_attr_keys and sources_sids:
             lines.append(f"  - Sources used (SIDs): {sources_sids}")
 
         if "slot_value_inventorization" in slot_attr_keys:
@@ -853,7 +853,7 @@ class SolverPresenter:
                 "mime",
                 "tool_id",
                 "citable",
-                "sources_used_sids",
+                "sources_used",
                 "gaps",
                 "summary",
                 "slot_value_inventorization",
@@ -862,7 +862,7 @@ class SolverPresenter:
             config.deliverable_attrs = {
                 "description",
                 "content_guidance",
-                "sources_used_sids",
+                "sources_used",
                 "slot_value_inventorization",
             }
 

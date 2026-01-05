@@ -303,7 +303,6 @@ async def run_exec_tool(
             "format": artifact.get("format"),
             "description": artifact.get("description"),
             "sources_used": artifact.get("sources_used"),
-            "sources_used_sids": artifact.get("sources_used_sids"),
             "draft": artifact.get("draft"),
             "content_inventorization": artifact.get("content_inventorization"),
         }
@@ -317,7 +316,7 @@ async def run_exec_tool(
         "workdir": str(workdir),
         "outdir": str(outdir),
         "artifacts": artifacts_list,
-        "canonical_sources": [],
+        "sources_pool": [],
         "error": error,
         "project_log": None,
     }

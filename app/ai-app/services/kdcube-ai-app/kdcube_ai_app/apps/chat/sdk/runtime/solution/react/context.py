@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-import time, json, logging
+import time, json, logging, re
 import pathlib
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Tuple, Optional
@@ -79,7 +79,7 @@ def _short_value(v: Any, trim: int) -> str:
         return f"<{type(v).__name__} len={len(v)}>"
     return json.dumps(v, ensure_ascii=False)
 
-def _extract_text_and_sources(obj: Dict[str, Any]) -> tuple[str, List[Dict[str, Any]]]:
+def _extract_text_and_sources(obj: Dict[str, Any]) -> tuple[str, List[Any]]:
     """
     Return (surrogate_text_or_inline_content, sources_used) from a tool-result or slot object.
 
@@ -110,6 +110,7 @@ def _extract_text_and_sources(obj: Dict[str, Any]) -> tuple[str, List[Dict[str, 
       - As permissive fallback, accept common authoring keys ("markdown", "html", "json", "yaml") if present.
       - Only if no usable text found in value, fall back to obj["summary"] (last resort).
       - Sources come from value["sources_used"] first, then obj["sources_used"].
+      - sources_used may be a list of dicts or a list of SIDs (ints).
     """
     if not isinstance(obj, dict):
         return "", []
@@ -355,11 +356,19 @@ class ReactContext:
             if path.endswith(".user") or path.endswith(".assistant") or ".user.prompt." in path or ".assistant.completion." in path:
                 val = None
                 if path == "current_turn.user":
-                    val = self.user_text or ""
+                    if self.scratchpad and isinstance(self.scratchpad.turn_log, dict):
+                        prompt_obj = (self.scratchpad.turn_log.get("user") or {}).get("prompt") or {}
+                        val = (prompt_obj.get("text") or "")
+                    else:
+                        val = self.user_text or ""
                 elif path == "current_turn.assistant":
-                    val = (self.scratchpad.answer or "") if self.scratchpad else ""
+                    if self.scratchpad and isinstance(self.scratchpad.turn_log, dict):
+                        completion_obj = (self.scratchpad.turn_log.get("assistant") or {}).get("completion") or {}
+                        val = (completion_obj.get("text") or "")
+                    else:
+                        val = (self.scratchpad.answer or "") if self.scratchpad else ""
                 else:
-                    val, _owner = self.resolve_path(path, mode="full")
+                    val, _owner = self.resolve_path(path)
 
                 if not isinstance(val, str) or not val.strip():
                     continue
@@ -409,7 +418,6 @@ class ReactContext:
         """
         Restore ReactContext from a persisted context.json payload (dict).
         No truncation, no transformation of user/assistant text.
-        Also applies small compatibility shims for older schemas.
         """
         payload = payload or {}
 
@@ -422,9 +430,11 @@ class ReactContext:
 
         self.turn_id = cur.get("turn_id") or self.turn_id
         if isinstance(cur.get("user"), dict):
-            self.user_text = (cur.get("user") or {}).get("prompt") or self.user_text
-            self.user_input_summary = (cur.get("user") or {}).get("input_summary") or (cur.get("user") or {}).get("summary") or self.user_input_summary
-            self.user_attachments = (cur.get("user") or {}).get("attachments") or self.user_attachments
+            user_obj = cur.get("user") or {}
+            prompt_obj = user_obj.get("prompt") if isinstance(user_obj.get("prompt"), dict) else {}
+            self.user_text = (prompt_obj or {}).get("text") or ""
+            self.user_input_summary = (prompt_obj or {}).get("summary") or ""
+            self.user_attachments = (user_obj.get("attachments") or [])
         self.started_at = cur.get("ts") or self.started_at
 
         self.current_slots = cur.get("slots") or {}
@@ -436,15 +446,7 @@ class ReactContext:
         self.sources_pool = payload.get("sources_pool") or self.sources_pool
         self.tool_call_index = payload.get("tool_call_index") or self.tool_call_index
 
-        # ---- Compatibility: prior turns may store slots under "slots" not "deliverables"
-        try:
-            for tid, turn in (self.prior_turns or {}).items():
-                if not isinstance(turn, dict):
-                    continue
-                if "deliverables" not in turn and isinstance(turn.get("slots"), dict):
-                    turn["deliverables"] = turn["slots"]
-        except Exception:
-            pass
+        # No compatibility shims: current schema only.
 
         return self
 
@@ -497,16 +499,14 @@ class ReactContext:
         if not self.outdir:
             return
 
+        user_payload: Dict[str, Any] = {}
+        if self.scratchpad is not None:
+            user_payload = (self.scratchpad.turn_log or {}).get("user") or {}
         payload = {
             "prior_turns": self.prior_turns,
             "current_turn": {
                 "turn_id": self.turn_id,
-                "user": {
-                    "prompt": self.user_text,
-                    "input_summary": self.user_input_summary,
-                    "summary": self.user_input_summary,
-                    "attachments": self.user_attachments,
-                },
+                "user": user_payload,
                 "ts": self.started_at,
                 "slots": self.current_slots,
                 "artifacts": self.artifacts,
@@ -560,7 +560,28 @@ class ReactContext:
         """Collect prior turn sources into current pool; keep SIDs; don’t renumber."""
         acc: List[Dict[str, Any]] = []
         for _tid, turn in (self.prior_turns or {}).items():
-            acc.extend(normalize_sources_any((turn or {}).get("sources")))
+            deliverables = (turn or {}).get("deliverables") or {}
+            used_sids: set[int] = set()
+            if isinstance(deliverables, dict):
+                for spec in deliverables.values():
+                    if not isinstance(spec, dict):
+                        continue
+                    art = spec.get("value") if isinstance(spec.get("value"), dict) else spec
+                    if not isinstance(art, dict):
+                        continue
+                    used_sids.update(self._extract_source_sids(art.get("sources_used")))
+                    for sid in (art.get("sources_used_sids") or []):
+                        if isinstance(sid, (int, float)):
+                            used_sids.add(int(sid))
+            pool = (turn or {}).get("sources_pool") or []
+            pool_norm = normalize_sources_any(pool)
+            if used_sids:
+                for row in pool_norm:
+                    sid = row.get("sid")
+                    if isinstance(sid, int) and sid in used_sids:
+                        acc.append(row)
+            elif not deliverables:
+                acc.extend(pool_norm)
         if acc:
             # Keep as-is (SIDs pre-reconciled by history)
             self.set_sources_pool(acc, persist=False)
@@ -582,6 +603,96 @@ class ReactContext:
         if persist:
             self.persist()
 
+    def _extract_source_sids(self, sources: Any) -> List[int]:
+        used: List[int] = []
+        if isinstance(sources, list):
+            for s in sources:
+                if isinstance(s, dict):
+                    sid = s.get("sid")
+                    if isinstance(sid, (int, float)) and int(sid) not in used:
+                        used.append(int(sid))
+                elif isinstance(s, (int, float)) and int(s) not in used:
+                    used.append(int(s))
+        return used
+
+    def materialize_sources_by_sids(self, sids: List[int]) -> List[Dict[str, Any]]:
+        if not sids or not self.sources_pool:
+            return []
+        by_sid = {
+            int(s.get("sid")): s
+            for s in (self.sources_pool or [])
+            if isinstance(s, dict) and isinstance(s.get("sid"), (int, float))
+        }
+        out: List[Dict[str, Any]] = []
+        seen: set[int] = set()
+        for sid in sids:
+            try:
+                sid_int = int(sid)
+            except Exception:
+                continue
+            if sid_int in seen:
+                continue
+            src = by_sid.get(sid_int)
+            if src:
+                out.append(src)
+                seen.add(sid_int)
+        return out
+
+    def _sync_max_sid_from_pool(self) -> None:
+        try:
+            mx = max(int(s.get("sid") or 0) for s in (self.sources_pool or []) if isinstance(s, dict))
+        except Exception:
+            mx = 0
+        if mx > self.max_sid:
+            self.max_sid = mx
+
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
+            next_sid = int(self.max_sid) + 1
+            SOURCE_ID_CV.set({"next": next_sid})
+        except Exception:
+            pass
+
+    def ensure_sources_in_pool(self, sources: Any) -> List[int]:
+        """
+        Normalize a sources-like list and ensure each row exists in the pool.
+        Returns the corresponding list of pool SIDs.
+        """
+        if not sources:
+            return []
+        # If already SIDs, just return normalized ints
+        sid_list = self._extract_source_sids(sources)
+        if sid_list and not normalize_sources_any(sources):
+            return sid_list
+
+        normalized = normalize_sources_any(sources)
+        if not normalized:
+            return sid_list
+
+        merged = dedupe_sources_by_url(self.sources_pool, normalized)
+        self.set_sources_pool(merged, persist=True)
+        self._sync_max_sid_from_pool()
+
+        return self._extract_source_sids(self.remap_sources_to_pool_sids(normalized))
+
+    def mark_sources_used(self, sids: List[int]) -> None:
+        if not sids or not self.sources_pool:
+            return
+        seen: set[int] = set()
+        for sid in sids:
+            try:
+                sid_int = int(sid)
+            except Exception:
+                continue
+            if sid_int in seen:
+                continue
+            seen.add(sid_int)
+            for row in self.sources_pool:
+                if not isinstance(row, dict):
+                    continue
+                if row.get("sid") == sid_int:
+                    row["used"] = True
+        self.persist()
     def remap_sources_to_pool_sids(self, tool_sources: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Return tool_sources with SIDs replaced by those in the pool (match by URL)."""
         if not tool_sources or not self.sources_pool:
@@ -634,7 +745,7 @@ class ReactContext:
             tool_id: str,
             value: Any,
             summary: str,
-            sources_used: List[Dict[str, Any]] | None = None,
+            sources_used: List[Any] | None = None,
             inputs: Dict[str, Any] | None = None,
             call_record_rel: str | None = None,
             call_record_abs: str | None = None,
@@ -679,7 +790,7 @@ class ReactContext:
             # propagate sources into value for uniform consumption
             if sources_used:
                 try:
-                    value_norm["sources_used"] = list(sources_used)
+                    value_norm["sources_used"] = self._extract_source_sids(sources_used)
                 except Exception:
                     pass
 
@@ -706,7 +817,7 @@ class ReactContext:
             "tool_id": tool_id,
             "value": value_norm,
             "summary": str(summary or ""),
-            "sources_used": list(sources_used or []),
+            "sources_used": self._extract_source_sids(sources_used) if sources_used else [],
             "timestamp": time.time(),
             "inputs": dict(inputs or {}),
             "call_record": {
@@ -742,7 +853,7 @@ class ReactContext:
             slot_name: str,
             slot_spec: SlotSpec,
             source_value: Any,
-            sources_used: List[Dict[str, Any]] | None = None,
+            sources_used: List[Any] | None = None,
             tool_id: Optional[str] = None,
             summary: Optional[str] = None,
             draft: bool = False,
@@ -759,7 +870,7 @@ class ReactContext:
             "format": fmt,
             "text": text_repr,
             "value": source_value,
-            "sources_used": list(sources_used or []),
+            "sources_used": self._extract_source_sids(sources_used) if sources_used else [],
             "tool_id": tool_id,
             "description": slot_spec.description or "",
             "summary": summary,
@@ -774,6 +885,7 @@ class ReactContext:
 
         self.current_slots[slot_name] = artifact
         self.persist()
+        self.mark_sources_used(artifact.get("sources_used") or [])
         self.add_event(
             kind="slot_mapped",
             data={
@@ -794,7 +906,7 @@ class ReactContext:
             slot_spec: SlotSpec,
             surrogate_text: str,
             file_path: str,
-            sources_used: List[Dict[str, Any]] | None = None,
+            sources_used: List[Any] | None = None,
             tool_id: Optional[str] = None,
             summary: Optional[str] = None,
             mime_override: Optional[str] = None,
@@ -812,7 +924,7 @@ class ReactContext:
             "mime": (mime_override or slot_spec.mime or "application/octet-stream"),
             "path": file_path,
             "text": surrogate_text,  # authoritative text surrogate
-            "sources_used": list(sources_used or []),
+            "sources_used": self._extract_source_sids(sources_used) if sources_used else [],
             "tool_id": tool_id,
             "description": slot_spec.description or "",
             "summary": summary,
@@ -826,6 +938,7 @@ class ReactContext:
 
         self.current_slots[slot_name] = artifact
         self.persist()
+        self.mark_sources_used(artifact.get("sources_used") or [])
         self.add_event(
             kind="slot_mapped",
             data={
@@ -841,6 +954,102 @@ class ReactContext:
 
 
     # ---------- Object resolution ----------
+    def _ensure_artifact_fields(
+            self,
+            art: Dict[str, Any],
+            *,
+            artifact_name: str,
+            artifact_tag: str,
+            artifact_kind: str,
+            artifact_type: str,
+            default_format: Optional[str] = None,
+            default_mime: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        out = dict(art or {})
+        out.setdefault("artifact_name", artifact_name)
+        out.setdefault("artifact_tag", artifact_tag)
+        out.setdefault("artifact_kind", artifact_kind)
+        out.setdefault("artifact_type", artifact_type)
+        if default_format and not out.get("format"):
+            out["format"] = default_format
+        if default_mime and not out.get("mime"):
+            out["mime"] = default_mime
+        if "summary" not in out:
+            out["summary"] = ""
+        if "sources_used" not in out:
+            out["sources_used"] = []
+        return out
+
+    def _get_turn_log(self, turn_id: str) -> Dict[str, Any]:
+        if turn_id == "current_turn":
+            if self.scratchpad is not None:
+                return self.scratchpad.turn_log or {}
+            return {}
+        turn = self.prior_turns.get(turn_id) or {}
+        return (turn.get("turn_log") or {}) if isinstance(turn.get("turn_log"), dict) else {}
+
+    def _get_user_artifact(self, turn_id: str) -> Optional[Dict[str, Any]]:
+        tlog = self._get_turn_log(turn_id)
+        user_obj = tlog.get("user") if isinstance(tlog.get("user"), dict) else {}
+        prompt_obj = user_obj.get("prompt")
+        return prompt_obj if isinstance(prompt_obj, dict) else None
+
+    def _get_assistant_artifact(self, turn_id: str) -> Optional[Dict[str, Any]]:
+        tlog = self._get_turn_log(turn_id)
+        asst_obj = tlog.get("assistant") if isinstance(tlog.get("assistant"), dict) else {}
+        completion_obj = asst_obj.get("completion")
+        return completion_obj if isinstance(completion_obj, dict) else None
+
+    def _build_prompt_artifact(self, turn_id: str) -> Optional[Dict[str, Any]]:
+        prompt_obj = self._get_user_artifact(turn_id)
+        if not isinstance(prompt_obj, dict):
+            return None
+        return self._ensure_artifact_fields(
+            prompt_obj,
+            artifact_name="prompt",
+            artifact_tag="chat:user",
+            artifact_kind="inline",
+            artifact_type="user.prompt",
+            default_format="markdown",
+            default_mime="text/plain",
+        )
+
+    def _build_assistant_artifact(self, turn_id: str) -> Optional[Dict[str, Any]]:
+        completion_obj = self._get_assistant_artifact(turn_id)
+        if not isinstance(completion_obj, dict):
+            return None
+        return self._ensure_artifact_fields(
+            completion_obj,
+            artifact_name="completion",
+            artifact_tag="chat:assistant",
+            artifact_kind="inline",
+            artifact_type="assistant.completion",
+            default_format="markdown",
+            default_mime="text/plain",
+        )
+    @staticmethod
+    def _normalize_attachment_name(raw: Any) -> str:
+        base = str(raw or "").strip()
+        if not base:
+            return ""
+        base = re.sub(r"[\\s./:]+", "_", base)
+        base = re.sub(r"[^A-Za-z0-9_-]+", "", base)
+        return base
+
+    def _attachment_name_matches(self, attachment: Dict[str, Any], name: str) -> bool:
+        raw_candidates = [
+            (attachment or {}).get("artifact_name"),
+            (attachment or {}).get("filename"),
+        ]
+        for candidate in raw_candidates:
+            if not candidate:
+                continue
+            if candidate == name:
+                return True
+            if self._normalize_attachment_name(candidate) == self._normalize_attachment_name(name):
+                return True
+        return False
+
     def resolve_object(self, path: str) -> Optional[Dict[str, Any]]:
         """
         Resolve an OBJECT path (not a leaf). Returns the artifact dict or None.
@@ -856,8 +1065,8 @@ class ReactContext:
             return None
 
         parts = path.split(".")
-        # current turn: artifacts.<id>
-        if len(parts) == 3 and parts[0] == "current_turn" and parts[1] == "artifacts":
+        # current turn: artifacts.<id> (tolerate leaf paths like ...artifacts.<id>.value)
+        if len(parts) >= 3 and parts[0] == "current_turn" and parts[1] == "artifacts":
             return self.artifacts.get(parts[2])
 
         # current turn: slots.<slot>
@@ -874,6 +1083,18 @@ class ReactContext:
                 return pack["value"]
             return pack if isinstance(pack, dict) else None
 
+        # current turn: user.prompt / assistant.completion
+        if len(parts) == 3 and parts[0] == "current_turn" and parts[1] == "user" and parts[2] == "prompt":
+            return self._build_prompt_artifact("current_turn")
+        if len(parts) == 3 and parts[0] == "current_turn" and parts[1] == "assistant" and parts[2] == "completion":
+            return self._build_assistant_artifact("current_turn")
+
+        # prior turn: user.prompt / assistant.completion
+        if len(parts) == 3 and parts[1] == "user" and parts[2] == "prompt":
+            return self._build_prompt_artifact(parts[0])
+        if len(parts) == 3 and parts[1] == "assistant" and parts[2] == "completion":
+            return self._build_assistant_artifact(parts[0])
+
         # user attachment object
         if (".user.attachments." in path or path.startswith("user.attachments.")
                 or ".user.attachment." in path or path.startswith("user.attachment.")):
@@ -889,17 +1110,20 @@ class ReactContext:
             name = (rel.split(".", 1)[0] or "").strip()
             if not name:
                 return None
-            if turn_id == "current_turn":
-                attachments = self.user_attachments or []
-            else:
-                turn = self.prior_turns.get(turn_id) or {}
-                user_obj = (turn.get("user") or {}) if isinstance(turn.get("user"), dict) else {}
-                attachments = user_obj.get("attachments") or []
+            tlog = self._get_turn_log(turn_id)
+            user_obj = tlog.get("user") if isinstance(tlog.get("user"), dict) else {}
+            attachments = user_obj.get("attachments") or []
             for a in attachments:
                 if not isinstance(a, dict):
                     continue
-                if (a.get("artifact_name") or a.get("filename")) == name:
-                    return a
+                if self._attachment_name_matches(a, name):
+                    return self._ensure_artifact_fields(
+                        a,
+                        artifact_name=a.get("artifact_name") or a.get("filename") or name,
+                        artifact_tag="artifact:user.attachment",
+                        artifact_kind="file",
+                        artifact_type="user.attachment",
+                    )
             return None
 
         return None
@@ -1009,7 +1233,7 @@ class ReactContext:
         if slot_type == "inline":
 
             # 1) Leaf-first (preferred)
-            val, owner = self.resolve_path(art_path, mode="full") if art_path else (None, None)
+            val, owner = self.resolve_path(art_path) if art_path else (None, None)
             if val:
                 if not isinstance(val, str):
                     val = json.dumps(_to_jsonable(val), ensure_ascii=False)
@@ -1138,7 +1362,7 @@ class ReactContext:
         # 2) Fallback path: draft file slot backed by inline text surrogate
         if draft_flag and art_path:
             text = None
-            sources_used: list[dict] | None = None
+            sources_used: list[Any] | None = None
             owner_tool_id = None
             actual_owner = src_obj
 
@@ -1149,7 +1373,7 @@ class ReactContext:
 
             # If that didn't work, fall back to leaf resolution
             if not text:
-                val, owner = self.resolve_path(art_path, mode="full")
+                val, owner = self.resolve_path(art_path)
                 if isinstance(val, str) and val.strip():
                     text = val
                     owner_tool_id = (owner or {}).get("tool_id")
@@ -1169,7 +1393,8 @@ class ReactContext:
                 if gaps:
                     art["gaps"] = gaps
                 if sources_used:
-                    art["sources_used"] = sources_used
+                    art["sources_used"] = self._extract_source_sids(sources_used)
+                    self.mark_sources_used(art["sources_used"])
                 if isinstance(actual_owner, dict) and actual_owner.get("content_inventorization") is not None:
                     art["content_inventorization"] = actual_owner.get("content_inventorization")
                 if isinstance(actual_owner, dict) and actual_owner.get("summary") is not None:
@@ -1195,7 +1420,7 @@ class ReactContext:
 
 
     # ---------- Path resolution ----------
-    def resolve_path(self, path: str, *, mode: str = "summary") -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+    def resolve_path(self, path: str) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
         """
         Resolve a dot-path to a primitive leaf value.
         Returns (value, owning_object_or_None).
@@ -1219,41 +1444,43 @@ class ReactContext:
             pieces = path.split(".")
             if len(pieces) == 2:
                 turn_id, leaf = pieces
-                turn = self.prior_turns.get(turn_id) or {}
-
-                # '.user' means we want the user **prompt** string
                 if leaf == "user":
-                    val = ((turn.get("user") or {}).get("prompt") or "")
-                elif leaf == "assistant":
-                    val = (turn.get("assistant") or "")
-                else:
-                    # fallback (shouldn't happen with allowed leaves)
-                    val = (turn.get(leaf) or "")
-
-                return val, {"_kind": "message", "turn_id": turn_id}
+                    art = self._build_prompt_artifact(turn_id)
+                    return art, {"_kind": "artifact", "turn_id": turn_id}
+                if leaf == "assistant":
+                    art = self._build_assistant_artifact(turn_id)
+                    return art, {"_kind": "artifact", "turn_id": turn_id}
+                return None, None
 
         if ".assistant." in path:
             turn_id, _, rest = path.partition(".assistant.")
-            turn = self.prior_turns.get(turn_id) or {}
-            if rest in ("completion.text", "completion"):
-                val = (turn.get("assistant") or "")
+            if rest == "completion":
+                val = self._build_assistant_artifact(turn_id)
+                return val, {"_kind": "artifact", "turn_id": turn_id}
+            if rest == "completion.text":
+                val = (self._build_assistant_artifact(turn_id) or {}).get("text", "")
             elif rest in ("completion.summary", "summary"):
-                summary = (turn.get("turn_summary") or {}) if isinstance(turn.get("turn_summary"), dict) else {}
-                val = summary.get("assistant_answer") or ""
+                val = (self._build_assistant_artifact(turn_id) or {}).get("summary", "")
             else:
-                val = (turn.get(rest) or "")
-            return val, {"_kind": "message", "turn_id": turn_id}
+                val = ""
+            return val, {"_kind": "artifact", "turn_id": turn_id}
 
         # ---------- Current turn user aliases ----------
-        if path in ("current_turn.user.prompt.text", "user.prompt.text", "current_turn.user.prompt", "user.prompt", "current_turn.user"):
-            val = self.user_text or ""
-            return val, {"_kind": "message", "turn_id": "current_turn"}
+        if path in ("current_turn.user.prompt.text", "user.prompt.text"):
+            art = self._build_prompt_artifact("current_turn")
+            return (art or {}).get("text", ""), {"_kind": "artifact", "turn_id": "current_turn"}
+        if path in ("current_turn.user.prompt", "user.prompt"):
+            art = self._build_prompt_artifact("current_turn")
+            return art, {"_kind": "artifact", "turn_id": "current_turn"}
+        if path in ("current_turn.user",):
+            art = self._build_prompt_artifact("current_turn")
+            return art, {"_kind": "artifact", "turn_id": "current_turn"}
 
         if path in ("current_turn.user.prompt.summary", "user.prompt.summary",
                     "current_turn.user.input.summary", "current_turn.user.input_summary",
                     "user.input.summary", "user.input_summary"):
-            val = self.user_input_summary or ""
-            return val, {"_kind": "message", "turn_id": "current_turn"}
+            art = self._build_prompt_artifact("current_turn")
+            return (art or {}).get("summary", ""), {"_kind": "artifact", "turn_id": "current_turn"}
 
         # ---------- Current turn attachments ----------
         if (path.startswith("current_turn.user.attachments.") or path.startswith("user.attachments.")
@@ -1262,24 +1489,29 @@ class ReactContext:
             name, _, leaf = rel.partition(".")
             if not name:
                 return None, None
+            tlog = self._get_turn_log("current_turn")
+            user_obj = tlog.get("user") if isinstance(tlog.get("user"), dict) else {}
             match = None
-            for a in (self.user_attachments or []):
+            for a in (user_obj.get("attachments") or []):
                 if not isinstance(a, dict):
                     continue
-                if (a.get("artifact_name") or a.get("filename")) == name:
-                    match = a
+                if self._attachment_name_matches(a, name):
+                    match = self._ensure_artifact_fields(
+                        a,
+                        artifact_name=a.get("artifact_name") or a.get("filename") or name,
+                        artifact_tag="artifact:user.attachment",
+                        artifact_kind="file",
+                        artifact_type="user.attachment",
+                    )
                     break
             if not match:
                 return None, None
             if not leaf:
                 return match, {"_kind": "attachment", "turn_id": "current_turn"}
             if leaf in ("content", "text"):
-                if mode == "summary":
-                    val = match.get("summary") or match.get("input_summary") or match.get("text") or ""
-                else:
-                    val = match.get("text") or ""
+                val = match.get("text") or ""
             elif leaf in ("summary", "input_summary"):
-                val = match.get("summary") or match.get("input_summary") or ""
+                val = match.get("summary") or ""
             else:
                 val = match.get(leaf)
             return val, {"_kind": "attachment", "turn_id": "current_turn"}
@@ -1287,51 +1519,57 @@ class ReactContext:
         # ---------- Past turn user leaves ----------
         if ".user." in path:
             turn_id, _, rest = path.partition(".user.")
-            turn = self.prior_turns.get(turn_id) or {}
-            user_obj = (turn.get("user") or {}) if isinstance(turn.get("user"), dict) else {}
-            if rest in ("prompt", "prompt.text"):
-                val = user_obj.get("prompt") or ""
-            elif rest in ("prompt.summary", "input.summary", "input_summary", "summary"):
-                val = user_obj.get("input_summary") or user_obj.get("summary") or ""
-            elif rest.startswith("attachments.") or rest.startswith("attachment."):
+            if rest == "prompt":
+                art = self._build_prompt_artifact(turn_id)
+                return art, {"_kind": "artifact", "turn_id": turn_id}
+            if rest in ("prompt.text",):
+                art = self._build_prompt_artifact(turn_id)
+                return (art or {}).get("text", ""), {"_kind": "artifact", "turn_id": turn_id}
+            if rest in ("prompt.summary", "input.summary", "input_summary", "summary"):
+                art = self._build_prompt_artifact(turn_id)
+                return (art or {}).get("summary", ""), {"_kind": "artifact", "turn_id": turn_id}
+            if rest.startswith("attachments.") or rest.startswith("attachment."):
                 rel = rest.split("attachments.", 1)[1] if rest.startswith("attachments.") else rest.split("attachment.", 1)[1]
                 name, _, leaf = rel.partition(".")
+                tlog = self._get_turn_log(turn_id)
+                user_obj = tlog.get("user") if isinstance(tlog.get("user"), dict) else {}
                 attachments = user_obj.get("attachments") or []
                 match = None
                 for a in attachments:
                     if not isinstance(a, dict):
                         continue
-                    if (a.get("artifact_name") or a.get("filename")) == name:
-                        match = a
+                    if self._attachment_name_matches(a, name):
+                        match = self._ensure_artifact_fields(
+                            a,
+                            artifact_name=a.get("artifact_name") or a.get("filename") or name,
+                            artifact_tag="artifact:user.attachment",
+                            artifact_kind="file",
+                            artifact_type="user.attachment",
+                        )
                         break
                 if not match:
                     return None, None
                 if not leaf:
                     return match, {"_kind": "attachment", "turn_id": turn_id}
                 if leaf in ("content", "text"):
-                    if mode == "summary":
-                        val = match.get("summary") or match.get("input_summary") or match.get("text") or ""
-                    else:
-                        val = match.get("text") or ""
+                    val = match.get("text") or ""
                 elif leaf in ("summary", "input_summary"):
-                    val = match.get("summary") or match.get("input_summary") or ""
+                    val = match.get("summary") or ""
                 else:
                     val = match.get(leaf)
                 return val, {"_kind": "attachment", "turn_id": turn_id}
-            else:
-                val = user_obj.get(rest)
-            return val, {"_kind": "message", "turn_id": turn_id}
+            return None, None
 
         # ---------- Current turn assistant ----------
         if path in ("current_turn.assistant.completion.text", "assistant.completion.text"):
-            val = (self.scratchpad.answer or "") if self.scratchpad else ""
-            return val, {"_kind": "message", "turn_id": "current_turn"}
+            art = self._build_assistant_artifact("current_turn")
+            return (art or {}).get("text", ""), {"_kind": "artifact", "turn_id": "current_turn"}
+        if path in ("current_turn.assistant.completion", "assistant.completion"):
+            art = self._build_assistant_artifact("current_turn")
+            return art, {"_kind": "artifact", "turn_id": "current_turn"}
         if path in ("current_turn.assistant.completion.summary", "assistant.completion.summary"):
-            if self.scratchpad and isinstance(self.scratchpad.turn_summary, dict):
-                val = self.scratchpad.turn_summary.get("assistant_answer") or ""
-            else:
-                val = ""
-            return val, {"_kind": "message", "turn_id": "current_turn"}
+            art = self._build_assistant_artifact("current_turn")
+            return (art or {}).get("summary", ""), {"_kind": "artifact", "turn_id": "current_turn"}
 
         # ---------- Current turn tool results ----------
         if path.startswith("current_turn.artifacts."):
@@ -1343,7 +1581,7 @@ class ReactContext:
                 val, parent = maybe
                 leaf = rel.split(".")[-1]
                 # Only .text leaves can be truncated; for others keep full value.
-                return _summarize_if_needed(val, mode, leaf=leaf), parent
+                return val, parent
 
             # 2) Structured traversal under ".value.*"
             #    Support: current_turn.artifacts.<id>.value.<nested.dotted.path>
@@ -1407,9 +1645,6 @@ class ReactContext:
 
                         if ok:
                             val = cur
-                            # For structured values, only truncate long string leaves in summary mode
-                            if mode == "summary" and isinstance(val, str) and len(val) > _SUMMARY_MAX:
-                                val = val[:_SUMMARY_MAX] + "…"
                             return val, parent
                         else:
                             # Helpful debug log for future diagnostics; does not change behavior.
@@ -1428,14 +1663,14 @@ class ReactContext:
                             )
 
             # 3) Fallback: try resolving as a normal leaf within current_turn.artifacts
-            leaf_val, parent = _resolve_leaf_path(self.artifacts, rel, mode)
+            leaf_val, parent = _resolve_leaf_path(self.artifacts, rel)
             return leaf_val, parent
 
         # ---------- Current turn slots ----------
         # (strict: only standard leaves; no nested .value.* traversal here)
         if path.startswith("current_turn.slots."):
             rel = path.replace("current_turn.slots.", "")
-            leaf_val, parent = _resolve_slot_with_value_fallback(self.current_slots, rel, mode)
+            leaf_val, parent = _resolve_slot_with_value_fallback(self.current_slots, rel)
             return leaf_val, parent
 
         # ---------- Past turn slots ----------
@@ -1443,14 +1678,13 @@ class ReactContext:
             turn_id, _, rest = path.partition(".slots.")
             turn = self.prior_turns.get(turn_id) or {}
             slots = (turn.get("deliverables") or {})
-            leaf_val, parent = _resolve_slot_with_value_fallback(slots, rest, mode)
+            leaf_val, parent = _resolve_slot_with_value_fallback(slots, rest)
             return leaf_val, parent
 
         # ---------- Fallback: generic leaf resolution over current turn namespaces ----------
         leaf_val, parent = _resolve_leaf_path(
             {"artifacts": self.artifacts, "slots": self.current_slots},
             path.replace("current_turn.", ""),
-            mode,
         )
         return leaf_val, parent
 
@@ -1504,17 +1738,9 @@ class ReactContext:
         for fd in (fetch_directives or []):
             p = (fd or {}).get("path")
             name = (fd or {}).get("param_name")
-            mode = (fd or {}).get("mode") or "summary"
             if not (p and name):
                 continue
-            if (wants_sources_list or wants_sources_param) and name in {"sources", "sources_list"} and mode == "summary":
-                log.warning(
-                    f"[bind_params] Overriding fetch mode 'summary' → 'full' "
-                    f"for sources-like param '{name}' of tool '{tool_id}'"
-                )
-                mode = "full"  # for sources we want full data
-
-            val, parent = self.resolve_path(p, mode=mode)
+            val, parent = self.resolve_path(p)
             if val is None:
                 continue
 
@@ -1618,14 +1844,20 @@ class ReactContext:
             # Inline/base contribution
             inline = params.get(param_name)
             if isinstance(inline, list):
-                rows.extend(inline)
+                if inline and all(isinstance(x, (int, float)) for x in inline):
+                    rows.extend(self.materialize_sources_by_sids(self._extract_source_sids(inline)))
+                else:
+                    rows.extend(inline)
             elif isinstance(inline, dict):
                 rows.append(inline)
 
             # Fetched contributions
             for v in sources_buckets.get(param_name, []):
                 if isinstance(v, list):
-                    rows.extend(v)
+                    if v and all(isinstance(x, (int, float)) for x in v):
+                        rows.extend(self.materialize_sources_by_sids(self._extract_source_sids(v)))
+                    else:
+                        rows.extend(v)
                 elif isinstance(v, dict):
                     rows.append(v)
 
@@ -1680,7 +1912,7 @@ class ReactContext:
     def _reconcile_sources_lists(self, lists: list[list[dict] | None]) -> list[dict]:
         """
         Normalize + dedupe by URL; assign fresh SIDs for rows missing 'sid',
-        monotonically increasing from self.max_sid. Persist updated max_sid.
+        monotonically increasing from self.max_sid. Updates pool and max_sid.
         """
         combined: list[dict] = []
         for li in (lists or []):
@@ -1688,17 +1920,10 @@ class ReactContext:
         if not combined:
             return []
 
-        deduped = dedupe_sources_by_url([], combined)
-        # Assign SIDs for items that don't have one
-        for row in deduped:
-            sid = row.get("sid")
-            if not isinstance(sid, int) or sid <= 0:
-                self.max_sid += 1
-                row["sid"] = int(self.max_sid)
-
-        # Persist updated counter
-        self.persist()
-        return deduped
+        merged = dedupe_sources_by_url(self.sources_pool, combined)
+        self.set_sources_pool(merged, persist=True)
+        self._sync_max_sid_from_pool()
+        return self.remap_sources_to_pool_sids(combined)
 
     def _collect_sources_from_fetch(self, fetch_directives: list[dict]) -> list[dict]:
         """
@@ -1716,7 +1941,7 @@ class ReactContext:
                 continue
 
             # For sources we always want full, non-truncated values
-            val, parent = self.resolve_path(p, mode="full")
+            val, parent = self.resolve_path(p)
 
             candidates: list[dict] = []
 
@@ -1724,7 +1949,10 @@ class ReactContext:
             if isinstance(parent, dict):
                 su = parent.get("sources_used")
                 if su:
-                    candidates.extend(normalize_sources_any(su))
+                    if isinstance(su, list) and any(isinstance(x, (int, float)) for x in su):
+                        candidates.extend(self.materialize_sources_by_sids(self._extract_source_sids(su)))
+                    else:
+                        candidates.extend(normalize_sources_any(su))
 
             if candidates:
                 acc.extend(normalize_sources_any(candidates))
@@ -1742,15 +1970,20 @@ class ReactContext:
             p = (fd.get("path") or "").strip()
             if not p:
                 continue
-            val, parent = self.resolve_path(p, mode="full")
+            val, parent = self.resolve_path(p)
 
             candidates: list[dict] = []
             if isinstance(parent, dict):
                 su = parent.get("sources_used")
                 if su:
-                    candidates.extend(normalize_sources_any(su))
+                    if isinstance(su, list) and any(isinstance(x, (int, float)) for x in su):
+                        candidates.extend(self.materialize_sources_by_sids(self._extract_source_sids(su)))
+                    else:
+                        candidates.extend(normalize_sources_any(su))
 
-            if not candidates and isinstance(val, (list, dict)):
+            if not candidates and isinstance(val, list) and all(isinstance(x, (int, float)) for x in val):
+                candidates.extend(self.materialize_sources_by_sids(self._extract_source_sids(val)))
+            elif not candidates and isinstance(val, (list, dict)):
                 candidates.extend(normalize_sources_any(val))
 
             if candidates:
@@ -1766,6 +1999,8 @@ class ReactContext:
         """
         rows: list[Any] = []
         if isinstance(raw, list):
+            if raw and all(isinstance(x, (int, float)) for x in raw):
+                return self.materialize_sources_by_sids(self._extract_source_sids(raw))
             rows = list(raw)
         elif isinstance(raw, dict):
             rows.append(raw)
@@ -1807,6 +2042,9 @@ class ReactContext:
         """
         # Get params AND lineage from bind_params (single pass)
         # Normalize common envelope bindings (LLM gen -> writer content)
+
+        # COPY the directives to avoid mutating caller's state
+        fetch_directives = [dict(fd) for fd in (fetch_directives or [])]
         if tool_id and tools_insights.is_write_tool(tool_id) and isinstance(fetch_directives, list):
             for fd in fetch_directives:
                 if not isinstance(fd, dict):
@@ -1870,7 +2108,7 @@ class ReactContext:
         elif "sources" in params:
             provided_list = self._parse_sources_param_value(params["sources"])
 
-        # merge + dedupe in-engine (local, not touching pool)
+        # merge + dedupe in-engine (pool-aware; ensures SIDs align with pool)
         merged = self._reconcile_sources_lists([from_fetch, provided_list])
 
         if merged:
@@ -1989,7 +2227,7 @@ def _dig(root: Dict[str, Any], path: str) -> Optional[Tuple[Any, Dict[str, Any]]
         return obj.get(leaf), obj
     return None
 
-def _resolve_leaf_path(namespace: Dict[str, Any], rel_path: str, mode: str) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
+def _resolve_leaf_path(namespace: Dict[str, Any], rel_path: str) -> Tuple[Optional[Any], Optional[Dict[str, Any]]]:
     """
     Resolve rel_path like '<key>.<leaf>' inside provided namespace (dict of dicts).
     Returns (value, owning_obj).
@@ -2001,7 +2239,7 @@ def _resolve_leaf_path(namespace: Dict[str, Any], rel_path: str, mode: str) -> T
     maybe = _dig(namespace, rel_path)
     if maybe:
         val, parent = maybe
-        return _summarize_if_needed(val, mode, leaf=rel_path.split(".")[-1]), parent
+        return val, parent
 
     # Next, permit root access ONLY when it’s a message-like string (safety)
     # For slots and artifacts, root is an object → NOT allowed as a leaf.
@@ -2009,7 +2247,7 @@ def _resolve_leaf_path(namespace: Dict[str, Any], rel_path: str, mode: str) -> T
     if len(parts) == 1:
         obj = namespace.get(parts[0])
         if isinstance(obj, str):
-            return _summarize_if_needed(obj, mode, leaf="value"), {"_kind": "string"}
+            return obj, {"_kind": "string"}
         return None, None
 
     # Finally, walk dotted leaves safely
@@ -2028,11 +2266,11 @@ def _resolve_leaf_path(namespace: Dict[str, Any], rel_path: str, mode: str) -> T
         cur = cur.get(key) if isinstance(cur, dict) else None
         if cur is None:
             return None, obj
-    return _summarize_if_needed(cur, mode, leaf=leaf), obj
+    return cur, obj
 
-def _resolve_slot_with_value_fallback(slots: Dict[str, Any], rel_path: str, mode: str):
+def _resolve_slot_with_value_fallback(slots: Dict[str, Any], rel_path: str):
     # 1) Try as-is
-    val, parent = _resolve_leaf_path(slots, rel_path, mode)
+    val, parent = _resolve_leaf_path(slots, rel_path)
     if val is not None:
         return val, parent
 
@@ -2043,7 +2281,7 @@ def _resolve_slot_with_value_fallback(slots: Dict[str, Any], rel_path: str, mode
     slot_key = parts[0]
     rest = parts[1] if len(parts) == 2 else ""
     alt = slot_key + ".value" + (("." + rest) if rest else "")
-    val2, parent2 = _resolve_leaf_path(slots, alt, mode)
+    val2, parent2 = _resolve_leaf_path(slots, alt)
     if val2 is not None:
         # Prefer inner artifact dict as parent
         if isinstance(parent2, dict) and isinstance(parent2.get("value"), dict):
@@ -2060,21 +2298,10 @@ def _resolve_slot_with_value_fallback(slots: Dict[str, Any], rel_path: str, mode
         if isinstance(art, dict):
             # Inline slot often has: {"type":"inline", "content": "..."} in some histories
             if (art.get("type") == "inline") and isinstance(art.get("content"), str):
-                v = art.get("content")
-                if mode == "summary" and isinstance(v, str) and len(v) > _SUMMARY_MAX:
-                    v = v[:_SUMMARY_MAX] + "…"
-                return v, art
+                return art.get("content"), art
 
     return None, None
 
-
-def _summarize_if_needed(value: Any, mode: str, *, leaf: str) -> Any:
-    if mode != "summary":
-        return value
-    # Only .text leaves can be truncated for slots; messages/tool-results summaries are precomputed
-    if leaf == "text" and isinstance(value, str) and len(value) > _SUMMARY_MAX:
-        return value[:_SUMMARY_MAX] + "…"
-    return value
 
 def _text_repr(val: Any) -> str:
     if isinstance(val, str):

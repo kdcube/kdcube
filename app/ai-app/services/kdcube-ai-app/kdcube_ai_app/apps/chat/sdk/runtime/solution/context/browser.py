@@ -25,7 +25,7 @@ class ContextBundle:
     """A single, reusable container for both React and Codegen."""
     program_history: List[Dict[str, Any]]
     program_history_reconciled: List[Dict[str, Any]]
-    canonical_sources: List[Dict[str, Any]]
+    sources_pool: List[Dict[str, Any]]
 
     user_id: Optional[str] = None
 
@@ -91,22 +91,22 @@ class ContextBrowser:
         # except Exception:
         #     last_mat_working_canvas = "(no prior project work)"
 
-        # --- 3) reconcile (updates tokens + web_links_citations)
+        # --- 3) reconcile (updates tokens + sources_pool-derived citations)
         program_history_reconciled = copy.deepcopy(program_history)
-        canonical_sources: List[Dict[str, Any]] = []
+        sources_pool: List[Dict[str, Any]] = []
         try:
             rec = reconcile_citations_for_context(
                 program_history_reconciled, max_sources=max_sources, rewrite_tokens_in_place=True
             )
-            canonical_sources = rec.get("canonical_sources", [])
-            self.log.log(f"[context_browser] canonical sources: {len(canonical_sources)}")
+            sources_pool = rec.get("sources_pool", [])
+            self.log.log(f"[context_browser] sources pool: {len(sources_pool)}")
         except Exception as e:
             self.log.log(f"[context_browser] reconcile error: {e}", level="ERROR")
 
         return ContextBundle(
             program_history=program_history,
             program_history_reconciled=program_history_reconciled,
-            canonical_sources=canonical_sources,
+            sources_pool=sources_pool,
             # last_mat_working_canvas=last_mat_working_canvas,
         )
 
@@ -123,7 +123,7 @@ class ContextBrowser:
         """
         Convert a ContextBundle into a fully prepared ReactContext, including:
           - prior_turns
-          - sources_pool seeded with canonical_sources
+          - sources_pool seeded with sources_pool
           - SOURCE_ID_CV initialization
           - turn meta (ids, user text, start ts)
         """
@@ -141,30 +141,36 @@ class ContextBrowser:
                         continue
                     deliverables[slot] = d_item
 
-                turn_sources = ((meta.get("web_links_citations") or {}).get("items") or [])
+                turn_sources_pool = meta.get("sources_pool")
+                if not turn_sources_pool and isinstance(meta.get("turn_log"), dict):
+                    turn_sources_pool = meta["turn_log"].get("sources_pool")
                 t_id = meta.get("turn_id")
+                turn_log = meta.get("turn_log") or {}
+                turn_user = (turn_log.get("user") if isinstance(turn_log, dict) else None) or {}
+                turn_assistant = (turn_log.get("assistant") if isinstance(turn_log, dict) else None) or {}
                 ctx.prior_turns[t_id] = {
                     "turn_id": t_id,
                     "ts": (meta.get("ts") or ""),
-                    "user": meta.get("user", {}),
-                    "assistant": meta.get("assistant", ""),
+                    "user": turn_user,
+                    "assistant": turn_assistant,
                     "project_log": (meta.get("project_log") or {}),
                     "solver_failure": meta.get("solver_failure", ""),
                     "deliverables": deliverables,
-                    "sources": turn_sources,
+                    "turn_log": turn_log,
+                    "sources_pool": turn_sources_pool or [],
                 }
             except Exception as e:
                 self.log.log(f"[context_browser] react_context parse error: {e}", level="ERROR")
 
         # Seed source pool with canonical sources if present
-        if bundle.canonical_sources:
+        if bundle.sources_pool:
             try:
-                ctx.set_sources_pool(bundle.canonical_sources, persist=False)
+                ctx.set_sources_pool(bundle.sources_pool, persist=False)
             except Exception:
-                ctx.sources_pool = bundle.canonical_sources
+                ctx.sources_pool = bundle.sources_pool
             try:
                 ctx.max_sid = max(
-                    int(s.get("sid") or 0) for s in bundle.canonical_sources if isinstance(s, dict)
+                    int(s.get("sid") or 0) for s in bundle.sources_pool if isinstance(s, dict)
                 )
             except Exception:
                 ctx.max_sid = 0
@@ -210,7 +216,9 @@ class ContextBrowser:
         import kdcube_ai_app.apps.chat.sdk.runtime.solution.solution_workspace as solution_workspace
 
         try:
-            for turn in (bundle.program_history or []):
+            for turn in (bundle.program_history_reconciled or bundle.program_history or []):
+                if not isinstance(turn, dict):
+                    continue
                 turn_program = next(iter(turn.values()), {})
                 if turn_program:
                     # Extract turn_id for directory naming
@@ -249,28 +257,31 @@ class ContextBrowser:
         import kdcube_ai_app.apps.chat.sdk.runtime.solution.solution_workspace as solution_workspace
 
         try:
-            for history in (bundle.program_history or [], bundle.program_history_reconciled or []):
-                for turn in history:
-                    turn_program = next(iter(turn.values()), {})
-                    if not turn_program:
-                        continue
-                    turn_log = turn_program.get("turn_log")  or {}
-                    turn_id = turn_program.get("turn_id", "unknown_turn")
-                    user = turn_log.get("user") or {}
-                    attachments = user.get("attachments") or []
-                    if not attachments:
-                        continue
-                    rehosted = await solution_workspace.rehost_previous_attachments(
-                        attachments,
-                        workdir,
-                        turn_id=turn_id,
-                    )
-                    user["attachments"] = rehosted
-                    turn_program["user"] = user
-                    self.log.log(
-                        f"[{ctx}] Rehosted {len(attachments)} attachments from turn {turn_id} "
-                        f"to {turn_id}/attachments/ subdirectory"
-                    )
+            for turn in (bundle.program_history_reconciled or bundle.program_history or []):
+                if not isinstance(turn, dict):
+                    continue
+                turn_program = next(iter(turn.values()), {})
+                if not turn_program:
+                    continue
+                turn_log = turn_program.get("turn_log") or {}
+                turn_id = turn_program.get("turn_id", "unknown_turn")
+                user = turn_log.get("user") or turn_program.get("user") or {}
+                attachments = user.get("attachments") or []
+                if not attachments:
+                    continue
+                rehosted = await solution_workspace.rehost_previous_attachments(
+                    attachments,
+                    workdir,
+                    turn_id=turn_id,
+                )
+                user["attachments"] = rehosted
+                turn_program["user"] = user
+                turn_log["user"] = user
+                turn_program["turn_log"] = turn_log
+                self.log.log(
+                    f"[{ctx}] Rehosted {len(attachments)} attachments from turn {turn_id} "
+                    f"to {turn_id}/attachments/ subdirectory"
+                )
         except Exception as e:
             self.log.log(
                 f"[{ctx}] Warning: Failed to rehost previous attachments: {e}",
