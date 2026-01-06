@@ -478,6 +478,11 @@ async def _execute_tool_in_memory(
                 },
             }
         exec_id = _safe_exec_id(tool_call_id)
+        dest_dir = outdir / "executed_programs"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        i = 0
+        while (dest_dir / f"{_safe_label(tool_id)}_{i}_main.py").exists():
+            i += 1
         envelope = await run_codegen_tool(codegen=codegen,
                                           context=context,
                                           logger=logger,
@@ -488,7 +493,8 @@ async def _execute_tool_in_memory(
                                           outdir=outdir,
                                           workdir=workdir,
                                           solution_gen_stream=solution_gen_stream,
-                                          exec_id=exec_id)
+                                          exec_id=exec_id,
+                                          invocation_idx=i)
         err_tail = errors_log_tail(outdir / "logs" / "errors.log", exec_id=exec_id)
         project_log = envelope.get("project_log")
         if isinstance(project_log, dict) and project_log:
@@ -506,11 +512,6 @@ async def _execute_tool_in_memory(
         codegen_codefile = codegen_codefile_path.read_text(encoding="utf-8") if codegen_codefile_path.exists() else None
         try:
             if codegen_codefile_path.exists():
-                dest_dir = outdir / "executed_programs"
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                i = 0
-                while (dest_dir / f"{_safe_label(tool_id)}_{i}_main.py").exists():
-                    i += 1
                 dest_main = dest_dir / f"{_safe_label(tool_id)}_{i}_main.py"
                 shutil.copy2(codegen_codefile_path, dest_main)
                 logger.log(f"[react.exec] main.py preserved as {dest_main.relative_to(outdir)}")

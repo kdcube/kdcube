@@ -134,6 +134,60 @@ def build_turn_session_journal(*,
                 lines_local.append(f"  {i}. {used_mark} S{sid} {url}")
         return lines_local
 
+    def _format_attachment_paths(attachments: List[Dict[str, Any]], *, turn_id: str) -> List[str]:
+        lines_local: List[str] = []
+        for att in attachments or []:
+            if not isinstance(att, dict):
+                continue
+            filename = (att.get("filename") or "").strip()
+            path = (att.get("path") or "").strip()
+            mime = (att.get("mime") or att.get("mime_type") or "").strip()
+            artifact_name = (att.get("artifact_name") or "").strip()
+            if not path and filename:
+                path = f"{turn_id}/attachments/{filename}"
+            if not filename and path:
+                filename = path.split("/")[-1]
+            parts = []
+            if artifact_name:
+                parts.append(f"artifact_name={artifact_name}")
+            if path:
+                parts.append(f"path={path}")
+            if filename:
+                parts.append(f"filename={filename}")
+            if mime:
+                parts.append(f"mime={mime}")
+            if parts:
+                lines_local.append("- " + " | ".join(parts))
+        return lines_local
+
+    def _format_file_paths(slots: Dict[str, Any], *, turn_id: str) -> List[str]:
+        lines_local: List[str] = []
+        for slot_name, spec in (slots or {}).items():
+            if not isinstance(spec, dict):
+                continue
+            art = spec.get("value") if isinstance(spec.get("value"), dict) else spec
+            if not isinstance(art, dict):
+                continue
+            slot_type = (art.get("type") or spec.get("type") or "").strip().lower()
+            if slot_type != "file":
+                continue
+            filename = (art.get("filename") or "").strip()
+            path = (art.get("path") or "").strip()
+            mime = (art.get("mime") or spec.get("mime") or "").strip()
+            if not filename and path:
+                filename = path.split("/")[-1]
+            if not path and filename:
+                path = filename if turn_id == "current_turn" else f"{turn_id}/files/{filename}"
+            parts = [f"slot={slot_name}"]
+            if path:
+                parts.append(f"path={path}")
+            if filename:
+                parts.append(f"filename={filename}")
+            if mime:
+                parts.append(f"mime={mime}")
+            lines_local.append("- " + " | ".join(parts))
+        return lines_local
+
     def _slot_kind(name: Optional[str]) -> Optional[str]:
         if not name or not isinstance(output_contract, dict):
             return None
@@ -157,6 +211,7 @@ def build_turn_session_journal(*,
         fetch_context_tool_retrieval_example = f"Use 'show_artifacts' to see any artifact in full on next round"
     # lines.append("Previews are truncated. Use ctx_tools.fetch_turn_artifacts([turn_ids]) for full content.")
     lines.append(f"Within turn, User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown. If available, only their content summary is shown. {fetch_context_tool_retrieval_example}")
+    lines.append("Use OUT_DIR-relative file/attachment paths exactly as shown in this journal; do NOT fetch slots to discover paths.")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -219,6 +274,16 @@ def build_turn_session_journal(*,
 
             if turn_presentation.strip():
                 lines.append(turn_presentation.strip())
+                lines.append("")
+
+            attachments = []
+            if isinstance(meta.get("turn_log"), dict):
+                user_obj = meta["turn_log"].get("user") or {}
+                attachments = list(user_obj.get("attachments") or [])
+            attachment_lines = _format_attachment_paths(attachments, turn_id=turn_id)
+            if attachment_lines:
+                lines.append("[ATTACHMENTS — OUT_DIR-relative paths]")
+                lines.extend(attachment_lines)
                 lines.append("")
 
             # Sources (NOT part of solver, formatted separately)
@@ -292,6 +357,25 @@ def build_turn_session_journal(*,
         print(f"Failed to build TurnView for current_turn: {ex}")
         print(traceback.format_exc())
         lines.append("(failed to render current turn view)")
+
+    try:
+        file_lines = _format_file_paths(context.current_slots or {}, turn_id="current_turn")
+        if file_lines:
+            lines.append("[FILES — OUT_DIR-relative paths]")
+            lines.extend(file_lines)
+            lines.append("")
+    except Exception:
+        pass
+
+    try:
+        attachments = list(getattr(context.scratchpad, "user_attachments", None) or [])
+        attachment_lines = _format_attachment_paths(attachments, turn_id="current_turn")
+        if attachment_lines:
+            lines.append("[ATTACHMENTS — OUT_DIR-relative paths]")
+            lines.extend(attachment_lines)
+            lines.append("")
+    except Exception:
+        pass
 
     # Current turn sources (full pool with used/unused marks)
     try:

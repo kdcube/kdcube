@@ -498,6 +498,11 @@ def _format_produced_slots_grouped_by_status(
                     or c_spec.get("filename")
             )
             if fpath:
+                try:
+                    from pathlib import Path
+                    fpath = Path(str(fpath)).name
+                except Exception:
+                    fpath = str(fpath)
                 lines.append(f"  - Filename: {fpath}")
         if slot_type == "file" and art is not None and file_path_prefix is not None:
             fpath = (art or {}).get("filename") or ""
@@ -771,6 +776,11 @@ def _format_deliverables_flat_with_icons(
                 or c_spec.get("filename")
             )
             if fpath:
+                try:
+                    from pathlib import Path
+                    fpath = Path(str(fpath)).name
+                except Exception:
+                    fpath = str(fpath)
                 lines.append(f"  Filename: {fpath}")
         if status != "missing" and art is not None and file_path_prefix is not None:
             slot_type = (

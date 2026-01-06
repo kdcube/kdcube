@@ -351,7 +351,8 @@ logger = logging.getLogger("agent.runtime")
 OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
 if not OUTPUT_DIR:
     raise RuntimeError("OUTPUT_DIR missing in run context")
-OUTPUT = Path(OUTPUT_DIR)
+OUT_DIR = Path(OUTPUT_DIR)
+OUT = OUT_DIR
 _EXEC_ID = os.environ.get("EXECUTION_ID") or "unknown"
 logger.info(f"===== EXECUTION {_EXEC_ID} START =====")
 
@@ -519,7 +520,7 @@ def _refresh_project_log_slot():
 
 def _dump_delta_cache_file():
     """
-    Best-effort: write communicator delta cache to OUTPUT/delta_aggregates.json.
+    Best-effort: write communicator delta cache to OUT_DIR/delta_aggregates.json.
     Safe to call multiple times; last write wins.
     """
     try:
@@ -531,7 +532,7 @@ def _dump_delta_cache_file():
             pass
         if not comm:
             return
-        dest = OUTPUT / "delta_aggregates.json"
+        dest = OUT_DIR / "delta_aggregates.json"
         try:
             ok = comm.dump_delta_cache(dest)
             if not ok:
@@ -845,7 +846,8 @@ logger = logging.getLogger("agent.runtime")
 OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
 if not OUTPUT_DIR:
     raise RuntimeError("OUTPUT_DIR missing in run context")
-OUTPUT = Path(OUTPUT_DIR)
+OUT_DIR = Path(OUTPUT_DIR)
+OUT = OUT_DIR
 
 # Ensure ContextVars are set even if only env was provided
 try:
@@ -1177,7 +1179,8 @@ logger = logging.getLogger("agent.runtime")
 OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
 if not OUTPUT_DIR:
     raise RuntimeError("OUTPUT_DIR missing in run context")
-OUTPUT = Path(OUTPUT_DIR)
+OUT_DIR = Path(OUTPUT_DIR)
+OUT = OUT_DIR
 
 # Ensure ContextVars are set even if only env was provided
 try:

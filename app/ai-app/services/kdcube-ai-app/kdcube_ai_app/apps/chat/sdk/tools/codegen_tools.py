@@ -140,6 +140,7 @@ async def run_codegen_tool(
         outdir: Optional[pathlib.Path] = None,
         workdir: Optional[pathlib.Path] = None,
         exec_id: Optional[str] = None,
+        invocation_idx: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Supervisor-side meta-tool wrapper.
@@ -177,6 +178,7 @@ async def run_codegen_tool(
         workdir=workdir,
         solution_gen_stream=solution_gen_stream,
         exec_id=exec_id,
+        invocation_idx=invocation_idx,
     )
     outdir = pathlib.Path(run_rec.get("outdir") or "")
     workdir = pathlib.Path(run_rec.get("workdir") or "")

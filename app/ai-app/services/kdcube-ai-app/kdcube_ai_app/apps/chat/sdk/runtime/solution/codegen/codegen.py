@@ -447,6 +447,7 @@ class CodegenRunner:
             workdir: pathlib.Path,
             solution_gen_stream: Callable[..., Awaitable[Dict[str, Any]]],
             exec_id: Optional[str] = None,
+            invocation_idx: Optional[int] = None,
     ) -> Dict[str, Any]:
         import uuid as _uuid
         import tempfile as _tempfile
@@ -516,6 +517,9 @@ class CodegenRunner:
                 metadata={"track_id": track_id, "agent": self.AGENT_NAME},
         ):
             with self.scratchpad.phase("solver.codegen", agent="solver.codegen"):
+                author = f"{self.AGENT_NAME}.solver.codegen"
+                if invocation_idx is not None:
+                    author = f"{author}.{invocation_idx}"
                 cg_stream = await solution_gen_stream(
                     self.svc,
                     timezone=self.comm_context.user.timezone,
@@ -525,7 +529,7 @@ class CodegenRunner:
                     program_playbook=program_playbook,
                     instruction=instruction,
                     on_thinking_delta=mk_thinking_streamer(comm=self.comm,
-                                                           author=f"{self.AGENT_NAME}.solver.codegen"),
+                                                           author=author),
                     ctx=self.AGENT_NAME,
                     code_packages=code_packages,
                     max_tokens=7000
