@@ -79,6 +79,7 @@ class ReactState:
     wrapup_round_used: bool = False
     # Exit
     exit_reason: Optional[str] = None
+    pending_exit_reason: Optional[str] = None
     clarification_questions: Optional[List[str]] = None
 
     # Lasts
@@ -343,6 +344,7 @@ class ReactSolver:
             "max_iterations": s.max_iterations,
             "wrapup_round_used": s.wrapup_round_used,
             "exit_reason": s.exit_reason,
+            "pending_exit_reason": s.pending_exit_reason,
             "clarification_questions": s.clarification_questions,
             "last_decision": s.last_decision,
             "last_tool_result": s.last_tool_result,
@@ -370,6 +372,7 @@ class ReactSolver:
             await self.comm.delta(text=text, index=i, marker="thinking", agent=author, completed=completed)
         return emit_thinking_delta
 
+
     # ----------------------------
     # Routing
     # ----------------------------
@@ -377,6 +380,11 @@ class ReactSolver:
     def _route_after_decision(self, state: Dict[str, Any]) -> str:
         last_decision = state.get("last_decision") or {}
         action = last_decision.get("action")
+        if not state.get("exit_reason") and state.get("pending_exit_reason"):
+            state["exit_reason"] = state.get("pending_exit_reason")
+            state["pending_exit_reason"] = None
+        if action == "clarify" and not state.get("exit_reason"):
+            state["exit_reason"] = "clarify"
         if action in ("complete", "exit") and not state.get("exit_reason"):
             state["exit_reason"] = "complete"
         # Centralized wrap-up gate: only when exiting with pending slots and unused artifacts.
@@ -385,7 +393,8 @@ class ReactSolver:
             declared = list((state.get("output_contract") or {}).keys())
             filled = list((getattr(context, "current_slots", {}) or {}).keys()) if context else []
             pending = [s for s in declared if s not in set(filled)]
-            artifacts = list((getattr(context, "artifacts", {}) or {}).keys()) if context else []
+            artifacts_map = (getattr(context, "artifacts", {}) or {}) if context else {}
+            artifacts = list(artifacts_map.keys())
             mapped_artifacts = set()
             if context and getattr(context, "current_slots", None):
                 for slot in (context.current_slots or {}).values():
@@ -393,11 +402,21 @@ class ReactSolver:
                         aid = (slot.get("mapped_artifact_id") or "").strip()
                         if aid:
                             mapped_artifacts.add(aid)
-            has_unmapped = any(aid not in mapped_artifacts for aid in artifacts)
+            mappable_artifacts = [
+                aid for aid, art in artifacts_map.items()
+                if not isinstance(art, dict)
+                or (
+                    art.get("artifact_kind") != "search"
+                    and not art.get("error")
+                    and art.get("value") is not None
+                )
+            ]
+            has_unmapped = any(aid not in mapped_artifacts for aid in mappable_artifacts)
             if pending and has_unmapped:
                 state["wrapup_round_used"] = True
                 state["is_wrapup_round"] = True
                 state["exit_reason"] = None
+                state["pending_exit_reason"] = None
                 return "decision"
 
         if state.get("exit_reason"):
@@ -730,11 +749,42 @@ class ReactSolver:
         # ---------- Budget hard gate ----------
         bs = getattr(context, "budget_state", None)
         if bs is not None and bs.must_finish():
+            allow_exploit_overdraft = False
+            overdraft_total = 0
+            gb = bs.global_budget
+            remaining_exploit = gb.remaining_exploit_rounds()
+            if remaining_exploit > 0:
+                st = bs.current_stage()
+                if st is None:
+                    allow_exploit_overdraft = True
+                    overdraft_total = remaining_exploit
+                else:
+                    stage_remaining = max(0, int(st.caps.max_exploit) - int(st.usage.exploit_used))
+                    allow_exploit_overdraft = stage_remaining > 0
+                    overdraft_total = min(remaining_exploit, stage_remaining)
+            if allow_exploit_overdraft:
+                last_round = state.get("exploit_overdraft_round")
+                used = int(state.get("exploit_overdraft_used") or 0)
+                if last_round != it:
+                    used = min(used + 1, max(1, overdraft_total))
+                    state["exploit_overdraft_used"] = used
+                    state["exploit_overdraft_round"] = it
+                state["allow_exploit_overdraft"] = True
+                state["exploit_overdraft_total"] = max(1, overdraft_total)
+                if state.get("exit_reason") == "max_iterations":
+                    state["exit_reason"] = None
+                if state.get("pending_exit_reason") == "max_iterations":
+                    state["pending_exit_reason"] = None
+                self.log.log(
+                    "[react.decision] Budget exhausted; allowing exploit overdraft round",
+                    level="WARNING",
+                )
             # Budget exhausted: allow ONE wrapup round for mapping if needed.
             declared = list((state.get("output_contract") or {}).keys())
             filled = list((getattr(context, "current_slots", {}) or {}).keys()) if context else []
             pending = [s for s in declared if s not in set(filled)]
-            artifacts = list((getattr(context, "artifacts", {}) or {}).keys()) if context else []
+            artifacts_map = (getattr(context, "artifacts", {}) or {}) if context else {}
+            artifacts = list(artifacts_map.keys())
             mapped_artifacts = set()
             if context and getattr(context, "current_slots", None):
                 for slot in (context.current_slots or {}).values():
@@ -742,12 +792,21 @@ class ReactSolver:
                         aid = (slot.get("mapped_artifact_id") or "").strip()
                         if aid:
                             mapped_artifacts.add(aid)
-            has_unmapped = any(aid not in mapped_artifacts for aid in artifacts)
+            mappable_artifacts = [
+                aid for aid, art in artifacts_map.items()
+                if not isinstance(art, dict)
+                or (
+                    art.get("artifact_kind") != "search"
+                    and not art.get("error")
+                    and art.get("value") is not None
+                )
+            ]
+            has_unmapped = any(aid not in mapped_artifacts for aid in mappable_artifacts)
             if pending and has_unmapped and not state.get("wrapup_round_used", False):
                 state["wrapup_round_used"] = True
                 state["is_wrapup_round"] = True
-            else:
-                state["exit_reason"] = "max_iterations"
+            elif not allow_exploit_overdraft:
+                state["pending_exit_reason"] = "max_iterations"
                 state["error"] = {
                     "where": "react.decision",
                     "error": "budget_exhausted",
@@ -783,6 +842,14 @@ class ReactSolver:
             snap_ids = self._snapshot_artifact_ids(context)
             state["round_snapshot_artifact_ids"] = snap_ids
 
+        if bs is not None:
+            bs.wrapup_active = bool(state.get("is_wrapup_round", False))
+            if state.get("allow_exploit_overdraft"):
+                bs.exploit_overdraft_used = int(state.get("exploit_overdraft_used") or 0)
+                bs.exploit_overdraft_total = int(state.get("exploit_overdraft_total") or 0)
+            else:
+                bs.exploit_overdraft_used = None
+                bs.exploit_overdraft_total = None
         turn_session_journal = build_turn_session_journal(
             context=context,
             output_contract=state["output_contract"],
@@ -911,7 +978,7 @@ class ReactSolver:
                     if action == "decision":
                         agent_response["action"] = "exit"
                         action = "exit"
-                        state["exit_reason"] = "context_reads_exhausted"
+                        state["pending_exit_reason"] = "context_reads_exhausted"
                     show_paths = []
                 else:
                     if bs is not None:
@@ -923,15 +990,12 @@ class ReactSolver:
                     )
                     show_items = context.materialize_show_artifacts(show_paths)
                     state["show_artifacts"] = show_items or []
-                    fetch_context_tool_retrieval_example = ""
-                    if tool_call_id == "codegen_tools.codegen_python":
-                        fetch_context_tool_retrieval_example = "ctx_tools.fetch_ctx([<turn_id>.artifacts.<ID>])"
                     turn_session_journal = build_turn_session_journal(
                         context=context,
                         output_contract=state["output_contract"],
                         turn_view_class=self.turn_view_class,
                         show_artifacts=show_items or None,
-                        is_codegen_agent=True,
+                        is_codegen_agent=tool_call_id == "codegen_tools.codegen_python",
                         coordinator_turn_line=state.get("coordinator_turn_line"),
                     )
                     operational_digest = build_operational_digest(
@@ -1010,6 +1074,16 @@ class ReactSolver:
         # ---- Handle action ----
         nxt = action
         is_wrapup = state.get("is_wrapup_round", False)
+        allow_exploit_overdraft = bool(state.get("allow_exploit_overdraft"))
+        if allow_exploit_overdraft and nxt == "call_tool" and strategy != "exploit":
+            self.log.log(
+                "[react.decision] Exploit overdraft requires exploit tool call; exiting",
+                level="WARNING",
+            )
+            nxt = "exit"
+            agent_response["action"] = "exit"
+            state["pending_exit_reason"] = "exploit_overdraft_blocked"
+            state["allow_exploit_overdraft"] = False
         if is_wrapup and nxt == "call_tool":
             nxt = "exit"
             agent_response["action"] = "exit"
@@ -1019,7 +1093,7 @@ class ReactSolver:
                 self.log.log("[react.decision] decision rerun without show_artifacts; exiting", level="WARNING")
                 nxt = "exit"
                 agent_response["action"] = "exit"
-                state["exit_reason"] = "decision_no_show_artifacts"
+                state["pending_exit_reason"] = "decision_no_show_artifacts"
             state["force_decision_rerun"] = False
 
         # ---------- MANDATORY mapping step: ONCE per round, only here ----------
@@ -1075,7 +1149,7 @@ class ReactSolver:
                 self.log.log("[react.decision] decision rerun blocked during wrapup; exiting", level="WARNING")
                 nxt = "exit"
                 agent_response["action"] = "exit"
-                state["exit_reason"] = "wrapup_no_decision_rerun"
+                state["pending_exit_reason"] = "wrapup_no_decision_rerun"
             else:
                 if bs is not None:
                     gb = bs.global_budget
@@ -1083,7 +1157,7 @@ class ReactSolver:
                         self.log.log("[react.decision] decision rerun budget exhausted; exiting", level="WARNING")
                         nxt = "exit"
                         agent_response["action"] = "exit"
-                        state["exit_reason"] = "decision_reruns_exhausted"
+                        state["pending_exit_reason"] = "decision_reruns_exhausted"
                     else:
                         bs.note_decision_rerun()
                         try:
@@ -1113,10 +1187,10 @@ class ReactSolver:
                     pass
 
             if nxt == "clarify":
-                state["exit_reason"] = "clarify"
+                state["pending_exit_reason"] = "clarify"
                 state["clarification_questions"] = agent_response.get("clarification_questions")
             else:
-                state["exit_reason"] = "complete"
+                state["pending_exit_reason"] = "complete"
 
             self._finalize_round_timing(state, end_reason=nxt)
             return state
@@ -1400,6 +1474,8 @@ class ReactSolver:
             spec = next(iter([i for i in declared_specs if i.get("name") == artifact_id or ""]), None) or {}
             artifact_type = tr.get("artifact_type") or spec.get("type")
             artifact_kind = tr.get("artifact_kind") or spec.get("kind")
+            if tools_insights.is_exploration_tool(tool_id):
+                artifact_kind = "search"
 
             artifact_summary = tr.get("summary") or ""
             tool_exec_output = tr.get("output")

@@ -41,6 +41,7 @@ class PreflightConfig:
     # OOXML allowlist
     allow_docx: bool = True
     allow_pptx: bool = True
+    allow_xlsx: bool = True
     allow_macros: bool = False  # block .docm/.pptm
 
 @dataclass
@@ -210,6 +211,8 @@ def preflight_zip_ooxml(data: bytes, cfg: PreflightConfig) -> PreflightResult:
                 ooxml_kind = "docx"
             if "presentationml.presentation" in ct:
                 ooxml_kind = "pptx"
+            if "spreadsheetml.sheet" in ct:
+                ooxml_kind = "xlsx"
             macro = ("macroEnabled" in ct) or (".vbaProject" in "\n".join(names))
             if macro and not cfg.allow_macros:
                 r.deny("Macro-enabled OOXML is not allowed")
@@ -217,6 +220,8 @@ def preflight_zip_ooxml(data: bytes, cfg: PreflightConfig) -> PreflightResult:
                 r.deny("DOCX not allowed by policy")
             if ooxml_kind == "pptx" and not cfg.allow_pptx:
                 r.deny("PPTX not allowed by policy")
+            if ooxml_kind == "xlsx" and not cfg.allow_xlsx:
+                r.deny("XLSX not allowed by policy")
     except Exception:
         pass
 
@@ -266,6 +271,7 @@ async def preflight_async(
             "application/zip",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ) or data[:2] == b"PK"
     ):
         r = preflight_zip_ooxml(data, cfg)

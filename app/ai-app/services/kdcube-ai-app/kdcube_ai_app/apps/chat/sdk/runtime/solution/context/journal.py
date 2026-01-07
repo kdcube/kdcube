@@ -151,7 +151,7 @@ def build_turn_session_journal(*,
             if artifact_name:
                 parts.append(f"artifact_name={artifact_name}")
             if path:
-                parts.append(f"path={path}")
+                parts.append(f"path=\"{path}\"")
             if filename:
                 parts.append(f"filename={filename}")
             if mime:
@@ -180,7 +180,7 @@ def build_turn_session_journal(*,
                 path = filename if turn_id == "current_turn" else f"{turn_id}/files/{filename}"
             parts = [f"slot={slot_name}"]
             if path:
-                parts.append(f"path={path}")
+                parts.append(f"path=\"{path}\"")
             if filename:
                 parts.append(f"filename={filename}")
             if mime:
@@ -276,16 +276,6 @@ def build_turn_session_journal(*,
                 lines.append(turn_presentation.strip())
                 lines.append("")
 
-            attachments = []
-            if isinstance(meta.get("turn_log"), dict):
-                user_obj = meta["turn_log"].get("user") or {}
-                attachments = list(user_obj.get("attachments") or [])
-            attachment_lines = _format_attachment_paths(attachments, turn_id=turn_id)
-            if attachment_lines:
-                lines.append("[ATTACHMENTS — OUT_DIR-relative paths]")
-                lines.extend(attachment_lines)
-                lines.append("")
-
             # Sources (NOT part of solver, formatted separately)
             from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any, sids_in_text
             sources_pool = normalize_sources_any(
@@ -367,16 +357,6 @@ def build_turn_session_journal(*,
     except Exception:
         pass
 
-    try:
-        attachments = list(getattr(context.scratchpad, "user_attachments", None) or [])
-        attachment_lines = _format_attachment_paths(attachments, turn_id="current_turn")
-        if attachment_lines:
-            lines.append("[ATTACHMENTS — OUT_DIR-relative paths]")
-            lines.extend(attachment_lines)
-            lines.append("")
-    except Exception:
-        pass
-
     # Current turn sources (full pool with used/unused marks)
     try:
         from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any, sids_in_text
@@ -422,16 +402,16 @@ def build_turn_session_journal(*,
         pass
 
     if coordinator_turn_line:
-        lines.append("[COORDINATOR TURN DECISION]")
+        lines.append("[SOLVER.COORDINATOR DECISION]")
         lines.append(coordinator_turn_line)
         lines.append("")
-    lines.append("[CURRENT TURN CONTRACT SLOTS (to fill)]")
+    lines.append("[SOLVER.TURN CONTRACT SLOTS (to fill)]")
     lines.append(json.dumps(_to_jsonable(output_contract or {}), ensure_ascii=False, indent=2),)
     lines.append("")
     lines.append("---")
 
     # 3) Events timeline (short timestamps)
-    lines.append("[EVENTS (oldest → newest)]")
+    lines.append("[SOLVER.REACT.EVENTS (oldest → newest)]")
     if not context.events:
         lines.append("(no events yet)")
     else:
@@ -715,7 +695,7 @@ def build_turn_session_journal(*,
 
             return queries_preview, objective_preview
 
-        lines.append("#### Current artifacts (oldest→newest)")
+        lines.append("[SOLVER.CURRENT ARTIFACTS (oldest→newest)]")
         if not items:
             lines.append("(none)")
             lines.append("")
@@ -775,7 +755,7 @@ def build_turn_session_journal(*,
     filled_set = set(filled)
     pending = [s for s in declared if s not in filled_set]
 
-    lines.append("[CURRENT TURN PROGRESS SNAPSHOT]")
+    lines.append("[SOLVER.CURRENT TURN PROGRESS SNAPSHOT]")
     lines.append("")
     lines.append("# Contract Status")
     lines.append(f"- Declared slots: {len(declared)}")

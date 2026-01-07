@@ -447,68 +447,6 @@ class SocketIOChatHandler:
             conversation_id = message_data.get("conversation_id") or session.session_id
             message_data["conversation_id"] = conversation_id
 
-            attachments: List[Dict[str, Any]] = []
-            if raw_attachments:
-                max_bytes = max_mb * 1024 * 1024
-                store = getattr(self.app.state, "conversation_store", None)
-                enable_av = os.getenv("APP_AV_SCAN", "1") == "1"
-                av_timeout = float(os.getenv("APP_AV_TIMEOUT_S", "3.0"))
-                from kdcube_ai_app.infra.gateway.safe_preflight import PreflightConfig, preflight_async
-                cfg = PreflightConfig(av_scan=enable_av, av_timeout_s=av_timeout)
-                for a in raw_attachments:
-                    if not a.content:
-                        continue
-                    if len(a.content) > max_bytes:
-                        logger.warning("attachment '%s' rejected: %d > max %d", a.name, len(a.content), max_bytes)
-                        continue
-                    if not store:
-                        logger.warning("attachment '%s' skipped: conversation_store missing", a.name)
-                        continue
-                    if enable_av:
-                        try:
-                            pf = await preflight_async(
-                                a.content,
-                                a.name or "file",
-                                a.mime or "application/octet-stream",
-                                cfg,
-                            )
-                        except Exception as ex:
-                            logger.warning("attachment '%s' preflight failed: %s", a.name, ex)
-                            continue
-                        if not pf.allowed:
-                            logger.warning("attachment '%s' rejected by preflight", a.name)
-                            continue
-                    try:
-                        uri, key, rn_f = await store.put_attachment(
-                            tenant=message_data.get("tenant") or self.settings.TENANT,
-                            project=message_data.get("project") or self.settings.PROJECT,
-                            user=session.user_id,
-                            fingerprint=session.fingerprint,
-                            conversation_id=conversation_id,
-                            turn_id=turn_id,
-                            track_id="A",
-                            role="user",
-                            filename=a.name or "file",
-                            data=a.content,
-                            mime=a.mime or "application/octet-stream",
-                            user_type=session.user_type.value,
-                            origin="user",
-                        )
-                    except Exception as ex:
-                        logger.warning("attachment '%s' failed to host: %s", a.name, ex)
-                        continue
-                    attachments.append({
-                        "filename": a.name or "file",
-                        "mime": a.mime or "application/octet-stream",
-                        "size": len(a.content),
-                        "meta": a.meta or {},
-                        "hosted_uri": uri,
-                        "key": key,
-                        "rn": rn_f,
-                        "role": "user",
-                        "origin": "user",
-                    })
-
             # ---------- build final message text ----------
             base_message = (
                     (message_data or {}).get("text")
@@ -518,8 +456,6 @@ class SocketIOChatHandler:
             payload = message_data.get("payload")
             if not isinstance(payload, dict):
                 payload = {}
-            if attachments:
-                payload["attachments"] = attachments
             message_data["payload"] = payload
             text = base_message.strip()
 
@@ -541,6 +477,7 @@ class SocketIOChatHandler:
                 request_context=context,
                 message_data=message_data,
                 message_text=text,
+                raw_attachments=raw_attachments,
                 ingress=ingress_cfg,
             )
 

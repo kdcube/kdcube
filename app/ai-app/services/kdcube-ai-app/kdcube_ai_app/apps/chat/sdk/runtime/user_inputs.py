@@ -114,6 +114,7 @@ def attachment_summary_text(items: List[Dict[str, Any]]) -> str:
         raw_name = (a.get("artifact_name") or a.get("filename") or "attachment").strip()
         name = re.sub(r"[\\s./:]+", "_", raw_name)
         name = re.sub(r"[^A-Za-z0-9_-]+", "", name) or "attachment"
+        name = name.lower()
         count = used.get(name, 0) + 1
         used[name] = count
         if count > 1:

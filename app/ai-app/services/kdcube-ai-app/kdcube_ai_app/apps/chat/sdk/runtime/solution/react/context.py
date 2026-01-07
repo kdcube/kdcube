@@ -1038,7 +1038,7 @@ class ReactContext:
             return ""
         base = re.sub(r"[\\s./:]+", "_", base)
         base = re.sub(r"[^A-Za-z0-9_-]+", "", base)
-        return base
+        return base.lower()
 
     def _attachment_name_matches(self, attachment: Dict[str, Any], name: str) -> bool:
         raw_candidates = [

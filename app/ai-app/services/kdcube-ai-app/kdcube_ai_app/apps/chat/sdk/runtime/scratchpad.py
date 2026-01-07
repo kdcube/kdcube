@@ -421,6 +421,7 @@ class TurnScratchpad:
             base = str(raw_name).strip() or "file"
             base = re.sub(r"[\\s./:]+", "_", base)
             base = re.sub(r"[^A-Za-z0-9_-]+", "", base) or "file"
+            base = base.lower()
             count = used.get(base, 0) + 1
             used[base] = count
             f["artifact_name"] = base if count == 1 else f"{base}_{count}"
@@ -441,6 +442,7 @@ class TurnScratchpad:
             base = str(raw_name).strip() or "attachment"
             base = re.sub(r"[\\s./:]+", "_", base)
             base = re.sub(r"[^A-Za-z0-9_-]+", "", base) or "attachment"
+            base = base.lower()
             count = used.get(base, 0) + 1
             used[base] = count
             a["artifact_name"] = base if count == 1 else f"{base}_{count}"
@@ -680,6 +682,7 @@ class TurnLog(BaseModel):
         base = (raw_name or "").strip() or "attachment"
         base = re.sub(r"[\\s./:]+", "_", base)
         base = re.sub(r"[^A-Za-z0-9_-]+", "", base) or "attachment"
+        base = base.lower()
         count = used.get(base, 0) + 1
         used[base] = count
         return base if count == 1 else f"{base}_{count}"
@@ -708,7 +711,7 @@ class TurnLog(BaseModel):
             if artifact_name:
                 parts.append(f"artifact_name={artifact_name}")
             if filename:
-                parts.append(f"filename={filename}")
+                parts.append(f"filename=\"{filename}\"")
             if mime:
                 parts.append(f"mime={mime}")
             if size is not None:

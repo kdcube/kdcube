@@ -107,6 +107,9 @@ class GlobalBudget:
     def remaining_tool_calls(self) -> int:
         return max(0, self.max_tool_calls - self.tool_calls_used)
 
+    def remaining_exploit_rounds(self) -> int:
+        return max(0, self.max_exploit_rounds - self.exploit_rounds_used)
+
     def remaining_decision_reruns(self) -> int:
         return max(0, self.max_decision_reruns - self.decision_reruns_used)
 
@@ -130,6 +133,9 @@ class BudgetState:
     global_budget: GlobalBudget = field(default_factory=GlobalBudget)
     stages: Dict[str, StageBudget] = field(default_factory=dict)
     current_stage_id: Optional[str] = None
+    wrapup_active: Optional[bool] = None
+    exploit_overdraft_used: Optional[int] = None
+    exploit_overdraft_total: Optional[int] = None
 
     def set_current_stage(self, stage_id: str) -> None:
         if stage_id in self.stages:
@@ -389,6 +395,12 @@ def format_budget_for_llm(budget: BudgetState) -> str:
     if max_ctx > 0:
         ctx_left = max_ctx - used_ctx
         global_parts.append(f"context_reads left { _rem(ctx_left, max_ctx) }")
+    if budget.wrapup_active:
+        global_parts.append("wrapup active")
+    if budget.exploit_overdraft_total:
+        used = int(budget.exploit_overdraft_used or 0)
+        total = int(budget.exploit_overdraft_total or 0)
+        global_parts.append(f"exploit_overdraft { _rem(used, total) }")
 
     lines.append("BUDGET_STATE: " + "global(" + ", ".join(global_parts) + ")")
 

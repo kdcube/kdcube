@@ -501,7 +501,7 @@ class CodegenRunner:
         current_task_spec = {
             # "objective": user_text,
             "constraints": constraints,
-            "tools_selected": [a["id"] for a in special_adapters],
+            # "tools_selected": [a["id"] for a in special_adapters],
             "notes": []
         }
         if prefs_hint:

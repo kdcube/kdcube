@@ -36,6 +36,7 @@ class DocumentTextExtractor:
         ".pdf": "application/pdf",
         ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         ".txt": "text/plain",
         ".md": "text/markdown",
     }
@@ -55,6 +56,10 @@ class DocumentTextExtractor:
 
             elif mime.endswith("presentationml.presentation") or ext == ".pptx" or hints.get("is_pptx", False):
                 text, meta, more = self._extract_pptx(data)
+                warnings.extend(more)
+
+            elif mime.endswith("spreadsheetml.sheet") or ext == ".xlsx" or hints.get("is_xlsx", False):
+                text, meta, more = self._extract_xlsx(data)
                 warnings.extend(more)
 
             elif mime.startswith("text/") or ext in (".txt", ".md"):
@@ -100,6 +105,8 @@ class DocumentTextExtractor:
                             hints["is_docx"] = True
                         if "presentationml.presentation" in ct:
                             hints["is_pptx"] = True
+                        if "spreadsheetml.sheet" in ct:
+                            hints["is_xlsx"] = True
             except Exception:
                 pass
 
@@ -114,6 +121,8 @@ class DocumentTextExtractor:
                     chosen = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
                 elif hints.get("is_pptx"):
                     chosen = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+                elif hints.get("is_xlsx"):
+                    chosen = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 elif ext in (".md",):
                     chosen = "text/markdown"
                 elif ext in (".txt",):
@@ -252,6 +261,35 @@ class DocumentTextExtractor:
                 pass
 
         return "\n".join(parts), {"engine": "python-pptx", "slides": slide_count}, warnings
+
+    def _extract_xlsx(self, data: bytes) -> Tuple[str, Dict[str, Any], List[str]]:
+        warnings: List[str] = []
+        spec = importlib.util.find_spec("openpyxl")
+        if not spec:
+            return "", {"engine": None}, ["openpyxl not installed"]
+
+        from openpyxl import load_workbook  # type: ignore
+
+        wb = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        parts: List[str] = []
+        sheet_count = 0
+        for ws in wb.worksheets:
+            sheet_count += 1
+            parts.append(f"\n\n--- Sheet {ws.title} ---\n")
+            try:
+                for row in ws.iter_rows(values_only=True):
+                    cells = []
+                    for v in row:
+                        if v is None:
+                            cells.append("")
+                        else:
+                            cells.append(str(v).strip())
+                    line = " | ".join(cells).strip()
+                    if line:
+                        parts.append(line)
+            except Exception as e:
+                warnings.append(f"Worksheet parse failed ({ws.title}): {e!r}")
+        return "\n".join(parts), {"engine": "openpyxl", "sheets": sheet_count}, warnings
 
     def _extract_textlike(self, data: bytes, mime: str) -> Tuple[str, Dict[str, Any], List[str]]:
         # Try utf-8; fall back to chardet

@@ -78,6 +78,7 @@ GENERATIVE_TOOL_IDS = {
 
 CITABLE_TOOL_IDS = {
     "generic_tools.web_search",
+    "generic_tools.fetch_url_contents",
     "sdk_tools.kb_search",
     "ctx_tools.merge_sources",
 }
@@ -110,6 +111,9 @@ def is_search_tool(tool_id: str) -> bool|None:
 def is_fetch_uri_content_tool(tool_id: str) -> bool|None:
     # None means "we do not know"
     return tool_id in FETCH_URI_TOOL_IDS if tool_id in BUILTIN_TOOLS else None
+
+def is_exploration_tool(tool_id: str) -> bool:
+    return tool_id in CITABLE_TOOL_IDS
 
 def is_generative_tool(tool_id: str) -> bool|None:
     # None means "we do not know"

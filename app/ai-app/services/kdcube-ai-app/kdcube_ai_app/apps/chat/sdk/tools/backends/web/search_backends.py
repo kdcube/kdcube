@@ -641,7 +641,8 @@ async def web_search(
             agent=agent_id,
             title=agent_label,
             format="markdown",
-            artifact_name=artifact_thinking,
+            # artifact_name=artifact_thinking,
+            artifact_name=agent_id,
             completed=completed,
             **kwargs
         )

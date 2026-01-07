@@ -17,7 +17,7 @@ from fastapi import Request  # only if you put this in a place where FastAPI is 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import _iso
 from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession
-from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskPayload, ChatTaskMeta, ChatTaskRouting, ChatTaskActor, ChatTaskUser,
     ChatTaskRequest, ChatTaskConfig, ChatTaskAccounting, ServiceCtx, ConversationCtx
@@ -178,6 +178,7 @@ async def process_chat_message(
         message_data: Dict[str, Any],
         message_text: str,
         ingress: IngressConfig,
+        raw_attachments: Optional[List[RawAttachment]] = None,
 ) -> IngressResult:
     """
     Core chat ingestion:
@@ -212,6 +213,17 @@ async def process_chat_message(
         session_id=session.session_id,
         conversation_id=conversation_id,
         turn_id=turn_id,
+    )
+    comm = ChatCommunicator(
+        emitter=chat_comm,
+        tenant=tenant_id or "",
+        project=project_id or "",
+        user_id=session.user_id,
+        user_type=session.user_type.value,
+        service=svc.model_dump(),
+        conversation=conv.model_dump(),
+        room=session.session_id,
+        target_sid=ingress.stream_id,
     )
 
     # Empty message → emit error via relay + let transport map to HTTP/WS
@@ -413,6 +425,202 @@ async def process_chat_message(
         )
     except Exception:
         pass
+
+    # --- Attachments (host after lock; reject entire message on any failure) ---
+    if raw_attachments:
+        max_mb = 20
+        try:
+            max_mb = int(os.environ.get("CHAT_MAX_UPLOAD_MB", "20"))
+        except Exception:
+            max_mb = 20
+        max_bytes = max_mb * 1024 * 1024
+        store = getattr(app.state, "conversation_store", None)
+        enable_av = os.getenv("APP_AV_SCAN", "1") == "1"
+        av_timeout = float(os.getenv("APP_AV_TIMEOUT_S", "3.0"))
+        from kdcube_ai_app.infra.gateway.safe_preflight import PreflightConfig, preflight_async
+        cfg = PreflightConfig(av_scan=enable_av, av_timeout_s=av_timeout)
+
+        attachment_errors: List[str] = []
+        preflight_ok: List[RawAttachment] = []
+
+        async def _safe_attachment_event(reason: str, message: str, att: RawAttachment, extra: Optional[Dict[str, Any]] = None) -> None:
+            data = {
+                "reason": reason,
+                "message": message,
+                "filename": att.name or "file",
+                "mime": att.mime or "application/octet-stream",
+                "show_in_timeline": True,
+            }
+            if extra:
+                data.update(extra)
+            try:
+                await comm.service_event(
+                    type="rate_limit.attachment_failure",
+                    step="rate_limit",
+                    status="error",
+                    title="Attachment rejected",
+                    agent="ingress.attachments",
+                    data=data,
+                )
+            except Exception:
+                logger.exception("failed to emit attachment failure event")
+
+        for a in raw_attachments:
+            if not a.content:
+                attachment_errors.append("empty")
+                await _safe_attachment_event("empty", "Attachment is empty.", a)
+                continue
+            if len(a.content) > max_bytes:
+                attachment_errors.append("size_limit")
+                await _safe_attachment_event(
+                    "size_limit",
+                    f"Attachment '{a.name or 'file'}' exceeds the {max_mb} MB limit.",
+                    a,
+                    {"size_bytes": len(a.content), "max_bytes": max_bytes, "max_mb": max_mb},
+                )
+                continue
+            if not store:
+                attachment_errors.append("store_missing")
+                await _safe_attachment_event(
+                    "store_missing",
+                    "Attachment store is unavailable.",
+                    a,
+                    {"size_bytes": len(a.content)},
+                )
+                continue
+            if enable_av:
+                try:
+                    pf = await preflight_async(
+                        a.content,
+                        a.name or "file",
+                        a.mime or "application/octet-stream",
+                        cfg,
+                    )
+                except Exception:
+                    attachment_errors.append("preflight_error")
+                    await _safe_attachment_event("preflight_error", "Attachment preflight failed.", a)
+                    continue
+                if not pf.allowed:
+                    attachment_errors.append("preflight_rejected")
+                    await _safe_attachment_event(
+                        "preflight_rejected",
+                        "Attachment failed security checks.",
+                        a,
+                        {"reasons": pf.reasons},
+                    )
+                    continue
+            preflight_ok.append(a)
+
+        attachments: List[Dict[str, Any]] = []
+        if not attachment_errors and preflight_ok:
+            for a in preflight_ok:
+                try:
+                    uri, key, rn_f = await store.put_attachment(
+                        tenant=tenant_id or "",
+                        project=project_id or "",
+                        user=session.user_id,
+                        fingerprint=session.fingerprint,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        track_id="A",
+                        role="user",
+                        filename=a.name or "file",
+                        data=a.content,
+                        mime=a.mime or "application/octet-stream",
+                        user_type=session.user_type.value,
+                        origin="user",
+                    )
+                except Exception:
+                    attachment_errors.append("store_error")
+                    await _safe_attachment_event("store_error", "Attachment hosting failed.", a)
+                    break
+                attachments.append({
+                    "filename": a.name or "file",
+                    "mime": a.mime or "application/octet-stream",
+                    "size": len(a.content),
+                    "meta": a.meta or {},
+                    "hosted_uri": uri,
+                    "key": key,
+                    "rn": rn_f,
+                    "role": "user",
+                    "origin": "user",
+                })
+
+        if attachment_errors:
+            # Best-effort cleanup for partially stored attachments in this turn
+            if store:
+                try:
+                    _, user_or_fp = store._who_and_id(session.user_id, session.fingerprint)
+                    await store.delete_turn(
+                        tenant=tenant_id or "",
+                        project=project_id or "",
+                        user_type=session.user_type.value,
+                        user_or_fp=user_or_fp,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                    )
+                except Exception:
+                    logger.exception("failed to cleanup attachments after failure")
+            # rollback state since nothing will process this turn
+            try:
+                res_reset = await app.state.conversation_browser.set_conversation_state(
+                    tenant=tenant_id,
+                    project=project_id,
+                    user_id=session.user_id,
+                    conversation_id=conversation_id,
+                    new_state="idle",
+                    by_instance=ingress.instance_id,
+                    request_id=request_id,
+                    last_turn_id=turn_id,
+                    require_not_in_progress=False,
+                    user_type=session.user_type.value,
+                    bundle_id=bundle_id,
+                )
+                await chat_comm.emit_conv_status(
+                    svc,
+                    conv,
+                    routing=routing,
+                    state="idle",
+                    updated_at=res_reset.get("updated_at", _iso()),
+                    current_turn_id=res_reset.get("current_turn_id"),
+                    completion="rollback",
+                    target_sid=ingress.stream_id,
+                )
+            except Exception:
+                logger.exception("failed to reset conv state after attachment failure")
+            await chat_comm.emit_error(
+                svc,
+                conv,
+                error="Attachment rejected; message not processed.",
+                target_sid=ingress.stream_id,
+                session_id=session.session_id,
+            )
+            return IngressResult(
+                ok=False,
+                error_type="attachment_rejected",
+                error="Attachment rejected; message not processed.",
+                http_status=400,
+            )
+
+        if attachments:
+            payload_obj = message_data.get("payload")
+            if not isinstance(payload_obj, dict):
+                payload_obj = {}
+            payload_obj["attachments"] = attachments
+            message_data["payload"] = payload_obj
+            if payload.request:
+                payload.request.payload = payload_obj
+            try:
+                await comm.event(
+                    agent="tooling",
+                    type="chat.attachments",
+                    title=f"Attachments Ready ({len(attachments)})",
+                    step="attachments",
+                    status="completed",
+                    data={"count": len(attachments), "items": attachments},
+                )
+            except Exception:
+                logger.exception("failed to emit attachments step")
 
     # --- Enqueue ---
     try:

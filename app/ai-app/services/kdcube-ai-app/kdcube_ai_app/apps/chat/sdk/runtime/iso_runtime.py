@@ -823,7 +823,7 @@ def _build_iso_injected_header(*, globals_src: str, imports_src: str) -> str:
     - No _dump_delta_cache_file here.
       All privileged state (COMM, KB, secrets) lives in the supervisor.
     - Executor owns only:
-        * OUTDIR / WORKDIR (via ContextVars or env)
+        * OUT_DIR / WORKDIR (via ContextVars or env)
         * _PROGRESS + project_log
         * set_progress / done / fail that proxy to supervisor via io_tools.save_ret.
     """

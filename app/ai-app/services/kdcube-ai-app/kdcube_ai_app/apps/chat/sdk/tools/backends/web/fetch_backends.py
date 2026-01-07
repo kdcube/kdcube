@@ -110,7 +110,7 @@ async def fetch_url_contents(
         extraction_mode: str = "custom",
         refinement="none",
         objective: Optional[str] = None,
-) -> Annotated[str, (
+) -> Annotated[dict, (
         "JSON object mapping each input URL to a result object, for example:\n"
         "{\n"
         '  "https://example.com/article": {\n'
@@ -166,7 +166,7 @@ async def fetch_url_contents(
         normalized_urls.append(u)
 
     if not normalized_urls:
-        return json.dumps({}, ensure_ascii=False)
+        return {}
 
     # ==== thinking / comm setup (parallel to web_search) ====
     # If this env var is >0, we let the LLM agent burn that budget internally
@@ -223,7 +223,7 @@ async def fetch_url_contents(
 
     async def finish_thinking():
         """Signal thinking completion."""
-        await emit_thinking("", completed=True)
+        await emit_progress("", completed=True)
 
     # Initial trace, only when we are not delegating to an agent with its own budget
     if not FETCH_URL_AGENTIC_THINKING_BUDGET:
@@ -235,7 +235,7 @@ async def fetch_url_contents(
         initial_lines.append("- URLs to fetch:")
         for u in normalized_urls[:10]:
             initial_lines.append(f"  - `{u}`")
-        await emit_thinking("\n".join(initial_lines))
+        await emit_progress("\n".join(initial_lines))
 
     results: Dict[str, Dict[str, Any]] = {}
 
@@ -315,8 +315,8 @@ async def fetch_url_contents(
             f"- Total URLs requested: {len(normalized_urls)}",
             f"- Successful/archived: {success_count}",
         ]
-        await emit_thinking("\n".join(lines))
+        await emit_progress("\n".join(lines))
 
     await finish_thinking()
     # ---------- Done ----------
-    return json.dumps(results, ensure_ascii=False)
+    return results

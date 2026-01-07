@@ -254,9 +254,6 @@ def _build_detailed_guidance(c_out: "UnifiedCoordinatorOut") -> str:
         "## Decision & Solvability",
         *([*decision_lines] if decision_lines else ["(none)"]),
         "",
-        "## Proposed Tools (from Coordinator)",
-        *([*tool_lines] if tool_lines else ["(none)"]),
-        "",
         "## Contract Slots (Output Deliverables)",
         *([*slot_lines] if slot_lines else ["(none)"]),
     ]
