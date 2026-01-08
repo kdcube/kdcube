@@ -737,6 +737,19 @@ def build_turn_session_journal(*,
                 lines.append(f"    path: current_turn.artifacts.{art_id}")
                 if meta_parts:
                     lines.append("    meta: " + "; ".join(meta_parts))
+                if isinstance(value_dict, dict):
+                    write_error = (value_dict.get("write_error") or "").strip()
+                    write_warning = (value_dict.get("write_warning") or "").strip()
+                    size_bytes = value_dict.get("size_bytes")
+                    if write_error or write_warning:
+                        parts = []
+                        if write_error:
+                            parts.append(f"write_error={write_error}")
+                        if write_warning:
+                            parts.append(f"write_warning={write_warning}")
+                        if size_bytes is not None:
+                            parts.append(f"size={size_bytes}")
+                        lines.append("    !! " + "; ".join(parts))
 
                 if tools_insights.is_search_tool(tid):
                     q_prev, obj_prev = _search_context_from_inputs(art)

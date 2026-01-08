@@ -38,7 +38,6 @@ linkify-it-py
 pygments
 jinja2
 
-python-pptx
 Pillow
 lxml
 tiktoken

@@ -755,7 +755,8 @@ class ReactContext:
             content_inventorization: Optional[Any] = None,
             content_lineage: List[str] | None = None,
             tool_call_id: str|None=None,
-            tool_call_item_index: int|None=None
+            tool_call_item_index: int|None=None,
+            artifact_stats: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Store a current-turn tool result as an artifact object.
@@ -786,6 +787,11 @@ class ReactContext:
                 "text": (surrogate_text or ""),
                 "mime": (mime_hint or tools_insights.default_mime_for_write_tool(tool_id)),
             }
+
+            if isinstance(artifact_stats, dict) and artifact_stats:
+                for k, v in artifact_stats.items():
+                    if k not in value_norm:
+                        value_norm[k] = v
 
             # propagate sources into value for uniform consumption
             if sources_used:

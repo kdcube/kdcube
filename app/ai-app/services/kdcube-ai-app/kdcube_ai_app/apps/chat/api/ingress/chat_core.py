@@ -588,13 +588,13 @@ async def process_chat_message(
                 )
             except Exception:
                 logger.exception("failed to reset conv state after attachment failure")
-            await chat_comm.emit_error(
-                svc,
-                conv,
-                error="Attachment rejected; message not processed.",
-                target_sid=ingress.stream_id,
-                session_id=session.session_id,
-            )
+            # await chat_comm.emit_error(
+            #     svc,
+            #     conv,
+            #     error="Attachment rejected; message not processed.",
+            #     target_sid=ingress.stream_id,
+            #     session_id=session.session_id,
+            # )
             return IngressResult(
                 ok=False,
                 error_type="attachment_rejected",

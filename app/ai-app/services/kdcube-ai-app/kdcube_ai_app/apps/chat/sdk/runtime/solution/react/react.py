@@ -1634,10 +1634,35 @@ class ReactSolver:
                 content_lineage=content_lineage,
                 tool_call_id=tool_call_id,
                 tool_call_item_index=tool_call_item_index,
+                artifact_stats=tr.get("artifact_stats") if isinstance(tr, dict) else None,
             )
             msg_ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
             message_id = f"{_mid('artifact', msg_ts)}{'-' + artifact_id}"
             artifact["message_id"] = message_id
+
+            artifact_stats = tr.get("artifact_stats") if isinstance(tr, dict) else None
+            if tools_insights.is_write_tool(tool_id) and isinstance(artifact_stats, dict):
+                file_path = ""
+                if isinstance(artifact.get("value"), dict):
+                    file_path = (artifact.get("value", {}).get("path") or "").strip()
+                if artifact_stats.get("write_error"):
+                    context.add_event(kind="error", data={
+                        "reason": "write_tool_output_invalid",
+                        "tool_id": tool_id,
+                        "artifact_id": artifact_id,
+                        "file_path": file_path,
+                        "size_bytes": artifact_stats.get("size_bytes"),
+                        "write_error": artifact_stats.get("write_error"),
+                    })
+                elif artifact_stats.get("write_warning"):
+                    context.add_event(kind="note", data={
+                        "reason": "write_tool_output_suspicious",
+                        "tool_id": tool_id,
+                        "artifact_id": artifact_id,
+                        "file_path": file_path,
+                        "size_bytes": artifact_stats.get("size_bytes"),
+                        "write_warning": artifact_stats.get("write_warning"),
+                    })
             is_file_artifact = bool(
                 artifact_kind == "file"
                 or (isinstance(artifact.get("value"), dict) and artifact.get("value", {}).get("type") == "file")

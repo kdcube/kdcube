@@ -3,9 +3,7 @@
 
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/react/execution.py
 
-import base64
 import json
-import mimetypes
 import pathlib
 import re
 import shutil
@@ -22,6 +20,11 @@ from kdcube_ai_app.apps.chat.sdk.runtime.logging_utils import errors_log_tail
 
 from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import _InProcessRuntime
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.artifact_analysis import (
+    analyze_write_tool_output,
+    prepare_summary_artifact,
+    prepare_write_tool_summary_artifact,
+)
 
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 
@@ -33,136 +36,6 @@ def _safe_label(s: str, *, maxlen: int = 96) -> str:
 def _safe_exec_id(val: Optional[str]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", (val or "")).strip("_")
     return safe or uuid.uuid4().hex[:12]
-
-_SUMMARY_IMAGE_MIME = {"image/jpeg", "image/png", "image/gif", "image/webp"}
-_SUMMARY_DOC_MIME = {"application/pdf"}
-_SUMMARY_MAX_IMAGE_BYTES = 5 * 1024 * 1024
-_SUMMARY_MAX_DOC_BYTES = 10 * 1024 * 1024
-
-def _coerce_summary_text(value: Any) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False, indent=2)
-    except Exception:
-        return str(value)
-
-def _guess_mime_from_path(path: str) -> Optional[str]:
-    if not path:
-        return None
-    guess, _ = mimetypes.guess_type(path)
-    return guess
-
-def _prepare_summary_artifact(artifact: Dict[str, Any], base_dir: Optional[pathlib.Path]) -> Optional[Dict[str, Any]]:
-    if not isinstance(artifact, dict):
-        return None
-
-    art_type = (artifact.get("type") or "").strip().lower()
-    output = artifact.get("output")
-    filename = artifact.get("filename") or (output.get("filename") if isinstance(output, dict) else None)
-    mime = (artifact.get("mime") or (output.get("mime") if isinstance(output, dict) else None) or "").strip().lower()
-    if not mime:
-        guess = _guess_mime_from_path((output or {}).get("path") if isinstance(output, dict) else "")
-        mime = (guess or "").strip().lower()
-
-    if art_type == "inline":
-        if isinstance(output, dict):
-            text = output.get("text")
-            if text is None:
-                text = output.get("value")
-        else:
-            text = output
-        return {
-            "type": "inline",
-            "mime": mime or None,
-            "text": _coerce_summary_text(text),
-        }
-
-    if art_type != "file":
-        return None
-
-    if isinstance(output, dict):
-        relpath = output.get("path") or ""
-        text = output.get("text")
-    else:
-        relpath = ""
-        text = output
-
-    file_path = None
-    if relpath:
-        p = pathlib.Path(relpath)
-        if not p.is_absolute() and base_dir:
-            p = base_dir / relpath
-        file_path = p
-
-    size_bytes = None
-    base64_data = None
-    read_error = None
-
-    if file_path and file_path.exists() and file_path.is_file():
-        try:
-            size_bytes = file_path.stat().st_size
-            if mime in _SUMMARY_IMAGE_MIME or mime in _SUMMARY_DOC_MIME:
-                limit = _SUMMARY_MAX_IMAGE_BYTES if mime in _SUMMARY_IMAGE_MIME else _SUMMARY_MAX_DOC_BYTES
-                if size_bytes <= limit:
-                    base64_data = base64.b64encode(file_path.read_bytes()).decode("ascii")
-                else:
-                    read_error = f"file too large to attach ({size_bytes} bytes > {limit})"
-        except Exception as exc:
-            read_error = f"file read failed: {exc}"
-    elif relpath:
-        read_error = "file not found on disk"
-
-    return {
-        "type": "file",
-        "mime": mime or None,
-        "text": _coerce_summary_text(text),
-        "base64": base64_data,
-        "filename": filename,
-        "path": str(file_path) if file_path else relpath,
-        "size_bytes": size_bytes,
-        "read_error": read_error,
-    }
-
-def _prepare_write_tool_summary_artifact(
-    *,
-    tool_id: str,
-    output: Any,
-    inputs: Optional[Dict[str, Any]],
-    base_dir: Optional[pathlib.Path],
-    context: ReactContext,
-) -> Optional[Dict[str, Any]]:
-    if not tools_insights.is_write_tool(tool_id):
-        return None
-
-    file_path = ""
-    if isinstance(output, dict) and isinstance(output.get("path"), str):
-        file_path = output.get("path", "").strip()
-    elif isinstance(output, str):
-        file_path = output.strip()
-
-    if not file_path:
-        return None
-
-    surrogate_text, mime_hint = context._surrogate_from_writer_inputs(
-        tool_id=tool_id,
-        inputs=inputs or {},
-    )
-    filename = pathlib.Path(file_path).name if file_path else ""
-    artifact = {
-        "type": "file",
-        "output": {
-            "path": file_path,
-            "text": surrogate_text or "",
-            "mime": mime_hint or tools_insights.default_mime_for_write_tool(tool_id),
-            "filename": filename,
-        },
-        "mime": mime_hint or "",
-        "filename": filename,
-    }
-    return _prepare_summary_artifact(artifact, base_dir)
 
 def _extract_error_from_output(output: Any) -> Optional[Dict[str, Any]]:
     """
@@ -224,7 +97,7 @@ async def _build_program_run_items(
         produced_ids.append(artifact_id)
         artifact_kind = a.get("type")
         value = a.get("output")
-        summary_artifact = _prepare_summary_artifact(a, run_outdir)
+        summary_artifact = prepare_summary_artifact(a, run_outdir)
         contract_entry = contract.get(artifact_id) or {}
 
         ctx = (
@@ -791,6 +664,7 @@ async def _execute_tool_in_memory(
 
     # Build summary with centralized logic
     content_inventorization = None
+    mime_hint = ""
     if error_info:
         # Error-focused summary, short and consistent
         code = error_info.get("code", "unknown")
@@ -800,12 +674,20 @@ async def _execute_tool_in_memory(
             msg = msg[:197] + "..."
         summary = f"ERROR [{code}] at {where}: {msg}"
     else:
-        summary_artifact = _prepare_write_tool_summary_artifact(
+        surrogate_text = ""
+        mime_hint = ""
+        if tools_insights.is_write_tool(tool_id):
+            surrogate_text, mime_hint = context._surrogate_from_writer_inputs(
+                tool_id=tool_id,
+                inputs=params or {},
+            )
+        summary_artifact = prepare_write_tool_summary_artifact(
             tool_id=tool_id,
             output=output,
             inputs=params,
             base_dir=outdir,
-            context=context,
+            surrogate_text=surrogate_text,
+            mime_hint=mime_hint,
         )
         summary_obj, summary = await build_summary_for_tool_output(
             tool_id=tool_id,
@@ -839,6 +721,19 @@ async def _execute_tool_in_memory(
     call_record_rel = last_rel
     call_record_abs = str(call_path)
 
+    artifact_stats = None
+    if tools_insights.is_write_tool(tool_id):
+        file_path = ""
+        if isinstance(output, dict) and isinstance(output.get("path"), str):
+            file_path = output.get("path", "").strip()
+        elif isinstance(output, str):
+            file_path = output.strip()
+        artifact_stats = analyze_write_tool_output(
+            file_path=file_path,
+            mime=mime_hint or tools_insights.default_mime_for_write_tool(tool_id),
+            output_dir=outdir,
+        )
+
     item = {
         "artifact_id": artifacts_contract[0].get("name") if artifacts_contract else None,
         "artifact_kind": artifacts_contract[0].get("kind") if artifacts_contract else None,
@@ -852,6 +747,8 @@ async def _execute_tool_in_memory(
         "tool_call_id": tool_call_id,
         "tool_call_item_index": 0,
     }
+    if artifact_stats:
+        item["artifact_stats"] = artifact_stats
     if error_info:
         item["error"] = error_info
     if content_inventorization is not None:
@@ -1052,6 +949,7 @@ async def execute_tool_in_isolation(
     status = "error" if error_info else "success"
 
     content_inventorization = None
+    mime_hint = ""
     # Build summary with centralized logic
     if error_info:
         code = error_info.get("code", "unknown")
@@ -1061,12 +959,20 @@ async def execute_tool_in_isolation(
             msg = msg[:197] + "..."
         summary = f"ERROR [{code}] at {where}: {msg}"
     else:
-        summary_artifact = _prepare_write_tool_summary_artifact(
+        surrogate_text = ""
+        mime_hint = ""
+        if tools_insights.is_write_tool(tool_id):
+            surrogate_text, mime_hint = context._surrogate_from_writer_inputs(
+                tool_id=tool_id,
+                inputs=params or {},
+            )
+        summary_artifact = prepare_write_tool_summary_artifact(
             tool_id=tool_id,
             output=output,
             inputs=params,
             base_dir=outdir,
-            context=context,
+            surrogate_text=surrogate_text,
+            mime_hint=mime_hint,
         )
         summary_obj, summary = await build_summary_for_tool_output(
             tool_id=tool_id,
@@ -1128,6 +1034,19 @@ async def execute_tool_in_isolation(
 
     tool_call_group_id = tool_execution_context.get("tool_call_group_id") or uuid.uuid4().hex[:12]
 
+    artifact_stats = None
+    if tools_insights.is_write_tool(tool_id):
+        file_path = ""
+        if isinstance(output, dict) and isinstance(output.get("path"), str):
+            file_path = output.get("path", "").strip()
+        elif isinstance(output, str):
+            file_path = output.strip()
+        artifact_stats = analyze_write_tool_output(
+            file_path=file_path,
+            mime=mime_hint or tools_insights.default_mime_for_write_tool(tool_id),
+            output_dir=outdir,
+        )
+
     item = {
         "artifact_id": artifacts_contract[0].get("name") if artifacts_contract else None,
         "artifact_kind": artifacts_contract[0].get("kind") if artifacts_contract else None,
@@ -1142,6 +1061,8 @@ async def execute_tool_in_isolation(
         "tool_call_group_id": tool_call_group_id,
         "tool_call_item_index": 0,
     }
+    if artifact_stats:
+        item["artifact_stats"] = artifact_stats
     if error_info:
         item["error"] = error_info
     if content_inventorization is not None:
