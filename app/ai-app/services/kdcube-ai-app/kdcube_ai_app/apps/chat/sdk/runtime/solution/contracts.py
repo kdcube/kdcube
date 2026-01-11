@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Literal
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.presentation import SolverPresenter, SolverPresenterConfig, \
     build_runtime_inventory_from_artifact, ProgramBrief, program_brief_from_contract
 from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_url, enrich_sources_pool_with_favicons
+from kdcube_ai_app.infra.service_hub.cache import create_namespaced_kv_cache
 from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable
 
 log = logging.getLogger(__name__)
@@ -466,8 +467,13 @@ class SolveResult:
             log.debug("enrich_used_citations_with_favicons: no used sources to enrich")
             return 0
 
-        # Enrich in-place using shared instance
-        return await enrich_sources_pool_with_favicons(sources_to_enrich, log=log)
+        # Enrich in-place using shared instance (with cache if available)
+        cache = None
+        try:
+            cache = create_namespaced_kv_cache()
+        except Exception:
+            cache = None
+        return await enrich_sources_pool_with_favicons(sources_to_enrich, log=log, cache=cache)
 
 
 

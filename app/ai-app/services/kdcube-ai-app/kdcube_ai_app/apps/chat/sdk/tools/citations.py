@@ -29,8 +29,11 @@ from __future__ import annotations
 
 import json
 import re, unicodedata
+from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional, Iterable, Any, Set
+
+from kdcube_ai_app.apps.chat.sdk.tools.web.favicon_cache import enrich_sources_pool_with_favicons
 
 # ---------------------------------------------------------------------------
 # Public regex / constants
@@ -232,10 +235,11 @@ def _normalize_citation_chars(text: str) -> str:
 
 # ---- shared optional attributes carried through citations ----
 CITATION_OPTIONAL_ATTRS = (
-    "provider", "published_time_iso", "modified_time_iso", "expiration",
-    "mime", "base64", "size_bytes", "source_type", "rn", "author",
+    "provider", "published_time_iso", "modified_time_iso", "fetched_time_iso", "expiration",
+    "mime", "base64", "size_bytes", "source_type", "rn", "local_path", "artifact_path", "author",
     "content_length", "fetch_status", # "content",
     "objective_relevance", "query_relevance", "authority", "favicon_url",
+    "favicon", "favicon_status",
     "provider_rank", "weighted_rank"
 )
 
@@ -251,13 +255,18 @@ canonical_source_shape_reference = {
     "mime": str,                 # optional
     "base64": str,               # optional (multimodal payloads)
     "size_bytes": int,           # optional (multimodal payload size)
+    "local_path": str,           # optional (local file path for file sources)
+    "artifact_path": str,        # optional (turn_id.files.<artifact_name>)
 
     # metadata
     "provider": str, # "web" | "kb." | ...
     "source_type": str, # "web_search" | "kb" | ...
     "published_time_iso": str | None,
     "modified_time_iso": str | None,
+    "fetched_time_iso": str | None,
     "fetch_status": str | None,
+    "favicon": str | None,
+    "favicon_status": str | None,
 
     # scoring
     "objective_relevance": float | None,
@@ -477,13 +486,21 @@ def dedupe_sources_by_url(prior: List[Dict[str, Any]], new: List[Dict[str, Any]]
     by_url: Dict[str, Dict[str, Any]] = {}
     max_sid = 0
 
+    def _key_for(row: Dict[str, Any]) -> str:
+        url = normalize_url(row.get("url",""))
+        local_path = (row.get("local_path") or "").strip()
+        if local_path:
+            return f"local:{local_path}"
+        return url
+
     def _touch(row: Dict[str, Any]):
         nonlocal max_sid
         url = normalize_url(row.get("url",""))
-        if not url:
+        key = _key_for(row)
+        if not key:
             return
-        if url in by_url:
-            existing = by_url[url]
+        if key in by_url:
+            existing = by_url[key]
             if len(row.get("title","")) > len(existing.get("title","")):
                 existing["title"] = row.get("title","")
             if len(row.get("text","")) > len(existing.get("text","")):
@@ -538,7 +555,7 @@ def dedupe_sources_by_url(prior: List[Dict[str, Any]], new: List[Dict[str, Any]]
         for k in CITATION_OPTIONAL_ATTRS:
             if row.get(k):
                 kept[k] = row[k]
-        by_url[url] = kept
+        by_url[key] = kept
 
     for r in prior or []:
         _touch(r)
@@ -967,6 +984,58 @@ def extract_citation_sids_any(text: str) -> List[int]:
     return extract_citation_sids_from_text(text)
 
 # ---------------------------------------------------------------------------
+# Extract local file paths from rendered content
+# ---------------------------------------------------------------------------
+
+_HTML_REF_RE = re.compile(r"""(?i)\b(?:src|href)\s*=\s*["']([^"']+)["']""")
+_MD_LINK_RE = re.compile(r"""\[[^\]]*\]\(([^)]+)\)""")
+
+def _normalize_embedded_path(raw: str) -> str:
+    candidate = (raw or "").strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("<") and candidate.endswith(">"):
+        candidate = candidate[1:-1].strip()
+    if not candidate:
+        return ""
+    # Drop optional title after whitespace: (path "title")
+    candidate = candidate.split()[0].strip()
+    return candidate
+
+def extract_local_paths_any(text: str) -> List[str]:
+    """
+    Extract local (non-http) paths from HTML/Markdown content.
+    Returns deduped list in encounter order.
+    """
+    if not isinstance(text, str) or not text:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def _maybe_add(raw: str) -> None:
+        candidate = _normalize_embedded_path(raw)
+        if not candidate or candidate.startswith("#"):
+            return
+        parts = urlsplit(candidate)
+        if parts.scheme or parts.netloc:
+            return
+        if not parts.path:
+            return
+        if candidate.lower().startswith(("data:", "mailto:", "tel:")):
+            return
+        if candidate in seen:
+            return
+        seen.add(candidate)
+        out.append(candidate)
+
+    for m in _HTML_REF_RE.finditer(text):
+        _maybe_add(m.group(1))
+    for m in _MD_LINK_RE.finditer(text):
+        _maybe_add(m.group(1))
+
+    return out
+
+# ---------------------------------------------------------------------------
 # Back-compat wrappers (aliases used by existing code)
 # ---------------------------------------------------------------------------
 
@@ -1244,91 +1313,6 @@ def adapt_source_for_llm(
         out["content_length"] = src["content_length"]
 
     return out
-
-async def enrich_sources_pool_with_favicons(
-        sources_pool: List[Dict[str, Any]],
-        log
-) -> int:
-    """
-    Enrich sources_pool with favicons in-place (FAST batch operation).
-
-    Uses the shared module-level AsyncLinkPreview instance automatically.
-    No need to pass or manage instances - it's handled transparently.
-
-    - Single HTTP session for all requests (5-10x faster than individual)
-    - Only processes sources without existing 'favicon' key (idempotent)
-    - Updates sources_pool list in-place
-    - Returns count of newly enriched sources
-
-    Performance:
-    - 10 URLs: ~300-500ms
-    - 50 URLs: ~1-2s
-    - 100 URLs: ~2-4s
-    """
-    if not sources_pool:
-        return 0
-
-    # Find sources that need enrichment
-    to_enrich = []
-    url_to_source = {}
-
-    for src in sources_pool:
-        if not isinstance(src, dict):
-            continue
-        if "favicon" in src:  # Already enriched
-            continue
-        url = (src.get("url") or "").strip()
-        if url and (url.startswith("http://") or url.startswith("https://")):
-            to_enrich.append(url)
-            url_to_source[url] = src
-
-    if not to_enrich:
-        log.debug("enrich_favicons: all sources already enriched")
-        return 0
-
-    log.info(f"enrich_favicons: batch enriching {len(to_enrich)}/{len(sources_pool)} sources")
-
-    # Import and get shared instance
-    try:
-        from kdcube_ai_app.infra.rendering.link_preview import get_shared_link_preview
-    except ImportError:
-        log.warning("enrich_favicons: link_preview module not available, skipping")
-        return 0
-
-    try:
-        # Get the shared instance (lazy-initialized on first call)
-        preview = await get_shared_link_preview()
-
-        # BATCH FETCH - single HTTP session for all URLs (FAST!)
-        results_map = await preview.generate_preview_batch(
-            urls=to_enrich,
-            mode="minimal"
-        )
-
-        # Update sources in-place
-        enriched_count = 0
-        for url, result in results_map.items():
-            src = url_to_source.get(url)
-            if not src:
-                continue
-
-            if result.get("success"):
-                src["favicon"] = result.get("favicon")
-                src["favicon_status"] = "success"
-                # Optionally improve title
-                if not src.get("title") and result.get("title"):
-                    src["title"] = result["title"]
-                enriched_count += 1
-            else:
-                src["favicon"] = None
-                src["favicon_status"] = result.get("error", "failed")
-
-        log.info(f"enrich_favicons: completed {enriched_count}/{len(to_enrich)} successful")
-        return enriched_count
-
-    except Exception as e:
-        log.exception("enrich_favicons: failed")
-        return 0
 
 def _rewrite_md_citation_tokens(md: str, sid_map: dict[int,int]) -> str:
     """

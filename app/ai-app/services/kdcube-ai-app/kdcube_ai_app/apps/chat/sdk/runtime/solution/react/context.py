@@ -9,7 +9,7 @@ from __future__ import annotations
 import time, json, logging, re
 import pathlib
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional, Set
 
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.tools.citations import (
@@ -21,6 +21,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.strategy_and_budget impo
 
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.contracts import SlotSpec
 from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable
+from kdcube_ai_app.apps.chat.sdk.runtime.files_and_attachments import (
+    strip_base64_from_value,
+    collect_modal_attachments_from_artifact_obj,
+)
 
 _SUMMARY_MAX = 600
 
@@ -219,6 +223,7 @@ class ReactContext:
 
     scratchpad: TurnScratchpad = None
     operational_digest: Optional[str] = None
+    show_artifact_attachments: List[Dict[str, Any]] = field(default_factory=list)
 
     # ---------- Playbook helpers ----------
     def _human_ts(self, ts_val: Any) -> str:
@@ -241,19 +246,56 @@ class ReactContext:
         if obj is None:
             return None
 
+        def _compact_sources_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            compact: List[Dict[str, Any]] = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                mime = (item.get("mime") or "").strip().lower()
+                has_modal = bool(item.get("base64")) and bool(mime)
+                compact.append({
+                    "sid": item.get("sid"),
+                    "title": item.get("title"),
+                    "url": item.get("url"),
+                    "mime": mime or None,
+                    "multimodal": True if has_modal else False,
+                    "text": (item.get("text") or "").strip(),
+                })
+            return compact
+
         def _compact_search_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             compact: List[Dict[str, Any]] = []
             for item in items:
                 if not isinstance(item, dict):
                     continue
+                mime = (item.get("mime") or "").strip().lower()
+                has_modal = bool(item.get("base64")) and bool(mime)
                 compact.append({
                     "sid": item.get("sid"),
                     "title": item.get("title"),
                     "url": item.get("url"),
                     "published_time_iso": item.get("published_time_iso"),
                     "authority": item.get("authority"),
-                    "content": (item.get("content") or item.get("text") or "").strip(),
+                    "mime": mime or None,
+                    "attached": True if has_modal else False,
+                    "content": "" if has_modal else (item.get("content") or item.get("text") or "").strip(),
                 })
+            return compact
+
+        def _compact_fetch_items(entries: Dict[str, Any]) -> Dict[str, Any]:
+            compact: Dict[str, Any] = {}
+            for url, entry in entries.items():
+                if not isinstance(entry, dict):
+                    compact[url] = entry
+                    continue
+                mime = (entry.get("mime") or "").strip().lower()
+                has_modal = bool(entry.get("base64")) and bool(mime)
+                cleaned = {k: v for k, v in entry.items() if k != "base64"}
+                cleaned["mime"] = mime or None
+                if has_modal:
+                    cleaned["attached"] = True
+                    cleaned["content"] = ""
+                compact[url] = cleaned
             return compact
 
         if isinstance(obj, dict):
@@ -262,6 +304,25 @@ class ReactContext:
                 out["kind"] = obj.get("type")
                 if out["kind"] == "inline" and not out.get("format"):
                     out["format"] = default_format
+                return out
+
+            if obj.get("artifact_kind") == "search":
+                val = obj.get("value")
+                out: Dict[str, Any] = {"kind": "search"}
+                out["format"] = "json"
+                if isinstance(val, list):
+                    out["text"] = json.dumps(_compact_search_items(val), ensure_ascii=False, indent=2)
+                elif isinstance(val, dict):
+                    out["text"] = json.dumps(_compact_fetch_items(val), ensure_ascii=False, indent=2)
+                else:
+                    out["text"] = json.dumps(strip_base64_from_value(val), ensure_ascii=False, indent=2)
+                for k in (
+                    "artifact_id", "tool_id", "summary", "sources_used", "error",
+                    "inputs", "description", "content_inventorization", "content_lineage",
+                    "timestamp",
+                ):
+                    if k in obj and k not in out:
+                        out[k] = obj[k]
                 return out
 
             if obj.get("artifact_kind") in ("inline", "file"):
@@ -279,7 +340,7 @@ class ReactContext:
                         out["text"] = ""
                     else:
                         out["format"] = "json"
-                        out["text"] = json.dumps(val, ensure_ascii=False, indent=2)
+                        out["text"] = json.dumps(strip_base64_from_value(val), ensure_ascii=False, indent=2)
                 else:
                     if isinstance(val, dict) and val.get("type") == "file":
                         out.update(val)
@@ -290,7 +351,7 @@ class ReactContext:
                         out["path"] = val
                         out.setdefault("text", "")
                     else:
-                        out["text"] = json.dumps(val, ensure_ascii=False, indent=2)
+                        out["text"] = json.dumps(strip_base64_from_value(val), ensure_ascii=False, indent=2)
                 for k in (
                     "artifact_id", "tool_id", "summary", "sources_used", "error",
                     "inputs", "description", "content_inventorization", "content_lineage",
@@ -301,12 +362,19 @@ class ReactContext:
                 return out
 
             val = obj.get("value")
-            if obj.get("tool_id") in ("generic_tools.web_search", "generic_tools.fetch_url_contents") and isinstance(val, list):
-                return {
-                    "kind": "inline",
-                    "format": "json",
-                    "text": json.dumps(_compact_search_items(val), ensure_ascii=False, indent=2),
-                }
+            if obj.get("tool_id") in ("generic_tools.web_search", "generic_tools.fetch_url_contents"):
+                if isinstance(val, list):
+                    return {
+                        "kind": "search",
+                        "format": "json",
+                        "text": json.dumps(_compact_search_items(val), ensure_ascii=False, indent=2),
+                    }
+                if isinstance(val, dict):
+                    return {
+                        "kind": "search",
+                        "format": "json",
+                        "text": json.dumps(_compact_fetch_items(val), ensure_ascii=False, indent=2),
+                    }
             if isinstance(val, dict) and val.get("type") in ("inline", "file"):
                 out = dict(val)
                 out["kind"] = val.get("type")
@@ -333,9 +401,15 @@ class ReactContext:
                 return {
                     "kind": "inline",
                     "format": "json",
-                    "text": json.dumps(val, ensure_ascii=False, indent=2),
+                    "text": json.dumps(strip_base64_from_value(val), ensure_ascii=False, indent=2),
                 }
 
+        if isinstance(obj, list):
+            return {
+                "kind": "inline",
+                "format": "json",
+                "text": json.dumps(_compact_sources_items([i for i in obj if isinstance(i, dict)]), ensure_ascii=False, indent=2),
+            }
         if isinstance(obj, str):
             return {"kind": "inline", "format": default_format, "text": obj}
 
@@ -346,12 +420,60 @@ class ReactContext:
         Materialize full artifacts for the playbook from show_artifacts paths.
         """
         items: List[Dict[str, Any]] = []
+        selected_attachments: List[Dict[str, Any]] = []
+        seen_mime: Set[str] = set()
         for raw_path in (show_paths or []):
             if not isinstance(raw_path, str) or not raw_path.strip():
                 continue
             path = raw_path.strip()
             parts = path.split(".")
             turn_id = parts[0] if parts else ""
+
+            # sources_pool[sid1,sid2] special path (current turn pool)
+            if path.startswith("sources_pool[") and path.endswith("]"):
+                sids_raw = path[len("sources_pool["):-1]
+                sids: List[int] = []
+                for tok in sids_raw.split(","):
+                    tok = tok.strip()
+                    if not tok:
+                        continue
+                    try:
+                        sids.append(int(tok))
+                    except Exception:
+                        continue
+                if not sids:
+                    continue
+                sources = self.materialize_sources_by_sids(sids)
+                if not sources:
+                    continue
+                art = self._normalize_show_artifact(sources)
+                if art is None:
+                    continue
+                item = {
+                    "context_path": path,
+                    "artifact_type": "sources_pool",
+                    "timestamp": self._turn_timestamp("current_turn"),
+                    "artifact": art,
+                }
+                item_attachments = collect_modal_attachments_from_artifact_obj(
+                    {"artifact_kind": "search", "value": sources},
+                    outdir=self.outdir,
+                )
+                if item_attachments:
+                    kept_for_item: List[Dict[str, Any]] = []
+                    for att in item_attachments:
+                        mime = (att.get("mime") or "").strip().lower()
+                        if not mime or mime in seen_mime:
+                            continue
+                        if len(selected_attachments) >= 2:
+                            break
+                        kept_for_item.append(att)
+                        selected_attachments.append(att)
+                        seen_mime.add(mime)
+                    if kept_for_item:
+                        item["modal_attachments"] = kept_for_item
+                items.append(item)
+                continue
 
             if path.endswith(".user") or path.endswith(".assistant") or ".user.prompt." in path or ".assistant.completion." in path:
                 val = None
@@ -398,13 +520,29 @@ class ReactContext:
             if art is None:
                 continue
 
-            items.append({
+            item = {
                 "context_path": base_path,
                 "artifact_type": art_type,
                 "timestamp": self._turn_timestamp(turn_id),
                 "artifact": art,
-            })
+            }
+            item_attachments = collect_modal_attachments_from_artifact_obj(obj, outdir=self.outdir)
+            if item_attachments:
+                kept_for_item: List[Dict[str, Any]] = []
+                for att in item_attachments:
+                    mime = (att.get("mime") or "").strip().lower()
+                    if not mime or mime in seen_mime:
+                        continue
+                    if len(selected_attachments) >= 2:
+                        break
+                    kept_for_item.append(att)
+                    selected_attachments.append(att)
+                    seen_mime.add(mime)
+                if kept_for_item:
+                    item["modal_attachments"] = kept_for_item
+            items.append(item)
 
+        self.show_artifact_attachments = selected_attachments
         return items
 
     # ---------- Persistence ----------
@@ -1449,6 +1587,21 @@ class ReactContext:
         if not path or not isinstance(path, str):
             return None, None
 
+        if path.startswith("sources_pool[") and path.endswith("]"):
+            sids_raw = path[len("sources_pool["):-1]
+            sids: List[int] = []
+            for tok in sids_raw.split(","):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                try:
+                    sids.append(int(tok))
+                except Exception:
+                    continue
+            if not sids:
+                return None, None
+            return self.materialize_sources_by_sids(sids), {"_kind": "sources_pool", "turn_id": "current_turn"}
+
         # ---------- Messages (past turns) ----------
         if path.endswith(".user") or path.endswith(".assistant"):
             pieces = path.split(".")
@@ -1526,6 +1679,39 @@ class ReactContext:
                 val = match.get(leaf)
             return val, {"_kind": "attachment", "turn_id": "current_turn"}
 
+        # ---------- Current turn assistant files ----------
+        if path.startswith("current_turn.files.") or path.startswith("files."):
+            rel = path.split("files.", 1)[1]
+            name, _, leaf = rel.partition(".")
+            if not name:
+                return None, None
+            tlog = self._get_turn_log("current_turn")
+            assistant_obj = tlog.get("assistant") if isinstance(tlog.get("assistant"), dict) else {}
+            match = None
+            for f in (assistant_obj.get("files") or []):
+                if not isinstance(f, dict):
+                    continue
+                if self._attachment_name_matches(f, name):
+                    match = self._ensure_artifact_fields(
+                        f,
+                        artifact_name=f.get("artifact_name") or f.get("filename") or name,
+                        artifact_tag="artifact:assistant.file",
+                        artifact_kind="file",
+                        artifact_type="assistant.file",
+                    )
+                    break
+            if not match:
+                return None, None
+            if not leaf:
+                return match, {"_kind": "artifact", "turn_id": "current_turn"}
+            if leaf in ("content", "text"):
+                val = match.get("text") or ""
+            elif leaf in ("summary",):
+                val = match.get("summary") or ""
+            else:
+                val = match.get(leaf)
+            return val, {"_kind": "artifact", "turn_id": "current_turn"}
+
         # ---------- Past turn user leaves ----------
         if ".user." in path:
             turn_id, _, rest = path.partition(".user.")
@@ -1569,6 +1755,41 @@ class ReactContext:
                     val = match.get(leaf)
                 return val, {"_kind": "attachment", "turn_id": turn_id}
             return None, None
+
+        # ---------- Past turn assistant files ----------
+        if ".files." in path:
+            turn_id, _, rest = path.partition(".files.")
+            if not turn_id or not rest:
+                return None, None
+            name, _, leaf = rest.partition(".")
+            if not name:
+                return None, None
+            tlog = self._get_turn_log(turn_id)
+            assistant_obj = tlog.get("assistant") if isinstance(tlog.get("assistant"), dict) else {}
+            match = None
+            for f in (assistant_obj.get("files") or []):
+                if not isinstance(f, dict):
+                    continue
+                if self._attachment_name_matches(f, name):
+                    match = self._ensure_artifact_fields(
+                        f,
+                        artifact_name=f.get("artifact_name") or f.get("filename") or name,
+                        artifact_tag="artifact:assistant.file",
+                        artifact_kind="file",
+                        artifact_type="assistant.file",
+                    )
+                    break
+            if not match:
+                return None, None
+            if not leaf:
+                return match, {"_kind": "artifact", "turn_id": turn_id}
+            if leaf in ("content", "text"):
+                val = match.get("text") or ""
+            elif leaf in ("summary",):
+                val = match.get("summary") or ""
+            else:
+                val = match.get(leaf)
+            return val, {"_kind": "artifact", "turn_id": turn_id}
 
         # ---------- Current turn assistant ----------
         if path in ("current_turn.assistant.completion.text", "assistant.completion.text"):

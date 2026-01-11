@@ -1540,5 +1540,6 @@ async def generate_content_llm(
             "citations": citations_status if require_citations else "n/a"
         },
         "sources_used": sources_used,
+        "tool.origin": "llm_tools.generate_content_llm",
     }
     return out

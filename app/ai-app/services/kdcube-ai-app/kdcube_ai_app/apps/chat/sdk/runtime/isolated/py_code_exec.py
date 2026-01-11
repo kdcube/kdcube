@@ -218,6 +218,16 @@ async def run_py_code(
     child_env["WORKDIR"] = str(workdir)
     child_env["AGENT_IO_CONTEXT"] = "limited"
     child_env["LOG_FILE_PREFIX"] = "executor"
+    # Matplotlib/fontconfig caches must be writable in iso runtime
+    mpl_cache_dir = output_dir / ".mplconfig"
+    font_cache_dir = output_dir / ".fontconfig"
+    mpl_cache_dir.mkdir(parents=True, exist_ok=True)
+    font_cache_dir.mkdir(parents=True, exist_ok=True)
+    child_env["MPLCONFIGDIR"] = str(mpl_cache_dir)
+    child_env["XDG_CACHE_HOME"] = str(output_dir)
+    child_env["XDG_CONFIG_HOME"] = str(output_dir)
+    child_env["FONTCONFIG_PATH"] = str(font_cache_dir)
+    child_env["MPLBACKEND"] = "Agg"
     # RUNTIME_TOOL_MODULES:
     # - Start from env (if any), then augment with dynamic alias modules from TOOL_ALIAS_MAP
     tool_module_names: list[str] = []

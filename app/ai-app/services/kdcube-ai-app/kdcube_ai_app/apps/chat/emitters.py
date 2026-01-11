@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from datetime import datetime
 
 from dataclasses import dataclass, field
@@ -52,6 +53,7 @@ class _DeltaAggregate:
     format: Optional[str] = None
     artifact_name: Optional[str] = None
     title: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
 
     chunks: List[_DeltaChunk] = field(default_factory=list)
 
@@ -468,7 +470,7 @@ class ChatCommunicator:
         )
 
     # ----- internal buffer helpers -----
-    def _record_delta(self, *, text: str, index: int, agent: str, marker: str, format: str, artifact_name: str, title: Optional[str] = None):
+    def _record_delta(self, *, text: str, index: int, agent: str, marker: str, format: str, artifact_name: str, title: Optional[str] = None, extra: Optional[dict] = None):
         if not text:
             return
         conv_id = (self.conversation or {}).get("conversation_id") or ""
@@ -481,6 +483,10 @@ class ChatCommunicator:
                                   agent=agent or "assistant", marker=marker or "answer",
                                   format=format, artifact_name=artifact_name, title=title_norm)
             self._delta_cache[key] = agg
+        if extra:
+            for k, v in extra.items():
+                if k not in agg.extra and v is not None:
+                    agg.extra[k] = v
         agg.append(ts=_now_ms(), idx=int(index), text=text)
 
     def get_delta_aggregates(self, *, conversation_id: str | None = None,
@@ -507,6 +513,7 @@ class ChatCommunicator:
                 "format": f,
                 "artifact_name": an,
                 "title": title,
+                "extra": dict(agg.extra or {}),
                 "ts_first": agg.ts_first,
                 "ts_last": agg.ts_last,
                 "text": agg.merged_text() if merge_text else "",
@@ -590,6 +597,10 @@ class ChatCommunicator:
                     format=key[4], artifact_name=key[5], title=key[6]
                 )
                 self._delta_cache[key] = agg
+            if isinstance(it.get("extra"), dict):
+                for k, v in it["extra"].items():
+                    if k not in agg.extra and v is not None:
+                        agg.extra[k] = v
             # dedupe chunks
             existing = {(c.idx, c.ts, c.text) for c in agg.chunks}
             for c in (it.get("chunks") or []):
@@ -646,7 +657,17 @@ class ChatCommunicator:
                 format  = eve.get("format") or "markdown"
                 artifact_name  = eve.get("artifact_name") or "Unknown"
                 title = eve.get("title") or None
-                self._record_delta(text=text, index=idx, agent=agent, marker=marker, format=format, artifact_name=artifact_name, title=title)
+                extra = (env or {}).get("extra")
+                self._record_delta(
+                    text=text,
+                    index=idx,
+                    agent=agent,
+                    marker=marker,
+                    format=format,
+                    artifact_name=artifact_name,
+                    title=title,
+                    extra=extra if isinstance(extra, dict) else None,
+                )
         except Exception:
             pass
 
@@ -690,13 +711,40 @@ class ChatCommunicator:
 
         # record before sending
         try:
-            self._record_delta(text=text, index=index, agent=agent, marker=marker,
-                               format=kwargs.get("format"), artifact_name=kwargs.get("artifact_name"),
-                               title=kwargs.get("title"))
+            self._record_delta(text=text, index=index,
+                               agent=agent,
+                               marker=marker,
+                               format=kwargs.get("format"),
+                               artifact_name=kwargs.get("artifact_name"),
+                               title=kwargs.get("title"),
+                               extra=kwargs)
         except Exception:
             pass
 
+        # TODO: remove after integration of subsystem channel is completed
         await self.emit("chat_delta", env, broadcast=False)
+        if marker == "subsystem":
+            try:
+                env_tool = copy.deepcopy(env)
+                env_tool["delta"]["marker"] = "tool"
+                env_tool["text"] = text
+                env_tool["idx"] = int(index)
+                try:
+                    self._record_delta(
+                        text=text,
+                        index=index,
+                        agent=agent,
+                        marker="tool",
+                        format=kwargs.get("format"),
+                        artifact_name=kwargs.get("artifact_name"),
+                        title=kwargs.get("title"),
+                        extra=kwargs,
+                    )
+                except Exception:
+                    pass
+                await self.emit("chat_delta", env_tool, broadcast=False)
+            except Exception:
+                pass
 
     async def complete(self, *, data: dict):
         env = self._base_env("chat.complete")

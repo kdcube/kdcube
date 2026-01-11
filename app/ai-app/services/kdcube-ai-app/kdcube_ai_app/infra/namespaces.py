@@ -60,6 +60,9 @@ class REDIS:
         CAPACITY = "kdcube:system:capacity"
         RATE_LIMIT = "kdcube:system:ratelimit"
 
+    class CACHE:
+        FAVICON = "kdcube:cache:favicon"
+
     class SYNCHRONIZATION:
         LOCK = "kdcube:lock"
 
@@ -82,5 +85,4 @@ class CONFIG:
         SUGGESTIONS_PREFIX = "kdcube:agentic:suggestions:{tenant}:{project}:{bundle_id}"
 
     KDCUBE_STORAGE_PATH = os.environ.get("KDCUBE_STORAGE_PATH") or os.environ.get("STORAGE_PATH")
-
 

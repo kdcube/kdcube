@@ -41,6 +41,23 @@ def price_table():
                 },
                 "cache_write_tokens_1M": 3.00,
                 "cache_read_tokens_1M": 0.30,
+
+                "vision": {
+                    "enabled": True,
+                    "pricing_mode": "token_based",  # or "per_image"
+                    # Images are converted to tokens based on size:
+                    # <200KB: ~150 tokens, <500KB: ~400 tokens, <5MB: ~1600 tokens
+                    "notes": "Images counted as input tokens, ~1600 tokens max per image",
+                    "max_images_per_request": 20,
+                    "max_image_size_mb": 5,
+                },
+                "documents": {
+                    "enabled": True,
+                    "pricing_mode": "token_based",
+                    "formats": ["pdf"],
+                    "notes": "PDFs rendered as images, ~10k token limit per page",
+                    "max_document_size_mb": 10,
+                },
             },
             {
                 "model": haiku_4,
@@ -103,6 +120,20 @@ def price_table():
                 "output_tokens_1M": 10.00,
                 "cache_write_tokens_1M": 0.00,
                 "cache_read_tokens_1M": 1.25,
+
+                "vision": {
+                    "enabled": True,
+                    "pricing_mode": "detail_based",
+                    "detail_low_tokens": 85,  # fixed
+                    "detail_high_base_tokens": 85,
+                    "detail_high_tile_tokens": 170,  # per 512px tile
+                    "notes": "Low detail: 85 tokens, High detail: 85 + (tiles × 170)",
+                    "max_images_per_request": 50,
+                },
+                "documents": {
+                    "enabled": False,
+                    "notes": "Not natively supported, extract text first",
+                },
             },
             {
                 "model": "gpt-4o-mini",
@@ -137,6 +168,20 @@ def price_table():
                 "thinking_output_tokens_1M": 10.00,  # same bucket; explicit for clarity
                 "cache_write_tokens_1M": 0.0,
                 "cache_read_tokens_1M": 0.0,
+
+                "vision": {
+                    "enabled": True,
+                    "pricing_mode": "token_based",
+                    "notes": "Images counted as input tokens based on resolution",
+                    # Gemini calculates: tokens = (width * height) / 258
+                    "token_calculation": "pixels_div_258",
+                },
+                "documents": {
+                    "enabled": True,
+                    "pricing_mode": "token_based",
+                    "formats": ["pdf", "txt", "html", "csv"],
+                    "notes": "Documents counted as input tokens",
+                },
             },
             {
                 "model": "gemini-2.5-pro-long",
@@ -267,8 +312,18 @@ class ServiceUsage:
     embedding_dimensions: int = 0
     search_queries: int = 0
     search_results: int = 0
+
+    document_count: int = 0
+    document_pages: int = 0
+    document_tokens: int = 0
+
     image_count: int = 0
-    image_pixels: int = 0
+    image_pixels: int = 0 # this is for debugging
+
+    # Multimodal tracking
+    image_tokens: int = 0  # actual tokens charged for images
+    image_details: Optional[List[Dict[str, Any]]] = None  # size, detail level, etc.
+
     audio_seconds: float = 0.0
     requests: int = 0
     cost_usd: Optional[float] = None
@@ -287,8 +342,15 @@ class ServiceUsage:
             "embedding_dimensions": self.embedding_dimensions,
             "search_queries": self.search_queries,
             "search_results": self.search_results,
+
             "image_count": self.image_count,
-            "image_pixels": self.image_pixels,
+            "image_tokens": self.image_tokens,
+            "image_details": self.image_details,
+
+            "document_count": self.document_count,
+            "document_pages": self.document_pages,
+            "document_tokens": self.document_tokens,
+
             "audio_seconds": self.audio_seconds,
             "requests": self.requests,
             "cost_usd": self.cost_usd,

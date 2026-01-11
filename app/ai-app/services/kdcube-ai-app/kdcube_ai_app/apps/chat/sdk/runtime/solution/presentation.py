@@ -539,7 +539,7 @@ def _format_produced_slots_grouped_by_status(
         if "gaps" in slot_attr_keys and gaps:
             lines.append(f"  - Gaps: {gaps}")
         if "summary" in slot_attr_keys and summary:
-            lines.append(f"  - Summary: {summary}")
+            lines.append(f"  - Content summary: {summary}")
         if "tool_id" in slot_attr_keys and tool_id:
             lines.append(f"  - Tool: `{tool_id}`")
         if "citable" in slot_attr_keys and citable is not None:
@@ -551,20 +551,10 @@ def _format_produced_slots_grouped_by_status(
         if "sources_used" in slot_attr_keys and sources_sids:
             lines.append(f"  - Sources used (SIDs): {sources_sids}")
 
-        if "slot_value_inventorization" in slot_attr_keys:
-            inv = build_runtime_inventory_from_artifact(art)
-            if inv:
-                lines.append("  - Slot value inventorization info:")
-                inv_md = format_inventory(inv)
-                if inv_md:
-                    for ln in inv_md.splitlines():
-                        lines.append("    " + ln)
-
         return lines
 
     lines: List[str] = []
     lines.append("## Produced slots")
-    lines.append("")
     lines.append("Grouped by status: ❌ missing →  ⚠️ draft → ✅ completed.")
     lines.append("")
 
@@ -576,7 +566,7 @@ def _format_produced_slots_grouped_by_status(
     ]:
         slots = slots_by_status[status]
         lines.append(f"### {group_title} ({len(slots)})")
-        lines.append("")
+        # lines.append("")
 
         if slots:
             for slot in slots:
@@ -592,59 +582,6 @@ def _format_produced_slots_grouped_by_status(
             "❗️Slots in the **draft / incomplete** group contain partial content "
             "and may require further work before being shown to end users."
         )
-
-    # Files produced (OUT_DIR-relative paths)
-    if file_path_prefix is not None:
-        file_lines: List[str] = []
-        for slot in ordered_slots:
-            st = _slot_status_for_presentation(slot, dmap)
-            if st not in {"completed", "draft"}:
-                continue
-            spec = (dmap or {}).get(slot) or {}
-            art = spec.get("value") if isinstance(spec, dict) else None
-            art = art if isinstance(art, dict) else None
-            if not art:
-                continue
-            slot_type = (
-                (art or {}).get("type")
-                or (spec.get("type") if isinstance(spec, dict) else None)
-                or ""
-            )
-            if str(slot_type).strip().lower() != "file":
-                continue
-            filename = (art or {}).get("filename") or ""
-            if not filename:
-                src_path = (art or {}).get("path") or ""
-                if isinstance(src_path, str) and src_path.strip():
-                    try:
-                        from pathlib import Path
-                        filename = Path(src_path).name
-                    except Exception:
-                        filename = ""
-            if not filename:
-                continue
-            desc = (
-                (spec.get("description") if isinstance(spec, dict) else None)
-                or (contract or {}).get(slot, {}).get("description")
-                or ""
-            )
-            summary = (art or {}).get("summary") or ""
-            mime = (art or {}).get("mime") or (spec.get("mime") if isinstance(spec, dict) else None) or ""
-            file_lines.append(f"- `{slot}` ({mime or 'file'})")
-            if desc:
-                file_lines.append(f"  - Description: {desc}")
-            if summary:
-                file_lines.append(f"  - Summary: {summary}")
-            file_lines.append(f"  - Filename: {filename}")
-            if file_path_prefix:
-                file_lines.append(f"  - Path (OUT_DIR-relative): {file_path_prefix}/{filename}")
-            else:
-                file_lines.append(f"  - Path (OUT_DIR-relative): {filename}")
-        if file_lines:
-            lines.append("")
-            lines.append("## Files produced")
-            lines.append("")
-            lines.extend(file_lines)
 
     return "\n".join(lines).rstrip(), has_any_draft
 
@@ -816,11 +753,23 @@ def _format_deliverables_flat_with_icons(
         # Optional attributes
         gaps = art.get("gaps")
         summary = art.get("summary")
+        sources_sids = art.get("sources_used") or []
 
         if "gaps" in slot_attr_keys and gaps:
             lines.append(f"  Gaps: {gaps}")
         if "summary" in slot_attr_keys and summary:
             lines.append(f"  Summary: {summary}")
+        if "sources_used" in slot_attr_keys and sources_sids:
+            sids: List[str] = []
+            for rec in sources_sids:
+                if isinstance(rec, dict):
+                    sid = rec.get("sid")
+                else:
+                    sid = rec
+                if isinstance(sid, (int, float)):
+                    sids.append(f"S{int(sid)}")
+            if sids:
+                lines.append(f"  Sources used: {', '.join(sids)}")
 
         # Content preview (if requested)
         if content_len != 0:

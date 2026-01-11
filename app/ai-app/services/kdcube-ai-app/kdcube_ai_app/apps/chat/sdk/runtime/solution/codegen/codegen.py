@@ -448,6 +448,7 @@ class CodegenRunner:
             solution_gen_stream: Callable[..., Awaitable[Dict[str, Any]]],
             exec_id: Optional[str] = None,
             invocation_idx: Optional[int] = None,
+            attachments: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         import uuid as _uuid
         import tempfile as _tempfile
@@ -532,7 +533,8 @@ class CodegenRunner:
                                                            author=author),
                     ctx=self.AGENT_NAME,
                     code_packages=code_packages,
-                    max_tokens=7000
+                    max_tokens=7000,
+                    attachments=attachments,
 
                 )
                 if cg_stream and (cg_stream.get("log") or {}).get("error"):

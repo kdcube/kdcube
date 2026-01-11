@@ -5,6 +5,7 @@
 
 from typing import List, Optional, Dict, Any, Annotated
 import logging, json, os, uuid, base64, asyncio
+from datetime import datetime, timezone
 
 from kdcube_ai_app.apps.chat.sdk.tools.web.web_extractors import WebContentFetcher
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import filter_fetch_results
@@ -89,6 +90,8 @@ async def fetch_search_results_content(
 
         fetch_status = fetch_result.get("status", "unknown")
         row["fetch_status"] = fetch_status
+        if fetch_result.get("mime"):
+            row["mime"] = fetch_result.get("mime")
 
         if fetch_status in ("non_html", "pdf_redirect"):
             attach = await _materialize_binary_attachment(row.get("url", ""))
@@ -118,7 +121,8 @@ async def fetch_search_results_content(
         # Successful fetch: attach content + metadata
         row["content"] = fetch_result.get("content", "")
         row["content_length"] = fetch_result.get("content_length", 0)
-        row["mime"] = "text/html"
+        if not row.get("mime"):
+            row["mime"] = "text/html"
 
         for k in [
             "published_time_raw",
@@ -302,12 +306,14 @@ async def fetch_url_contents(
         )
 
     for url, fetch_result in zip(normalized_urls, fetch_list):
+        fetched_time_iso = datetime.now(timezone.utc).isoformat()
         if isinstance(fetch_result, Exception):
             # Transport-level failure
             results[url] = {
                 "status": "error",
                 "content": "",
                 "content_length": 0,
+                "fetched_time_iso": fetched_time_iso,
                 "published_time_iso": None,
                 "modified_time_iso": None,
                 "date_method": None,
@@ -323,11 +329,14 @@ async def fetch_url_contents(
             "status": status,
             "content": content,
             "content_length": len(content),
+            "fetched_time_iso": fetched_time_iso,
             "published_time_iso": fetch_result.get("published_time_iso"),
             "modified_time_iso": fetch_result.get("modified_time_iso"),
             "date_method": fetch_result.get("date_method"),
             "date_confidence": fetch_result.get("date_confidence", 0.0),
         }
+        if fetch_result.get("mime"):
+            entry["mime"] = fetch_result.get("mime")
 
         if "error" in fetch_result and fetch_result.get("error"):
             entry["error"] = fetch_result.get("error")
@@ -346,7 +355,7 @@ async def fetch_url_contents(
             if attach.get("error"):
                 entry["error"] = attach.get("error")
         elif status in ("success", "archive"):
-            entry["mime"] = "text/html"
+            entry["mime"] = entry.get("mime") or "text/html"
 
         results[url] = entry
 

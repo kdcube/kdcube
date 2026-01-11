@@ -405,7 +405,8 @@ async def _execute_tool_in_memory(
                                           workdir=workdir,
                                           solution_gen_stream=solution_gen_stream,
                                           exec_id=exec_id,
-                                          invocation_idx=i)
+                                          invocation_idx=i,
+                                          attachments=context.show_artifact_attachments)
         err_tail = errors_log_tail(outdir / "logs" / "errors.log", exec_id=exec_id)
         project_log = envelope.get("project_log")
         if isinstance(project_log, dict) and project_log:

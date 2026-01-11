@@ -572,7 +572,8 @@ class BaseTurnView(ABC):
             include_turn_summary: bool = True,
             include_context_used: bool = True,
             include_turn_info: bool = True,
-            deliverables_detalization: str = "summary" # digest | summary
+            deliverables_detalization: str = "summary", # digest | summary,
+            include_deliverables_section: bool = True,
     ) -> str:
         ...
 

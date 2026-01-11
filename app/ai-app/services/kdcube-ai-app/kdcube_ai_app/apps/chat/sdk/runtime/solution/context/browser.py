@@ -223,14 +223,39 @@ class ContextBrowser:
                         d for d in deliverables
                         if (d.get("value") or {}).get("type") == "file"
                     ]
-                    if file_delivs:
+
+                    turn_log = turn_program.get("turn_log") or {}
+                    assistant_obj = turn_log.get("assistant") if isinstance(turn_log.get("assistant"), dict) else {}
+                    assistant_files = assistant_obj.get("files") or []
+                    assistant_file_delivs: list[dict] = []
+                    for f in assistant_files:
+                        if not isinstance(f, dict):
+                            continue
+                        key = (f.get("key") or "").strip()
+                        hosted_uri = (f.get("hosted_uri") or "").strip()
+                        path = key or hosted_uri
+                        if not path:
+                            continue
+                        assistant_file_delivs.append({
+                            "value": {
+                                "type": "file",
+                                "path": path,
+                                "mime": (f.get("mime") or "").strip(),
+                                "filename": (f.get("filename") or "").strip(),
+                                "text": (f.get("text") or ""),
+                                "summary": (f.get("summary") or "").strip(),
+                            }
+                        })
+
+                    all_files = [*file_delivs, *assistant_file_delivs]
+                    if all_files:
                         await solution_workspace.rehost_previous_files(
-                            file_delivs,
+                            all_files,
                             workdir,
                             turn_id=turn_id  # ← Pass turn_id
                         )
                         self.log.log(
-                            f"[{ctx}] Rehosted {len(file_delivs)} files from turn {turn_id} "
+                            f"[{ctx}] Rehosted {len(all_files)} files from turn {turn_id} "
                             f"to {turn_id}/ subdirectory"
                         )
         except Exception as e:

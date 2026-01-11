@@ -10,6 +10,8 @@ import json
 import re
 from html.parser import HTMLParser
 from dataclasses import dataclass
+import logging
+from urllib.parse import urlparse
 
 from pptx import Presentation
 from pptx.util import Pt, Inches
@@ -40,6 +42,8 @@ DEFAULT_COLORS = {
     'primary': RGBColor(0, 102, 204),
     'subtitle': RGBColor(102, 102, 102),
 }
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -313,6 +317,41 @@ class StyledHTMLParser(HTMLParser):
 
         self.div_stack = []
         self.current_column = None
+        self._css_parser = css_parser
+
+    def _parse_img_dims(self, attrs_dict: Dict[str, str], inline_style: Optional[str]) -> Tuple[Optional[float], Optional[float]]:
+        width_in = None
+        height_in = None
+
+        def _parse_attr(val: Optional[str]) -> Optional[float]:
+            if not val:
+                return None
+            v = val.strip()
+            if v.isdigit():
+                v = f"{v}px"
+            inches = self._css_parser._parse_length_to_inches(v)
+            return inches.inches if inches else None
+
+        width_in = _parse_attr(attrs_dict.get('width'))
+        height_in = _parse_attr(attrs_dict.get('height'))
+
+        if inline_style:
+            for part in inline_style.split(';'):
+                if ':' not in part:
+                    continue
+                k, v = part.split(':', 1)
+                key = k.strip().lower()
+                if key not in ('width', 'height'):
+                    continue
+                inches = self._css_parser._parse_length_to_inches(v.strip())
+                if not inches:
+                    continue
+                if key == 'width':
+                    width_in = inches.inches
+                else:
+                    height_in = inches.inches
+
+        return width_in, height_in
 
     def _current_format(self) -> Dict[str, Any]:
         return self.format_stack[-1] if self.format_stack else {'bold': False, 'italic': False, 'classes': []}
@@ -466,6 +505,25 @@ class StyledHTMLParser(HTMLParser):
         elif tag in ('th', 'td') and self.current_table is not None:
             # Create a cell collector
             self.current_element = {'type': 'cell', 'text': '', 'runs': []}
+        elif tag == 'img' and self.current_section is not None:
+            src = attrs_dict.get('src', '')
+            width_in, height_in = self._parse_img_dims(attrs_dict, inline)
+            elem_style = self.css.compute_style('img', classes, inline)
+            elem = {
+                'type': 'image',
+                'src': src,
+                'alt': attrs_dict.get('alt', ''),
+                'classes': classes,
+                'style': elem_style,
+                'width_in': width_in,
+                'height_in': height_in,
+            }
+            target = (self.current_column['elements'] if (self.in_columns and self.current_column is not None)
+                      else self.current_section['elements'])
+            target.append(elem)
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
 
     def handle_endtag(self, tag):
         if tag in ('strong', 'b', 'em', 'i', 'span'):
@@ -597,6 +655,84 @@ class StyledHTMLParser(HTMLParser):
 # ============================================================================
 # RENDERER WITH OVERFLOW PROTECTION
 # ============================================================================
+def _resolve_image_path(src: str, base_dir: Optional[str]) -> Optional[Path]:
+    if not src:
+        return None
+    src = src.strip()
+    if src.startswith("data:"):
+        logger.warning("PPTX renderer: data URI images are not supported. Use file paths. src=%s", src[:120])
+        return None
+    if src.startswith("http://") or src.startswith("https://"):
+        logger.warning("PPTX renderer: http(s) images are not supported. Use file paths. src=%s", src)
+        return None
+    if src.startswith("file://"):
+        parsed = urlparse(src)
+        src = parsed.path
+    path = Path(src)
+    if not path.is_absolute():
+        if base_dir:
+            path = Path(base_dir) / src
+    if path.exists():
+        return path
+    logger.warning("PPTX renderer: image not found. src=%s resolved=%s", src, path)
+    return None
+
+
+def _image_size_px(path: Path) -> Optional[Tuple[int, int]]:
+    try:
+        from PIL import Image
+    except Exception:
+        return None
+    try:
+        with Image.open(path) as im:
+            return im.size
+    except Exception:
+        return None
+
+
+def _compute_image_dims(
+    path: Path,
+    *,
+    max_w_in: float,
+    req_w_in: Optional[float],
+    req_h_in: Optional[float],
+) -> Tuple[Inches, Inches]:
+    size = _image_size_px(path)
+    w_in = req_w_in if req_w_in else None
+    h_in = req_h_in if req_h_in else None
+
+    if size:
+        w_px, h_px = size
+        if w_px > 0 and h_px > 0:
+            aspect = h_px / w_px
+        else:
+            aspect = 0.0
+    else:
+        aspect = 0.0
+
+    if w_in:
+        w_in = min(w_in, max_w_in)
+        h_in = (w_in * aspect) if aspect else (h_in or min(2.5, max_w_in * 0.6))
+    elif h_in:
+        if aspect:
+            w_in = h_in / aspect
+            if w_in > max_w_in:
+                w_in = max_w_in
+                h_in = w_in * aspect
+        else:
+            w_in = min(max_w_in, h_in)
+    else:
+        w_in = max_w_in
+        h_in = (w_in * aspect) if aspect else min(2.5, max_w_in * 0.6)
+
+    max_h_in = MAX_CONTENT_HEIGHT.inches
+    if h_in > max_h_in and h_in > 0:
+        scale = max_h_in / h_in
+        h_in = max_h_in
+        w_in = w_in * scale
+
+    return Inches(w_in), Inches(h_in)
+
 def _estimate_elements_height(elements: List[Dict], base_font_size_pt: float, page_w_in: float) -> float:
     total = 0.0
     for elem in elements:
@@ -738,6 +874,12 @@ def estimate_content_height(elements: List[Dict], base_font_size: Pt) -> float:
                 header_h = (fs * 1.2) / 72.0
                 row_h = (fs * 1.2) / 72.0
                 total_in += header_h + row_h * len(elem.get('rows', [])) + 0.1
+        elif t == 'image':
+            height_in = elem.get('height_in')
+            if height_in:
+                total_in += height_in + 0.12
+            else:
+                total_in += min(2.5, page_w_in * 0.6) + 0.12
     return total_in
 
 
@@ -1206,7 +1348,8 @@ def render_slide(
         slide_data: Dict[str, Any],
         css_parser,
         sources_map: Dict[int, Dict[str, str]],
-        resolve_citations: bool
+        resolve_citations: bool,
+        base_dir: Optional[str],
 ):
     slide = prs.slides.add_slide(prs.slide_layouts[6])
 
@@ -1381,6 +1524,19 @@ def render_slide(
             )
             y += box_h + Inches(0.12 * scale_factor)
 
+        elif elem_type == 'image':
+            img_path = _resolve_image_path(elem.get('src', ''), base_dir)
+            if not img_path:
+                continue
+            width_len, height_len = _compute_image_dims(
+                img_path,
+                max_w_in=page_w_in,
+                req_w_in=elem.get('width_in'),
+                req_h_in=elem.get('height_in'),
+            )
+            slide.shapes.add_picture(str(img_path), MARGIN, y, width=width_len, height=height_len)
+            y += height_len + Inches(0.12 * scale_factor)
+
         elif elem_type == 'columns':
             gap_in = elem.get('gap_in', 0.0)
             gap_len = Inches(gap_in)
@@ -1511,6 +1667,19 @@ def render_slide(
                             resolve_citations=resolve_citations
                         )
                         y_col += box_h + Inches(0.08 * scale_factor)
+
+                    elif bt == 'image':
+                        img_path = _resolve_image_path(b.get('src', ''), base_dir)
+                        if not img_path:
+                            continue
+                        width_len, height_len = _compute_image_dims(
+                            img_path,
+                            max_w_in=avail_w_in,
+                            req_w_in=b.get('width_in'),
+                            req_h_in=b.get('height_in'),
+                        )
+                        slide.shapes.add_picture(str(img_path), x_left_len, y_col, width=width_len, height=height_len)
+                        y_col += height_len + Inches(0.06 * scale_factor)
 
                     elif bt == 'table':
                         header = b.get('header', [])
@@ -1920,7 +2089,7 @@ def render_pptx(
         # Render ALL slides
         for slide_data in slides_data:
             print(f"Rendering slide: {slide_data.get('title')}")
-            render_slide(prs, slide_data, css_parser, sources_map, resolve_citations)
+            render_slide(prs, slide_data, css_parser, sources_map, resolve_citations, base_dir)
 
         # Always add Sources slide when we have sources (per spec)
         if sources_map:

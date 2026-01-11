@@ -44,6 +44,7 @@ class CommSpec:
 class IntegrationsSpec:
     # whatever your tools expect (e.g. ctx RAG client endpoint/keys)
     ctx_client: Optional[Dict[str, Any]] = None
+    namespaced_kv_cache: Optional[Dict[str, Any]] = None
 
 @dataclass
 class PortableSpec:

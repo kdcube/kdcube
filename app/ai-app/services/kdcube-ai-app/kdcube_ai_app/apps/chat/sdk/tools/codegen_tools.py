@@ -29,9 +29,13 @@ class CodegenTool:
                 "- Use this tool when the step requires producing one or more concrete deliverables (inline text and/or files)\n"
                 "  and the work may require multiple tool calls, transformations, or rendering.\n"
                 "  This includes the cases when the work must be done using the existing artifacts in context (improve, fix, continue, tarnsform, synthetize, etc.).\n"
-                " Important note on context this tool will receive: this tool is always provided with the same context as you see now. \n"
-                " This allows you to refer, in the instruction, to named context artifacts that you see by naming the turn and artifacts. \n"
-                " This allows you to ask codegen to use the context objects as a base for future work according to your instruction and advice. \n"
+                "- Do NOT use this tool to run web_search or fetch_url_contents; discovery must happen in separate steps.\n"
+                " Important note on context this tool will receive: this tool is provided the same journal/context you see now, "
+                "plus any full artifacts explicitly exposed via show_artifacts. "
+                "This allows you to refer, in the instruction, to named context artifacts by turn/artifact path. \n"
+                "For multimodal-supported artifacts (PDF/images), the journal shows only the definition; "
+                "the actual content is attached as multimodal blocks when show_artifacts includes them. \n"
+                "Use show_artifacts when full content is required; otherwise restate only the needed points in instruction to save tokens. \n"
                 " Another case is when the data must be retrieved in a pipeline way and stitched between the visible integrations.\n"
                 " Another case is when the binary data must be synthetized, or for some simulations, or for data analyzis, building the reactive code etc..\n"
                 " One of the popular cases is to create excel file with data as must come from some research. Another is when there are images (or they should be generated in-round) and "
@@ -141,6 +145,7 @@ async def run_codegen_tool(
         workdir: Optional[pathlib.Path] = None,
         exec_id: Optional[str] = None,
         invocation_idx: Optional[int] = None,
+        attachments: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Supervisor-side meta-tool wrapper.
@@ -179,6 +184,7 @@ async def run_codegen_tool(
         solution_gen_stream=solution_gen_stream,
         exec_id=exec_id,
         invocation_idx=invocation_idx,
+        attachments=attachments,
     )
     outdir = pathlib.Path(run_rec.get("outdir") or "")
     workdir = pathlib.Path(run_rec.get("workdir") or "")

@@ -33,6 +33,7 @@ Goals
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os, copy, uuid
 from abc import ABC, abstractmethod
@@ -43,14 +44,17 @@ from typing import Any, Dict, List, Optional, Sequence, Annotated, Iterable
 import aiohttp
 
 from kdcube_ai_app.apps.chat.sdk.tools.backends.web.inventory import compose_search_results_html, SearchRequest, \
-    make_hit, clamp_max_results, SearchBackendError, _claim_sid_block, _normalize_url, dedup_round_robin_ranked
+    make_hit, clamp_max_results, SearchBackendError, _claim_sid_block, _normalize_url, dedup_round_robin_ranked, \
+    PROVIDERS_AUTHORITY_RANK
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import sources_reconciler, \
     filter_search_results_by_content
+from kdcube_ai_app.apps.chat.sdk.tools.citations import enrich_sources_pool_with_favicons
 from kdcube_ai_app.infra.accounting import track_web_search, with_accounting
 from kdcube_ai_app.infra.accounting.usage import ws_provider_extractor, ws_model_extractor, ws_usage_extractor, \
     ws_meta_extractor
 from kdcube_ai_app.apps.chat.sdk.tools.backends.web.fetch_backends import fetch_search_results_content
-from kdcube_ai_app.apps.chat.sdk.tools.backends.web.ranking import apply_weighted_rank
+from kdcube_ai_app.apps.chat.sdk.tools.backends.web.ranking import apply_weighted_rank, \
+    max_relevance_score, provider_rank
 
 logger = logging.getLogger(__name__)
 
@@ -551,6 +555,7 @@ async def web_search(
         artifact_id: str = None,
         enable_hybrid: bool = True,
         hybrid_mode: str = "sequential",
+        namespaced_kv_cache: Any | None = None,
 ) -> Annotated[List[dict]|None, (
         "JSON array: [{sid, title, url, text, objective_relevance?, query_relevance?, content?}, ...]. "
         "Relevance fields present only when reconciliation runs. Content present if fetched."
@@ -623,12 +628,17 @@ async def web_search(
     agent_suffix = uuid.uuid4().hex[:8]
     max_label_len = max(1, 120 - (len(agent_suffix) + 3))
     agent_id = f"{agent_label[:max_label_len]} [{agent_suffix}]"
+    search_id = f"Web Search Results [{agent_suffix}]-{uuid.uuid4().hex[:6]}"
 
     marker = "timeline_text" # "thinking"
+    disable_display_progress = True
     async def emit_progress(text: str, completed: bool = False, **kwargs):
         """Wrapper to emit thinking/timeline_text deltas."""
         nonlocal think_idx
         nonlocal finish_thinking_is_sent
+        if disable_display_progress:
+            return
+
         if not (emit_delta_fn and comm):
             return
         if not text and not completed:
@@ -641,7 +651,6 @@ async def web_search(
             agent=agent_id,
             title=agent_label,
             format="markdown",
-            # artifact_name=artifact_thinking,
             artifact_name=agent_id,
             completed=completed,
             **kwargs
@@ -654,6 +663,8 @@ async def web_search(
     async def finish_thinking():
         """Signal thinking completion."""
         nonlocal finish_thinking_is_sent
+        if disable_display_progress:
+            return
         if think_idx:
             await emit_progress("", completed=True)
         finish_thinking_is_sent = True
@@ -785,6 +796,66 @@ async def web_search(
         )
         reconciled_rows = reconciled_rows[:n]
 
+    favicon_by_url: Dict[str, Dict[str, Any]] = {}
+    if emit_delta_fn and comm:
+        await enrich_sources_pool_with_favicons(
+            reconciled_rows,
+            log=logger,
+            cache=namespaced_kv_cache,
+        )
+        for row in reconciled_rows:
+            if not isinstance(row, dict):
+                continue
+            url = row.get("url") or ""
+            if not url:
+                continue
+            key = _normalize_url(url)
+            if not key:
+                continue
+            if "favicon" in row or "favicon_status" in row:
+                favicon_by_url[key] = {
+                    "favicon": row.get("favicon"),
+                    "favicon_status": row.get("favicon_status"),
+                    "title": row.get("title"),
+                }
+
+    if emit_delta_fn and comm:
+        rel_weight = 0.60
+        prov_weight = 0.25
+        denom = rel_weight + prov_weight
+        max_rank = max(PROVIDERS_AUTHORITY_RANK.values() or [0])
+        filtered_payload = []
+        for row in reconciled_rows:
+            rel_score = max_relevance_score(row)
+            rank = provider_rank(row.get("provider"))
+            prov_score = (rank / max_rank) if max_rank > 0 else 0.0
+            weighted_score = (
+                (rel_weight * rel_score + prov_weight * prov_score) / denom
+                if denom > 0
+                else 0.0
+            )
+            if weighted_score < 0.0:
+                weighted_score = 0.0
+            elif weighted_score > 1.0:
+                weighted_score = 1.0
+            payload_row = dict(row)
+            payload_row["weighted_score"] = weighted_score
+            filtered_payload.append(payload_row)
+
+        artifact_filtered = f"Web Search Filtered Results [{agent_suffix}]"
+        filtered_idx = 0
+        await emit_delta_fn(
+            json.dumps(filtered_payload, ensure_ascii=True),
+            index=filtered_idx,
+            marker="subsystem",
+            agent=agent_id,
+            title=agent_label,
+            format="json",
+            artifact_name=artifact_filtered,
+            sub_type="web_search.filtered_results",
+            search_id=search_id,
+        )
+
     # --- Fetch content ---
     filtered_rows = reconciled_rows
     new_rows = filtered_rows
@@ -810,6 +881,30 @@ async def web_search(
 
     # --- Finalize SIDs ---
     final_rows = new_rows or []
+    if final_rows:
+        fetched_time_iso = datetime.now(timezone.utc).isoformat()
+        for row in final_rows:
+            if isinstance(row, dict) and "fetched_time_iso" not in row:
+                row["fetched_time_iso"] = fetched_time_iso
+    if favicon_by_url:
+        for row in final_rows:
+            if not isinstance(row, dict):
+                continue
+            if row.get("favicon") is not None or "favicon_status" in row:
+                continue
+            url = row.get("url") or ""
+            if not url:
+                continue
+            key = _normalize_url(url)
+            if not key:
+                continue
+            cached = favicon_by_url.get(key)
+            if not cached:
+                continue
+            row["favicon"] = cached.get("favicon")
+            row["favicon_status"] = cached.get("favicon_status")
+            if not row.get("title") and cached.get("title"):
+                row["title"] = cached.get("title")
     apply_weighted_rank(final_rows, force=True)
     base = _claim_sid_block(len(final_rows))
 
@@ -839,23 +934,27 @@ async def web_search(
         await emit_delta_fn(
             html_view,
             index=html_idx,
-            marker="tool",
+            marker="subsystem",
             agent=agent_id,
             title=agent_label,
             format="html",
             artifact_name=artifact_html,
+            sub_type="web_search.html_view",
+            search_id=search_id,
         )
-        html_idx += 1
-        await emit_delta_fn(
-            "",
-            completed=True,
-            index=html_idx,
-            marker="tool",
-            agent=agent_id,
-            title=agent_label,
-            format="html",
-            artifact_name=artifact_html,
-        )
+        # html_idx += 1
+        # await emit_delta_fn(
+        #     "",
+        #     completed=True,
+        #     index=html_idx,
+        #     marker="subsystem",
+        #     agent=agent_id,
+        #     title=agent_label,
+        #     format="html",
+        #     artifact_name=artifact_html,
+        #     sub_type="web_search",
+        #     search_id=search_id,
+        # )
 
     # --- CLEAN OUTPUT: remove accounting metadata ---
     # Provider are for accounting only, not for LLM

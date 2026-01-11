@@ -1201,7 +1201,9 @@ class WebContentFetcher:
                 return result
 
             # Fetch HTML with smart header selection
-            html, status, last_modified = await self._fetch_html(url)
+            html, status, last_modified, content_type = await self._fetch_html(url)
+            if content_type:
+                result["mime"] = content_type
 
             if not html:
                 result["status"] = status
@@ -1212,13 +1214,18 @@ class WebContentFetcher:
                     "paywall", "error", "blocked_403", "session_expired", "insufficient_content"
                 ]:
                     logger.info(f"Trying archive fallback for: {url}")
-                    html, status, last_modified = await self._fetch_archive(url)
+                    html, status, last_modified, content_type = await self._fetch_archive(url)
+                    if content_type:
+                        result["mime"] = content_type
 
                     if html:
                         result["status"] = "archive"
                     else:
                         logger.warning(f"Archive fetch also failed for {url}")
                         return result
+
+                if not html:
+                    return result
 
             # Check for paywall
             if self._is_paywalled(html, url):
@@ -1273,14 +1280,14 @@ class WebContentFetcher:
             result["error"] = str(e)
             return result
 
-    async def _fetch_html(self, url: str) -> tuple[str, str, Optional[str]]:
+    async def _fetch_html(self, url: str) -> tuple[str, str, Optional[str], Optional[str]]:
         """
         Fetch HTML from URL with smart header selection.
 
         Uses bot headers for Discourse forums, browser headers for other sites.
 
         Returns:
-            (html, status, last_modified_header)
+            (html, status, last_modified_header, content_type)
             status: "success", "timeout", "blocked_403", "session_expired", "http_XXX", etc.
         """
         try:
@@ -1299,36 +1306,37 @@ class WebContentFetcher:
             ) as response:
                 # Check for authentication issues
                 if response.status == 401:
-                    return "", "session_expired" if cookies else "paywall", None
+                    return "", "session_expired" if cookies else "paywall", None, None
 
                 final_url = str(response.url)
                 if cookies and any(ind in final_url.lower() for ind in ['/signin', '/login', '/auth']):
                     logger.warning(f"Redirected to login page for {url}")
-                    return "", "session_expired", None
+                    return "", "session_expired", None, None
 
                 if response.status == 403:
                     logger.warning(f"Got 403 for {url}")
-                    return "", "blocked_403", None
+                    return "", "blocked_403", None, None
 
                 if response.status != 200:
-                    return "", f"http_{response.status}", None
+                    return "", f"http_{response.status}", None, None
 
                 content_type = (response.headers.get('Content-Type') or '').lower()
+                mime = content_type.split(";")[0].strip() if content_type else None
                 if 'text/html' not in content_type and 'text/plain' not in content_type:
-                    return "", "non_html", None
+                    return "", "non_html", None, mime
 
                 html = await response.text()
                 last_modified = response.headers.get("Last-Modified")
 
-                return html, "success", last_modified
+                return html, "success", last_modified, mime
 
         except asyncio.TimeoutError:
-            return "", "timeout", None
+            return "", "timeout", None, None
         except Exception as e:
             logger.warning(f"Fetch failed for {url}: {e}")
-            return "", "error", None
+            return "", "error", None, None
 
-    async def _fetch_archive(self, url: str) -> tuple[str, str, Optional[str]]:
+    async def _fetch_archive(self, url: str) -> tuple[str, str, Optional[str], Optional[str]]:
         """Try to fetch content via the Wayback Machine."""
         archive_url = f"https://web.archive.org/web/{url}"
         return await self._fetch_html(archive_url)

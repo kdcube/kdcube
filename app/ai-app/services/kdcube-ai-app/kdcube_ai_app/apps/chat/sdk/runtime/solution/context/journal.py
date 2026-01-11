@@ -15,7 +15,90 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.strategy_and_budget impo
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 
 import kdcube_ai_app.apps.chat.sdk.runtime.solution.context.retrieval as ctx_retrieval_module
-from kdcube_ai_app.apps.chat.sdk.util import _truncate, _turn_id_from_tags_safe, _to_jsonable, ts_key
+from kdcube_ai_app.apps.chat.sdk.util import _truncate, _turn_id_from_tags_safe, _to_jsonable, ts_key, _shorten
+
+
+def _format_full_value_for_journal(val: Any) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val
+    try:
+        return json.dumps(val, ensure_ascii=False, indent=2)
+    except Exception:
+        return str(val)
+
+
+def _render_full_artifact_for_journal(item: Dict[str, Any]) -> List[str]:
+    lines_local: list[str] = []
+    ctx_path = (item.get("context_path") or "").strip()
+    art_type = (item.get("artifact_type") or "").strip()
+    ts = (item.get("timestamp") or item.get("ts_human") or item.get("time") or "").strip()
+    modal_attachments = item.get("modal_attachments") or []
+    art = item.get("artifact") or {}
+    if not isinstance(art, dict):
+        art = {"value": art}
+
+    kind = (art.get("kind") or art.get("type") or "").strip()
+    fmt = (art.get("format") or "").strip()
+    mime = (art.get("mime") or "").strip()
+    filename = (art.get("filename") or art.get("path") or "").strip()
+    header = f"### {ctx_path} [artifact]" if ctx_path else "### [artifact]"
+    lines_local.append(header)
+
+    meta_bits = []
+    if ts:
+        meta_bits.append(f"time={ts}")
+    if kind:
+        meta_bits.append(f"kind={kind}")
+    if fmt:
+        meta_bits.append(f"format={fmt}")
+    if mime:
+        meta_bits.append(f"mime={mime}")
+    if filename:
+        meta_bits.append(f"filename={filename}")
+    if art_type:
+        meta_bits.append(f"type={art_type}")
+    if meta_bits:
+        lines_local.append("meta: " + "; ".join(meta_bits))
+
+    if modal_attachments:
+        lines_local.append(
+            "note: multimodal content attached in modal blocks; content not shown here"
+        )
+
+    value = art.get("value")
+    if isinstance(value, dict):
+        # Avoid leaking base64 into the journal
+        value = dict(value)
+        if "base64" in value:
+            value["base64"] = ""
+    if value not in (None, ""):
+        lines_local.append("content:")
+        lines_local.append("```text")
+        lines_local.append(_format_full_value_for_journal(value))
+        lines_local.append("```")
+    lines_local.append("")
+    return lines_local
+
+
+def render_full_context_artifacts_for_journal(show_artifacts: Optional[List[Dict[str, Any]]]) -> str:
+    if not show_artifacts:
+        return ""
+    lines: list[str] = []
+    lines.append("[FULL CONTEXT ARTIFACTS (show_artifacts)]")
+    lines.append("")
+    for item in show_artifacts:
+        if not isinstance(item, dict):
+            lines.append("### (invalid show_artifacts entry)")
+            lines.append("content:")
+            lines.append("```text")
+            lines.append(_format_full_value_for_journal(item))
+            lines.append("```")
+            lines.append("")
+            continue
+        lines.extend(_render_full_artifact_for_journal(item))
+    return "\n".join(lines)
 
 
 def build_turn_session_journal(*,
@@ -54,67 +137,28 @@ def build_turn_session_journal(*,
         remaining = len(text) - limit
         return f"{text[:limit]}... (...{remaining} more chars)"
 
-    def _format_full_value(val: Any) -> str:
-        if val is None:
-            return ""
-        if isinstance(val, str):
-            return val
-        try:
-            return json.dumps(val, ensure_ascii=False, indent=2)
-        except Exception:
-            return str(val)
-
-    def _render_full_artifact(item: Dict[str, Any]) -> List[str]:
+    def _format_assistant_files_lines(files: List[Dict[str, Any]], *, turn_id: str, is_current: bool) -> List[str]:
         lines_local: list[str] = []
-        ctx_path = (item.get("context_path") or "").strip()
-        art_type = (item.get("artifact_type") or "").strip()
-        ts = (item.get("timestamp") or item.get("ts_human") or item.get("time") or "").strip()
-        art = item.get("artifact") or {}
-        if not isinstance(art, dict):
-            art = {"value": art}
-
-        kind = (art.get("kind") or art.get("type") or "").strip()
-        fmt = (art.get("format") or "").strip()
-        mime = (art.get("mime") or "").strip()
-        filename = (art.get("filename") or art.get("path") or "").strip()
-
-        header = f"### {ctx_path}" if ctx_path else "### (unknown context path)"
-        if art_type:
-            header += f" [{art_type}]"
-        lines_local.append(header)
-
-        meta_parts = []
-        if ts:
-            meta_parts.append(f"time={ts}")
-        if kind:
-            meta_parts.append(f"kind={kind}")
-        if fmt:
-            meta_parts.append(f"format={fmt}")
-        if mime:
-            meta_parts.append(f"mime={mime}")
-        if filename:
-            meta_parts.append(f"filename={filename}")
-        if meta_parts:
-            lines_local.append("meta: " + "; ".join(meta_parts))
-
-        text_val = (
-            art.get("text")
-            if art.get("text") is not None
-            else art.get("value")
-        )
-        if text_val is None and art.get("content") is not None:
-            text_val = art.get("content")
-
-        full_text = _format_full_value(text_val if text_val is not None else art)
-        if full_text:
-            lines_local.append("content:")
-            lines_local.append("```text")
-            lines_local.append(full_text)
-            lines_local.append("```")
-        else:
-            lines_local.append("content: (empty)")
-
-        lines_local.append("")
+        for f in files or []:
+            if not isinstance(f, dict):
+                continue
+            filename = (f.get("filename") or "").strip()
+            if not filename:
+                continue
+            art_name = (f.get("artifact_name") or "").strip()
+            mime = (f.get("mime") or "").strip()
+            size = f.get("size") or f.get("size_bytes")
+            path = filename if is_current else f"{turn_id}/files/{filename}"
+            parts = [f"filename={filename}", f"path={path}"]
+            if art_name:
+                parts.append(
+                    f"artifact_path={'current_turn' if is_current else turn_id}.files.{art_name}"
+                )
+            if mime:
+                parts.append(f"mime={mime}")
+            if size is not None:
+                parts.append(f"size={size}")
+            lines_local.append("- " + " | ".join(parts))
         return lines_local
 
     def _format_sources_lines(sources: List[Dict[str, Any]], *, used_sids: Optional[set[int]] = None) -> List[str]:
@@ -125,13 +169,30 @@ def build_turn_session_journal(*,
             sid = src.get("sid")
             url = (src.get("url") or "").strip()
             title = (src.get("title") or "").strip()
+            mime = (src.get("mime") or "").strip()
+            has_b64 = bool(src.get("base64"))
             if not url:
                 continue
             used_mark = "used" if used_sids is None or sid in used_sids else "unused"
+            extra = []
+            if mime:
+                extra.append(f"mime={mime}")
+            fetched_time_iso = (src.get("fetched_time_iso") or "").strip()
+            if fetched_time_iso:
+                extra.append(f"fetched={fetched_time_iso}")
+            modified_time_iso = (src.get("modified_time_iso") or "").strip()
+            published_time_iso = (src.get("published_time_iso") or "").strip()
+            if modified_time_iso:
+                extra.append(f"modified={modified_time_iso}")
+            elif published_time_iso:
+                extra.append(f"published={published_time_iso}")
+            if has_b64 and mime:
+                extra.append("multimodal")
+            extra_txt = (" | " + " ".join(extra)) if extra else ""
             if title:
-                lines_local.append(f"  {i}. {used_mark} S{sid} {url} | {title}")
+                lines_local.append(f"  {i}. {used_mark} S{sid} {url} | {title}{extra_txt}")
             else:
-                lines_local.append(f"  {i}. {used_mark} S{sid} {url}")
+                lines_local.append(f"  {i}. {used_mark} S{sid} {url}{extra_txt}")
         return lines_local
 
     def _format_attachment_paths(attachments: List[Dict[str, Any]], *, turn_id: str) -> List[str]:
@@ -211,7 +272,13 @@ def build_turn_session_journal(*,
         fetch_context_tool_retrieval_example = f"Use 'show_artifacts' to see any artifact in full on next round"
     # lines.append("Previews are truncated. Use ctx_tools.fetch_turn_artifacts([turn_ids]) for full content.")
     lines.append(f"Within turn, User message, assistant final answer can be truncated. Solver artifacts (slots) content is not shown. If available, only their content summary is shown. {fetch_context_tool_retrieval_example}")
+    lines.append("For show_artifacts: text artifacts show full content; unsupported binaries show best-effort surrogate; multimodal-supported artifacts show definition only and are attached as multimodal blocks.")
+    lines.append("Slots define the turn contract (what must be delivered). Some slots are file slots, but the turn may produce additional files on the way.")
+    lines.append("All produced files are tracked and can be reused later (e.g., images, spreadsheets). These files also have surrogates and summaries.")
     lines.append("Use OUT_DIR-relative file/attachment paths exactly as shown in this journal; do NOT fetch slots to discover paths.")
+    lines.append("Files from prior turns live under: <turn_id>/files/<filename>; current turn files are just <filename>.")
+    lines.append("Continuation rule: if a slot lists Sources used (SIDs) and you need more detail than the slot content provides, use sources_pool; re-fetch only if volatile or freshness is required.")
+    lines.append("All SIDs across turns refer to the global sources_pool below.")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -249,7 +316,9 @@ def build_turn_session_journal(*,
                 continue
 
             # Header
+            lines.append("****")
             lines.append(f"### Turn {turn_id} — {ts_disp} [HISTORICAL]")
+            lines.append("****")
             if is_codegen_agent:
                 lines.append(f"Fetch from this turn with: ctx_tools.fetch_ctx(\"{turn_id}\")")
             else:
@@ -265,7 +334,7 @@ def build_turn_session_journal(*,
             turn_presentation = tv.to_solver_presentation(
                 user_prompt_limit=600,
                 user_prompt_or_inventorization_summary="inv",
-                program_log_limit=5000,
+                program_log_limit=None,
                 include_base_summary=True,  # ← Includes user prompt!
                 include_program_log=True,
                 include_deliverable_meta=True,
@@ -276,49 +345,26 @@ def build_turn_session_journal(*,
                 lines.append(turn_presentation.strip())
                 lines.append("")
 
-            # Sources (NOT part of solver, formatted separately)
-            from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any, sids_in_text
-            sources_pool = normalize_sources_any(
-                meta.get("sources_pool")
-                or (meta.get("payload") or {}).get("sources_pool")
-                or []
-            )
-            used_sids: set[int] = set()
-            for d in (meta.get("deliverables") or []):
-                if not isinstance(d, dict):
-                    continue
-                art = d.get("value")
-                if not isinstance(art, dict):
-                    continue
-                for rec in (art.get("sources_used") or []):
-                    if isinstance(rec, (int, float)):
-                        used_sids.add(int(rec))
-                    elif isinstance(rec, dict):
-                        sid = rec.get("sid")
-                        if isinstance(sid, (int, float)):
-                            used_sids.add(int(sid))
-                text = art.get("text") or ""
-                if isinstance(text, str) and text.strip():
-                    used_sids.update(sids_in_text(text))
-
-            if used_sids:
-                sources = [s for s in sources_pool if isinstance(s.get("sid"), int) and s.get("sid") in used_sids]
-            else:
-                sources = []
-
-            if sources:
-                src_lines = _format_sources_lines(sources, used_sids=used_sids)
-                if src_lines:
+            try:
+                turn_log = meta.get("turn_log") or {}
+                assistant_files = ((turn_log.get("assistant") or {}).get("files") or [])
+                file_lines = _format_assistant_files_lines(assistant_files, turn_id=str(turn_id), is_current=False)
+                if file_lines:
+                    lines.append("[FILES — OUT_DIR-relative paths]")
+                    lines.extend(file_lines)
                     lines.append("")
-                    lines.append(f"[**Turn Sources:** ({len(sources)} total)]")
-                    lines.extend(src_lines)
-                    lines.append("")
+            except Exception:
+                pass
+
+            # Per-turn sources are not printed; SIDs always refer to current turn's global sources_pool.
 
     lines.append("")
     lines.append("---")
     lines.append("")
     # ---------- Current Turn (live) ----------
+    lines.append("****")
     lines.append("## Current Turn (live — oldest → newest events) [CURRENT TURN]")
+    lines.append("****")
     try:
         tlog = getattr(context.scratchpad, "turn_log", None)
         ts_raw = None
@@ -348,69 +394,16 @@ def build_turn_session_journal(*,
         print(traceback.format_exc())
         lines.append("(failed to render current turn view)")
 
-    try:
-        file_lines = _format_file_paths(context.current_slots or {}, turn_id="current_turn")
-        if file_lines:
-            lines.append("[FILES — OUT_DIR-relative paths]")
-            lines.extend(file_lines)
-            lines.append("")
-    except Exception:
-        pass
-
-    # Current turn sources (full pool with used/unused marks)
-    try:
-        from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any, sids_in_text
-
-        current_used_sids: set[int] = set()
-        for d in (context.current_slots or {}).values():
-            if not isinstance(d, dict):
-                continue
-            art = d.get("value") if isinstance(d.get("value"), dict) else d
-            for rec in (art.get("sources_used") or []):
-                if isinstance(rec, (int, float)):
-                    current_used_sids.add(int(rec))
-                elif isinstance(rec, dict):
-                    sid = rec.get("sid")
-                    if isinstance(sid, (int, float)):
-                        current_used_sids.add(int(sid))
-            text = art.get("text") or art.get("content") or ""
-            if isinstance(text, str) and text.strip():
-                current_used_sids.update(sids_in_text(text))
-
-        for art in (context.artifacts or {}).values():
-            if not isinstance(art, dict):
-                continue
-            for rec in (art.get("sources_used") or []):
-                if isinstance(rec, (int, float)):
-                    current_used_sids.add(int(rec))
-                elif isinstance(rec, dict):
-                    sid = rec.get("sid")
-                    if isinstance(sid, (int, float)):
-                        current_used_sids.add(int(sid))
-            text = art.get("text") or art.get("content") or ""
-            if isinstance(text, str) and text.strip():
-                current_used_sids.update(sids_in_text(text))
-
-        sources_pool = normalize_sources_any(context.sources_pool or [])
-        if sources_pool:
-            src_lines = _format_sources_lines(sources_pool, used_sids=current_used_sids)
-            if src_lines:
-                lines.append(f"[**Turn Sources:** ({len(sources_pool)} total)]")
-                lines.extend(src_lines)
-                lines.append("")
-    except Exception:
-        pass
-
+    lines.append("")
     if coordinator_turn_line:
         lines.append("[SOLVER.COORDINATOR DECISION]")
         lines.append(coordinator_turn_line)
         lines.append("")
     lines.append("[SOLVER.TURN CONTRACT SLOTS (to fill)]")
     lines.append(json.dumps(_to_jsonable(output_contract or {}), ensure_ascii=False, indent=2),)
-    lines.append("")
     lines.append("---")
 
-    # 3) Events timeline (short timestamps)
+
     lines.append("[SOLVER.REACT.EVENTS (oldest → newest)]")
     if not context.events:
         lines.append("(no events yet)")
@@ -524,6 +517,7 @@ def build_turn_session_journal(*,
                     fetch_n = len(fetch_ctx) if isinstance(fetch_ctx, list) else 0
 
                 map_slots = e.get("map_slots") or []
+                show_list = e.get("show_artifacts") or []
                 mapped_pairs: list[str] = []
                 def _extract_aid(sp: str) -> str:
                     prefix = "current_turn.artifacts."
@@ -549,8 +543,6 @@ def build_turn_session_journal(*,
                     maps_s = ", ".join(shown) + (f", +{rest} more" if rest > 0 else "")
 
                 reason = (e.get("reasoning") or "").replace("\n", " ").strip()
-                # if len(reason) > 140:
-                #     reason = reason[:137] + "..."
 
                 tool_piece = None
                 if tool_id:
@@ -559,6 +551,12 @@ def build_turn_session_journal(*,
                         arts_s = "MISSING_ARTIFACTS"
                     tool_piece = f"tool={tool_id}->{arts_s}"
 
+                show_piece = None
+                if show_list:
+                    show_paths = [str(p) for p in show_list if isinstance(p, (str, int, float))]
+                    show_preview = ", ".join(show_paths[:2])
+                    show_piece = f"show={len(show_paths)}" + (f"[{_shorten(show_preview, 120)}]" if show_preview else "")
+
                 pieces = [
                     f"action={nxt}",
                     f"strategy={strat}" if strat else None,
@@ -566,6 +564,7 @@ def build_turn_session_journal(*,
                     f"next_plan={next_plan}" if next_plan else None,
                     tool_piece,
                     f"map={maps_s}" if maps_s else None,
+                    show_piece,
                     f"fetch={fetch_n}" if fetch_n else None,
                     f"reason={reason}" if reason else None,
                 ]
@@ -641,11 +640,9 @@ def build_turn_session_journal(*,
                 continue
 
             payload = {k: v for k, v in e.items() if k != "ts"}
-            # lines.append(f"- {ts} — {kind}: {json.dumps(payload, ensure_ascii=False)[:400]}")
             lines.append(f"- {ts} — {kind}: {json.dumps(payload, ensure_ascii=False)[:400]}")
 
     lines.append("")
-
     if context.artifacts:
         items_raw = [(k, v) for k, v in (context.artifacts or {}).items() if isinstance(v, dict)]
 
@@ -762,14 +759,87 @@ def build_turn_session_journal(*,
 
         lines.append("")
 
+    try:
+        current_files: List[Dict[str, Any]] = []
+        try:
+            seen: set[str] = set()
+            for art_id, art in (context.artifacts or {}).items():
+                if not isinstance(art, dict):
+                    continue
+                if (art.get("artifact_kind") or "").strip() != "file":
+                    continue
+                filename = (art.get("filename") or (art.get("value") or {}).get("filename") or art.get("path") or "").strip()
+                if not filename or filename in seen:
+                    continue
+                current_files.append({
+                    "filename": filename,
+                    "artifact_name": str(art_id),
+                    "mime": (art.get("mime") or "").strip(),
+                    "size": art.get("size") or art.get("size_bytes"),
+                })
+                seen.add(filename)
+        except Exception:
+            pass
+
+        file_lines = _format_assistant_files_lines(current_files, turn_id="current_turn", is_current=True)
+        if file_lines:
+            lines.append("[FILES — OUT_DIR-relative paths]")
+            lines.extend(file_lines)
+            lines.append("")
+    except Exception:
+        pass
+
+    # Current turn sources (full pool with used/unused marks)
+    try:
+        from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any, sids_in_text
+
+        current_used_sids: set[int] = set()
+        for d in (context.current_slots or {}).values():
+            if not isinstance(d, dict):
+                continue
+            art = d.get("value") if isinstance(d.get("value"), dict) else d
+            for rec in (art.get("sources_used") or []):
+                if isinstance(rec, (int, float)):
+                    current_used_sids.add(int(rec))
+                elif isinstance(rec, dict):
+                    sid = rec.get("sid")
+                    if isinstance(sid, (int, float)):
+                        current_used_sids.add(int(sid))
+            text = art.get("text") or art.get("content") or ""
+            if isinstance(text, str) and text.strip():
+                current_used_sids.update(sids_in_text(text))
+
+        for art in (context.artifacts or {}).values():
+            if not isinstance(art, dict):
+                continue
+            for rec in (art.get("sources_used") or []):
+                if isinstance(rec, (int, float)):
+                    current_used_sids.add(int(rec))
+                elif isinstance(rec, dict):
+                    sid = rec.get("sid")
+                    if isinstance(sid, (int, float)):
+                        current_used_sids.add(int(sid))
+            text = art.get("text") or art.get("content") or ""
+            if isinstance(text, str) and text.strip():
+                current_used_sids.update(sids_in_text(text))
+
+        sources_pool = normalize_sources_any(context.sources_pool or [])
+        if sources_pool:
+            src_lines = _format_sources_lines(sources_pool, used_sids=current_used_sids)
+            if src_lines:
+                lines.append(f"[TURN SOURCES POOL. ({len(sources_pool)} total)]")
+                lines.extend(src_lines)
+                lines.append("")
+    except Exception:
+        pass
+
     # 2) Live snapshot (current contract/slots/tool results)
+    lines.append("[SOLVER.CURRENT TURN PROGRESS SNAPSHOT]")
     declared = list((output_contract or {}).keys())
     filled = list((context.current_slots or {}).keys())
     filled_set = set(filled)
     pending = [s for s in declared if s not in filled_set]
 
-    lines.append("[SOLVER.CURRENT TURN PROGRESS SNAPSHOT]")
-    lines.append("")
     lines.append("# Contract Status")
     lines.append(f"- Declared slots: {len(declared)}")
     lines.append(f"- Filled slots  : {len(filled)}  ({', '.join(filled) if filled else '-'})")
@@ -783,7 +853,7 @@ def build_turn_session_journal(*,
             slots=context.current_slots,
             contract=output_contract,
             grouping="flat",  # or "status" if you want grouping
-            slot_attrs={"description", "gaps", "artifact_id", "filename"},
+            slot_attrs={"description", "gaps", "artifact_id", "filename", "sources_used"},
             file_path_prefix="",
         )
 
@@ -795,29 +865,13 @@ def build_turn_session_journal(*,
     try:
         if hasattr(context, "budget_state") and context.budget_state is not None:
             lines.append("")
-            lines.append("## Budget Snapshot")
+            lines.append("# Budget Snapshot")
             lines.append("")
             lines.append(format_budget_for_llm(context.budget_state))
     except Exception:
         pass
 
-    if show_artifacts:
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-        lines.append("## Full Context Artifacts (show_artifacts)")
-        lines.append("")
-        for item in show_artifacts:
-            if not isinstance(item, dict):
-                lines.append("### (invalid show_artifacts entry)")
-                lines.append("content:")
-                lines.append("```text")
-                lines.append(_format_full_value(item))
-                lines.append("```")
-                lines.append("")
-                continue
-            lines.extend(_render_full_artifact(item))
-
+    lines.append("")
     return "\n".join(lines)
 
 def build_session_log_summary(session_log: List[Dict[str, Any]],
@@ -961,6 +1015,7 @@ def build_session_log_summary(session_log: List[Dict[str, Any]],
 
                 call_reason = tc.get("reasoning") or dec.get("reasoning") or ""
                 fetch_n = len(dec.get("fetch_context") or [])
+                show_list = dec.get("show_artifacts") or []
                 map_slots_list = dec.get("map_slots") or []
                 strategy = dec.get("strategy")
                 focus_slot = dec.get("focus_slot")
@@ -982,6 +1037,13 @@ def build_session_log_summary(session_log: List[Dict[str, Any]],
                         sk = _slot_kind(name)
                         segs.append(f"map:{name}{(' (' + sk + ')') if sk else ''}")
 
+                if show_list:
+                    show_paths = [str(p) for p in show_list if isinstance(p, (str, int, float))]
+                    show_preview = ", ".join(show_paths[:2])
+                    segs.append(f"show:{len(show_paths)}" + (f" [{_short(show_preview, 120)}]" if show_preview else ""))
+
+                if show_list:
+                    segs.append("stage=show_artifacts")
                 if fetch_n:
                     segs.append(f"fetch:{fetch_n}")
                 if call_reason:
@@ -1132,7 +1194,8 @@ def build_operational_digest(*,
                              session_log: List[Dict[str, Any]],
                              slot_specs: Optional[Dict[str, Any]] = None,
                              adapters: Optional[List[Dict[str, Any]]] = None,
-                             exclude_tool_ids: Optional[List[str]] = None) -> str:
+                             exclude_tool_ids: Optional[List[str]] = None,
+                             show_artifacts: Optional[List[Dict[str, Any]]] = None) -> str:
     """
     Combine the turn session journal with a session log summary.
     The journal must remain the prefix to preserve cache behavior across agents.
@@ -1142,7 +1205,7 @@ def build_operational_digest(*,
     tool_block = ""
     if tool_catalog:
         tool_block = "\n".join([
-            "## Available Common Tools",
+            "[AVAILABLE COMMON TOOLS]",
             json.dumps(tool_catalog or [], ensure_ascii=False, indent=2),
         ])
     log_summary = build_session_log_summary(session_log=session_log, slot_specs=slot_specs)
@@ -1150,12 +1213,15 @@ def build_operational_digest(*,
         "## Session Log (recent events, summary)",
         "\n".join(log_summary) if log_summary else "(empty)",
     ])
+    full_context_block = render_full_context_artifacts_for_journal(show_artifacts)
     parts = []
     if tool_block:
         parts.append(tool_block)
     if playbook_text:
         parts.append(playbook_text)
     parts.append(log_block)
+    if full_context_block:
+        parts.append(full_context_block)
     return "\n\n".join(parts)
 
 
@@ -1168,43 +1234,6 @@ def _short_with_count(text: str, limit: int) -> str:
         return text
     remaining = len(text) - limit
     return f"{text[:limit]}... (...{remaining} more chars)"
-
-def _materialize_glue_canvas(glue_md: str, d_items: list[dict]) -> str:
-    """
-    Materialize canvas with deliverables from solver.
-
-    Uses SolverPresenter for consistent deliverable formatting.
-    """
-    if not (glue_md or "").strip():
-        return glue_md or ""
-
-    lines = [glue_md.strip(), "", "## Materials (this turn)", ""]
-
-    # Convert d_items to deliverables_map shape for presenter
-    dmap = {}
-    for item in d_items:
-        slot_name = item.get("slot") or ""
-        if slot_name == "project_log":
-            continue
-        dmap[slot_name] = item
-
-    if dmap:
-        # Use SolverPresenter for consistent formatting
-        from kdcube_ai_app.apps.chat.sdk.runtime.solution.presentation import (
-            _format_deliverables_flat_with_icons
-        )
-
-        deliverables_md, _ = _format_deliverables_flat_with_icons(
-            dmap=dmap,
-            contract=None,
-            content_len=-1,  # Full content
-            slot_attr_keys={"description"},
-            exclude_slots=["project_log", "project_canvas"],
-        )
-
-        lines.append(deliverables_md)
-
-    return "\n".join(lines).strip()
 
 # ----------------- moved from copilot/context/context_reconstruction.py
 ViewName = Literal["compact", "materialize"]
@@ -1876,7 +1905,7 @@ async def retrospective_context_view(
                 user_prompt_limit=600,
                 include_turn_summary=True,
                 include_context_used=True,
-                deliverables_detalization="summary"
+                deliverables_detalization="summary",
             )
 
             # Add timestamp header

@@ -46,6 +46,11 @@ from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad, BaseT
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger, _mid
 import kdcube_ai_app.apps.chat.sdk.tools.backends.summary_backends as summary
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.execution import execute_tool
+from kdcube_ai_app.apps.chat.sdk.runtime.files_and_attachments import (
+    collect_local_file_sources_from_content,
+    unwrap_llm_content_payload,
+)
+from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any
 
 @dataclass
 class ReactState:
@@ -390,11 +395,11 @@ class ReactSolver:
         # Centralized wrap-up gate: only when exiting with pending slots and unused artifacts.
         if state.get("exit_reason") and not state.get("wrapup_round_used", False):
             context: ReactContext = state.get("context")
+            bs = getattr(context, "budget_state", None) if context else None
             declared = list((state.get("output_contract") or {}).keys())
             filled = list((getattr(context, "current_slots", {}) or {}).keys()) if context else []
             pending = [s for s in declared if s not in set(filled)]
             artifacts_map = (getattr(context, "artifacts", {}) or {}) if context else {}
-            artifacts = list(artifacts_map.keys())
             mapped_artifacts = set()
             if context and getattr(context, "current_slots", None):
                 for slot in (context.current_slots or {}).values():
@@ -412,12 +417,22 @@ class ReactSolver:
                 )
             ]
             has_unmapped = any(aid not in mapped_artifacts for aid in mappable_artifacts)
-            if pending and has_unmapped:
+            wrapup_possible = bool(pending and has_unmapped)
+            if wrapup_possible:
                 state["wrapup_round_used"] = True
                 state["is_wrapup_round"] = True
                 state["exit_reason"] = None
                 state["pending_exit_reason"] = None
                 return "decision"
+            if bs is not None and bs.must_finish():
+                try:
+                    self.log.log(
+                        "[react.route] Budget exhausted and no wrap-up available; exiting",
+                        level="WARNING",
+                    )
+                except Exception:
+                    pass
+                return "max_iterations" if state["exit_reason"] == "max_iterations" else "exit"
 
         if state.get("exit_reason"):
             return "max_iterations" if state["exit_reason"] == "max_iterations" else "exit"
@@ -544,6 +559,47 @@ class ReactSolver:
         aid = (parts[0] or "").strip()
         return aid or None
 
+    def _normalize_map_source_path(self, *, context: ReactContext, source_path: str) -> str:
+        """
+        Normalize mapping paths to artifact objects.
+        - Strip leaf selectors like .value.*, .text, .content, .summary.
+        - If mapping points to files namespace, try to resolve to an artifact id by filename.
+        """
+        if not isinstance(source_path, str) or not source_path:
+            return source_path
+
+        sp = source_path.strip()
+        # Normalize current_turn.artifacts.<id>.<leaf> → current_turn.artifacts.<id>
+        if sp.startswith("current_turn.artifacts."):
+            rel = sp[len("current_turn.artifacts."):]
+            art_id = rel.split(".", 1)[0].strip()
+            if art_id:
+                return f"current_turn.artifacts.{art_id}"
+
+        # Normalize <turn_id>.slots.<name>.<leaf> → <turn_id>.slots.<name>
+        if ".slots." in sp:
+            turn_id, _, rest = sp.partition(".slots.")
+            slot_name = rest.split(".", 1)[0].strip() if rest else ""
+            if turn_id and slot_name:
+                return f"{turn_id}.slots.{slot_name}"
+
+        # Normalize files namespace to artifacts when possible.
+        if sp.startswith("current_turn.files."):
+            obj = context.resolve_object(sp)
+            if isinstance(obj, dict):
+                fname = (obj.get("filename") or obj.get("path") or "").strip()
+                if fname:
+                    for art_id, art in (context.artifacts or {}).items():
+                        if not isinstance(art, dict):
+                            continue
+                        if (art.get("artifact_kind") or "").strip() != "file":
+                            continue
+                        art_fname = (art.get("filename") or (art.get("value") or {}).get("filename") or "").strip()
+                        if art_fname and art_fname == fname:
+                            return f"current_turn.artifacts.{art_id}"
+
+        return sp
+
     def _safe_apply_mappings_best_effort(
         self,
         *,
@@ -575,6 +631,7 @@ class ReactSolver:
                 continue
             slot_name = (ms.get("slot_name") or "").strip()
             sp = (ms.get("source_path") or ms.get("artifact") or "").strip()
+            sp = self._normalize_map_source_path(context=context, source_path=sp)
             if not slot_name or not sp:
                 dropped.append({"slot_name": slot_name, "source_path": sp, "reason": "missing_slot_or_path"})
                 continue
@@ -726,6 +783,12 @@ class ReactSolver:
     async def _decision_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
         it = int(state["iteration"])
         context: ReactContext = state["context"]
+        if state.get("exit_reason"):
+            self.log.log("[react.decision] exit_reason already set; skipping decision", level="WARNING")
+            return state
+        if state.get("pending_exit_reason") and not state.get("is_wrapup_round", False):
+            self.log.log("[react.decision] pending exit set; skipping decision", level="WARNING")
+            return state
         # === DEBUG: Check context state ===
         self.log.log(
             f"[react.decision.{it}] Context check: "
@@ -850,14 +913,17 @@ class ReactSolver:
             else:
                 bs.exploit_overdraft_used = None
                 bs.exploit_overdraft_total = None
+        show_artifacts_for_journal = state.get("show_artifacts")
         turn_session_journal = build_turn_session_journal(
             context=context,
             output_contract=state["output_contract"],
             turn_view_class=self.turn_view_class,
-            show_artifacts=state.get("show_artifacts"),
+            show_artifacts=show_artifacts_for_journal,
             is_codegen_agent=False,
             coordinator_turn_line=state.get("coordinator_turn_line"),
         )
+        if not state.get("show_artifacts"):
+            context.show_artifact_attachments = []
         if state.get("show_artifacts"):
             state["show_artifacts"] = None
         contract_for_agent = {k: v.model_dump() for k, v in (state["output_contract"] or {}).items()}
@@ -871,6 +937,7 @@ class ReactSolver:
             session_log=state["session_log"],
             slot_specs=contract_for_agent,
             adapters=announced_adapters,
+            show_artifacts=show_artifacts_for_journal,
         )
         context.operational_digest = operational_digest
 
@@ -893,7 +960,8 @@ class ReactSolver:
                 agent_name=role,
                 is_wrapup_round=is_wrapup,
                 timezone=self.comm_context.user.timezone,
-                max_tokens=6000
+                max_tokens=6000,
+                attachments=context.show_artifact_attachments,
             )
         logging_helpers.log_agent_packet(role, "react.decision", decision_out)
 
@@ -1003,6 +1071,7 @@ class ReactSolver:
                         session_log=state["session_log"],
                         slot_specs=contract_for_agent,
                         adapters=announced_adapters,
+                        show_artifacts=show_items or None,
                     )
                     context.operational_digest = operational_digest
 
@@ -1576,10 +1645,15 @@ class ReactSolver:
                         for meta_key in (
                             "published_time_iso",
                             "modified_time_iso",
+                            "fetched_time_iso",
                             "date_method",
                             "date_confidence",
                             "status",
                             "content_length",
+                            "mime",
+                            "base64",
+                            "size_bytes",
+                            "fetch_status",
                         ):
                             if meta_key in payload:
                                 row[meta_key] = payload[meta_key]
@@ -1615,6 +1689,55 @@ class ReactSolver:
                 # Optionally reconcile with existing pool SIDs
                 if srcs_for_artifact:
                     srcs_for_artifact = context.ensure_sources_in_pool(srcs_for_artifact)
+
+            if tools_insights.is_write_tool(tool_id):
+                content_raw = final_params.get("content")
+                content_text = unwrap_llm_content_payload(content_raw)
+                if isinstance(content_text, str) and content_text.strip():
+                    cited_sids = extract_citation_sids_any(content_text)
+                    if cited_sids:
+                        srcs_for_artifact.extend(cited_sids)
+
+                    file_sources = collect_local_file_sources_from_content(
+                        content_text,
+                        outdir=outdir,
+                    )
+                    for row in file_sources:
+                        if not isinstance(row, dict):
+                            continue
+                        if row.get("source_type") != "file":
+                            continue
+                        local_path = (row.get("local_path") or "").strip()
+                        if not local_path:
+                            local_path = (row.get("url") or "").strip()
+                        if not local_path:
+                            continue
+                        hosted_uri = ""
+                        found_rn = ""
+                        found_artifact_name = ""
+                        filename = pathlib.Path(local_path).name
+                        for f in (self.scratchpad.produced_files or []):
+                            if not isinstance(f, dict):
+                                continue
+                            f_name = (f.get("filename") or "").strip()
+                            if f_name != filename:
+                                continue
+                            hosted_uri = (f.get("hosted_uri") or "").strip()
+                            found_rn = (f.get("rn") or "").strip()
+                            found_artifact_name = (f.get("artifact_name") or "").strip()
+                            if hosted_uri:
+                                break
+                        if hosted_uri:
+                            row["url"] = hosted_uri
+                            if found_rn:
+                                row["rn"] = found_rn
+                            row["local_path"] = local_path
+                            if found_artifact_name:
+                                row["artifact_path"] = f"current_turn.files.{found_artifact_name}"
+                    if file_sources:
+                        file_sids = context.ensure_sources_in_pool(file_sources)
+                        if file_sids:
+                            srcs_for_artifact.extend(file_sids)
 
             # Register artifact
             tool_call_item_index = tr.get("tool_call_item_index") or None
@@ -1691,6 +1814,72 @@ class ReactSolver:
                     if hosted_uri:
                         artifact["hosted_uri"] = hosted_uri
                         artifact["rn"] = hosted[0].get("rn")
+
+                    try:
+                        for h in hosted:
+                            if not isinstance(h, dict):
+                                continue
+                            h_uri = (h.get("hosted_uri") or "").strip()
+                            if not h_uri:
+                                continue
+                            local_path = (h.get("local_path") or "").strip()
+                            rel_path = ""
+                            if local_path:
+                                try:
+                                    rel_path = str(pathlib.Path(local_path).resolve().relative_to(outdir))
+                                except Exception:
+                                    rel_path = ""
+                            filename = (h.get("filename") or "").strip() or pathlib.Path(local_path).name
+                            updated = False
+                            for src in (context.sources_pool or []):
+                                if not isinstance(src, dict):
+                                    continue
+                                src_type = (src.get("source_type") or "")
+                                if src_type not in ("file", "attachment"):
+                                    continue
+                                if rel_path and (src.get("local_path") == rel_path or src.get("url") == rel_path):
+                                    if h.get("rn"):
+                                        src["url"] = h.get("rn")
+                                        src["rn"] = h.get("rn")
+                                    else:
+                                        src["url"] = h_uri
+                                    if rel_path:
+                                        src["local_path"] = rel_path
+                                    art_name = (h.get("slot") or h.get("artifact_name") or "").strip()
+                                    if art_name:
+                                        src["artifact_path"] = f"{context.turn_id}.files.{art_name}"
+                                    if h.get("mime"):
+                                        src["mime"] = h.get("mime")
+                                    hosted_title = (h.get("description") or "").strip() or (h.get("artifact_name") or "").strip()
+                                    if hosted_title:
+                                        src["title"] = hosted_title
+                                    elif filename and not src.get("title"):
+                                        src["title"] = filename
+                                    if h.get("size") is not None:
+                                        src["size_bytes"] = h.get("size")
+                                    updated = True
+                                    break
+                            if not updated:
+                                hosted_title = (h.get("description") or "").strip() or (h.get("artifact_name") or "").strip()
+                                row = {
+                                    "url": h.get("rn") or h_uri,
+                                    "title": hosted_title or filename or h_uri,
+                                    "source_type": "file",
+                                }
+                                if rel_path:
+                                    row["local_path"] = rel_path
+                                if h.get("rn"):
+                                    row["rn"] = h.get("rn")
+                                art_name = (h.get("slot") or h.get("artifact_name") or "").strip()
+                                if art_name:
+                                    row["artifact_path"] = f"{context.turn_id}.files.{art_name}"
+                                if h.get("mime"):
+                                    row["mime"] = h.get("mime")
+                                if h.get("size") is not None:
+                                    row["size_bytes"] = h.get("size")
+                                context.ensure_sources_in_pool([row])
+                    except Exception:
+                        pass
 
                     hosted_files_to_emit.extend(hosted)
                     try:

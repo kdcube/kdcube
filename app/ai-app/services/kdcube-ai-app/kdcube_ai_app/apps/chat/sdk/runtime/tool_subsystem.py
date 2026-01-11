@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
+from kdcube_ai_app.infra.service_hub.cache import create_namespaced_kv_cache
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 
@@ -58,6 +59,10 @@ class ToolSubsystem:
         self.log = logger or AgentLogger("tool_subsystem")
         self.context_rag_client = context_rag_client
         self.registry = registry or {}
+        try:
+            self.namespaced_kv_cache = create_namespaced_kv_cache()
+        except Exception:
+            self.namespaced_kv_cache = None
         self.raw_tool_specs = raw_tool_specs or []
 
         # --- compute bundle_root once ---
@@ -117,7 +122,10 @@ class ToolSubsystem:
                 pass
             try:
                 if hasattr(mod, "bind_integrations"):
-                    mod.bind_integrations({"ctx_client": self.context_rag_client})
+                    mod.bind_integrations({
+                        "ctx_client": self.context_rag_client,
+                        "namespaced_kv_cache": self.namespaced_kv_cache,
+                    })
             except Exception:
                 pass
 

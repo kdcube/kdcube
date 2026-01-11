@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     normalize_sources_any,
     sids_in_text,
 )
+from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_local_paths_any
 
 log = logging.getLogger(__name__)
 
@@ -327,6 +328,29 @@ class ContextTools:
         if not all_sources:
             return []
 
+        # Add embedded local media references (e.g., <img src="...">) as sources.
+        media_seen: set[str] = set()
+        for src in list(all_sources):
+            if not isinstance(src, dict):
+                continue
+            for field in ("content", "text"):
+                content = src.get(field)
+                if not isinstance(content, str) or not content:
+                    continue
+                for path in extract_local_paths_any(content):
+                    if path in media_seen:
+                        continue
+                    media_seen.add(path)
+                    title = os.path.basename(path) or path
+                    source_type = "attachment" if "/attachments/" in path else "file"
+                    all_sources.append({
+                        "url": path,
+                        "title": title,
+                        "text": "Embedded media",
+                        "source_type": source_type,
+                        "local_path": path,
+                    })
+
         by_url: dict[str, dict] = {}
         used_sids: set[int] = set()
         max_sid: int = 0
@@ -367,13 +391,15 @@ class ContextTools:
                 pass
 
         for src in all_sources:
-            url = normalize_url(src.get("url", ""))
-            if not url:
+            local_path = (src.get("local_path") or "").strip()
+            url = normalize_url(src.get("url", "")) if not local_path else ""
+            key = f"local:{local_path}" if local_path else url
+            if not key:
                 continue
 
             # Already have this URL → merge & keep original SID
-            if url in by_url:
-                _merge_richer(by_url[url], src)
+            if key in by_url:
+                _merge_richer(by_url[key], src)
                 # do NOT touch SID / used_sids / max_sid
                 continue
 
@@ -397,17 +423,19 @@ class ContextTools:
 
             row = {
                 "sid": sid,
-                "url": url,
+                "url": local_path or url,
                 "title": src.get("title", ""),
                 "text": src.get("text") or src.get("body") or src.get("content") or "",
             }
             if src.get("content"):
                 row["content"] = src["content"]
+            if local_path:
+                row["local_path"] = local_path
             for k in CITATION_OPTIONAL_ATTRS:
                 if src.get(k):
                     row[k] = src[k]
 
-            by_url[url] = row
+            by_url[key] = row
 
         # Stable output: sort by SID so left-most items (assigned earlier) appear first
         merged = sorted(by_url.values(), key=lambda x: x["sid"])

@@ -30,6 +30,6 @@ def test_materialize_show_artifacts_handles_list_value():
 
     assert len(items) == 1
     artifact = items[0]["artifact"]
-    assert artifact["kind"] == "inline"
+    assert artifact["kind"] == "search"
     assert artifact["format"] == "json"
     assert "Title 1" in artifact["text"]

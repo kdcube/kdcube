@@ -377,9 +377,25 @@ class AsyncMarkdownPDF:
         footer_html = Template(footer_tpl).render()
 
         # Write HTML to a temp file so relative assets and fonts resolve reliably
-        tmp_dir = Path(tempfile.mkdtemp(prefix="md2pdf_"))
+        tmp_dir = None
+        html_dir = base_dir
+        if html_dir is None:
+            tmp_dir = Path(tempfile.mkdtemp(prefix="md2pdf_"))
+            html_dir = tmp_dir
         try:
-            html_path = tmp_dir / "index.html"
+            if html_dir is None:
+                raise RuntimeError("HTML temp directory could not be resolved")
+            if base_dir is not None:
+                tmp_file = tempfile.NamedTemporaryFile(
+                    prefix="md2pdf_",
+                    suffix=".html",
+                    dir=str(html_dir),
+                    delete=False,
+                )
+                html_path = Path(tmp_file.name)
+                tmp_file.close()
+            else:
+                html_path = html_dir / "index.html"
             html_path.write_text(html_content, encoding="utf-8")
 
             # High-DPI context for crisp canvas/bitmaps
@@ -578,9 +594,13 @@ class AsyncMarkdownPDF:
         finally:
             # Best-effort cleanup
             try:
-                for p in tmp_dir.glob("*"):
-                    p.unlink(missing_ok=True)
-                tmp_dir.rmdir()
+                if base_dir is not None:
+                    if "html_path" in locals():
+                        html_path.unlink(missing_ok=True)
+                elif tmp_dir is not None:
+                    for p in tmp_dir.glob("*"):
+                        p.unlink(missing_ok=True)
+                    tmp_dir.rmdir()
             except Exception:
                 pass
 

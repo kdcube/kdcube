@@ -216,6 +216,20 @@ def _bind_target(target, *, svc, registry=None, integrations=None):
     except Exception:
         pass
 
+
+def _build_integrations_from_spec(spec: PortableSpec) -> Dict[str, Any] | None:
+    if not spec.integrations:
+        return None
+    integrations: Dict[str, Any] = dict(spec.integrations.__dict__ or {})
+    cache_cfg = integrations.get("namespaced_kv_cache")
+    if cache_cfg:
+        try:
+            from kdcube_ai_app.infra.service_hub.cache import create_namespaced_kv_cache_from_config
+            integrations["namespaced_kv_cache"] = create_namespaced_kv_cache_from_config(cache_cfg)
+        except Exception:
+            integrations["namespaced_kv_cache"] = None
+    return integrations
+
 def bootstrap_bind_all(spec_json: str, *,
                        module_names: list[str],
                        bootstrap_env: bool = True) -> dict:
@@ -302,7 +316,7 @@ def bootstrap_bind_all(spec_json: str, *,
                 m,
                 svc=svc,
                 registry=registry,
-                integrations=(spec.integrations.__dict__ if spec.integrations else None),
+                integrations=_build_integrations_from_spec(spec),
             )
         except Exception:
             print(f"bind_into_module failed for {name}", file=sys.stderr)
@@ -399,7 +413,7 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
             tool_module,
             svc=svc,
             registry=registry,
-            integrations=(spec.integrations.__dict__ if spec.integrations else None),
+            integrations=_build_integrations_from_spec(spec),
         )
     except Exception:
         logger.exception(f"bind_into_module failed {traceback.format_exc()}")

@@ -15,13 +15,12 @@ from kdcube_ai_app.apps.chat.sdk.util import _now_str, _today_str
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_system_message, create_cached_human_message
 import kdcube_ai_app.apps.chat.sdk.viz.logging_helpers as logging_helpers
-from kdcube_ai_app.infra.service_hub.multimodality import (
-    MODALITY_IMAGE_MIME,
-    MODALITY_DOC_MIME,
-    MODALITY_MAX_IMAGE_BYTES,
-    MODALITY_MAX_DOC_BYTES,
+from kdcube_ai_app.apps.chat.sdk.runtime.files_and_attachments import (
+    artifact_block_for_summary,
+    artifact_blocks_for_summary,
+    collect_multimodal_artifacts_from_tool_output,
+    strip_base64_from_tool_output,
 )
-from kdcube_ai_app.apps.chat.sdk.util import estimate_b64_size
 
 
 def _attachment_summary_system_prompt() -> str:
@@ -56,123 +55,12 @@ def _attachment_summary_prompt(modality_kind: Optional[str]) -> str:
 log = logging.getLogger(__name__)
 
 def _artifact_block_for_summary(artifact: Optional[Dict[str, Any]]) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
-    if not isinstance(artifact, dict):
-        return None, None, None
-
-    art_type = (artifact.get("type") or "").strip().lower()
-    mime = (artifact.get("mime") or "").strip().lower()
-    text = artifact.get("text") or ""
-    base64_data = artifact.get("base64")
-    size_bytes = artifact.get("size_bytes")
-    filename = artifact.get("filename")
-    read_error = artifact.get("read_error")
-
-    block = None
-    modality_kind = None
-    if base64_data and mime in MODALITY_IMAGE_MIME:
-        modality_kind = "image"
-        block = {"type": "image", "data": base64_data, "media_type": mime}
-    elif base64_data and mime in MODALITY_DOC_MIME:
-        modality_kind = "document"
-        block = {"type": "document", "data": base64_data, "media_type": mime}
-    elif text:
-        modality_kind = "text"
-        block = {"type": "text", "text": text}
-
-    meta_lines = [
-        "### Attached artifact (for validation)",
-        f"- type: {art_type or 'unknown'}",
-        f"- mime: {mime or 'unknown'}",
-        f"- filename: {filename or 'unknown'}",
-        f"- size_bytes: {size_bytes if isinstance(size_bytes, int) else 'unknown'}",
-        f"- base64_attached: {'yes' if block else 'no'}",
-        f"- text_surrogate_len: {len(text)}",
-    ]
-    if read_error:
-        meta_lines.append(f"- read_error: {read_error}")
-    if art_type == "file" and not block and mime and mime not in MODALITY_IMAGE_MIME and mime not in MODALITY_DOC_MIME:
-        meta_lines.append("- note: mime not supported for vision; using text surrogate only")
-
-    return block, "\n".join(meta_lines), modality_kind
+    return artifact_block_for_summary(artifact)
 
 def _artifact_blocks_for_summary(
     artifacts: Optional[Any],
 ) -> Tuple[List[dict], Optional[str], Set[str]]:
-    if isinstance(artifacts, dict):
-        artifacts_list = [artifacts]
-    elif isinstance(artifacts, list):
-        artifacts_list = [a for a in artifacts if isinstance(a, dict)]
-    else:
-        artifacts_list = []
-
-    blocks: List[dict] = []
-    meta_lines: List[str] = []
-    modality_kinds: Set[str] = set()
-    for artifact in artifacts_list:
-        block, meta, modality_kind = _artifact_block_for_summary(artifact)
-        if meta:
-            meta_lines.append(meta)
-        if block:
-            blocks.append(block)
-        if modality_kind:
-            modality_kinds.add(modality_kind)
-
-    meta_text = "\n\n".join(meta_lines) if meta_lines else None
-    return blocks, meta_text, modality_kinds
-
-def _collect_multimodal_artifacts_from_tool_output(
-    tool_id: str,
-    obj: Any,
-) -> List[Dict[str, Any]]:
-    if tool_id not in ("generic_tools.web_search", "generic_tools.fetch_url_contents"):
-        return []
-
-    rows: List[Dict[str, Any]] = []
-    if tool_id == "generic_tools.web_search" and isinstance(obj, list):
-        rows = [r for r in obj if isinstance(r, dict)]
-    elif tool_id == "generic_tools.fetch_url_contents" and isinstance(obj, dict):
-        for url, entry in obj.items():
-            if not isinstance(entry, dict):
-                continue
-            rows.append({**entry, "url": url})
-
-    collected: List[Dict[str, Any]] = []
-    seen_mime: Set[str] = set()
-    for row in rows:
-        mime = (row.get("mime") or "").strip().lower()
-        data_b64 = row.get("base64")
-        if not mime or not data_b64:
-            continue
-        if mime not in MODALITY_IMAGE_MIME and mime not in MODALITY_DOC_MIME:
-            continue
-        if mime in seen_mime:
-            continue
-        size_bytes = row.get("size_bytes")
-        if size_bytes is None:
-            size_bytes = estimate_b64_size(data_b64)
-        if size_bytes is None:
-            continue
-        limit = MODALITY_MAX_IMAGE_BYTES if mime in MODALITY_IMAGE_MIME else MODALITY_MAX_DOC_BYTES
-        if size_bytes > limit:
-            continue
-        filename = (row.get("filename") or "").strip()
-        if not filename:
-            url = row.get("url") if isinstance(row.get("url"), str) else ""
-            filename = urlparse(url).path.split("/")[-1] if url else ""
-        if not filename:
-            filename = f"source_{row.get('sid') or len(collected) + 1}"
-        collected.append({
-            "type": "file",
-            "mime": mime,
-            "base64": data_b64,
-            "text": row.get("text") or "",
-            "filename": filename,
-            "size_bytes": size_bytes,
-        })
-        seen_mime.add(mime)
-        if len(collected) >= 2:
-            break
-    return collected
+    return artifact_blocks_for_summary(artifacts)
 
 async def summarize_user_attachment(
     *,
@@ -1190,8 +1078,11 @@ async def build_summary_for_tool_output(
             obj = output
 
     if summary_artifact is None:
-        collected = _collect_multimodal_artifacts_from_tool_output(tool_id, obj)
+        collected = collect_multimodal_artifacts_from_tool_output(tool_id, obj)
         summary_artifact = collected or None
+
+    obj_for_summary = strip_base64_from_tool_output(tool_id, obj)
+    obj = obj_for_summary
 
     # 3) If caller wants structured JSON, try JSON summarizer first
     if structured:
