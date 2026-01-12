@@ -25,7 +25,7 @@ UI_ARTIFACT_TAGS = {
     "artifact:solver.program.citables",
     "artifact:solver.program.files",
     "artifact:conv.thinking.stream",
-    "artifact:conv.canvas.stream",
+    "artifact:conv.artifacts.stream",
     "artifact:conv.timeline_text.stream",
     "artifact:user.attachment",
     "artifact:turn.log.reaction",

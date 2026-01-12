@@ -309,3 +309,169 @@ class CompositeJsonArtifactStreamer:
             # if completed already, st["pending"] should be "", index consumed
             if st["pending"]:
                 await self._close_artifact(key)
+
+
+class CodegenJsonCodeStreamer:
+    """
+    Stream code snippets from a codegen JSON response (files[].content).
+    Emits markdown wrapped in ```python fences.
+    """
+
+    def __init__(
+            self,
+            *,
+            channel: str,
+            agent: str,
+            artifact_name: str,
+            emit_delta: Callable[..., Awaitable[None]],
+            on_delta_fn: Optional[Callable[[str], Awaitable[None]]] = None,
+    ):
+        self.channel = channel
+        self.agent = agent
+        self.artifact_name = artifact_name
+        self.emit_delta = emit_delta
+        self.on_delta_fn = on_delta_fn
+
+        self.in_string = False
+        self.escaping = False
+        self.unicode_mode = False
+        self.unicode_buf = ""
+
+        self.reading_key = False
+        self.current_key = ""
+        self.last_key: Optional[str] = None
+        self.expecting_value = False
+        self.active_key: Optional[str] = None
+        self.active_value_buf = ""
+
+        self.started = False
+        self.index = 0
+
+    async def _emit_chunk(self, text: str) -> None:
+        if not text:
+            return
+        if not self.started:
+            text = "```python\n" + text
+            self.started = True
+        await self.emit_delta(
+            text,
+            index=self.index,
+            marker=self.channel,
+            agent=self.agent,
+            format="markdown",
+            artifact_name=self.artifact_name,
+        )
+        self.index += 1
+        if self.on_delta_fn:
+            await self.on_delta_fn(text)
+
+    async def feed(self, chunk: str) -> None:
+        if not chunk:
+            return
+
+        for ch in chunk:
+            if self.in_string:
+                if self.unicode_mode:
+                    self.unicode_buf += ch
+                    if len(self.unicode_buf) == 4:
+                        try:
+                            code = int(self.unicode_buf, 16)
+                            decoded = chr(code)
+                        except Exception:
+                            decoded = ""
+                        if self.reading_key:
+                            self.current_key += decoded
+                        elif self.active_key:
+                            self.active_value_buf += decoded
+                        self.unicode_mode = False
+                        self.unicode_buf = ""
+                    continue
+
+                if self.escaping:
+                    self.escaping = False
+                    if ch == "n":
+                        decoded = "\n"
+                    elif ch == "r":
+                        decoded = "\r"
+                    elif ch == "t":
+                        decoded = "\t"
+                    elif ch == "b":
+                        decoded = "\b"
+                    elif ch == "f":
+                        decoded = "\f"
+                    elif ch == "u":
+                        self.unicode_mode = True
+                        self.unicode_buf = ""
+                        continue
+                    else:
+                        decoded = ch
+
+                    if self.reading_key:
+                        self.current_key += decoded
+                    elif self.active_key:
+                        self.active_value_buf += decoded
+                    continue
+
+                if ch == "\\":
+                    self.escaping = True
+                    continue
+
+                if ch == '"':
+                    self.in_string = False
+                    if self.reading_key:
+                        self.reading_key = False
+                        self.last_key = self.current_key
+                        self.current_key = ""
+                    elif self.active_key:
+                        if self.active_value_buf:
+                            await self._emit_chunk(self.active_value_buf)
+                            self.active_value_buf = ""
+                        self.active_key = None
+                    continue
+
+                if self.reading_key:
+                    self.current_key += ch
+                elif self.active_key:
+                    self.active_value_buf += ch
+                continue
+
+            if ch == '"':
+                self.in_string = True
+                if not self.expecting_value:
+                    self.reading_key = True
+                    self.current_key = ""
+                else:
+                    if self.last_key == "content":
+                        self.active_key = self.last_key
+                        self.active_value_buf = ""
+                continue
+
+            if ch == ":":
+                if self.last_key is not None:
+                    self.expecting_value = True
+                continue
+
+            if ch == ",":
+                self.expecting_value = False
+                continue
+
+        if self.active_key and self.active_value_buf:
+            await self._emit_chunk(self.active_value_buf)
+            self.active_value_buf = ""
+
+    async def finish(self) -> None:
+        if self.active_key and self.active_value_buf:
+            await self._emit_chunk(self.active_value_buf)
+            self.active_value_buf = ""
+        if self.started:
+            await self._emit_chunk("\n```")
+        await self.emit_delta(
+            "",
+            index=self.index,
+            marker=self.channel,
+            agent=self.agent,
+            format="markdown",
+            artifact_name=self.artifact_name,
+            completed=True,
+        )
+        self.index += 1
