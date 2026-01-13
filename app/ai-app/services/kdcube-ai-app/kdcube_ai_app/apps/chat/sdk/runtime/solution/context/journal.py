@@ -188,55 +188,55 @@ def build_turn_session_journal(*,
                 lines_local.append(f"  {origin}: " + ", ".join(sids))
             for src in group:
                 idx += 1
-            sid = src.get("sid")
-            url = (src.get("url") or "").strip()
-            title = (src.get("title") or "").strip()
-            mime = (src.get("mime") or "").strip()
-            has_b64 = bool(src.get("base64"))
-            if not url:
-                continue
-            used_mark = "used" if used_sids is None or sid in used_sids else "unused"
-            extra = []
-            if mime:
-                extra.append(f"mime={mime}")
-            source_type = (src.get("source_type") or "").strip()
-            if source_type:
-                extra.append(f"type={source_type}")
-            text_val = src.get("content") or src.get("text") or ""
-            if isinstance(text_val, str) and text_val:
-                try:
-                    text_bytes = len(text_val.encode("utf-8"))
-                except Exception:
-                    text_bytes = None
-                try:
-                    text_tokens = estimate_tokens(text_val)
-                except Exception:
-                    text_tokens = None
-                if text_bytes is not None:
-                    extra.append(f"text_bytes={text_bytes}")
-                if text_tokens is not None:
-                    extra.append(f"text_toks={text_tokens}")
-            if has_b64 and isinstance(src.get("base64"), str):
-                b64_bytes = estimate_b64_size(src.get("base64"))
-                if b64_bytes is not None:
-                    extra.append(f"b64_bytes={b64_bytes}")
-                    extra.append(f"b64_toks={max(1, int(b64_bytes // 4))}")
-            fetched_time_iso = (src.get("fetched_time_iso") or "").strip()
-            if fetched_time_iso:
-                extra.append(f"fetched={fetched_time_iso}")
-            modified_time_iso = (src.get("modified_time_iso") or "").strip()
-            published_time_iso = (src.get("published_time_iso") or "").strip()
-            if modified_time_iso:
-                extra.append(f"modified={modified_time_iso}")
-            elif published_time_iso:
-                extra.append(f"published={published_time_iso}")
-            if has_b64 and mime:
-                extra.append("multimodal")
-            extra_txt = (" | " + " ".join(extra)) if extra else ""
-            if title:
-                lines_local.append(f"    {idx}. {used_mark} S{sid} {url} | {title}{extra_txt}")
-            else:
-                lines_local.append(f"    {idx}. {used_mark} S{sid} {url}{extra_txt}")
+                sid = src.get("sid")
+                url = (src.get("url") or "").strip()
+                title = (src.get("title") or "").strip()
+                mime = (src.get("mime") or "").strip()
+                has_b64 = bool(src.get("base64"))
+                if not url:
+                    continue
+                used_mark = "used" if used_sids is None or sid in used_sids else "unused"
+                extra = []
+                if mime:
+                    extra.append(f"mime={mime}")
+                source_type = (src.get("source_type") or "").strip()
+                if source_type:
+                    extra.append(f"type={source_type}")
+                text_val = src.get("content") or src.get("text") or ""
+                if isinstance(text_val, str) and text_val:
+                    try:
+                        text_bytes = len(text_val.encode("utf-8"))
+                    except Exception:
+                        text_bytes = None
+                    try:
+                        text_tokens = estimate_tokens(text_val)
+                    except Exception:
+                        text_tokens = None
+                    if text_bytes is not None:
+                        extra.append(f"text_bytes={text_bytes}")
+                    if text_tokens is not None:
+                        extra.append(f"text_toks={text_tokens}")
+                if has_b64 and isinstance(src.get("base64"), str):
+                    b64_bytes = estimate_b64_size(src.get("base64"))
+                    if b64_bytes is not None:
+                        extra.append(f"b64_bytes={b64_bytes}")
+                        extra.append(f"b64_toks={max(1, int(b64_bytes // 4))}")
+                fetched_time_iso = (src.get("fetched_time_iso") or "").strip()
+                if fetched_time_iso:
+                    extra.append(f"fetched={fetched_time_iso}")
+                modified_time_iso = (src.get("modified_time_iso") or "").strip()
+                published_time_iso = (src.get("published_time_iso") or "").strip()
+                if modified_time_iso:
+                    extra.append(f"modified={modified_time_iso}")
+                elif published_time_iso:
+                    extra.append(f"published={published_time_iso}")
+                if has_b64 and mime:
+                    extra.append("multimodal")
+                extra_txt = (" | " + " ".join(extra)) if extra else ""
+                if title:
+                    lines_local.append(f"    {idx}. {used_mark} S{sid} {url} | {title}{extra_txt}")
+                else:
+                    lines_local.append(f"    {idx}. {used_mark} S{sid} {url}{extra_txt}")
         return lines_local
 
     def _format_attachment_paths(attachments: List[Dict[str, Any]], *, turn_id: str) -> List[str]:
