@@ -15,8 +15,10 @@ ENV PATH="/opt/venv/bin:$PATH"
 # Install Python deps
 COPY services/kdcube-ai-app/requirements-chat.txt requirements.txt
 RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    python -m playwright install --with-deps chromium
+    pip install --no-cache-dir -r requirements.txt
+
+# Install browser deps separately to keep pip layer cacheable
+RUN python -m playwright install --with-deps chromium
 
 # Create unprivileged user for executor (but entrypoint runs as root)
 RUN groupadd --gid 1001 executor && \

@@ -150,7 +150,7 @@ class ReactSolver:
         self.react_decision_stream = react_decision_stream
         self.solution_gen_stream = solution_gen_stream
         self.hosting_service = hosting_service
-        self._timeline_text_idx = 0
+        self._timeline_text_idx = {}
 
         self.codegen_runner = CodegenRunner(
             service=self.svc,
@@ -439,7 +439,7 @@ class ReactSolver:
     async def _emit_timeline_text(self, *, text: str, agent: str, artifact_name: str):
         if not text:
             return
-        idx = self._timeline_text_idx
+        idx = int(self._timeline_text_idx.get(artifact_name, 0))
         await self.comm.delta(
             text=text,
             index=idx,
@@ -449,17 +449,17 @@ class ReactSolver:
             artifact_name=artifact_name,
             completed=False,
         )
-        self._timeline_text_idx += 1
+        self._timeline_text_idx[artifact_name] = idx + 1
         await self.comm.delta(
             text="",
-            index=self._timeline_text_idx,
+            index=idx + 1,
             marker="timeline_text",
             agent=agent,
             format="markdown",
             artifact_name=artifact_name,
             completed=True,
         )
-        self._timeline_text_idx += 1
+        self._timeline_text_idx[artifact_name] = idx + 2
 
 
     # ----------------------------
@@ -1114,21 +1114,20 @@ class ReactSolver:
                     emit_delta=self.comm.delta,
                     execution_id=state.get("pending_codegen_exec_id"),
                 )
-        tool_reason = ""
+        call_reason = ""
         if isinstance(tool_call, dict):
-            tool_reason = (tool_call.get("reasoning") or "").strip()
-        if not tool_reason:
-            tool_reason = (agent_response.get("reasoning") or "").strip()
-        if tool_reason:
-            if tools_insights.is_exec_tool(tool_id) and exec_streamer:
-                await exec_streamer.emit_reasoning(tool_reason)
+            call_reason = (tool_call.get("reasoning") or "").strip()
+
+        if call_reason:
+            if tools_insights.is_exec_tool(tool_id) and exec_streamer_widget:
+                await exec_streamer_widget.emit_reasoning(call_reason)
             elif tools_insights.is_codegen_tool(tool_id):
                 codegen_streamer = state.get("codegen_streamer")
                 if codegen_streamer:
-                    await codegen_streamer.emit_reasoning(tool_reason)
+                    await codegen_streamer.emit_reasoning(call_reason)
             else:
                 await self._emit_timeline_text(
-                    text=tool_reason,
+                    text=call_reason,
                     agent=role,
                     artifact_name=f"timeline_text.react.decision.{it}",
                 )
