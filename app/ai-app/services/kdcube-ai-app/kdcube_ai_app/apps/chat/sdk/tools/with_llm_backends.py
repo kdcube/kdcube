@@ -14,7 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.streaming.artifacts_channeled_streaming import 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import split_safe_citation_prefix, replace_citation_tokens_streaming, \
     extract_sids, build_citation_map_from_sources, citations_present_inline, adapt_source_for_llm, \
     find_unmapped_citation_sids, USAGE_TAG_RE, _split_safe_usage_prefix, _expand_ids, \
-    strip_only_suspicious_citation_like_tokens, split_safe_stream_prefix
+    strip_only_suspicious_citation_like_tokens, split_safe_stream_prefix, _normalize_citation_chars
 from kdcube_ai_app.apps.chat.sdk.tools.text_proc_utils import _rm_invis, _remove_end_marker_everywhere, \
     _split_safe_marker_prefix, _remove_marker, _unwrap_fenced_blocks_concat, _strip_bom_zwsp, _parse_json, \
     _extract_json_object, _strip_code_fences, _format_ok, _validate_json_schema, _parse_yaml, _validate_sidecar, \
@@ -294,6 +294,8 @@ async def generate_content_llm(
 
         # Normalize invisibles first so regexes see a cleaner pattern
         s = _rm_invis(s)
+        # Normalize full-width brackets/colons so USAGE tokens match
+        s = _normalize_citation_chars(s)
 
         # 1) Strip the exact completion marker (can appear multiple times)
         s = _remove_end_marker_everywhere(s, end_marker)
@@ -1145,7 +1147,7 @@ async def generate_content_llm(
 
     # --- usage tag extraction (from the RAW buffer that still has the tag) ---
     usage_sids: List[int] = []
-    m_usage = USAGE_TAG_RE.search(content_raw or "")
+    m_usage = USAGE_TAG_RE.search(_normalize_citation_chars(content_raw or ""))
     if m_usage:
         try:
             ids_str = m_usage.group(1) or ""
