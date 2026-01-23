@@ -179,6 +179,22 @@ APP_DEBUG=false
 APP_LOG_LEVEL=INFO
 ```
 
+### 2.5. Optional: Run Setup Wizard
+If you prefer a guided setup, run the CLI installer from the repository root.
+```bash
+pip install -r services/kdcube-ai-app/requirements-cli.txt
+./deployment/docker/all_in_one/kdcube-cli.py
+```
+
+If you do not have the repo yet, use one of these bootstrap options:
+```bash
+pipx install kdcube-apps-cli
+kdcube-apps-cli
+```
+```bash
+curl -fsSL https://raw.githubusercontent.com/elenaviter/kdcube-ai-app/main/app/ai-app/deployment/docker/all_in_one/kdcube-cli.sh | bash
+```
+
 ### 3. Build Code Execution Image
 ```bash
 docker build -t py-code-exec:latest -f Dockerfile_Exec ../../..

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=67", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kdcube-apps-cli"
+version = "0.1.0"
+description = "KDCube Apps bootstrap CLI"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["rich>=13.9.4"]
+license = {file = "LICENSE"}
+
+[project.scripts]
+kdcube-apps-cli = "kdcube_apps_cli.cli:main"

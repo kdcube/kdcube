@@ -20,7 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.text_proc_utils import (
     _parse_json,
     _validate_json_schema,
 )
-from kdcube_ai_app.apps.custom_apps.codegen.models.shared_instructions import CITATION_TOKENS
+from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import CITATION_TOKENS
 from kdcube_ai_app.apps.chat.sdk.util import _today_str, _now_up_to_minutes
 from kdcube_ai_app.infra.accounting import _get_context
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_system_message, create_cached_human_message

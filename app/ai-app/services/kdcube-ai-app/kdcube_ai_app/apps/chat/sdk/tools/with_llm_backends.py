@@ -23,7 +23,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.text_proc_utils import _rm_invis, _remove
 from kdcube_ai_app.apps.chat.sdk.util import _today_str, _now_up_to_minutes
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_human_message, create_cached_system_message
-from kdcube_ai_app.apps.custom_apps.codegen.models.shared_instructions import CITATION_TOKENS
+from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import CITATION_TOKENS
 from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_IMAGE_MIME,
     MODALITY_DOC_MIME,
@@ -848,12 +848,13 @@ async def generate_content_llm(
             clean = _scrub_emit_once(text)
             if get_comm():
                 if not replace_in_stream:
-                    logger.warning(
-                        "Streaming citations disabled: replace_in_stream=False (tgt=%s is_json_like=%s allow_inline=%s)",
-                        tgt,
-                        is_json_like,
-                        allow_inline_citations_in_strings,
-                    )
+                    # logger.warning(
+                    #     "Streaming citations disabled: replace_in_stream=False (tgt=%s is_json_like=%s allow_inline=%s)",
+                    #     tgt,
+                    #     is_json_like,
+                    #     allow_inline_citations_in_strings,
+                    # )
+                    pass
                 elif not citation_map:
                     logger.warning("Streaming citations disabled: citation_map empty")
                 if replace_in_stream and citation_map and "[[S:" in clean:
