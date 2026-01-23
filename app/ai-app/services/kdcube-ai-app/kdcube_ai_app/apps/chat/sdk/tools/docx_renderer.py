@@ -21,10 +21,12 @@ from docx.oxml import OxmlElement
 # --------------------------- Helpers / constants -----------------------------
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")  # ![alt](url)
 _CIT_RE  = re.compile(r"\[\[S:(\d+)\]\]")  # [[S:3]]
 _CODE_FENCE_RE = re.compile(r"^```(\w+)?\s*$")
 _TABLE_ROW_RE  = re.compile(r"^\s*\|.+\|\s*$")
 _BLOCKQUOTE_RE = re.compile(r"^\s*>\s+(.*)$")
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+)$")  # Detect headings from # to ######
 
 PALETTE = {
     "fg": RGBColor(20, 24, 31),
@@ -40,6 +42,9 @@ TYPE = {
     "h1": Pt(18),
     "h2": Pt(16),
     "h3": Pt(14),
+    "h4": Pt(12.5),
+    "h5": Pt(12),
+    "h6": Pt(11.5),
     "body": Pt(11.5),
     "code": Pt(10.5),
 }
@@ -84,13 +89,40 @@ def _set_para(p, *, space_before=3, space_after=3, line_spacing=1.25, align=None
         p.alignment = align
 
 def _add_heading(doc: Document, text: str, level: int):
-    # map to built-in Heading styles
-    style = {1: "Heading 1", 2: "Heading 2", 3: "Heading 3"}.get(level, "Heading 3")
-    p = doc.add_paragraph(style=style)
+    """Add a heading with proper styling and indentation for levels 1-6."""
+    # Map to built-in styles where available
+    if level <= 3:
+        style = {1: "Heading 1", 2: "Heading 2", 3: "Heading 3"}[level]
+        p = doc.add_paragraph(style=style)
+        p.clear()
+    else:
+        # For levels 4-6, create custom styled paragraphs
+        p = doc.add_paragraph()
+        # Indent deeper headings slightly
+        if level >= 4:
+            p.paragraph_format.left_indent = Inches(0.25 * (level - 3))
+
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    p.clear()  # make sure we control the run
+
+    # Set spacing based on level
+    space_before = max(12 - level * 2, 3)
+    space_after = max(8 - level * 2, 2)
+    _set_para(p, space_before=space_before, space_after=space_after)
+
     r = p.add_run(text.strip())
-    size = {1: TYPE["h1"], 2: TYPE["h2"], 3: TYPE["h3"]}[level if level in (1,2,3) else 3]
+
+    # Font sizes for different levels
+    size_map = {
+        1: TYPE["h1"],
+        2: TYPE["h2"],
+        3: TYPE["h3"],
+        4: TYPE["h4"],
+        5: TYPE["h5"],
+        6: TYPE["h6"],
+    }
+    size = size_map.get(level, TYPE["h6"])
+
+    # All headings are bold
     _add_char_style(r, size=size, bold=True, color=PALETTE["fg"])
 
 def _add_paragraph_text(doc: Document, text: str, level: int = 0):
@@ -161,6 +193,39 @@ def _emit_link_or_text(p, text: str, sources_map: Dict[int, Dict[str, str]] = No
                 except Exception:
                     pass
         text = text[m.end():]
+
+def _add_image(doc: Document, path: str, alt_text: str = "", max_width: float = 6.0):
+    """
+    Add an image to the document.
+
+    Args:
+        doc: Document object
+        path: Path to image file (local path or could be URL - caller should handle download)
+        alt_text: Alternative text for the image
+        max_width: Maximum width in inches (default 6.0 for standard page width)
+    """
+    try:
+        p = doc.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        _set_para(p, space_before=6, space_after=6)
+
+        # Add the image
+        run = p.add_run()
+        picture = run.add_picture(path, width=Inches(max_width))
+
+        # Add caption if alt text provided
+        if alt_text:
+            caption = doc.add_paragraph()
+            caption.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            _set_para(caption, space_before=2, space_after=8)
+            r = caption.add_run(alt_text)
+            _add_char_style(r, size=Pt(10), italic=True, color=PALETTE["muted"])
+
+    except Exception as e:
+        # Fallback: add error message if image can't be loaded
+        p = doc.add_paragraph()
+        r = p.add_run(f"[Image not found: {path}]")
+        _add_char_style(r, size=TYPE["body"], italic=True, color=PALETTE["muted"])
 
 def _add_code_block(doc: Document, lines: List[str]):
     # Use 1x1 table as a card w/ background + border for better reliability
@@ -324,6 +389,7 @@ def _add_table(doc: Document, data: List[List[str]]):
 def _split_markdown_sections(md: str) -> List[Tuple[str, List[str]]]:
     """
     Create sections by '## ' headings; first '# ' becomes doc title if present.
+    Preserve all other heading levels in the body.
     """
     lines = (md or "").splitlines()
     slides: List[Tuple[str, List[str]]] = []
@@ -337,10 +403,12 @@ def _split_markdown_sections(md: str) -> List[Tuple[str, List[str]]]:
             cur_title = ln[3:]
             cur_body = []
         elif ln.startswith("# "):
+            # Only use first # as document title
             if cur_title is None and not slides:
                 cur_title = ln[2:]
                 cur_body = []
             else:
+                # Other # headings go in body
                 cur_body.append(ln)
         else:
             cur_body.append(ln)
@@ -364,7 +432,20 @@ def render_docx(
         include_sources_section: bool = True
 ) -> str:
     """
-    Render a modern-looking .docx from Markdown with headings, lists, code, quotes, tables, links, citations.
+    Render a modern-looking .docx from Markdown with headings, lists, code, quotes, tables, links, citations, and images.
+
+    Supported markdown features:
+    - Headings: # through ###### (all levels)
+    - Lists: bullet (-,*) and numbered (1.)
+    - Bold: **text**
+    - Italic: *text*
+    - Links: [text](url)
+    - Images: ![alt text](path/to/image.png)
+    - Code blocks: ```language
+    - Tables: | header | header |
+    - Blockquotes: > text
+    - Citations: [[S:n]]
+
     Returns the **basename** written inside OUTPUT_DIR.
     """
     basename = _basename_only(path, ".docx")
@@ -445,6 +526,16 @@ def render_docx(
                 code_buf.append(ln)
                 continue
 
+            # Handle images (before other inline processing)
+            m_img = _IMAGE_RE.match(ln.strip())
+            if m_img:
+                flush_code()
+                flush_table()
+                flush_quote()
+                alt_text, img_path = m_img.groups()
+                _add_image(doc, img_path, alt_text)
+                continue
+
             # Handle table rows
             if _TABLE_ROW_RE.match(ln):
                 flush_code()
@@ -462,6 +553,17 @@ def render_docx(
                 continue
             else:
                 flush_quote()
+
+            # Handle headings (###, ####, etc.)
+            m_heading = _HEADING_RE.match(ln)
+            if m_heading:
+                flush_code()
+                hashes, heading_text = m_heading.groups()
+                level = len(hashes)
+                # Adjust level: ## sections are already handled, so ### becomes level 2 in output
+                # Actually, we want to preserve the hierarchy, so ### should be level 3
+                _add_heading(doc, heading_text, level=level)
+                continue
 
             # Paragraph / list
             # compute indent level from leading spaces
@@ -503,12 +605,137 @@ def render_docx(
     return basename
 
 
-# Test with sample markdown table
+# Test with sample markdown including deep headings
 if __name__ == "__main__":
     test_md = """
-# Security Alerts
+# Pacific Northwest Ecosystem Assessment
 
-## Alert Types
+## Executive Summary
+
+This report examines the biodiversity and ecological health of coastal temperate rainforests 
+in the Pacific Northwest region, focusing on indicator species and habitat connectivity.
+
+## Regional Biodiversity Analysis
+
+### Mammalian Species Distribution
+
+The region supports diverse mammalian populations across multiple elevation zones, 
+with distinct patterns emerging in recent survey data.
+
+#### Large Predators
+
+- **Gray Wolf** (*Canis lupus*) - Recovered population in northern ranges
+- **Cougar** (*Puma concolor*) - Stable throughout forested areas
+- **Black Bear** (*Ursus americanus*) - Abundant across all zones
+
+#### Medium-Sized Mammals
+
+Population densities vary significantly by habitat type and human disturbance levels.
+
+##### Riparian Zone Specialists
+- River Otter - 2.3 individuals per km of stream
+- Beaver - Colony density: 0.8 per km²
+- Mink - Declining in urbanized watersheds
+
+##### Forest Interior Species
+- Pine Marten - Requires old-growth connectivity
+- Fisher - Sensitive to canopy fragmentation
+- Red Fox - Expanding range northward
+
+### Avian Community Structure
+
+#### Resident Forest Birds
+
+Year-round residents show strong site fidelity and territory maintenance.
+
+##### Canopy Nesters
+- **Spotted Owl** (*Strix occidentalis*) - Threatened; requires >200 acres old growth
+- **Marbled Murrelet** - Nests on moss-covered branches
+- **Varied Thrush** - Common in dense understory
+
+##### Cavity Nesters
+Critical dependence on snag availability for breeding success.
+
+###### Primary Cavity Excavators
+- Pileated Woodpecker - Creates cavities used by 20+ species
+- Hairy Woodpecker - Medium-sized cavity provider
+- Downy Woodpecker - Small cavity specialist
+
+###### Secondary Cavity Users
+- Wood Duck - Requires large tree cavities near water
+- Common Merganser - Competes for limited nest sites
+- Northern Flying Squirrel - Nocturnal cavity occupant
+
+## Historical Data Comparison
+
+### Population Trends (2014-2024)
+
+| Species | 2014 Count | 2024 Count | Change | Status |
+|---------|------------|------------|--------|---------|
+| Gray Wolf | 12 | 47 | +292% | Recovering |
+| Fisher | 23 | 18 | -22% | Declining |
+| Spotted Owl | 156 | 134 | -14% | Threatened |
+| Marbled Murrelet | 2,400 | 1,850 | -23% | Endangered |
+
+## Habitat Connectivity Analysis
+
+### Corridor Assessment
+
+#### Primary Wildlife Corridors
+
+Critical linkages between protected areas maintain genetic diversity and seasonal movement patterns.
+
+##### North-South Corridors
+- **Cascade Corridor** - 45 km continuous forest
+- **Olympic-Fraser Connection** - Cross-border importance
+- **Coastal Riparian Network** - Salmon-dependent species pathway
+
+##### East-West Corridors
+- **Columbia River Gorge** - Migration bottleneck
+- **Willamette Valley Crossings** - Highly fragmented
+- **Puget Sound Lowlands** - Urban barrier zones
+
+### Fragmentation Impact Levels
+
+#### High Impact Zones
+
+Areas where habitat loss exceeds 60% of historical extent.
+
+##### Urban-Wildland Interface
+- Development pressure increasing 3% annually
+- Road density: >2 km/km² in affected areas
+- Barrier effect on salamander dispersal
+
+##### Agricultural Conversion Areas
+- Former forest now row crops: 15,000 hectares
+- Hedgerow network supports some movement
+- Pesticide drift affecting amphibians
+
+## Conservation Recommendations
+
+### Immediate Actions Required
+
+#### Habitat Protection
+- Acquire 5,000 hectares in priority corridors
+- Establish conservation easements on private lands
+- Enforce stream buffer regulations
+
+#### Species-Specific Interventions
+- Augment Fisher population through translocation
+- Protect all known Spotted Owl nesting sites
+- Restore Marbled Murrelet nesting habitat
+
+### Long-Term Strategic Goals
+
+#### Climate Adaptation Planning
+Projected changes will shift suitable habitat 200-400 meters upslope by 2050.
+
+##### Assisted Migration Considerations
+- Evaluate translocation needs for low-mobility species
+- Establish seed banks for foundation tree species
+- Monitor for range-shifting southern species
+
+## Monitoring Alert Types
 
 | Alert Name | Trigger Condition | Detection Sources |
 |------------|-------------------|-------------------|
@@ -517,5 +744,5 @@ if __name__ == "__main__":
 | Data Exfiltration | Large data transfer | DLP, Network Monitor |
 """
 
-    render_docx("/tmp/test_table.docx", test_md, title="Test Document")
-    print("Test document created at /tmp/test_table.docx")
+    render_docx("/tmp/test_biodiversity.docx", test_md, title="Pacific Northwest Ecosystem Assessment")
+    print("Test document created at /tmp/test_biodiversity.docx")
