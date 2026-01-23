@@ -236,6 +236,9 @@ class TurnScratchpad:
         # Timelines for objective buckets keyed by bucket_id
         self.objective_memory_timelines: Dict[str, Any] = {}
 
+        # Local memories (delta fingerprints) collected on non-reconciled turns
+        self.delta_turns_local_mem_entries: Optional[List[dict]] = None
+
     def set_phase(self, name: str, *, agent: str | None = None, **meta):
         self.current_phase = TurnPhase(name=name, agent=agent, meta=meta)
 
