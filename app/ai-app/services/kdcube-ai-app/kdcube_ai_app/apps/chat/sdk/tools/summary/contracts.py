@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import List, Literal, Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator, ConfigDict
 
 NONE = "NONE"
@@ -189,3 +189,19 @@ class ToolCallSummaryJSON(BaseModel):
 - **Risks**: {', '.join(self.strategy.risks)}
 - **Next Move**: {self.strategy.main_next_move}
         """
+
+class TurnSummaryOut(BaseModel):
+    objective: Optional[str] = None
+    done: List[str] = Field(default_factory=list)
+    not_done: List[str] = Field(default_factory=list)
+    assumptions: List[str] = Field(default_factory=list)
+    risks: List[str] = Field(default_factory=list)
+    notes: Optional[str] = ""
+    user_inquiry: Optional[str] = None
+    user_message_description: Optional[str] = None
+    assistant_answer: Optional[str] = None
+    delivered_to_user: Optional[str] = None
+    complexity: Optional[Dict[str, Any]] = None  # {"level": "...", "factors": [...]}
+    domain: Optional[str] = None                 # "domain1;domain2"
+    inquiry_type: Optional[str] = None           # "type1;type2"
+    prefs: Dict[str, Any] = Field(default_factory=dict)
