@@ -309,6 +309,3 @@ class CompositeJsonArtifactStreamer:
             # if completed already, st["pending"] should be "", index consumed
             if st["pending"]:
                 await self._close_artifact(key)
-
-
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.widgets.exec import CodegenJsonCodeStreamer

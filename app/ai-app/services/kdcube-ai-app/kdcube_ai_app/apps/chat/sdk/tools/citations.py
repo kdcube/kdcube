@@ -937,6 +937,44 @@ def replace_citation_tokens_streaming(
     """
     return replace_citation_tokens_batch(text, citation_map, options)
 
+@dataclass
+class CitationStreamState:
+    buffer: str = ""
+
+def replace_citation_tokens_streaming_stateful(
+        text: str,
+        citation_map: Dict[int, Dict[str, str]],
+        state: CitationStreamState,
+        options: Optional[CitationRenderOptions] = None,
+        *,
+        flush: bool = False,
+        html: bool = False,
+) -> str:
+    """
+    Stateful streaming replacement.
+    Buffers any dangling citation prefix across chunks and only emits once complete.
+    """
+    if state is None:
+        return text or ""
+
+    combined = (state.buffer or "") + (text or "")
+    safe, dangling = split_safe_citation_prefix(combined)
+
+    if html:
+        out = replace_html_citations(safe, citation_map, keep_unresolved=True, first_only=False)
+    else:
+        out = replace_citation_tokens_batch(safe, citation_map, options)
+
+    if dangling and not flush:
+        state.buffer = combined[len(safe):]
+    else:
+        state.buffer = ""
+
+    if flush and state.buffer:
+        state.buffer = ""
+
+    return out
+
 # ---------------------------------------------------------------------------
 # Presence checks
 # ---------------------------------------------------------------------------

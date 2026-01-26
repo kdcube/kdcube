@@ -12,10 +12,11 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import delta as emit_delta, ge
 from kdcube_ai_app.apps.chat.sdk.streaming.artifacts_channeled_streaming import CompositeJsonArtifactStreamer
 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import split_safe_citation_prefix, replace_citation_tokens_streaming, \
-    extract_sids, build_citation_map_from_sources, citations_present_inline, adapt_source_for_llm, \
-    find_unmapped_citation_sids, USAGE_TAG_RE, _split_safe_usage_prefix, _expand_ids, \
-    strip_only_suspicious_citation_like_tokens, split_safe_stream_prefix, split_safe_stream_prefix_with_holdback, \
-    _normalize_citation_chars, replace_html_citations, _strip_invisible, CITE_TOKEN_RE
+    replace_citation_tokens_streaming_stateful, CitationStreamState, extract_sids, build_citation_map_from_sources, \
+    citations_present_inline, adapt_source_for_llm, find_unmapped_citation_sids, USAGE_TAG_RE, \
+    _split_safe_usage_prefix, _expand_ids, strip_only_suspicious_citation_like_tokens, split_safe_stream_prefix, \
+    split_safe_stream_prefix_with_holdback, _normalize_citation_chars, replace_html_citations, _strip_invisible, \
+    CITE_TOKEN_RE
 from kdcube_ai_app.apps.chat.sdk.tools.text_proc_utils import _rm_invis, _remove_end_marker_everywhere, \
     _split_safe_marker_prefix, _remove_marker, _unwrap_fenced_blocks_concat, _strip_bom_zwsp, _parse_json, \
     _extract_json_object, _strip_code_fences, _format_ok, _validate_json_schema, _parse_yaml, _validate_sidecar, \
@@ -598,7 +599,7 @@ async def generate_content_llm(
             sys_lines += [
                 "",
                 "[CITATION REQUIREMENTS (MARKDOWN/TEXT)]:",
-                "- Insert [[S:<sid>]] tokens at the end of sentences/bullets that contain NEW or materially CHANGED factual claims.",
+                "- Insert [[S:<sid>]] tokens at the end of sentences/bullets that contain NEW or materially CHANGED factual claims. Have a space between citation marks and preceding text. I.e. ..text.. [[S:1]]",
                 "- Keep citations balanced: if consecutive sentences or bullets rely on the same source(s), cite once at the end of the block instead of tagging every line.",
                 "- Avoid per-line citation spam; prefer one citation per coherent paragraph/section when the source set is unchanged.",
                 "- Multiple sources allowed: [[S:1,3]] for enumeration and [[S:2-4]] for inclusive range. Use only the provided sid values. Never invent.",
@@ -826,6 +827,9 @@ async def generate_content_llm(
         thinking_idx = 0  # ← ADD THIS: track thinking index
 
         composite_streamer: Optional[CompositeJsonArtifactStreamer] = None
+        citation_stream: Optional[CitationStreamState] = (
+            CitationStreamState() if (replace_in_stream and citation_map) else None
+        )
         if (
                 is_managed_json
                 and composite_cfg
@@ -841,32 +845,10 @@ async def generate_content_llm(
                 on_delta_fn=on_delta_fn,
             )
 
-        async def _emit_visible(text: str):
+        async def _emit_ready(out: str):
             nonlocal emitted_local
-            if not text:
+            if not out:
                 return
-            clean = _scrub_emit_once(text)
-            if get_comm():
-                if not replace_in_stream:
-                    # logger.warning(
-                    #     "Streaming citations disabled: replace_in_stream=False (tgt=%s is_json_like=%s allow_inline=%s)",
-                    #     tgt,
-                    #     is_json_like,
-                    #     allow_inline_citations_in_strings,
-                    # )
-                    pass
-                elif not citation_map:
-                    logger.warning("Streaming citations disabled: citation_map empty")
-                if replace_in_stream and citation_map and "[[S:" in clean:
-                    logger.warning("Pre-replace stream chunk contains citation token; head=%r tail=%r", clean[:120], clean[-120:])
-                if "[[USAGE" in clean.upper():
-                    logger.warning("Pre-replace stream chunk still contains USAGE token; tail=%r", clean[-160:])
-            if replace_in_stream and tgt == "html":
-                out = replace_html_citations(clean, citation_map, keep_unresolved=True, first_only=False)
-            else:
-                out = replace_citation_tokens_streaming(clean, citation_map) if replace_in_stream else clean
-            if replace_in_stream and citation_map and "[[S:" in clean and out == clean:
-                logger.warning("Citation replacement no-op for chunk with token; head=%r tail=%r", clean[:120], clean[-120:])
             # 🔸 Do NOT stream raw JSON for composite artifacts to canvas
             idx = start_index + emitted_local
             if is_managed_json and composite_cfg and channel_to_stream == "canvas":
@@ -909,6 +891,40 @@ async def generate_content_llm(
                         artifact_name=artifact_name,
                     )
                 emitted_local += 1
+
+        async def _emit_visible(text: str):
+            if not text:
+                return
+            clean = _scrub_emit_once(text)
+            if get_comm():
+                if not replace_in_stream:
+                    # logger.warning(
+                    #     "Streaming citations disabled: replace_in_stream=False (tgt=%s is_json_like=%s allow_inline=%s)",
+                    #     tgt,
+                    #     is_json_like,
+                    #     allow_inline_citations_in_strings,
+                    # )
+                    pass
+                elif not citation_map:
+                    logger.warning("Streaming citations disabled: citation_map empty")
+                if replace_in_stream and citation_map and "[[S:" in clean:
+                    logger.warning("Pre-replace stream chunk contains citation token; head=%r tail=%r", clean[:120], clean[-120:])
+                if "[[USAGE" in clean.upper():
+                    logger.warning("Pre-replace stream chunk still contains USAGE token; tail=%r", clean[-160:])
+            if replace_in_stream and citation_stream:
+                out = replace_citation_tokens_streaming_stateful(
+                    clean,
+                    citation_map,
+                    citation_stream,
+                    html=(tgt == "html"),
+                )
+            elif replace_in_stream and tgt == "html":
+                out = replace_html_citations(clean, citation_map, keep_unresolved=True, first_only=False)
+            else:
+                out = replace_citation_tokens_streaming(clean, citation_map) if replace_in_stream else clean
+            if replace_in_stream and citation_map and "[[S:" in clean and out == clean:
+                logger.warning("Citation replacement no-op for chunk with token; head=%r tail=%r", clean[:120], clean[-120:])
+            await _emit_ready(out)
 
         async def _flush_pending(force: bool = False):
             nonlocal pending
@@ -988,6 +1004,16 @@ async def generate_content_llm(
                 return
             # Flush everything that’s left (including any last complete citation tokens)
             await _flush_pending(force=True)
+            if citation_stream:
+                tail = replace_citation_tokens_streaming_stateful(
+                    "",
+                    citation_map,
+                    citation_stream,
+                    html=(tgt == "html"),
+                    flush=True,
+                )
+                if tail:
+                    await _emit_ready(tail)
             if get_comm():
                 idx = start_index + emitted_local
                 emitted_local += 1

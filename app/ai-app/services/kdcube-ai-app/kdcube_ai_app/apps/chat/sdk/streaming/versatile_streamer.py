@@ -72,14 +72,23 @@ def _replace_citations(
     fmt: str,
     citation_map: Dict[int, Dict[str, str]],
     replace: bool,
+    state: Optional[citations_module.CitationStreamState] = None,
 ) -> str:
     if not replace or not citation_map or not text:
         return text
     if fmt == "html":
+        if state:
+            return citations_module.replace_citation_tokens_streaming_stateful(
+                text, citation_map, state, html=True
+            )
         return citations_module.replace_html_citations(
             text, citation_map, keep_unresolved=False, first_only=False
         )
     if fmt in ("markdown", "text"):
+        if state:
+            return citations_module.replace_citation_tokens_streaming_stateful(
+                text, citation_map, state
+            )
         return citations_module.replace_citation_tokens_streaming(text, citation_map)
     return text
 
@@ -125,6 +134,10 @@ async def stream_with_channels(
     raw_by_channel: Dict[str, List[str]] = {c.name: [] for c in channels}
     used_by_channel: Dict[str, set[int]] = {c.name: set() for c in channels}
     delta_counts: Dict[str, int] = {c.name: 0 for c in channels}
+    citation_states: Dict[str, citations_module.CitationStreamState] = {}
+    for spec in channels:
+        if spec.replace_citations and spec.format in ("markdown", "text", "html") and citation_map:
+            citation_states[spec.name] = citations_module.CitationStreamState()
 
     async def _emit_channel(name: str, raw_text: str) -> None:
         spec = channel_specs.get(name)
@@ -132,7 +145,11 @@ async def stream_with_channels(
             return
         scrubbed = _scrub_chunk(raw_text, strip_usage=spec.strip_usage)
         rendered = _replace_citations(
-            scrubbed, spec.format, citation_map, replace=spec.replace_citations
+            scrubbed,
+            spec.format,
+            citation_map,
+            replace=spec.replace_citations,
+            state=citation_states.get(name),
         )
         if scrubbed:
             used_by_channel[name].update(citations_module.sids_in_text(scrubbed))
@@ -149,9 +166,26 @@ async def stream_with_channels(
             completed=False,
         )
 
+    async def _flush_channel_citations(name: str) -> None:
+        state = citation_states.get(name)
+        if not state:
+            return
+        flushed = citations_module.replace_citation_tokens_streaming_stateful(
+            "",
+            citation_map,
+            state,
+            flush=True,
+            html=(channel_specs.get(name).format == "html"),
+        )
+        if flushed:
+            await _emit_channel(name, flushed)
+
     composite_streamer: Optional[CompositeJsonArtifactStreamer] = None
     if composite_cfg and composite_channel:
-        async def _composite_emit(**kwargs):
+        async def _composite_emit(*args, **kwargs):
+            if args:
+                kwargs = dict(kwargs)
+                kwargs["text"] = args[0]
             await emit(channel=composite_channel, **kwargs)
 
         composite_streamer = CompositeJsonArtifactStreamer(
@@ -185,8 +219,9 @@ async def stream_with_channels(
             if m_close:
                 raw_slice = buf[emit_from:m_close.start()]
                 if raw_slice:
+                    holdback = 0 if current in citation_states else 12
                     emit_now, tail, needs_more = citations_module.split_safe_stream_prefix_with_holdback(
-                        raw_slice, holdback=12
+                        raw_slice, holdback=holdback
                     )
                     if emit_now:
                         if composite_streamer and current == composite_channel:
@@ -196,6 +231,7 @@ async def stream_with_channels(
                         emit_from += len(emit_now)
                     if needs_more:
                         break
+                await _flush_channel_citations(current)
                 emit_from = m_close.end()
                 current = None
                 continue
@@ -203,8 +239,9 @@ async def stream_with_channels(
             safe_end = _safe_end_for_tags(buf, emit_from)
             if safe_end > emit_from:
                 raw_slice = buf[emit_from:safe_end]
+                holdback = 0 if current in citation_states else 12
                 emit_now, tail, needs_more = citations_module.split_safe_stream_prefix_with_holdback(
-                    raw_slice, holdback=12
+                    raw_slice, holdback=holdback
                 )
                 if emit_now:
                     if composite_streamer and current == composite_channel:
@@ -220,12 +257,14 @@ async def stream_with_channels(
         # Flush remaining buffered content
         if current and emit_from < len(buf):
             raw_slice = buf[emit_from:]
-            emit_now, _, _ = citations_module.split_safe_stream_prefix_with_holdback(raw_slice, holdback=12)
+            holdback = 0 if current in citation_states else 12
+            emit_now, _, _ = citations_module.split_safe_stream_prefix_with_holdback(raw_slice, holdback=holdback)
             if emit_now:
                 if composite_streamer and current == composite_channel:
                     await composite_streamer.feed(emit_now)
                 raw_by_channel[current].append(emit_now)
                 await _emit_channel(current, emit_now)
+            await _flush_channel_citations(current)
         if composite_streamer:
             await composite_streamer.finish()
 
