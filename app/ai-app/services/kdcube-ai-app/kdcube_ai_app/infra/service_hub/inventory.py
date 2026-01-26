@@ -561,6 +561,7 @@ class ConfigRequest(BaseModel):
 
     tenant: Optional[str] = None
     project: Optional[str] = None
+    assistant_signal_spec: Optional[str] = None
 
 class Config:
     """
@@ -634,6 +635,33 @@ class Config:
         else:
             self.custom_embedding_endpoint = None
             self.embedding_model = self.embedder_config["model_name"]
+
+    def set_embedding(self, embedding: Dict[str, Any] | None):
+        if not embedding:
+            return
+        embedder_id = embedding.get("embedder_id") or embedding.get("selected_embedder")
+        if not embedder_id:
+            provider = (embedding.get("provider") or "").strip()
+            model = (embedding.get("model") or "").strip()
+            if provider and model:
+                for key, spec in EMBEDDERS.items():
+                    if spec.get("provider") == provider and spec.get("model_name") == model:
+                        embedder_id = key
+                        break
+        endpoint = embedding.get("endpoint") or embedding.get("custom_endpoint")
+        if embedder_id:
+            try:
+                self.set_embedder(embedder_id, endpoint)
+                return
+            except ValueError:
+                pass
+        if endpoint:
+            size = embedding.get("dim")
+            self.set_custom_embedding_endpoint(
+                endpoint,
+                model=embedding.get("model"),
+                size=int(size) if size else None,
+            )
 
     def set_custom_embedding_endpoint(self, endpoint: str, model: str | None = None, size: int | None = None):
         self.custom_embedding_endpoint = endpoint
@@ -1032,7 +1060,49 @@ class ModelServiceBase:
         self._format_fixer = None
         self._anthropic_async = None
 
-        self._emb_model = embedding_model()
+        self._emb_model = None
+        self._custom_embeddings = None
+        self._init_embeddings()
+
+    def _resolve_embedder_api_key(self, provider: AIProviderName) -> str:
+        if provider == AIProviderName.open_ai:
+            return self.config.openai_api_key or get_service_key_fn(provider)
+        if provider == AIProviderName.anthropic:
+            return self.config.claude_api_key or get_service_key_fn(provider)
+        if provider == AIProviderName.google:
+            return self.config.google_api_key or get_service_key_fn(provider)
+        if provider == AIProviderName.hugging_face:
+            return get_service_key_fn(provider)
+        return ""
+
+    def _init_embeddings(self) -> None:
+        embedder_config = self.config.embedder_config or {}
+        provider_id = (embedder_config.get("provider") or "openai").lower()
+        model_name = embedder_config.get("model_name") or self.config.embedding_model
+        if provider_id == "custom":
+            if not self.config.custom_embedding_endpoint:
+                raise ValueError(f"Custom embedder {self.config.selected_embedder} requires an endpoint")
+            size = int(embedder_config.get("dim") or self.config.custom_embedding_size or 0)
+            self._custom_embeddings = CustomEmbeddings(
+                endpoint=self.config.custom_embedding_endpoint,
+                model=model_name,
+                size=size,
+            )
+            self._emb_model = None
+            return
+
+        self._custom_embeddings = None
+        try:
+            provider_enum = AIProviderName(provider_id)
+        except Exception:
+            provider_enum = AIProviderName.open_ai
+        api_token = self._resolve_embedder_api_key(provider_enum)
+        self._emb_model = ModelRecord(
+            modelType="base",
+            status="active",
+            provider=AIProvider(provider=provider_enum, apiToken=api_token),
+            systemName=model_name,
+        )
 
     # ---------- back-compat clients (lazily resolved) ----------
     @property
@@ -1058,12 +1128,18 @@ class ModelServiceBase:
         Uses your accounting-aware embedding path via get_embedding().
         Kept simple; if you want to offload to thread pool, you can wrap get_embedding in run_in_executor.
         """
+        if self._custom_embeddings is not None:
+            return self._custom_embeddings.embed_documents(texts)
+
+        if self._emb_model is None:
+            self._init_embeddings()
+
         out: List[List[float]] = []
         for t in texts:
             out.append(get_embedding(model=self._emb_model, text=t))
         return out
 
-    # ---------- helper ----------
+    # ---------- helper ----------Ya vypil chay
     def describe_client(self, client, role: Optional[str] = None) -> ClientConfigHint:
         # Prefer role mapping when provided
         if role:
