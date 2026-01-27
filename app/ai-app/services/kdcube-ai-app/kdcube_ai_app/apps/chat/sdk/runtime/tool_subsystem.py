@@ -52,6 +52,7 @@ class ToolSubsystem:
             registry: Optional[Dict[str, Any]] = None,
             tools_specs: Optional[List[Dict[str, Any]]] = None,  # [{"module"| "ref", "alias", "use_sk": bool}]
             raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
+            tool_runtime: Optional[Dict[str, str]] = None,
     ):
         self.svc = service
         self.comm = comm
@@ -64,6 +65,7 @@ class ToolSubsystem:
         except Exception:
             self.namespaced_kv_cache = None
         self.raw_tool_specs = raw_tool_specs or []
+        self._tool_runtime = tool_runtime or {}
 
         # --- compute bundle_root once ---
         self.bundle_root: pathlib.Path | None = None
@@ -145,6 +147,16 @@ class ToolSubsystem:
         self._secure_stub = ToolStub()
 
     # ---------- public surface used by manager + react solver ----------
+    def get_tool_runtime(self, tool_id: str) -> Optional[str]:
+        if not tool_id:
+            return None
+        val = self._tool_runtime.get(tool_id)
+        if not isinstance(val, str):
+            return None
+        v = val.strip().lower()
+        if v in ("none", "local", "local_network", "docker"):
+            return v
+        return None
 
     def tool_catalog_for_prompt(self, *, allowed_plugins: Optional[List[str]] = None,
                                 allowed_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:

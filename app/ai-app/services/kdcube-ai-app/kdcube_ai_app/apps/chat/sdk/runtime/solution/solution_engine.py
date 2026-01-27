@@ -531,6 +531,7 @@ class SolverSystem:
             context_rag_client: Optional[ContextRAGClient] = None,
             tools_specs: Optional[List[Dict[str, Any]]] = None, # list of {ref, use_sk, alias}
             raw_tool_specs: Optional[List[Dict[str, Any]]] = None, # non-resolved tool specs
+            tool_runtime: Optional[Dict[str, str]] = None,
             tool_subsystem: Optional[ToolSubsystem] = None,
             skills_descriptor: Optional[Dict[str, Any]] = None,
             skills_subsystem: Optional[SkillsSubsystem] = None,
@@ -552,6 +553,7 @@ class SolverSystem:
             registry=registry,
             tools_specs=tools_specs,
             raw_tool_specs=raw_tool_specs,
+            tool_runtime=tool_runtime,
         )
         bundle_root = None
         if getattr(self.tools, "bundle_root", None):
@@ -845,4 +847,3 @@ class SolverSystem:
             runtime_ctx=ctx.get("runtime_ctx") or {},
         )
         return react_res
-

@@ -5,9 +5,9 @@ This document explains where built-in tools run (in-process vs isolated subproce
 ## Runtime modes
 
 - `none` (in-process): tool code runs in the main server process.
-- `local` (isolated subprocess): tool code runs in a separate Python process on the same host.
+- `local` (isolated subprocess): tool code runs in a separate Python process on the same host (no supervisor).
 - `local_network` (reserved): same as `local` but with a dedicated network namespace (not used yet).
-- `docker`: tool code runs inside a Docker container (filesystem + network isolation).
+- `docker`: tool code runs inside a Docker container with a **supervisor** that executes tools. The exec sandbox itself is locked down (no network, no secrets, limited FS).
 
 The runtime selector lives in `kdcube_ai_app/apps/chat/sdk/tools/tools_insights.py` (`tool_isolation`).
 
@@ -28,7 +28,7 @@ Native libraries (HTML parsers, PDFs, browser bindings) can crash the process. I
 
 ## How isolation works (high level)
 
-Execution uses the ISO runtime (`kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`). For `local`, it spawns a subprocess via `py_code_exec_entry.py` and communicates over a supervised RPC channel. For `docker`, it launches the same entry inside a container.
+Execution uses the ISO runtime (`kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`). For `local`, it spawns a standalone subprocess via `py_code_exec_entry.py`. For `docker`, the supervisor runs inside the container and brokers tool execution while the exec sandbox stays restricted (no network, no secrets).
 
 Sources are merged back into the main sources pool; artifacts and logs are recorded in the same way as in-process tools.
 
@@ -54,4 +54,3 @@ def should_isolate_tool_execution(tool_id: str) -> bool:
         or tool_id in CUSTOM_ISOLATED
     )
 ```
-

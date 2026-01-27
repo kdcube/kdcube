@@ -14,6 +14,9 @@ The context is the canonical source of truth for:
 - Rehosted files/attachments from prior turns.
 - A global sources pool (SIDs are stable across turns in the current session).
 - The event timeline, tool call index, and content lineage for auditing.
+- The budget snapshot exposed to the decision model.
+
+Coordinator policy (scope + output contract + budget intent) seeds the budget caps shown in the journal and used by the decision agent.
 
 ## Filesystem Layout
 
@@ -23,7 +26,7 @@ Each ReAct run uses a temporary workspace with:
 
 Key files under `out/`:
 - `context.json`: the session index (turn metadata, artifacts, slots, events, tool index, and a snapshot of sources pool).
-- `sources_pool.json`: the canonical, heavy sources pool (stored separately but also mirrored into `context.json`).
+- `sources_pool.json`: the canonical, heavy sources pool (stored separately; **fully duplicated** in `context.json`).
 - Tool outputs: files created by tools or codegen (PDF/PPTX/PNG/XLSX/etc.).
 - Auxiliary files (e.g., tool call records, delta caches) when tools emit them.
 
@@ -76,8 +79,8 @@ Artifacts are typed by kind:
 
 Producers:
 - Codegen program output: files only.
-- Decision-exec code: files only.
-- LLM gen tool: inline artifacts (today), but the system is moving toward file outputs where possible.
+- Decision-exec code: files only (exec always produces file artifacts, even for text).
+- LLM gen tool: inline artifacts; file outputs are produced via write_* tools.
 - write_* tools: file artifacts.
 
 ## Artifact Paths (Decision/Codegen View)
@@ -124,7 +127,7 @@ Binding is performed through `fetch_context` and merged into tool params. Key be
 ## Slot Mapping and Relaxations
 
 Slot mapping supports:
-- Mapping from a leaf (`.value.content`, `.text`, etc.) or from the artifact object itself.
+- Mapping from a leaf (`.value.content`, `.text`, etc.) or from the artifact object itself (if the leaf is implied).
 - Normalization of `current_turn.files.<filename>` to the matching artifact ID when possible.
 - Draft file mapping from inline text when a rendered file is missing (wrap-up support). Draft mappings carry `gaps`.
 
@@ -141,8 +144,23 @@ User attachments and show_artifacts may also contribute multimodal blocks to the
 - Materializes each artifact into a compact, readable form.
 - Extracts up to two multimodal attachments across all shown artifacts (deduped by MIME type) to keep context small.
 
+## Notes on isolation modes
+
+ReAct may execute tools in-process or via isolated runtime (local subprocess or Docker sandbox). The on-disk context layout is the same across modes; only the execution boundary changes.
+
 ## Lineage Between Artifacts
 
 Artifacts record `content_lineage`, which is derived from the paths used in `fetch_context`.
 This lineage is used to trace provenance and, when mapping file slots, to resolve the best summary if multiple inputs contributed.
 
+## Sources provenance in generated artifacts
+
+Artifacts and slots can carry `sources_used` to show which sources were actually referenced:
+
+- LLM generation tools emit `sources_used` when `sources_list` is bound.
+- When artifacts are mapped into slots, `sources_used` is propagated into the slot.
+- The sources pool maintains stable SIDs and is deduped by URL, so citations remain consistent across merges.
+
+Where to look:
+- Tool artifacts: `current_turn.artifacts.<id>.value.sources_used` (or `sources_used` at the root for legacy artifacts).
+- Slots: `current_turn.slots.<slot>.sources_used` / `<turn_id>.slots.<slot>.sources_used`.

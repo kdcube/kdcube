@@ -17,7 +17,19 @@ We execute untrusted, LLM-generated Python (codegen + exec tools). To keep the s
 - The **executor process** runs without network access.
 - The container **root filesystem is read-only**.
 - The executor can only write inside its `workdir` and `outdir`.
-- All external operations (web fetch, storage, LLM calls, etc.) are proxied via **supervisor tools**.
+- In Docker mode, all **tool calls** are proxied via the supervisor. Any other code runs in the executor sandbox (no secrets, no network, write‑only to workdir/outdir).
+
+## Local vs Docker (at a glance)
+
+**Local (subprocess)**  
+- Separate Python process on the same host.  
+- No supervisor/executor split.  
+- Crash containment only; no extra sandboxing beyond process boundary.
+
+**Docker (supervised sandbox)**  
+- Supervisor executes tool calls; executor runs untrusted code with no network/keys.  
+- Read‑only root FS; only workdir/outdir writable.  
+- Stronger isolation and policy enforcement.
 
 ## When ISO runtime is used
 

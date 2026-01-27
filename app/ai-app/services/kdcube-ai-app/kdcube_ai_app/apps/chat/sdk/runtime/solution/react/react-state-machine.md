@@ -100,6 +100,7 @@ This prevents silent exits after a decision with `action=call_tool`.
 
 Budgets are tracked in `BudgetState` and are exposed to the decision LLM as
 `BUDGET_STATE` in the session journal.
+See also: [react-budget.md](react-budget.md) for detailed budget semantics and coordinator inputs, and [coordinator-README.md](coordinator-README.md).
 
 ### Global Budget
 
@@ -140,7 +141,7 @@ BUDGET_STATE: global(decisions left D/T, tools left C/T, explore left E/T, explo
 Optional flags:
 
 - `wrapup active` when the current round is the wrapup pass.
-- `exploit_overdraft u/t` when exploit overdraft is active.
+- `exploit_overdraft u/t` when exploit overdraft is active (not shown during wrap-up).
 
 ## Wrapup Round
 
@@ -164,6 +165,7 @@ If wrapup triggers:
 - `wrapup_round_used = True`
 - `exit_reason` and `pending_exit_reason` are cleared
 - control returns to `decision`
+- budget snapshot shows all remaining counts as `0/*` for strategies/reruns/ctx
 
 During wrapup, any `call_tool` action is forced to exit (mapping only).
 

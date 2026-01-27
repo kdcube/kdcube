@@ -4,6 +4,9 @@
 Multi-bundle by design, with a separate, governed **Knowledge Base** that plugs into the same UI. 
 Real-time **WebSocket streaming**, built-in **accounting**, and a clean **frontend** so you focus on agent logic—not plumbing.
 
+> **Note:** This README will be refreshed soon. For the current SDK documentation, see:
+> - [SDK Index](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/SDK-index.md)
+
 ---
 
 ## What’s inside

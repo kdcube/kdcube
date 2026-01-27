@@ -48,6 +48,7 @@ If omitted and the bundle has `skills/` under its root, the bundle can pass that
    - Runtime globals include `SKILLS_DESCRIPTOR` from the active subsystem.
    - `py_code_exec_entry.py` reads it and calls `set_skills_descriptor(...)`,
      recreating a `SkillsSubsystem` in the isolated process.
+   - This works for both local subprocess isolation and Docker mode.
 
 ## Access patterns
 

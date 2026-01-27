@@ -1,4 +1,4 @@
-# **Isolated Code Execution Architecture**
+# **Isolated Code Execution Architecture (Docker Mode)**
 
 ## **Diagram 1: Detailed Execution Flow (Docker Mode)**
 
@@ -191,11 +191,11 @@
 └─────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ TOOL EXECUTION BY TYPE                                                  │
+│ TOOL EXECUTION BY TYPE (Docker mode)                                    │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
 │  ┌────────────────────────────────────────────────────────────────┐   │
-│  │ BUILT-IN SAFE TOOLS (Always in Supervisor)                     │   │
+│  │ BUILT-IN SAFE TOOLS (Executed by Supervisor in Docker)          │   │
 │  ├────────────────────────────────────────────────────────────────┤   │
 │  │ Tool              │ Requires    │ Execution Location          │   │
 │  ├───────────────────┼─────────────┼─────────────────────────────┤   │
@@ -293,7 +293,7 @@
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
-## **Key Insights**
+## **Key Insights (Docker mode)**
 
 1. **Untrusted code CAN execute arbitrary logic** (loops, calculations, pandas, etc.) - it just **cannot** directly access network/secrets
 2. **Tool calls are transparent** - user code calls `await web_search(...)` like normal, but it's proxied
@@ -301,3 +301,14 @@
 4. **Supervisor is the trust boundary** - it has all privileges and validates all tool calls
 5. **Network isolation doesn't break functionality** - tools that need network run in supervisor
 6. **`--network host` mode** allows supervisor to reach Redis/Postgres on `localhost` while executor remains isolated
+
+---
+
+## **Local Subprocess Mode (no supervisor)**
+
+When isolation is set to `local` or `local_network`, tools run in a standalone subprocess on the host:
+
+- No supervisor/executor split.
+- No Unix socket proxying.
+- Crash containment only (process boundary).
+- Use this mode when you want safety from native crashes but don’t need Docker sandboxing.

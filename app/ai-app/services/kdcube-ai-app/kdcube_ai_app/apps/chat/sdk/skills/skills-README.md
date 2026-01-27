@@ -94,7 +94,7 @@ tools.yaml is metadata for the skill and lists which tools are relevant and why.
 Example:
 
 tools:
-  - id: agent_tools.write_pdf
+  - id: generic_tools.write_pdf
     role: document rendering
     why: Renders HTML/Markdown/Mermaid to PDF.
   - id: llm_tools.generate_content_llm
@@ -131,10 +131,10 @@ Example:
 custom_skills_root = "/opt/custom_skills"
 
 agents_config = {
-  "solver.coordinator": {
+  "solver.react.decision": {
     "enabled": ["public.url-gen"]
   },
-  "tool.generator.strong": {
+  "answer.generator.strong": {
     "disabled": ["public.pdf-press", "public.*-press"]
   }
 }
@@ -172,6 +172,7 @@ For infrastructure details and how descriptors are wired into runtime, see:
 
 Important: skills are applied only to generators (decision, codegen, llm).
 They are not passed to tools unless the tool itself is a generator.
+The final answer generator is a generator and can receive skills (e.g., formatting or marketing guidance).
 
 
 ## When skills are applied

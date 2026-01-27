@@ -19,14 +19,15 @@ This guide covers setup and configuration for running [AI-]generated Python code
 ## Overview
 
 The isolated execution system allows running untrusted AI-generated code safely by:
-- **Network isolation** - Code cannot access the internet or internal services
-- **Privilege separation** - Privileged operations run in supervisor, untrusted code in isolated executor
-- **Tool proxying** - All external operations (web search, file I/O, LLM calls) proxied via Unix socket
+- **Network isolation** - Executor code cannot access the internet or internal services
+- **Privilege separation** - Supervisor handles tool calls; untrusted code runs in isolated executor
+- **Tool proxying (Docker mode)** - All tool calls are proxied via Unix socket to the supervisor
 - **Read-only filesystem** - Container has read-only root, only workspace is writable
 
 **Supported deployment modes:**
 1. **Bare metal** - Chat service runs on host, spawns Docker containers for code execution
 2. **Docker-in-Docker** - Chat service runs in Docker, spawns sibling containers for code execution
+3. **Local isolation (subprocess)** - Some tools run in a local subprocess without a supervisor (see runtime modes doc)
 
 ---
 
@@ -34,7 +35,8 @@ The isolated execution system allows running untrusted AI-generated code safely 
 
 For implementation details (runtime flow, supervisor/executor roles, mounts, permissions, env vars, and parallel-exec notes), see:
 
-- `kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-iso-runtime.md`
+- [README-iso-runtime.md](../../sdk/runtime/isolated/README-iso-runtime.md)
+- [README-runtime-modes-builtin-tools.md](../../sdk/runtime/isolated/README-runtime-modes-builtin-tools.md)
 
 ---
 

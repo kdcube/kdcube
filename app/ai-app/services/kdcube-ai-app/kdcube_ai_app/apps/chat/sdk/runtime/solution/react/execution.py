@@ -1092,6 +1092,7 @@ async def execute_tool_in_isolation(
         artifacts_contract: Optional[list[dict]] = None,
         use_llm_summary: bool = False,
         llm_service: Optional[Any] = None,
+        isolation_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute a single tool using the iso runtime (bootstrapped child).
@@ -1147,7 +1148,7 @@ async def execute_tool_in_isolation(
         **runtime_globals,  # TOOL_ALIAS_MAP, TOOL_MODULE_FILES, BUNDLE_SPEC, RAW_TOOL_SPECS
     }
 
-    isolation = tools_insights.tool_isolation(tool_id=tool_id)
+    isolation = isolation_override or tools_insights.tool_isolation(tool_id=tool_id)
     # Unless there's no third-party blackboxed tools, and the tools are all verified, it is safe. TODO.
     # Tool isolation settings TODO define on the level of Tool Subsystem and simply inherit here as a part of runtime_globals.
     # Per-call overrides for sandbox behavior; _run_subprocess will read these via env
@@ -1439,8 +1440,32 @@ async def execute_tool(
       - else → run in sandbox subprocess (preserves main.py into executed_programs/)
     """
     tool_id = tool_execution_context.get("tool_id") or ""
+    runtime_override = None
+    if tool_manager and hasattr(tool_manager, "get_tool_runtime"):
+        try:
+            runtime_override = tool_manager.get_tool_runtime(tool_id)
+        except Exception:
+            runtime_override = None
 
-    if not tools_insights.should_isolate_tool_execution(tool_id):
+    if runtime_override == "none":
+        return await _execute_tool_in_memory(
+            tool_execution_context=tool_execution_context,
+            context=context,
+            workdir=workdir,
+            outdir=outdir,
+            tool_manager=tool_manager,
+            logger=logger,
+            use_llm_summary=use_llm_summary,
+            llm_service=llm_service,
+            codegen=codegen_runner,
+            tool_call_id=tool_call_id,
+            artifacts_contract=artifacts_contract,
+            solution_gen_stream=solution_gen_stream,
+            exec_streamer=exec_streamer,
+            codegen_streamer=codegen_streamer,
+        )
+
+    if not tools_insights.should_isolate_tool_execution(tool_id) and runtime_override is None:
         return await _execute_tool_in_memory(
             tool_execution_context=tool_execution_context,
             context=context,
@@ -1470,4 +1495,5 @@ async def execute_tool(
                                            use_llm_summary=use_llm_summary,
                                            llm_service=llm_service,
                                            artifacts_contract=artifacts_contract,
-                                           tool_call_id=tool_call_id)
+                                           tool_call_id=tool_call_id,
+                                           isolation_override=runtime_override)
