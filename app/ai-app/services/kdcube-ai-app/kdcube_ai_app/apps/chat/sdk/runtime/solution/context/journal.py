@@ -589,7 +589,7 @@ def build_turn_session_journal(*,
                 nxt = e.get("action")
                 strat = e.get("strategy")
                 focus = e.get("focus_slot")
-                next_plan = (e.get("decision_notes") or "").strip()
+                notes = (e.get("notes") or "").strip()
 
                 tc = e.get("tool_call") or {}
                 tool_id = (tc.get("tool_id") or "").strip() if isinstance(tc, dict) else ""
@@ -657,8 +657,6 @@ def build_turn_session_journal(*,
                     rest = len(mapped_pairs) - len(shown)
                     maps_s = ", ".join(shown) + (f", +{rest} more" if rest > 0 else "")
 
-                reason = (e.get("reasoning") or "").replace("\n", " ").strip()
-
                 tool_piece = None
                 if tool_id:
                     # If this ever happens, it’s a protocol violation we WANT to see.
@@ -676,12 +674,11 @@ def build_turn_session_journal(*,
                     f"action={nxt}",
                     f"strategy={strat}" if strat else None,
                     f"focus={focus}" if focus else None,
-                    f"notes={next_plan}" if next_plan else None,
+                    f"notes={notes}" if notes else None,
                     tool_piece,
                     f"map={maps_s}" if maps_s else None,
                     show_piece,
                     f"fetch={fetch_n}" if fetch_n else None,
-                    f"reason={reason}" if reason else None,
                 ]
                 pieces = [p for p in pieces if p]
                 lines.append(f"- {ts} — decision: " + " — ".join(pieces))
@@ -1310,7 +1307,7 @@ def build_session_log_summary(session_log: List[Dict[str, Any]],
                 tras = _norm_out_artifacts_spec(tc)
                 tras_s = _fmt_res_artifacts(tras)
 
-                call_reason = tc.get("reasoning") or dec.get("reasoning") or ""
+                call_reason = tc.get("reasoning") or dec.get("notes") or ""
                 fetch_n = len(dec.get("fetch_context") or [])
                 show_list = dec.get("show_artifacts") or []
                 map_slots_list = dec.get("map_slots") or []
@@ -1585,7 +1582,7 @@ def build_instruction_catalog_block(
     return "\n\n".join(parts)
 
 
-def build_tools_block(
+def build_tools_block_old(
         tool_catalog: Optional[List[Dict[str, Any]]],
         *,
         header: str,
@@ -1597,6 +1594,139 @@ def build_tools_block(
         json.dumps(tool_catalog or [], ensure_ascii=False, indent=2),
     ])
 
+def build_tools_block(
+        tool_catalog: Optional[List[Dict[str, Any]]],
+        *,
+        header: str,
+) -> str:
+    """Build a formatted, human-readable tools catalog (similar to skills gallery)."""
+    if not tool_catalog:
+        return ""
+
+    lines: List[str] = [
+        header,
+        "Available tools extend agent capabilities with specific operations. "
+        "Call tools using their full ID (e.g., generic_tools.web_search).",
+        "",
+        "═" * 79,
+        "",
+        ]
+
+    for idx, tool in enumerate(tool_catalog, start=1):
+        tid = tool.get("id", "unknown")
+        purpose = tool.get("purpose", "")
+        is_async = tool.get("is_async", False)
+        args = tool.get("args", {})
+        returns = tool.get("returns", "")
+        examples = tool.get("examples", [])
+        constraints = tool.get("constraints", [])
+
+        # Tool header with emoji
+        async_txt = " [async]" if is_async else ""
+        lines.append(f"🔧 [{idx}] {tid}{async_txt}")
+        lines.append("")
+
+        # Purpose/description
+        if purpose:
+            lines.extend(_wrap_lines(purpose, indent="   "))
+            lines.append("")
+
+        # Arguments
+        if args:
+            lines.append("   📥 Parameters:")
+            for arg_name, arg_info in args.items():
+                # Parse type and description from arg_info string
+                # Format is typically: "type, description (default=value)"
+                if isinstance(arg_info, str):
+                    parts = arg_info.split(", ", 1)
+                    arg_type = parts[0] if parts else "any"
+                    arg_desc = parts[1] if len(parts) > 1 else ""
+
+                    # Extract default if present
+                    default_match = re.search(r'\(default=(.*?)\)$', arg_desc)
+                    default_txt = ""
+                    if default_match:
+                        default_val = default_match.group(1)
+                        default_txt = f" [default: {default_val}]" if default_val else " [optional]"
+                        arg_desc = arg_desc[:default_match.start()].strip()
+
+                    lines.append(f"       • {arg_name}: {arg_type}{default_txt}")
+                    if arg_desc:
+                        lines.extend(_wrap_lines(arg_desc, indent="         "))
+                else:
+                    lines.append(f"       • {arg_name}: {arg_info}")
+            lines.append("")
+
+        # Returns
+        if returns:
+            lines.append("   📤 Returns:")
+            lines.extend(_wrap_lines(returns, indent="       "))
+            lines.append("")
+
+        # Call signature (simplified)
+        call_template = tool.get("call_template", "")
+        if call_template:
+            # Extract just the function signature without the full template
+            match = re.match(r'([^(]+)\(', call_template)
+            if match:
+                sig = f"{match.group(1)}(...)"
+                lines.append(f"   📞 Usage: {sig}")
+                lines.append("")
+
+        # Constraints
+        if constraints:
+            lines.append("   ⚠️  Constraints:")
+            for constraint in constraints:
+                lines.append(f"       • {constraint}")
+            lines.append("")
+
+        # Examples
+        if examples:
+            lines.append("   💡 Examples:")
+            for ex_idx, example in enumerate(examples, start=1):
+                if isinstance(example, dict):
+                    desc = example.get("description", "")
+                    code = example.get("code", "")
+                    if desc:
+                        lines.append(f"       {ex_idx}. {desc}")
+                    if code:
+                        lines.extend(_wrap_lines(code, indent="          "))
+                else:
+                    lines.extend(_wrap_lines(str(example), indent="       "))
+            lines.append("")
+
+        lines.append("━" * 77)
+        lines.append("")
+
+    return "\n".join([l for l in lines if l is not None])
+
+
+def _wrap_lines(text: str, indent: str = "   ", width: int = 77) -> List[str]:
+    """Wrap text to fit within width, applying indent to each line."""
+    if not text:
+        return []
+
+    # Clean up whitespace
+    text = " ".join(text.split())
+
+    lines = []
+    available_width = width - len(indent)
+
+    while text:
+        if len(text) <= available_width:
+            lines.append(f"{indent}{text}")
+            break
+
+        # Find last space within available width
+        break_point = text.rfind(" ", 0, available_width)
+        if break_point == -1:
+            # No space found, force break at width
+            break_point = available_width
+
+        lines.append(f"{indent}{text[:break_point]}")
+        text = text[break_point:].lstrip()
+
+    return lines
 
 def build_active_skills_block(active_skills: Optional[List[str]]) -> str:
     if not active_skills:

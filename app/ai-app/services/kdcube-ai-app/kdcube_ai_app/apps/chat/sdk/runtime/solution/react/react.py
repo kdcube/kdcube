@@ -1271,7 +1271,7 @@ class ReactSolver:
                 )
         focus_slot = agent_response.get("focus_slot") or ""
         action = agent_response.get("action") or "complete"
-        decision_notes = agent_response.get("decision_notes") or ""
+        notes = agent_response.get("notes") or ""
         completion_summary = (agent_response.get("completion_summary") or "").strip()
         raw_strategy = agent_response.get("strategy")
         allowed_strategies = {"explore", "exploit", "render", "exit"}
@@ -1309,8 +1309,7 @@ class ReactSolver:
         if not agent_response.get("action"):
             agent_response["action"] = action
         self.scratchpad.tlog.solver(
-            f"[react.decision] action={action} decision_notes={decision_notes} "
-            f"reason={agent_response.get('reasoning','')[:120]} focus_slot={focus_slot}"
+            f"[react.decision] action={action} notes={notes[:160]} focus_slot={focus_slot}"
         )
         await emit_event(
             comm=self.comm,
@@ -1476,8 +1475,7 @@ class ReactSolver:
         context.add_event(kind="decision", data={
             "iteration": it + 1,
             "action": action,
-            "decision_notes": agent_response.get("decision_notes"),
-            "reasoning": agent_response.get("reasoning"),
+            "notes": agent_response.get("notes"),
             "tool_call": agent_response.get("tool_call") or {},
             "map_slots": filtered_maps,
             "fetch_context_count": len(fetch_ctx) if isinstance(fetch_ctx, list) else 0,
@@ -2876,7 +2874,7 @@ class ReactSolver:
         rii = ""
         last_decision = state.get("last_decision")
         if last_decision and isinstance(last_decision, dict):
-            rii = (last_decision.get("completion_summary") or "") or (last_decision.get("reasoning") or "")
+            rii = (last_decision.get("completion_summary") or "") or (last_decision.get("notes") or "")
             if rii:
                 rii = rii.strip()
                 idx = 0
