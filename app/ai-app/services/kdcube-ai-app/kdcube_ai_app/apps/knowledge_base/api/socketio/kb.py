@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.knowledge_base.api.resolvers import require_kb_read
 from kdcube_ai_app.apps.middleware.accounting import MiddlewareAuthWithAccounting
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.auth.AuthManager import RequireRoles, RequirePermissions, AuthenticationError
+from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
 
 logger = logging.getLogger("KB.SocketIO")
 
@@ -128,8 +129,7 @@ class SocketIOKBHandler:
         logger.info(f"KB socket connect from {origin} (sid={sid})")
 
         # 1) Accept access token; ID token optional (warn if missing).
-        bearer = (auth or {}).get("bearer_token")
-        idt    = (auth or {}).get("id_token")  # optional
+        bearer, idt = resolve_socket_auth_tokens(auth, environ)
 
         if not bearer:
             # Send a reason the client can read via `connect_error`

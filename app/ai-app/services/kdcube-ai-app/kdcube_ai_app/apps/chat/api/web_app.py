@@ -33,6 +33,10 @@ from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 
 from kdcube_ai_app.apps.middleware.gateway import STATE_FLAG, STATE_SESSION, STATE_USER_TYPE
+from kdcube_ai_app.apps.middleware.token_extract import (
+    extract_auth_tokens_from_query_params,
+    inject_auth_tokens_into_headers,
+)
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.config import get_gateway_config
@@ -332,19 +336,18 @@ async def gateway_middleware(request: Request, call_next):
     try:
         # FOR SSE: Check query params for auth tokens if headers are missing
         if request.url.path.startswith("/sse/"):
-            bearer_token = request.query_params.get("bearer_token")
-            id_token = request.query_params.get("id_token")
+            bearer_token, id_token = extract_auth_tokens_from_query_params(request.query_params)
             user_timezone = request.query_params.get("user_timezone")
             user_utc_offset_min = request.query_params.get("user_utc_offset_min")
 
             # Inject into headers so gateway adapter can process normally
-            if bearer_token and "authorization" not in request.headers:
-                request._headers = dict(request.headers)
-                request._headers["authorization"] = f"Bearer {bearer_token}"
-            request._headers = dict(request.headers) if not hasattr(request, '_headers') else request._headers
-            if id_token:
-                # request._headers[id_token_header.lower()] = id_token
-                request._headers[CONFIG.ID_TOKEN_HEADER_NAME] = id_token
+            base_headers = request._headers if hasattr(request, "_headers") else request.headers
+            request._headers = inject_auth_tokens_into_headers(
+                base_headers,
+                bearer_token,
+                id_token,
+                id_header_name=CONFIG.ID_TOKEN_HEADER_NAME,
+            )
             if user_timezone:
                 request._headers[CONFIG.USER_TIMEZONE_HEADER_NAME] = user_timezone
             if user_utc_offset_min:

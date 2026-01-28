@@ -27,6 +27,10 @@ from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError
 from kdcube_ai_app.infra.gateway.backpressure import BackpressureError
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.namespaces import CONFIG
+from kdcube_ai_app.apps.middleware.token_extract import (
+    resolve_auth_from_headers_and_cookies,
+    resolve_socket_auth_tokens,
+)
 from kdcube_ai_app.apps.chat.api.resolvers import get_auth_manager
 from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
 
@@ -914,7 +918,11 @@ def build_sse_request_context(
     elif bearer_token:
         auth_header = f"Bearer {bearer_token}"
     else:
-        auth_header = request.headers.get("authorization")
+        auth_header, _ = resolve_auth_from_headers_and_cookies(
+            request.headers.get("authorization"),
+            None,
+            request.cookies,
+        )
 
     # id token
     resolved_id_token = None
@@ -923,7 +931,12 @@ def build_sse_request_context(
     elif id_token:
         resolved_id_token = id_token
     else:
-        resolved_id_token = request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+        _, resolved_id_token = resolve_auth_from_headers_and_cookies(
+            None,
+            request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+            or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
+            request.cookies,
+        )
 
     return RequestContext(
         client_ip=client_ip,
@@ -940,8 +953,7 @@ def build_ws_connect_request_context(
     xff = environ.get("HTTP_X_FORWARDED_FOR")
     client_ip = (xff.split(",")[0].strip() if xff else None) or environ.get("REMOTE_ADDR") or "unknown"
     user_agent = environ.get("HTTP_USER_AGENT", "")
-    bearer = (auth or {}).get("bearer_token")
-    id_token = (auth or {}).get("id_token")
+    bearer, id_token = resolve_socket_auth_tokens(auth, environ)
     auth_header = f"Bearer {bearer}" if bearer else None
 
     return RequestContext(

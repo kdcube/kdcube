@@ -1,5 +1,10 @@
 # Redis-based Chat Relay & SSE Fan-Out
 
+> Note: This document focuses on SSE fan-out, but the same relay/channeling
+> design is used by Socket.IO as well. See:
+> - [Socket.IO transport](../socketio/chat.py)
+> - [Comm integrations overview](../../sdk/comm/README-comm.md)
+
 This document describes the architecture of the **chat relay** in the KDCube AI App, specifically:
 
 * How **Redis Pub/Sub** is used as a relay between orchestrators/workers and the web app.

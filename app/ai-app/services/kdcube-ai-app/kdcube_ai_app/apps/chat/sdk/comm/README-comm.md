@@ -1,218 +1,178 @@
-# Using the Chat Emitter in Agent Bundles
+# Communication Integrations (External + Internal)
 
-This guide shows bundle authors how to stream tokens, post step updates, and send typed UI cards (like follow-ups) through the **emitter** in the chat runtime.
-Streaming UX with minimal boilerplate.
+This README is the entry point for **communication integrations**:
 
-Utility: [emitters.py](emitters.py)
-Example of usage - [agentic_app.py](../../default_app/agentic_app.py).
----
+- **External transports**: HTTP (REST), SSE, Socket.IO
+- **Auth/session handling**: token sources, anonymous vs registered, role-based policy
+- **Attachments**: REST/SSE multipart and Socket.IO binary frames
+- **Internal relay**: Redis Pub/Sub fan-out (`ServiceCommunicator` + `ChatRelayCommunicator`)
 
-
-
-## TL;DR
-
-* Use `AIBEmitters` inside your workflow.
-* Emit **steps** for progress, **deltas** for streaming, and **typed events** for UI cards.
-* Typed events default-route to `chat_step` (the client already listens there).
-
-```python
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters, DeltaPayload, StepPayload
-from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
-
-class ChatWorkflow:
-    def __init__(self, config, communicator: ChatCommunicator, streaming: bool = True):
-        self.emit = AIBEmitters(communicator)
-```
+If you are implementing a UI, API client, or a new transport, start here.
 
 ---
 
-## What the runtime already does (so you don’t have to)
+## 1) External transports (client-facing)
 
-* The processor sends `chat.start` and `chat.complete` envelopes for each turn.
-* If your workflow raises, the processor emits `chat.error`.
+### A) REST (non-streaming)
 
-You should emit **steps**, **deltas**, and optional **typed events** from inside your nodes.
+- Use standard HTTP requests for non-streaming endpoints (e.g. profile, admin, KB, etc.).
+- Auth is accepted via headers or cookies (see **Auth & token sources** below).
 
----
+> Note: Chat streaming is handled via **SSE** or **Socket.IO**. REST is primarily used for non-streaming APIs.
 
-## API at a glance
+### B) SSE (stream + send)
 
-### Steps (progress cards)
+**Stream**
+- Endpoint: `/sse/stream`
+- Purpose: open a server-to-client stream for async events.
+- Key params:
+  - `stream_id` (client-provided unique id)
+  - `user_session_id` (optional; reuse an existing session)
+  - `bearer_token`, `id_token` (optional; can upgrade anonymous)
 
-```python
-await self.emit.step(StepPayload(
-    step="classifier",
-    status="started",                 # "started" | "completed" | "error" | "skipped"
-    title="🧭 Classifier",
-))
-# ... do work ...
-await self.emit.step(StepPayload(
-    step="classifier",
-    status="completed",
-    title="🧭 Classifier",
-    markdown="**Result:** In scope\n\n**Confidence:** 92%",
-    data={"details": {"confidence": 0.92}},
-))
-```
+**Send**
+- Endpoint: `/sse/chat`
+- Purpose: enqueue a user message + attachments.
+- Body:
+  - JSON (application/json) **or**
+  - multipart/form-data for attachments
 
-* `markdown` (if provided) is wrapped into a compose-block automatically.
-* Use `data` for structured payloads you may render later.
+**Code references**
+- SSE transport: [sse/chat.py](../../api/sse/chat.py)
+- SSE relay: [CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md](../../api/sse/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
 
----
+### C) Socket.IO (stream + send)
 
-### Deltas (token streaming)
+**Connect**
+- Event: `connect` (Socket.IO handshake)
+- Auth payload may include:
+  - `user_session_id`
+  - `bearer_token`
+  - `id_token`
+  - `tenant`, `project`
 
-```python
-i = 0
-await self.emit.delta(DeltaPayload(text="Let’s start with ", index=i)); i += 1
-await self.emit.delta(DeltaPayload(text="light needs.", index=i)); i += 1
+**Send**
+- Event: `chat_message`
+- Payload: JSON (message + metadata) + optional binary frames for attachments
 
-# Optional end markers (some UIs use them, safe to omit if not needed)
-await self.emit.delta(DeltaPayload(text="", index=i, marker="answer", completed=True))
-```
-
-* `index` must be **monotonic** per stream.
-* `marker` may be `"thinking"` or `"answer"`. UIs can render separate tracks.
-
----
-
-### Typed events (cards/chips such as follow-ups)
-
-```python
-await self.emit.event(
-    agent="answer_generator",
-    type="chat.followups",
-    title="Follow-ups: User Shortcuts",
-    step="followups",
-    status="completed",
-    data={"items": ["Adjust watering schedule.", "Reposition plant to bright, indirect light."]},
-)
-```
-
-* **Routing:** By default, typed events are emitted on **`chat_step`** so the existing client receives them without any UI changes.
-* If you *do* set `route="chat_followups"` (or other), make sure your client listens to that socket event.
-
-Convenience for follow-ups:
-
-```python
-await self.emit.followups(["Adjust watering schedule.", "Inspect for pests."])
-```
+**Code reference**
+- Socket.IO transport: [socketio/chat.py](../../api/socketio/chat.py)
 
 ---
 
-## Common patterns
+## 2) Auth & token sources (all transports)
 
-### 1) A full node with start/complete + streaming
+The gateway/auth adapters accept tokens from multiple sources, so clients can choose the best fit.
 
-```python
-await self.emit.step(StepPayload(step="answer_generator", status="started", title="✍️ Compose Answer"))
+### Access token (auth)
+- Header: `Authorization: Bearer <access_token>`
+- Cookie: `__Secure-LATC` (configurable via `AUTH_TOKEN_COOKIE_NAME`)
+- SSE query param: `bearer_token`
+- Socket.IO auth payload: `bearer_token`
 
-idx = 0
-# thinking track
-await self.emit.delta(DeltaPayload(text="• Identify likely causes\n", index=idx, marker="thinking")); idx += 1
-await self.emit.delta(DeltaPayload(text="• Propose fixes\n", index=idx, marker="thinking")); idx += 1
-await self.emit.delta(DeltaPayload(text="", index=idx, marker="thinking", completed=True)); idx += 1
+### ID token
+- Header: `X-ID-Token` (configurable via `ID_TOKEN_HEADER_NAME`)
+- Cookie: `__Secure-LITC` (configurable via `ID_TOKEN_COOKIE_NAME`)
+- SSE query param: `id_token`
+- Socket.IO auth payload: `id_token`
 
-# answer track
-await self.emit.delta(DeltaPayload(text="**Overwatering** can cause yellowing. ", index=idx)); idx += 1
-await self.emit.delta(DeltaPayload(text="Check drainage and reduce frequency.", index=idx)); idx += 1
-await self.emit.delta(DeltaPayload(text="", index=idx, marker="answer", completed=True)); idx += 1
+### Precedence
+1) Explicit transport payload (headers or Socket.IO auth payload)
+2) Query params (SSE only)
+3) Cookies (fallback)
 
-await self.emit.step(StepPayload(step="answer_generator", status="completed",
-                                 title="✍️ Compose Answer",
-                                 markdown="_Answer composed._"))
-```
-
-### 2) Follow-ups as chips + an optional summary card
-
-```python
-items = ["Adjust watering schedule.", "Reposition for indirect light.", "Inspect for pests."]
-await self.emit.followups(items)
-
-# (Optional) also show a visible markdown card in the timeline:
-await self.emit.step(StepPayload(
-    step="followups",
-    status="completed",
-    title="🧠 Follow-ups",
-    markdown="### Suggested next actions\n\n" + "\n".join(f"- {s}" for s in items),
-))
-```
+**Server entrypoints**
+- Gateway adapter: [middleware/gateway.py](../../middleware/gateway.py)
+- Auth adapter: [middleware/auth.py](../../middleware/auth.py)
+- Socket/SSE helpers: [middleware/token_extract.py](../../middleware/token_extract.py)
 
 ---
 
-## Envelope compatibility (client v1)
+## 3) Session handling & role-based policy
 
-The web client listens to these socket events:
+### Anonymous vs registered
+- Sessions start as **anonymous** unless upgraded by tokens.
+- SSE `/stream` and WS `connect` both perform optional token upgrades.
+- You can enforce a hard block for anonymous users via:
+  - `CHAT_SSE_REJECT_ANONYMOUS=1`
+  - `CHAT_WS_REJECT_ANONYMOUS=1`
 
-* `chat_start` / `chat_step` / `chat_delta` / `chat_complete` / `chat_error`
+### Session upgrade
+- If `bearer_token` and/or `id_token` are present, the session is upgraded to:
+  - `registered` or `privileged` depending on roles.
 
-Your **steps** and **typed events** arrive on **`chat_step`** by default.
-Your **deltas** arrive on **`chat_delta`**.
-
-Typed events keep their semantic **`env.type`** (e.g., `"chat.followups"`) inside the envelope so the UI can branch on it.
-
----
-
-## Gotchas & troubleshooting
-
-* **“My follow-ups don’t show.”**
-  You probably routed to a socket name the client doesn’t listen to. Don’t set `route`, or set `route="chat_step"`.
-
-* **“I see duplicate content.”**
-  Ensure you only stream **public** content. If you parse model output that includes a private “prelude/log”, do not emit it as deltas. Keep a clear parser state (e.g., switch modes on markers) and only emit what belongs to `"thinking"` or `"answer"` sections.
-
-* **“Deltas arrive out of order.”**
-  Use a single, monotonic `index` counter per stream.
-
-* **“Do I need to call `chat.start` or `chat.complete`?”**
-  No—handled by the runtime unless you’re writing a custom processor.
+**Upgrade implementation**
+- [ingress/chat_core.py](../../api/ingress/chat_core.py)
 
 ---
 
-## Minimal integration checklist
+## 4) Attachments
 
-1. Construct once in your workflow: `self.emit = AIBEmitters(communicator)`.
-2. For each node:
+### SSE / REST (multipart)
+- `/sse/chat` supports `multipart/form-data`:
+  - `message`: JSON string
+  - `attachment_meta`: JSON string (array)
+  - `files`: binary file parts
 
-    * `step(... started ...)`
-    * work
-    * `delta(...)` (optional streaming)
-    * `step(... completed ...)`
-3. When you have shortcuts or UI cards, use:
+### Socket.IO (binary frames)
+- `chat_message` payload:
+  - `attachment_meta`: array of `{filename, mime, ...}`
+  - binary frames follow the JSON payload (one per attachment)
 
-    * `emit.followups(items)` **or**
-    * `emit.event(agent=..., type="chat.followups", ... data={"items": [...]})`
-4. Don’t set `route` unless you’ve added a matching client listener.
+**Code references**
+- SSE attachments: [sse/chat.py](../../api/sse/chat.py)
+- Socket.IO attachments: [socketio/chat.py](../../api/socketio/chat.py)
 
 ---
 
-## Unified sample
+## 5) Internal relay (Redis)
 
-```python
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters, DeltaPayload, StepPayload
-from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+All transports subscribe to the same internal event bus via **session-scoped** Redis channels.
 
-communicator: ChatCommunicator = ...  # provided to your workflow/node
-emit = AIBEmitters(communicator)
+### Components
+- **Service relay**: `ServiceCommunicator` (low-level Pub/Sub)
+- **Chat relay**: `ChatRelayCommunicator` (session channels + refcounting)
+- **Chat communicator**: producer API for bundles
 
-# Step card
-await emit.step(StepPayload(step="classifier", status="started", title="🧭 Classifier"))
+### Why this matters
+- Per-session Redis channels prevent every server from receiving all events.
+- The relay subscribes only when at least one active connection for that session exists.
 
-# Streaming
-i = 0
-await emit.delta(DeltaPayload(text="plan → ", index=i, marker="thinking")); i += 1
-await emit.delta(DeltaPayload(text="answer part 1 ", index=i)); i += 1
-await emit.delta(DeltaPayload(text="", index=i, marker="answer", completed=True)); i += 1
+**Docs**
+- System overview: [comm-system.md](../../doc/comm-system.md)
+- SSE relay deep dive: [CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md](../../api/sse/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
 
-# Typed UI card (chips)
-await emit.event(
-  agent="answer_generator",
-  type="chat.followups",
-  title="Follow-ups: User Shortcuts",
-  step="followups",
-  status="completed",
-  data={"items": ["Adjust watering schedule.", "Reposition for indirect light."]},
-)
-# or simply:
-await emit.followups(["Adjust watering schedule.", "Reposition for indirect light."])
-```
+---
+
+## 6) Event families (what the client receives)
+
+Standard streaming events:
+- `chat_start`
+- `chat_step`
+- `chat_delta`
+- `chat_complete`
+- `chat_error`
+
+Conversation state:
+- `conv_status`
+
+Typed UI cards:
+- carried as `chat_step` with `env.type` (e.g. `chat.followups`)
+
+---
+
+## 7) Quick client integration checklist
+
+1) Choose **SSE** or **Socket.IO** for streaming.
+2) Provide tokens via header or cookie; for SSE you may also use query params.
+3) Open stream (`/sse/stream`) or connect Socket.IO.
+4) Send messages via `/sse/chat` or `chat_message` event.
+5) Listen for standard events (`chat_start`, `chat_step`, `chat_delta`, `chat_complete`).
+
+---
+
+## 8) Producer API (bundles)
+
+If you are a bundle author, see:
+- [comm-system.md](../../doc/comm-system.md) (producer API + filters)
+- [emitters.py](emitters.py) and [agentic_app.py](../../default_app/agentic_app.py)

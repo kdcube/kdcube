@@ -11,6 +11,7 @@ from kdcube_ai_app.infra.accounting import AccountingSystem
 from kdcube_ai_app.apps.middleware.auth import FastAPIAuthAdapter
 from kdcube_ai_app.auth.AuthManager import RequirementBase, User, AuthenticationError, PRIVILEGED_ROLES
 from kdcube_ai_app.auth.AuthManager import User as AuthUser, AuthorizationError
+from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
 
 class MiddlewareAuthWithAccounting:
     def __init__(
@@ -88,8 +89,7 @@ class MiddlewareAuthWithAccounting:
             require_existing_session: bool = False,
             verify_token_session_match: bool = False,
     ) -> UserSession | None:
-        bearer_token = (auth or {}).get("bearer_token")
-        id_token = (auth or {}).get("id_token")
+        bearer_token, id_token = resolve_socket_auth_tokens(auth, environ)
 
         user_session_id = (auth or {}).get("user_session_id")
         if not bearer_token:

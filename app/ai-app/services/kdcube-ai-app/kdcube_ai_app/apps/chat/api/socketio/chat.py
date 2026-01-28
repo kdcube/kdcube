@@ -38,6 +38,7 @@ from kdcube_ai_app.apps.chat.api.ingress.chat_core import (
     build_ws_chat_request_context,
 )
 from kdcube_ai_app.infra.service_hub.multimodality import MESSAGE_MAX_BYTES
+from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -223,9 +224,8 @@ class SocketIOChatHandler:
             logger.error("WS connect failed to load session %s: %s", user_session_id, e)
             return False
 
-        # 2) extract tokens from Socket.IO auth payload
-        bearer_token = auth.get("bearer_token")
-        id_token = auth.get("id_token")
+        # 2) extract tokens from Socket.IO auth payload (fallback to cookies)
+        bearer_token, id_token = resolve_socket_auth_tokens(auth, environ)
 
         # 3) build connect RequestContext from transport
         ctx = build_ws_connect_request_context(environ, auth)

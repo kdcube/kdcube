@@ -20,6 +20,7 @@ from kdcube_ai_app.auth.sessions import UserType, UserSession, RequestContext
 from kdcube_ai_app.auth.AuthManager import RequirementBase, AuthenticationError, AuthorizationError, RequireUser, \
     RequireRoles
 from kdcube_ai_app.infra.namespaces import CONFIG
+from kdcube_ai_app.apps.middleware.token_extract import resolve_auth_from_headers_and_cookies
 
 STATE_ADMIN_CHECKED = "_gw_admin_checked"
 
@@ -66,11 +67,18 @@ class FastAPIGatewayAdapter:
             except Exception:
                 return None
 
+        auth_header, id_token = resolve_auth_from_headers_and_cookies(
+            request.headers.get("authorization"),
+            request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+            or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
+            request.cookies,
+        )
+
         return RequestContext(
             client_ip=request.client.host if request.client else "unknown",
             user_agent=request.headers.get("user-agent", ""),
-            authorization_header=request.headers.get("authorization"),
-            id_token=request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME) or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
+            authorization_header=auth_header,
+            id_token=id_token,
             user_timezone= request.headers.get(CONFIG.USER_TIMEZONE_HEADER_NAME) or request.headers.get(CONFIG.USER_TIMEZONE_HEADER_NAME.lower()),
             user_utc_offset_min=_parse_int(request.headers.get(CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME) or request.headers.get(CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME.lower()),)
         )

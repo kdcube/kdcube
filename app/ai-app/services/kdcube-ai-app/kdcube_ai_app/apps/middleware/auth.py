@@ -18,6 +18,10 @@ from kdcube_ai_app.auth.AuthManager import AuthManager, RequirementBase, Authent
     HTTP_401_UNAUTHORIZED, PRIVILEGED_ROLES
 from kdcube_ai_app.auth.sessions import RequestContext, UserType
 from kdcube_ai_app.infra.namespaces import CONFIG
+from kdcube_ai_app.apps.middleware.token_extract import (
+    extract_auth_tokens_from_cookies,
+    resolve_auth_from_headers_and_cookies,
+)
 
 
 class UserSessionError(HTTPException):
@@ -51,11 +55,17 @@ class FastAPIAuthAdapter:
 
     def _extract_context(self, request: Request) -> RequestContext:
         """Extract request context from FastAPI request"""
+        auth_header, id_token = resolve_auth_from_headers_and_cookies(
+            request.headers.get("authorization"),
+            request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+            or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
+            request.cookies,
+        )
         return RequestContext(
             client_ip=request.client.host if request.client else "unknown",
             user_agent=request.headers.get("user-agent", ""),
-            authorization_header=request.headers.get("authorization"),
-            id_token=request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME),
+            authorization_header=auth_header,
+            id_token=id_token,
         )
 
     def require(self, *requirements: RequirementBase, require_all: bool = True):
@@ -64,14 +74,19 @@ class FastAPIAuthAdapter:
                 user_session_id: str = Depends(UserSessionID(auto_error=False)),
                 request: Request = None,
         ):
-            if not credentials:
+            cookie_token, cookie_id_token = extract_auth_tokens_from_cookies(request.cookies) if request else (None, None)
+            if not credentials and not cookie_token:
                 raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="No authentication credentials provided")
 
-            id_token = request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+            id_token = (
+                request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+                or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower())
+                or cookie_id_token
+            )
 
             try:
                 user = await self.auth_manager.authenticate_and_authorize_with_both(
-                    credentials.credentials,
+                    (credentials.credentials if credentials else cookie_token),
                     id_token,
                     *requirements,
                     require_all=require_all
@@ -97,14 +112,19 @@ class FastAPIAuthAdapter:
                 user_session_id: str = Depends(UserSessionID(auto_error=False)),
                 request: Request = None,
         ):
-            if not credentials:
+            cookie_token, cookie_id_token = extract_auth_tokens_from_cookies(request.cookies) if request else (None, None)
+            if not credentials and not cookie_token:
                 raise HTTPException(status_code=HTTP_401_UNAUTHORIZED, detail="No authentication credentials provided")
 
-            id_token = request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+            id_token = (
+                request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME)
+                or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower())
+                or cookie_id_token
+            )
 
             try:
                 user = await self.auth_manager.authenticate_and_authorize_with_both(
-                    credentials.credentials,
+                    (credentials.credentials if credentials else cookie_token),
                     id_token,
                     *requirements,
                     require_all=require_all

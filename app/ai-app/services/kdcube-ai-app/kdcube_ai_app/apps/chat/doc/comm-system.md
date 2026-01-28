@@ -1,5 +1,9 @@
 # Communication Subsystem Architecture
 
+> Integration guide: for client-facing transports (REST/SSE/Socket.IO), auth token sources,
+> attachments, and Redis relay overview, see
+> [README-comm.md](../sdk/comm/README-comm.md).
+
 This README describes the **communication subsystem** that delivers **async server events** from chat scenarios/bundles to connected clients via **Redis Pub/Sub**, **SSE**, and **WebSocket**.
 
 The design goal is:
@@ -272,6 +276,26 @@ You can enforce hard blocking at transport boundary:
 
 * `CHAT_SSE_REJECT_ANONYMOUS`
 * `CHAT_WS_REJECT_ANONYMOUS`
+
+### Token sources (transport parity)
+
+Accepted sources (by transport):
+
+* Headers: `Authorization: Bearer <token>`, `X-ID-Token`
+* Cookies: `__Secure-LATC` (auth), `__Secure-LITC` (id)
+* SSE query params: `bearer_token`, `id_token`
+* Socket.IO auth payload: `bearer_token`, `id_token`
+
+See [README-comm.md](../sdk/comm/README-comm.md) for precedence and examples.
+
+### Attachments (transport parity)
+
+Attachments are supported by both SSE and Socket.IO:
+
+* SSE `/sse/chat` accepts `multipart/form-data` with `message`, `attachment_meta`, and `files`.
+* Socket.IO `chat_message` accepts `attachment_meta` plus binary frames for each attachment.
+
+See [attachments-system.md](attachments-system.md) for schema details and client expectations.
 
 ### Filter role
 
