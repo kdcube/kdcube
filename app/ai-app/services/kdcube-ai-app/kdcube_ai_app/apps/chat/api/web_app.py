@@ -37,6 +37,7 @@ from kdcube_ai_app.apps.middleware.token_extract import (
     extract_auth_tokens_from_query_params,
     inject_auth_tokens_into_headers,
 )
+from starlette.datastructures import Headers
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.config import get_gateway_config
@@ -342,16 +343,18 @@ async def gateway_middleware(request: Request, call_next):
 
             # Inject into headers so gateway adapter can process normally
             base_headers = request._headers if hasattr(request, "_headers") else request.headers
-            request._headers = inject_auth_tokens_into_headers(
+            injected = inject_auth_tokens_into_headers(
                 base_headers,
                 bearer_token,
                 id_token,
                 id_header_name=CONFIG.ID_TOKEN_HEADER_NAME,
             )
+            # Keep Starlette Headers type so cookies parsing works (needs getlist)
+            request._headers = Headers(injected)
             if user_timezone:
-                request._headers[CONFIG.USER_TIMEZONE_HEADER_NAME] = user_timezone
+                request._headers = Headers({**dict(request._headers), CONFIG.USER_TIMEZONE_HEADER_NAME: user_timezone})
             if user_utc_offset_min:
-                request._headers[CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME] = user_utc_offset_min
+                request._headers = Headers({**dict(request._headers), CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME: user_utc_offset_min})
 
         # session = await app.state.gateway_adapter.process_request(request, [])
         session = await app.state.gateway_adapter.process_by_policy(request)

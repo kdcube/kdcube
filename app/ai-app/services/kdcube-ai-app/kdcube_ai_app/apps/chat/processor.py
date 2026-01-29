@@ -34,7 +34,7 @@ class EnhancedChatRequestProcessor:
       - Handles graceful shutdown
     """
 
-    QUEUE_ORDER: Iterable[str] = ("privileged", "registered", "anonymous")
+    QUEUE_ORDER: Iterable[str] = ("privileged", "registered", "anonymous", "paid")
 
     def __init__(
             self,
