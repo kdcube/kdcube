@@ -199,8 +199,8 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
-      neo4j:
-        condition: service_healthy
+#      neo4j:
+#        condition: service_healthy
       clamav:
         condition: service_healthy
     networks:
