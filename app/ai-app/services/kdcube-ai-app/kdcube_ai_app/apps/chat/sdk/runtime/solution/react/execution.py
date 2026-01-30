@@ -819,9 +819,43 @@ async def _execute_tool_in_memory(
                                              logger=logger,
                                              bootstrap_env=True)
 
-    # resolve "<alias>.<fn>"
+    # resolve "<alias>.<fn>" or "mcp.<alias>.<tool_id...>"
+    fn = None
     try:
-        alias, fn_name = tool_id.split(".", 1)
+        from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import parse_tool_id
+        origin, provider, fn_name = parse_tool_id(tool_id)
+        if origin == "mcp":
+            fn = None
+        elif origin == "mod" and provider and fn_name:
+            alias = provider
+            owner = tool_manager.get_owner_for_alias(alias)
+            if owner is None:
+                return {
+                    "status": "error",
+                    "output": None,
+                    "summary": f"Alias '{alias}' not found",
+                    "error": {
+                        "code": "alias_not_found",
+                        "message": f"Tool alias '{alias}' is not registered",
+                        "where": "execution",
+                        "managed": True,
+                    }
+                }
+            fn = getattr(owner, fn_name, None)
+            if fn is None:
+                return {
+                    "status": "error",
+                    "output": None,
+                    "summary": f"Function '{fn_name}' not found on '{alias}'",
+                    "error": {
+                        "code": "function_not_found",
+                        "message": f"Function '{fn_name}' not found on alias '{alias}'",
+                        "where": "execution",
+                        "managed": True,
+                    }
+                }
+        else:
+            raise ValueError(f"Unsupported tool id for execution: {tool_id}")
     except ValueError:
         return {
             "status": "error",
@@ -829,35 +863,7 @@ async def _execute_tool_in_memory(
             "summary": f"Bad tool_id: {tool_id}",
             "error": {
                 "code": "invalid_tool_id",
-                "message": f"Tool ID '{tool_id}' is not in format 'alias.function'",
-                "where": "execution",
-                "managed": True,
-            }
-        }
-
-    owner = tool_manager.get_owner_for_alias(alias)
-    if owner is None:
-        return {
-            "status": "error",
-            "output": None,
-            "summary": f"Alias '{alias}' not found",
-            "error": {
-                "code": "alias_not_found",
-                "message": f"Tool alias '{alias}' is not registered",
-                "where": "execution",
-                "managed": True,
-            }
-        }
-
-    fn = getattr(owner, fn_name, None)
-    if fn is None:
-        return {
-            "status": "error",
-            "output": None,
-            "summary": f"Function '{fn_name}' not found on '{alias}'",
-            "error": {
-                "code": "function_not_found",
-                "message": f"Function '{fn_name}' not found on alias '{alias}'",
+                "message": f"Tool ID '{tool_id}' is not in supported format",
                 "where": "execution",
                 "managed": True,
             }

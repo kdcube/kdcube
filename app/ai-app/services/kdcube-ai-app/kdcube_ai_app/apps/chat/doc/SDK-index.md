@@ -47,6 +47,11 @@ by area and links to the canonical README or design notes for each component.
 - ISO runtime internals: [../sdk/runtime/isolated/README-iso-runtime.md](../sdk/runtime/isolated/README-iso-runtime.md)
 - Runtime modes for built-in tools: [../sdk/runtime/isolated/README-runtime-modes-builtin-tools.md](../sdk/runtime/isolated/README-runtime-modes-builtin-tools.md)
 - Tool subsystem: [../sdk/runtime/tool-subsystem-README.md](../sdk/runtime/tool-subsystem-README.md)
+- MCP integration: [../sdk/runtime/mcp/mcp-README.md](../sdk/runtime/mcp/mcp-README.md)
+
+## Storage & Cache
+
+- KV cache: [../../infra/service_hub/cache-README.md](../../infra/service_hub/cache-README.md)
 
 ## Security & Safety
 

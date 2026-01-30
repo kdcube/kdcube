@@ -221,15 +221,92 @@ def _build_integrations_from_spec(spec: PortableSpec) -> Dict[str, Any] | None:
     if not spec.integrations:
         return None
     integrations: Dict[str, Any] = dict(spec.integrations.__dict__ or {})
-    cache_cfg = integrations.get("namespaced_kv_cache")
+    cache_cfg = integrations.get("kv_cache")
     if cache_cfg:
         try:
-            from kdcube_ai_app.infra.service_hub.cache import create_namespaced_kv_cache_from_config
-            integrations["namespaced_kv_cache"] = create_namespaced_kv_cache_from_config(cache_cfg)
+            from kdcube_ai_app.infra.service_hub.cache import create_kv_cache_from_config
+            integrations["kv_cache"] = create_kv_cache_from_config(cache_cfg)
         except Exception:
-            integrations["namespaced_kv_cache"] = None
+            integrations["kv_cache"] = None
     return integrations
 
+def _load_runtime_globals_from_env() -> Dict[str, Any]:
+    raw = os.environ.get("RUNTIME_GLOBALS_JSON") or ""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+def _build_tool_subsystem_from_runtime_globals(
+        *,
+        runtime_globals: Dict[str, Any] | None,
+        svc: ModelServiceBase,
+        comm: ChatCommunicator,
+        registry: Any | None,
+        integrations: Dict[str, Any] | None,
+) -> Any | None:
+    try:
+        from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
+        from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
+    except Exception:
+        return None
+
+    rg = runtime_globals or {}
+    if not rg:
+        rg = _load_runtime_globals_from_env()
+    if not rg:
+        return None
+
+    bundle_dict = rg.get("BUNDLE_SPEC")
+    if not isinstance(bundle_dict, dict):
+        return None
+
+    try:
+        bundle_spec = BundleSpec(**bundle_dict)
+    except Exception:
+        return None
+
+    raw_tool_specs = rg.get("RAW_TOOL_SPECS")
+    if not isinstance(raw_tool_specs, list):
+        raw_tool_specs = []
+
+    ctx_client = None
+    if isinstance(integrations, dict):
+        ctx_client = integrations.get("ctx_client")
+
+    mcp_subsystem = None
+    mcp_specs = rg.get("MCP_TOOL_SPECS")
+    if isinstance(mcp_specs, list) and mcp_specs:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.mcp.mcp_tools_subsystem import MCPToolsSubsystem
+            mcp_subsystem = MCPToolsSubsystem(
+                bundle_id=bundle_spec.id,
+                mcp_tool_specs=mcp_specs,
+                cache=(integrations or {}).get("kv_cache") if isinstance(integrations, dict) else None,
+                env_json=os.environ.get("MCP_SERVICES") or "",
+            )
+        except Exception:
+            mcp_subsystem = None
+
+    try:
+        return ToolSubsystem(
+            service=svc,
+            comm=comm,
+            logger=logger,
+            bundle_spec=bundle_spec,
+            context_rag_client=ctx_client,
+            registry=registry,
+            raw_tool_specs=raw_tool_specs,
+            tool_runtime=rg.get("TOOL_RUNTIME") if isinstance(rg.get("TOOL_RUNTIME"), dict) else None,
+            mcp_subsystem=mcp_subsystem,
+        )
+    except Exception:
+        return None
 def bootstrap_bind_all(spec_json: str, *,
                        module_names: list[str],
                        bootstrap_env: bool = True) -> dict:
@@ -308,20 +385,8 @@ def bootstrap_bind_all(spec_json: str, *,
     except Exception:
         registry = {}
 
-    # 5) bind into every module (module and module.tools)
-    for name in module_names or []:
-        try:
-            m = importlib.import_module(name)
-            bind_into_module(
-                m,
-                svc=svc,
-                registry=registry,
-                integrations=_build_integrations_from_spec(spec),
-            )
-        except Exception:
-            print(f"bind_into_module failed for {name}", file=sys.stderr)
-
-    # 6) communicator once
+    # 5) communicator once (needed for tool subsystem)
+    comm = None
     try:
         comm = make_chat_comm(spec)
         if comm:
@@ -329,6 +394,37 @@ def bootstrap_bind_all(spec_json: str, *,
             set_comm(comm)
     except Exception:
         print("make_chat_comm failed", file=sys.stderr)
+
+    # 6) Build integrations + tool subsystem
+    integrations = _build_integrations_from_spec(spec)
+    try:
+        if comm:
+            tool_subsystem = _build_tool_subsystem_from_runtime_globals(
+                runtime_globals=None,
+                svc=svc,
+                comm=comm,
+                registry=registry,
+                integrations=integrations,
+            )
+            if tool_subsystem is not None:
+                if integrations is None:
+                    integrations = {}
+                integrations["tool_subsystem"] = tool_subsystem
+    except Exception:
+        pass
+
+    # 7) bind into every module (module and module.tools)
+    for name in module_names or []:
+        try:
+            m = importlib.import_module(name)
+            bind_into_module(
+                m,
+                svc=svc,
+                registry=registry,
+                integrations=integrations,
+            )
+        except Exception:
+            print(f"bind_into_module failed for {name}", file=sys.stderr)
 
     return {"ok": True}
 

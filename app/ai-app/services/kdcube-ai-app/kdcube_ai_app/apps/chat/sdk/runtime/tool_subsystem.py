@@ -18,9 +18,28 @@ from typing import Any, Dict, List, Optional, Tuple
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
-from kdcube_ai_app.infra.service_hub.cache import create_namespaced_kv_cache
+from kdcube_ai_app.infra.service_hub.cache import create_kv_cache
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
+
+
+def parse_tool_id(tool_id: str) -> Tuple[str, str, str]:
+    """
+    Parse tool_id into (origin, provider, tool_name).
+    - Back-compat: alias.tool_id -> ("mod", alias, tool_id)
+    - Namespaced: origin.provider.tool_id... -> (origin, provider, tool_id...)
+    """
+    if not tool_id or not isinstance(tool_id, str):
+        return "mod", "", ""
+    parts = [p for p in tool_id.split(".") if p]
+    if len(parts) == 2:
+        return "mod", parts[0], parts[1]
+    if len(parts) >= 3:
+        origin = parts[0]
+        provider = parts[1]
+        tool_name = ".".join(parts[2:])
+        return origin, provider, tool_name
+    return "mod", parts[0], ""
 
 @dataclass
 class ToolModuleSpec:
@@ -53,6 +72,7 @@ class ToolSubsystem:
             tools_specs: Optional[List[Dict[str, Any]]] = None,  # [{"module"| "ref", "alias", "use_sk": bool}]
             raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
             tool_runtime: Optional[Dict[str, str]] = None,
+            mcp_subsystem: Optional[Any] = None,
     ):
         self.svc = service
         self.comm = comm
@@ -61,11 +81,12 @@ class ToolSubsystem:
         self.context_rag_client = context_rag_client
         self.registry = registry or {}
         try:
-            self.namespaced_kv_cache = create_namespaced_kv_cache()
+            self.kv_cache = create_kv_cache()
         except Exception:
-            self.namespaced_kv_cache = None
+            self.kv_cache = None
         self.raw_tool_specs = raw_tool_specs or []
         self._tool_runtime = tool_runtime or {}
+        self.mcp_subsystem = mcp_subsystem
 
         # --- compute bundle_root once ---
         self.bundle_root: pathlib.Path | None = None
@@ -126,7 +147,8 @@ class ToolSubsystem:
                 if hasattr(mod, "bind_integrations"):
                     mod.bind_integrations({
                         "ctx_client": self.context_rag_client,
-                        "namespaced_kv_cache": self.namespaced_kv_cache,
+                        "kv_cache": self.kv_cache,
+                        "tool_subsystem": self,
                     })
             except Exception:
                 pass
@@ -187,6 +209,9 @@ class ToolSubsystem:
         alias_to_file = {m["alias"]: m.get("file") for m in self._modules}
         return alias_to_dyn, alias_to_file
 
+    def get_mcp_subsystem(self):
+        return self.mcp_subsystem
+
     def tool_modules_tuple_list(self) -> List[Tuple[str, object]]:
         """[(dyn_module_name, module_obj)]"""
         return [(m["name"], m["mod"]) for m in self._modules]
@@ -200,8 +225,10 @@ class ToolSubsystem:
 
     def resolve_callable(self, qualified_id: str):
         try:
-            alias, fn = qualified_id.split(".", 1)
-            owner = self.get_owner_for_alias(alias)
+            origin, provider, fn = parse_tool_id(qualified_id)
+            if origin != "mod" or not provider or not fn:
+                return None
+            owner = self.get_owner_for_alias(provider)
             if owner is None:
                 return None
             return getattr(owner, fn, None)
@@ -530,6 +557,10 @@ class ToolSubsystem:
             "BUNDLE_SPEC": bundle_dict,
             "BUNDLE_ROOT_HOST": str(self.bundle_root) if self.bundle_root else None,
             "RAW_TOOL_SPECS": self.raw_tool_specs or [],
+            "MCP_TOOL_SPECS": [
+                {"server_id": s.server_id, "alias": s.alias, "tools": s.tools}
+                for s in (getattr(self.mcp_subsystem, "mcp_specs", []) or [])
+            ] if self.mcp_subsystem else [],
         }
 
 def resolve_codegen_tools_specs(tool_specs: List[Dict[str, Any]],

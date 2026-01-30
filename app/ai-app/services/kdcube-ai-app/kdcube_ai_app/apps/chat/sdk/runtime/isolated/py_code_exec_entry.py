@@ -238,6 +238,11 @@ def _bootstrap_supervisor_runtime(
     for dyn_name in (TOOL_ALIAS_MAP or {}).values():
         if dyn_name and dyn_name not in bind_targets:
             bind_targets.append(dyn_name)
+    try:
+        if "kdcube_ai_app.apps.chat.sdk.tools.io_tools" not in bind_targets:
+            bind_targets.append("kdcube_ai_app.apps.chat.sdk.tools.io_tools")
+    except Exception:
+        pass
 
     logger.log(f"[supervisor.bootstrap] bind_targets: {bind_targets}", "INFO")
 

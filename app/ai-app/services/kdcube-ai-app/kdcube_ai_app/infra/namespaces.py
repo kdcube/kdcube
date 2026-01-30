@@ -33,6 +33,7 @@ class REDIS:
         STATS_KEY = "kdcube:throttling:stats"
         SESSION_COUNTERS_KEY = "kdcube:throttling:session_counters"
         TOTAL_REQUESTS_KEY = "kdcube:throttling:total_requests"
+        TOTAL_REQUESTS_HOURLY = "kdcube:throttling:requests:hourly"
         TOTAL_THROTTLED_REQUESTS_KEY = "kdcube:throttling:total_throttled"
         RATE_LIMIT_429 = "kdcube:throttling:rate_limit_429"
         BACKPRESSURE_503 = "kdcube:throttling:backpressure_503"
@@ -62,6 +63,7 @@ class REDIS:
 
     class CACHE:
         FAVICON = "kdcube:cache:favicon"
+        MCP = "kdcube:cache:mcp"
 
     class SYNCHRONIZATION:
         LOCK = "kdcube:lock"
@@ -79,6 +81,11 @@ class CONFIG:
     class BUNDLES:
         BUNDLE_MAPPING_KEY_FMT = "kdcube:config:bundles:mapping:{tenant}:{project}"
         UPDATE_CHANNEL = "kdcube:config:bundles:update"
+
+    class GATEWAY:
+        NAMESPACE = "kdcube:config:gateway"
+        UPDATE_CHANNEL = "kdcube:config:gateway:update"
+        CURRENT_KEY = "current"
 
     class AGENTIC:
         DEFAULT_LLM_MODEL_CONFIG = MODEL_CONFIGS.get(os.getenv("DEFAULT_LLM_MODEL_ID"), "gpt-4o-mini")

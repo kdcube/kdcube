@@ -46,7 +46,11 @@ class PrivilegedSupervisor:
 
         # Fallback: resolve from "<alias>.<fn_name>"
         try:
-            alias, name = tool_id.split(".", 1)
+            from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import parse_tool_id
+            origin, provider, name = parse_tool_id(tool_id)
+            if origin != "mod" or not provider or not name:
+                raise ValueError(f"Unsupported tool id for isolated runtime: {tool_id}")
+            alias = provider
         except ValueError:
             return None
 
@@ -175,16 +179,32 @@ class PrivilegedSupervisor:
             self.log.log("[supervisor] ERROR: Missing tool_id in request", level="ERROR")
             return {"ok": False, "error": "Missing tool_id"}
 
-        fn = self._resolve_tool_fn(tool_id)
-        if fn is None:
-            self.log.log(
-                f"[supervisor] ERROR: Could not resolve callable for {tool_id}. "
-                f"Alias map has: {list(self.alias_to_dyn.keys())}",
-                level="ERROR"
-            )
-            return {"ok": False, "error": f"Could not resolve tool callable for {tool_id}"}
+        fn = None
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import parse_tool_id
+            origin, provider, name = parse_tool_id(tool_id)
+        except Exception:
+            origin, provider, name = None, None, None
 
-        self.log.log(f"[supervisor] Resolved {tool_id} to {fn}", level="INFO")
+        if origin == "mcp":
+            if not provider or not name:
+                self.log.log(
+                    f"[supervisor] ERROR: Invalid MCP tool id {tool_id}",
+                    level="ERROR",
+                )
+                return {"ok": False, "error": f"Invalid MCP tool id {tool_id}"}
+            self.log.log(f"[supervisor] MCP tool call: {tool_id}", level="INFO")
+        else:
+            fn = self._resolve_tool_fn(tool_id)
+            if fn is None:
+                self.log.log(
+                    f"[supervisor] ERROR: Could not resolve callable for {tool_id}. "
+                    f"Alias map has: {list(self.alias_to_dyn.keys())}",
+                    level="ERROR"
+                )
+                return {"ok": False, "error": f"Could not resolve tool callable for {tool_id}"}
+
+            self.log.log(f"[supervisor] Resolved {tool_id} to {fn}", level="INFO")
 
         # Decode any base64-encoded bytes in params
         decoded_params = self._decode_params(params)

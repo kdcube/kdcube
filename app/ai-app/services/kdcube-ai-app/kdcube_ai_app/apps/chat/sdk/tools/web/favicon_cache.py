@@ -7,6 +7,10 @@ from __future__ import annotations
 
 import hashlib
 from typing import Any, Dict, List, Optional
+
+from kdcube_ai_app.infra.service_hub.cache import ensure_namespaced_cache
+from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 
 _UTM_PARAMS = {"utm_source", "utm_medium", "utm_campaign","utm_term","utm_content","utm_id","gclid","fbclid"}
@@ -78,6 +82,19 @@ async def enrich_sources_pool_with_favicons(
         return 0
 
     cached_results: Dict[str, Dict[str, Any]] = {}
+    if cache is not None:
+        try:
+            # settings = get_settings()
+            cache = ensure_namespaced_cache(
+                cache,
+                namespace=REDIS.CACHE.FAVICON,
+                # tenant=settings.TENANT,
+                # project=settings.PROJECT,
+                default_ttl_seconds=cache_ttl_seconds,
+                use_tp_prefix=False
+            )
+        except Exception:
+            cache = None
     if cache is not None:
         cache_keys = []
         url_for_key = []

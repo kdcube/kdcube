@@ -209,7 +209,7 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
     env_passthrough = dict(os.environ)
     cache_spec = None
     if isinstance(integrations, dict):
-        cache_val = integrations.get("namespaced_kv_cache")
+        cache_val = integrations.get("kv_cache")
         if cache_val is not None:
             try:
                 cache_cfg = cache_val.to_config() if hasattr(cache_val, "to_config") else cache_val
@@ -219,16 +219,10 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
                     cache_spec = cache_cfg
             except Exception:
                 cache_spec = None
-    if cache_spec is None:
-        try:
-            from kdcube_ai_app.infra.service_hub.cache import build_default_favicon_cache_config
-            cache_spec = build_default_favicon_cache_config().as_dict()
-        except Exception:
-            cache_spec = None
 
     integrations_spec = IntegrationsSpec(
         ctx_client=(integrations or {}).get("ctx_client") if isinstance(integrations, dict) else None,
-        namespaced_kv_cache=cache_spec,
+        kv_cache=cache_spec,
     )
 
     from kdcube_ai_app.apps.chat.sdk.runtime import run_ctx as _run_ctx

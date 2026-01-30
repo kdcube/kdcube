@@ -791,6 +791,37 @@ def create_workflow_config(config_request: ConfigRequest) -> Config:
 
     return cfg
 
+
+def _build_model_service_from_env() -> "ModelServiceBase":
+    """
+    Build ModelServiceBase from environment variables.
+    Used by MCP servers and other lightweight entrypoints.
+    """
+    selected_model = (
+        os.getenv("DEFAULT_LLM_MODEL_ID")
+        or os.getenv("SELECTED_MODEL")
+        or "o3-mini"
+    )
+    role_models = None
+    role_models_json = os.getenv("ROLE_MODELS_JSON")
+    if role_models_json:
+        try:
+            role_models = json.loads(role_models_json)
+        except Exception:
+            role_models = None
+
+    req = ConfigRequest(
+        openai_api_key=os.environ.get("OPENAI_API_KEY"),
+        claude_api_key=os.environ.get("ANTHROPIC_API_KEY"),
+        google_api_key=os.environ.get("GEMINI_API_KEY"),
+        selected_model=selected_model,
+        role_models=role_models,
+        tenant=os.environ.get("TENANT_ID"),
+        project=os.environ.get("DEFAULT_PROJECT_NAME"),
+    )
+    cfg = create_workflow_config(req)
+    return ModelServiceBase(cfg)
+
 # =========================
 # Provider-aware router (lazy, cached)
 # =========================

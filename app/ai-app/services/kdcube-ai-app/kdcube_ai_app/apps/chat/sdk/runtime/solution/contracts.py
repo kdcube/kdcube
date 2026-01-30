@@ -11,7 +11,9 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Literal
 
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.presentation import SolverPresenter
 from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_url, enrich_sources_pool_with_favicons
-from kdcube_ai_app.infra.service_hub.cache import create_namespaced_kv_cache
+from kdcube_ai_app.infra.service_hub.cache import create_kv_cache, ensure_namespaced_cache
+from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import _to_jsonable
 
 log = logging.getLogger(__name__)
@@ -443,9 +445,21 @@ class SolveResult:
         # Enrich in-place using shared instance (with cache if available)
         cache = None
         try:
-            cache = create_namespaced_kv_cache()
+            cache = create_kv_cache()
         except Exception:
             cache = None
+        if cache is not None:
+            try:
+                # settings = get_settings()
+                cache = ensure_namespaced_cache(
+                    cache,
+                    namespace=REDIS.CACHE.FAVICON,
+                    use_tp_prefix=False,
+                    # tenant=settings.TENANT,
+                    # project=settings.PROJECT,
+                )
+            except Exception:
+                cache = None
         return await enrich_sources_pool_with_favicons(sources_to_enrich, log=log, cache=cache)
 
 

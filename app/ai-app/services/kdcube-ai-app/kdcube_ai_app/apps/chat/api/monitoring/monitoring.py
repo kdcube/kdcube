@@ -518,28 +518,16 @@ def _extract_gateway_config_for_frontend(gateway_status: Dict[str, Any]) -> Dict
     actual_runtime = capacity_metrics.get("actual_runtime", {})
     configuration = capacity_metrics.get("configuration", {})
 
+    rate_limits = config.get("rate_limits", {})
+    roles = rate_limits.get("roles") if isinstance(rate_limits, dict) else None
+    roles = roles if roles is not None else rate_limits
     return {
         "current_profile": config["profile"],
         "instance_id": config["instance_id"],
         "tenant_id": config["tenant_id"],
         "display_name": config["display_name"],
-        "rate_limits": {
-            "anonymous": {
-                "hourly": config["rate_limits"]["anonymous_hourly"],
-                "burst": config["rate_limits"]["anonymous_burst"],
-                "burst_window": config["rate_limits"]["anonymous_burst_window"]
-            },
-            "registered": {
-                "hourly": config["rate_limits"]["registered_hourly"],
-                "burst": config["rate_limits"]["registered_burst"],
-                "burst_window": config["rate_limits"]["registered_burst_window"]
-            },
-            "privileged": {
-                "hourly": config["rate_limits"]["privileged_hourly"],
-                "burst": config["rate_limits"]["privileged_burst"],
-                "burst_window": config["rate_limits"]["privileged_burst_window"]
-            }
-        },
+        "guarded_rest_patterns": config.get("guarded_rest_patterns", []),
+        "rate_limits": roles or {},
         "service_capacity": {
             # Use actual runtime data if available, otherwise fall back to config
             "concurrent_requests_per_instance": actual_runtime.get(
@@ -649,6 +637,31 @@ async def update_gateway_config(
         "applied_changes": changes,
         "updated_metrics": new_metrics,
         "validation": validation
+    }
+
+@router.post("/admin/gateway/reset-config")
+async def reset_gateway_config(
+        payload: Dict[str, Any],
+        session: UserSession = Depends(require_auth(
+            RequireUser(),
+            RequireRoles("kdcube:role:super-admin")
+        ))
+):
+    """
+    Reset gateway config to env defaults.
+    Optional payload: {"tenant": "...", "project": "..."}.
+    """
+    gateway_adapter = get_fastapi_adapter()
+    config_manager = GatewayConfigurationManager(gateway_adapter)
+    payload = payload or {}
+    dry_run = bool(payload.get("dry_run", False))
+    applied = await config_manager.reset_to_env(**payload)
+    new_metrics = await config_manager.get_current_metrics()
+    return {
+        "success": True,
+        "message": "Configuration reset to env defaults" if not dry_run else "Dry run: env defaults computed",
+        "applied_config": applied.to_dict(),
+        "updated_metrics": new_metrics
     }
 
 @router.get("/debug/capacity-calculation")

@@ -406,6 +406,11 @@ def _bootstrap_child():
                 _BIND_TARGETS.append(_dyn)
     except Exception as e:
         logger.error(f"Failed to build bind targets: {e}", exc_info=True)
+    try:
+        if "kdcube_ai_app.apps.chat.sdk.tools.io_tools" not in _BIND_TARGETS:
+            _BIND_TARGETS.append("kdcube_ai_app.apps.chat.sdk.tools.io_tools")
+    except Exception:
+        pass
     
     # Perform a single, idempotent bootstrap and bind into all modules
     try:
@@ -1670,6 +1675,10 @@ class _InProcessRuntime:
         if ps is not None:
             portable_spec_str = ps if isinstance(ps, str) else json.dumps(ps, ensure_ascii=False)
             child_env["PORTABLE_SPEC"] = portable_spec_str
+        try:
+            child_env["RUNTIME_GLOBALS_JSON"] = json.dumps(g, ensure_ascii=False, default=str)
+        except Exception:
+            pass
         skills_desc = g.get("SKILLS_DESCRIPTOR")
         if isinstance(skills_desc, dict) and skills_desc:
             try:
@@ -1744,25 +1753,37 @@ PARAMS   = json.loads({params_json!r})
 REASON   = {call_reason!r} or f"ReAct: {{TOOL_ID}}"
 
 async def _main():
-    alias, func_name = TOOL_ID.split('.', 1)
+    from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import parse_tool_id
+    origin, provider, func_name = parse_tool_id(TOOL_ID)
+    fn = None
+    if origin == "mod":
+        if not provider or not func_name:
+            raise ValueError(f"Unsupported tool id for iso_runtime: {{TOOL_ID}}")
+        alias = provider
 
-    # prefer alias symbol injected by the runtime header
-    owner = globals().get(alias)
+        # prefer alias symbol injected by the runtime header
+        owner = globals().get(alias)
 
-    # fallback 1: import alias module if available
-    if owner is None:
-        try:
-            mod = importlib.import_module(alias)
-            owner = getattr(mod, "tools", None) or mod
-        except Exception:
-            owner = None
+        # fallback 1: import alias module if available
+        if owner is None:
+            try:
+                mod = importlib.import_module(alias)
+                owner = getattr(mod, "tools", None) or mod
+            except Exception:
+                owner = None
 
-    if owner is None:
-        raise ImportError(f"Could not resolve tool owner for alias '{{alias}}'")
+        if owner is None:
+            raise ImportError(f"Could not resolve tool owner for alias '{{alias}}'")
 
-    fn = getattr(owner, func_name, None)
-    if fn is None:
-        raise AttributeError(f"Function '{{func_name}}' not found on alias '{{alias}}'")
+        fn = getattr(owner, func_name, None)
+        if fn is None:
+            raise AttributeError(f"Function '{{func_name}}' not found on alias '{{alias}}'")
+    elif origin == "mcp":
+        if not provider or not func_name:
+            raise ValueError(f"Unsupported MCP tool id for iso_runtime: {{TOOL_ID}}")
+        fn = None
+    else:
+        raise ValueError(f"Unsupported tool id for iso_runtime: {{TOOL_ID}}")
 
     # Execute via io_tools so the call is persisted to <sanitized>-<idx>.json and indexed
     await agent_io_tools.tool_call(

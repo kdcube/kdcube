@@ -44,23 +44,25 @@ class RateLimiter:
         self.monitor = monitor
         self.RATE_LIMIT_PREFIX = REDIS.SYSTEM.RATE_LIMIT
 
-        # Create rate limit configs from centralized configuration
+        self.limits = {}
+        self._refresh_limits()
+
+    def _refresh_limits(self):
+        roles = self.gateway_config.rate_limits.roles
+        def _rl(role: str, default: RateLimitConfig) -> RateLimitConfig:
+            cfg = roles.get(role)
+            if cfg:
+                return RateLimitConfig(
+                    requests_per_hour=cfg.hourly,
+                    burst_limit=cfg.burst,
+                    burst_window=cfg.burst_window
+                )
+            return default
         self.limits = {
-            UserType.ANONYMOUS: RateLimitConfig(
-                requests_per_hour=gateway_config.rate_limits.anonymous_hourly,
-                burst_limit=gateway_config.rate_limits.anonymous_burst,
-                burst_window=gateway_config.rate_limits.anonymous_burst_window
-            ),
-            UserType.REGISTERED: RateLimitConfig(
-                requests_per_hour=gateway_config.rate_limits.registered_hourly,
-                burst_limit=gateway_config.rate_limits.registered_burst,
-                burst_window=gateway_config.rate_limits.registered_burst_window
-            ),
-            UserType.PRIVILEGED: RateLimitConfig(
-                requests_per_hour=gateway_config.rate_limits.privileged_hourly,
-                burst_limit=gateway_config.rate_limits.privileged_burst,
-                burst_window=gateway_config.rate_limits.privileged_burst_window
-            )
+            UserType.ANONYMOUS: _rl("anonymous", RateLimitConfig(50, 5, 60)),
+            UserType.REGISTERED: _rl("registered", RateLimitConfig(500, 20, 60)),
+            UserType.PAID: _rl("paid", RateLimitConfig(1000, 50, 60)),
+            UserType.PRIVILEGED: _rl("privileged", RateLimitConfig(-1, 100, 60)),
         }
 
     def ns(self, base: str) -> str:

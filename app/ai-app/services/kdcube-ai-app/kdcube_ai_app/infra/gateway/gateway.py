@@ -351,8 +351,10 @@ def create_gateway_from_config(gateway_config: GatewayConfiguration, auth_manage
     logger.info(f"Creating gateway with profile: {gateway_config.profile.value}")
     logger.info(f"Service capacity: {gateway_config.service_capacity.concurrent_requests_per_instance} concurrent, "
                 f"{gateway_config.service_capacity.avg_processing_time_seconds}s avg processing")
-    logger.info(f"Rate limits - Anonymous: {gateway_config.rate_limits.anonymous_hourly}/hr, "
-                f"Registered: {gateway_config.rate_limits.registered_hourly}/hr")
+    anon = gateway_config.rate_limits.roles.get("anonymous")
+    reg = gateway_config.rate_limits.roles.get("registered")
+    logger.info(f"Rate limits - Anonymous: {anon.hourly if anon else 'n/a'}/hr, "
+                f"Registered: {reg.hourly if reg else 'n/a'}/hr")
 
     # Validate configuration
     issues = validate_gateway_config(gateway_config)

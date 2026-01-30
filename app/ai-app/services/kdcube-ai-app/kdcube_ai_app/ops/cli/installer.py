@@ -196,7 +196,7 @@ def compute_paths(ai_app_root: Path, lib_root: Path) -> Dict[str, str]:
         "host_exec_workspace": str(docker_dir / "data/exec-workspace"),
         "host_bundles": str(lib_root / "kdcube_ai_app/apps/custom_apps"),
         "ui_dockerfile_path": "ops/cicd/customer-c/local/Dockerfile_UI",
-        "ui_source_path": "example-product/ui",
+        "ui_source_path": "customer-c/ui",
         "ui_env_build_relative": "ops/cicd/customer-c/local/.env.ui.build",
         "nginx_ui_config": "ops/cicd/customer-c/local/nginx_ui.conf",
     }

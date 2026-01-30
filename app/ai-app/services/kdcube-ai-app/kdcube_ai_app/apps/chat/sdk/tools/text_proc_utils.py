@@ -227,6 +227,9 @@ def _format_ok(out: str, fmt: str) -> Tuple[bool, str]:
     if fmt in ("markdown", "text"):
         # Always OK structurally; semantic completeness is handled by citations/marker.
         return (len(out.strip()) > 0, "nonempty")
+    if fmt == "mermaid":
+        # Mermaid is plain text; accept non-empty output.
+        return (len(out.strip()) > 0, "nonempty")
     if fmt == "json":
         obj, err = _parse_json(out)
         return ((obj is not None), ("json_ok" if obj is not None else err or "json_parse_error"))

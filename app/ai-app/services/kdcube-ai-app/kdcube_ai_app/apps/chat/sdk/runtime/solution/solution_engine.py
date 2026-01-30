@@ -533,6 +533,7 @@ class SolverSystem:
             raw_tool_specs: Optional[List[Dict[str, Any]]] = None, # non-resolved tool specs
             tool_runtime: Optional[Dict[str, str]] = None,
             tool_subsystem: Optional[ToolSubsystem] = None,
+            mcp_subsystem: Optional[Any] = None,
             skills_descriptor: Optional[Dict[str, Any]] = None,
             skills_subsystem: Optional[SkillsSubsystem] = None,
             turn_view_class: Type[BaseTurnView] = BaseTurnView,
@@ -554,6 +555,7 @@ class SolverSystem:
             tools_specs=tools_specs,
             raw_tool_specs=raw_tool_specs,
             tool_runtime=tool_runtime,
+            mcp_subsystem=mcp_subsystem,
         )
         bundle_root = None
         if getattr(self.tools, "bundle_root", None):

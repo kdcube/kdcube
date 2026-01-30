@@ -11,6 +11,7 @@ ToolSubsystem is the single place that:
 - Provides callables for `<alias>.<tool_name>` at runtime.
 - Exports runtime globals for isolated execution.
 - Provides optional per‑tool runtime overrides.
+- Wires MCP tools (via MCPToolsSubsystem) into the tool catalog.
 
 Implementation: `kdcube_ai_app/apps/chat/sdk/runtime/tool_subsystem.py`
 
@@ -36,6 +37,14 @@ Tool IDs are resolved as:
 ```
 
 Example: alias `generic_tools` + function `web_search` → `generic_tools.web_search`.
+
+For non‑module tools (e.g., MCP), tool IDs include a provider origin prefix:
+
+```
+<origin>.<provider>.<tool_name...>
+```
+
+Example: `mcp.web_search.web_search`
 
 ## Runtime selection per tool
 
@@ -66,8 +75,15 @@ This keeps built‑in tools behavior stable while allowing bundles to opt into i
 - Modules are imported and bound with:
   - `bind_service(...)` (ModelService)
   - `bind_registry(...)` (bundle registry)
-  - `bind_integrations(...)` (ctx client, cache)
+  - `bind_integrations(...)` (ctx client, kv cache)
 - Tool metadata is introspected and a flattened catalog is built.
+
+## MCP tools
+
+If MCP tools are configured, `ToolSubsystem` delegates MCP discovery/execution
+to `MCPToolsSubsystem` and injects MCP tool entries into the catalog.
+
+See: `sdk/runtime/mcp/mcp-README.md`
 
 ## Connection to runtime
 
@@ -79,4 +95,3 @@ This keeps built‑in tools behavior stable while allowing bundles to opt into i
 See:
 - `sdk/runtime/isolated/README-iso-runtime.md`
 - `sdk/runtime/isolated/README-runtime-modes-builtin-tools.md`
-

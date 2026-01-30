@@ -908,7 +908,8 @@ async def generate_content_llm(
                 elif not citation_map:
                     logger.warning("Streaming citations disabled: citation_map empty")
                 if replace_in_stream and citation_map and "[[S:" in clean:
-                    logger.warning("Pre-replace stream chunk contains citation token; head=%r tail=%r", clean[:120], clean[-120:])
+                    # logger.warning("Pre-replace stream chunk contains citation token; head=%r tail=%r", clean[:120], clean[-120:])
+                    pass
                 if "[[USAGE" in clean.upper():
                     logger.warning("Pre-replace stream chunk still contains USAGE token; tail=%r", clean[-160:])
             if replace_in_stream and citation_stream:
@@ -1141,9 +1142,9 @@ async def generate_content_llm(
 
         return blocks
 
-    # --------- main generation rounds (still supports multi-round for text/markdown/mermaid) ---------
-    effective_max_rounds = 1 if (tgt in ("json", "yaml", "html", "xml") or is_managed_json) else max_rounds
-    logger.warning(f"Effective max rounds={effective_max_rounds}; format={tgt}")
+    # --------- main generation rounds (single round only) ---------
+    effective_max_rounds = 1
+    logger.warning(f"Effective max rounds={effective_max_rounds}; format={tgt} (multi-round disabled)")
 
     role = role or "tool.generator"
 
@@ -1346,7 +1347,7 @@ async def generate_content_llm(
     # --------- Repair phase (kept) but now:
     # - uses shared streaming helper
     # - is skipped entirely when there is nothing to repair (payload_for_repair == "")
-    allow_repair = max_rounds > 1 and (tgt not in ("json", "yaml", "html", "xml")) and (not is_managed_json)
+    allow_repair = False
     if strict and not ok and allow_repair:
         repair_reasons = []
         if not fmt_ok:

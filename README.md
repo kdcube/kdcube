@@ -1,293 +1,153 @@
-# KDCube AgentLab — Rapid prototyping for agentic chat apps
+# KDCube Agentic Prototyping Platform (KDCube APP)
 
-**full-stack** runtime for prototyping chat/agent apps. 
-Multi-bundle by design, with a separate, governed **Knowledge Base** that plugs into the same UI. 
-Real-time **WebSocket streaming**, built-in **accounting**, and a clean **frontend** so you focus on agent logic—not plumbing.
-
-> **Note:** This README will be refreshed soon. For the current SDK documentation, see:
-> - [SDK Index](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/SDK-index.md)
+KDCube APP is a **self‑hosted platform + SDK** for building and operating **agentic chat applications and copilots**.
+It ships the full stack: streaming runtime, tool execution, memory/context, economics, and a hosting platform
+for multi‑tenant production deployment.
 
 ---
 
-## What’s inside
+## Out of the box
 
-* **Frontend (Web UI)**
+A versatile assistant stack that already supports:
 
-    * **Chat Playground** — test agents, switch bundles, see steps/thinking/tokens, click follow-ups.
-    * **Admin: Bundles Registry** — load/unload bundles, set defaults.
-    * **Monitoring** — queue/pressure/health views.
-    * **KB Console (optional)** — ingest Markdown/URLs/PDFs, search with citations.
-* **Chat runtime (backend)**
+- **Streaming chat** (REST / SSE / Socket.IO) with steps/deltas/status (and many more) events and role-based streaming filtering
+- **Tool execution** (local tools + MCP tools) and skills (built in and custom)
+- **Code generation + code execution** with isolated runtime
+- **ReAct strategic solver agent** operating skills acquisition and exploitation, tools and code execution. Adaptive agents selection, planning, and tool-first/code-first flows.
+- **Web Search** multi-backend agent
+- **Citations subsystem** (structured citations with sources tracking and in-stream rendering). We do not force the llm to repeat the links or embedded files paths. All produced data is connected to sources used, if any.
+- **Memory & context** (retrieval, turn memories, conversation memories, user level memories, signals, reconciliation)
+- **Storage and cache**
+- **Attachments & artifacts** (upload + generated files + secutirty checks + quality assessment + index + storage)
+- **Economics & accounting** (budgets, rate limits, usage reporting)
+- **Dynamic UI widgets** (control plane: gate configuration and monitoring, economics configuration, conversations browser, full control over servicing and economics rate limits, spendings reporting, etc.)
+- **Knowledge Base** (ingestion + hybrid search + citations)
 
-    * **WebSocket-only** chat loop (tokens, steps, thinking, follow-ups, custom events).
-    * **Multi-bundle** loader (LangGraph/LangChain/plain Python). Pick a bundle **per message**.
-    * **Binary attachments** and duplex events supported end-to-end.
-* **Knowledge Base (separate app)**
+You can plug your own technologies and existing workflows.  
+---
 
-    * Ingestion pipeline → extract → segment → embed (pgvector) → index.
-    * Hybrid search with navigation/backtracking.
-    * Integrates into the **same frontend** (KB Console) or can run standalone.
-* **Accounting**
+## Platform components
 
-    * Auto-tracks SDK LLM/Embeddings calls per tenant/project/user & service type.
-    * Extra breakdowns via `with_accounting(...)`.
-* **Gateway & Ops**
+### SDK (build the agent app)
+- **Agent runtime**: ReAct, planning, tool‑first, and code‑first flows
+- **Streaming channels**: REST + SSE + Socket.IO with token/step events
+- **Tools & skills**: local tools + MCP tools, easy custom wiring
+- **Memory & context**: turn memories, signals, retrieval, reconciliation
+- **Code execution**: isolated Docker runtime for untrusted code
+- **Attachments & artifacts**: upload + generated files + storage integration
+- **Economics & accounting**: usage tracking, budgets, rate limits, reporting
+- **Bundle API**: build workflows in LangGraph, LangChain, or custom Python, let them become reachable and speak via the Bundle API
 
-    * Auth, rate limits, backpressure, circuit breakers.
-    * Observability endpoints.
+### Platform (host and scale)
+- **Multi‑tenant / multi‑project isolation** (storage + schema + namespaces separation)
+- **Gateway**: auth, rate limiting, backpressure, circuit breakers
+- **Knowledge Base**: ingestion + embeddings + hybrid search + citations
+- **Dynamic UI widgets** rendered from bundles (monitoring, control plane, browsers)
+- **Horizontal scaling** with stateless web service + queue/processor
+
+> Bundles are deployable agent apps. Multiple bundles can be registered and selected **per message**.
+> One bundle executes per request; different requests can target different bundles.
 
 ---
 
-## How it works (big picture)
+## System at a glance
 
 ```mermaid
-graph TB
-    subgraph "Frontend"
-        CHATUI[Chat Playground]
-        ADMIN[Admin: Bundles]
-        MON[Monitoring]
-        KBUI[KB Console]
-    end
+graph TD
+  %% Entry / Auth
+  UI[Web UI / Client] -->|HTTPS + masked cookie| NGINX[Web Proxy / Nginx]
+  AUTH["ProxyLogin (Delegated Auth + 2FA)"] -->|token exchange| NGINX
+  NGINX -->|real auth/id cookies| GATE[Chat API + Gateway]
+  KB[Knowledge Base Service] --> GATE
+  CP[Control Plane / Project Mgmt] --> GATE
 
-    subgraph "Gateway"
-        AUTH[Auth]
-        LIMITS[Rate Limits]
-        BACK[Backpressure]
-        CB[Circuit Breakers]
-    end
+  %% Transport + Gateway
+  NGINX -->|SSE / Socket.IO| GATE
+  NGINX -->|REST| GATE
+  GATE -->|session mgmt| SESS[Session Manager]
+  GATE -->|rate limit/backpressure| GW[Gateway + Throttling]
 
-    subgraph "Chat Service (Agent Runtime)"
-        WS[WebSocket Handler]
-        QUEUE[Queue]
-        WORKER[Chat Workers]
-        BREG[Bundles Registry]
-    end
+  %% Queue + Processing
+  GATE -->|enqueue| Q[Redis Queues]
+  Q --> PROC[Chat Processor Workers]
 
-    subgraph "Knowledge Base Service"
-        INGEST[Ingestion]
-        PIPE[Extract/Segment/Embed]
-        SEARCH[Hybrid Search API]
-        PG[(Postgres + pgvector)]
-    end
+  %% Orchestration
+  PROC --> BUNDLES[Dynamic Bundles / Workflows]
+  BUNDLES -->|events| RELAY[ChatRelay + Redis Pub/Sub]
+  RELAY -->|fan-out| GATE
 
-    subgraph "Infra"
-        REDIS[(Redis Pub/Sub)]
-        STORAGE[(Accounting Store)]
-    end
+  %% Context management
+  BUNDLES --> CTX[Context Management]
+  CTX -->|storage| PG["(Postgres RDS)"]
+  CTX -->|artifacts| S3[(S3)]
+  KB -->|storage| PG
+  KB -->|artifacts| S3
+  CP -->|policies + quotas| PG
 
-    CHATUI -.-> AUTH
-    KBUI --> AUTH
+  %% Runtime + providers
+  BUNDLES --> RT["Runtime (LLM + Tools)"]
+  RT --> DOCKER[Ephemeral Docker Exec]
+  RT --> TOOLS[External Tools / APIs]
 
-    AUTH --> LIMITS --> BACK --> CB
-    CB --> WS
-    CHATUI --> REDIS
+  subgraph EXTPROV[External Providers]
+    OAI[OpenAI]
+    ANTH[Anthropic]
+    GEM[Gemini]
+    BRAVE[Brave Search]
+    DDG[DuckDuckGo]
+  end
 
-    WS --> QUEUE --> WORKER
-    WORKER --> BREG
-    WORKER -.-> SEARCH
-    SEARCH --> PG
-    WORKER --> REDIS
-    WORKER --> STORAGE
+  RT --> OAI
+  RT --> ANTH
+  RT --> GEM
+  RT --> BRAVE
+  RT --> DDG
 
-    KBUI --> INGEST --> PIPE --> PG
-    MON --> CB
-    ADMIN --> BREG
+  %% Cache/Queues/PubSub
+  BUNDLES -->|cache/queues/pubsub| REDIS["(Redis / ElastiCache)"]
 
-%% Styling
-    classDef frontend fill:#e1f5fe,stroke:#01579b,stroke-width:2px,color:#000
-    classDef gateway fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,color:#000
-    classDef chat fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px,color:#000
-    classDef kb fill:#fff3e0,stroke:#e65100,stroke-width:2px,color:#000
-    classDef infra fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#000
-    classDef database fill:#f1f8e9,stroke:#33691e,stroke-width:3px,color:#000
+  classDef aws fill:#e8f4ff,stroke:#7aa7d6,color:#0b2b4f;
+  classDef ext fill:#f2f7ee,stroke:#8fbf7a,color:#1f3b1c;
+  classDef infra fill:#f7f2ff,stroke:#b69ad6,color:#2b1b4f;
 
-    class CHATUI,ADMIN,MON,KBUI frontend
-    class AUTH,LIMITS,BACK,CB gateway
-    class WS,QUEUE,WORKER,BREG chat
-    class INGEST,PIPE,SEARCH kb
-    class PG,REDIS,STORAGE database
-```
-
-> **Chat is async and WS-only.** Answers stream over WebSocket. Admin/monitoring/KB APIs are REST.
-
----
-
-## Quickstart (Docker Compose)
-
-1. Configure Nginx paths in `.env`:
-
-```bash
-NGINX_PROXY_CONFIG_FILE_PATH=/etc/nginx/nginx.conf
-NGINX_UI_CONFIG_FILE_PATH=deployment/docker/all_in_one/nginx_ui.conf
-```
-
-2. Initialize Postgres (first time / after schema changes):
-
-```bash
-docker compose build postgres-setup && docker compose run --rm postgres-setup
-```
-
-3. (Optional) Local KB storage:
-
-```bash
-mkdir kdcube-storage -p && chmod 777 kdcube-storage
-```
-
-4. Start everything:
-
-```bash
-# backend stack (chat, kb, workers, db, redis, proxy)
-docker compose --profile backend --env-file ./.env.backend up -d --remove-orphans
-# frontend
-docker compose --profile frontend up -d --remove-orphans
-```
-
-5. Open the **Web UI** (see compose logs for the URL/port).
-   You’ll find:
-
-* **Chat Playground** (streaming, follow-ups, attachments),
-* **Admin: Bundles** (register/choose defaults),
-* **Monitoring**,
-* **KB Console** (if KB is enabled).
-
-**Rebuild tips**
-
-```bash
-# pick up bundle code changes (chat runtime reload)
-docker compose restart chat
-# rebuild if dependencies changed
-docker compose up -d --build chat
-# KB changes
-docker compose restart kb
-# UI changes
-docker compose up -d --build web-ui
+  class PG,REDIS,S3 aws;
+  class OAI,ANTH,GEM,BRAVE,DDG,TOOLS ext;
+  class AUTH infra;
 ```
 
 ---
 
-## Developing bundles (chatbots / agentic apps)
+## Quickstart
 
-Bring your agentic app (**any Python**) (folder, single `.py`, or wheel/zip). Decorate one workflow class so the loader can find it. Stream via the communicator.
-
-**Hello-bundle sketch**
-
-```python
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, agentic_initial_state
-
-@agentic_initial_state(name="hello-init", priority=100)
-def init_state(payload): return {"final_answer": None}
-
-@agentic_workflow(name="hello-bundle", version="1.0.0", priority=100)
-class HelloWorkflow:
-    def __init__(self, config, communicator, streaming=True):
-        self.cfg, self.comm = config, communicator
-
-    async def run(self, **params):
-        text = (params.get("text") or "").strip()
-        await self.comm.step(step="workflow_start", status="started", data={"message":"Starting"})
-        for i, tok in enumerate(["Hello, ", "you said: ", text]):
-            await self.comm.delta(text=tok, index=i, marker="answer")
-        await self.comm.step(step="answer_generator", status="completed", data={"answer_length": len(text)})
-        return {"final_answer": f"Hello, you said: {text}"}
-```
-
-**Register bundles (env JSON)**
-
-```bash
-export AGENTIC_BUNDLES_JSON='{
-  "default_bundle_id": "hello-bundle",
-  "bundles": {
-    "hello-bundle": { "id":"hello-bundle", "path":"/bundles/hello", "module":"agentic_app", "singleton":true }
-  }
-}'
-```
-
-**Choose bundle per message (from the Chat Playground)**
-
-```json
-{
-  "message": "try my agent",
-  "config": { "agentic_bundle_id": "hello-bundle" }
-}
-```
-
-**Events you can emit from a bundle**
-
-* `chat.delta` — token chunks (`marker="answer"` or `"thinking"`).
-* `chat.step` — phase updates with `step`, `status`, `data`.
-* `chat.followups` — clickable suggestions (UI chips).
-* **Custom events** — emit your own event types; the UI forwards them.
-
-> Attachments and other binary payloads are supported over the same socket.
-
-**Dev loop & reload**
-
-* Bundles run **in-process** with the chat service.
-* Change code? **Restart `chat`** to reload imports:
-
-  ```bash
-  docker compose restart chat
-  ```
-* Registry updates can be hot-applied; they don’t reload already-imported code.
+- CLI installer: [app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/README.md](app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/README.md)
+- All‑in‑one Docker Compose: [app/ai-app/deployment/docker/all_in_one/README.md](app/ai-app/deployment/docker/all_in_one/README.md)
 
 ---
 
-## Knowledge Base (separate app, same UI)
+## Documentation (direct links)
 
-* Ingest **Markdown/URL/PDF** → extract → segment → embed → index.
-* Hybrid search with citations & backtracking.
-* Operate it from the **KB Console** in the Web UI (ingest, view, search).
-* Use from bundles as a tool (search/content APIs).
+### Architecture
+- System architecture (short): [app/ai-app/docs/arch/architecture-short.md](app/ai-app/docs/arch/architecture-short.md)
+- System architecture (long): [app/ai-app/docs/arch/architecture-long.md](app/ai-app/docs/arch/architecture-long.md)
 
----
+### Platform & Operations
+- Gateway: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/gateway/gateway-README.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/gateway/gateway-README.md)
+- Auth: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/auth/auth-README.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/auth/auth-README.md)
+- Monitoring & observability: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/monitoring/README-monitoring-observability.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/monitoring/README-monitoring-observability.md)
+- Chat comms (REST/SSE/Socket.IO): [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/comm-system.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/comm-system.md)
 
-## Accounting (automatic)
+### SDK & Runtime
+- SDK index: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/SDK-index.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/SDK-index.md)
+- Tool subsystem: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool-subsystem-README.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool-subsystem-README.md)
+- Execution runtime (ops): [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/execution/operations.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/execution/operations.md)
+- Isolated runtime: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-iso-runtime.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-iso-runtime.md)
+- Economics & usage: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/economics-usage.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/economics-usage.md)
+- Control plane management: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/control_plane/control-plane-management.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/control_plane/control-plane-management.md)
 
-* Using **SDK LLM/Embedding APIs** auto-records usage/cost per **tenant/project/user** and **service type (llm/embedding)**.
-* Add finer breakdowns with:
+### Bundles & Plugin System
+- Agentic bundles: [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/plugin/README.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/plugin/README.md)
 
-  ```python
-  from kdcube_ai_app.infra.accounting import with_accounting
-  with with_accounting("my.component", metadata={"phase":"rerank"}):
-      ... your calls ...
-  ```
-* Events are JSON in your configured storage (FS/S3).
-
----
-
-## Monitoring & gateway
-
-* **Auth, rate limits, backpressure, circuit breakers** protect the system.
-* The chat loop is **async**: request handling and agent execution can run on different workers; responses are routed to the correct socket via Redis Pub/Sub.
-* Monitoring pages in the UI + REST endpoints.
-
----
-
-## Roadmap (short)
-
-* Chat: SDK (context DB, sandboxed code-exec, preferences, tracks and working canvas, etc)
-* More adapters (IdP/storage/orchestrators), more rerankers
-* KB: repo sync, code ingestion, graph linking
-
----
-
-## Docs
-
-* Agentic Bundles (multi-bundle) — full guide: [README.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/plugin/README.md)
-* KB API (search + moderation): TBD add doc
-* KB Clients (REST & Socket.IO):
-    * [rest_client.py](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/rest_client.py)
-    * [socket_client.py](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/socket_client.py)
-* Gateway Architecture: [gateway-README.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/gateway/gateway-README.md)
-* Accounting and Spending Tracking: TBD add doc
-* Monitoring & Observability: [README-monitoring-observability.md](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/monitoring/README-monitoring-observability.md)
-* All-in-One Docker Compose: [README.md](app/ai-app/deployment/docker/all_in_one/README.md)
-* Tenant/Project model: TBD add doc
-
----
-
-## Contributing & License
-
-**MIT** © 2025 Elena Viter
-
----
+### Knowledge Base
+- KB clients (REST & Socket.IO):
+  - [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/rest_client.py](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/rest_client.py)
+  - [app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/socket_client.py](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/socket_client.py)

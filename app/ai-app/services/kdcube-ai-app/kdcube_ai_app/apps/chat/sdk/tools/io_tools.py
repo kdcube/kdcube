@@ -26,9 +26,19 @@ try:
 except Exception:  # non-supervised environments, tests, etc.
     ToolStub = None
 
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import parse_tool_id
+
 # ---------- basics ----------
 
 _INDEX_FILE = "tool_calls_index.json"
+
+_TOOL_SUBSYSTEM = None
+
+
+def bind_integrations(integrations: dict) -> None:
+    global _TOOL_SUBSYSTEM
+    if isinstance(integrations, dict) and integrations.get("tool_subsystem"):
+        _TOOL_SUBSYSTEM = integrations.get("tool_subsystem")
 
 def _is_limited_executor() -> bool:
     """
@@ -789,11 +799,25 @@ class AgentIO:
         try:
             # Execute tool *locally* (supervisor / legacy behavior)
             if fn is None:
-                raise ValueError("tool_call: fn cannot be None in local/supervisor mode")
-
-            ret = fn(**final_params) if final_params else fn()
-            if inspect.isawaitable(ret):
-                ret = await ret
+                origin, provider, name = parse_tool_id(tid)
+                if origin == "mcp" and provider and name:
+                    if not _TOOL_SUBSYSTEM:
+                        raise ValueError("tool_call: tool_subsystem not bound")
+                    mcp = _TOOL_SUBSYSTEM.get_mcp_subsystem()
+                    if not mcp:
+                        raise ValueError("tool_call: MCP subsystem not configured")
+                    ret = await mcp.execute_tool(
+                        alias=provider,
+                        tool_name=name,
+                        params=final_params,
+                        trace_id=str(call_reason or ""),
+                    )
+                else:
+                    raise ValueError("tool_call: fn cannot be None in local/supervisor mode")
+            else:
+                ret = fn(**final_params) if final_params else fn()
+                if inspect.isawaitable(ret):
+                    ret = await ret
 
             # Persist SUCCESS via save_tool_call (strict shape; no top-level extras)
             await self.save_tool_call(

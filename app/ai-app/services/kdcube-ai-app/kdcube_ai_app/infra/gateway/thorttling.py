@@ -88,8 +88,16 @@ class ThrottlingMonitor:
         await self.init_redis()
         self.request_counter += 1
 
-        # Increment total request counter
-        await self.redis.incr(REDIS.THROTTLING.TOTAL_REQUESTS_KEY)
+        # Increment total request counter (namespaced)
+        await self.redis.incr(self.ns(REDIS.THROTTLING.TOTAL_REQUESTS_KEY))
+
+        # Increment hourly request counter (namespaced)
+        hour_key = time.strftime("%Y-%m-%d_%H", time.localtime())
+        hourly_key = self.ns(REDIS.THROTTLING.TOTAL_REQUESTS_HOURLY)
+        pipe = self.redis.pipeline()
+        pipe.hincrby(hourly_key, hour_key, 1)
+        pipe.expire(hourly_key, 60 * 60 * 48)  # keep 48 hours
+        await pipe.execute()
 
     async def record_throttling_event(self,
                                       reason: ThrottlingReason,
@@ -198,9 +206,22 @@ class ThrottlingMonitor:
             except json.JSONDecodeError:
                 continue
 
-        # Get total requests in period (approximate)
-        # We'll need to track this better, for now use throttled + estimated successful
-        total_requests = total_throttled  # This is a lower bound
+        # Get total requests in period from hourly counters
+        total_requests = 0
+        try:
+            hourly_key = self.ns(REDIS.THROTTLING.TOTAL_REQUESTS_HOURLY)
+            for hour_offset in range(hours_back):
+                ts = current_time - (hour_offset * 3600)
+                hour_key = time.strftime("%Y-%m-%d_%H", time.localtime(ts))
+                raw = await self.redis.hget(hourly_key, hour_key)
+                if raw:
+                    try:
+                        total_requests += int(raw)
+                    except (ValueError, TypeError):
+                        pass
+        except Exception:
+            # fallback to throttled count if hourly counters not available
+            total_requests = total_throttled
 
         # Top throttled sessions
         top_sessions = sorted(session_counters.items(), key=lambda x: x[1], reverse=True)[:10]

@@ -38,8 +38,8 @@ logger = logging.getLogger(__name__)
 REDIS_PASSWORD = os.environ.get("REDIS_PASSWORD", "")
 REDIS_HOST = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT = os.environ.get("REDIS_PORT", "6379")
-REDIS_URL = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
-os.environ["REDIS_URL"] = REDIS_URL
+REDIS_URL__ = f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/0"
+# os.environ["REDIS_URL"] = REDIS_URL
 
 # TENANT_ID = os.environ.get("TENANT_ID", "home")
 # INSTANCE_ID = os.environ.get("INSTANCE_ID", "home-instance-1")
@@ -52,7 +52,7 @@ GATEWAY_PRESET = os.environ.get("GATEWAY_PRESET", None)  # Optional preset overr
 # Storage and other configurations (your existing logic)
 
 _settings = get_settings()
-# STORAGE_PATH = os.environ.get("KDCUBE_STORAGE_PATH")
+REDIS_URL = _settings.REDIS_URL
 STORAGE_PATH = _settings.STORAGE_PATH
 DEFAULT_PROJECT = _settings.PROJECT
 TENANT_ID = _settings.TENANT
@@ -198,8 +198,10 @@ def create_request_gateway():
     logger.info(f"  Instance: {gateway_config.instance_id}")
     logger.info(f"  Service Capacity: {gateway_config.service_capacity.concurrent_requests_per_instance} concurrent, "
                 f"{gateway_config.service_capacity.avg_processing_time_seconds}s avg")
-    logger.info(f"  Rate Limits: Anon={gateway_config.rate_limits.anonymous_hourly}/hr, "
-                f"Reg={gateway_config.rate_limits.registered_hourly}/hr")
+    anon = gateway_config.rate_limits.roles.get("anonymous")
+    reg = gateway_config.rate_limits.roles.get("registered")
+    logger.info(f"  Rate Limits: Anon={anon.hourly if anon else 'n/a'}/hr, "
+                f"Reg={reg.hourly if reg else 'n/a'}/hr")
     logger.info(f"  Backpressure Thresholds: Anon={gateway_config.backpressure.anonymous_pressure_threshold}, "
                 f"Reg={gateway_config.backpressure.registered_pressure_threshold}, "
                 f"Hard={gateway_config.backpressure.hard_limit_threshold}")
@@ -212,7 +214,7 @@ def create_request_gateway():
 def create_fastapi_gateway_adapter():
     """Create FastAPI adapter for the gateway"""
     gateway = create_request_gateway()
-    gateway_policy = GatewayPolicyResolver()
+    gateway_policy = GatewayPolicyResolver(gateway.gateway_config.guarded_rest_patterns)
     return FastAPIGatewayAdapter(gateway=gateway,
                                  policy_resolver=gateway_policy)
 
@@ -238,11 +240,20 @@ def update_gateway_config(**kwargs):
     """Update gateway configuration parameters"""
     config = get_gateway_config()
 
-    # Update rate limits
-    if 'anonymous_hourly' in kwargs:
-        config.rate_limits.anonymous_hourly = kwargs['anonymous_hourly']
-    if 'registered_hourly' in kwargs:
-        config.rate_limits.registered_hourly = kwargs['registered_hourly']
+    # Update rate limits (role-based)
+    if 'rate_limits' in kwargs:
+        roles_payload = kwargs['rate_limits'] or {}
+        roles_payload = roles_payload.get("roles") if isinstance(roles_payload, dict) and "roles" in roles_payload else roles_payload
+        if isinstance(roles_payload, dict):
+            from kdcube_ai_app.infra.gateway.config import RoleRateLimit
+            for role, cfg in roles_payload.items():
+                if not isinstance(cfg, dict):
+                    continue
+                config.rate_limits.roles[str(role)] = RoleRateLimit(
+                    hourly=int(cfg.get("hourly", 50)),
+                    burst=int(cfg.get("burst", 5)),
+                    burst_window=int(cfg.get("burst_window", 60)),
+                )
 
     # Update service capacity
     if 'concurrent_requests_per_instance' in kwargs:

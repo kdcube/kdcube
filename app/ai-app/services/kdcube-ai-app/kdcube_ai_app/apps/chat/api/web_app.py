@@ -10,6 +10,7 @@ import traceback
 import time
 import logging
 import os
+import asyncio
 
 from contextlib import asynccontextmanager
 
@@ -19,10 +20,10 @@ from fastapi.responses import JSONResponse
 
 from dotenv import load_dotenv, find_dotenv
 
+load_dotenv(find_dotenv())
+
 from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
 from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec
-
-load_dotenv(find_dotenv())
 
 import kdcube_ai_app.apps.utils.logging_config as logging_config
 logging_config.configure_logging()
@@ -33,14 +34,15 @@ from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 
 from kdcube_ai_app.apps.middleware.gateway import STATE_FLAG, STATE_SESSION, STATE_USER_TYPE
-from kdcube_ai_app.apps.middleware.token_extract import (
-    extract_auth_tokens_from_query_params,
-    inject_auth_tokens_into_headers,
-)
-from starlette.datastructures import Headers
+from kdcube_ai_app.apps.middleware.token_extract import extract_auth_tokens_from_query_params
+from starlette.datastructures import MutableHeaders
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
-from kdcube_ai_app.infra.gateway.config import get_gateway_config
+from kdcube_ai_app.infra.gateway.config import (
+    get_gateway_config,
+    apply_gateway_config_from_cache,
+    subscribe_gateway_config_updates,
+)
 from kdcube_ai_app.infra.namespaces import CONFIG
 
 # Import our simplified components
@@ -51,6 +53,7 @@ from kdcube_ai_app.apps.chat.api.resolvers import (
 )
 from kdcube_ai_app.auth.sessions import UserType, UserSession
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest
 
@@ -87,6 +90,23 @@ async def lifespan(app: FastAPI):
 
     # Initialize gateway adapter and store in app state
     app.state.gateway_adapter = get_fastapi_adapter()
+    settings = get_settings()
+    await apply_gateway_config_from_cache(
+        gateway_adapter=app.state.gateway_adapter,
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        redis_url=REDIS_URL,
+    )
+    app.state.gateway_config_stop = asyncio.Event()
+    app.state.gateway_config_task = asyncio.create_task(
+        subscribe_gateway_config_updates(
+            gateway_adapter=app.state.gateway_adapter,
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            redis_url=REDIS_URL,
+            stop_event=app.state.gateway_config_stop,
+        )
+    )
     gateway_config = get_gateway_config()
     app.state.chat_queue_manager = create_atomic_chat_queue_manager(
         gateway_config.redis_url,
@@ -284,6 +304,13 @@ async def lifespan(app: FastAPI):
     app.state.shutting_down = True
 
     # Shutdown
+    try:
+        if hasattr(app.state, "gateway_config_stop"):
+            app.state.gateway_config_stop.set()
+        if hasattr(app.state, "gateway_config_task"):
+            app.state.gateway_config_task.cancel()
+    except Exception:
+        pass
     if hasattr(app.state, "socketio_handler") and getattr(app.state.socketio_handler, "stop", None):
         try:
             await app.state.socketio_handler.stop()
@@ -341,20 +368,16 @@ async def gateway_middleware(request: Request, call_next):
             user_timezone = request.query_params.get("user_timezone")
             user_utc_offset_min = request.query_params.get("user_utc_offset_min")
 
-            # Inject into headers so gateway adapter can process normally
-            base_headers = request._headers if hasattr(request, "_headers") else request.headers
-            injected = inject_auth_tokens_into_headers(
-                base_headers,
-                bearer_token,
-                id_token,
-                id_header_name=CONFIG.ID_TOKEN_HEADER_NAME,
-            )
-            # Keep Starlette Headers type so cookies parsing works (needs getlist)
-            request._headers = Headers(injected)
+            # Inject into the request scope so downstream headers/cookies resolve correctly
+            headers = MutableHeaders(scope=request.scope)
+            if bearer_token and "authorization" not in {k.lower(): v for k, v in headers.items()}:
+                headers["authorization"] = f"Bearer {bearer_token}"
+            if id_token:
+                headers[CONFIG.ID_TOKEN_HEADER_NAME] = id_token
             if user_timezone:
-                request._headers = Headers({**dict(request._headers), CONFIG.USER_TIMEZONE_HEADER_NAME: user_timezone})
+                headers[CONFIG.USER_TIMEZONE_HEADER_NAME] = user_timezone
             if user_utc_offset_min:
-                request._headers = Headers({**dict(request._headers), CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME: user_utc_offset_min})
+                headers[CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME] = user_utc_offset_min
 
         # session = await app.state.gateway_adapter.process_request(request, [])
         session = await app.state.gateway_adapter.process_by_policy(request)

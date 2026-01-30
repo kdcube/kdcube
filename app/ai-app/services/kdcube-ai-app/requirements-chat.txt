@@ -87,3 +87,4 @@ geopy
 folium
 
 stripe
+mcp

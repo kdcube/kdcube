@@ -282,7 +282,7 @@ CITATION_OPTIONAL_ATTRS = (
     "provider", "published_time_iso", "modified_time_iso", "fetched_time_iso", "expiration",
     "mime", "base64", "size_bytes", "source_type", "rn", "local_path", "artifact_path", "author",
     "turn_id",
-    "content_length", "fetch_status", # "content",
+    "content", "content_length", "fetch_status",
     "objective_relevance", "query_relevance", "authority", "favicon_url",
     "favicon", "favicon_status",
     "provider_rank", "weighted_rank"

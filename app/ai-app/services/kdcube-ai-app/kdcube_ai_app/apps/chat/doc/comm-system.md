@@ -322,14 +322,14 @@ flowchart TB
   end
 
   subgraph CommSubsystem
-    CC[ChatCommunicator\n(envelopes + filters + delta sniffer)]
-    CR[ChatRelayCommunicator\n(session channels + refcount subs + callbacks)]
-    SC[ServiceCommunicator\n(redis pub/sub + identity prefix)]
+    CC["ChatCommunicator\n(envelopes + filters + delta sniffer)"]
+    CR["ChatRelayCommunicator\n(session channels + refcount subs + callbacks)"]
+    SC["ServiceCommunicator\n(redis pub/sub + identity prefix)"]
   end
 
   subgraph Transports
-    SSE[SSEHub\n(per-process fan-out)]
-    WS[Socket.IO Chat Handler\n(room emit)]
+    SSE["SSEHub\n(per-process fan-out)"]
+    WS["Socket.IO Chat Handler\n(room emit)"]
   end
 
   subgraph Clients
