@@ -263,6 +263,39 @@ CREATE TABLE IF NOT EXISTS kdcube_control_plane.tenant_project_budget (
     CONSTRAINT chk_cp_budget_reserved_nonneg CHECK (reserved_cents >= 0)
 );
 
+-- Backfill columns for existing schemas
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'kdcube_control_plane'
+          AND table_name = 'tenant_project_budget'
+          AND column_name = 'reserved_cents'
+    ) THEN
+        ALTER TABLE kdcube_control_plane.tenant_project_budget
+            ADD COLUMN reserved_cents BIGINT NOT NULL DEFAULT 0;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'kdcube_control_plane'
+          AND table_name = 'tenant_project_budget'
+          AND column_name = 'overdraft_limit_cents'
+    ) THEN
+        ALTER TABLE kdcube_control_plane.tenant_project_budget
+            ADD COLUMN overdraft_limit_cents BIGINT DEFAULT 0;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'chk_cp_budget_reserved_nonneg'
+          AND conrelid = 'kdcube_control_plane.tenant_project_budget'::regclass
+    ) THEN
+        ALTER TABLE kdcube_control_plane.tenant_project_budget
+            ADD CONSTRAINT chk_cp_budget_reserved_nonneg CHECK (reserved_cents >= 0);
+    END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_cp_budget_balance
   ON kdcube_control_plane.tenant_project_budget(tenant, project, balance_cents);
 
