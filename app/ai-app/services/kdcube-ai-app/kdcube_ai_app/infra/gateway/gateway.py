@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict
 from typing import Dict, Any, Optional, List, Tuple
 import logging
+import os
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, AuthenticationError, RequirementBase, PRIVILEGED_ROLES, \
     PAID_ROLES
@@ -23,6 +24,9 @@ from kdcube_ai_app.infra.gateway.config import GatewayConfiguration, validate_ga
 from kdcube_ai_app.auth.sessions import SessionManager, UserType, UserSession, RequestContext
 
 logger = logging.getLogger(__name__)
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 
 class RequestGateway:
@@ -228,16 +232,30 @@ class RequestGateway:
     async def _authenticate(self, context: RequestContext) -> Tuple[UserType, Optional[Dict]]:
         """Authenticate request"""
         if not context.authorization_header or not self.auth_manager:
+            if _auth_debug_enabled():
+                logger.info(
+                    "Gateway auth: missing auth header or auth manager (auth_header=%s auth_manager=%s)",
+                    bool(context.authorization_header),
+                    bool(self.auth_manager),
+                )
             return UserType.ANONYMOUS, None
 
         try:
             # Extract token
             parts = context.authorization_header.split(" ", 1)
             if len(parts) != 2 or parts[0].lower() != "bearer":
+                if _auth_debug_enabled():
+                    logger.info("Gateway auth: malformed authorization header")
                 return UserType.ANONYMOUS, None
             id_token = context.id_token
 
             token = parts[1]
+            if _auth_debug_enabled():
+                logger.info(
+                    "Gateway auth: bearer=%s id_token=%s",
+                    bool(token),
+                    bool(id_token),
+                )
             user = await self.auth_manager.authenticate_with_both(token, id_token)
 
             if PRIVILEGED_ROLES & set(user.roles):
@@ -246,6 +264,14 @@ class RequestGateway:
                 user_type = UserType.PAID
             else:
                 user_type = UserType.REGISTERED
+            if _auth_debug_enabled():
+                logger.info(
+                    "Gateway auth result: user=%s roles=%s perms=%s type=%s",
+                    getattr(user, "username", None),
+                    len(user.roles or []),
+                    len(user.permissions or []),
+                    user_type.value,
+                )
             return user_type, {
                 "user_id": getattr(user, 'sub', None) or user.username,
                 "username": user.username,
@@ -255,6 +281,8 @@ class RequestGateway:
             }
 
         except (AuthenticationError, Exception) as ex:
+            if _auth_debug_enabled():
+                logger.info("Gateway auth failed: %s", str(ex))
             return UserType.ANONYMOUS, None
 
     async def get_system_status(self) -> Dict[str, Any]:

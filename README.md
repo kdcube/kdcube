@@ -141,11 +141,24 @@ graph TD
 - Tool subsystem: [Tool Subsystem](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool-subsystem-README.md)
 - Execution runtime (ops): [Execution Runtime Ops](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/execution/operations.md)
 - Isolated runtime: [Isolated Runtime](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-iso-runtime.md)
+- Runtime modes & built‑in tools: [Runtime Modes & Built‑in Tools](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-runtime-modes-builtin-tools.md)
 - Economics & usage: [Economics & Usage](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/economics-usage.md)
 - Control plane management: [Control Plane Management](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/control_plane/control-plane-management.md)
 
 ### Bundles & Plugin System
 - Agentic bundles: [Bundle System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/plugin/README.md)
+
+### Chat Subsystems
+- Comm integrations (REST/SSE/Socket.IO): [Comm Integrations](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/comm/README-comm.md)
+- Relay + session fan‑out: [Chat Relay (SSE/Socket.IO)](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
+- Channeled streamer: [Channeled Streamer](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/streaming/channeled-streamer-README.md)
+- Attachments: [Attachments System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/attachments-system.md)
+- Feedback: [Feedback System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/feedback-system.md)
+- Citations: [Citations System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/citations-system.md)
+- Memories (overview): [Memory Subsystem](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/memories-README.md)
+- Conversation memories: [Conversation Memories](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/conv-memories-README.md)
+- OPEX aggregations: [OPEX Aggregations](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/opex/README-AGGREGATIONS.md)
+- Code exec widget: [Code Exec Widget](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/solution/widgets/code-exec-widget-README.md)
 
 ### Knowledge Base
 - KB clients (REST & Socket.IO):

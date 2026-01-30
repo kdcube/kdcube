@@ -22,6 +22,13 @@ from kdcube_ai_app.apps.middleware.token_extract import (
     extract_auth_tokens_from_cookies,
     resolve_auth_from_headers_and_cookies,
 )
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 
 class UserSessionError(HTTPException):
@@ -61,6 +68,16 @@ class FastAPIAuthAdapter:
             or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
             request.cookies,
         )
+        if _auth_debug_enabled():
+            logger.info(
+                "Auth context: has_auth=%s has_id=%s id_hdr=%s cookie_auth=%s cookie_id=%s path=%s",
+                bool(auth_header),
+                bool(id_token),
+                bool(request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME) or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower())),
+                bool(request.cookies.get(CONFIG.AUTH_TOKEN_COOKIE_NAME)),
+                bool(request.cookies.get(CONFIG.ID_TOKEN_COOKIE_NAME)),
+                request.url.path if request else "",
+            )
         return RequestContext(
             client_ip=request.client.host if request.client else "unknown",
             user_agent=request.headers.get("user-agent", ""),
@@ -137,6 +154,14 @@ class FastAPIAuthAdapter:
                     "roles": user.roles or [],
                     "permissions": user.permissions or []
                 }
+                if _auth_debug_enabled():
+                    logger.info(
+                        "Auth session: user=%s roles=%s perms=%s privileged=%s",
+                        user.username,
+                        len(user_data.get("roles") or []),
+                        len(user_data.get("permissions") or []),
+                        user_type == UserType.PRIVILEGED,
+                    )
 
                 if self.service_role_name in (user.roles or []):
                     if user_session_id is None or user_session_id.strip() == "":

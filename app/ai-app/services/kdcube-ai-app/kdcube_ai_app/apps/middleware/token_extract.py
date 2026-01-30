@@ -5,8 +5,15 @@ from __future__ import annotations
 
 from http.cookies import SimpleCookie
 from typing import Mapping, Optional, Tuple, Any
+import logging
+import os
 
 from kdcube_ai_app.infra.namespaces import CONFIG
+
+logger = logging.getLogger(__name__)
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 
 def extract_auth_tokens_from_cookies(
@@ -82,6 +89,17 @@ def resolve_auth_from_headers_and_cookies(
             auth_header = f"Bearer {cookie_bearer}"
         if not id_token and cookie_id:
             id_token = cookie_id
+
+    if _auth_debug_enabled():
+        logger.info(
+            "Auth resolve: header_auth=%s header_id=%s cookie_auth=%s cookie_id=%s final_auth=%s final_id=%s",
+            bool(authorization_header),
+            bool(id_token_header),
+            bool(cookies and cookies.get(CONFIG.AUTH_TOKEN_COOKIE_NAME)),
+            bool(cookies and cookies.get(CONFIG.ID_TOKEN_COOKIE_NAME)),
+            bool(auth_header),
+            bool(id_token),
+        )
 
     return auth_header, id_token
 

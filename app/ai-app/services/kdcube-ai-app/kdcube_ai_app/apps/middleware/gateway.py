@@ -21,6 +21,13 @@ from kdcube_ai_app.auth.AuthManager import RequirementBase, AuthenticationError,
     RequireRoles
 from kdcube_ai_app.infra.namespaces import CONFIG
 from kdcube_ai_app.apps.middleware.token_extract import resolve_auth_from_headers_and_cookies
+import logging
+import os
+
+logger = logging.getLogger(__name__)
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 STATE_ADMIN_CHECKED = "_gw_admin_checked"
 
@@ -73,6 +80,13 @@ class FastAPIGatewayAdapter:
             or request.headers.get(CONFIG.ID_TOKEN_HEADER_NAME.lower()),
             request.cookies,
         )
+        if _auth_debug_enabled():
+            logger.info(
+                "Gateway adapter: has_auth=%s has_id=%s path=%s",
+                bool(auth_header),
+                bool(id_token),
+                request.url.path,
+            )
 
         return RequestContext(
             client_ip=request.client.host if request.client else "unknown",

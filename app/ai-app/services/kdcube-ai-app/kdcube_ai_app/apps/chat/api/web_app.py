@@ -441,6 +441,15 @@ async def check_embeddings_endpoint(request: ConfigRequest,
 # think of replacing with auth_without_pressure
 async def get_profile(session: UserSession = Depends(get_user_session_dependency())):
     """Get user profile - works for both anonymous and registered users"""
+    if os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}:
+        logger.info(
+            "Profile session: type=%s user=%s roles=%s perms=%s session_id=%s",
+            session.user_type.value if hasattr(session.user_type, "value") else session.user_type,
+            session.username or session.user_id or session.fingerprint,
+            len(session.roles or []),
+            len(session.permissions or []),
+            session.session_id,
+        )
     if session.user_type in [UserType.REGISTERED, UserType.PRIVILEGED]:
         return {
             "user_type": "registered" if session.user_type == UserType.REGISTERED else "privileged",

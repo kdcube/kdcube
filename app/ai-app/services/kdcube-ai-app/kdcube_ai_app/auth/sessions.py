@@ -5,6 +5,8 @@
 import hashlib
 import json
 import time
+import logging
+import os
 import uuid
 from dataclasses import asdict, dataclass
 from enum import Enum
@@ -15,6 +17,10 @@ from redis import asyncio as aioredis
 from kdcube_ai_app.auth.AuthManager import User
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
+logger = logging.getLogger(__name__)
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 ATOMIC_SESSION_MERGE_OR_CREATE_AND_GET = r"""
 -- Atomic merge-or-create + get
 -- Shallow merge (level one) with presence-based semantics for user_data.
@@ -442,6 +448,14 @@ class SessionManager:
             request_context=context,
             timezone=context.user_timezone
         )
+        if _auth_debug_enabled():
+            logger.info(
+                "Session merge: type=%s user_id=%s roles=%s perms=%s",
+                user_type.value if isinstance(user_type, UserType) else user_type,
+                user_data.get("user_id") if user_data else None,
+                len(user_data.get("roles") or []) if user_data else 0,
+                len(user_data.get("permissions") or []) if user_data else 0,
+            )
 
         payload = json.dumps(session.serialize_to_dict(), ensure_ascii=False)
         user_data_json = json.dumps(user_data, ensure_ascii=False) if user_data else ""
@@ -530,4 +544,3 @@ class SessionManager:
             return json.loads(text)
         except Exception:
             return None
-

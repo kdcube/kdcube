@@ -6,6 +6,8 @@
 Framework-agnostic OAuth Manager implementation
 """
 import base64, time, hashlib
+import logging
+import os
 from functools import lru_cache
 from typing import Optional, Dict, Any, Tuple
 
@@ -15,6 +17,11 @@ from jwt import PyJWTError
 from pydantic import BaseModel
 
 from kdcube_ai_app.auth.AuthManager import AuthManager, User, AuthenticationError
+
+logger = logging.getLogger("OAuthManager")
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 
 class OAuthUser(User):
@@ -306,6 +313,12 @@ class OAuthManager(AuthManager):
         user = await self.authenticate(access_token)
 
         if not id_token:
+            if _auth_debug_enabled():
+                logger.info(
+                    "OAuth auth: access token ok, id_token missing, roles=%s perms=%s",
+                    len(user.roles or []),
+                    len(user.permissions or []),
+                )
             return user
 
         id_payload = self._verify_id_token(id_token)
@@ -321,5 +334,10 @@ class OAuthManager(AuthManager):
 
         # cache merged view under the access token key
         self._cache_put(access_token, merged, id_payload.get("exp"))
+        if _auth_debug_enabled():
+            logger.info(
+                "OAuth auth: merged user roles=%s perms=%s",
+                len(merged.get("roles") or []),
+                len(merged.get("permissions") or []),
+            )
         return OAuthUser(**merged)
-

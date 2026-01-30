@@ -4,8 +4,14 @@
 # auth/cognito_manager.py
 from typing import Any, Dict, Optional
 import os
+import logging
 from kdcube_ai_app.auth.AuthManager import AuthenticationError, User
 from kdcube_ai_app.auth.OAuthManager import OAuthManager, OAuth2Config
+
+logger = logging.getLogger(__name__)
+
+def _auth_debug_enabled() -> bool:
+    return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 class CognitoUser(User):
     sub: str
@@ -82,6 +88,8 @@ class CognitoAuthManager(OAuthManager):
             access_payload = await self._verify_access_token(access_token)
         except Exception as e:
             raise AuthenticationError(f"Access token validation failed: {str(e)}")
+        if _auth_debug_enabled():
+            logger.info("Cognito auth: access token ok, id_token_present=%s", bool(id_token))
 
         # 2. If we have ID token, extract user identity from it
         if id_token:
@@ -96,6 +104,13 @@ class CognitoAuthManager(OAuthManager):
 
                 # Create user from ID token (has roles/groups)
                 user = self._create_user_from_id_token(id_payload)
+                if _auth_debug_enabled():
+                    logger.info(
+                        "Cognito auth: roles=%s perms=%s user=%s",
+                        len(user.roles or []),
+                        len(user.permissions or []),
+                        user.username,
+                    )
 
                 # Cache under access token key since that's what we'll use for API calls
                 user_data = user.model_dump()
