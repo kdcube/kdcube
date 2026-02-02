@@ -114,9 +114,6 @@ Where `attachments` are either:
 
 The "Loop Rounds" lines are appended after the Operational Digest in the same cached text block.
 
-Reference example:
-- [`kdcube_ai_app/apps/chat/sdk/runtime/solution/react/agents/ctx/1/usr`](agents/ctx/1/usr)
-
 ---
 
 ## 4) Operational Digest Structure (What the Decision Agent Reads)
@@ -283,22 +280,6 @@ The layout is designed so that **large prefixes remain stable** across rounds.
    - New events are appended without rewriting older lines.
 
 This layout preserves **long prefix caches** even as the round-by-round content grows.
-
----
-
-## 10) Example Prompt Snapshot (Reference)
-
-The directory below contains a real prompt capture from a first-round decision:
-
-- System blocks: [`kdcube_ai_app/apps/chat/sdk/runtime/solution/react/agents/ctx/1/sys1`](agents/ctx/1/sys1), [`kdcube_ai_app/apps/chat/sdk/runtime/solution/react/agents/ctx/1/sys2`](agents/ctx/1/sys2), [`kdcube_ai_app/apps/chat/sdk/runtime/solution/react/agents/ctx/1/sys3`](agents/ctx/1/sys3)
-- Human message: [`kdcube_ai_app/apps/chat/sdk/runtime/solution/react/agents/ctx/1/usr`](agents/ctx/1/usr)
-
-These files illustrate:
-
-- System prompt split into 3 blocks
-- Journal structure (prior turns + current turn)
-- Contract slots + budget snapshot
-- No `show_artifacts` yet (first round)
 
 ---
 
