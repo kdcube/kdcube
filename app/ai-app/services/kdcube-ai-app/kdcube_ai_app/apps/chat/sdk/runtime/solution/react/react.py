@@ -243,7 +243,7 @@ class ReactSolver:
 
         # use ContextBrowser unless ctx.reconciler already materialized bundle
         browser = ContextBrowser(
-            tool_manager=self.tool_manager,
+            ctx_client=getattr(self.tool_manager, "context_rag_client", None),
             logger=self.log,
             turn_view_class=self.turn_view_class,
         )
@@ -310,9 +310,9 @@ class ReactSolver:
         context.track_id = runtime_ctx.get("track_id")
 
         # Get ALL available tools (respecting allowed_plugins filter for safety)
-        adapters = self.tool_manager.tools.adapters_for_codegen(
+        adapters = await self.tool_manager.tools.react_tools(
             allowed_plugins=allowed_plugins,
-            allowed_ids=None  # ← None means "all tools" (subject to allowed_plugins)
+            allowed_ids=None,  # ← None means "all tools" (subject to allowed_plugins)
         )
         try:
             user_msg = getattr(self.scratchpad, "user_text", None) or getattr(self.scratchpad, "user_message", None) or ""
@@ -1661,11 +1661,52 @@ class ReactSolver:
                 "iteration": it,
             })
 
+        # ---- tool signature validation (filter params + classify issues) ----
+        sig_status = None
+        sig_issues: List[Dict[str, Any]] = []
+        filtered_params = params if isinstance(params, dict) else {}
+        try:
+            if tool_id:
+                tv = await self.tool_manager.tools.validate_tool_params(tool_id=tool_id, params=filtered_params)
+                sig_status = tv.get("status")
+                sig_issues = tv.get("issues") or []
+                filtered_params = tv.get("params") or {}
+                # apply filtered params for execution if any filtering occurred
+                if isinstance(tool_call, dict):
+                    tool_call["params"] = filtered_params
+                    decision["tool_call"] = tool_call
+                    state["last_decision"] = decision
+        except Exception:
+            sig_status = None
+            sig_issues = []
+
+        if sig_status in ("yellow", "red"):
+            context.add_event(kind="tool_signature_validation", data={
+                "iteration": it,
+                "tool_id": tool_id,
+                "status": sig_status,
+                "issues": sig_issues,
+            })
+            state["session_log"].append({
+                "type": "tool_signature_validation",
+                "iteration": it,
+                "timestamp": time.time(),
+                "tool_id": tool_id,
+                "status": sig_status,
+                "issues": sig_issues,
+            })
+
+        if sig_status == "red":
+            # Treat as protocol violation: missing required or incompatible required params
+            violations.extend(sig_issues)
+            ok = False
+
         context.add_event(kind="protocol_verify", data={
             "iteration": it,
             "tool_id": tool_id,
             "ok": ok,
             "violations_count": len(violations),
+            "violation_codes": [v.get("code") for v in violations if isinstance(v, dict) and v.get("code")],
         })
 
         state["session_log"].append({

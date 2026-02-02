@@ -268,23 +268,23 @@ def transform_codegen_to_turnid(data):
 
     return transformed
 
-async def build_program_history_from_turn_ids(self, *,
-                                              user_id: str,
-                                              turn_ids: List[str],
-                                              conversation_id: Optional[str] = None,
-                                              scope: str = "track",
-                                              days: int = 365) -> List[Dict[str, Any]]:
+async def _build_program_history_from_turn_ids(ctx_client, *,
+                                               user_id: str,
+                                               turn_ids: List[str],
+                                               conversation_id: Optional[str] = None,
+                                               scope: str = "track",
+                                               days: int = 365) -> List[Dict[str, Any]]:
     """
     For each turn_id, materialize: program presentation (if present), project_canvas / project_log
     from deliverables, and citations tied to the run. Returns the same shape as _build_program_history().
     """
-    if not self.context_rag_client:
+    if not ctx_client:
         return []
     out = []
     seen_runs = set()
 
     for tid in turn_ids:
-        mat = await self.context_rag_client.materialize_turn(
+        mat = await ctx_client.materialize_turn(
             user_id=user_id,
             conversation_id=conversation_id,
             turn_id=tid,
@@ -387,6 +387,41 @@ async def build_program_history_from_turn_ids(self, *,
         reverse=True
     )
     return out
+
+
+async def build_program_history_from_turn_ids(self, *,
+                                              user_id: str,
+                                              turn_ids: List[str],
+                                              conversation_id: Optional[str] = None,
+                                              scope: str = "track",
+                                              days: int = 365) -> List[Dict[str, Any]]:
+    if not self.context_rag_client:
+        return []
+    return await _build_program_history_from_turn_ids(
+        self.context_rag_client,
+        user_id=user_id,
+        turn_ids=turn_ids,
+        conversation_id=conversation_id,
+        scope=scope,
+        days=days,
+    )
+
+
+async def build_program_history_from_turn_ids_by_client(*,
+                                                        ctx_client,
+                                                        user_id: str,
+                                                        turn_ids: List[str],
+                                                        conversation_id: Optional[str] = None,
+                                                        scope: str = "track",
+                                                        days: int = 365) -> List[Dict[str, Any]]:
+    return await _build_program_history_from_turn_ids(
+        ctx_client,
+        user_id=user_id,
+        turn_ids=turn_ids,
+        conversation_id=conversation_id,
+        scope=scope,
+        days=days,
+    )
 
 # ---------------------------------------------------------------------------
 # Materialization for prior pairs (with artifacts and view policy)

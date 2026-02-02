@@ -10,11 +10,11 @@ Put your bundles into the root once (or keep them synced with rsync):
 # Example
 export SITE_AGENTIC_BUNDLES_ROOT="/abs/path/to/agentic-bundles-root"
 
-mkdir -p "$SITE_AGENTIC_BUNDLES_ROOT/custom_apps" \
+mkdir -p "$SITE_AGENTIC_BUNDLES_ROOT/bundles" \
          "$SITE_AGENTIC_BUNDLES_ROOT/customers"
 
 # Copy your sources/wheels/zips into the root
-rsync -a /Users/you/src/kdcube/.../apps/chat/        "$SITE_AGENTIC_BUNDLES_ROOT/custom_apps/"
+rsync -a /Users/you/src/my_bundle/                   "$SITE_AGENTIC_BUNDLES_ROOT/bundles/"
 rsync -a /Users/you/src/>customer>/chatbot/          "$SITE_AGENTIC_BUNDLES_ROOT/customers/"
 # For wheels/zips: just place the artifact in a subfolder under the root
 # e.g. $SITE_AGENTIC_BUNDLES_ROOT/packages/acme_bundle-1.0.0.whl
@@ -29,39 +29,39 @@ Symlinks are preserved by Docker, but they must resolve **within the mounted roo
 ✔️ OK:
 
 ```
-/abs/agentic-bundles-root/custom_apps -> ./real/custom_apps   # relative symlink within root
-/abs/agentic-bundles-root/real/custom_apps/...                # actual files live here under the root
+/abs/agentic-bundles-root/bundles -> ./real/bundles   # relative symlink within root
+/abs/agentic-bundles-root/real/bundles/...            # actual files live here under the root
 ```
 
 ❌ Not OK:
 
 ```
-/abs/agentic-bundles-root/custom_apps -> /Users/you/other/location   # absolute outside root
+/abs/agentic-bundles-root/bundles -> /Users/you/other/location   # absolute outside root
 ```
 
 ### Directory layout example
 
 ```
 $SITE_AGENTIC_BUNDLES_ROOT
-├── custom_apps
-│   ├── default_app/
-│   │   ├── agentic_app.py
+├── bundles
+│   ├── my_bundle/
+│   │   ├── entrypoint.py
 │   │   └── __init__.py
-│   └── context_db_experiment/
-│       ├── agentic_app.py
+│   └── another_bundle/
+│       ├── entrypoint.py
 │       └── __init__.py
 └── customers
     └── <customer>/
         ├── app_backend/
-        │   ├── agentic_app.py
+        │   ├── entrypoint.py
         │   └── __init__.py
         └── __init__.py
 ```
 
 Then your `AGENTIC_BUNDLES_JSON` uses:
-`/bundles/custom_apps` (module `default_app.agentic_app`)
-`/bundles/custom_apps` (module `context_db_experiment.agentic_app`)
-`/bundles/customers`   (module `app_backend.agentic_app`)
+`/bundles/bundles`   (module `my_bundle.entrypoint`)
+`/bundles/bundles`   (module `another_bundle.entrypoint`)
+`/bundles/customers` (module `app_backend.entrypoint`)
 
 ---
 
@@ -87,7 +87,7 @@ curl -s -H "Authorization: Bearer <token>" http://<chat-host>/landing/bundles | 
 ### Confirm container paths exist
 
 ```bash
-docker exec -it chat-chat bash -lc 'ls -la /bundles && ls -la /bundles/custom_apps && ls -la /bundles/customers'
+docker exec -it chat-chat bash -lc 'ls -la /bundles && ls -la /bundles/bundles && ls -la /bundles/customers'
 ```
 
 (Optional) test an import quickly (just checks Python importability, not decorator discovery):
@@ -95,11 +95,11 @@ docker exec -it chat-chat bash -lc 'ls -la /bundles && ls -la /bundles/custom_ap
 ```bash
 docker exec -it chat-chat python - <<'PY'
 import sys, importlib
-sys.path.insert(0, "/bundles/custom_apps")
-import default_app.agentic_app as a
-print("✅ default_app OK:", a.__file__)
+sys.path.insert(0, "/bundles/bundles")
+import my_bundle.entrypoint as a
+print("✅ my_bundle OK:", a.__file__)
 sys.path.insert(0, "/bundles/customers")
-import app_backend.agentic_app as b
+import app_backend.entrypoint as b
 print("✅ <customer> app OK:", b.__file__)
 PY
 ```

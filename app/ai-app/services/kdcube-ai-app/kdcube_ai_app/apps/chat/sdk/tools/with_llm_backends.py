@@ -56,7 +56,8 @@ async def generate_content_llm(
             "Optional text or data to use as a base. Do NOT embed sources here; use sources_list only."
         ] = "",
         target_format: Annotated[str, "html|markdown|json|yaml|text|managed_json_artifact. Must output ONLY that format; no markdown or code fences.",
-            {"enum": ["html", "markdown", "mermaid", "json", "yaml", "text", "xml", "managed_json_artifact"]}] = "markdown",        schema_json: Annotated[str,
+            {"enum": ["html", "markdown", "mermaid", "json", "yaml", "text", "xml", "managed_json_artifact"]}] = "markdown",
+        schema_json: Annotated[str,
         "Optional JSON Schema. If provided (and target_format is json|yaml), "
         "the schema is inserted into the prompt and the model MUST produce an output that validates against it."] = "",
         sources_list: Annotated[
@@ -686,8 +687,8 @@ async def generate_content_llm(
                 _schema_obj = json.loads(schema_json)
                 schema_text_for_prompt = json.dumps(_schema_obj, ensure_ascii=False, indent=2)
                 # Optional: hard cap to avoid massive schemas
-                if len(schema_text_for_prompt) > 6000:
-                    schema_text_for_prompt = schema_text_for_prompt[:6000] + "\n/* …truncated for prompt… */"
+                # if len(schema_text_for_prompt) > 6000:
+                #     schema_text_for_prompt = schema_text_for_prompt[:6000] + "\n/* …truncated for prompt… */"
             except Exception:
                 # If the provided schema isn't valid JSON, don't stop; just skip embedding
                 schema_text_for_prompt = ""

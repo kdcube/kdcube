@@ -19,7 +19,7 @@ Implementation: `kdcube_ai_app/apps/chat/sdk/runtime/tool_subsystem.py`
 
 Bundles provide tool modules via a portable descriptor, e.g.:
 
-`kdcube_ai_app/apps/custom_apps/codegen/tools_descriptor.py`
+`bundle_root/tools_descriptor.py`
 
 ```python
 CODEGEN_TOOLS_SPECS = [
@@ -77,6 +77,14 @@ This keeps built‑in tools behavior stable while allowing bundles to opt into i
   - `bind_registry(...)` (bundle registry)
   - `bind_integrations(...)` (ctx client, kv cache)
 - Tool metadata is introspected and a flattened catalog is built.
+
+## Integrations available to tools
+
+Tools can access shared integrations injected by the subsystem:
+- `ctx_client`: ContextRAGClient / ContextBrowser helper to query or persist artifacts.
+- `kv_cache`: Redis-backed KV cache for lightweight state (see `infra/service_hub/cache-README.md`).
+
+Prefer cache access over direct Redis calls inside tools.
 
 ## MCP tools
 

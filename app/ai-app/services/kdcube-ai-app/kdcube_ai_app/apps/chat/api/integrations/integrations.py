@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
+
+# # kdcube_ai_app/apps/chat/api/integrations/integrations.py
 import uuid
 from dataclasses import asdict
 from typing import Optional, Dict, Any
@@ -52,6 +54,19 @@ class BundleSuggestionsRequest(BaseModel):
     conversation_id: Optional[str] = None
     config_request: Optional[ConfigRequest] = None
 
+class BundlePropsUpdateRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+    op: str = "replace"  # "replace" | "merge"
+    props: Dict[str, Any] = {}
+
+class BundlePropsResetRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+
+class BundleCleanupRequest(BaseModel):
+    drop_sys_modules: bool = True
+
 def _ensure_chat_communicator(app) -> ChatRelayCommunicator:
     """
     Return a process-wide ChatRelayCommunicator.
@@ -85,7 +100,7 @@ def _ensure_chat_communicator(app) -> ChatRelayCommunicator:
     app.state.chat_comm = comm
     return comm
 
-@router.get("/landing/bundles")
+@router.get("/admin/integrations/bundles")
 async def get_available_bundles(
         request: Request,
         session: UserSession = Depends(get_user_session_dependency())
@@ -118,6 +133,190 @@ async def get_available_bundles(
         },
         "default_bundle_id": reg.default_bundle_id
     }
+
+def _bundle_props_key(*, tenant: str, project: str, bundle_id: str) -> str:
+    return namespaces.CONFIG.BUNDLES.PROPS_KEY_FMT.format(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+    )
+
+async def _load_bundle_props_defaults(
+        *,
+        bundle_id: str,
+        tenant: str,
+        project: str,
+        request: Request,
+        session: UserSession,
+) -> Dict[str, Any]:
+    from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
+    from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
+    from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec, get_workflow_instance
+
+    spec_resolved = resolve_bundle(bundle_id, override=None)
+    if not spec_resolved:
+        raise HTTPException(status_code=404, detail=f"Bundle {bundle_id} not found")
+
+    try:
+        wf_config = create_workflow_config(ConfigRequest())
+    except Exception:
+        wf_config = create_workflow_config(ConfigRequest.model_validate({"project": project}))
+
+    spec = AgenticBundleSpec(
+        path=spec_resolved.path,
+        module=spec_resolved.module,
+        singleton=bool(spec_resolved.singleton),
+    )
+    routing = ChatTaskRouting(
+        session_id=session.session_id,
+        bundle_id=spec_resolved.id,
+    )
+    comm_context = ChatTaskPayload(
+        request=ChatTaskRequest(request_id=str(uuid.uuid4())),
+        routing=routing,
+        actor=ChatTaskActor(
+            tenant_id=tenant,
+            project_id=project,
+        ),
+        user=ChatTaskUser(
+            user_type=session.user_type.value,
+            user_id=session.user_id,
+            username=session.username,
+            fingerprint=session.fingerprint,
+            roles=session.roles,
+            permissions=session.permissions,
+            timezone=session.request_context.user_timezone,
+            utc_offset_min=session.request_context.user_utc_offset_min,
+        ),
+    )
+
+    wf_config.ai_bundle_spec = spec_resolved
+    workflow, _mod = get_workflow_instance(
+        spec, wf_config, comm_context=comm_context,
+    )
+    defaults = getattr(workflow, "bundle_props_defaults", None) or {}
+    return dict(defaults)
+
+@router.get("/admin/integrations/bundles/{bundle_id}/props")
+async def get_bundle_props(
+        bundle_id: str,
+        request: Request,
+        tenant: Optional[str] = None,
+        project: Optional[str] = None,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    tenant_id = tenant or settings.TENANT
+    project_id = project or settings.PROJECT
+
+    redis = request.app.state.middleware.redis
+    key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
+    raw = await redis.get(key)
+    props = {}
+    if raw:
+        try:
+            props = json.loads(raw)
+        except Exception:
+            props = {}
+
+    defaults = await _load_bundle_props_defaults(
+        bundle_id=bundle_id,
+        tenant=tenant_id,
+        project=project_id,
+        request=request,
+        session=session,
+    )
+
+    return {
+        "bundle_id": bundle_id,
+        "tenant": tenant_id,
+        "project": project_id,
+        "props": props,
+        "defaults": defaults,
+    }
+
+@router.post("/admin/integrations/bundles/{bundle_id}/props", status_code=200)
+async def set_bundle_props(
+        bundle_id: str,
+        payload: BundlePropsUpdateRequest,
+        request: Request,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+    redis = request.app.state.middleware.redis
+
+    key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
+    props = dict(payload.props or {})
+
+    if payload.op == "merge":
+        raw = await redis.get(key)
+        current = {}
+        if raw:
+            try:
+                current = json.loads(raw)
+            except Exception:
+                current = {}
+        current.update(props)
+        props = current
+    elif payload.op != "replace":
+        raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
+
+    await redis.set(key, json.dumps(props, ensure_ascii=False))
+
+    try:
+        msg = {
+            "type": "bundles.props.update",
+            "bundle_id": bundle_id,
+            "tenant": tenant_id,
+            "project": project_id,
+            "updated_by": session.username or session.user_id or "unknown",
+            "ts": datetime.utcnow().isoformat() + "Z",
+        }
+        await redis.publish(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
+    except Exception as e:
+        logger.error(f"Failed to publish props update: {e}")
+
+    return {"status": "ok", "bundle_id": bundle_id, "tenant": tenant_id, "project": project_id}
+
+@router.post("/admin/integrations/bundles/{bundle_id}/props/reset-code", status_code=200)
+async def reset_bundle_props_from_code(
+        bundle_id: str,
+        payload: BundlePropsResetRequest,
+        request: Request,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+
+    defaults = await _load_bundle_props_defaults(
+        bundle_id=bundle_id,
+        tenant=tenant_id,
+        project=project_id,
+        request=request,
+        session=session,
+    )
+
+    redis = request.app.state.middleware.redis
+    key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
+    await redis.set(key, json.dumps(defaults, ensure_ascii=False))
+
+    try:
+        msg = {
+            "type": "bundles.props.update",
+            "bundle_id": bundle_id,
+            "tenant": tenant_id,
+            "project": project_id,
+            "updated_by": session.username or session.user_id or "unknown",
+            "ts": datetime.utcnow().isoformat() + "Z",
+        }
+        await redis.publish(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
+    except Exception as e:
+        logger.error(f"Failed to publish props reset: {e}")
+
+    return {"status": "ok", "bundle_id": bundle_id, "tenant": tenant_id, "project": project_id, "source": "code"}
 
 @router.post("/admin/integrations/bundles", status_code=200)
 async def admin_set_bundles(
@@ -200,6 +399,46 @@ async def admin_reset_bundles_from_env(
         "count": len(reg.bundles)
     }
 
+@router.post("/admin/integrations/bundles/cleanup", status_code=200)
+async def admin_cleanup_bundles(
+        payload: BundleCleanupRequest,
+        request: Request,
+        session: UserSession = Depends(auth_without_pressure())
+):
+    from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+    from kdcube_ai_app.infra.plugin.bundle_registry import get_all
+
+    active_specs = []
+    for _bid, entry in (get_all() or {}).items():
+        try:
+            active_specs.append(AgenticBundleSpec(
+                path=entry.get("path"),
+                module=entry.get("module"),
+                singleton=bool(entry.get("singleton")),
+            ))
+        except Exception:
+            continue
+
+    result = evict_inactive_specs(
+        active_specs=active_specs,
+        drop_sys_modules=bool(payload.drop_sys_modules),
+    )
+    result["status"] = "ok"
+
+    try:
+        msg = {
+            "type": "bundles.cleanup",
+            "drop_sys_modules": bool(payload.drop_sys_modules),
+            "updated_by": session.username or session.user_id or "unknown",
+            "ts": datetime.utcnow().isoformat() + "Z",
+        }
+        redis = request.app.state.middleware.redis
+        await redis.publish(namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL, json.dumps(msg, ensure_ascii=False))
+    except Exception as e:
+        logger.error(f"Failed to publish bundles cleanup: {e}")
+
+    return result
+
 @router.post("/integrations/bundles/{tenant}/{project}/operations/{operation}")
 async def call_bundle_op(
         tenant: str,
@@ -277,12 +516,27 @@ async def call_bundle_op(
     )
     try:
         wf_config.ai_bundle_spec = spec_resolved
-        workflow, _init_state, _mod = get_workflow_instance(
+        workflow, _mod = get_workflow_instance(
             spec, wf_config, comm_context=comm_context,
         )
     except Exception as e:
         logger.exception(f"[get_bundle_suggestions.{tenant}.{project}] Failed to load bundle {asdict(spec)}")
-        raise HTTPException(status_code=500, detail=f"Failed to load bundle: {e}")
+        try:
+            admin_spec = resolve_bundle("kdcube.admin", override=None)
+            if not admin_spec:
+                raise e
+            wf_config.ai_bundle_spec = admin_spec
+            admin = AgenticBundleSpec(
+                path=admin_spec.path,
+                module=admin_spec.module,
+                singleton=bool(admin_spec.singleton),
+            )
+            workflow, _mod = get_workflow_instance(
+                admin, wf_config, comm_context=comm_context,
+            )
+            spec_resolved = admin_spec
+        except Exception:
+            raise HTTPException(status_code=500, detail=f"Failed to load bundle: {e}")
 
     # 4) Call op() if available (support sync/async)
     if not hasattr(workflow, operation) or not callable(getattr(workflow, operation)):

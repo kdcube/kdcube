@@ -5,11 +5,37 @@
 from __future__ import annotations
 import json, os, time
 from typing import Dict, Optional, Tuple, Any
+from pathlib import Path
 from pydantic import BaseModel, Field, ValidationError
 import kdcube_ai_app.infra.namespaces as namespaces
 
 REDIS_KEY_FMT = namespaces.CONFIG.BUNDLES.BUNDLE_MAPPING_KEY_FMT
 REDIS_CHANNEL = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
+ADMIN_BUNDLE_ID = "kdcube.admin"
+
+
+def _admin_bundle_entry() -> "BundleEntry":
+    root = Path(__file__).resolve().parent
+    return BundleEntry(
+        id=ADMIN_BUNDLE_ID,
+        name="KDCube Admin",
+        path=str(root),
+        module="admin_bundle.entrypoint",
+        singleton=True,
+        description="Built-in admin-only bundle",
+    )
+
+
+def _ensure_admin_bundle(reg: "BundlesRegistry") -> "BundlesRegistry":
+    if ADMIN_BUNDLE_ID not in reg.bundles:
+        reg = BundlesRegistry(
+            default_bundle_id=reg.default_bundle_id,
+            bundles=dict(reg.bundles),
+        )
+        reg.bundles[ADMIN_BUNDLE_ID] = _admin_bundle_entry()
+    if not reg.default_bundle_id or reg.default_bundle_id not in reg.bundles:
+        reg.default_bundle_id = ADMIN_BUNDLE_ID
+    return reg
 
 class BundleEntry(BaseModel):
     id: str
@@ -59,17 +85,20 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
         if not reg.bundles or len(reg.bundles) == 0:
             seeded = await seed_from_env_if_any(redis, tenant, project)
             if seeded and seeded.bundles:
-                return seeded
+                return _ensure_admin_bundle(seeded)
             # keep returning the empty registry if seeding didn't produce anything
-            return reg
-        return reg
+            return _ensure_admin_bundle(reg)
+        return _ensure_admin_bundle(reg)
 
     # Key absent -> try seeding once
     seeded = await seed_from_env_if_any(redis, tenant, project)
-    return seeded or BundlesRegistry()
+    if seeded:
+        return _ensure_admin_bundle(seeded)
+    return _ensure_admin_bundle(BundlesRegistry())
 
 async def save_registry(redis, reg: BundlesRegistry, tenant: Optional[str]=None, project: Optional[str]=None) -> None:
     key = redis_key(tenant, project)
+    reg = _ensure_admin_bundle(reg)
     await redis.set(key, reg.model_dump_json())
 
 async def publish_update(redis, reg: BundlesRegistry, *, tenant: Optional[str]=None, project: Optional[str]=None, op: str="merge", actor: Optional[str]=None):
@@ -110,7 +139,7 @@ async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Opt
         )
         if not reg.bundles:
             return None
-
+        reg = _ensure_admin_bundle(reg)
         await save_registry(redis, reg, tenant, project)
         return reg
 
@@ -141,6 +170,7 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
         default_bundle_id=default_id,
         bundles={bid: BundleEntry(**b) for bid, b in bundles_dict.items()}
     )
+    reg = _ensure_admin_bundle(reg)
     await save_registry(redis, reg, tenant, project)
     return reg
 
@@ -174,7 +204,7 @@ def apply_update(
         new_default = (
             default_bundle_id if (default_bundle_id in new_map) else (next(iter(new_map), None))
         )
-        return BundlesRegistry(default_bundle_id=new_default, bundles=new_map)
+        return _ensure_admin_bundle(BundlesRegistry(default_bundle_id=new_default, bundles=new_map))
 
     # merge
     new_map: Dict[str, BundleEntry] = dict(current.bundles)
@@ -185,4 +215,4 @@ def apply_update(
     if new_default and new_default not in new_map:
         new_default = next(iter(new_map), None)
 
-    return BundlesRegistry(default_bundle_id=new_default, bundles=new_map)
+    return _ensure_admin_bundle(BundlesRegistry(default_bundle_id=new_default, bundles=new_map))

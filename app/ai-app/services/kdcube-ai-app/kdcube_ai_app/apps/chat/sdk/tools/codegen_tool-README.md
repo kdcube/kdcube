@@ -6,7 +6,7 @@ This describes the end-to-end execution path for `codegen_tools.codegen_python`,
 - ReAct decision selects `codegen_tools.codegen_python` with:
   - `instruction` (what to do)
   - `output_contract` (required artifacts)
-- Execution path: `apps/custom_apps/codegen/sdk/codegen/react/execution.py`
+- Execution path: `apps/chat/sdk/runtime/solution/react/execution.py`
   - `_execute_tool_in_memory(...)` detects `tools_insights.is_codegen_tool(tool_id)`
   - Calls `run_codegen_tool(...)`
 
@@ -59,7 +59,7 @@ File: `apps/chat/sdk/tools/codegen_tool.py`
 - Returns `artifacts` list in the envelope
 
 ## 7) React registers artifacts
-File: `apps/custom_apps/codegen/sdk/codegen/react/execution.py`
+File: `apps/chat/sdk/runtime/solution/react/execution.py`
 - Iterates the returned `artifacts`
 - Each artifact becomes a tool result item
 - These are registered in `ReactContext` as current turn artifacts

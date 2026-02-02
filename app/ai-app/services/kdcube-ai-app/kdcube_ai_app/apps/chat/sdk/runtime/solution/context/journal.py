@@ -540,6 +540,33 @@ def build_turn_session_journal(*,
                 )
                 continue
 
+            if kind == "tool_signature_validation":
+                tool_id = (e.get("tool_id") or "").strip()
+                status = (e.get("status") or "").strip()
+                issues = e.get("issues") or []
+                pairs: list[str] = []
+                if isinstance(issues, list):
+                    for v in issues:
+                        if not isinstance(v, dict):
+                            continue
+                        p = (v.get("param") or "").strip() or "?"
+                        c = (v.get("code") or "").strip() or "issue"
+                        if c == "type_mismatch":
+                            exp = (v.get("expected") or "").strip() or "?"
+                            got = (v.get("got") or "").strip() or "?"
+                            pairs.append(f"{p}:{c}({got}->{exp})")
+                        else:
+                            pairs.append(f"{p}:{c}")
+                pairs_s = ", ".join(pairs[:4])
+                lines.append(
+                    f"- {ts} — tool_signature_validation:"
+                    + (f" status={status}" if status else "")
+                    + (f" tool={tool_id}" if tool_id else "")
+                    + (f" issues=[{pairs_s}]" if pairs_s else "")
+                    + (f" (n={len(issues)})" if isinstance(issues, list) else "")
+                )
+                continue
+
             if kind == "tool_call_invalid":
                 tool_id = (e.get("tool_id") or "").strip()
                 viols = e.get("violations") or []

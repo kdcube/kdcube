@@ -191,7 +191,7 @@ Key worker: [apps/chat/processor.py](../../processor.py)
 Bundles are **runtime‑loadable workflows** with custom logic and optional endpoints.
 
 - Registry + loader: [infra/plugin/README.md](../../../infra/plugin/README.md)
-- Example bundle entrypoint: [codegen/entrypoint.py](../../../apps/custom_apps/codegen/entrypoint.py)
+- Example bundle entrypoint: [streaming_and_storage entrypoint](../../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/streaming_and_storage@2026-02-01-22-53/entrypoint.py)
 
 Bundles can:
 - Define workflows (agentic graphs)

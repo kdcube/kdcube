@@ -326,6 +326,7 @@ def _params_from_schema(schema: Dict[str, Any]) -> List[Dict[str, Any]]:
             "annotation": annot,
             "default": None if name in required else meta.get("default"),
             "kind": "POSITIONAL_OR_KEYWORD",
+            "required": bool(name in required),
         })
     return params
 

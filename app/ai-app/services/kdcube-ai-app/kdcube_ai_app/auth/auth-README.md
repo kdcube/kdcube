@@ -16,12 +16,6 @@ options across REST, SSE, and Socket.IO.
 3) Delegated auth (proxy login service)
 - Proxy service build: [ProxyLogin Dockerfile](../../deployment/docker/all_in_one/Dockerfile_ProxyLogin)
 - Proxy service wiring: [all-in-one compose](../../deployment/docker/all_in_one/docker-compose.yaml)
-- UI client example:
-  - [DelegatedLogin.tsx](/Users/elenaviter/src/kdcube/ai-customers-solutions/example-product/ui/src/components/auth/DelegatedLogin.tsx)
-  - [DelegatedAuthManager.tsx](/Users/elenaviter/src/kdcube/ai-customers-solutions/example-product/ui/src/components/auth/DelegatedAuthManager.tsx)
-  - [DelegatedAuthContext.ts](/Users/elenaviter/src/kdcube/ai-customers-solutions/example-product/ui/src/components/auth/DelegatedAuthContext.ts)
-  - [OAuthManager.tsx](/Users/elenaviter/src/kdcube/ai-customers-solutions/example-product/ui/src/components/auth/OAuthManager.tsx)
-  - [AuthManager.tsx](/Users/elenaviter/src/kdcube/ai-customers-solutions/example-product/ui/src/components/auth/AuthManager.tsx)
 - The proxy service exchanges credentials and returns tokens; the UI stores
   access + refresh + id tokens and forwards them to the API.
 

@@ -45,7 +45,7 @@ Both flows:
 
 ### 2.2 Multimodal LLM usage (base64 artifacts)
 
-In the workflow (`kdcube_ai_app/apps/custom_apps/codegen/orchestrator/workflow.py`):
+In the workflow (example: `kdcube_ai_app/apps/chat/sdk/examples/bundles/with_context@2026-02-01-23-25/orchestrator/workflow.py`):
 - Attachments are retrieved from storage and converted by
   `ingest_user_attachments(...)` in `kdcube_ai_app/apps/chat/sdk/runtime/user_inputs.py`.
 - The function resolves mime, optionally extracts text, and adds base64 only for

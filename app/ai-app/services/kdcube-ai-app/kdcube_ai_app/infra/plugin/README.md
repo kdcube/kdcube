@@ -1,14 +1,14 @@
-# Agentic App Bundles — Developer Guide (WS-only, multi-bundle runtime)
+# Agentic App Bundles — Developer Guide (multi-bundle, channel-agnostic runtime)
 
 Build your chatbot logic as a **bundle** and run it inside the chat runtime with **live streaming**, **step timelines**, and **follow-ups** — without touching infra or UI plumbing.
 
-* **Prototype fast:** WebSocket, queue, auth, sessions, storage, accounting — already wired.
+* **Prototype fast:** channel, queue, auth, sessions, storage, accounting — already wired.
 * **Multi-bundle:** register many bundles and select one per message.
 * **Streaming & steps:** token streaming + step events out-of-the-box.
 * **Follow-ups:** clickable suggestions for “next actions.”
 * **Accounting:** SDK LLM/Embedding calls are auto-tracked per tenant/project/user/service type; add your own breakdown with `with_accounting(...)`.
 
-> **Transport:** There is **no blocking REST** response path. All answers stream **asynchronously over WebSocket**; workers may run on a different process/host and route results back to your socket via Redis relay.
+> **Transport:** There is **no blocking REST** response path. All answers stream **asynchronously over the active channel** (Socket.IO, SSE, or integration relay). Workers may run on a different process/host and route results back to your client channel via Redis relay. The channel is negotiated by the client; it can be an intermediate relay feeding external integrations (Telegram, Slack, etc.).
 
 ---
 
@@ -41,8 +41,8 @@ docker compose --profile backend --env-file ./.env.backend up -d
 docker compose --profile frontend up -d
 ```
 
-3. **Send a message (WebSocket only).**
-   Open a Socket.IO connection to `/socket.io` and emit a payload like:
+3. **Send a message (via your active channel).**
+   Use the channel opened by the client (Socket.IO or SSE) and send a payload like:
 
 ```jsonc
 {
@@ -55,7 +55,7 @@ docker compose --profile frontend up -d
 }
 ```
 
-You’ll receive a stream of **events** (`chat.start`, `chat.step`, `chat.delta`, `chat.complete`, `chat.error`) on the same socket **session**.
+You’ll receive a stream of **events** (`chat.start`, `chat.step`, `chat.delta`, `chat.complete`, `chat.error`) on the same session channel.
 
 ---
 
@@ -71,6 +71,10 @@ my_bundle/
 
 Supported forms: directory, single `.py`, or wheel/zip (then set `module`).
 
+See also:
+- [First AI bundle (minimal streaming)](../../apps/chat/sdk/examples/bundles/first-ai-bundle-README.md)
+- [Example bundles](../../apps/chat/sdk/examples/bundles/README.md)
+
 ---
 
 ## Minimal “Hello Workflow” (copy–paste)
@@ -79,32 +83,14 @@ Supported forms: directory, single `.py`, or wheel/zip (then set `module`).
 # my_bundle/agentic_app.py
 import asyncio, time
 from typing import Dict, Any
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, agentic_initial_state
-from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
-from kdcube_ai_app.infra.service_hub.inventory import Config
+from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 BUNDLE_ID = "demo.hello"
 
-@agentic_initial_state(name=f"{BUNDLE_ID}.init", priority=100)
-def initial_state(payload: Dict[str, Any]) -> Dict[str, Any]:
-    return {
-        "user_message": payload.get("user_message"),
-        "final_answer": None,
-        "error_message": None,
-        "execution_id": f"exec_{int(time.time()*1000)}",
-        "start_time": time.time(),
-        "step_logs": [],
-        "followups": []
-    }
-
 @agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=100)
-class HelloWorkflow:
-    def __init__(self, config: Config, communicator: ChatCommunicator, streaming: bool = True):
-        self.config = config
-        self.comm = communicator
-        self.streaming = streaming
-
-    async def run(self, **params) -> Dict[str, Any]:
+class HelloWorkflow(BaseEntrypoint):
+    async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
         text = (params.get("text") or "").strip()
 
         # Step: workflow start
@@ -152,22 +138,26 @@ class HelloWorkflow:
 
 ## Runtime Contract
 
-### Constructor
+### Constructor (BaseEntrypoint)
 
 ```python
-def __init__(self, config: Config, communicator: ChatCommunicator, streaming: bool = True)
+def __init__(self, config, pg_pool=None, redis=None, comm_context=None, event_filter=None, ctx_client=None)
 ```
 
 * `config`: resolved app config (models, embedder, kb endpoints, etc. if provided).
-* `communicator`: emit **steps** and **token deltas** to the client.
-* `streaming`: you can use this flag to gate token streaming.
+* `comm_context`: task context used to build the ChatCommunicator.
+* `pg_pool` / `redis`: optional DB pools for SDK subsystems.
+* `ctx_client`: optional ContextRAGClient (if you already have one).
 
-### Entry point
+### Entry point (no economics)
 
 ```python
-async def run(self, **params) -> Dict[str, Any]:
+async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
     # params may include: text, attachments, etc.
 ```
+
+`BaseEntrypoint.run(...)` is already implemented and calls:
+`pre_run_hook(...)` → `execute_core(...)` → `run_accounting(...)` → `post_run_hook(...)`.
 
 **Return** a JSON-serializable dict. Common keys:
 
@@ -182,14 +172,89 @@ async def run(self, **params) -> Dict[str, Any]:
 }
 ```
 
+### Entry point (with economics)
+
+If you want standard rate limiting / budgets / accounting, inherit from
+`BaseEntrypointWithEconomics` and implement `execute_core(...)`:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
+
+@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=100)
+class HelloWorkflow(BaseEntrypointWithEconomics):
+    async def execute_core(self, *, state, thread_id: str, params: dict):
+        # main bundle logic (return result dict)
+        return {"final_answer": "Hello", "followups": []}
+
+    async def pre_run_hook(self, *, state, econ_ctx: dict) -> None:
+        return None
+
+    async def post_run_hook(self, *, state, result: dict, econ_ctx: dict) -> None:
+        return None
+```
+
+
+### Configuration overrides (optional)
+
+If your bundle wants to enforce SDK defaults (role models / embedding),
+set `configuration` on the class. `BaseEntrypoint` applies these in `__init__`.
+
+```python
+class HelloWorkflow(BaseEntrypoint):
+    configuration = {
+        "role_models": {
+            "solver": "gpt-4o",
+            "tool.generator.default": "gpt-4o-mini"
+        },
+        "embedding": {
+            "provider": "openai",
+            "model": "text-embedding-3-large"
+        }
+    }
+
+    async def execute_core(self, *, state, thread_id, params):
+        ...
+```
+
+### Optional SDK services (ConvIndex / KBClient / ctx_client)
+
+`BaseEntrypoint` exposes helpers so bundles can opt into SDK services without boilerplate:
+
+```python
+conv_idx = await self.get_conv_index()   # None if pg_pool is not provided
+kb = await self.get_kb_client()          # None if pg_pool is not provided
+ctx = await self.get_ctx_client()        # builds ContextRAGClient from conv_idx + store
+```
+
+If you already have a `ContextRAGClient`, pass it into the constructor as `ctx_client`.
+
 ---
 
 ## Emitting Streams & Steps
+
+
+### Emitting events (recommended emitter)
+
+`BaseEntrypoint` exposes `self.comm` (a `ChatCommunicator`).
+If you prefer typed payloads, wrap it with SDK emitters:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
+
+emit = AIBEmitters(self.comm)
+await emit.step(step="workflow_start", status="started", title="Kickoff")
+await emit.delta(text="Hello ", index=0, marker="answer")
+```
+
+Both approaches publish into the same Redis relay + channel stream.
 
 ### Token deltas
 
 * `marker="answer"` — visible chat response (main bubble)
 * `marker="thinking"` — optional side stream for rationale/plan
+* `marker="subsystem"` — widget streams tied to a subsystem (see widget docs)
+* `marker="canvas"` — inline artifacts for a client canvas panel (if enabled)
+* `marker="timeline_text"` — compact timeline log lines (used by the react solver)
 
 ```python
 await self.comm.delta(text=chunk, index=i, marker="answer")
@@ -197,6 +262,34 @@ await self.comm.delta(text=chunk, index=i, marker="thinking")
 ```
 
 > Increase `index` monotonically **per marker**.
+
+### Subsystem markers (widgets)
+
+Subsystem streams are used by built-in widgets (code exec, web search, etc.). They are deltas with
+`marker="subsystem"` and additional metadata such as `sub_type`, `format`, `artifact_name`, and IDs.
+
+See:
+- `kdcube_ai_app/apps/chat/sdk/runtime/solution/widgets/code-exec-widget-README.md`
+- `kdcube_ai_app/apps/chat/sdk/runtime/solution/widgets/exec.py`
+
+Example (code exec stream):
+
+```python
+await self.comm.delta(
+    text=chunk,
+    index=i,
+    marker="subsystem",
+    format="text",
+    artifact_name="code_exec.code",
+    sub_type="code_exec.code",
+    execution_id="exec_123",
+)
+```
+
+### Canvas marker (inline artifacts)
+
+If your client enables a canvas panel, emit `marker="canvas"` deltas with a `format` and `artifact_name`
+so the UI can render the artifact in the canvas stream (e.g., LLM tool-generated artifacts).
 
 ### Step updates
 
@@ -211,6 +304,24 @@ await self.comm.step(step="rag_retrieval", status="completed",
 
 **Common step names** (UI knows these):
 `workflow_start`, `summarize`, `classifier`, `query_writer`, `rag_retrieval`, `reranking`, `answer_generator`, `followups`, `workflow_complete`.
+
+### Timeline text (optional)
+
+Some workflows emit short timeline strings using `marker="timeline_text"` (see `react.py`).
+This is useful for compact, inline decision logs in the timeline panel.
+
+Example:
+
+```python
+await self.comm.delta(
+    text="Decision: clarify",
+    index=0,
+    marker="timeline_text",
+    format="markdown",
+    artifact_name="timeline_text.react.decision.0",
+    completed=False,
+)
+```
 
 ### Follow-ups (suggestions)
 
@@ -228,21 +339,26 @@ await self.comm.step(step="followups", status="completed", data={"items": [
 
 ### Custom events (optional)
 
-If you need extras for your UI, you can emit a **custom chat event** (and still mirror a `step`):
+If you need extras for your UI, use `comm.event(...)` with a typed route
+(filters use the route to allow/deny events):
 
 ```python
-await self.comm.emit_enveloped({
-  "type": "chat.my_widget",
-  "event": {"step": "my_widget", "status": "completed", "title": "Widget Data"},
-  "data": {"series": [1,2,3]}
-})
+await self.comm.event(
+    agent="my.bundle",
+    type="chat.followups",
+    step="followups",
+    status="completed",
+    title="Suggested follow-ups",
+    data={"items": ["Option A", "Option B"]},
+    route="chat.followups",
+)
 ```
 
 ---
 
 ## Attachments
 
-Bundles can receive attachments sent from the chat UI; they arrive in `run(**params)` (e.g., file name, MIME type, handle). Resolve content via your storage/KB tools as needed.
+Bundles can receive attachments sent from the chat UI; they arrive in `execute_core(..., params)` (e.g., file name, MIME type, handle). Resolve content via your storage/KB tools as needed.
 
 > If you want this doc to show a concrete attachment schema + helper, share the final payload shape and I’ll add it.
 
@@ -298,25 +414,25 @@ The runtime hot-reloads this registry across workers and clears loader caches on
 
 ---
 
-## Event Loop & Routing (how WS-only async works)
+## Event Loop & Routing (channel-agnostic async flow)
 
-1. **Client → WS:** the browser/app sends `{ message, config, … }` over Socket.IO.
+1. **Client → Channel:** the browser/app sends `{ message, config, … }` over its active channel (Socket.IO or SSE).
 2. **Gateway:** auth + rate limits + backpressure; the request is **enqueued**.
-3. **Worker:** the queue processor **loads your bundle** and calls `run(...)`.
-4. **Streaming:** your bundle calls `communicator.delta/step`; these are published to Redis and **relayed** to the **socket “room” = session\_id**.
+3. **Worker:** the queue processor **loads your bundle** and calls `BaseEntrypoint.run(...)` (which invokes `execute_core(...)`).
+4. **Streaming:** your bundle calls `communicator.delta/step`; these are published to Redis and **relayed** to the client channel (Socket.IO room = session_id, SSE stream id, or integration relay).
 5. **Complete:** a final `chat.complete` is emitted with your return payload.
 
-> Because execution may occur on another worker/host, the original HTTP/WS handler does not block waiting for a reply. All progress and results are delivered asynchronously to the same socket session via the relay.
+> Because execution may occur on another worker/host, the original handler does not block waiting for a reply. All progress and results are delivered asynchronously to the same client channel via the relay.
 
 awesome—here are two drop-in Mermaid diagrams for the README.
 
-### 1) Architecture (WS-only async flow)
+### 1) Architecture (channel-agnostic async flow)
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant UI as Client
-    participant WS as WS Handler
+    participant CH as Channel Handler
     participant GW as Gateway
     participant Q as Queue
     participant P as Processor
@@ -326,12 +442,12 @@ sequenceDiagram
     participant KB as Knowledge Base
     participant AC as Accounting
 
-    Note over UI: Connect room = session_id
-    UI->>WS: emit message
-    WS->>GW: check auth rate pressure
+    Note over UI: Connect channel = session_id
+    UI->>CH: emit message
+    CH->>GW: check auth rate pressure
 
     alt accepted
-        WS->>Q: enqueue task
+        CH->>Q: enqueue task
         P->>Q: dequeue task
         P->>REG: resolve bundle_id
         REG-->>P: return bundle info
@@ -354,7 +470,7 @@ sequenceDiagram
         P-->>R: publish complete
         R-->>UI: push complete
     else rejected
-        WS-->>UI: error throttled
+        CH-->>UI: error throttled
     end
 
     Note over UI: UI renders streams and steps
@@ -366,7 +482,56 @@ sequenceDiagram
 
 * `chat.start` (platform)
 * `chat.step` (your phases/timeline)
-* `chat.delta` (your token stream; `marker="answer"|"thinking"`)
+* `chat.delta` (token stream; `marker="answer"|"thinking"|"subsystem"|"canvas"|"timeline_text"`)
+* `chat.event` (custom event payloads for widgets or integrations)
+* `chat.files` (file artifacts for the workspace/files panel)
+* `chat.citations` (citations stream for the answer)
+* `chat.turn.summary` (turn summary)
+* `chat.conversation.title` (conversation title updates)
+
+### Conversation events and filters
+
+Some events are routed through `chat.step` and filtered by default. If you emit
+custom typed events (for example follow-ups), include a `route` so filters can allow it.
+
+Default allowlist for non-privileged users includes:
+
+* `chat.conversation.title`
+* `chat.followups`
+* `chat.files`
+* `chat.citations`
+* `chat.turn.summary`
+
+See: `kdcube_ai_app/apps/chat/doc/comm-system.md` for the full contract and filter behavior.
+
+### File events (workspace/files panel)
+
+File artifacts are emitted as `chat.files` events. These are typically produced by tooling
+and workspace helpers (see `solution_workspace.py`), but bundles may emit them directly:
+
+```python
+await self.comm.event(
+    agent="my.bundle",
+    type="chat.files",
+    step="files",
+    status="completed",
+    title="Generated Files",
+    route="chat.files",
+    data={
+        "items": [
+            {
+                "artifact_id": "file:report.md",
+                "name": "report.md",
+                "mime": "text/markdown",
+                "path": "turn_123/files/report.md",
+                "size": 12034,
+            }
+        ]
+    },
+)
+```
+
+Reference: `kdcube_ai_app/apps/chat/sdk/runtime/solution/solution_workspace.py`.
 * `chat.followups` (optional custom; many UIs just read `step: "followups"`)
 * `chat.complete` (platform)
 * `chat.error` (platform)
@@ -374,7 +539,7 @@ sequenceDiagram
 sequenceDiagram
     autonumber
     participant UI as Client
-    participant WS as WS Handler
+    participant CH as Channel Handler
     participant GW as Gateway
     participant Q as Queue
     participant P as Processor
@@ -384,12 +549,12 @@ sequenceDiagram
     participant KB as Knowledge Base
     participant AC as Accounting
 
-    Note over UI: Connect room = session_id
-    UI->>WS: emit message with bundle_id
-    WS->>GW: check auth rate pressure
+    Note over UI: Connect channel = session_id
+    UI->>CH: emit message with bundle_id
+    CH->>GW: check auth rate pressure
 
     alt accepted
-        WS->>Q: enqueue session_id turn_id payload
+        CH->>Q: enqueue session_id turn_id payload
         P->>Q: dequeue task
         P->>REG: resolve bundle_id
         REG-->>P: return path module singleton
@@ -418,7 +583,7 @@ sequenceDiagram
         P-->>R: publish chat complete
         R-->>UI: push complete
     else rejected
-        WS-->>UI: chat error throttled retry after
+        CH-->>UI: chat error throttled retry after
     end
 
     Note over UI: UI renders thinking stream answer stream steps follow-ups

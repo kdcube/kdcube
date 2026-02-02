@@ -1593,7 +1593,6 @@ Only include non-empty fields. Omit null/""/[]/{} at every level.
     "tool_id": "llm_tools.generate_content_llm",
     "reasoning": "Synthesize a detailed markdown report and an HTML dashboard from research notes; return both in a single managed JSON artifact under 'report' and 'dashboard' keys.",
     "params": {
-      "agent_name": "Report generator",
       "instruction": "Generate JSON with two fields: 'report' (detailed markdown, 800-1000 words) and 'dashboard' (HTML section, roughly 150-200 words equivalent). Use all provided context and cite sources inline where appropriate.",
       "artifact_name": {
         "report": "markdown",
@@ -1634,7 +1633,6 @@ Only include non-empty fields. Omit null/""/[]/{} at every level.
     "tool_id": "llm_tools.generate_content_llm",
     "reasoning": "Enhance dashboard HTML to add missing cost analysis section before finalizing.",
     "params": {
-      "agent_name": "Dashboard enhancer",
       "artifact_name": "dashboard_enhanced_1",
       "instruction": "Add a cost analysis section to the dashboard HTML. Focus on budget implications and ROI metrics.",
       "target_format": "html"

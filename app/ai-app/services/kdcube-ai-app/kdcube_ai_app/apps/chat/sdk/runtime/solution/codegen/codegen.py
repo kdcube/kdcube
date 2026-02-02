@@ -174,7 +174,7 @@ class CodegenRunner:
 
         # ---------- adapters (selected + infra) ----------
         # chosen_ids = [t.id for t in (plan.tools or [])]
-        adapters = self.tool_manager.adapters_for_codegen(
+        adapters = await self.tool_manager.react_tools(
             allowed_plugins=allowed_plugins,
             allowed_ids=None,  # ← None means "all tools" (subject to allowed_plugins)
             denied_ids=["codegen_tools.codegen_python", "exec_tools.execute_code_python", "ctx_tools.fetch_ctx"],  # exclude codegen tool itself and the new fetch ctx tool
@@ -184,7 +184,7 @@ class CodegenRunner:
         user_id = runtime_ctx.get("user_id")
         conversation_id = runtime_ctx.get("conversation_id")
 
-        browser = ContextBrowser(tool_manager=self.tool_manager,
+        browser = ContextBrowser(ctx_client=getattr(self.tool_manager, "context_rag_client", None),
                                  logger=self.log,
                                  turn_view_class=self.turn_view_class)
         bundle = await browser.materialize(
@@ -500,7 +500,7 @@ class CodegenRunner:
         self.log.log(f"[{self.AGENT_NAME}] workdir={workdir}", level="INFO")
 
         # ---------- adapters (infra). Not including codegen tool  ----------
-        adapters = self.tool_manager.adapters_for_codegen(
+        adapters = await self.tool_manager.react_tools(
             allowed_plugins=allowed_plugins,
             allowed_ids=None,  # ← None means "all tools" (subject to allowed_plugins)
             denied_ids=["codegen_tools.codegen_python", "exec_tools.execute_code_python", "ctx_tools.fetch_turn_artifacts"],  # exclude codegen tool itself and the old fetch ctx tool

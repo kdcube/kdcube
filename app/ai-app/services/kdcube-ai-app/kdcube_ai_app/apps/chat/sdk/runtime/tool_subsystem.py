@@ -87,6 +87,7 @@ class ToolSubsystem:
         self.raw_tool_specs = raw_tool_specs or []
         self._tool_runtime = tool_runtime or {}
         self.mcp_subsystem = mcp_subsystem
+        self._mcp_entries: List[Dict[str, Any]] = []
 
         # --- compute bundle_root once ---
         self.bundle_root: pathlib.Path | None = None
@@ -180,17 +181,209 @@ class ToolSubsystem:
             return v
         return None
 
+    async def validate_tool_params(
+            self,
+            *,
+            tool_id: str,
+            params: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Validate tool params against the known signature.
+        Returns:
+          {
+            "status": "green" | "yellow" | "red",
+            "params": <filtered params>,
+            "issues": [ {param, code, message, expected?, got?} ... ],
+          }
+        """
+        issues: List[Dict[str, Any]] = []
+        raw_params = params if isinstance(params, dict) else {}
+        tid = (tool_id or "").strip()
+        entry = self._by_id.get(tid)
+        if not entry and self.mcp_subsystem:
+            try:
+                await self.ensure_mcp_entries()
+            except Exception:
+                pass
+            entry = self._by_id.get(tid)
+        if not entry:
+            return {
+                "status": "red",
+                "params": {},
+                "issues": [{
+                    "param": "",
+                    "code": "unknown_tool",
+                    "message": f"tool_id '{tool_id}' not found in tool catalog",
+                }],
+            }
+
+        sig_params = entry.get("params") or []
+        if not isinstance(sig_params, list) or not sig_params:
+            # No signature info; pass-through as green.
+            return {
+                "status": "green",
+                "params": raw_params,
+                "issues": [],
+            }
+
+        # Build signature map
+        sig_by_name: Dict[str, Dict[str, Any]] = {}
+        required_names: set[str] = set()
+        for p in sig_params:
+            if not isinstance(p, dict):
+                continue
+            name = (p.get("name") or "").strip()
+            if not name:
+                continue
+            sig_by_name[name] = p
+            if p.get("required") is True:
+                required_names.add(name)
+
+        def _expected_types_from_annot(annot: str) -> List[str]:
+            a = (annot or "").lower()
+            if not a:
+                return []
+            types = []
+            for t in ("bool", "int", "float", "str", "string", "dict", "list", "object"):
+                if t in a:
+                    types.append("str" if t == "string" else t)
+            return types
+
+        def _type_ok(val: Any, annot: str) -> bool:
+            if val is None:
+                return True
+            exp = _expected_types_from_annot(annot)
+            if not exp:
+                return True
+            ok = False
+            for t in exp:
+                if t == "bool":
+                    ok = ok or isinstance(val, bool)
+                elif t == "int":
+                    ok = ok or (isinstance(val, int) and not isinstance(val, bool))
+                elif t == "float":
+                    ok = ok or isinstance(val, (int, float)) and not isinstance(val, bool)
+                elif t == "str":
+                    ok = ok or isinstance(val, str)
+                elif t == "list":
+                    ok = ok or isinstance(val, list)
+                elif t == "dict":
+                    ok = ok or isinstance(val, dict)
+                elif t == "object":
+                    ok = True
+            return ok
+
+        filtered: Dict[str, Any] = {}
+        # unknown params
+        for k in raw_params.keys():
+            if k not in sig_by_name:
+                issues.append({
+                    "param": k,
+                    "code": "unknown_param",
+                    "message": f"param '{k}' not in tool signature",
+                })
+        # check provided params
+        for name, val in raw_params.items():
+            meta = sig_by_name.get(name)
+            if not meta:
+                continue
+            annot = meta.get("annotation") or ""
+            if val is None:
+                if name in required_names:
+                    issues.append({
+                        "param": name,
+                        "code": "missing_required",
+                        "message": f"required param '{name}' is null/empty",
+                    })
+                else:
+                    filtered[name] = val
+                continue
+            if not _type_ok(val, annot):
+                issues.append({
+                    "param": name,
+                    "code": "type_mismatch",
+                    "message": f"param '{name}' has incompatible type",
+                    "expected": annot,
+                    "got": type(val).__name__,
+                })
+                # drop mismatched param
+                continue
+            filtered[name] = val
+
+        # missing required params
+        for req in sorted(required_names):
+            if req not in raw_params or raw_params.get(req) is None:
+                issues.append({
+                    "param": req,
+                    "code": "missing_required",
+                    "message": f"required param '{req}' is missing",
+                })
+
+        # classify status
+        status = "green"
+        has_red = any(i.get("code") == "missing_required" for i in issues)
+        if has_red:
+            status = "red"
+        elif issues:
+            status = "yellow"
+
+        return {
+            "status": status,
+            "params": filtered,
+            "issues": issues,
+        }
+
     def tool_catalog_for_prompt(self, *, allowed_plugins: Optional[List[str]] = None,
-                                allowed_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                                allowed_ids: Optional[List[str]] = None,
+                                include_mcp: bool = True) -> List[Dict[str, Any]]:
         return [
             {"id": e["id"], "doc": {"purpose": e["doc"]["purpose"], "args": e["doc"]["args"], "returns": e["doc"]["returns"]}}
-            for e in self._filter_entries(allowed_plugins, allowed_ids)
+            for e in self._filter_entries(allowed_plugins, allowed_ids, include_mcp=include_mcp)
         ]
+
+    async def tool_catalog_for_prompt_async(self, *, allowed_plugins: Optional[List[str]] = None,
+                                            allowed_ids: Optional[List[str]] = None,
+                                            include_mcp: bool = True) -> List[Dict[str, Any]]:
+        if include_mcp:
+            try:
+                await self.ensure_mcp_entries()
+            except Exception:
+                pass
+        return self.tool_catalog_for_prompt(allowed_plugins=allowed_plugins, allowed_ids=allowed_ids, include_mcp=include_mcp)
 
     def adapters_for_codegen(self, *,
                              allowed_plugins: Optional[List[str]] = None,
                              allowed_ids: Optional[List[str]] = None,
                              denied_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        # Deprecated: use react_tools()/react_tools_cached()
+        return self.react_tools_cached(
+            allowed_plugins=allowed_plugins,
+            allowed_ids=allowed_ids,
+            denied_ids=denied_ids,
+        )
+
+    async def react_tools(self, *,
+                          allowed_plugins: Optional[List[str]] = None,
+                          allowed_ids: Optional[List[str]] = None,
+                          denied_ids: Optional[List[str]] = None,
+                          include_mcp: bool = True) -> List[Dict[str, Any]]:
+        if include_mcp:
+            try:
+                await self.ensure_mcp_entries()
+            except Exception:
+                pass
+        return self.react_tools_cached(
+            allowed_plugins=allowed_plugins,
+            allowed_ids=allowed_ids,
+            denied_ids=denied_ids,
+            include_mcp=include_mcp,
+        )
+
+    def react_tools_cached(self, *,
+                           allowed_plugins: Optional[List[str]] = None,
+                           allowed_ids: Optional[List[str]] = None,
+                           denied_ids: Optional[List[str]] = None,
+                           include_mcp: bool = True) -> List[Dict[str, Any]]:
         # ensure io/ctx are always present
         ap = set(allowed_plugins or [])
         ap.update({"io_tools", "ctx_tools"})
@@ -201,7 +394,7 @@ class ToolSubsystem:
             "call_template": e["call_template"],
             "is_async": bool(e.get("is_async")),
             "doc": e["doc"],
-        } for e in self._filter_entries(allowed_plugins, allowed_ids, denied_ids)]
+        } for e in self._filter_entries(allowed_plugins, allowed_ids, denied_ids, include_mcp=include_mcp)]
 
     def get_alias_maps(self) -> Tuple[Dict[str, str], Dict[str, Optional[str]]]:
         """Returns (alias->dyn_module_name, alias->file_path)."""
@@ -211,6 +404,24 @@ class ToolSubsystem:
 
     def get_mcp_subsystem(self):
         return self.mcp_subsystem
+
+    async def ensure_mcp_entries(self) -> List[Dict[str, Any]]:
+        if not self.mcp_subsystem:
+            return []
+        if self._mcp_entries:
+            return self._mcp_entries
+        try:
+            entries = await self.mcp_subsystem.build_tool_entries()
+        except Exception:
+            entries = []
+        if entries:
+            self._mcp_entries = entries
+            # merge into by_id so validation works
+            for e in entries:
+                tid = e.get("id")
+                if tid:
+                    self._by_id[tid] = e
+        return self._mcp_entries
 
     def tool_modules_tuple_list(self) -> List[Tuple[str, object]]:
         """[(dyn_module_name, module_obj)]"""
@@ -336,8 +547,11 @@ class ToolSubsystem:
 
     def _filter_entries(self, allowed_plugins: Optional[List[str]] = None,
                         allowed_ids: Optional[List[str]] = None,
-                        denied_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+                        denied_ids: Optional[List[str]] = None,
+                        include_mcp: bool = True) -> List[Dict[str, Any]]:
         ents = list(self.tools_info)
+        if include_mcp and self._mcp_entries:
+            ents = ents + list(self._mcp_entries)
         system_tool = lambda e: (e.get("plugin_alias") or "") in ["io_tools"]
         if allowed_plugins:
             allow = set(p.strip() for p in allowed_plugins if p and str(p).strip())
@@ -456,11 +670,13 @@ class ToolSubsystem:
         for p in sig.parameters.values():
             if p.name == "self":
                 continue
+            required = p.default is inspect._empty
             out.append({
                 "name": p.name,
                 "annotation": str(p.annotation) if p.annotation is not inspect._empty else "",
                 "default": None if p.default is inspect._empty else p.default,
                 "kind": str(p.kind),
+                "required": bool(required),
             })
         return out
 
@@ -586,3 +802,48 @@ def resolve_codegen_tools_specs(tool_specs: List[Dict[str, Any]],
         specs.append(s)
 
     return specs
+
+
+def create_tool_subsystem_with_mcp(
+        *,
+        service: ModelServiceBase,
+        comm: ChatCommunicator,
+        logger: Optional[AgentLogger],
+        bundle_spec: BundleSpec,
+        context_rag_client: Optional[ContextRAGClient],
+        registry: Optional[Dict[str, Any]] = None,
+        tools_specs: Optional[List[Dict[str, Any]]] = None,
+        raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
+        tool_runtime: Optional[Dict[str, str]] = None,
+        mcp_tool_specs: Optional[List[Dict[str, Any]]] = None,
+        mcp_env_json: Optional[str] = None,
+):
+    """
+    Factory to create MCPToolsSubsystem (optional) + ToolSubsystem.
+    Returns (tool_subsystem, mcp_subsystem).
+    """
+    mcp_subsystem = None
+    try:
+        if mcp_tool_specs:
+            from kdcube_ai_app.apps.chat.sdk.runtime.mcp.mcp_tools_subsystem import MCPToolsSubsystem
+            mcp_subsystem = MCPToolsSubsystem(
+                bundle_id=bundle_spec.id,
+                mcp_tool_specs=mcp_tool_specs,
+                env_json=mcp_env_json or "",
+            )
+    except Exception:
+        mcp_subsystem = None
+
+    tool_subsystem = ToolSubsystem(
+        service=service,
+        comm=comm,
+        bundle_spec=bundle_spec,
+        logger=logger,
+        context_rag_client=context_rag_client,
+        registry=registry,
+        tools_specs=tools_specs,
+        raw_tool_specs=raw_tool_specs,
+        tool_runtime=tool_runtime,
+        mcp_subsystem=mcp_subsystem,
+    )
+    return tool_subsystem, mcp_subsystem

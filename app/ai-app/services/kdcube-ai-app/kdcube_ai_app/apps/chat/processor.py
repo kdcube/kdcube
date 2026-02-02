@@ -180,8 +180,14 @@ class EnhancedChatRequestProcessor:
 
         try:
             pubsub = self.middleware.redis.pubsub()
-            await pubsub.subscribe(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL)
-            logger.info(f"Subscribed to bundles channel: {namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL}")
+            await pubsub.subscribe(
+                namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL,
+                namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL,
+            )
+            logger.info(
+                "Subscribed to bundles channels: "
+                f"{namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL}, {namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL}"
+            )
 
             async for message in pubsub.listen():
                 if not message or message.get("type") != "message":
@@ -255,6 +261,32 @@ class EnhancedChatRequestProcessor:
                         pass
 
                     logger.info(f"Applied bundles COMMAND (op={op}); now have {len(get_all())} bundles. New env = {new_env}")
+                    continue
+
+                if evt.get("type") == "bundles.cleanup":
+                    from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+
+                    active_specs = []
+                    for _bid, entry in (get_all() or {}).items():
+                        try:
+                            active_specs.append(AgenticBundleSpec(
+                                path=entry.get("path"),
+                                module=entry.get("module"),
+                                singleton=bool(entry.get("singleton")),
+                            ))
+                        except Exception:
+                            continue
+                    drop_sys_modules = bool(evt.get("drop_sys_modules", True))
+                    result = evict_inactive_specs(
+                        active_specs=active_specs,
+                        drop_sys_modules=drop_sys_modules,
+                    )
+                    logger.info(
+                        "Applied bundles cleanup. "
+                        f"evicted_modules={result.get('evicted_modules')}; "
+                        f"evicted_singletons={result.get('evicted_singletons')}; "
+                        f"sys_modules_deleted={result.get('sys_modules_deleted')}"
+                    )
                     continue
 
                 logger.debug("Ignoring unrelated pub/sub message on bundles channel")
@@ -418,4 +450,3 @@ class EnhancedChatRequestProcessor:
                                                      target_sid=None)
                 except Exception as ex:
                     logger.error(traceback.format_exc())
-

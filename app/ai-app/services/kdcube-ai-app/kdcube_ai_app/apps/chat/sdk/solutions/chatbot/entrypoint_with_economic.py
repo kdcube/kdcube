@@ -1,0 +1,1185 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 Elena Viter
+
+# chat/sdk/solutions/chatbot/entrypoint_with_economics.py
+
+from __future__ import annotations
+
+from typing import Any, Optional, Dict
+
+import asyncio
+import dataclasses
+import json
+import math
+import secrets
+from datetime import datetime, timezone
+from uuid import uuid4, UUID
+
+from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
+from kdcube_ai_app.infra.service_hub.inventory import Config, _mid
+
+
+class BaseEntrypointWithEconomics(BaseEntrypoint):
+    """
+    BaseEntrypoint with optional economics wiring.
+    This class only initializes managers; policy logic remains bundle-specific.
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        pg_pool: Any = None,
+        redis: Any = None,
+        comm_context: ChatTaskPayload = None,
+        event_filter: Optional[Any] = None,
+        ctx_client: Optional[Any] = None,
+    ):
+        super().__init__(
+            config=config,
+            pg_pool=pg_pool,
+            redis=redis,
+            comm_context=comm_context,
+            event_filter=event_filter,
+            ctx_client=ctx_client,
+        )
+
+        self.cp_manager = None
+        self.rl = None
+        self.budget_limiter = None
+        self._policies_initialized = False
+
+        if self.redis or self.pg_pool:
+            from kdcube_ai_app.apps.chat.sdk.infra.control_plane.manager import ControlPlaneManager
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter
+            from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
+
+            self.cp_manager = ControlPlaneManager(
+                pg_pool=self.pg_pool,
+                redis=self.redis,
+                cache_ttl=60,
+                tier_balance_cache_ttl=10,
+            )
+            self.rl = UserEconomicsRateLimiter(
+                self.redis,
+                user_balance_snapshot_mgr=self.cp_manager.tier_balance_snapshot_mgr,
+            )
+            self.budget_limiter = ProjectBudgetLimiter(
+                redis=self.redis,
+                pg_pool=self.pg_pool,
+                tenant=self.settings.TENANT,
+                project=self.settings.PROJECT,
+            )
+
+
+    async def ensure_policies_initialized(self):
+        """
+        Ensure policies are seeded from bundle configuration (one-time operation).
+        Optional hook for bundles that seed policies from config.
+        Run from a master bundle only.
+        Override in subclasses as needed.
+        """
+        if self._policies_initialized:
+            return
+
+        tenant = self.settings.TENANT
+        project = self.settings.PROJECT
+        bundle_id = self.config.ai_bundle_spec.id
+
+        self._policies_initialized = \
+            await self.cp_manager.tenant_project_user_quota_policies_policies_initialize_from_master_app(tenant=tenant,
+                                                                                                         project=project,
+                                                                                                         bundle_id=bundle_id,
+                                                                                                         app_quota_policies=self.app_quota_policies,
+                                                                                                         app_budget_policies=self.app_budget_policies)
+
+    def rate_limit_policy(self, user_type: str):
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import QuotaPolicy
+
+        anonymous_policy = QuotaPolicy(
+            max_concurrent=1,
+            requests_per_day=2,
+            requests_per_month=60,
+            total_requests=None,
+            tokens_per_hour=150_000,
+            tokens_per_day=1_500_000,
+            tokens_per_month=20_000_000,
+        )
+        return {
+            "anonymous": anonymous_policy,
+            "registered": QuotaPolicy(
+                max_concurrent=2,
+                requests_per_day=10,
+                requests_per_month=1000,
+                total_requests=None,
+                tokens_per_hour=150_000,
+                tokens_per_day=1_500_000,
+                tokens_per_month=20_000_000,
+            ),
+            "paid": QuotaPolicy(
+                max_concurrent=2,
+                requests_per_day=200,
+                requests_per_month=6000,
+                total_requests=None,
+                tokens_per_hour=1_500_000,
+                tokens_per_day=1_500_000,
+                tokens_per_month=20_000_000,
+            ),
+            "privileged": QuotaPolicy(
+                max_concurrent=10,
+            )
+        }.get(user_type, anonymous_policy) or anonymous_policy
+
+    @property
+    def app_quota_policies(self):
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import QuotaPolicy
+
+        anonymous_policy = QuotaPolicy(
+            max_concurrent=1,
+            requests_per_day=2,
+            requests_per_month=60,
+            total_requests=None,
+            tokens_per_hour=150_000,
+            tokens_per_day=1_500_000,
+            tokens_per_month=20_000_000,
+        )
+        return {
+            "anonymous": anonymous_policy,
+            "registered": QuotaPolicy(
+                max_concurrent=2,
+                requests_per_day=100,
+                requests_per_month=30000,
+                total_requests=None,
+                tokens_per_hour=500_000,
+                tokens_per_day=2_000_000,
+                tokens_per_month=30_000_000,
+            ),
+            "paid": QuotaPolicy(
+                max_concurrent=2,
+                requests_per_day=200,
+                requests_per_month=6000,
+                total_requests=None,
+                tokens_per_hour=1_500_000,
+                tokens_per_day=4_000_000,
+                tokens_per_month=60_000_000,
+            ),
+            "privileged": QuotaPolicy(
+                max_concurrent=10,
+            )
+        }
+
+    @property
+    def app_budget_policies(self):
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import ProviderBudgetPolicy
+
+        return {
+            "anthropic": ProviderBudgetPolicy(
+                provider="anthropic",
+                usd_per_hour=10.0,
+                usd_per_day=200.0,
+                usd_per_month=5000.0,
+            ),
+            "openai": ProviderBudgetPolicy(
+                provider="openai",
+                usd_per_hour=5.0,
+                usd_per_day=100.0,
+                usd_per_month=2000.0,
+            ),
+            "brave": ProviderBudgetPolicy(
+                provider="brave",
+                usd_per_hour=1.0,
+                usd_per_day=20.0,
+                usd_per_month=500.0,
+            ),
+            "duckduckgo": ProviderBudgetPolicy(
+                provider="duckduckgo",
+                usd_per_hour=None,
+                usd_per_day=None,
+                usd_per_month=None,
+            ),
+        }
+
+    async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]):
+        raise NotImplementedError("execute_core() must be implemented by subclasses")
+
+    async def pre_run_hook(self, *, state: Dict[str, Any], econ_ctx: Dict[str, Any]) -> None:
+        return None
+
+    async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any], econ_ctx: Dict[str, Any]) -> None:
+        return None
+
+    async def run(self, **params) -> Dict[str, Any]:
+        """
+        Economics-aware run() with strict two-source funding and atomic reservations.
+        """
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import (
+            AdmitResult,
+            QuotaInsight,
+            compute_quota_insight,
+            subject_id_of,
+        )
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import QuotaPolicy, EconomicsLimitException
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import _merge_policy_with_tier_balance
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import BudgetInsufficientFunds
+        from kdcube_ai_app.infra.accounting.usage import llm_output_price_usd_per_token, anthropic, sonnet_45
+        from kdcube_ai_app.apps.chat.sdk.util import safe_frac
+        from kdcube_ai_app.infra import accounting as acct
+
+        SAFETY_MARGIN = 1.15
+        MIN_USER_TOKENS_TO_RUN = 133_333
+        est_turn_tokens = int(MIN_USER_TOKENS_TO_RUN)
+        lock_released = False
+
+        bundle_id = self.config.ai_bundle_spec.id
+
+        def _j(obj) -> str:
+            try:
+                return json.dumps(obj, ensure_ascii=False, default=str)
+            except Exception:
+                return str(obj)
+
+        def _log(stage: str, msg: str, level: str = "INFO", **kv):
+            payload = {"stage": stage, **kv}
+            self.logger.log(f"[run] {stage} | {msg} | { _j(payload) }", level)
+
+        async def _emit_event(*, type: str, status: str, title: str, data: dict):
+            try:
+                await self.comm.service_event(
+                    type=type,
+                    step="rate_limit",
+                    status=status,
+                    title=title,
+                    agent="bundle.rate_limiter",
+                    data=data,
+                )
+            except Exception as e:
+                _log("telemetry", "Failed to emit service_event", "WARN", error=str(e), event_type=type)
+
+        async def _econ_fail(*, code: str, title: str, message: str, event_type: str, data: dict):
+            payload = dict(data)
+            payload["code"] = code
+            payload["show_in_timeline"] = False
+            await _emit_event(type=event_type, status="error", title=title, data=payload)
+            raise EconomicsLimitException(message, code=code, data=payload)
+
+        async def _record_app_analytics_by_provider(
+            *,
+            app_spend_usd: float,
+            total_cost_usd: float,
+            cost_breakdown: list[dict],
+            now: datetime,
+        ) -> None:
+            if app_spend_usd <= 0 or total_cost_usd <= 0:
+                return
+            try:
+                for item in (cost_breakdown or []):
+                    provider = item.get("provider")
+                    provider_cost = float(item.get("cost_usd") or 0.0)
+                    if not provider or provider_cost <= 0:
+                        continue
+                    provider_app_cost = float(app_spend_usd) * safe_frac(provider_cost, total_cost_usd)
+                    if provider_app_cost > 0:
+                        await self.budget_limiter.record_budget_analytics_only(
+                            bundle_id=bundle_id,
+                            provider=str(provider),
+                            spent_usd=float(provider_app_cost),
+                            now=now,
+                        )
+            except Exception as e:
+                _log("analytics", "Provider analytics write failed (best-effort)", "WARN", error=str(e))
+
+        async def _quota_lock_try_acquire(key: str, token: str, ttl_sec: int) -> bool:
+            r = self.redis
+            if r is None:
+                return False
+            try:
+                ok = await r.set(key, token, nx=True, ex=ttl_sec)
+                return bool(ok)
+            except TypeError:
+                pass
+            except Exception:
+                return False
+            try:
+                ok = await r.set(key, token, nx=True, px=int(ttl_sec * 1000))
+                return bool(ok)
+            except Exception:
+                return False
+
+        async def _quota_lock_release(key: str, token: str) -> None:
+            r = self.redis
+            if r is None:
+                return
+            lua = (
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) else return 0 end"
+            )
+            try:
+                await r.eval(lua, 1, key, token)
+                return
+            except TypeError:
+                try:
+                    await r.eval(lua, keys=[key], args=[token])
+                    return
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            try:
+                cur = await r.get(key)
+                if cur is None:
+                    return
+                if isinstance(cur, (bytes, bytearray)):
+                    cur = cur.decode("utf-8", errors="ignore")
+                if str(cur) == str(token):
+                    await r.delete(key)
+            except Exception:
+                pass
+
+        quota_lock_key = None
+        quota_lock_token = None
+        quota_lock_acquired = False
+
+        async def _acquire_quota_lock_or_deny(*, scope: str) -> None:
+            nonlocal quota_lock_key, quota_lock_token, quota_lock_acquired
+            if self.redis is None:
+                _log("quota_lock", "Redis unavailable; quota_lock disabled", "WARN")
+                return
+            quota_lock_key = f"quota_lock:{tenant}:{project}:{user_id}:{scope}:{bundle_id}"
+            quota_lock_token = secrets.token_hex(16)
+            ttl_sec = 60
+            wait_total_sec = 5.0
+            t0 = asyncio.get_event_loop().time()
+            sleep = 0.05
+            while True:
+                ok = await _quota_lock_try_acquire(quota_lock_key, quota_lock_token, ttl_sec=ttl_sec)
+                if ok:
+                    quota_lock_acquired = True
+                    _log("quota_lock", "Acquired quota_lock", key=quota_lock_key, scope=scope, ttl_sec=ttl_sec)
+                    return
+                if (asyncio.get_event_loop().time() - t0) >= wait_total_sec:
+                    _log("quota_lock", "Failed to acquire quota_lock within wait window", "WARN", key=quota_lock_key, scope=scope)
+                    await _econ_fail(
+                        code="quota_lock_timeout",
+                        title="System busy",
+                        message="Too many concurrent requests are planning quotas right now. Please retry.",
+                        event_type="rate_limit.denied",
+                        data={
+                            "reason": "quota_lock_timeout",
+                            "bundle_id": bundle_id,
+                            "subject_id": self.subj,
+                            "user_type": user_type,
+                            "lane": "deny",
+                            "scope": scope,
+                        },
+                    )
+                await asyncio.sleep(sleep)
+                sleep = min(sleep * 1.5, 0.25)
+
+        async def _release_quota_lock_if_held() -> None:
+            nonlocal quota_lock_key, quota_lock_token, quota_lock_acquired
+            if quota_lock_acquired and quota_lock_key and quota_lock_token:
+                await _quota_lock_release(quota_lock_key, quota_lock_token)
+                _log("quota_lock", "Released quota_lock", key=quota_lock_key)
+            quota_lock_key = None
+            quota_lock_token = None
+            quota_lock_acquired = False
+
+        await self.ensure_policies_initialized()
+
+        self._turn_id = self._turn_id or _mid("turn")
+        turn_id = self._turn_id
+        lock_id = turn_id
+
+        state = dict(getattr(self, "_app_state", {}) or {})
+        state["turn_id"] = turn_id
+        if params.get("text"):
+            state["text"] = params["text"]
+        if "attachments" in params:
+            state["attachments"] = params.get("attachments") or []
+
+        tenant = state.get("tenant")
+        project = state.get("project")
+        user_id = state.get("user") or state.get("fingerprint")
+        user_type = state.get("user_type") or "anonymous"
+        thread_id = state.get("conversation_id") or state.get("session_id") or "default"
+
+        self.subj = subject_id_of(tenant, project, user_id)
+
+        _log(
+            "init",
+            "Initialized run()",
+            tenant=tenant, project=project,
+            user_id=user_id, user_type=user_type,
+            thread_id=thread_id, turn_id=turn_id, bundle_id=bundle_id,
+            text_len=len((state.get("text") or "")),
+        )
+
+        base_policy = await self.cp_manager.get_user_quota_policy(tenant=tenant, project=project, user_type=user_type)
+        if not base_policy:
+            base_policy = self.app_quota_policies.get(user_type, self.app_quota_policies["anonymous"])
+            _log("policy.base", "No policy in DB; using fallback", "WARN", base_policy=dataclasses.asdict(base_policy))
+        else:
+            _log("policy.base", "Loaded base policy from control plane", base_policy=dataclasses.asdict(base_policy))
+
+        tier_balance = await self.cp_manager.get_user_tier_balance(tenant=tenant, project=project, user_id=user_id)
+        _log(
+            "tier_balance",
+            "Fetched user tier balance",
+            has_tier_balance=bool(tier_balance),
+            has_tier_override=bool(tier_balance and tier_balance.has_tier_override()),
+            tier_override_active=bool(tier_balance and tier_balance.tier_override_is_active()),
+            has_lifetime_budget=bool(tier_balance and tier_balance.has_lifetime_budget()),
+            tier_expires_at=getattr(tier_balance, "expires_at", None),
+            tier_tokens_per_month=getattr(tier_balance, "tokens_per_month", None),
+        )
+
+        user_budget_tokens: Optional[int] = None
+        if tier_balance and tier_balance.has_lifetime_budget():
+            bal = await self.cp_manager.user_credits_mgr.get_lifetime_balance(tenant=tenant, project=project, user_id=user_id)
+            user_budget_tokens = int(bal or 0)
+
+        _log("user_budget", "Computed user lifetime budget", user_budget_tokens=user_budget_tokens)
+
+        project_budget = await self.budget_limiter.get_app_budget_balance()
+        project_available_usd = float(project_budget.get("available_usd") or 0.0)
+        project_balance_usd = float(project_budget.get("balance_usd") or 0.0)
+
+        _log(
+            "project_budget",
+            "Fetched project budget balance",
+            project_balance_usd=project_balance_usd,
+            project_available_usd=project_available_usd,
+            snapshot=project_budget,
+        )
+
+        user_can_pay_turn = user_budget_tokens is not None and user_budget_tokens >= MIN_USER_TOKENS_TO_RUN
+
+        lane: str | None = None
+        admit: AdmitResult | None = None
+        tier_admit_now = datetime.utcnow().replace(tzinfo=timezone.utc)
+        tier_reservation_id = None
+        tier_reservation_active = False
+        paid_policy: QuotaPolicy | None = None
+
+        def _build_paid_policy() -> QuotaPolicy:
+            maxc = int(getattr(base_policy, "max_concurrent", 1) or 1)
+            if tier_balance and getattr(tier_balance, "max_concurrent", None) is not None:
+                maxc = max(maxc, int(tier_balance.max_concurrent))
+            return QuotaPolicy(
+                max_concurrent=maxc,
+                requests_per_day=None, requests_per_month=None, total_requests=None,
+                tokens_per_hour=None, tokens_per_day=None, tokens_per_month=None,
+            )
+
+        async def _admit_tier() -> AdmitResult:
+            try:
+                return await self.rl.admit(
+                    bundle_id=bundle_id,
+                    subject_id=self.subj,
+                    policy=base_policy,
+                    lock_id=lock_id, lock_ttl_sec=180,
+                    apply_tier_override=True,
+                    reserve_tokens=est_turn_tokens,
+                    reservation_id=turn_id,
+                    reservation_ttl_sec=900,
+                    now=tier_admit_now,
+                )
+            except TypeError:
+                _log("admit.tier", "rl.admit lacks apply_tier_override; calling without", "WARN")
+                return await self.rl.admit(
+                    bundle_id=bundle_id, subject_id=self.subj, policy=base_policy,
+                    lock_id=lock_id, lock_ttl_sec=180,
+                )
+
+        async def _admit_paid(p: QuotaPolicy) -> AdmitResult:
+            try:
+                return await self.rl.admit(
+                    bundle_id=bundle_id, subject_id=self.subj, policy=p,
+                    lock_id=lock_id, lock_ttl_sec=180,
+                    apply_tier_override=False,
+                )
+            except TypeError:
+                _log("admit.paid", "rl.admit lacks apply_tier_override; calling without", "WARN")
+                return await self.rl.admit(
+                    bundle_id=bundle_id, subject_id=self.subj, policy=p,
+                    lock_id=lock_id, lock_ttl_sec=180,
+                )
+
+        async def _switch_tier_to_paid_or_die(*, switch_reason: str) -> None:
+            nonlocal lane, paid_policy, admit, effective_policy
+            nonlocal lock_released, tier_reservation_id, tier_reservation_active, tier_reserved_tokens
+
+            if tier_reservation_id:
+                try:
+                    await self.rl.release_token_reservation(
+                        bundle_id=bundle_id,
+                        subject_id=self.subj,
+                        reservation_id=tier_reservation_id,
+                        now=tier_admit_now,
+                    )
+                finally:
+                    tier_reservation_id = None
+                    tier_reservation_active = False
+                    tier_reserved_tokens = 0
+
+            if not lock_released:
+                await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
+                lock_released = True
+
+            lane = "paid"
+            paid_policy = _build_paid_policy()
+            admit = await _admit_paid(paid_policy)
+            effective_policy = paid_policy
+            lock_released = False
+
+            if not admit.allowed:
+                await _econ_fail(
+                    code="paid_admit_denied_after_switch",
+                    title="Rate limit exceeded",
+                    message=f"Paid lane admit denied after switch: {admit.reason or 'unknown'}",
+                    event_type="rate_limit.denied",
+                    data={
+                        "reason": admit.reason,
+                        "bundle_id": bundle_id,
+                        "subject_id": self.subj,
+                        "user_type": user_type,
+                        "snapshot": admit.snapshot,
+                        "lane": "paid",
+                        "switch_reason": switch_reason,
+                    },
+                )
+
+        if project_available_usd <= 0.0:
+            usd_per_token = llm_output_price_usd_per_token(ref_model=sonnet_45, ref_provider=anthropic)
+            if not user_can_pay_turn:
+                user_budget_tokens_int = int(user_budget_tokens or 0)
+                await _econ_fail(
+                    code="project_budget_exhausted",
+                    title="Project budget exhausted",
+                    message=f"Project budget exhausted and user has insufficient personal credits (available_usd={project_available_usd:.2f}, user_budget_tokens={user_budget_tokens}).",
+                    event_type="rate_limit.project_exhausted",
+                    data={
+                        "reason": "project_budget_exhausted",
+                        "bundle_id": bundle_id,
+                        "subject_id": self.subj,
+                        "user_type": user_type,
+                        "project_available_usd": project_available_usd,
+                        "user_budget_tokens": user_budget_tokens_int,
+                        "user_budget_usd": user_budget_tokens_int * usd_per_token,
+                        "min_tokens_required": MIN_USER_TOKENS_TO_RUN,
+                        "min_usd_required": MIN_USER_TOKENS_TO_RUN * usd_per_token,
+                        "tokens_short": max(0, MIN_USER_TOKENS_TO_RUN - user_budget_tokens_int),
+                        "usd_short": max(0.0, (MIN_USER_TOKENS_TO_RUN - user_budget_tokens_int) * usd_per_token),
+                        "has_personal_budget": bool(tier_balance and tier_balance.has_lifetime_budget()),
+                        "min_user_tokens": MIN_USER_TOKENS_TO_RUN,
+                    },
+                )
+            lane = "paid"
+            paid_policy = _build_paid_policy()
+            admit = await _admit_paid(paid_policy)
+            lock_released = False
+        else:
+            tier_admit = await _admit_tier()
+            lock_released = False
+            _log("admit.tier", "Tier admit result", allowed=tier_admit.allowed, reason=tier_admit.reason, snapshot=tier_admit.snapshot)
+
+            if tier_admit.allowed:
+                lane = "tier"
+                admit = tier_admit
+            else:
+                if not user_can_pay_turn:
+                    insight = compute_quota_insight(
+                        policy=base_policy,
+                        snapshot=tier_admit.snapshot,
+                        reason=tier_admit.reason,
+                        used_tier_override=tier_admit.used_tier_override,
+                        user_budget_tokens=user_budget_tokens,
+                    )
+                    payload = dataclasses.asdict(insight)
+                    retry_after_hours = None
+                    if insight.retry_after_sec:
+                        retry_after_hours = math.ceil(int(insight.retry_after_sec) / 3600)
+                    payload["retry_after_hours"] = retry_after_hours
+
+                    await _econ_fail(
+                        code="rate_limited",
+                        title="Rate limit exceeded",
+                        message=f"Rate limited: {tier_admit.reason or 'unknown'}",
+                        event_type="rate_limit.denied",
+                        data={
+                            "reason": tier_admit.reason,
+                            "bundle_id": bundle_id,
+                            "subject_id": self.subj,
+                            "user_type": user_type,
+                            "snapshot": tier_admit.snapshot,
+                            "rate_limit": payload,
+                            "lane": "deny",
+                        },
+                    )
+
+                lane = "paid"
+                paid_policy = _build_paid_policy()
+                admit = await _admit_paid(paid_policy)
+                lock_released = False
+
+        _log("admit.final", "Final admit", lane=lane, allowed=admit.allowed, reason=admit.reason, snapshot=admit.snapshot)
+
+        if not admit.allowed:
+            effective_policy_for_insight = paid_policy if lane == "paid" and paid_policy else base_policy
+            insight = compute_quota_insight(
+                policy=effective_policy_for_insight,
+                snapshot=admit.snapshot,
+                reason=admit.reason,
+                used_tier_override=admit.used_tier_override,
+                user_budget_tokens=user_budget_tokens,
+            )
+            payload = dataclasses.asdict(insight)
+            retry_after_hours = None
+            if insight.retry_after_sec:
+                retry_after_hours = math.ceil(int(insight.retry_after_sec) / 3600)
+            payload["retry_after_hours"] = retry_after_hours
+
+            await _econ_fail(
+                code="rate_limited",
+                title="Rate limit exceeded",
+                message=f"Rate limited: {admit.reason or 'unknown'}",
+                event_type="rate_limit.denied",
+                data={
+                    "reason": admit.reason,
+                    "bundle_id": bundle_id,
+                    "subject_id": self.subj,
+                    "user_type": user_type,
+                    "snapshot": admit.snapshot,
+                    "rate_limit": payload,
+                    "lane": "deny",
+                },
+            )
+
+        if lane == "paid":
+            effective_policy = paid_policy
+            _log("policy.effective", "Using PAID effective policy", effective_policy=dataclasses.asdict(effective_policy))
+        else:
+            if admit.used_tier_override and admit.effective_policy:
+                effective_policy = QuotaPolicy(**(admit.effective_policy or {}))
+                _log("policy.effective", "Using effective policy from RL (tier override applied)", effective_policy=dataclasses.asdict(effective_policy))
+            else:
+                if tier_balance and tier_balance.tier_override_is_active():
+                    effective_policy = _merge_policy_with_tier_balance(base_policy, tier_balance)
+                else:
+                    effective_policy = base_policy
+                _log("policy.effective", "Using merged policy", effective_policy=dataclasses.asdict(effective_policy))
+
+        insight: QuotaInsight = compute_quota_insight(
+            policy=effective_policy,
+            snapshot=admit.snapshot,
+            reason=admit.reason,
+            used_tier_override=admit.used_tier_override,
+            user_budget_tokens=user_budget_tokens,
+        )
+        _log("insight", "Computed quota insight", lane=lane, insight=dataclasses.asdict(insight))
+
+        if (
+            (insight.messages_remaining is not None and insight.messages_remaining == 1)
+            or (insight.total_token_remaining is not None and insight.total_token_remaining < MIN_USER_TOKENS_TO_RUN)
+        ):
+            await _emit_event(
+                type="rate_limit.warning",
+                status="running",
+                title="Approaching quota",
+                data={
+                    "bundle_id": bundle_id,
+                    "subject_id": self.subj,
+                    "user_type": user_type,
+                    "snapshot": admit.snapshot,
+                    "rate_limit": dataclasses.asdict(insight),
+                    "lane": lane,
+                },
+            )
+
+        app_reservation_id: UUID | None = None
+        app_reserved_usd: float = 0.0
+        app_reservation_active: bool = False
+
+        personal_reservation_id: str | None = None
+        personal_reserved_tokens: int = 0
+        personal_reservation_active: bool = False
+
+        tier_reserved_tokens = 0
+        usd_per_token = float(llm_output_price_usd_per_token(anthropic, sonnet_45))
+
+        if lane == "tier":
+            tier_limit, scope = effective_policy.effective_allowed_tokens()
+            scope_for_lock = str(scope or "month")
+            await _acquire_quota_lock_or_deny(scope=scope_for_lock)
+
+            try:
+                tier_reserved_tokens = int(getattr(admit, "reserved_tokens", 0) or 0)
+                tier_reservation_id = getattr(admit, "reservation_id", None)
+                tier_reservation_active = (lane == "tier" and tier_reserved_tokens > 0 and tier_reservation_id is not None)
+
+                tier_covered_tokens_est = tier_reserved_tokens
+                overflow_tokens_est = int(est_turn_tokens) - int(tier_covered_tokens_est)
+                if tier_limit is None:
+                    tier_remaining = est_turn_tokens
+                    tokens_spent_stat = f'Tokens spent from tier in this month: {int(admit.snapshot.get("tok_month", 0) or 0)}'
+                else:
+                    tok_so_far = int(admit.snapshot.get(f"tok_{scope}", 0) or 0)
+                    tokens_spent_stat = f"Tokens spent from tier in this {scope}: {tok_so_far}"
+                    tier_remaining = max(int(tier_limit) - int(tok_so_far), 0)
+
+                _log(
+                    "reserve.plan",
+                    "Reservation plan (tier lane)",
+                    est_turn_tokens=est_turn_tokens,
+                    tokens_spent_stat=tokens_spent_stat,
+                    tier_limit=tier_limit,
+                    tier_remaining=tier_remaining,
+                    tier_covered_tokens_est=tier_covered_tokens_est,
+                    overflow_tokens_est=overflow_tokens_est,
+                    usd_per_token=usd_per_token,
+                )
+
+                if tier_covered_tokens_est <= 0:
+                    if not user_can_pay_turn:
+                        await _econ_fail(
+                            code="tier_exhausted_no_personal",
+                            title="Tier exhausted",
+                            message="Tier exhausted and user cannot pay from personal credits.",
+                            event_type="rate_limit.denied",
+                            data={
+                                "reason": "tier_exhausted",
+                                "bundle_id": bundle_id,
+                                "subject_id": self.subj,
+                                "user_type": user_type,
+                                "snapshot": admit.snapshot,
+                                "lane": "deny",
+                            },
+                        )
+
+                    await _emit_event(
+                        type="rate_limit.lane_switch",
+                        status="running",
+                        title="Switching to personal credits",
+                        data={
+                            "reason": "tier_tokens_exhausted_for_turn",
+                            "bundle_id": bundle_id,
+                            "subject_id": self.subj,
+                            "user_type": user_type,
+                            "snapshot": admit.snapshot,
+                            "lane_from": "tier",
+                            "lane_to": "paid",
+                        },
+                    )
+
+                    await _switch_tier_to_paid_or_die(switch_reason="tier_tokens_exhausted_for_turn")
+                else:
+                    app_reserved_usd = float(tier_covered_tokens_est) * float(usd_per_token) * SAFETY_MARGIN
+                    app_reservation_id = uuid4()
+
+                    try:
+                        rr = await self.budget_limiter.reserve(
+                            reservation_id=app_reservation_id,
+                            bundle_id=bundle_id,
+                            provider=None,
+                            user_id=user_id,
+                            request_id=turn_id,
+                            amount_usd=float(app_reserved_usd),
+                            ttl_sec=900,
+                            notes=f"tier reserve: est_turn={est_turn_tokens}, tier_cover_est={tier_covered_tokens_est}, ref=anthropic/claude-sonnet-4-5-20250929",
+                        )
+                        app_reservation_active = True
+                        _log(
+                            "reserve.app",
+                            "Reserved app budget (tier lane)",
+                            reservation_id=str(rr.reservation_id),
+                            app_reserved_usd=rr.reserved_usd,
+                            expires_at=rr.expires_at,
+                            snapshot=dataclasses.asdict(rr.snapshot),
+                        )
+                    except BudgetInsufficientFunds as e:
+                        _log("reserve.app", "App budget reservation denied", "WARN", error=str(e), app_reserved_usd=app_reserved_usd)
+
+                        if not user_can_pay_turn:
+                            await _econ_fail(
+                                code="app_budget_reservation_failed_no_personal",
+                                title="Insufficient project funds",
+                                message="Project budget cannot reserve tier funds and user cannot pay.",
+                                event_type="rate_limit.project_exhausted",
+                                data={
+                                    "reason": "app_budget_reservation_failed",
+                                    "bundle_id": bundle_id,
+                                    "subject_id": self.subj,
+                                    "user_type": user_type,
+                                    "project_budget": project_budget,
+                                    "app_reserved_usd": app_reserved_usd,
+                                    "user_budget_tokens": user_budget_tokens,
+                                },
+                            )
+
+                        await _emit_event(
+                            type="rate_limit.lane_switch",
+                            status="running",
+                            title="Switching to personal credits",
+                            data={
+                                "reason": "app_budget_reservation_failed",
+                                "bundle_id": bundle_id,
+                                "subject_id": self.subj,
+                                "user_type": user_type,
+                                "snapshot": admit.snapshot,
+                                "lane_from": "tier",
+                                "lane_to": "paid",
+                            },
+                        )
+                        await _switch_tier_to_paid_or_die(switch_reason="app_budget_reservation_failed")
+
+                    if overflow_tokens_est > 0:
+                        ok = await self.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
+                            tenant=tenant,
+                            project=project,
+                            user_id=user_id,
+                            reservation_id=turn_id,
+                            tokens=int(overflow_tokens_est),
+                            ttl_sec=900,
+                            bundle_id=bundle_id,
+                            notes=f"auto-reserve: lane=tier, overflow={overflow_tokens_est}, est_turn={est_turn_tokens}",
+                        )
+                        if not ok:
+                            await _econ_fail(
+                                code="personal_reservation_failed_tier",
+                                title="Insufficient personal credits",
+                                message="Insufficient personal credits to cover overflow.",
+                                event_type="rate_limit.denied",
+                                data={
+                                    "reason": "personal_reservation_failed",
+                                    "bundle_id": bundle_id,
+                                    "subject_id": self.subj,
+                                    "user_type": user_type,
+                                    "tokens_required": int(overflow_tokens_est),
+                                    "lane": lane,
+                                },
+                            )
+                        personal_reservation_id = turn_id
+                        personal_reserved_tokens = int(overflow_tokens_est)
+                        personal_reservation_active = True
+                        _log("reserve.personal", "Reserved personal overflow tokens", reservation_id=turn_id, tokens_reserved=personal_reserved_tokens)
+            finally:
+                try:
+                    await _release_quota_lock_if_held()
+                except Exception as ex:
+                    _log("quota_lock", "Failed to release quota_lock", "WARN", error=str(ex))
+
+        if lane == "paid" and not personal_reservation_active:
+            if not (tier_balance and tier_balance.has_lifetime_budget()):
+                await _econ_fail(
+                    code="paid_lane_requires_personal_budget",
+                    title="Insufficient personal credits",
+                    message="Paid lane requires personal lifetime budget.",
+                    event_type="rate_limit.denied",
+                    data={
+                        "reason": "no_personal_budget",
+                        "bundle_id": bundle_id,
+                        "subject_id": self.subj,
+                        "user_type": user_type,
+                        "lane": lane,
+                    },
+                )
+
+            ok = await self.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
+                tenant=tenant,
+                project=project,
+                user_id=user_id,
+                reservation_id=turn_id,
+                tokens=int(est_turn_tokens),
+                ttl_sec=900,
+                bundle_id=bundle_id,
+                notes=f"auto-reserve paid: lane=paid, est_turn={est_turn_tokens}",
+            )
+            if not ok:
+                await _econ_fail(
+                    code="personal_reservation_failed_paid",
+                    title="Insufficient personal credits",
+                    message="Insufficient personal credits to run this request.",
+                    event_type="rate_limit.denied",
+                    data={
+                        "reason": "personal_reservation_failed",
+                        "bundle_id": bundle_id,
+                        "subject_id": self.subj,
+                        "user_type": user_type,
+                        "tokens_required": int(est_turn_tokens),
+                        "lane": lane,
+                    },
+                )
+
+            personal_reservation_id = turn_id
+            personal_reserved_tokens = int(est_turn_tokens)
+            personal_reservation_active = True
+            _log("reserve.personal", "Reserved personal tokens (paid lane)", reservation_id=turn_id, tokens_reserved=personal_reserved_tokens)
+
+        econ_ctx = {
+            "lane": lane,
+            "admit": admit,
+            "base_policy": base_policy,
+            "effective_policy": effective_policy,
+            "paid_policy": paid_policy,
+            "tier_balance": tier_balance,
+            "user_budget_tokens": user_budget_tokens,
+            "project_budget": project_budget,
+            "project_available_usd": project_available_usd,
+            "tier_reserved_tokens": tier_reserved_tokens,
+            "tier_reservation_id": tier_reservation_id,
+            "tier_reservation_active": tier_reservation_active,
+            "app_reservation_id": app_reservation_id,
+            "app_reservation_active": app_reservation_active,
+            "personal_reservation_id": personal_reservation_id,
+            "personal_reservation_active": personal_reservation_active,
+            "lock_id": lock_id,
+            "lock_released": lock_released,
+            "tier_admit_now": tier_admit_now,
+        }
+
+        await self.pre_run_hook(state=state, econ_ctx=econ_ctx)
+
+        result = None
+        admit_snapshot_pre = dict(admit.snapshot or {})
+
+        try:
+            usage_from = datetime.utcnow().date().isoformat()
+            _log("exec", "Invoking execute_core", lane=lane, usage_from=usage_from)
+            result = await self.execute_core(state=state, thread_id=thread_id, params=params)
+            _log("exec", "execute_core completed", lane=lane)
+
+            _log("accounting", "Applying accounting", lane=lane)
+            ranked_tokens, cost_result = await self.run_accounting(
+                tenant=tenant, project=project, user_id=user_id, user_type=user_type,
+                thread_id=thread_id, turn_id=turn_id, usage_from=usage_from,
+            )
+
+            ranked_tokens = int(ranked_tokens or 0)
+            cost_breakdown = cost_result.get("cost_breakdown") or []
+            total_cost = float(cost_result.get("cost_total_usd") or 0.0)
+
+            _log(
+                "accounting",
+                "Accounting applied",
+                lane=lane,
+                ranked_tokens=ranked_tokens,
+                total_cost=total_cost,
+                cost_breakdown=cost_breakdown,
+            )
+
+            now = datetime.utcnow().replace(tzinfo=timezone.utc)
+
+            if lane == "tier":
+                tier_covered_tokens = min(int(ranked_tokens), int(tier_reserved_tokens))
+            else:
+                tier_covered_tokens = 0
+
+            overflow_tokens = max(int(ranked_tokens) - int(tier_covered_tokens), 0)
+
+            tier_covered_usd = 0.0
+            overflow_usd = 0.0
+            if ranked_tokens > 0 and total_cost > 0:
+                tier_covered_usd = float(total_cost) * safe_frac(float(tier_covered_tokens), float(ranked_tokens))
+                overflow_usd = float(total_cost) * safe_frac(float(overflow_tokens), float(ranked_tokens))
+
+            _log(
+                "charge.split",
+                "Computed actual split",
+                ranked_tokens=ranked_tokens,
+                tier_covered_tokens=tier_covered_tokens,
+                overflow_tokens=overflow_tokens,
+                total_cost=total_cost,
+                tier_covered_usd=tier_covered_usd,
+                overflow_usd=overflow_usd,
+            )
+
+            if lane == "paid":
+                user_target_tokens = int(ranked_tokens)
+            else:
+                user_target_tokens = int(overflow_tokens)
+
+            user_uncovered_tokens = 0
+            if user_target_tokens > 0:
+                rid = str(personal_reservation_id or turn_id)
+                try:
+                    user_uncovered_tokens = await self.cp_manager.user_credits_mgr.commit_reserved_lifetime_tokens(
+                        tenant=tenant, project=project, user_id=user_id,
+                        reservation_id=rid,
+                        tokens=int(user_target_tokens),
+                    )
+                finally:
+                    if personal_reservation_active:
+                        personal_reservation_active = False
+
+            if personal_reservation_active and user_target_tokens <= 0 and personal_reservation_id:
+                try:
+                    await self.cp_manager.user_credits_mgr.release_lifetime_token_reservation(
+                        tenant=tenant, project=project, user_id=user_id,
+                        reservation_id=personal_reservation_id,
+                        reason="run: no_user_spend",
+                    )
+                finally:
+                    personal_reservation_active = False
+
+            user_uncovered_tokens = int(user_uncovered_tokens or 0)
+            user_uncovered_usd = 0.0
+            if user_uncovered_tokens > 0 and ranked_tokens > 0 and total_cost > 0:
+                user_uncovered_usd = float(total_cost) * safe_frac(float(user_uncovered_tokens), float(ranked_tokens))
+
+            if user_uncovered_tokens > 0:
+                await _emit_event(
+                    type="economics.user_underfunded_absorbed",
+                    status="running",
+                    title="Personal credits underfunded; absorbed by project budget",
+                    data={
+                        "bundle_id": bundle_id,
+                        "subject_id": self.subj,
+                        "user_type": user_type,
+                        "lane": lane,
+                        "ranked_tokens": ranked_tokens,
+                        "user_target_tokens": int(user_target_tokens),
+                        "user_uncovered_tokens": int(user_uncovered_tokens),
+                        "user_uncovered_usd": float(user_uncovered_usd),
+                    },
+                )
+                _log(
+                    "charge.user",
+                    "User underfunded post-fact; app will absorb remainder",
+                    "WARN",
+                    lane=lane,
+                    user_target_tokens=int(user_target_tokens),
+                    user_uncovered_tokens=int(user_uncovered_tokens),
+                    user_uncovered_usd=float(user_uncovered_usd),
+                )
+
+            if lane == "tier":
+                app_spend_usd = float(tier_covered_usd) + float(user_uncovered_usd)
+                app_note = "post-run settle: tier_cost + user_shortfall"
+            else:
+                app_spend_usd = float(user_uncovered_usd)
+                app_note = "post-run settle: user_shortfall (paid lane)"
+
+            if app_spend_usd > 0 or (app_reservation_active and app_reservation_id):
+                if app_reservation_active and app_reservation_id:
+                    await self.budget_limiter.commit_reserved_spend(
+                        reservation_id=app_reservation_id,
+                        spent_usd=float(app_spend_usd),
+                    )
+                    app_reservation_active = False
+                    _log(
+                        "charge.app",
+                        "Committed app reservation (post-run settle)",
+                        reservation_id=str(app_reservation_id),
+                        spent_usd=float(app_spend_usd),
+                        tier_covered_usd=float(tier_covered_usd),
+                        user_uncovered_usd=float(user_uncovered_usd),
+                    )
+                else:
+                    await self.budget_limiter.force_project_spend(
+                        spent_usd=float(app_spend_usd),
+                        bundle_id=bundle_id,
+                        provider=None,
+                        request_id=turn_id,
+                        user_id=user_id,
+                        note=app_note,
+                    )
+                    _log(
+                        "charge.app",
+                        "Force-deducted app spend from PG (no reservation)",
+                        spent_usd=float(app_spend_usd),
+                        tier_covered_usd=float(tier_covered_usd),
+                        user_uncovered_usd=float(user_uncovered_usd),
+                    )
+
+            if app_spend_usd > 0 and total_cost > 0:
+                await _record_app_analytics_by_provider(
+                    app_spend_usd=float(app_spend_usd),
+                    total_cost_usd=float(total_cost),
+                    cost_breakdown=cost_breakdown,
+                    now=now,
+                )
+
+            if not lock_released:
+                if lane == "tier" and tier_reservation_id:
+                    await self.rl.commit_with_reservation(
+                        bundle_id=bundle_id,
+                        subject_id=self.subj,
+                        tokens=int(tier_covered_tokens),
+                        lock_id=lock_id,
+                        reservation_id=tier_reservation_id,
+                        now=tier_admit_now,
+                        inc_request=1,
+                    )
+                    lock_released = True
+                    tier_reservation_active = False
+                    tier_reservation_id = None
+                    tier_reserved_tokens = 0
+                    _log(
+                        "rl.commit",
+                        "RL committed (tier tokens) and lock released (reservation finalized)",
+                        tokens=int(tier_covered_tokens),
+                    )
+                else:
+                    await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
+                    lock_released = True
+                    _log("rl.release", "RL lock released", lane=lane)
+
+        except EconomicsLimitException:
+            raise
+
+        except Exception as e:
+            _log("error", "Exception in run()", "ERROR", error=str(e))
+            raise
+
+        finally:
+            try:
+                await _release_quota_lock_if_held()
+            except Exception as ex:
+                _log("quota_lock", "Failed to release quota_lock in finally", "WARN", error=str(ex))
+
+            try:
+                if app_reservation_active and app_reservation_id:
+                    await self.budget_limiter.release_reservation(reservation_id=app_reservation_id, note=None)
+                    _log("reserve.app", "Released app reservation in finally", reservation_id=str(app_reservation_id))
+            except Exception as ex:
+                _log("reserve.app", "Failed to release app reservation in finally", "WARN", error=str(ex))
+
+            try:
+                if personal_reservation_active and personal_reservation_id:
+                    await self.cp_manager.user_credits_mgr.release_lifetime_token_reservation(
+                        tenant=tenant, project=project, user_id=user_id,
+                        reservation_id=personal_reservation_id,
+                        reason="run: finally cleanup",
+                    )
+                    _log("reserve.personal", "Released personal reservation in finally", reservation_id=personal_reservation_id)
+            except Exception as ex:
+                _log("reserve.personal", "Failed to release personal reservation in finally", "WARN", error=str(ex))
+
+            try:
+                if tier_reservation_active and tier_reservation_id:
+                    await self.rl.release_token_reservation(
+                        bundle_id=bundle_id, subject_id=self.subj,
+                        reservation_id=tier_reservation_id,
+                        now=tier_admit_now,
+                    )
+                    _log("rl.reserve", "Released tier token reservation in finally", reservation_id=tier_reservation_id)
+            except Exception as ex:
+                _log("rl.reserve", "Failed to release tier reservation in finally", "WARN", error=str(ex))
+
+            try:
+                if not lock_released:
+                    await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
+                    _log("rl.release", "Released lock in finally", lock_id=lock_id)
+            except Exception as ex:
+                _log("rl.release", "Failed to release lock in finally", "WARN", error=str(ex))
+
+            try:
+                if acct is not None:
+                    await acct.clear_turn_events(tenant=tenant, project=project, conversation_id=thread_id, turn_id=turn_id)
+                    _log("cleanup", "Cleared accounting turn cache", tenant=tenant, project=project, thread_id=thread_id, turn_id=turn_id)
+            except Exception as e:
+                _log("cleanup", "Failed to clear accounting turn cache", "WARN", error=str(e))
+
+        await self.post_run_hook(state=state, result=result, econ_ctx=econ_ctx)
+        _log("done", "run() completed successfully", lane=lane)
+        return self.project_app_state(result)

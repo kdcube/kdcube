@@ -49,3 +49,15 @@ def log_agent_packet(agent_name: str, phase: str, packet: dict):
             "\n%s\n<%s:%s>\n%s\nInternal thinking:\n%s\n\nUser-facing:\n%s\n\nStructured response:\n%s\n%s",
             border, agent_name, phase, border, internal, user, resp, border
         )
+
+def log_stream_channels(agent_name: str, phase: str, channels: dict):
+    """
+    Log raw channel outputs from versatile multi-stream responses.
+    channels: {name: raw_text}
+    """
+    if not isinstance(channels, dict):
+        return
+    payload = {
+        "agent_response": channels
+    }
+    log_agent_packet(agent_name, phase, payload)

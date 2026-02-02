@@ -61,7 +61,7 @@ async def test_stream_with_channels_citations_and_usage():
         ChannelSpec(name="usage", format="json", replace_citations=False, emit_marker="answer"),
     ]
 
-    results = await stream_with_channels(
+    results, meta = await stream_with_channels(
         svc=svc,
         messages=["sys", "user"],
         role="answer.generator.regular",
@@ -72,7 +72,10 @@ async def test_stream_with_channels_citations_and_usage():
         sources_list=sources_list,
         max_tokens=200,
         temperature=0.0,
+        return_full_raw=True,
     )
+    assert meta.get("service_error") is None
+    assert meta.get("raw") == "".join(chunks)
 
     rendered_answer = "".join(
         e.get("text", "") for e in events if e.get("channel") == "answer" and e.get("text")
@@ -108,7 +111,7 @@ async def test_stream_with_channels_json_fanout_to_canvas():
         ChannelSpec(name="usage", format="json", replace_citations=False, emit_marker="answer"),
     ]
 
-    await stream_with_channels(
+    results, meta = await stream_with_channels(
         svc=svc,
         messages=["sys", "user"],
         role="answer.generator.regular",
@@ -122,7 +125,10 @@ async def test_stream_with_channels_json_fanout_to_canvas():
         composite_marker="canvas", # comm recipient
         max_tokens=200,
         temperature=0.0,
+        return_full_raw=True,
     )
+    assert meta.get("service_error") is None
+    assert meta.get("raw") == "".join(chunks)
 
     canvas_text = "".join(
         e.get("text", "") for e in events if e.get("marker") == "canvas" and e.get("text")

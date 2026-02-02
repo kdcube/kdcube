@@ -5,6 +5,7 @@
 from __future__ import annotations
 import json, os, threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 _REG_LOCK = threading.RLock()
@@ -21,6 +22,26 @@ class BundleSpec:
     description: Optional[str] = None
 
 ENV_JSON = "AGENTIC_BUNDLES_JSON"
+ADMIN_BUNDLE_ID = "kdcube.admin"
+
+
+def _admin_bundle_spec() -> Dict[str, Any]:
+    root = Path(__file__).resolve().parent
+    return {
+        "id": ADMIN_BUNDLE_ID,
+        "name": "KDCube Admin",
+        "path": str(root),
+        "module": "admin_bundle.entrypoint",
+        "singleton": True,
+        "description": "Built-in admin-only bundle",
+    }
+
+
+def _ensure_admin_bundle(reg: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    if ADMIN_BUNDLE_ID not in reg:
+        reg = dict(reg)
+        reg[ADMIN_BUNDLE_ID] = _normalize(_admin_bundle_spec())
+    return reg
 
 def _normalize(d: Dict[str, Any]) -> Dict[str, Any]:
     # Ensure required keys exist
@@ -65,20 +86,22 @@ def load_from_env() -> None:
             item = _normalize(v)
             reg[item["id"]] = item
 
+        reg = _ensure_admin_bundle(reg)
         _REGISTRY = reg
 
         # resolve default
         if default_bundle_id and default_bundle_id in _REGISTRY:
             _DEFAULT_ID = default_bundle_id
         else:
-            _DEFAULT_ID = next(iter(_REGISTRY.keys()), None)
+            _DEFAULT_ID = ADMIN_BUNDLE_ID if ADMIN_BUNDLE_ID in _REGISTRY else next(iter(_REGISTRY.keys()), None)
 
 def serialize_to_env(registry: Dict[str, Dict[str, Any]], default_id: Optional[str]) -> str:
     """Reflect current in-memory mapping back into env (best-effort)."""
     with _REG_LOCK:
+        registry = _ensure_admin_bundle(registry or {})
         payload = {
-            "default_bundle_id": default_id if default_id in registry else next(iter(registry), None),
-            "bundles": registry
+            "default_bundle_id": default_id if default_id in registry else ADMIN_BUNDLE_ID,
+            "bundles": registry,
         }
         os.environ[ENV_JSON] = json.dumps(payload, ensure_ascii=False)
         return os.environ[ENV_JSON]
@@ -100,8 +123,9 @@ def set_registry(registry: Dict[str, Dict[str, Any]], default_id: Optional[str])
         for k, v in (registry or {}).items():
             item = _normalize({"id": k, **(v or {})})
             new_reg[item["id"]] = item
+        new_reg = _ensure_admin_bundle(new_reg)
         _REGISTRY = new_reg
-        _DEFAULT_ID = default_id if default_id in _REGISTRY else (next(iter(_REGISTRY), None))
+        _DEFAULT_ID = default_id if default_id in _REGISTRY else ADMIN_BUNDLE_ID
 
 def upsert_bundles(partial: Dict[str, Dict[str, Any]], default_id: Optional[str]) -> None:
     """Merge update."""
@@ -111,6 +135,7 @@ def upsert_bundles(partial: Dict[str, Dict[str, Any]], default_id: Optional[str]
         for k, v in (partial or {}).items():
             item = _normalize({"id": k, **(v or {})})
             reg[item["id"]] = {**reg.get(item["id"], {}), **item}
+        reg = _ensure_admin_bundle(reg)
         _REGISTRY = reg
         if default_id:
             _DEFAULT_ID = default_id if default_id in _REGISTRY else _DEFAULT_ID
@@ -148,4 +173,3 @@ async def load_registry(redis, logger):
         logger.info(f"Bundle mapping synced from Redis: {len(persisted.bundles)} bundles (default={persisted.default_bundle_id})")
     except Exception as _e:
         logger.warning(f"Could not sync bundles from Redis; using env-only: {_e}")
-

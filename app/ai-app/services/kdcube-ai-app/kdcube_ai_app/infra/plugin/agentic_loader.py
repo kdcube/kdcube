@@ -65,22 +65,6 @@ def agentic_workflow(
     return _wrap
 
 
-def agentic_initial_state(
-        *,
-        name: str | None = None,
-        priority: int = 100,
-):
-    """
-    Mark a function that builds the initial state.
-    Signature: fn(user_message: str) -> state(dict|TypedDict)
-    """
-    def _wrap(fn):
-        setattr(fn, AGENTIC_ROLE_ATTR, "initial_state")
-        setattr(fn, AGENTIC_META_ATTR, {"name": name, "priority": priority})
-        return fn
-    return _wrap
-
-
 # --------------------------------------------------------------------------------------
 # Spec & caches
 # --------------------------------------------------------------------------------------
@@ -98,10 +82,13 @@ class AgenticBundleSpec:
     singleton: bool = False
 
 _module_cache: Dict[str, types.ModuleType] = {}
-_singleton_cache: Dict[str, Tuple[Any, Optional[Callable[[str], Any]], types.ModuleType]] = {}
+_singleton_cache: Dict[str, Tuple[Any, types.ModuleType]] = {}
 
 def _cache_key(spec: AgenticBundleSpec) -> str:
     return f"{Path(spec.path).resolve()}::{spec.module or ''}"
+
+def cache_key_for_spec(spec: AgenticBundleSpec) -> str:
+    return _cache_key(spec)
 
 # --------------------------------------------------------------------------------------
 # Module loading
@@ -167,7 +154,6 @@ def _resolve_module(spec: AgenticBundleSpec) -> types.ModuleType:
 def _discover_decorated(mod: types.ModuleType):
     factories: List[Tuple[int, Dict[str, Any], Callable[..., Any]]] = []
     classes:   List[Tuple[int, Dict[str, Any], type]] = []
-    inits:     List[Tuple[int, Dict[str, Any], Callable[[str], Any]]] = []
 
     for obj in vars(mod).values():
         role = getattr(obj, AGENTIC_ROLE_ATTR, None)
@@ -178,14 +164,10 @@ def _discover_decorated(mod: types.ModuleType):
             factories.append((prio, meta, obj))  # fn(config, step_emitter, delta_emitter)
         elif role == "workflow_class" and isinstance(obj, type):
             classes.append((prio, meta, obj))    # class(config, step_emitter, delta_emitter)
-        elif role == "initial_state" and callable(obj):
-            inits.append((prio, meta, obj))      # fn(user_message)
 
     # sort by priority desc, then by name to stabilize
     factories.sort(key=lambda t: (-t[0], getattr(t[2], "__name__", "")))
     classes.sort(key=lambda t: (-t[0], getattr(t[2], "__name__", "")))
-    inits.sort(key=lambda t: (-t[0], getattr(t[2], "__name__", "")))
-
     # choose winner across factory/class by highest priority; tie → prefer factory
     winner_factory = factories[0] if factories else None
     winner_class   = classes[0] if classes else None
@@ -204,8 +186,7 @@ def _discover_decorated(mod: types.ModuleType):
     else:
         chosen = None
 
-    init_fn = inits[0][2] if inits else None
-    return chosen, init_fn
+    return chosen
 
 def _select_supported_kwargs(symbol: Any, provided: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -246,10 +227,10 @@ def get_workflow_instance(
         comm_context: ChatTaskPayload,        # ← optional unified communicator
         pg_pool: Optional[Any] = None,             # ← optional DB pools
         redis: Optional[Any] = None,               # ← optional DB pools
-) -> Tuple[Any, Optional[Callable[[str], Any]], types.ModuleType]:
+) -> Tuple[Any, types.ModuleType]:
     """
     Load the bundle at 'spec', discover decorated symbols, instantiate a workflow,
-    and return (workflow_instance, initial_state_fn_or_None, module).
+    and return (workflow_instance, module).
 
     Notes:
     - ONLY decorated @agentic_workflow_factory / @agentic_workflow are recognized.
@@ -257,16 +238,15 @@ def get_workflow_instance(
     - Singleton is honored if:
         * spec.singleton is True, OR
         * the chosen factory has decorator meta singleton=True
-    - initial_state is optional; if not provided, returns None.
     """
     key = _cache_key(spec)
     # singleton cache hit?
     if spec.singleton and key in _singleton_cache:
-        inst, init_fn, mod = _singleton_cache[key]
-        return inst, init_fn, mod
+        inst, mod = _singleton_cache[key]
+        return inst, mod
 
     mod = _resolve_module(spec)
-    chosen, init_fn = _discover_decorated(mod)
+    chosen = _discover_decorated(mod)
 
     if not chosen:
         raise AttributeError(
@@ -292,11 +272,55 @@ def get_workflow_instance(
         final_singleton = bool(spec.singleton)
 
     if final_singleton:
-        _singleton_cache[key] = (instance, init_fn, mod)
+        _singleton_cache[key] = (instance, mod)
 
-    return instance, init_fn, mod
+    return instance, mod
 
 def clear_agentic_caches() -> None:
     """Utility for tests/dev hot-reload."""
     _module_cache.clear()
     _singleton_cache.clear()
+
+def evict_inactive_specs(
+        *,
+        active_specs: List[AgenticBundleSpec],
+        drop_sys_modules: bool = True,
+) -> Dict[str, int]:
+    """
+    Evict cached modules/singletons not present in active_specs.
+    Optionally remove module entries from sys.modules (best-effort).
+    """
+    active_keys = {cache_key_for_spec(s) for s in (active_specs or [])}
+    evicted_modules = 0
+    evicted_singletons = 0
+    sys_modules_deleted = 0
+
+    for key in list(_singleton_cache.keys()):
+        if key not in active_keys:
+            _singleton_cache.pop(key, None)
+            evicted_singletons += 1
+
+    for key, mod in list(_module_cache.items()):
+        if key in active_keys:
+            continue
+        _module_cache.pop(key, None)
+        evicted_modules += 1
+        if drop_sys_modules and mod is not None:
+            mod_name = getattr(mod, "__name__", None)
+            mod_file = getattr(mod, "__file__", None) or ""
+            mod_path_key = key.split("::")[0]
+            if mod_name and (
+                mod_name.startswith("agentic_bundle_")
+                or (mod_file and mod_path_key and str(mod_file).find(str(Path(mod_path_key))) >= 0)
+            ):
+                if sys.modules.pop(mod_name, None) is not None:
+                    sys_modules_deleted += 1
+
+    if drop_sys_modules:
+        importlib.invalidate_caches()
+
+    return {
+        "evicted_modules": evicted_modules,
+        "evicted_singletons": evicted_singletons,
+        "sys_modules_deleted": sys_modules_deleted,
+    }

@@ -15,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import BaseTurnView, TurnScr
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.retrieval import reconcile_citations_for_context
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 import kdcube_ai_app.apps.chat.sdk.runtime.solution.context.retrieval as ctx_retrieval_module
+from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import search_context, ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext  # used only by make_react_context
 
 PROJECT_LOG_SLOTS = { "project_log" }
@@ -44,13 +45,14 @@ class ContextBrowser:
     Produces a ContextBundle that can be consumed by:
       - ReactSolver (to build a ReactContext)
       - CodegenToolManager (to extract canvas, playbook, etc.)
+    Uses ContextRAGClient for both search and materialization.
     """
 
     def __init__(self, *,
-                 tool_manager: Any,
+                 ctx_client: Optional[ContextRAGClient] = None,
                  turn_view_class: Type[BaseTurnView] = BaseTurnView,
                  logger: Optional[AgentLogger] = None):
-        self.tool_manager = tool_manager
+        self.ctx_client = ctx_client
         self.log = logger or AgentLogger("context_browser")
         self.turn_view_class = turn_view_class
 
@@ -74,8 +76,8 @@ class ContextBrowser:
         program_history: List[Dict[str, Any]] = []
         if materialize_turn_ids:
             try:
-                program_history = await ctx_retrieval_module.build_program_history_from_turn_ids(
-                    self.tool_manager,
+                program_history = await ctx_retrieval_module.build_program_history_from_turn_ids_by_client(
+                    ctx_client=self.ctx_client,
                     user_id=user_id,
                     conversation_id=conversation_id,
                     turn_ids=materialize_turn_ids,
@@ -102,6 +104,98 @@ class ContextBrowser:
             program_history_reconciled=program_history_reconciled,
             sources_pool=sources_pool,
             # last_mat_working_canvas=last_mat_working_canvas,
+        )
+
+    async def search(
+            self,
+            *,
+            targets: List[dict],
+            user: str,
+            conv: str,
+            track: str,
+            top_k: int = 5,
+            days: int = 365,
+            half_life_days: float = 7.0,
+            scoring_mode: str = "hybrid",
+            sim_weight: float = 0.8,
+            rec_weight: float = 0.2,
+            custom_score_fn: Optional[Any] = None,
+            with_payload: bool = False,
+            conv_idx: Optional[Any] = None,
+            ctx_client: Optional[ContextRAGClient] = None,
+            model_service: Optional[Any] = None,
+    ) -> tuple[Optional[str], List[dict]]:
+        """
+        Convenience wrapper around ctx_rag.search_context.
+        """
+        ctx_client = ctx_client or self.ctx_client
+        conv_idx = conv_idx or (getattr(ctx_client, "idx", None) if ctx_client else None)
+        model_service = model_service or (getattr(ctx_client, "model_service", None) if ctx_client else None)
+        if not conv_idx or not model_service:
+            raise ValueError("ContextBrowser.search requires conv_idx and model_service.")
+        return await search_context(
+            conv_idx=conv_idx,
+            ctx_client=ctx_client,
+            model_service=model_service,
+            targets=targets,
+            user=user,
+            conv=conv,
+            track=track,
+            top_k=top_k,
+            days=days,
+            half_life_days=half_life_days,
+            scoring_mode=scoring_mode,
+            sim_weight=sim_weight,
+            rec_weight=rec_weight,
+            custom_score_fn=custom_score_fn,
+            with_payload=with_payload,
+            logger=self.log,
+        )
+
+    async def save_artifact(
+            self,
+            *,
+            kind: str,
+            tenant: str,
+            project: str,
+            user_id: str,
+            conversation_id: str,
+            user_type: str,
+            turn_id: str,
+            track_id: Optional[str],
+            content: dict,
+            content_str: Optional[str] = None,
+            meta: Optional[Dict[str, Any]] = None,
+            extra_tags: Optional[List[str]] = None,
+            bundle_id: Optional[str] = None,
+            index_only: bool = False,
+            store_only: bool = False,
+            embedding: Optional[List[float]] = None,
+            ttl_days: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Proxy to ContextRAGClient.save_artifact(...).
+        """
+        if not self.ctx_client:
+            raise ValueError("ContextBrowser.save_artifact requires ctx_client.")
+        return await self.ctx_client.save_artifact(
+            kind=kind,
+            tenant=tenant,
+            project=project,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            user_type=user_type,
+            turn_id=turn_id,
+            track_id=track_id,
+            content=content,
+            content_str=content_str,
+            meta=meta,
+            extra_tags=extra_tags,
+            bundle_id=bundle_id,
+            index_only=index_only,
+            store_only=store_only,
+            embedding=embedding,
+            ttl_days=ttl_days,
         )
 
     def make_react_context(

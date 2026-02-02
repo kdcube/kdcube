@@ -127,6 +127,34 @@ Transports (SSE / Socket.IO) hook into the chat relay to dynamically subscribe/u
 
 ---
 
+## Delta markers (producer-facing)
+
+`chat.delta` events carry a `marker` that tells the client how to render the stream.
+
+Recommended for most bundles:
+- `thinking` — side-channel thoughts
+- `answer` — main assistant answer
+
+Additional built-in markers:
+- `subsystem` — subsystem/widget stream
+- `canvas` — inline artifact/canvas stream
+- `timeline_text` — compact timeline entries
+
+Custom markers are allowed, but they require client support to be visible.
+When in doubt, stick to `thinking` and `answer`.
+
+Example delta envelope:
+
+```json
+{
+  "type": "chat.delta",
+  "event": { "agent": "gate", "step": "thinking", "status": "update" },
+  "delta": { "text": "…", "marker": "thinking" }
+}
+```
+
+---
+
 ## Where filters live and what they see
 
 Filters are evaluated **inside `ChatCommunicator.emit()`**, before the event is published to Redis.
@@ -539,6 +567,46 @@ Emits:
 
 * socket event: `chat_delta`
 * payload type: `chat.delta`
+
+Markers (common):
+
+* `answer` — main assistant answer stream.
+* `thinking` — optional side stream (plans/notes).
+* `subsystem` — widget streams (code exec, web search, etc.); include `sub_type`, `artifact_name`, `format`.
+* `canvas` — inline artifacts for a client canvas panel (if enabled).
+* `timeline_text` — compact timeline entries (react solver).
+
+Subsystem widget refs:
+* `kdcube_ai_app/apps/chat/sdk/runtime/solution/widgets/code-exec-widget-README.md`
+* `kdcube_ai_app/apps/chat/sdk/runtime/solution/widgets/exec.py`
+
+Example subsystem delta:
+
+```python
+await comm.delta(
+    text="{\"status\":\"gen\"}",
+    index=0,
+    marker="subsystem",
+    agent="tool.codegen",
+    format="json",
+    artifact_name="code_exec.status",
+    sub_type="code_exec.status",
+    execution_id="exec_123",
+)
+```
+
+Example canvas delta:
+
+```python
+await comm.delta(
+    text="{\"title\":\"Design\",\"nodes\":[]}",
+    index=0,
+    marker="canvas",
+    agent="tool.generator",
+    format="json",
+    artifact_name="canvas.design.v1",
+)
+```
 
 Also:
 

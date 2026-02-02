@@ -149,13 +149,34 @@ async def lifespan(app: FastAPI):
             module=spec_resolved.module,
             singleton=bool(spec_resolved.singleton),
         )
-        workflow, create_initial_state_fn, _ = get_workflow_instance(
-            spec=spec,
-            config=wf_config,
-            comm_context=comm_context,
-            pg_pool=app.state.pg_pool,
-            redis=app.state.middleware.redis
-        )
+        try:
+            workflow, _ = get_workflow_instance(
+                spec=spec,
+                config=wf_config,
+                comm_context=comm_context,
+                pg_pool=app.state.pg_pool,
+                redis=app.state.middleware.redis
+            )
+        except Exception as e:
+            try:
+                admin_spec = resolve_bundle("kdcube.admin", override=None)
+                if not admin_spec:
+                    raise e
+                wf_config.ai_bundle_spec = admin_spec
+                admin = AgenticBundleSpec(
+                    path=admin_spec.path,
+                    module=admin_spec.module,
+                    singleton=bool(admin_spec.singleton),
+                )
+                workflow, _ = get_workflow_instance(
+                    spec=admin,
+                    config=wf_config,
+                    comm_context=comm_context,
+                    pg_pool=app.state.pg_pool,
+                    redis=app.state.middleware.redis
+                )
+            except Exception:
+                raise
 
         # set workflow state (no emits here; processor already announced start)
         state = {

@@ -32,6 +32,13 @@ The model must wrap each channel in XML-like tags:
 - Only tags defined in the protocol should be emitted by the model.
 - The streamer ignores any content outside a channel tag.
 
+### Recommended marker mapping
+
+When routing channel output to the client, keep it simple:
+- `thinking` → `marker="thinking"`
+- `answer` → `marker="answer"`
+- `followup` → use a `chat.followups` step/event (recommended) or `marker="subsystem"`
+
 ## Core Mechanism
 
 `stream_with_channels(...)` performs a streaming parse with these steps:
@@ -179,13 +186,29 @@ await stream_with_channels(
     composite_cfg: Optional[Dict[str, str]] = None,
     composite_channel: Optional[str] = None,
     composite_marker: str = "canvas",
-) -> Dict[str, ChannelResult]
+    return_full_raw: bool = False,
+) -> Dict[str, ChannelResult] | Tuple[Dict[str, ChannelResult], Dict[str, Any]]
 ```
 
 `ChannelResult` contains:
 - `raw`: concatenated raw channel content.
 - `obj`: parsed `pydantic` model if provided, else `None`.
 - `used_sources`: list of SIDs detected in raw channel content.
+
+If `return_full_raw=True`, a second object is returned: `meta` with:
+- `raw`: full model text from `stream_model_text_tracked`
+- `service_error`: normalized service error (if any)
+- `usage`, `model_name`, `provider_message_id`
+- `thoughts`, `tool_calls`, `citations`
+
+Recommended handling:
+
+```
+results, meta = await stream_with_channels(..., return_full_raw=True)
+service_error = (meta or {}).get("service_error")
+if service_error:
+    raise ServiceException(ServiceError.model_validate(service_error))
+```
 
 ## Usage Example
 
@@ -205,7 +228,7 @@ channels = [
     ),
 ]
 
-results = await stream_with_channels(
+results, meta = await stream_with_channels(
     svc=svc,
     messages=[system_msg, user_msg],
     role="answer.generator.regular",
@@ -214,10 +237,12 @@ results = await stream_with_channels(
     agent="my.agent",
     artifact_name="report",
     sources_list=sources_list,
+    return_full_raw=True,
 )
 
 answer_raw = results["answer"].raw
 usage_raw = results["usage"].raw
+service_error = (meta or {}).get("service_error")
 ```
 
 See also: `test_versatile_streamer.py` for illustrative, executable examples.

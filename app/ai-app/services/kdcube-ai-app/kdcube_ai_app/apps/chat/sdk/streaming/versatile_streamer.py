@@ -67,12 +67,35 @@ def _scrub_chunk(text: str, *, strip_usage: bool) -> str:
     return s
 
 
+def _truncate_at_channel_tag(text: str) -> str:
+    """
+    Prevent leaking channel markers into streamed content.
+    If a channel tag (open/close) appears inside the slice, truncate before it.
+    """
+    if not text:
+        return text
+    m = re.search(r"<\s*/?\s*channel", text, flags=re.I)
+    if not m:
+        return text
+    return text[:m.start()]
+
+
+_CHANNEL_PREFIX_RE = re.compile(r"<\s*/?\s*ch", re.I)
+
+
+def _next_possible_channel_prefix(text: str) -> Optional[int]:
+    if not text:
+        return None
+    m = _CHANNEL_PREFIX_RE.search(text)
+    return m.start() if m else None
+
+
 def _replace_citations(
-    text: str,
-    fmt: str,
-    citation_map: Dict[int, Dict[str, str]],
-    replace: bool,
-    state: Optional[citations_module.CitationStreamState] = None,
+        text: str,
+        fmt: str,
+        citation_map: Dict[int, Dict[str, str]],
+        replace: bool,
+        state: Optional[citations_module.CitationStreamState] = None,
 ) -> str:
     if not replace or not citation_map or not text:
         return text
@@ -94,22 +117,23 @@ def _replace_citations(
 
 
 async def stream_with_channels(
-    svc: ModelServiceBase,
-    *,
-    messages: List[Any],
-    role: str,
-    channels: List[ChannelSpec],
-    emit: ChannelEmitFn,
-    agent: str,
-    artifact_name: Optional[str] = None,
-    sources_list: Optional[List[Dict[str, Any]]] = None,
-    max_tokens: int = 8000,
-    temperature: float = 0.3,
-    debug: bool = False,
-    composite_cfg: Optional[Dict[str, str]] = None,
-    composite_channel: Optional[str] = None,
-    composite_marker: str = "canvas",
-) -> Dict[str, ChannelResult]:
+        svc: ModelServiceBase,
+        *,
+        messages: List[Any],
+        role: str,
+        channels: List[ChannelSpec],
+        emit: ChannelEmitFn,
+        agent: str,
+        artifact_name: Optional[str] = None,
+        sources_list: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: int = 8000,
+        temperature: float = 0.3,
+        debug: bool = False,
+        composite_cfg: Optional[Dict[str, str]] = None,
+        composite_channel: Optional[str] = None,
+        composite_marker: str = "canvas",
+        return_full_raw: bool = False,
+) -> Dict[str, ChannelResult] | Tuple[Dict[str, ChannelResult], Dict[str, Any]]:
     """
     Versatile multi-channel streamer using namespaced tags.
 
@@ -128,7 +152,7 @@ async def stream_with_channels(
     citation_map = citations_module.build_citation_map_from_sources(sources_list or [])
 
     buf = ""
-    emit_from = 0
+    cursor = 0
     current: Optional[str] = None
 
     raw_by_channel: Dict[str, List[str]] = {c.name: [] for c in channels}
@@ -180,6 +204,15 @@ async def stream_with_channels(
         if flushed:
             await _emit_channel(name, flushed)
 
+    def _get_holdback_for_channel(channel_name: str) -> int:
+        """Get appropriate holdback for channel based on format and citation needs."""
+        if channel_name in citation_states:
+            return 0  # Citation-aware channels handle their own buffering
+        spec = channel_specs.get(channel_name)
+        if spec and spec.format in ("json",):
+            return 0  # JSON doesn't need citation holdback
+        return 12  # Default holdback for other formats
+
     composite_streamer: Optional[CompositeJsonArtifactStreamer] = None
     if composite_cfg and composite_channel:
         async def _composite_emit(*args, **kwargs):
@@ -197,74 +230,115 @@ async def stream_with_channels(
             on_delta_fn=None,
         )
 
+    TAG_RE = re.compile(r"<\s*/?\s*channel:[a-zA-Z0-9_-]+\s*>", re.I)
+
+    def _parse_tag(tag_text: str) -> tuple[bool, Optional[str]]:
+        m_open = OPEN_RE.match(tag_text)
+        if m_open:
+            return False, m_open.group(1)
+        m_close = CLOSE_RE.match(tag_text)
+        if m_close:
+            return True, m_close.group(1)
+        return False, None
+
+    async def _emit_raw_slice(name: str, raw_slice: str) -> None:
+        if not raw_slice:
+            return
+        if composite_streamer and name == composite_channel:
+            await composite_streamer.feed(raw_slice)
+        raw_by_channel[name].append(raw_slice)
+        await _emit_channel(name, raw_slice)
+
+    async def _process_buffer(final: bool = False) -> None:
+        nonlocal buf, cursor, current
+        loop_guard = 0
+        while True:
+            loop_guard += 1
+            if loop_guard > 2000:
+                logger.warning(
+                    "versatile_streamer loop guard hit: current=%s cursor=%s buf_len=%s tail=%r",
+                    current, cursor, len(buf), buf[max(0, cursor - 80): cursor + 80],
+                )
+                break
+
+            # Compact buffer occasionally to avoid unbounded growth
+            if cursor > 4096:
+                buf = buf[cursor:]
+                cursor = 0
+
+            m_tag = TAG_RE.search(buf, cursor)
+            if not m_tag:
+                if current is None:
+                    # No channel open; keep a short tail to catch tag boundaries
+                    if len(buf) > _tag_holdback():
+                        buf = buf[-_tag_holdback():]
+                        cursor = 0
+                    break
+
+                # Emit safe content within current channel
+                safe_end = len(buf) if final else _safe_end_for_tags(buf, cursor)
+                if safe_end <= cursor:
+                    break
+                raw_slice = buf[cursor:safe_end]
+                raw_slice = _truncate_at_channel_tag(raw_slice)
+                holdback = 0 if final else _get_holdback_for_channel(current)
+                emit_now, _, needs_more = citations_module.split_safe_stream_prefix_with_holdback(
+                    raw_slice, holdback=holdback
+                )
+                if emit_now:
+                    await _emit_raw_slice(current, emit_now)
+                    cursor += len(emit_now)
+                if needs_more and not final:
+                    break
+                continue
+
+            # If we see a tag, emit content before it (if any)
+            tag_start = m_tag.start()
+            tag_end = m_tag.end()
+            if current is not None and tag_start > cursor:
+                raw_slice = buf[cursor:tag_start]
+                raw_slice = _truncate_at_channel_tag(raw_slice)
+                if raw_slice:
+                    await _emit_raw_slice(current, raw_slice)
+                cursor = tag_start
+
+            is_close, tag_name = _parse_tag(m_tag.group(0))
+            if tag_name is None:
+                cursor = tag_end
+                continue
+
+            # Skip close tags for other channels
+            if is_close and current != tag_name:
+                cursor = tag_end
+                continue
+
+            if is_close and current == tag_name:
+                await _flush_channel_citations(current)
+                cursor = tag_end
+                current = None
+                continue
+
+            # Opening a channel: switch to it (implicitly closes previous if any)
+            if not is_close:
+                if current is not None:
+                    await _flush_channel_citations(current)
+                current = tag_name
+                cursor = tag_end
+                continue
+
+            cursor = tag_end
+
     async def on_delta(piece: str):
-        nonlocal buf, emit_from, current
+        nonlocal buf
         piece = citations_module._strip_invisible(piece)
         if not piece:
             return
         buf += piece
-
-        while True:
-            if current is None:
-                m = OPEN_RE.search(buf, emit_from)
-                if not m:
-                    emit_from = _safe_end_for_tags(buf, emit_from)
-                    break
-                emit_from = m.end()
-                current = m.group(1)
-                continue
-
-            close_pat = re.compile(rf"</channel:{re.escape(current)}>", re.I)
-            m_close = close_pat.search(buf, emit_from)
-            if m_close:
-                raw_slice = buf[emit_from:m_close.start()]
-                if raw_slice:
-                    holdback = 0 if current in citation_states else 12
-                    emit_now, tail, needs_more = citations_module.split_safe_stream_prefix_with_holdback(
-                        raw_slice, holdback=holdback
-                    )
-                    if emit_now:
-                        if composite_streamer and current == composite_channel:
-                            await composite_streamer.feed(emit_now)
-                        raw_by_channel[current].append(emit_now)
-                        await _emit_channel(current, emit_now)
-                        emit_from += len(emit_now)
-                    if needs_more:
-                        break
-                await _flush_channel_citations(current)
-                emit_from = m_close.end()
-                current = None
-                continue
-
-            safe_end = _safe_end_for_tags(buf, emit_from)
-            if safe_end > emit_from:
-                raw_slice = buf[emit_from:safe_end]
-                holdback = 0 if current in citation_states else 12
-                emit_now, tail, needs_more = citations_module.split_safe_stream_prefix_with_holdback(
-                    raw_slice, holdback=holdback
-                )
-                if emit_now:
-                    if composite_streamer and current == composite_channel:
-                        await composite_streamer.feed(emit_now)
-                    raw_by_channel[current].append(emit_now)
-                    await _emit_channel(current, emit_now)
-                    emit_from += len(emit_now)
-                if needs_more:
-                    break
-            break
+        await _process_buffer(final=False)
 
     async def on_complete(_ret):
-        # Flush remaining buffered content
-        if current and emit_from < len(buf):
-            raw_slice = buf[emit_from:]
-            holdback = 0 if current in citation_states else 12
-            emit_now, _, _ = citations_module.split_safe_stream_prefix_with_holdback(raw_slice, holdback=holdback)
-            if emit_now:
-                if composite_streamer and current == composite_channel:
-                    await composite_streamer.feed(emit_now)
-                raw_by_channel[current].append(emit_now)
-                await _emit_channel(current, emit_now)
-            await _flush_channel_citations(current)
+        await _process_buffer(final=True)
+
         if composite_streamer:
             await composite_streamer.finish()
 
@@ -285,7 +359,7 @@ async def stream_with_channels(
     client = svc.get_client(role)
     cfg = svc.describe_client(client, role=role)
 
-    await svc.stream_model_text_tracked(
+    out = await svc.stream_model_text_tracked(
         client,
         messages,
         on_delta=on_delta,
@@ -298,6 +372,20 @@ async def stream_with_channels(
         debug_citations=True,
     )
 
+    # Fallback parsing on full raw text if a channel had no streamed content.
+    full_raw = out.get("text") or ""
+    if full_raw:
+        for name in channel_specs.keys():
+            if raw_by_channel.get(name):
+                continue
+            patt = re.compile(
+                rf"<channel:{re.escape(name)}>(.*?)</channel:{re.escape(name)}>",
+                re.I | re.S,
+                )
+            matches = patt.findall(full_raw)
+            if matches:
+                raw_by_channel[name] = [m for m in matches if m is not None]
+
     results: Dict[str, ChannelResult] = {}
     for name, spec in channel_specs.items():
         raw = "".join(raw_by_channel.get(name, []))
@@ -305,7 +393,7 @@ async def stream_with_channels(
         if spec.model and raw:
             try:
                 data = json.loads(raw)
-                obj = spec.model.parse_obj(data)
+                obj = spec.model.model_validate(data)
             except Exception:
                 logger.exception("Failed to parse channel %s into model %s", name, spec.model)
         results[name] = ChannelResult(
@@ -314,4 +402,16 @@ async def stream_with_channels(
             used_sources=sorted(used_by_channel.get(name, set())),
         )
 
+    if return_full_raw:
+        meta = {
+            "raw": full_raw,
+            "service_error": (out.get("service_error") or None),
+            "usage": out.get("usage") or {},
+            "model_name": out.get("model_name") or None,
+            "provider_message_id": out.get("provider_message_id") or None,
+            "thoughts": out.get("thoughts") or [],
+            "tool_calls": out.get("tool_calls") or [],
+            "citations": out.get("citations") or [],
+        }
+        return results, meta
     return results

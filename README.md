@@ -138,6 +138,7 @@ graph TD
 
 ### SDK & Runtime
 - SDK index: [SDK Index](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/SDK-index.md)
+- AI bundle SDK overview: [AI Bundle SDK](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/README-ai-bundle-sdk.md)
 - Tool subsystem: [Tool Subsystem](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool-subsystem-README.md)
 - Execution runtime (ops): [Execution Runtime Ops](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/execution/operations.md)
 - Isolated runtime: [Isolated Runtime](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-iso-runtime.md)
@@ -147,6 +148,8 @@ graph TD
 
 ### Bundles & Plugin System
 - Agentic bundles: [Bundle System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/plugin/README.md)
+- First AI bundle (minimal streaming): [First AI Bundle](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/first-ai-bundle-README.md)
+- Example bundles index: [Bundle Examples](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/README.md)
 
 ### Chat Subsystems
 - Comm integrations (REST/SSE/Socket.IO): [Comm Integrations](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/comm/README-comm.md)

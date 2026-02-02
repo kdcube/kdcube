@@ -32,7 +32,7 @@ If omitted and the bundle has `skills/` under its root, the bundle can pass that
 ## How it is wired
 
 1) Bundle provides descriptor (plugin side)
-   - Example: `kdcube_ai_app/apps/custom_apps/codegen/skills_descriptor.py`
+   - Example: `bundle_root/skills_descriptor.py`
    - The orchestrator passes this descriptor into `SolverSystem`.
 
 2) SolverSystem owns a `SkillsSubsystem`

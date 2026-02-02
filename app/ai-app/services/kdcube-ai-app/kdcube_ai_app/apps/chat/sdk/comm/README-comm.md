@@ -159,6 +159,45 @@ Conversation state:
 Typed UI cards:
 - carried as `chat_step` with `env.type` (e.g. `chat.followups`)
 
+## 6.1) Delta markers (bundle authors)
+
+Use `chat.delta` with a marker to control how the client renders the stream.
+Keep it simple unless you own the client UI.
+
+Recommended markers:
+- `thinking` — side-channel thoughts
+- `answer` — main assistant answer
+
+Supported by default in the platform:
+- `subsystem` — subsystem/widget stream
+- `canvas` — inline artifact/canvas stream
+- `timeline_text` — compact timeline entries
+
+Custom markers are allowed, but the client must know how to render them.
+See [comm-system.md](../../doc/comm-system.md) for the envelope details.
+
+### Examples (per marker)
+
+```python
+from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
+emit = AIBEmitters(self.comm)
+
+# thinking
+await emit.delta(text="Working it out…", index=0, marker="thinking", agent="gate")
+
+# answer
+await emit.delta(text="Here is the answer.", index=0, marker="answer", agent="answer.generator")
+
+# subsystem (widget stream)
+await emit.delta(text='{"status":"running"}', index=0, marker="subsystem", agent="tool.exec")
+
+# canvas (inline artifact stream)
+await emit.delta(text='{"type":"chart","data":{...}}', index=0, marker="canvas", agent="viz")
+
+# timeline_text (compact timeline entries)
+await emit.delta(text="Loaded 3 prior turns", index=0, marker="timeline_text", agent="orchestrator")
+```
+
 ---
 
 ## 7) Quick client integration checklist

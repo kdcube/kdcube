@@ -28,7 +28,6 @@ from kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage import AIBundleStorag
 
 # Loader decorators
 from kdcube_ai_app.infra.plugin.agentic_loader import (
-    agentic_initial_state,
     agentic_workflow,
 )
 from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters, DeltaPayload, StepPayload
@@ -915,7 +914,6 @@ FOLLOW-UP SUGGESTIONS (strict):
 # Initial state + Workflow
 # =========================
 
-@agentic_initial_state(name=f"{BUNDLE_ID}-initial-state", priority=200)
 def create_initial_state(payload: Dict[str, Any]):
     return {
         "messages": [],

@@ -39,215 +39,6 @@ CONV_START_FPS_TAG = "conv.start"
 ACTIVE_SET_KIND = "conversation.active_set.v1"
 ACTIVE_SET_TAG = "conv.state:conversation_state_v1"
 
-async def persist_single_artifact_message(
-        *,
-        store: ConversationStore,
-        conv_idx: ConvIndex,
-        bundle_id: str,
-        embed_fn: Optional[Callable[[List[str]], Any]] = None,
-        ttl_fn: Optional[Callable[[str, int], int]] = None,
-        attachment_summary_index_text_fn: Optional[Callable[[Dict[str, Any]], str]] = None,
-        tenant: str,
-        project: str,
-        user: str,
-        conversation_id: str,
-        user_type: str,
-        turn_id: str,
-        title: str,
-        kind: str,
-        payload: Dict[str, Any],
-        rid: str,
-        track_id: str,
-        payload_txt: Optional[str] = None,
-        codegen_run_id: Optional[str] = None,
-        extra_tags: Optional[List[str]] = None,
-        embed: Optional[bool] = None,
-        add_to_index: bool = True,
-        index_only: bool = False,
-) -> tuple[str, str]:
-    """
-    Persist a single artifact message and optionally index it.
-    """
-    def _short_val(v, n=160) -> str:
-        try:
-            s = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        except Exception:
-            s = str(v)
-        s = s.strip()
-        return s if len(s) <= n else s[: n - 1] + "…"
-
-    def _kv_preview(d: dict, limit: int = 8) -> str:
-        if not isinstance(d, dict):
-            return _short_val(d)
-        items = []
-        for i, (k, v) in enumerate(d.items()):
-            if i >= limit:
-                break
-            vv = _short_val(v, 120)
-            items.append(f"{k}={vv}")
-        return ", ".join(items)
-
-    def _files_section(files: List[dict], heading: str) -> List[str]:
-        lines = []
-        if not files:
-            return lines
-        lines.append(f"### {heading} ({len(files)})")
-        for f in files:
-            name = (f.get("filename") or f.get("path") or "").split("/")[-1]
-            mime = f.get("mime") or ""
-            desc = f.get("description") or ""
-            key = f.get("key") or f.get("hosted_uri") or f.get("path") or ""
-            parts = [name]
-            if mime:
-                parts.append(f"({mime})")
-            if desc:
-                parts.append(f"— {desc}")
-            if key:
-                parts.append(f"[path:{key}]")
-            lines.append(f"- {' '.join(parts)}")
-        return lines
-
-    def _make_payload_txt(kind: str, payload: Dict[str, Any], title: str) -> str:
-        """
-        Build a human-readable markdown body with a single '[kind]' header line.
-        """
-        lines: List[str] = [f"[{kind}]"]
-
-        if kind == "conv.user_shortcuts":
-            items = [str(x) for x in (payload.get("items") or [])]
-            lines.append("## Follow-up suggestions")
-            if items:
-                for s in items:
-                    lines.append(f"- {s}")
-            else:
-                lines.append("_none_")
-            return "\n".join(lines)
-
-        if kind == "conv.clarification_questions":
-            items = [str(x) for x in (payload.get("items") or [])]
-            lines.append("## Clarification questions")
-            if items:
-                for s in items:
-                    lines.append(f"- {s}")
-            else:
-                lines.append("_none_")
-            return "\n".join(lines)
-
-        if kind == "project.log":
-            md = payload.get("markdown") or ""
-            return (("\n".join(lines) + "\n") + (md.strip() or "## Project Log\n_No content_")).rstrip()
-
-        if kind == "solver.program.presentation":
-            md = payload.get("markdown") or ""
-            return (("\n".join(lines) + "\n") + (md.strip() or "## Program Presentation\n_No content_")).rstrip()
-
-        if kind == "solver.failure":
-            md = payload.get("markdown") or ""
-            return (("\n".join(lines) + "\n") + (md.strip() or "## Solver Failure\n_No content_")).rstrip()
-
-        lines.append(f"## {title or 'Artifact'}")
-        lines.append(json.dumps(payload, ensure_ascii=False))
-        return "\n".join(lines)
-
-    def _index_text(kind: str, payload: Dict[str, Any]) -> str:
-        if kind == "conv.user_shortcuts":
-            items = payload.get("items") or []
-            return "followups: " + " ; ".join([str(x) for x in items][:20])
-        if kind == "conv.clarification_questions":
-            items = payload.get("items") or []
-            return "clarification questions: " + " ; ".join([str(x) for x in items][:20])
-
-        if kind == "user.input.summary":
-            return (payload.get("summary") or "")[:4000]
-
-        if kind == "user.attachment":
-            if attachment_summary_index_text_fn:
-                return attachment_summary_index_text_fn(payload)
-            return str(payload)[:1000]
-
-        if kind == "project.log":
-            return payload.get("markdown") or ""
-
-        if kind == "solver.program.presentation":
-            return payload.get("markdown") or ""
-
-        if kind == "solver.failure":
-            return payload.get("markdown") or ""
-
-        return str(payload)[:1000]
-
-    if payload_txt:
-        text_body = payload_txt if payload_txt.startswith("[") else f"[{kind}]\n{payload_txt}"
-    else:
-        text_body = _make_payload_txt(kind, payload, title)
-
-    emb = None
-    if embed_fn:
-        try:
-            if embed is True:
-                [emb] = await embed_fn([_index_text(kind, payload)])
-            elif embed is False:
-                emb = None
-            else:
-                default_embed = kind in ("solver.program.presentation", "project.log", "solver.failure")
-                if default_embed:
-                    [emb] = await embed_fn([_index_text(kind, payload)])
-        except Exception:
-            emb = None
-
-    meta = {"title": title, "kind": kind, "turn_id": turn_id, "request_id": rid, "track_id": track_id}
-
-    if index_only:
-        uri = "index_only"
-        mid = f"index_only:{kind}:{turn_id}:{track_id}"
-    else:
-        uri, mid, rn = await store.put_message(
-            tenant=tenant,
-            project=project,
-            user=user,
-            fingerprint=None,
-            conversation_id=conversation_id,
-            bundle_id=bundle_id,
-            role="artifact",
-            user_type=user_type,
-            id=kind,
-            turn_id=turn_id,
-            payload=payload,
-            text=text_body,
-            meta=meta,
-            track_id=track_id,
-        )
-
-    a_tag = lambda item: f"artifact:{item}" if not item.startswith("artifact:") else item
-    tags = [a_tag(kind), f"track:{track_id}", f"turn:{turn_id}"]
-    if codegen_run_id:
-        tags.append(f"codegen_run:{codegen_run_id}")
-    if extra_tags:
-        for t in extra_tags:
-            if t and t not in tags:
-                tags.append(t)
-
-    if add_to_index:
-        ttl_days = ttl_fn(user_type, 365) if ttl_fn else 365
-        await conv_idx.add_message(
-            user_id=user,
-            conversation_id=conversation_id,
-            bundle_id=bundle_id,
-            turn_id=turn_id,
-            role="artifact",
-            user_type=user_type,
-            text=text_body,
-            hosted_uri=uri,
-            ts=datetime.datetime.utcnow().isoformat() + "Z",
-            tags=tags,
-            ttl_days=ttl_days,
-            embedding=emb,
-            message_id=mid,
-            track_id=track_id,
-        )
-
-    return uri, mid
-
 class ContextRAGClient:
     def __init__(self, *,
                  conv_idx: ConvIndex,
@@ -563,7 +354,7 @@ class ContextRAGClient:
             payload: Optional[Dict[str, Any]] = None,
             extra_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
-        """Writes markdown to store (assistant artifact) + indexes it."""
+        """Writes artifact to store and/or index (see index_only/store_only flags)."""
         md = log.to_markdown()
         # payload = {"turn_log": log.to_payload(), **(payload or {})}
 
@@ -1706,11 +1497,21 @@ class ContextRAGClient:
             turn_id: str, track_id: Optional[str],
             content: dict,
             content_str: Optional[str] = None,
+            meta: Optional[Dict[str, Any]] = None,
             extra_tags: Optional[List[str]] = None,
             bundle_id: Optional[str] = None,
             index_only: bool = False,
+            store_only: bool = False,
+            embedding: Optional[List[float]] = None,
+            ttl_days: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Writes markdown to store (assistant artifact) + indexes it."""
+        """Writes artifact to store and/or index.
+
+        Notes:
+          - content_str is the text persisted into the index row (conv_messages.text).
+          - index_only=True  => skip blob store, write index only (hosted_uri="index_only").
+          - store_only=True  => write blob store only, skip index row.
+        """
 
         artifact_tag = f"artifact:{kind}" if not kind.startswith("artifact:") else kind
         tags = [f"turn:{turn_id}", artifact_tag] + ([f"track:{track_id}"] if track_id else [])
@@ -1718,10 +1519,15 @@ class ContextRAGClient:
             content_str = json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else str(content)
         if extra_tags:
             tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
+        if index_only and store_only:
+            raise ValueError("save_artifact: index_only and store_only cannot both be True.")
         hosted_uri = None
         message_id = None
         rn = None
         if not index_only:
+            base_meta = {"kind": kind, "turn_id": turn_id, "track_id": track_id}
+            if meta:
+                base_meta.update({k: v for k, v in meta.items() if v is not None})
             hosted_uri, message_id, rn = await self.store.put_message(
                 tenant=tenant, project=project, user=user_id, fingerprint=None,
                 conversation_id=conversation_id,
@@ -1730,18 +1536,20 @@ class ContextRAGClient:
                 text=content_str,
                 id=kind,
                 payload=content,
-                meta={"kind": kind, "turn_id": turn_id, "track_id": track_id},
+                meta=base_meta,
                 embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
             )
         else:
             hosted_uri = "index_only"
-        await self.idx.add_message(
-            user_id=user_id, conversation_id=conversation_id, turn_id=turn_id,
-            bundle_id=bundle_id, role="artifact",
-            text=content_str, hosted_uri=hosted_uri, ts=datetime.datetime.utcnow().isoformat()+"Z",
-            tags=tags,
-            ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
-        )
+        if not store_only:
+            ttl_days = int(ttl_days or 365)
+            await self.idx.add_message(
+                user_id=user_id, conversation_id=conversation_id, turn_id=turn_id,
+                bundle_id=bundle_id, role="artifact",
+                text=content_str, hosted_uri=hosted_uri, ts=datetime.datetime.utcnow().isoformat()+"Z",
+                tags=tags,
+                ttl_days=ttl_days, user_type=user_type, embedding=embedding, message_id=message_id, track_id=track_id
+            )
         return {"hosted_uri": hosted_uri, "message_id": message_id, "rn": rn}
 
     async def _find_latest_artifact_by_tags(
@@ -2378,8 +2186,6 @@ class ContextRAGClient:
             "conversation_title": conversation_title,
             "turns": [turns_map[tid] for tid in order],
         }
-
-
 
     async def get_conversation_state(self, *, user_id: str, conversation_id: str) -> dict:
         row = await self.idx.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
