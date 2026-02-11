@@ -544,23 +544,7 @@ def apply_cache_ttl_pruning(
 
     all_turns = _recent_turn_ids(blocks, len(blocks) or 0)
     turn_count = len(all_turns)
-    if ttl_seconds and keep_recent_turns and turn_count and keep_recent_turns >= turn_count:
-        timeline.cache_last_touch_at = now
-        try:
-            logger.info(
-                "[cache_ttl_prune] ttl=%ss buffer=%ss last_touch=%s now=%s "
-                "blocks=%s turns=%s keep_recent_turns=%s >= turns, skipping prune",
-                int(ttl_seconds or 0),
-                int(buffer_seconds or 0),
-                last_touch_val,
-                now,
-                len(blocks),
-                turn_count,
-                int(keep_recent_turns or 0),
-            )
-        except Exception:
-            pass
-        return {"status": "skipped"}
+    skip_old_turns = bool(ttl_seconds and keep_recent_turns and turn_count and keep_recent_turns >= turn_count)
 
     def _estimate_blocks_tokens_safe(b: List[Dict[str, Any]]) -> int:
         try:
@@ -580,6 +564,21 @@ def apply_cache_ttl_pruning(
 
     before_blocks = len(blocks)
     before_tokens = _estimate_blocks_tokens_safe(blocks)
+    if skip_old_turns:
+        try:
+            logger.info(
+                "[cache_ttl_prune] ttl=%ss buffer=%ss last_touch=%s now=%s "
+                "blocks=%s turns=%s keep_recent_turns=%s >= turns, skipping old-turn pruning",
+                int(ttl_seconds or 0),
+                int(buffer_seconds or 0),
+                last_touch_val,
+                now,
+                len(blocks),
+                turn_count,
+                int(keep_recent_turns or 0),
+            )
+        except Exception:
+            pass
 
     recent_turns = _recent_turn_ids(blocks, keep_recent_turns)
     intact_turns = _recent_turn_ids(blocks, keep_recent_intact_turns)
@@ -641,6 +640,8 @@ def apply_cache_ttl_pruning(
         if not path or path in path_replacements:
             continue
         turn_id = _extract_turn_id(blk)
+        if skip_old_turns:
+            break
         if turn_id and turn_id in recent_turns:
             continue
 
@@ -668,12 +669,13 @@ def apply_cache_ttl_pruning(
         path_replacements[path] = rep
 
     hidden_paths: List[str] = []
-    for path, rep in path_replacements.items():
-        try:
-            timeline.hide_paths([path], rep)
-            hidden_paths.append(path)
-        except Exception:
-            pass
+    if not skip_old_turns:
+        for path, rep in path_replacements.items():
+            try:
+                timeline.hide_paths([path], rep)
+                hidden_paths.append(path)
+            except Exception:
+                pass
 
     hidden_recent_paths: set[str] = set()
 
@@ -689,8 +691,9 @@ def apply_cache_ttl_pruning(
         if not path:
             continue
         turn_id = _extract_turn_id(blk)
-        if turn_id and turn_id not in recent_turns:
-            continue
+        if not skip_old_turns:
+            if turn_id and turn_id not in recent_turns:
+                continue
         if turn_id and turn_id in intact_turns:
             continue
 
@@ -767,7 +770,8 @@ def apply_cache_ttl_pruning(
     try:
         logger.info(
             "[cache_ttl_prune] ttl=%ss buffer=%ss last_touch=%s now=%s "
-            "blocks=%s->%s tokens=%s->%s hidden_paths=%s keep_recent_turns=%s keep_intact=%s",
+            "blocks=%s->%s tokens=%s->%s hidden_paths=%s hidden_recent=%s "
+            "keep_recent_turns=%s keep_intact=%s skip_old_turns=%s",
             int(ttl_seconds or 0),
             int(buffer_seconds or 0),
             last_touch_val,
@@ -777,13 +781,16 @@ def apply_cache_ttl_pruning(
             before_tokens,
             after_tokens,
             len(hidden_paths),
+            len(hidden_recent_paths),
             int(keep_recent_turns or 0),
             int(keep_recent_intact_turns or 0),
+            bool(skip_old_turns),
         )
     except Exception:
         pass
     return {
-        "status": "pruned",
+        "status": "pruned_light" if skip_old_turns else "pruned",
         "hidden_paths": hidden_paths,
+        "skip_old_turns": bool(skip_old_turns),
         "truncated_blocks": 0,
     }

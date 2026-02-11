@@ -20,6 +20,7 @@ This document describes how the session view is derived from the timeline when c
 - If TTL has expired, pruning is applied before rendering:
 - Blocks older than the last N turns are hidden by path with a replacement text.
 - Blocks inside the last N turns remain visible, except oversized binary artifacts (images/PDFs) which may be hidden unless in the intact window.
+- If `keep_recent_turns` covers all turns, old-turn pruning is skipped, but lightweight artifact pruning still applies inside the recent window.
 - The most recent M turns are guaranteed intact (no pruning).
 - Hidden blocks keep a short replacement text (no per-block `react.read` hint).
 - User/assistant blocks are eligible for pruning when they are older than `keep_recent_turns` (they remain intact in the recent windows).
