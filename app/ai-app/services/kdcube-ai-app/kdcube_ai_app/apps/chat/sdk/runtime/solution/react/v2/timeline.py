@@ -63,6 +63,8 @@ def build_timeline_payload(
     sources_pool: Optional[List[Dict[str, Any]]] = None,
     conversation_title: Optional[str] = None,
     conversation_started_at: Optional[str] = None,
+    cache_last_touch_at: Optional[int] = None,
+    cache_last_ttl_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     return {
         "version": 1,
@@ -72,6 +74,8 @@ def build_timeline_payload(
         "turn_ids": extract_turn_ids_from_blocks(blocks or []),
         "conversation_title": conversation_title or "",
         "conversation_started_at": conversation_started_at or "",
+        "cache_last_touch_at": cache_last_touch_at,
+        "cache_last_ttl_seconds": cache_last_ttl_seconds,
     }
 
 
@@ -87,6 +91,18 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     turn_ids = payload.get("turn_ids")
     if not isinstance(turn_ids, list) or not turn_ids:
         turn_ids = extract_turn_ids_from_blocks(blocks)
+    cache_last_touch_at = payload.get("cache_last_touch_at")
+    if cache_last_touch_at is not None:
+        try:
+            cache_last_touch_at = int(cache_last_touch_at)
+        except Exception:
+            cache_last_touch_at = None
+    cache_last_ttl_seconds = payload.get("cache_last_ttl_seconds")
+    if cache_last_ttl_seconds is not None:
+        try:
+            cache_last_ttl_seconds = int(cache_last_ttl_seconds)
+        except Exception:
+            cache_last_ttl_seconds = None
     return {
         "blocks": blocks,
         "sources_pool": sources_pool,
@@ -95,6 +111,8 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "version": payload.get("version", 1),
         "conversation_title": payload.get("conversation_title") or "",
         "conversation_started_at": payload.get("conversation_started_at") or "",
+        "cache_last_touch_at": cache_last_touch_at,
+        "cache_last_ttl_seconds": cache_last_ttl_seconds,
     }
 
 
@@ -500,6 +518,7 @@ class Timeline:
     svc: Optional[Any] = None
     _lock: Optional["asyncio.Lock"] = field(default=None, init=False, repr=False)
     _cache_trace_prev: Optional[Dict[str, Any]] = field(default=None, init=False, repr=False)
+    _cache_ttl_bootstrap: bool = field(default=False, init=False, repr=False)
     version: int = 1
     ts: str = ""
     blocks: List[Dict[str, Any]] = None
@@ -508,6 +527,8 @@ class Timeline:
     current_turn_offset: Optional[int] = None
     conversation_title: str = ""
     conversation_started_at: str = ""
+    cache_last_touch_at: Optional[int] = None
+    cache_last_ttl_seconds: Optional[int] = None
 
     def __post_init__(self) -> None:
         self.blocks = list(self.blocks or [])
@@ -521,6 +542,7 @@ class Timeline:
                 self._lock = asyncio.Lock()
             except Exception:
                 self._lock = None
+        self._cache_ttl_bootstrap = self.cache_last_ttl_seconds is not None
 
     @classmethod
     def from_payload(cls, payload: Dict[str, Any], *, runtime: RuntimeCtx, svc: Optional[Any] = None) -> "Timeline":
@@ -534,6 +556,8 @@ class Timeline:
             sources_pool=list(parsed.get("sources_pool") or []),
             conversation_title=str(parsed.get("conversation_title") or ""),
             conversation_started_at=str(parsed.get("conversation_started_at") or ""),
+            cache_last_touch_at=parsed.get("cache_last_touch_at"),
+            cache_last_ttl_seconds=parsed.get("cache_last_ttl_seconds"),
         )
 
     def to_payload(self) -> Dict[str, Any]:
@@ -542,6 +566,8 @@ class Timeline:
             sources_pool=list(self.sources_pool or []),
             conversation_title=self.conversation_title,
             conversation_started_at=self.conversation_started_at,
+            cache_last_touch_at=self.cache_last_touch_at,
+            cache_last_ttl_seconds=self.cache_last_ttl_seconds,
         )
 
     def _blocks_for_persist(self) -> List[Dict[str, Any]]:
@@ -563,6 +589,8 @@ class Timeline:
                 sources_pool=list(self.sources_pool or []),
                 conversation_title=self.conversation_title,
                 conversation_started_at=self.conversation_started_at,
+                cache_last_touch_at=self.cache_last_touch_at,
+                cache_last_ttl_seconds=self.cache_last_ttl_seconds,
             )
             out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -1342,6 +1370,7 @@ class Timeline:
     ) -> List[Dict[str, Any]]:
         if debug_cache_trace and not debug_log and not debug_print:
             debug_print = True
+        self.apply_session_cache_ttl_pruning()
         blocks = self._collect_blocks()
         if self.runtime.max_tokens:
             before_tokens = None
@@ -1408,6 +1437,44 @@ class Timeline:
         blocks = self._apply_hidden_replacements(blocks)
         self._apply_cache_markers(blocks, cache_last=cache_last)
         return blocks
+
+    def apply_session_cache_ttl_pruning(self) -> Dict[str, Any]:
+        session = getattr(self.runtime, "session", None)
+        runtime_ttl: Optional[int] = getattr(session, "cache_ttl_seconds", None)
+        if runtime_ttl is None:
+            runtime_ttl = self.runtime.cache_ttl_seconds
+        ttl_seconds: Optional[int]
+        if self._cache_ttl_bootstrap and self.cache_last_ttl_seconds is not None:
+            # First render after load: use the previously stored TTL for pruning.
+            ttl_seconds = self.cache_last_ttl_seconds
+        else:
+            ttl_seconds = runtime_ttl if runtime_ttl is not None else self.cache_last_ttl_seconds
+        self._cache_ttl_bootstrap = False
+        buffer_seconds = getattr(session, "cache_ttl_prune_buffer_seconds", 0) if session is not None else 0
+        if not ttl_seconds:
+            return {"status": "disabled"}
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.session import (
+                apply_cache_ttl_pruning,
+            )
+            keep_recent_turns = getattr(session, "keep_recent_turns", 10) if session is not None else 10
+            keep_recent_intact_turns = (
+                getattr(session, "keep_recent_intact_turns", 2) if session is not None else 2
+            )
+            res = apply_cache_ttl_pruning(
+                timeline=self,
+                ttl_seconds=int(ttl_seconds or 0),
+                buffer_seconds=int(buffer_seconds or 0),
+                keep_recent_turns=int(keep_recent_turns or 0),
+                keep_recent_intact_turns=int(keep_recent_intact_turns or 0),
+            )
+            if runtime_ttl is not None and runtime_ttl != ttl_seconds:
+                # After the first render, sync TTL to the current runtime setting.
+                self.cache_last_ttl_seconds = runtime_ttl
+            return res
+        except Exception:
+            return {"status": "error"}
+
 
     def _apply_cache_markers(self, blocks: List[Dict[str, Any]], *, cache_last: bool) -> None:
         if not blocks:
@@ -1584,6 +1651,13 @@ class Timeline:
                 if path:
                     prefix += f"\n[path: {path}]"
                 text = (prefix + "\n" + (text or "")).strip()
+            elif btype == "system.message":
+                prefix = f"[SYSTEM MESSAGE]"
+                if ts:
+                    prefix += f"\n[ts: {ts}]"
+                if path:
+                    prefix += f"\n[path: {path}]"
+                text = (prefix + "\n" + (text or "")).strip()
             elif btype == "user.attachment.meta":
                 name = (meta.get("filename") or "").strip() or _attachment_name_from_path(path)
                 mime = (meta.get("mime") or "").strip()
@@ -1683,6 +1757,8 @@ class Timeline:
             sources_pool=list(self.sources_pool or []),
             conversation_title=self.conversation_title,
             conversation_started_at=self.conversation_started_at,
+            cache_last_touch_at=self.cache_last_touch_at,
+            cache_last_ttl_seconds=self.cache_last_ttl_seconds,
         )
         turn_ids = payload.get("turn_ids") or []
         extra_tags = [f"turn:{tid}" for tid in turn_ids if isinstance(tid, str) and tid]

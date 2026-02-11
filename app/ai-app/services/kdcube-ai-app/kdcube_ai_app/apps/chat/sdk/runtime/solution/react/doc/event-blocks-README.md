@@ -26,6 +26,7 @@ Blocks are dicts with:
 - `react.completion`
 - `react.plan.ack`
 - `conv.range.summary` (summary of earlier turns)
+- `system.message` (system notices persisted in the timeline)
 - `stage.gate`
 - `stage.coordinator`
 - `stage.feedback`
@@ -77,6 +78,26 @@ with `[P]` / `[D]` / `[S]` per the shared instruction.
 Summary blocks include:
 - `type`: `conv.range.summary`
 - `meta.covered_turn_ids`: list of turn ids summarized
+
+## System messages
+`system.message` blocks are persisted system notices that should be rendered in the model context.
+
+Cache TTL pruning emits:
+- `type`: `system.message`
+- `meta.kind`: `cache_ttl_pruned`
+- `meta.ttl_seconds`: TTL that triggered pruning
+
+Example:
+```json
+{
+  "type": "system.message",
+  "author": "system",
+  "turn_id": "turn_123",
+  "path": "ar:turn_123.system.message.cache_pruned",
+  "text": "[SYSTEM MESSAGE] Context was pruned because the session TTL (1800s) was exceeded. ...",
+  "meta": {"kind": "cache_ttl_pruned", "ttl_seconds": 1800}
+}
+```
 
 ## Hidden blocks (memory_hide)
 Blocks can be hidden with `react.memory_hide(path, replacement_text)`:

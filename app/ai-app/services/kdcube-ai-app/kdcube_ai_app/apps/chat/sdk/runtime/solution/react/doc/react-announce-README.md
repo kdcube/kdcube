@@ -8,6 +8,7 @@ This doc describes how the **announce** block is used for ReAct v2.
   - iteration
   - current plan with status markers
   - authoritative temporal context (UTC + user timezone)
+  - optional system notices (e.g., cache TTL pruning)
 
 ## Where it appears
 - It is appended at the end of the timeline when `timeline(include_announce=True)` is called.
@@ -17,6 +18,11 @@ This doc describes how the **announce** block is used for ReAct v2.
 - During the loop: updated each round with a fresh ANNOUNCE.
 - On exit: the final announce block is **persisted** into the turn log blocks,
   then announce is cleared.
+
+## System messages in announce
+When cache TTL pruning occurs, the render path appends a one-time announce block
+containing a system notice. It appears after the budget section and advises
+the agent to use `react.read(path)` to restore truncated context.
 
 ## Why it exists
 - Keeps high‑frequency state updates out of the cached timeline.

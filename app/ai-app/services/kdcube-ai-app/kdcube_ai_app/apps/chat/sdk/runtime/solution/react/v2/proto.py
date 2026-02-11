@@ -9,6 +9,37 @@ from typing import Any, Dict, Optional, List, Callable, Awaitable
 
 
 @dataclass
+class RuntimeSessionConfig:
+    # Cache TTL pruning (prompt cache)
+    cache_ttl_seconds: Optional[int] = None
+    cache_ttl_prune_buffer_seconds: int = 0
+    cache_truncation_max_text_chars: int = 4000
+    cache_truncation_max_field_chars: int = 1000
+    cache_truncation_max_list_items: int = 50
+    cache_truncation_max_dict_keys: int = 80
+    cache_truncation_max_base64_chars: int = 4000
+    cache_truncation_keep_recent_images: int = 2
+    cache_truncation_max_image_pdf_b64_sum: int = 1_000_000
+    keep_recent_turns: int = 10
+    keep_recent_intact_turns: int = 2
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "cache_ttl_seconds": self.cache_ttl_seconds,
+            "cache_ttl_prune_buffer_seconds": self.cache_ttl_prune_buffer_seconds,
+            "cache_truncation_max_text_chars": self.cache_truncation_max_text_chars,
+            "cache_truncation_max_field_chars": self.cache_truncation_max_field_chars,
+            "cache_truncation_max_list_items": self.cache_truncation_max_list_items,
+            "cache_truncation_max_dict_keys": self.cache_truncation_max_dict_keys,
+            "cache_truncation_max_base64_chars": self.cache_truncation_max_base64_chars,
+            "cache_truncation_keep_recent_images": self.cache_truncation_keep_recent_images,
+            "cache_truncation_max_image_pdf_b64_sum": self.cache_truncation_max_image_pdf_b64_sum,
+            "keep_recent_turns": self.keep_recent_turns,
+            "keep_recent_intact_turns": self.keep_recent_intact_turns,
+        }
+
+
+@dataclass
 class RuntimeCtx:
     tenant: Optional[str] = None
     project: Optional[str] = None
@@ -29,6 +60,16 @@ class RuntimeCtx:
     started_at: Optional[str] = ""
     debug_log_announce: bool = True
     debug_log_sources_pool: bool = False
+    session: RuntimeSessionConfig = field(default_factory=RuntimeSessionConfig)
+    # Legacy cache fields (prefer RuntimeCtx.session).
+    cache_ttl_seconds: Optional[int] = None
+    cache_truncation_max_text_chars: Optional[int] = None
+    cache_truncation_max_field_chars: Optional[int] = None
+    cache_truncation_max_list_items: Optional[int] = None
+    cache_truncation_max_dict_keys: Optional[int] = None
+    cache_truncation_max_base64_chars: Optional[int] = None
+    cache_truncation_keep_recent_images: Optional[int] = None
+    cache_truncation_max_image_pdf_b64_sum: Optional[int] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -47,6 +88,15 @@ class RuntimeCtx:
             "started_at": self.started_at,
             "debug_log_announce": bool(self.debug_log_announce),
             "debug_log_sources_pool": bool(self.debug_log_sources_pool),
+            "session": self.session.to_dict() if self.session else {},
+            "cache_ttl_seconds": self.cache_ttl_seconds,
+            "cache_truncation_max_text_chars": self.cache_truncation_max_text_chars,
+            "cache_truncation_max_field_chars": self.cache_truncation_max_field_chars,
+            "cache_truncation_max_list_items": self.cache_truncation_max_list_items,
+            "cache_truncation_max_dict_keys": self.cache_truncation_max_dict_keys,
+            "cache_truncation_max_base64_chars": self.cache_truncation_max_base64_chars,
+            "cache_truncation_keep_recent_images": self.cache_truncation_keep_recent_images,
+            "cache_truncation_max_image_pdf_b64_sum": self.cache_truncation_max_image_pdf_b64_sum,
         }
 
 
@@ -172,3 +222,33 @@ class ReactStateSnapshot:
             plan_status=dict(state.get("plan_status") or {}),
             plans=plans,
         )
+
+
+class ToolCallView:
+    """
+    Base class for tool call/result truncation views.
+    Subclasses should override build_call_replacement/build_result_replacement.
+    """
+    tool_id: str = ""
+
+    def __init__(self, tool_id: Optional[str] = None) -> None:
+        if tool_id:
+            self.tool_id = tool_id
+
+    def build_call_replacement(
+        self,
+        *,
+        tool_call_block: Dict[str, Any],
+        payload: Dict[str, Any],
+        cfg: Optional[Any] = None,
+    ) -> str:
+        raise NotImplementedError
+
+    def build_result_replacement(
+        self,
+        *,
+        tool_result_block: Dict[str, Any],
+        payload: Any,
+        cfg: Optional[Any] = None,
+    ) -> str:
+        raise NotImplementedError

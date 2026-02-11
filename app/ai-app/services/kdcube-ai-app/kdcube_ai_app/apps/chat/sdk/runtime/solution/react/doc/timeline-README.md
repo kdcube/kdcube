@@ -18,7 +18,9 @@ It is persisted as a single artifact: `artifact:conv.timeline.v1`.
   "sources_pool": [ ... ],
   "turn_ids": ["turn_...","turn_..."],
   "conversation_title": "...",
-  "conversation_started_at": "..."
+  "conversation_started_at": "...",
+  "cache_last_touch_at": 1739078400,
+  "cache_last_ttl_seconds": 1800
 }
 ```
 
@@ -31,13 +33,19 @@ It is persisted as a single artifact: `artifact:conv.timeline.v1`.
 ### Persistence behavior
 If compaction occurred, the persisted timeline contains **only the post‑summary window** (summary + following blocks).
 
+### Compaction
+When the visible window exceeds the model budget, the timeline compacts earlier blocks into a single summary:
+- A `conv.range.summary` block is inserted at the cut point.
+- The compacted blocks before the summary are removed from the persisted payload.
+- Future renders start from the most recent summary block onward.
+
 ## Block ordering (schematic)
 ```
 [TURN <id> header]
   user.prompt
   user.attachment.meta
   user.attachment (optional binary)
-  stage.gate / stage.coordinator / stage.react / ...
+  stage.gate [optional] / stage.react / ...
   react.tool.call / react.tool.result / ...
   assistant.completion
 
@@ -51,6 +59,34 @@ Timeline uses two cache checkpoints (see `context-caching-README.md`):
 - **checkpoint 2** (tail)
 
 Cache points are inserted when rendering the message blocks, not stored in timeline payload.
+
+## Cache TTL pruning
+When `RuntimeCtx.session.cache_ttl_seconds` is set, the timeline applies TTL-based pruning on render:
+- `cache_last_touch_at` and `cache_last_ttl_seconds` are stored in the timeline payload.
+- On the **first render** after loading a timeline, the stored TTL is used if present.
+- Subsequent renders use the runtime session settings.
+- A prune buffer (`cache_ttl_prune_buffer_seconds`) can force pruning *before* the TTL expires.
+- When pruning occurs, a one-time announce block is injected (after budget), and a
+  persistent `system.message` block is appended to the timeline to explain how to
+  restore paths via `react.read(path)`. Hidden replacement blocks do **not**
+  include per-block hints.
+
+### Pruned view (schematic)
+```
+[TURN turn_...]
+  [TRUNCATED] user prompt snippet...
+  [TRUNCATED FILE] path=fi:turn_... mime=image/png size=...
+  [TRUNCATED] tool result summary...
+
+[TURN turn_...]
+  user.prompt
+  react.tool.call
+  react.tool.result
+  assistant.completion
+
+[SYSTEM MESSAGE] Context was pruned because the session TTL (300s) was exceeded.
+Use react.read(path) to restore a logical path (fi:/ar:/so:/sk:).
+```
 
 ## Concurrency / locking
 - `contribute_async`, `render`, and `persist` are guarded by an internal async lock.
@@ -97,3 +133,6 @@ See `event-blocks-README.md` for concrete block examples.
   - `react.plan.ack` (human‑readable ack lines)
 - Active plan is derived at render time by scanning the latest `react.plan` block.
 - `react.plan.active` is **announced** (ephemeral), not persisted.
+
+Note that what makes the timeline a cache hit is the combination of system message and the messages build based on timeline contents.
+Agents with a different system message consuming the same timeline won't get cache hit and will have 2 separate caches.
