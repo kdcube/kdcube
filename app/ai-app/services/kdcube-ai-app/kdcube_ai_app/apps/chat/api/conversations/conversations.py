@@ -399,15 +399,12 @@ async def submit_turn_feedback(
 
         spec_resolved = resolve_bundle(None, override=None)
         bundle_id = spec_resolved.id
-        track_id = "A"
-
         # CASE 1: Clear feedback (reaction is null)
         if req.reaction is None:
             removed = await router.state.conversation_browser.remove_user_reaction(
                 turn_id=turn_id,
                 user_id=session.user_id,
-                conversation_id=conversation_id,
-                track_id=track_id
+                conversation_id=conversation_id
             )
             # Also scrub mirrored entries from turn log
             spec_resolved = resolve_bundle(None, override=None)
@@ -418,7 +415,6 @@ async def submit_turn_feedback(
                 user=session.user_id,
                 user_type=user_type.value,
                 conversation_id=conversation_id,
-                track_id=track_id,
                 turn_id=turn_id,
                 bundle_id=bundle_id,
             )
@@ -467,7 +463,6 @@ async def submit_turn_feedback(
             fingerprint=None,
             user_type=user_type.value,
             conversation_id=conversation_id,
-            track_id=track_id,
             bundle_id=bundle_id,
             origin="user",
         )
@@ -479,7 +474,6 @@ async def submit_turn_feedback(
             user=session.user_id,
             user_type=user_type.value,
             conversation_id=conversation_id,
-            track_id=track_id,
             turn_id=turn_id,
             bundle_id=bundle_id,
             feedback={

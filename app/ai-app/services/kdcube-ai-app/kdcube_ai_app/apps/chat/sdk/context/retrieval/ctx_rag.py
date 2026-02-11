@@ -7,13 +7,15 @@ from __future__ import annotations
 
 import datetime, traceback, logging
 import pathlib, json, asyncio
-from typing import Optional, Sequence, List, Dict, Any, Union, Callable, Awaitable
+from typing import Optional, Sequence, List, Dict, Any, Union, Callable
 
-from kdcube_ai_app.apps.chat.sdk.storage.rn import rn_file_from_file_path
 from kdcube_ai_app.apps.chat.sdk.util import _turn_id_from_tags_safe
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
-from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnLog
-import kdcube_ai_app.apps.chat.sdk.tools.citations as md_utils
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import (
+    TIMELINE_KIND,
+    parse_timeline_payload,
+)
+import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
 
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore, MAX_CONCURRENT_ARTIFACT_FETCHES
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
@@ -36,41 +38,54 @@ SOURCES_POOL_ARTIFACT_TAG = "artifact:conv:sources_pool"
 
 FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
 CONV_START_FPS_TAG = "conv.start"
-ACTIVE_SET_KIND = "conversation.active_set.v1"
-ACTIVE_SET_TAG = "conv.state:conversation_state_v1"
+TURNS_SUMMARY_TAG = "conv.range.summary"
+
+def unwrap_payload(p: dict) -> dict:
+    """
+    Accepts either a raw payload dict or a message record dict (with a 'payload' field)
+    and returns the payload content. If the payload itself is another message record
+    (legacy double-wrap), unwrap one extra level.
+    """
+    if not isinstance(p, dict):
+        return {}
+
+    def _looks_like_record(d: dict) -> bool:
+        if not isinstance(d, dict):
+            return False
+        # Message records have a payload plus at least one of these fields.
+        return "payload" in d and any(k in d for k in ("role", "meta", "text", "timestamp", "message_id"))
+
+    cur = p
+    if _looks_like_record(cur):
+        cur = cur.get("payload") or {}
+    # Handle legacy double-wrapped payloads
+    if _looks_like_record(cur):
+        cur = cur.get("payload") or {}
+    return cur or {}
 
 class ContextRAGClient:
     def __init__(self, *,
                  conv_idx: ConvIndex,
                  store: ConversationStore,
-                 model_service: ModelServiceBase,
-                 default_ctx_path: Optional[str] = None):
+                 model_service: ModelServiceBase):
         self.idx = conv_idx
         self.store = store
         self.model_service = model_service
-        self.default_ctx_path = default_ctx_path or "context.json"
 
     def _load_ctx(self, ctx: Optional[dict]) -> dict:
         if ctx is not None:
             return ctx
-        p = pathlib.Path(self.default_ctx_path)
-        if p.exists():
-            try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                pass
         from kdcube_ai_app.infra.accounting import _get_context
         context = _get_context()
         context_snapshot = context.to_dict()
         return context_snapshot
 
     def _scope_from_ctx(self, ctx: dict, *,
-                        user_id=None, conversation_id=None, track_id=None, turn_id=None, bundle_id=None) -> tuple[str, Optional[str], Optional[str], Optional[str]]:
+                        user_id=None, conversation_id=None, turn_id=None, bundle_id=None) -> tuple[str, Optional[str], Optional[str]]:
         user = user_id or ctx.get("user_id")
         conv = conversation_id or ctx.get("conversation_id")
-        track = track_id or ctx.get("track_id")
         bundle = bundle_id or ctx.get("bundle_id") or ctx.get("app_bundle_id")
-        return user, conv, track, bundle
+        return user, conv, bundle
 
     async def _materialize_payloads_for_items(
             self,
@@ -160,6 +175,27 @@ class ContextRAGClient:
             return False
 
         kind = meta.get("kind")
+        if kind == "conv.timeline_text.stream":
+            try:
+                items = payload.get("items") if isinstance(payload, dict) else None
+                if isinstance(items, list) and items:
+                    # TODO: remove this filter once timeline channels are persisted directly (no stream duplication).
+                    if items[-1].get("artifact_name", "").startswith("react.final_answer."):
+                        items = list(items[:-1])
+                    payload["items"] = items
+                text_val = data.get("text")
+                if isinstance(text_val, str) and text_val.strip():
+                    try:
+                        idx_items = json.loads(text_val)
+                        if isinstance(idx_items, list) and idx_items:
+                            # TODO: remove this filter once timeline channels are persisted directly (no stream duplication).
+                            if idx_items[-1].get("artifact_name", "").startswith("react.final_answer."):
+                                idx_items = list(idx_items[:-1])
+                            data["text"] = json.dumps(idx_items, ensure_ascii=False)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
         item["data"] = data
         return True
@@ -173,7 +209,7 @@ class ContextRAGClient:
             query: Optional[str] = None,
             embedding: Optional[Sequence[float]] = None,
             kinds: Optional[Sequence[str]] = None,
-            scope: str = "track",
+            scope: str = "conversation",
             days: int = 90,
             top_k: int = 12,
             include_deps: bool = True,
@@ -181,7 +217,6 @@ class ContextRAGClient:
             ctx: Optional[dict] = None,
             user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
-            track_id: Optional[str] = None,
             turn_id: Optional[str] = None,
             roles: tuple[str,...] = ("artifact","assistant","user"),
             with_payload: bool = False,
@@ -196,9 +231,9 @@ class ContextRAGClient:
         Semantic/Hybrid search (needs embedding unless provided).
         """
         ctx_loaded = self._load_ctx(ctx)
-        user, conv, track, bundle = self._scope_from_ctx(
+        user, conv, bundle = self._scope_from_ctx(
             ctx_loaded, user_id=user_id, conversation_id=conversation_id,
-            track_id=track_id, turn_id=turn_id, bundle_id=bundle_id
+            turn_id=turn_id, bundle_id=bundle_id
         )
 
         qvec = list(embedding) if embedding is not None else None
@@ -211,7 +246,6 @@ class ContextRAGClient:
         rows = await self.idx.search_context(
             user_id=user,
             conversation_id=(conv or None),
-            track_id=(track or None),
             turn_id=turn_id,
             query_embedding=qvec,
             top_k=top_k,
@@ -241,7 +275,6 @@ class ContextRAGClient:
                 "score": float(r.get("score") or 0.0),
                 "sim": float(r.get("sim") or 0.0),
                 "rec": float(r.get("rec") or 0.0),
-                "track_id": r.get("track_id"),
                 "turn_id": r.get("turn_id"),
                 "bundle_id": r.get("bundle_id"),
                 "hosted_uri": r.get("hosted_uri"),
@@ -263,25 +296,23 @@ class ContextRAGClient:
                           ctx: Optional[dict] = None,
                           user_id: str = None,
                           conversation_id: str = None,
-                          track_id: str = None,
                           bundle_id: str = None):
         ctx_loaded = self._load_ctx(ctx)
-        user, conv, track, bundle = self._scope_from_ctx(
-            ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id, bundle_id=bundle_id
+        user, conv, bundle = self._scope_from_ctx(
+            ctx_loaded, user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id
         )
-        return { "user_id": user, "conversation_id": conv, "track_id": track, "bundle_id": bundle }
+        return { "user_id": user, "conversation_id": conv, "bundle_id": bundle }
 
     async def recent(
             self,
             *,
             kinds: Optional[Sequence[str]] = None,
-            scope: str = "track",
+            scope: str = "conversation",
             days: int = 90,
             limit: int = 12,
             ctx: Optional[dict] = None,
             user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
-            track_id: Optional[str] = None,
             roles: tuple[str, ...] = ("artifact","assistant","user"),
             any_tags: Optional[Sequence[str]] = None,
             all_tags: Optional[Sequence[str]] = None,
@@ -293,8 +324,8 @@ class ContextRAGClient:
         Pure-recency fetch (no embeddings). Fast path for "last N in track".
         """
         ctx_loaded = self._load_ctx(ctx)
-        user, conv, track, bundle = self._scope_from_ctx(
-            ctx_loaded, user_id=user_id, conversation_id=conversation_id, track_id=track_id, bundle_id=bundle_id
+        user, conv, bundle = self._scope_from_ctx(
+            ctx_loaded, user_id=user_id, conversation_id=conversation_id, bundle_id=bundle_id
         )
         any_tags = list(any_tags or [])
 
@@ -305,7 +336,6 @@ class ContextRAGClient:
         rows = await self.idx.fetch_recent(
             user_id=user,
             conversation_id=(conv or None),
-            track_id=(track or None),
             roles=roles,
             any_tags=any_tags or None,
             all_tags=list(all_tags or []) or None,
@@ -323,7 +353,6 @@ class ContextRAGClient:
                 "text": r.get("text") or "",
                 "ts": r["ts"].isoformat() if hasattr(r["ts"], "isoformat") else r["ts"],
                 "tags": list(r.get("tags") or []),
-                "track_id": r.get("track_id"),
                 "turn_id": r.get("turn_id"),
                 "bundle_id": r.get("bundle_id"),
                 "hosted_uri": r.get("hosted_uri"),
@@ -339,6 +368,90 @@ class ContextRAGClient:
 
         return {"items": items}
 
+    async def recent_after_ts(
+            self,
+            *,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            roles: tuple[str, ...] = ("user", "assistant", "artifact"),
+            any_tags: Optional[Sequence[str]] = None,
+            all_tags: Optional[Sequence[str]] = None,
+            not_tags: Optional[Sequence[str]] = None,
+            limit: int = 5000,
+            days: int = 365,
+            with_payload: bool = True,
+            ctx: Optional[dict] = None,
+            bundle_id: Optional[str] = None,
+            after_ts: Optional[str] = None,
+    ) -> dict:
+        ctx_loaded = self._load_ctx(ctx)
+        user, conv, bundle = self._scope_from_ctx(ctx_loaded,
+                                                  user_id=user_id,
+                                                  conversation_id=conversation_id,
+                                                  bundle_id=bundle_id)
+        if not user or not conv:
+            return {"items": []}
+        rows = await self.idx.fetch_recent_after_ts(
+            user_id=user,
+            conversation_id=conv,
+            roles=roles,
+            any_tags=any_tags,
+            all_tags=all_tags,
+            not_tags=not_tags,
+            limit=limit,
+            days=days,
+            bundle_id=bundle,
+            after_ts=after_ts,
+        )
+        items = []
+        for r in rows:
+            ts = r.get("ts")
+            item = {
+                "id": r["id"],
+                "message_id": r.get("message_id"),
+                "role": r.get("role"),
+                "text": r.get("text") or "",
+                "ts": ts.isoformat() if hasattr(ts, "isoformat") else ts,
+                "tags": list(r.get("tags") or []),
+                "turn_id": r.get("turn_id"),
+                "bundle_id": r.get("bundle_id"),
+                "hosted_uri": r.get("hosted_uri"),
+            }
+            items.append(item)
+        if with_payload:
+            await self._materialize_payloads_for_items(
+                items,
+                s3_field="hosted_uri",
+                out_field="payload",
+            )
+        return {"items": items}
+
+    async def recent_summaries(
+            self,
+            *,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            limit: int = 8,
+            days: int = 365,
+            with_payload: bool = True,
+            ctx: Optional[dict] = None,
+            bundle_id: Optional[str] = None,
+    ) -> dict:
+        """
+        Fetch recent compacted conversation summaries (conv.range.summary).
+        """
+        return await self.recent(
+            kinds=(TURNS_SUMMARY_TAG,),
+            roles=("artifact",),
+            limit=limit,
+            days=days,
+            ctx=ctx,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            with_payload=with_payload,
+            bundle_id=bundle_id,
+        )
+
     async def pull_text_artifact(self, *, artifact_uri: str) -> dict:
         doc = await self.store.get_message(artifact_uri)
         return doc.get("payload") or {}
@@ -348,17 +461,17 @@ class ContextRAGClient:
             *,
             tenant: str, project: str, user: str,
             conversation_id: str, user_type: str,
-            turn_id: str, track_id: Optional[str],
+            turn_id: str,
             bundle_id: str,
-            log: TurnLog,
             payload: Optional[Dict[str, Any]] = None,
             extra_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Writes artifact to store and/or index (see index_only/store_only flags)."""
+        from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.turn_log import TurnLog as V2TurnLog
+        log = V2TurnLog.from_dict(payload or {})
         md = log.to_markdown()
-        # payload = {"turn_log": log.to_payload(), **(payload or {})}
 
-        tags = TURN_LOG_TAGS_BASE + [f"turn:{turn_id}"] + ([f"track:{track_id}"] if track_id else [])
+        tags = TURN_LOG_TAGS_BASE + [f"turn:{turn_id}"]
         if extra_tags:
             tags.extend([t for t in extra_tags if isinstance(t, str) and t.strip()])
         hosted_uri, message_id, rn = await self.store.put_message(
@@ -368,17 +481,17 @@ class ContextRAGClient:
             role="artifact", text=md,
             id="turn.log",
             payload=payload,
-            meta={"kind": "turn.log", "turn_id": turn_id, "track_id": track_id},
-            embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
+            meta={"kind": "turn.log", "turn_id": turn_id},
+            embedding=None, user_type=user_type, turn_id=turn_id,
         )
         await self.idx.add_message(
             user_id=user, conversation_id=conversation_id,
             turn_id=turn_id,
             bundle_id=bundle_id,
             role="artifact",
-            text=md, hosted_uri=hosted_uri, ts=log.started_at_iso,
+            text=md, hosted_uri=hosted_uri, ts=log.ts,
             tags=tags,
-            ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
+            ttl_days=365, user_type=user_type, embedding=None, message_id=message_id
         )
         return {"hosted_uri": hosted_uri, "message_id": message_id, "rn": rn}
 
@@ -386,13 +499,14 @@ class ContextRAGClient:
             self,
             *,
             turn_id: str,
-            scope: str = "track",         # kept for API compatibility, not used directly now
+            scope: str = "conversation",         # kept for API compatibility, not used directly now
             days: int = 365,
             ctx: Optional[dict] = None,
             user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
-            track_id: Optional[str] = None,
             with_payload: bool = True,
+            include_turn_log_payload: bool = True,
+            turn_log_payload_override: Optional[Dict[str, Any]] = None,
             extra_artifact_tags: Optional[Sequence[str]] = None,
     ) -> dict:
         """
@@ -405,11 +519,10 @@ class ContextRAGClient:
 
         # Resolve scope/user/conv/bundle from ctx if needed
         ctx_loaded = self._load_ctx(ctx)
-        user, conv, track, bundle = self._scope_from_ctx(
+        user, conv, bundle = self._scope_from_ctx(
             ctx_loaded,
             user_id=user_id,
             conversation_id=conversation_id,
-            track_id=track_id,
         )
 
         # If we don't know user or conversation, we can't hit the index safely
@@ -418,7 +531,6 @@ class ContextRAGClient:
                 "user": None,
                 "assistant": None,
                 "presentation": None,
-                "deliverables": None,
                 "citables": None,
                 "solver_failure": None,
                 "turn_log": None,
@@ -429,7 +541,6 @@ class ContextRAGClient:
         rows = await self.idx.fetch_recent(
             user_id=user,
             conversation_id=conv,
-            track_id=track,
             turn_id=turn_id,                         # <--- uses our index directly
             roles=("artifact",),
             limit=64,
@@ -442,7 +553,6 @@ class ContextRAGClient:
                 "user": None,
                 "assistant": None,
                 "presentation": None,
-                "deliverables": None,
                 "citables": None,
                 "solver_failure": None,
                 "turn_log": None,
@@ -458,7 +568,6 @@ class ContextRAGClient:
                 "text": r.get("text") or "",
                 "ts": ts.isoformat() if hasattr(ts, "isoformat") else ts,
                 "tags": list(r.get("tags") or []),
-                "track_id": r.get("track_id"),
                 "turn_id": r.get("turn_id"),
                 "bundle_id": r.get("bundle_id"),
                 "hosted_uri": r.get("hosted_uri"),
@@ -467,7 +576,6 @@ class ContextRAGClient:
         user_item: Optional[Dict[str, Any]] = None
         assistant_item: Optional[Dict[str, Any]] = None
         presentation_item: Optional[Dict[str, Any]] = None
-        deliverables_item: Optional[Dict[str, Any]] = None
         solver_failure_item: Optional[Dict[str, Any]] = None
         citables_item: Optional[Dict[str, Any]] = None
         turn_log_item: Optional[Dict[str, Any]] = None
@@ -515,10 +623,9 @@ class ContextRAGClient:
                     user_item,
                     assistant_item,
                     presentation_item,
-                    deliverables_item,
                     solver_failure_item,
                     citables_item,
-                    turn_log_item,
+                    (turn_log_item if include_turn_log_payload else None),
                     files_item,
                 ]
                 if it is not None and it.get("hosted_uri") and it.get("hosted_uri") != "index_only"
@@ -534,6 +641,21 @@ class ContextRAGClient:
                 out_field="payload",
             )
 
+            if turn_log_payload_override is not None:
+                if turn_log_item is None:
+                    turn_log_item = {
+                        "id": None,
+                        "message_id": None,
+                        "role": "artifact",
+                        "text": "",
+                        "ts": None,
+                        "tags": ["artifact:turn.log", "source:override"],
+                        "turn_id": turn_id,
+                        "bundle_id": bundle,
+                        "hosted_uri": None,
+                    }
+                turn_log_item["payload"] = turn_log_payload_override
+
             if extra_items:
                 sources_item = extra_items.get(SOURCES_POOL_ARTIFACT_TAG)
                 sources_payload = sources_item.get("payload") if sources_item else None
@@ -545,12 +667,6 @@ class ContextRAGClient:
                 if sources_pool is not None and turn_log_item and isinstance(turn_log_item.get("payload"), dict):
                     turn_log_item["payload"]["sources_pool"] = sources_pool
 
-            # Turn-log normalization: ensure deliverables[*].value.sources_used
-            # is a SID list (no materialized source dicts).
-            _enrich_sources_used_to_deliverables(
-                turn_log_item,
-                turn_id=turn_id,
-            )
             # Prefer user/assistant text from turn_log payload (source of truth).
             try:
                 turn_log_payload = (turn_log_item.get("payload") if turn_log_item else None)
@@ -566,7 +682,6 @@ class ContextRAGClient:
                             "text": prompt_text,
                             "ts": turn_log_item.get("ts"),
                             "tags": ["source:turn_log"],
-                            "track_id": turn_log_item.get("track_id"),
                             "turn_id": turn_log_item.get("turn_id"),
                             "bundle_id": turn_log_item.get("bundle_id"),
                             "hosted_uri": None,
@@ -583,40 +698,16 @@ class ContextRAGClient:
                             "text": comp_text,
                             "ts": turn_log_item.get("ts"),
                             "tags": ["source:turn_log"],
-                            "track_id": turn_log_item.get("track_id"),
                             "turn_id": turn_log_item.get("turn_id"),
                             "bundle_id": turn_log_item.get("bundle_id"),
                             "hosted_uri": None,
                         }
             except Exception:
                 logger.exception("Failed to extract user/assistant text from turn_log payload")
-            # Prefer deliverables/citables/files from turn_log (source of truth).
+            # Prefer citables/files from turn_log (source of truth).
             try:
                 turn_log_payload = (turn_log_item.get("payload") if turn_log_item else None)
                 if isinstance(turn_log_payload, dict):
-                    sr = turn_log_payload.get("solver_result") or {}
-                    exec_payload = (sr.get("execution") or {}) if isinstance(sr, dict) else {}
-                    deliverables_map = exec_payload.get("deliverables") if isinstance(exec_payload, dict) else None
-                    if isinstance(deliverables_map, dict) and deliverables_map:
-                        from kdcube_ai_app.apps.chat.sdk.runtime.solution.contracts import (
-                            normalize_deliverables_map,
-                            deliverables_items_from_map,
-                        )
-                        normalized = normalize_deliverables_map(deliverables_map)
-                        items = deliverables_items_from_map(normalized)
-                        deliverables_item = {
-                            "id": None,
-                            "message_id": None,
-                            "role": "artifact",
-                            "text": "",
-                            "ts": turn_log_item.get("ts"),
-                            "tags": ["artifact:solver.program.out.deliverables", "source:turn_log"],
-                            "track_id": turn_log_item.get("track_id"),
-                            "turn_id": turn_log_item.get("turn_id"),
-                            "bundle_id": turn_log_item.get("bundle_id"),
-                            "hosted_uri": None,
-                            "payload": {"items": items},
-                        }
                     sources_pool = turn_log_payload.get("sources_pool") or []
                     used_sources = [
                         s for s in sources_pool
@@ -630,7 +721,6 @@ class ContextRAGClient:
                             "text": "",
                             "ts": turn_log_item.get("ts"),
                             "tags": ["artifact:solver.program.citables", "source:turn_log"],
-                            "track_id": turn_log_item.get("track_id"),
                             "turn_id": turn_log_item.get("turn_id"),
                             "bundle_id": turn_log_item.get("bundle_id"),
                             "hosted_uri": None,
@@ -646,7 +736,6 @@ class ContextRAGClient:
                             "text": "",
                             "ts": turn_log_item.get("ts"),
                             "tags": ["artifact:solver.program.files", "source:turn_log"],
-                            "track_id": turn_log_item.get("track_id"),
                             "turn_id": turn_log_item.get("turn_id"),
                             "bundle_id": turn_log_item.get("bundle_id"),
                             "hosted_uri": None,
@@ -683,7 +772,6 @@ class ContextRAGClient:
             "user": user_item,
             "assistant": assistant_item,
             "presentation": presentation_item,
-            "deliverables": deliverables_item,
             "citables": citables_item,
             "solver_failure": solver_failure_item,
             "turn_log": turn_log_item,
@@ -694,8 +782,7 @@ class ContextRAGClient:
     async def remove_user_reaction(self, *,
                                    turn_id: str,
                                    user_id: str,
-                                   conversation_id: str,
-                                   track_id: Optional[str]) -> bool:
+                                   conversation_id: str) -> bool:
         try:
             existing = await self.recent(
                 kinds=("artifact:turn.log.reaction",),
@@ -735,7 +822,6 @@ class ContextRAGClient:
             user: str,
             user_type: str,
             conversation_id: str,
-            track_id: Optional[str],
             turn_id: str,
             bundle_id: str,
     ) -> bool:
@@ -798,9 +884,9 @@ class ContextRAGClient:
                 conversation_id=conversation_id, bundle_id=bundle_id,
                 role="artifact", text="", id="turn.log",
                 payload=payload,
-                meta={"kind": "turn.log", "turn_id": turn_id, "track_id": track_id},
+                meta={"kind": "turn.log", "turn_id": turn_id},
                 embedding=original_embedding,
-                user_type=user_type, turn_id=turn_id, track_id=track_id,
+                user_type=user_type, turn_id=turn_id,
             )
 
             # Update only hosted_uri/tags; preserve ts
@@ -819,7 +905,7 @@ class ContextRAGClient:
                                           turn_id: str, reaction: dict,
                                           tenant: str, project: str, user: str,
                                           fingerprint: Optional[str],
-                                          user_type: str, conversation_id: str, track_id: str,
+                                          user_type: str, conversation_id: str,
                                           bundle_id: str,
                                           origin: str = "machine"):
         """
@@ -837,16 +923,13 @@ class ContextRAGClient:
             await self.remove_user_reaction(
                 turn_id=turn_id,
                 user_id=user,
-                conversation_id=conversation_id,
-                track_id=track_id
+                conversation_id=conversation_id
             )
 
         payload = {"reaction": reaction}
 
         # Build tags with origin
         tags = ["artifact:turn.log.reaction", f"turn:{turn_id}", f"origin:{origin}"]
-        if track_id:
-            tags.append(f"track:{track_id}")
 
         # persist as a small artifact tied to the same turn
         hosted_uri, message_id, rn = await self.store.put_message(
@@ -856,9 +939,9 @@ class ContextRAGClient:
             role="artifact",
             text=f"[turn.log.reaction]\n{reaction}",
             payload=payload,
-            meta={"kind": "turn.log.reaction", "turn_id": turn_id, "track_id": track_id, "origin": origin},
+            meta={"kind": "turn.log.reaction", "turn_id": turn_id, "origin": origin},
             id="turn.log.reaction",
-            embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
+            embedding=None, user_type=user_type, turn_id=turn_id,
             fingerprint=fingerprint
         )
         await self.idx.add_message(
@@ -867,7 +950,7 @@ class ContextRAGClient:
             role="artifact",
             text=f"[turn.log.reaction] {reaction}", hosted_uri=hosted_uri, ts=payload["reaction"]["ts"],
             tags=tags,
-            ttl_days=365, user_type=user_type, embedding=None, message_id=message_id, track_id=track_id
+            ttl_days=365, user_type=user_type, embedding=None, message_id=message_id
         )
 
     async def apply_feedback_to_turn_log(
@@ -878,7 +961,6 @@ class ContextRAGClient:
             user: str,
             user_type: str,
             conversation_id: str,
-            track_id: Optional[str],
             turn_id: str,
             bundle_id: str,
             feedback: dict,  # {"text": str, "confidence": float, "ts": str, "from_turn_id": str, "origin": str, "reaction": str}
@@ -992,11 +1074,10 @@ class ContextRAGClient:
                 text="",  # Not used for S3 storage
                 id="turn.log",
                 payload=payload,
-                meta={"kind": "turn.log", "turn_id": turn_id, "track_id": track_id},
+                meta={"kind": "turn.log", "turn_id": turn_id},
                 embedding=original_embedding,  # PRESERVE original embedding
                 user_type=user_type,
                 turn_id=turn_id,
-                track_id=track_id,
             )
 
             # 10) Update index: ONLY hosted_uri and embedding, preserve ts and text
@@ -1166,13 +1247,19 @@ class ContextRAGClient:
                 turn_log_item = mat.get("turn_log") or {}
                 turn_log_payload = (turn_log_item.get("payload") if turn_log_item else None)
 
-                # Extract feedbacks array from the turn log payload (preferred source of truth)
+                # Extract feedbacks from blocks if present
                 feedbacks = []
                 if isinstance(turn_log_payload, dict):
-                    tl = turn_log_payload.get("turn_log") or {}
-                    fb = tl.get("feedbacks") or []
-                    if isinstance(fb, list):
-                        feedbacks = fb
+                    blocks = turn_log_payload.get("blocks")
+                    if isinstance(blocks, list):
+                        for blk in blocks:
+                            if not isinstance(blk, dict):
+                                continue
+                            if (blk.get("type") or "") == "stage.feedback":
+                                feedbacks.append({
+                                    "ts": blk.get("ts"),
+                                    "text": blk.get("text"),
+                                })
 
                 # Optional: also return raw reaction artifacts (already persisted separately)
                 reactions = await self.recent(
@@ -1494,7 +1581,7 @@ class ContextRAGClient:
             kind: str,
             tenant: str, project: str, user_id: str,
             conversation_id: str, user_type: str,
-            turn_id: str, track_id: Optional[str],
+            turn_id: str,
             content: dict,
             content_str: Optional[str] = None,
             meta: Optional[Dict[str, Any]] = None,
@@ -1514,7 +1601,7 @@ class ContextRAGClient:
         """
 
         artifact_tag = f"artifact:{kind}" if not kind.startswith("artifact:") else kind
-        tags = [f"turn:{turn_id}", artifact_tag] + ([f"track:{track_id}"] if track_id else [])
+        tags = [f"turn:{turn_id}", artifact_tag]
         if not content_str:
             content_str = json.dumps(content, ensure_ascii=False) if isinstance(content, dict) else str(content)
         if extra_tags:
@@ -1525,7 +1612,7 @@ class ContextRAGClient:
         message_id = None
         rn = None
         if not index_only:
-            base_meta = {"kind": kind, "turn_id": turn_id, "track_id": track_id}
+            base_meta = {"kind": kind, "turn_id": turn_id}
             if meta:
                 base_meta.update({k: v for k, v in meta.items() if v is not None})
             hosted_uri, message_id, rn = await self.store.put_message(
@@ -1537,7 +1624,7 @@ class ContextRAGClient:
                 id=kind,
                 payload=content,
                 meta=base_meta,
-                embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
+                embedding=None, user_type=user_type, turn_id=turn_id,
             )
         else:
             hosted_uri = "index_only"
@@ -1548,7 +1635,7 @@ class ContextRAGClient:
                 bundle_id=bundle_id, role="artifact",
                 text=content_str, hosted_uri=hosted_uri, ts=datetime.datetime.utcnow().isoformat()+"Z",
                 tags=tags,
-                ttl_days=ttl_days, user_type=user_type, embedding=embedding, message_id=message_id, track_id=track_id
+                ttl_days=ttl_days, user_type=user_type, embedding=embedding, message_id=message_id
             )
         return {"hosted_uri": hosted_uri, "message_id": message_id, "rn": rn}
 
@@ -1557,7 +1644,7 @@ class ContextRAGClient:
     ) -> Optional[dict]:
         """
         Find the latest *index row* for an artifact of `kind` that contains ALL `all_tags`.
-        Returns a slim row dict (id, message_id, role, text, hosted_uri, ts, tags, track_id).
+        Returns a slim row dict (id, message_id, role, text, hosted_uri, ts, tags).
         """
         artifact_tag = f"artifact:{kind}" if not kind.startswith("artifact:") else kind
         # ensure the kind tag is in all_tags
@@ -1579,7 +1666,7 @@ class ContextRAGClient:
             kind: str,
             tenant: str, project: str, user_id: str,
             conversation_id: str, user_type: str,
-            turn_id: str, track_id: Optional[str],
+            turn_id: str,
             bundle_id: str,
             content: dict,
             unique_tags: List[str],
@@ -1610,7 +1697,7 @@ class ContextRAGClient:
             saved = await self.save_artifact(
                 kind=kind,
                 tenant=tenant, project=project, user_id=user_id, conversation_id=conversation_id,
-                user_type=user_type, turn_id=turn_id, track_id=track_id, bundle_id=bundle_id,
+                user_type=user_type, turn_id=turn_id, bundle_id=bundle_id,
                 content=content, content_str=content_str, extra_tags=unique_tags,
                 index_only=index_only,
             )
@@ -1627,8 +1714,8 @@ class ContextRAGClient:
                 role="artifact", text=content_str,
                 id=kind,
                 payload=content,
-                meta={"kind": kind, "turn_id": turn_id, "track_id": track_id},
-                embedding=None, user_type=user_type, turn_id=turn_id, track_id=track_id,
+                meta={"kind": kind, "turn_id": turn_id},
+                embedding=None, user_type=user_type, turn_id=turn_id,
             )
         else:
             hosted_uri = "index_only"
@@ -1744,23 +1831,29 @@ class ContextRAGClient:
         :return:
         """
 
-        # 1) Find the conv.start fingerprint within this conversation (it is small and is stored as is in the index)
-        data = await self.recent(
-            kinds=[FINGERPRINT_KIND],
-            scope="conversation",
-            user_id=user_id,
-            conversation_id=conversation_id,
-            limit=1,
-            all_tags=[CONV_START_FPS_TAG],
-        )
-        conv_start = next(iter(data.get("items") or []), None) if data else None
+        # 1) Load the latest timeline artifact and extract conversation details.
+        conversation_title = None
+        conversation_started_at = None
         try:
-            conv_start_text = conv_start.get("text")
-            conv_start = json.loads(conv_start_text)
-            # 2) Extract the conversation title from the conv.start fingerprint
-            conversation_title = conv_start.get("conversation_title") if conv_start else None
-        except Exception as ex:
+            res_ws = await self.recent(
+                kinds=[f"artifact:{TIMELINE_KIND}"],
+                roles=("artifact",),
+                limit=1,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=True,
+            )
+            ws_items = list(res_ws.get("items") or [])
+            if ws_items:
+                payload = unwrap_payload(ws_items[0]) or {}
+                parsed = parse_timeline_payload(payload)
+                title = (parsed.get("conversation_title") or "").strip()
+                if title:
+                    conversation_title = title
+                conversation_started_at = (parsed.get("conversation_started_at") or "").strip() or None
+        except Exception:
             conversation_title = None
+            conversation_started_at = None
         ui_artifacts_tags = UI_ARTIFACT_TAGS
 
         # 3) Get raw turn-tag occurrences (chronological, duplicates preserved)
@@ -1772,7 +1865,7 @@ class ContextRAGClient:
         # 4) Aggregate to first/last timestamps per turn_id, preserving first-seen order
         turns_map: Dict[str, Dict[str, str|List]] = {}
         order: List[str] = []
-        started_at = None
+        started_at = conversation_started_at
         last_activity_at = None
 
         for occ in occurrences:
@@ -1841,7 +1934,6 @@ class ContextRAGClient:
                 ctx=None,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                track_id=None,
                 any_tags=None,
                 all_tags=[CONV_START_FPS_TAG],
                 not_tags=None,
@@ -1890,53 +1982,38 @@ class ContextRAGClient:
 
         conversation_title = None
         try:
-            active_set_res = await self.recent(
-                kinds=[f"artifact:{ACTIVE_SET_KIND}"],
-                scope="conversation",
-                user_id=user_id,
-                conversation_id=conversation_id,
+            # Fetch timeline artifact and read conversation_title from its payload
+            res_ws = await self.recent(
+                kinds=(f"artifact:{TIMELINE_KIND}",),
+                roles=("artifact",),
                 limit=1,
                 days=days,
-                with_payload=False,
-                all_tags=[ACTIVE_SET_TAG],
-                ctx={"bundle_id": bundle_id},
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=True,
             )
-            it = next(iter(active_set_res.get("items") or []), None)
-            if it:
-                text = (it.get("text") or "").strip()
-                if text:
-                    payload = json.loads(text)
-                    if isinstance(payload, dict):
-                        title = payload.get("conversation_title")
-                        if isinstance(title, str) and title.strip():
-                            conversation_title = title.strip()
-        except Exception:
-            conversation_title = None
-
-        if not conversation_title:
-            try:
-                conv_start_res = await self.recent(
-                    kinds=[FINGERPRINT_KIND],
-                    scope="conversation",
-                    user_id=user_id,
-                    conversation_id=conversation_id,
-                    limit=1,
-                    days=days,
-                    with_payload=False,
-                    all_tags=[CONV_START_FPS_TAG],
-                    ctx={"bundle_id": bundle_id},
+            ws_items = list(res_ws.get("items") or [])
+            if ws_items:
+                payload = unwrap_payload(ws_items[0]) or {}
+                parsed = parse_timeline_payload(payload)
+                title = (parsed.get("conversation_title") or "").strip()
+                if title:
+                    conversation_title = title
+                timeline_sources_pool = (parsed.get("sources_pool") or [])
+                logger.info(
+                    "fetch_conversation_artifacts: timeline title=%s conversation_id=%s items=%d",
+                    "set" if conversation_title else "missing",
+                    conversation_id,
+                    len(ws_items),
                 )
-                it = next(iter(conv_start_res.get("items") or []), None)
-                if it:
-                    text = (it.get("text") or "").strip()
-                    if text:
-                        payload = json.loads(text)
-                        if isinstance(payload, dict):
-                            title = payload.get("conversation_title")
-                            if isinstance(title, str) and title.strip():
-                                conversation_title = title.strip()
-            except Exception:
-                conversation_title = None
+            else:
+                logger.info(
+                    "fetch_conversation_artifacts: no timeline items conversation_id=%s",
+                    conversation_id,
+                )
+        except Exception:
+            timeline_sources_pool = []
+            conversation_title = None
 
         if not occ and not (turn_ids or []):
             return {
@@ -2014,16 +2091,9 @@ class ContextRAGClient:
                     turn["artifacts"] = [
                         a for a in turn["artifacts"] if id(a) not in drop_ids
                     ]
-
-        # 3) Add attachments + produced files from turn log (source of truth)
-        def _unwrap_payload(obj: Any) -> Dict[str, Any]:
-            if not isinstance(obj, dict):
-                return {}
-            inner = obj.get("payload")
-            return inner if isinstance(inner, dict) else obj
-
         async def _materialize_turn_log_artifacts(
             tid: str,
+            sources_pool_for_conv: List[Dict[str, Any]],
         ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, bool]]:
             mat = await self.materialize_turn(
                 turn_id=tid,
@@ -2034,72 +2104,100 @@ class ContextRAGClient:
                 with_payload=True,
             )
             turn_log_item = mat.get("turn_log") or {}
-            turn_log_payload = _unwrap_payload(turn_log_item.get("payload") if turn_log_item else None)
+            turn_log_payload = unwrap_payload(turn_log_item)
             if not isinstance(turn_log_payload, dict):
                 return [], [], {}
 
-            tl = turn_log_payload.get("turn_log") or {}
-            ts = tl.get("ended_at_iso") or tl.get("started_at_iso") or turn_log_item.get("ts")
+            ts = turn_log_payload.get("ts") or turn_log_item.get("ts")
             out: List[Dict[str, Any]] = []
             sources_pool = turn_log_payload.get("sources_pool") or []
+
+            blocks = turn_log_payload.get("blocks")
+            if not isinstance(blocks, list):
+                blocks = []
             replace_types: Dict[str, bool] = {}
+            view: Dict[str, Any] = {}
 
-            user = turn_log_payload.get("user") or {}
-            prompt = user.get("prompt") or {}
-            prompt_text = (prompt.get("text") or prompt.get("prompt") or "").strip()
-            if prompt_text:
-                out.append({
-                    "message_id": prompt.get("message_id"),
-                    "type": "chat:user",
-                    "ts": prompt.get("ts") or ts,
-                    "hosted_uri": None,
-                    "bundle_id": turn_log_item.get("bundle_id"),
-                    "data": {"text": prompt_text, "meta": {"source": "turn_log"}},
-                })
-                replace_types["chat:user"] = True
+            if blocks:
+                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import Timeline
+                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.proto import RuntimeCtx
+                view = Timeline(runtime=RuntimeCtx()).build_turn_view(
+                    turn_id=tid,
+                    blocks=blocks,
+                    sources_pool=(sources_pool or sources_pool_for_conv or []),
+                )
+                user_text = (view.get("user") or {}).get("text") or ""
+                user_ts = (view.get("user") or {}).get("ts") or ts
+                if user_text:
+                    out.append({
+                        "message_id": None,
+                        "type": "chat:user",
+                        "ts": user_ts,
+                        "hosted_uri": None,
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {"text": user_text, "meta": {"source": "turn_log"}},
+                    })
+                    replace_types["chat:user"] = True
 
-            for a in (user.get("attachments") or []):
-                if not isinstance(a, dict):
-                    continue
-                out.append({
-                    "message_id": a.get("message_id"),
-                    "type": "artifact:user.attachment",
-                    "ts": a.get("ts") or ts,
-                    "hosted_uri": a.get("hosted_uri") or a.get("path") or a.get("source_path"),
-                    "bundle_id": turn_log_item.get("bundle_id"),
-                    "data": {"payload": a, "meta": {"kind": "user.attachment", "turn_id": tid}},
-                })
+                for a in view.get("attachments") or []:
+                    out.append({
+                        "message_id": a.get("message_id"),
+                        "type": "artifact:user.attachment",
+                        "ts": ts,
+                        "hosted_uri": a.get("hosted_uri"),
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {"payload": a, "meta": {"kind": "user.attachment", "turn_id": tid}},
+                    })
 
-            assistant = turn_log_payload.get("assistant") or {}
-            completion = assistant.get("completion") or {}
-            completion_text = (completion.get("text") or completion.get("completion") or "").strip()
-            if completion_text:
-                out.append({
-                    "message_id": completion.get("message_id"),
-                    "type": "chat:assistant",
-                    "ts": completion.get("ts") or ts,
-                    "hosted_uri": None,
-                    "bundle_id": turn_log_item.get("bundle_id"),
-                    "data": {"text": completion_text, "meta": {"source": "turn_log"}},
-                })
-                replace_types["chat:assistant"] = True
-            for f in (assistant.get("files") or []):
-                if not isinstance(f, dict):
-                    continue
-                out.append({
-                    "message_id": f.get("message_id"),
-                    "type": "artifact:assistant.file",
-                    "ts": f.get("ts") or ts,
-                    "hosted_uri": f.get("hosted_uri") or f.get("path") or f.get("source_path"),
-                    "bundle_id": turn_log_item.get("bundle_id"),
-                    "data": {"payload": f, "meta": {"kind": "assistant.file", "turn_id": tid}},
-                })
+                asst_text = (view.get("assistant") or {}).get("text") or ""
+                asst_ts = (view.get("assistant") or {}).get("ts") or ts
+                if asst_text:
+                    out.append({
+                        "message_id": None,
+                        "type": "chat:assistant",
+                        "ts": asst_ts,
+                        "hosted_uri": None,
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {"text": asst_text, "meta": {"source": "turn_log"}},
+                    })
+                    replace_types["chat:assistant"] = True
+
+                for f in view.get("files") or []:
+                    out.append({
+                        "message_id": f.get("message_id"),
+                        "type": "artifact:assistant.file",
+                        "ts": ts,
+                        "hosted_uri": f.get("hosted_uri"),
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {"payload": f, "meta": {"kind": "assistant.file", "turn_id": tid}},
+                    })
+
+                followups = [x for x in (view.get("followups") or []) if isinstance(x, str)]
+                if followups:
+                    out.append({
+                        "message_id": None,
+                        "type": "artifact:conv.user_shortcuts",
+                        "ts": ts,
+                        "hosted_uri": None,
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {"payload": {"items": followups}, "meta": {"kind": "conv.user_shortcuts", "turn_id": tid}},
+                    })
+
+                clar_qs = [x for x in (view.get("clarification_questions") or []) if isinstance(x, str)]
+                if clar_qs:
+                    out.append({
+                        "message_id": None,
+                        "type": "artifact:conv.clarification_questions",
+                        "ts": ts,
+                        "hosted_uri": None,
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {"payload": {"items": clar_qs}, "meta": {"kind": "conv.clarification_questions", "turn_id": tid}},
+                    })
 
             # Synthesized artifacts expected by frontend from turn_log data
-            used_sources = [
-                s for s in sources_pool
-                if isinstance(s, dict) and s.get("used") is True and s.get("url")
-            ]
+            if not sources_pool:
+                sources_pool = list(sources_pool_for_conv or [])
+            used_sources = [s for s in (view.get("citations") or []) if isinstance(s, dict) and s.get("url")]
             if used_sources:
                 ts_candidates = []
                 for s in used_sources:
@@ -2131,7 +2229,7 @@ class ContextRAGClient:
                 tid: str,
             ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]], Dict[str, bool]]:
                 async with sem:
-                    return await _materialize_turn_log_artifacts(tid)
+                    return await _materialize_turn_log_artifacts(tid, timeline_sources_pool)
 
             turn_artifacts = await asyncio.gather(*(_build_turn_artifacts(tid) for tid in order))
             sources_pool_by_turn: Dict[str, List[Dict[str, Any]]] = {}
@@ -2161,7 +2259,7 @@ class ContextRAGClient:
                     sources_pool = sources_pool_by_turn.get(tid) or []
                     if not sources_pool:
                         continue
-                    citation_map = md_utils.build_citation_map_from_sources(sources_pool)
+                    citation_map = citation_utils.build_citation_map_from_sources(sources_pool)
                     if not citation_map:
                         continue
                     for item in (turns_map.get(tid) or {}).get("artifacts") or []:
@@ -2171,13 +2269,13 @@ class ContextRAGClient:
                         raw_text = (data.get("text") or "").strip()
                         if not raw_text:
                             continue
-                        opts = md_utils.CitationRenderOptions(
+                        opts = citation_utils.CitationRenderOptions(
                             mode="links",
                             embed_images=False,
                             keep_unresolved=False,
                             first_only=False,
                         )
-                        rendered = md_utils.replace_citation_tokens_batch(raw_text, citation_map, opts)
+                        rendered = citation_utils.replace_citation_tokens_batch(raw_text, citation_map, opts)
                         data["text"] = rendered
 
         return {
@@ -2223,7 +2321,6 @@ class ContextRAGClient:
             require_not_in_progress: bool = False,
             user_type: str = "system",
             bundle_id: str | None = None,
-            track_id: str | None = None,
     ) -> dict:
         """
         Returns: {
@@ -2248,8 +2345,8 @@ class ContextRAGClient:
             tenant=tenant, project=project, user=user_id, fingerprint=None,
             conversation_id=conversation_id, turn_id="conv", role="artifact", text="",
             id="conversation.state", bundle_id=bundle_id, payload=payload,
-            meta={"kind": "conversation.state", "track_id": track_id},
-            embedding=None, user_type=user_type, track_id=track_id,
+            meta={"kind": "conversation.state"},
+            embedding=None, user_type=user_type,
             msg_ts=now_iso.replace(":", "-"),
         )
 
@@ -2429,19 +2526,6 @@ class ContextRAGClient:
             "deleted_storage_executions": int(storage_counts.get("executions", 0) or 0),
         }
 
-
-def _ts_to_float(ts: str) -> float:
-    """Convert ISO timestamp to float for recency scoring"""
-    try:
-        s = (ts or "").strip()
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        import datetime as _dt
-        return _dt.datetime.fromisoformat(s).timestamp()
-    except Exception:
-        return float("-inf")
-
-
 async def search_context(
         conv_idx,
         ctx_client,
@@ -2449,7 +2533,6 @@ async def search_context(
         targets: list[dict],
         user: str,
         conv: str,
-        track: str,
         *,
         top_k: int = 5,
         days: int = 365,
@@ -2481,7 +2564,7 @@ async def search_context(
             if where in ("assistant_artifact", "artifact", "project_log"):
                 where = "artifact"
                 # search_tags = ["artifact:project.log"]
-                search_tags = ["artifact:solver.program.presentation", "artifact:solver.failure"]
+                search_tags = ["artifact:react.log.presentation", "artifact:solver.failure"]
             if where == "user":
                 search_roles = ("user", "artifact")
                 search_tags = ["chat:user", "artifact:user.attachment"]
@@ -2490,13 +2573,12 @@ async def search_context(
             res = await conv_idx.search_turn_logs_via_content(
                 user_id=user,
                 conversation_id=conv,
-                track_id=track,
                 query_embedding=qvec,
                 search_roles=search_roles,
                 search_tags=search_tags,
                 top_k=top_k,
                 days=days,
-                scope="track",
+                scope="conversation",
                 half_life_days=half_life_days,
             )
             return res or []
@@ -2580,80 +2662,3 @@ async def search_context(
         final_hits = hits[:top_k] if top_k else hits
 
     return best_tid, final_hits
-
-def _enrich_sources_used_to_deliverables(
-        turn_log_item: Optional[Dict[str, Any]],
-        *,
-        turn_id: Optional[str] = None,
-) -> None:
-    """
-    New-format normalization for turn log:
-
-    We now store:
-      solver_result.execution.deliverables[slot].value.sources_used: [sid, sid, ...]
-
-    This helper runs on READ:
-      - If deliverable.value has sources_used as dicts, normalize to SID list.
-      - If it has dicts, normalize to SID list.
-
-    It mutates turn_log_item["payload"] in-place and is best-effort
-    (never raises).
-    """
-    if not isinstance(turn_log_item, dict):
-        return
-
-    try:
-        root_payload = turn_log_item.get("payload") or {}
-        if not isinstance(root_payload, dict):
-            return
-
-        solver_result = root_payload.get("solver_result")
-        if not isinstance(solver_result, dict):
-            return
-
-        execution = solver_result.get("execution") or {}
-        if not isinstance(execution, dict):
-            return
-
-        deliverables = execution.get("deliverables") or {}
-        # deliverables can be dict (slot→spec) or list; handle both
-        if isinstance(deliverables, dict):
-            specs_iter = deliverables.values()
-        elif isinstance(deliverables, list):
-            specs_iter = deliverables
-        else:
-            return
-
-        for spec in specs_iter:
-            if not isinstance(spec, dict):
-                continue
-
-            # In our layout the artifact is usually under "value"
-            art = spec.get("value")
-            if not isinstance(art, dict):
-                # Some setups might put citation info directly on spec
-                art = spec
-
-            if not isinstance(art, dict):
-                continue
-
-            sids: list[int] = []
-            su = art.get("sources_used")
-            if isinstance(su, list):
-                for item in su:
-                    if isinstance(item, (int, float)):
-                        sids.append(int(item))
-                    elif isinstance(item, dict):
-                        sid = item.get("sid")
-                        if isinstance(sid, (int, float)):
-                            sids.append(int(sid))
-
-            if sids:
-                art["sources_used"] = sorted(set(sids))
-
-    except Exception:
-        logger.warning(
-            "Failed to hydrate sources_used from execution.sources_pool for turn_id=%s",
-            turn_id,
-            exc_info=True,
-        )

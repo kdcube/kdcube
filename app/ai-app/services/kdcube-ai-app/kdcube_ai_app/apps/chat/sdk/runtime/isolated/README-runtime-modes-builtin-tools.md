@@ -6,7 +6,6 @@ This document explains where built-in tools run (in-process vs isolated subproce
 
 - `none` (in-process): tool code runs in the main server process.
 - `local` (isolated subprocess): tool code runs in a separate Python process on the same host (no supervisor).
-- `local_network` (reserved): same as `local` but with a dedicated network namespace (not used yet).
 - `docker`: tool code runs inside a Docker container with a **supervisor** that executes tools. The exec sandbox itself is locked down (no network, no secrets, limited FS).
 
 The runtime selector lives in `kdcube_ai_app/apps/chat/sdk/tools/tools_insights.py` (`tool_isolation`).

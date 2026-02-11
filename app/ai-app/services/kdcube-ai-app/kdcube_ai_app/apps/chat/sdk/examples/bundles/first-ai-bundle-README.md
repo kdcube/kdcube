@@ -1,273 +1,213 @@
-# First AI Bundle (Minimal, streaming)
+# Bundle Authoring Guide (Chat SDK)
 
-This guide shows the smallest possible AI bundle that works with the chat runtime.
-It explains how to configure it and how to emit streams and steps.
+This guide replaces the old “First AI Bundle” doc. It’s based on the current reference bundle:
+`kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`.
+
+Use it as the canonical template for building and running bundles in our platform.
 
 ---
 
-## 1) Minimal bundle layout
+## 1) Reference Bundle (Use This as Your Starting Point)
+
+Bundle path:
+`kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`
+
+Key files:
+- `entrypoint.py` — bundle entrypoint (agentic_workflow)
+- `orchestrator/workflow.py` — orchestration logic (BaseWorkflow)
+- `agents/` — bundle-local agents (gate, etc.)
+- `tools_descriptor.py` — tool registry for react
+- `skills_descriptor.py` — skills visibility config
+- `resources.py` — friendly error messages
+- `event_filter.py` — event filtering policy
+
+---
+
+## 2) Recommended Bundle Layout
 
 ```
 my_bundle/
 ├── entrypoint.py
-└── __init__.py   # optional
+├── orchestrator/
+│   └── workflow.py
+├── agents/
+│   └── gate.py
+├── tools_descriptor.py
+├── skills_descriptor.py
+├── resources.py
+└── event_filter.py
 ```
 
-The entrypoint must export a class decorated with `@agentic_workflow(...)`.
+Notes:
+- `entrypoint.py` is required.
+- `orchestrator/workflow.py` is recommended for real bundles.
+- `tools_descriptor.py` and `skills_descriptor.py` define what react can use.
 
 ---
 
-## 2) Minimal entrypoint (BaseEntrypoint)
+## 3) Entrypoint: Register the Bundle
 
+Entrypoint uses `@agentic_workflow` and extends `BaseEntrypoint`. The reference bundle uses
+LangGraph to drive orchestration.
+
+Minimal pattern:
 ```python
-# my_bundle/entrypoint.py
-from typing import Dict, Any
 from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
+from langgraph.graph import StateGraph, START, END
 
-BUNDLE_ID = "demo.simple"
+BUNDLE_ID = "my.bundle"
 
 @agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=100)
-class SimpleWorkflow(BaseEntrypoint):
-    async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        text = (params.get("text") or "").strip()
+class MyWorkflow(BaseEntrypoint):
+    def __init__(...):
+        super().__init__(..., event_filter=MyEventFilter())
+        self.graph = self._build_graph()
 
-        emit = AIBEmitters(self.comm)
-        await emit.step(step="workflow_start", status="started", title="Kickoff")
+    def _build_graph(self) -> StateGraph:
+        g = StateGraph(BundleState)
+        g.add_node("orchestrate", orchestrate)
+        g.add_edge(START, "orchestrate")
+        g.add_edge("orchestrate", END)
+        return g.compile()
 
-        # stream answer
-        for i, tok in enumerate(["Hello! ", "You wrote: ", f"{text}"]):
-            await emit.delta(text=tok, index=i, marker="answer")
-
-        await emit.step(step="workflow_complete", status="completed", title="Done")
-
-        return {
-            "final_answer": f"Hello! You wrote: {text}",
-            "followups": ["Ask another question."]
-        }
+    async def execute_core(self, *, state, thread_id, params):
+        return await self.graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
 ```
 
-Bare minimum to integrate:
-- A decorated class with a stable `BUNDLE_ID`.
-- Implement `execute_core(...)` and return a dict with at least `final_answer`.
-- Use `self.comm` (or `AIBEmitters`) to emit steps/deltas.
-
-`BaseEntrypoint.run(...)` is already implemented and calls:
-`pre_run_hook(...)` → `execute_core(...)` → `run_accounting(...)` → `post_run_hook(...)`.
+Model configuration lives in `entrypoint.configuration` and maps logical roles to providers/models
+(`role_models`), as shown in the reference bundle.
 
 ---
 
-## 3) Configuration (how the runtime loads the bundle)
+## 4) Orchestrator Workflow (BaseWorkflow)
 
-Use `AGENTIC_BUNDLES_JSON` to register the bundle:
+Use `BaseWorkflow` to handle:
+- conversation context
+- timeline persistence
+- scratchpad lifecycle
+- turn completion
 
+Reference: `react@2026-02-10-02-44/orchestrator/workflow.py`.
+
+Key patterns:
+- Call `start_turn(scratchpad)` and `finish_turn(scratchpad, ok=...)`.
+- Use the built-in `ContextBrowser` and timeline to render/react.
+- Use `build_react(...)` to construct the react runtime and run `react.run(...)`.
+- Gate is used only to extract conversation title on the first turn.
+
+Output contract:
+- Set `scratchpad.answer` for the assistant message.
+- Set `scratchpad.suggested_followups` if you have followups.
+- Return `{ "answer": ..., "suggested_followups": [...] }` from the workflow.
+
+---
+
+## 5) Tools and Skills Configuration
+
+### tools_descriptor.py
+Defines tool modules (SDK tools, local tools, MCP tools).
+React uses these specs to build the tool catalog.
+
+Fields to know:
+- `TOOLS_SPECS`: list of modules or local refs.
+- `MCP_TOOL_SPECS`: external MCP servers (aliases/allowlists).
+- `TOOL_RUNTIME`: optional per-tool runtime (local/docker).
+
+### skills_descriptor.py
+Controls which skills are visible to specific agents.
+Use `AGENTS_CONFIG` to enable/disable skills per role.
+
+---
+
+## 6) Event Filter
+
+`event_filter.py` lets you restrict what events are visible to non-privileged users.
+The reference bundle uses a minimal filter that blocks some internal events.
+
+If you don’t need filtering, you can omit it or pass no filter to BaseEntrypoint.
+
+---
+
+## 7) Resources (Friendly Errors)
+
+`resources.py` defines the user-facing error messages for:
+- usage_limit
+- rate_limit
+- server_error
+- timeout
+
+BaseWorkflow can use this automatically when producing error responses.
+
+---
+
+## 8) Streaming and Output
+
+In most bundles you should rely on BaseWorkflow’s built-in emitters:
+- `mk_thinking_streamer` for agent thinking
+- react streaming through `react.write` (canvas or timeline_text)
+
+If you need direct streaming, use `AIBEmitters(self.comm)` and emit:
+- `delta(...)` for token streams
+- `step(...)` for progress steps
+- `event(...)` for custom widgets
+
+Markers commonly used:
+- `answer`
+- `thinking`
+- `canvas`
+- `timeline_text`
+
+---
+
+## 9) Register the Bundle
+
+Configure in `AGENTIC_BUNDLES_JSON`:
 ```bash
 export AGENTIC_BUNDLES_JSON='{
-  "default_bundle_id": "demo.simple",
+  "default_bundle_id": "react",
   "bundles": {
-    "demo.simple": {
-      "id": "demo.simple",
-      "name": "Demo Simple",
-      "path": "/bundles/demo_simple",
+    "react": {
+      "id": "react",
+      "name": "React Bundle",
+      "path": "/bundles/react",
       "module": "entrypoint",
       "singleton": false,
-      "description": "Minimal example bundle"
+      "description": "Reference bundle"
     }
   }
 }'
 ```
 
-For Docker Compose you typically also set:
-
+If running in Docker, also set:
 ```bash
 export AGENTIC_BUNDLES_ROOT=/bundles
 ```
 
-Then mount your bundle to `/bundles/demo_simple`.
+---
+
+## 10) Checklist for a New Bundle
+
+1. Create bundle folder with `entrypoint.py` and `orchestrator/workflow.py`.
+2. Implement `BaseEntrypoint` with a small graph.
+3. Implement `BaseWorkflow` orchestration.
+4. Define `tools_descriptor.py` and `skills_descriptor.py`.
+5. Register in `AGENTIC_BUNDLES_JSON`.
+6. Run and confirm:
+   - streaming appears in UI
+   - timeline is persisted
+   - followups and files are visible
 
 ---
 
-## 4) Streaming output (steps, deltas, events)
+## 11) Notes / Gotchas
 
-### Token deltas (keep it simple)
-
-Recommended:
-- `marker="thinking"` for agent thoughts
-- `marker="answer"` for the main answer
-
-```python
-await emit.delta(text="Thinking... ", index=0, marker="thinking")
-await emit.delta(text="Final answer ", index=0, marker="answer")
-```
-
-Other supported markers (use only if you own the client UI):
-- `subsystem` (widget streams)
-- `tool` (tool output)
-- `canvas` (inline artifacts)
-- `timeline_text` (compact timeline entries)
-
-Custom markers are allowed, but the client must know how to render them.
-See [comm-system.md](../../../doc/comm-system.md).
-
-Subsystem widget docs:
-- [code-exec-widget-README.md](../../runtime/solution/widgets/code-exec-widget-README.md)
-- [exec.py](../../runtime/solution/widgets/exec.py)
-
-Timeline text reference:
-- [react.py](../../runtime/solution/react/react.py)
+- Use `react.write` for text artifacts only.
+- Use `rendering_tools.write_*` for PDF/PPTX/DOCX/PNG.
+- Always call `react.read` before using large or truncated artifacts.
+- When using `channel=canvas`, the filename extension must be one of:
+  `.md/.markdown, .html/.htm, .mermaid/.mmd, .json, .yaml/.yml, .txt, .xml`.
 
 ---
 
-## 4.1) Connecting SDK agents (example: ctx.reconciler)
-
-SDK agents accept streaming callbacks so you can wire them into your bundle’s emitter.
-Here’s a minimal example using the context reconciler:
-
-```python
-from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_reconciler import ctx_reconciler_stream
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
-
-emit = AIBEmitters(self.comm)
-
-async def thinking_delta(text: str):
-    # stream reconciler thinking into the side channel
-    await emit.delta(text=text, index=0, marker="thinking", agent="ctx.reconciler")
-
-rr = await ctx_reconciler_stream(
-    self.models_service,
-    guess_package_json="{}",
-    current_context_str="",
-    search_hits_json="[]",
-    bucket_cards_json="[]",
-    limit_ctx=10,
-    max_buckets=5,
-    gate_decision={},
-    on_thinking_delta=thinking_delta,
-    timezone=self.comm_context.user.timezone,
-)
-```
-
-Notes:
-- The reconciler expects JSON strings for its inputs.
-- `on_thinking_delta` is an async callback; you can route it to `thinking`,
-  or to `subsystem` if you want a dedicated widget stream.
-- Similar patterns apply to other SDK agents that accept streaming hooks.
-
-## 4.4) Comm API reference
-
-For the full event envelope and transport details, see:
-- [README-comm.md](../../comm/README-comm.md)
-- [comm-system.md](../../../doc/comm-system.md)
-
-## 4.2) Context search (Conversation history)
-
-Use `ContextBrowser.search(...)` to retrieve relevant turns from the conversation history.
-
-```python
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.context.browser import ContextBrowser
-
-ctx_browser = ContextBrowser(
-    ctx_client=self.ctx_client,
-    logger=self.logger,
-    turn_view_class=TurnView,
-)
-
-targets = [
-    {"where": "assistant", "query": "risk register"},
-    {"where": "user", "query": "budget"},
-]
-
-best_tid, hits = await ctx_browser.search(
-    targets=targets,
-    user=user_id,
-    conv=conversation_id,
-    track=track_id,
-    top_k=5,
-    days=365,
-    half_life_days=7.0,
-    scoring_mode="hybrid",
-    with_payload=True,
-)
-```
-
-Notes:
-- `ctx_client` is required; it already contains `conv_idx` and `model_service`.
-- The `hits` list includes `turn_id`, scores, and (optionally) payloads.
-
-## 4.3) Storage layout (artifacts & attachments)
-
-If you need to inspect where artifacts/attachments land on disk or in S3, see:
-- [sdk-store-README.md](../../storage/sdk-store-README.md)
-- [conversation-artifacts-README.md](../../runtime/solution/context/conversation-artifacts-README.md)
-
-### Steps (timeline)
-Emit as `started` and `completed` for each phase:
-
-```python
-await emit.step(step="gate", status="started", title="Gate")
-await emit.step(step="gate", status="completed", data={"decision": "allow"})
-```
-
-### Custom events
-Use `event(...)` when you want a custom UI widget:
-
-```python
-await emit.event(type="chat.custom", title="My Widget", data={"items": [1,2,3]})
-```
-
----
-
-## 5) Which emitter should I use?
-
-You have two equivalent options:
-
-1) **Typed SDK emitter (recommended):** `AIBEmitters(self.comm)`
-   - Validates payload shape and fills defaults.
-2) **Raw communicator:** `self.comm.step(...)`, `self.comm.delta(...)`
-   - Direct, minimal, no validation.
-
-Both publish to the same Redis relay + channel stream and will appear in the UI.
-
----
-
-## 6) Emitting directly to infrastructure (advanced)
-
-If you need to emit outside the workflow (e.g., background tasks), build a communicator
-from a `ChatTaskPayload` and the relay:
-
-```python
-from kdcube_ai_app.apps.chat.emitters import build_comm_from_comm_context, build_relay_from_env
-
-comm = build_comm_from_comm_context(comm_context, relay=build_relay_from_env())
-await comm.delta(text="hello", index=0, marker="answer")
-```
-
-This uses the same Redis relay as the normal workflow path.
-
----
-
-## 7) Minimal request flow (how your bundle is called)
-
-1) Client sends a message with `agentic_bundle_id` over its active channel (Socket.IO or SSE).
-2) Chat gateway enqueues the task.
-3) Processor loads your bundle and calls `BaseEntrypoint.run(...)`.
-4) Your bundle emits steps/deltas to Redis relay.
-5) Relay pushes events to the same client channel (or an integration relay for third-party destinations).
-
----
-
-### Transport note
-
-The runtime is channel-agnostic. The client chooses the channel (Socket.IO, SSE, or an integration relay),
-and the bundle only emits events to the relay. This allows intermediate routers that forward events to
-Telegram/Slack or other destinations without changing bundle code.
-
----
-
-If you want a more advanced template with memory, context reconciliation,
-clarification gating, and follow-ups, build on top of `BaseEntrypoint` and
-add your own agents in `execute_core(...)`.
-
-See also:
-- [browser-README.md](../../runtime/solution/context/browser-README.md)
+If you want a “starter bundle” repo, I can generate one from the reference bundle. 

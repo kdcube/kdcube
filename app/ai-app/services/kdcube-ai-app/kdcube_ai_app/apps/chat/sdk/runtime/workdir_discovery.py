@@ -2,9 +2,11 @@
 # Copyright (c) 2025 Elena Viter
 
 # chat/sdk/runtime/workdir_discovery.py
-import os
+import os, json
 import pathlib
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
+from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any
+
 
 def _from_cv_or_env(cv, env_key: str) -> str:
     """
@@ -44,5 +46,20 @@ def resolve_workdir() -> pathlib.Path:
     p = pathlib.Path(raw).resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
+
+def load_sources_pool_from_disk() -> list[dict]:
+    outdir = resolve_output_dir()
+    payload = None
+    timeline_path = outdir / "timeline.json"
+    if timeline_path.exists():
+        try:
+            payload = json.loads(timeline_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = None
+    if isinstance(payload, dict):
+        pool = payload.get("sources_pool") or []
+    else:
+        pool = []
+    return normalize_sources_any(pool)
 
 __all__ = ["resolve_output_dir", "resolve_workdir"]

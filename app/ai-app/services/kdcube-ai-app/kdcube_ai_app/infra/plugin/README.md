@@ -1,6 +1,7 @@
 # Agentic App Bundles — Developer Guide (multi-bundle, channel-agnostic runtime)
 
-Build your chatbot logic as a **bundle** and run it inside the chat runtime with **live streaming**, **step timelines**, and **follow-ups** — without touching infra or UI plumbing.
+This repo is the platform + Chat SDK for building **AI agents and chatbots** with streaming, tools, memory, and artifact storage.  
+You package logic as a **bundle** and run it inside the chat runtime with **live streaming**, **step timelines**, and **follow-ups** — without touching infra or UI plumbing.
 
 * **Prototype fast:** channel, queue, auth, sessions, storage, accounting — already wired.
 * **Multi-bundle:** register many bundles and select one per message.
@@ -13,6 +14,9 @@ Build your chatbot logic as a **bundle** and run it inside the chat runtime with
 ---
 
 ## Quickstart — Clone → Compose → Chat
+
+**Bundle authors (AI agent/chatbot quickstart):**  
+[Bundle Authoring Guide (Chat SDK)](../../apps/chat/sdk/examples/bundles/first-ai-bundle-README.md)
 
 1. **Register your bundle(s)** via env:
 
@@ -72,7 +76,7 @@ my_bundle/
 Supported forms: directory, single `.py`, or wheel/zip (then set `module`).
 
 See also:
-- [First AI bundle (minimal streaming)](../../apps/chat/sdk/examples/bundles/first-ai-bundle-README.md)
+- [Bundle Authoring Guide (Chat SDK)](../../apps/chat/sdk/examples/bundles/first-ai-bundle-README.md)
 - [Example bundles](../../apps/chat/sdk/examples/bundles/README.md)
 
 ---

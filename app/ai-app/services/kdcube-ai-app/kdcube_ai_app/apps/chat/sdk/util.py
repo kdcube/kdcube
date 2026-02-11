@@ -98,6 +98,33 @@ def _parse_followups_tail(raw: str) -> List[str]:
             pass
     return []
 
+def _wrap_lines(text: str, indent: str = "   ", width: int = 77) -> List[str]:
+    """Wrap text to fit within width, applying indent to each line."""
+    if not text:
+        return []
+
+    # Clean up whitespace
+    text = " ".join(text.split())
+
+    lines = []
+    available_width = width - len(indent)
+
+    while text:
+        if len(text) <= available_width:
+            lines.append(f"{indent}{text}")
+            break
+
+        # Find last space within available width
+        break_point = text.rfind(" ", 0, available_width)
+        if break_point == -1:
+            # No space found, force break at width
+            break_point = available_width
+
+        lines.append(f"{indent}{text[:break_point]}")
+        text = text[break_point:].lstrip()
+
+    return lines
+
 def _extract_json_block(text: str) -> Optional[str]:
     """Strip ```json fences and return the innermost {...} block."""
     if not text:
@@ -535,6 +562,16 @@ def truncate_text_by_tokens(text, max_tokens=MAX_TOKENS):
         tokens = tokens[:max_tokens]
         text = encoding.decode(tokens)
     return text
+
+
+def token_count(text: str) -> int:
+    """Return token count using cl100k_base encoding."""
+    if not text:
+        return 0
+    try:
+        return len(encoding.encode(text))
+    except Exception:
+        return len((text or "").split())
 
 def strip_lone_surrogates(s: str) -> str:
     # Replace any code points in the surrogate range with U+FFFD

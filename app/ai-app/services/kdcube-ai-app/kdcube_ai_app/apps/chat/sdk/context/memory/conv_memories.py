@@ -69,7 +69,6 @@ class ConvMemoriesStore:
         turn_id: str,
         active_set: Dict[str, Any],
         user_type: str,
-        track_id: Optional[str],
         bundle_id: Optional[str],
     ) -> bool:
         if not self.ctx:
@@ -83,7 +82,6 @@ class ConvMemoriesStore:
                 user_type=user_type,
                 conversation_id=conversation,
                 turn_id=turn_id,
-                track_id=track_id,
                 content=active_set,
                 unique_tags=[self.UNIQUE_TAG],
                 bundle_id=bundle_id or "",
@@ -127,7 +125,6 @@ class ConvMemoriesStore:
         turn_id: str,
         active_set: Dict[str, Any],
         user_type: str = "system",
-        track_id: Optional[str] = None,
         bundle_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         if "new" in active_set:
@@ -142,7 +139,6 @@ class ConvMemoriesStore:
             turn_id=turn_id,
             active_set=active_set,
             user_type=user_type,
-            track_id=track_id,
             bundle_id=bundle_id,
         )
         try:

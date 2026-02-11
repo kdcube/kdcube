@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import json
 import time
+import mimetypes
+import pathlib
 from typing import Awaitable, Callable, List, Optional
 
 
@@ -109,15 +111,6 @@ class CodegenChanneledStreamingWidget:
             title="Objective",
             language=None,
         )
-        # await self._emit_subsystem_delta(
-        #     text="",
-        #     index=1,
-        #     sub_type="code_exec.objective",
-        #     fmt="text",
-        #     title="Objective",
-        #     completed=True,
-        #     language=None,
-        # )
 
     async def emit_program_name(self, name: str) -> None:
         name = (name or "").strip()
@@ -133,15 +126,6 @@ class CodegenChanneledStreamingWidget:
             title="Program Name",
             language=None,
         )
-        # await self._emit_subsystem_delta(
-        #     text="",
-        #     index=1,
-        #     sub_type="code_exec.program.name",
-        #     fmt="text",
-        #     title="Program Name",
-        #     completed=True,
-        #     language=None,
-        # )
 
     def _path_has(self, keys: List[str]) -> bool:
         stack = [k for k in self.path_stack if k]
@@ -400,12 +384,20 @@ class CodegenChanneledStreamingWidget:
         for name, spec in (contract or {}).items():
             if not isinstance(spec, dict):
                 continue
+            raw_filename = spec.get("filename") or ""
+            leaf = pathlib.Path(raw_filename).name if isinstance(raw_filename, str) else ""
+            display_name = pathlib.Path(leaf).stem if leaf else str(name)
+            if not display_name:
+                display_name = str(name)
+            mime = (spec.get("mime") or "").strip()
+            if not mime:
+                mime = mimetypes.guess_type(leaf)[0] or ""
             contract_items.append(
                 {
-                    "artifact_name": name,
+                    "artifact_name": display_name,
                     "description": spec.get("description") or "",
-                    "mime": spec.get("mime") or "",
-                    "filename": spec.get("filename") or "",
+                    "mime": mime,
+                    "filename": leaf,
                 }
             )
         payload = {
@@ -421,16 +413,6 @@ class CodegenChanneledStreamingWidget:
             language="json",
         )
         self.contract_index += 1
-        # await self._emit_subsystem_delta(
-        #     text="",
-        #     index=self.contract_index,
-        #     sub_type="code_exec.contract",
-        #     fmt="json",
-        #     title="Execution Contract",
-        #     completed=True,
-        #     language="json",
-        # )
-        # self.contract_index += 1
         await self.send_status(status="exec")
 
     async def emit_status(self, *, status: str, error: Optional[dict] = None) -> None:

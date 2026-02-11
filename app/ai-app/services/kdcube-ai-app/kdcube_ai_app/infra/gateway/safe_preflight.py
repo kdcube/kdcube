@@ -10,6 +10,26 @@ from typing import Optional, Dict, Any, List
 
 from kdcube_ai_app.infra.service_hub.multimodality import MODALITY_IMAGE_MIME, MODALITY_DOC_MIME
 
+# Text-like formats we allow even when mime is not text/*
+TEXT_LIKE_MIME = {
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "text/html",
+    "text/css",
+    "text/xml",
+    "text/yaml",
+    "text/x-yaml",
+    "text/javascript",
+    "application/json",
+    "application/x-ndjson",
+    "application/xml",
+    "application/yaml",
+    "application/x-yaml",
+    "application/toml",
+    "application/javascript",
+}
+
 
 # ---------- Config & Result ----------
 
@@ -83,6 +103,14 @@ def sniff_magic(data: bytes, filename: str = "") -> str:
         return "text/plain"
     if fn.endswith(".md"):
         return "text/markdown"
+    if fn.endswith(".json"):
+        return "application/json"
+    if fn.endswith((".yml", ".yaml")):
+        return "application/x-yaml"
+    if fn.endswith(".csv"):
+        return "text/csv"
+    if fn.endswith(".toml"):
+        return "application/toml"
     return "application/octet-stream"
 
 # ---------- AV (async) ----------
@@ -293,7 +321,7 @@ async def preflight_async(
         res.meta.update(r.meta)
         return res
 
-    if mime.startswith("text/"):
+    if mime in TEXT_LIKE_MIME or mime.startswith("text/"):
         r = preflight_text(data, cfg)
         res.meta.update(r.meta)
         if not r.allowed:

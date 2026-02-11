@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import pathlib
 import time
 import traceback
 from datetime import datetime
@@ -94,6 +95,23 @@ class BaseEntrypoint:
         wf_embedding = configuration.get("embedding") or {}
         if wf_embedding:
             self.config.set_embedding(wf_embedding)
+
+        if getattr(self.config, "ai_bundle_spec", None):
+            try:
+                from kdcube_ai_app.apps.chat.sdk.runtime.external.distributed_snapshot import compute_dir_sha256
+                spec = self.config.ai_bundle_spec
+                root = pathlib.Path(spec.path)
+                if spec.module:
+                    module_root = spec.module.split(".")[0]
+                    candidate = root / module_root
+                    if candidate.exists():
+                        root = candidate
+                if root.exists():
+                    sha = compute_dir_sha256(root, skip_files=set())
+                    # Always use content hash as authoritative version
+                    self.config.ai_bundle_spec.version = sha[:12]
+            except Exception:
+                pass
 
     @property
     def bundle_props_defaults(self) -> Dict[str, Any]:

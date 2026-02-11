@@ -20,6 +20,7 @@ class BundleSpec:
     module: Optional[str] = None
     singleton: bool = False
     description: Optional[str] = None
+    version: Optional[str] = None
 
 ENV_JSON = "AGENTIC_BUNDLES_JSON"
 ADMIN_BUNDLE_ID = "kdcube.admin"
@@ -51,6 +52,8 @@ def _normalize(d: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("BundleSpec missing 'id'")
     if not d.get("path"):
         raise ValueError(f"BundleSpec '{d['id']}' missing 'path'")
+    if not d.get("version"):
+        d["version"] = d.get("bundle_version")
     d["singleton"] = bool(d.get("singleton", False))
     return d
 

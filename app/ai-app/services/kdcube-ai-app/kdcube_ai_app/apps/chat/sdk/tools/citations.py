@@ -524,6 +524,36 @@ def normalize_sources_any(val: Any) -> List[Dict[str, Any]]:
 
     return []
 
+def dedup_citations(citations: list[dict]) -> list[dict]:
+    seen_sids: set[int] = set()
+    seen_urls: set[str] = set()
+    result: list[dict] = []
+
+    for c in citations:
+        if not isinstance(c, dict):
+            continue
+
+        sid = c.get("sid")
+        url = (c.get("url") or "").strip()
+
+        key_is_sid = isinstance(sid, int)
+        if key_is_sid:
+            if sid in seen_sids:
+                continue
+            seen_sids.add(sid)
+        elif url:
+            # optionally normalize url here if you want:
+            # url_norm = normalize_url(url)
+            # if url_norm in seen_urls: continue
+            # seen_urls.add(url_norm)
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+        result.append(c)
+
+    return result
+
 def dedupe_sources_by_url(prior: List[Dict[str, Any]], new: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     Deduplicate by normalized URL; preserve richer title/text; carry optional attrs; assign/keep sids.

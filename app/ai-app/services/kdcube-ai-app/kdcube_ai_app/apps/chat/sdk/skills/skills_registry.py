@@ -636,7 +636,7 @@ def skills_catalog_for_prompt(
         "description": "...",
         "category": "research",
         "tags": ["built_in", "discovery"],
-        "tools": [{"id":"generic_tools.web_search","role":"search"}, ...],
+        "tools": [{"id":"web_tools.web_search","role":"search"}, ...],
         "built_in": true,
         "include_for": ["coordinator","react_decision"]
       }

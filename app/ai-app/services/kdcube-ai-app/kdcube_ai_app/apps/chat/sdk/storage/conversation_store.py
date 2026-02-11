@@ -102,7 +102,6 @@ class ConversationStore:
             embedding: List[float] | None = None,
             user_type: str = "anonymous",
             ttl_days: int = 365,
-            track_id: Optional[str] = None,
             msg_ts: Optional[str] = None,
     ) -> Tuple[str, str, str]:
         """
@@ -141,8 +140,7 @@ class ConversationStore:
                 "ttl_days": int(ttl_days),
                 "rn": rn,
                 **(meta or {})
-            },
-            "track_id": track_id
+            }
         }
         await self.backend.write_bytes_a(rel, json.dumps(record, ensure_ascii=False, indent=2).encode("utf-8"), meta=_JSON_META)
         return self._uri_for_path(rel), message_id, rn
@@ -329,7 +327,6 @@ class ConversationStore:
         fingerprint: Optional[str],
         conversation_id: str,
         turn_id: str,
-        track_id: str,
         role: str = "artifact",
         filename: str,
         data: bytes,
@@ -389,7 +386,6 @@ class ConversationStore:
         fingerprint: Optional[str],
         conversation_id: str,
         turn_id: str,
-        track_id: str,
         codegen_run_id: str,
         role: str = "artifact",
         out_dir: Optional[str] = None,

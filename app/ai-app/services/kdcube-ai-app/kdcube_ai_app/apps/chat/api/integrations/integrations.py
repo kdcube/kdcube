@@ -120,7 +120,7 @@ async def get_available_bundles(
         )
 
     return {
-        "available_bundles": {
+            "available_bundles": {
             bid: {
                 "id": bid,
                 "name": entry.name,
@@ -128,6 +128,7 @@ async def get_available_bundles(
                 "path": entry.path,
                 "module": entry.module,
                 "singleton": bool(entry.singleton),
+                "version": getattr(entry, "version", None),
             }
             for bid, entry in reg.bundles.items()
         },
@@ -195,7 +196,18 @@ async def _load_bundle_props_defaults(
         spec, wf_config, comm_context=comm_context,
     )
     defaults = getattr(workflow, "bundle_props_defaults", None) or {}
-    return dict(defaults)
+    defaults = dict(defaults)
+    try:
+        cfg = getattr(workflow, "configuration", None) or {}
+        version = cfg.get("bundle_version")
+        if not version:
+            version = getattr(getattr(workflow, "config", None), "ai_bundle_spec", None)
+            version = getattr(version, "version", None)
+        if version:
+            defaults["bundle_version"] = str(version)
+    except Exception:
+        pass
+    return defaults
 
 @router.get("/admin/integrations/bundles/{bundle_id}/props")
 async def get_bundle_props(
@@ -226,6 +238,9 @@ async def get_bundle_props(
         request=request,
         session=session,
     )
+    if isinstance(defaults, dict) and "bundle_version" in defaults:
+        props = dict(props)
+        props["bundle_version"] = defaults.get("bundle_version")
 
     return {
         "bundle_id": bundle_id,
@@ -249,6 +264,7 @@ async def set_bundle_props(
 
     key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
     props = dict(payload.props or {})
+    props.pop("bundle_version", None)
 
     if payload.op == "merge":
         raw = await redis.get(key)

@@ -9,31 +9,6 @@ import datetime as _dt
 
 from kdcube_ai_app.apps.chat.sdk.context.memory.turn_fingerprint import TurnFingerprintV1
 
-
-def format_selected_memories_log(selected_bucket_cards: Optional[List[Dict[str, Any]]],
-                                 objective_memory_timelines: Optional[Dict[str, List[dict]]] = None,) -> str:
-    if not selected_bucket_cards:
-        return ""
-    lines = ["[MEMORIES COLLECTED AND RELEVANT]"]
-    for card in selected_bucket_cards or []:
-        if not isinstance(card, dict):
-            continue
-        bid = (card.get("bucket_id") or "").strip()
-        name = (card.get("name") or bid or "(bucket)").strip()
-        desc = (card.get("short_desc") or card.get("objective_text") or "").strip()
-        header = f"- {name}"
-        if desc:
-            header += f" — {desc}"
-        if bid:
-            header += f" (id={bid})"
-        lines.append(header)
-        for s in (objective_memory_timelines or {}).get(bid, [])[:3]:
-            oh = (s.get("objective_hint") or "").strip()
-            tf, tt = (s.get("ts_from") or "").strip(), (s.get("ts_to") or "").strip()
-            if oh:
-                lines.append(f"  · [{tf}..{tt}] {oh}")
-    return "\n".join(lines) if len(lines) > 1 else ""
-
 def format_assistant_signals_block(
     turn_memories: Optional[List[Dict[str, Any]]],
     *,

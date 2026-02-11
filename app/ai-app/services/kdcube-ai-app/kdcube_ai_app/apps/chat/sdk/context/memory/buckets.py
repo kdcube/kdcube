@@ -208,7 +208,6 @@ class BucketStore:
             tenant: str, project: str, user: str, user_type: str,
             conversation_id: str, turn_id: str,
             bundle_id: str,
-            track_id: Optional[str],
             bucket: dict | MemoryBucket
     ) -> dict:
         """
@@ -221,7 +220,7 @@ class BucketStore:
         res = await self.ctx.upsert_artifact(
             kind=self.KIND_BUCKET,
             tenant=tenant, project=project, user_id=user, user_type=user_type,
-            conversation_id=conversation_id, turn_id=turn_id, track_id=track_id,
+            conversation_id=conversation_id, turn_id=turn_id,
             content=content, unique_tags=tags_unique,
             bundle_id=bundle_id
         )
@@ -232,7 +231,6 @@ class BucketStore:
             tenant: str, project: str, user: str, user_type: str,
             conversation_id: str, turn_id: str,
             bundle_id: str,
-            track_id: Optional[str],
             bucket_id: str
     ) -> Optional[dict]:
         """
@@ -247,9 +245,8 @@ class BucketStore:
         res = await self.ctx.upsert_artifact(
             kind=self.KIND_BUCKET,
             tenant=tenant, project=project, user_id=user, user_type=user_type,
-            conversation_id=conversation_id, turn_id=turn_id, track_id=track_id,
+            conversation_id=conversation_id, turn_id=turn_id,
             content=b, unique_tags=tags_unique,
             bundle_id=bundle_id
         )
         return b | {"_write_mode": res.get("mode")}
-

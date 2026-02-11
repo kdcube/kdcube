@@ -554,7 +554,6 @@ async def web_search(
         freshness: Annotated[Optional[str], "Canonical freshness: 'day'|'week'|'month'|'year' or null."] = None,
         country: Annotated[Optional[str], "Canonical country ISO2, e.g. 'DE', 'US'."] = None,
         safesearch: Annotated[str, "Canonical safesearch: 'off'|'moderate'|'strict'."] = "moderate",
-        bundle_id: str = None,
         artifact_id: str = None,
         enable_hybrid: bool = True,
         hybrid_mode: str = "sequential",
@@ -615,9 +614,10 @@ async def web_search(
             return None
 
     comm = get_comm()
-    artifact_thinking = "Web Search Trace"
     think_idx = 0
     finish_thinking_is_sent = False
+
+    q_list = [" ".join(q_list)]
 
     if not artifact_id:
         if objective and objective.strip():
@@ -676,11 +676,20 @@ async def web_search(
     n = max(1, min(int(n), 20))
     per_query_max = n
 
+    # search_backend = get_search_backend_or_hybrid(
+    #     enable_hybrid=enable_hybrid,
+    #     hybrid_mode=hybrid_mode,
+    #     spare_backend="duckduckgo"
+    # )
+    enable_hybrid = False
     search_backend = get_search_backend_or_hybrid(
+        backend_name="brave",
         enable_hybrid=enable_hybrid,
         hybrid_mode=hybrid_mode,
-        spare_backend="duckduckgo"
+        # spare_backend="duckduckgo"
     )
+
+    #queries
 
     backend_name = (
             getattr(search_backend, "provider", None)
@@ -700,17 +709,14 @@ async def web_search(
     context_snapshot = context.to_dict()
     logger.warning(f"[Context snapshot]:\n{context_snapshot}")
 
-    track_id = context_snapshot.get("track_id")
     bundle_id = context_snapshot.get("app_bundle_id")
 
     # --- Execute search (backend.search_many() is decorated, will emit accounting event) ---
     async with with_accounting(
             bundle_id,
-            track_id=track_id,
             artifact_id=artifact_id,
             backend=backend_name,
             metadata={
-                "track_id": track_id,
                 "backend": backend_name,
                 "artifact_id": artifact_id,
             }

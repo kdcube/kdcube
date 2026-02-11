@@ -265,7 +265,7 @@ async def run_py_code(
     log.log(f"[py_code_exec] child_env keys: {sorted(child_env.keys())}", level="INFO")
     res = await _run_subprocess(
         entry_path=main_path,
-        cwd=workdir,
+        cwd=output_dir,
         env=child_env,
         timeout_s=timeout_s,
         outdir=output_dir,

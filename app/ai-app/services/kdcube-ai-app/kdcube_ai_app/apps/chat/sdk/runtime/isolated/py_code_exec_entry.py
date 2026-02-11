@@ -52,6 +52,12 @@ except ImportError:  # pragma: no cover
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm, get_comm
 from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all, bootstrap_from_spec  # type: ignore[assignment]
+from kdcube_ai_app.apps.chat.sdk.runtime.external.distributed_snapshot import (
+    restore_zip_to_dir,
+    rewrite_runtime_globals_for_bundle,
+    write_dir_zip_to_uri,
+    build_manifest,
+)
 
 def _append_errors_log(message: str) -> None:
     try:
@@ -90,6 +96,80 @@ def _load_runtime_globals() -> Dict[str, Any]:
         except Exception:
             pass
     return data
+
+
+def _restore_snapshot_if_present(
+    runtime_globals: Dict[str, Any],
+    workdir: pathlib.Path,
+    outdir: pathlib.Path,
+    logger: AgentLogger,
+) -> None:
+    snap = runtime_globals.get("EXEC_SNAPSHOT") or {}
+    if not isinstance(snap, dict):
+        return
+    input_work = snap.get("input_work_uri")
+    input_out = snap.get("input_out_uri")
+    if input_work:
+        try:
+            restore_zip_to_dir(input_work, workdir)
+            logger.log(f"[exec.snapshot] Restored workdir from {input_work}", "INFO")
+        except Exception as e:
+            logger.log(f"[exec.snapshot] Failed to restore workdir: {e}", "ERROR")
+    if input_out:
+        try:
+            restore_zip_to_dir(input_out, outdir)
+            logger.log(f"[exec.snapshot] Restored outdir from {input_out}", "INFO")
+        except Exception as e:
+            logger.log(f"[exec.snapshot] Failed to restore outdir: {e}", "ERROR")
+
+
+def _restore_bundle_if_present(
+    runtime_globals: Dict[str, Any],
+    logger: AgentLogger,
+) -> Dict[str, Any]:
+    uri = runtime_globals.get("BUNDLE_SNAPSHOT_URI")
+    if not uri:
+        return runtime_globals
+    bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
+    bundle_id = None
+    if isinstance(bundle_spec, dict):
+        bundle_id = bundle_spec.get("id")
+    bundle_id = bundle_id or "bundle"
+    dest_root = pathlib.Path(os.environ.get("EXEC_BUNDLE_ROOT", f"/workspace/bundles/{bundle_id}"))
+    try:
+        restore_zip_to_dir(str(uri), dest_root)
+        logger.log(f"[exec.bundle] Restored bundle to {dest_root} from {uri}", "INFO")
+        return rewrite_runtime_globals_for_bundle(runtime_globals, new_bundle_root=dest_root)
+    except Exception as e:
+        logger.log(f"[exec.bundle] Failed to restore bundle: {e}", "ERROR")
+        return runtime_globals
+
+
+def _upload_snapshot_outputs(
+    runtime_globals: Dict[str, Any],
+    workdir: pathlib.Path,
+    outdir: pathlib.Path,
+    logger: AgentLogger,
+    baseline_work: Optional[Dict[str, Dict[str, Any]]] = None,
+    baseline_out: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> None:
+    snap = runtime_globals.get("EXEC_SNAPSHOT") or {}
+    if not isinstance(snap, dict):
+        return
+    output_work = snap.get("output_work_uri")
+    output_out = snap.get("output_out_uri")
+    if output_work:
+        try:
+            write_dir_zip_to_uri(str(output_work), workdir, baseline=baseline_work)
+            logger.log(f"[exec.snapshot] Uploaded workdir to {output_work}", "INFO")
+        except Exception as e:
+            logger.log(f"[exec.snapshot] Failed to upload workdir: {e}", "ERROR")
+    if output_out:
+        try:
+            write_dir_zip_to_uri(str(output_out), outdir, baseline=baseline_out)
+            logger.log(f"[exec.snapshot] Uploaded outdir to {output_out}", "INFO")
+        except Exception as e:
+            logger.log(f"[exec.snapshot] Failed to upload outdir: {e}", "ERROR")
 
 
 def _load_tool_module_names() -> List[str]:
@@ -393,6 +473,7 @@ async def _async_main() -> int:
     outdir.mkdir(parents=True, exist_ok=True)
 
     runtime_globals = _load_runtime_globals()
+    runtime_globals = _restore_bundle_if_present(runtime_globals, logger)
     tool_module_names = _load_tool_module_names()
     spec_str = _portable_spec_str(runtime_globals)
 
@@ -409,6 +490,9 @@ async def _async_main() -> int:
         f"ENV OUTPUT_DIR={os.environ.get('OUTPUT_DIR','')}; WORKDIR={os.environ.get('WORKDIR','')}",
         level="INFO",
     )
+    _restore_snapshot_if_present(runtime_globals, workdir, outdir, logger)
+    baseline_work = build_manifest(workdir)
+    baseline_out = build_manifest(outdir)
     _bootstrap_supervisor_runtime(runtime_globals, tool_module_names, logger, outdir)
     try:
         logger.log(
@@ -509,6 +593,9 @@ async def _async_main() -> int:
         await _shutdown_supervisor_modules(tool_module_names, logger)
     except Exception as e:
         logger.log(f"[entry] module shutdown failed: {e}", level="ERROR")
+
+    # 🔹 7. Upload output snapshots if requested
+    _upload_snapshot_outputs(runtime_globals, workdir, outdir, logger, baseline_work, baseline_out)
 
     # Map run_py_code() result to exit code
     if isinstance(res, dict):

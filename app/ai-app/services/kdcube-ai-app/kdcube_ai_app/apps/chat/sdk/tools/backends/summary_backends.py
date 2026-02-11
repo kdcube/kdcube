@@ -13,8 +13,8 @@ from kdcube_ai_app.apps.chat.sdk.util import _now_str, _today_str
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.service_hub.inventory import create_cached_system_message, create_cached_human_message
 import kdcube_ai_app.apps.chat.sdk.viz.logging_helpers as logging_helpers
+from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import summarize_context_blocks_progressive
 from kdcube_ai_app.apps.chat.sdk.runtime.files_and_attachments import (
-    artifact_block_for_summary,
     artifact_blocks_for_summary,
     collect_multimodal_artifacts_from_tool_output,
     strip_base64_from_tool_output,
@@ -23,40 +23,107 @@ from kdcube_ai_app.apps.chat.sdk.runtime.files_and_attachments import (
 )
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any, strip_citation_tokens, CITE_TOKEN_RE
 
-
-def _attachment_summary_system_prompt() -> str:
-    return (
-        "You are summarizing a USER-PROVIDED ATTACHMENT.\n"
-        "Goal: produce a compact, telegraphic, embedding-friendly inventory of the attachment content.\n"
-        "Use any provided context (user prompt and other attachments) to resolve references, but do NOT assume.\n"
-        "\n"
-        "Output a TELEGRAPHIC, SECTIONED TEXT (NO JSON). Use pipes to separate sections.\n"
-        "Format:\n"
-        "semantic:<...> | structural:<...> | inventory:<...> | anomalies:<...> | safety:<...> | lookup_keys:<...> | filename:<...> | artifact_name:<...>\n"
-        "\n"
-        "Fields:\n"
-        "- semantic: what the attachment is about; intent; domains; scope; key facts/samples/schema.\n"
-        "- structural: file type, visible structure (tables/code/JSON/YAML/XML/diagrams), counts if visible.\n"
-        "- inventory: notable fragments or sections to help retrieval.\n"
-        "- anomalies: problems in the content (malformed, ambiguous, missing fields, garbled).\n"
-        "- safety: benign/suspicious (+short reason if suspicious).\n"
-        "- lookup_keys: 5-12 compact key phrases for retrieval.\n"
-        "- filename: a short, unique, filesystem-safe name for this attachment (no spaces).\n"
-        "- artifact_name: short, human-readable ID to use in paths (no spaces, unique enough).\n"
-        "\n"
-        "Rules:\n"
-        "- Keep it short; telegraphic; no prose.\n"
-        "- Mention attachment filename and mime.\n"
-        "- If content is empty/unreadable, say so in structural/anomalies.\n"
-    )
-
-def _attachment_summary_prompt(modality_kind: Optional[str]) -> str:
-    return _attachment_summary_system_prompt() + _modality_system_instructions(modality_kind)
-
 log = logging.getLogger(__name__)
 
-def _artifact_block_for_summary(artifact: Optional[Dict[str, Any]]) -> Tuple[Optional[dict], Optional[str], Optional[str]]:
-    return artifact_block_for_summary(artifact)
+
+def _context_summary_system_prompt() -> str:
+    return (
+        "You are summarizing a VIEWPORT of a conversation context.\n"
+        "Your goal is to produce a compact, inventory-style summary that preserves:\n"
+        "- user-visible artifacts (files/display outputs) and their purpose\n"
+        "- key decisions, tool actions, and constraints\n"
+        "- important facts, entities, and identifiers (paths, filenames)\n"
+        "- sources or citations if present\n\n"
+        "Output a concise bullet list (no JSON).\n"
+        "Be telegraphic, but include enough detail to stand in for the omitted turns.\n"
+        "If there are images/documents, mention their gist and filenames/paths.\n"
+    )
+
+
+def _context_blocks_to_modal(blocks: List[dict]) -> List[dict]:
+    modal: List[dict] = []
+    for blk in blocks or []:
+        if not isinstance(blk, dict):
+            continue
+        btype = blk.get("type") or "block"
+        author = blk.get("author") or blk.get("role") or ""
+        turn_id = blk.get("turn_id") or blk.get("turn") or ""
+        ts = blk.get("ts") or ""
+        path = blk.get("path") or ""
+        mime = blk.get("mime") or ""
+        header_parts = [f"type={btype}"]
+        if author:
+            header_parts.append(f"author={author}")
+        if turn_id:
+            header_parts.append(f"turn={turn_id}")
+        if ts:
+            header_parts.append(f"ts={ts}")
+        if path:
+            header_parts.append(f"path={path}")
+        if mime:
+            header_parts.append(f"mime={mime}")
+        header = "[BLOCK] " + " | ".join(header_parts)
+
+        text = blk.get("text")
+        if isinstance(text, str) and text.strip():
+            modal.append({"type": "text", "text": f"{header}\n{text}"})
+        else:
+            modal.append({"type": "text", "text": header})
+
+        b64 = blk.get("base64")
+        if b64:
+            if isinstance(mime, str) and mime.startswith("image/"):
+                modal.append({"type": "image", "data": b64, "media_type": mime})
+            else:
+                modal.append({"type": "document", "data": b64, "media_type": mime or "application/octet-stream"})
+    return modal
+
+
+async def summarize_context_blocks(
+    *,
+    svc: Any,
+    blocks: List[dict],
+    max_tokens: int = 800,
+    previous_summary: Optional[str] = None,
+    custom_instructions: Optional[str] = None,
+) -> Optional[str]:
+    if svc is None:
+        return None
+    try:
+        summary = await summarize_context_blocks_progressive(
+            svc=svc,
+            blocks=blocks,
+            max_tokens=max_tokens,
+            previous_summary=previous_summary,
+            custom_instructions=custom_instructions,
+        )
+        if summary:
+            return summary
+    except Exception:
+        pass
+    try:
+        from kdcube_ai_app.apps.chat.sdk.streaming.streaming import stream_agent_to_json
+
+        system_prompt = _context_summary_system_prompt()
+        system_msg = create_cached_system_message(system_prompt, cache_last=True)
+        user_blocks = _context_blocks_to_modal(blocks)
+        user_message = create_cached_human_message(user_blocks)
+        role = "context.compaction.summary"
+        async with with_accounting("context.compaction", agent=role, metadata={"agent": role}):
+            result = await stream_agent_to_json(
+                svc,
+                client_name=role,
+                client_role=role,
+                sys_prompt=system_msg,
+                messages=[user_message],
+                schema_model=None,
+                temperature=0.2,
+                max_tokens=max_tokens,
+            )
+        summary = (result.get("agent_response") or "").strip()
+        return summary if summary else None
+    except Exception:
+        return None
 
 def _artifact_blocks_for_summary(
     artifacts: Optional[Any],
@@ -115,100 +182,6 @@ def _sanitize_summary_artifacts(
     if isinstance(summary_artifact, dict):
         return (sanitized_list[0] if sanitized_list else summary_artifact), notes
     return sanitized_list, notes
-
-async def summarize_user_attachment(
-    *,
-    svc: Any,
-    attachment: Dict[str, Any],
-    user_prompt: str = "",
-    other_attachments: Optional[List[Dict[str, Any]]] = None,
-    max_tokens: int = 600,
-    max_attachment_chars: int = 12000,
-    max_peer_chars: int = 2000,
-) -> Optional[str]:
-    if svc is None or not isinstance(attachment, dict):
-        return None
-
-    filename = (attachment.get("filename") or "attachment").strip()
-    mime = (attachment.get("mime") or attachment.get("mime_type") or "application/octet-stream").strip()
-    size = attachment.get("size") or attachment.get("size_bytes") or ""
-    text = attachment.get("text") or ""
-    read_error = attachment.get("read_error")
-    if max_attachment_chars and len(text) > max_attachment_chars:
-        text = text[:max_attachment_chars] + "\n...[truncated]"
-
-    summary_artifact = {
-        "type": "file",
-        "mime": mime,
-        "text": text,
-        "base64": attachment.get("base64"),
-        "filename": filename,
-        "size_bytes": attachment.get("size_bytes") or size,
-        "read_error": read_error,
-    }
-    artifact_block, artifact_meta, modality_kind = _artifact_block_for_summary(summary_artifact)
-
-    meta_line = f"filename={filename}; mime={mime}"
-    if size != "":
-        meta_line += f"; size={size}"
-
-    blocks = [f"ATTACHMENT_META:\n{meta_line}"]
-    if artifact_meta:
-        blocks.append(artifact_meta)
-    if text:
-        blocks.append(f"ATTACHMENT_TEXT:\n{text}")
-    else:
-        blocks.append("ATTACHMENT_TEXT:\n<empty_or_unavailable>")
-    if read_error:
-        blocks.append(f"READ_ERROR:\n{read_error}")
-
-    if user_prompt:
-        blocks.append(f"USER_PROMPT:\n{user_prompt}")
-
-    peers = [p for p in (other_attachments or []) if isinstance(p, dict) and p is not attachment]
-    if peers:
-        peer_lines: List[str] = []
-        for p in peers:
-            pname = (p.get("filename") or "attachment").strip()
-            pmime = (p.get("mime") or p.get("mime_type") or "application/octet-stream").strip()
-            psummary = (p.get("summary") or "").strip()
-            ptext = (p.get("text") or "")
-            if not psummary and ptext:
-                if max_peer_chars and len(ptext) > max_peer_chars:
-                    ptext = ptext[:max_peer_chars] + "\n...[truncated]"
-                psummary = ptext
-            if psummary:
-                peer_lines.append(f"{pname} ({pmime}): {psummary}")
-        if peer_lines:
-            blocks.append("OTHER_ATTACHMENTS:\n" + "\n".join(peer_lines))
-
-    system_prompt = _attachment_summary_prompt(modality_kind)
-    user_msg = "\n\n".join(blocks).strip()
-
-    from kdcube_ai_app.apps.chat.sdk.streaming.streaming import stream_agent_to_json
-
-    message_blocks: List[dict] = []
-    if artifact_block:
-        message_blocks.append({**artifact_block, "cache": True})
-    message_blocks.append({"type": "text", "text": user_msg})
-
-    role = "attachment.summary"
-    result = await stream_agent_to_json(
-        svc,
-        client_name="attachment.summary",
-        client_role="attachment.summary",
-        sys_prompt=create_cached_system_message(system_prompt, cache_last=True),
-        messages=[create_cached_human_message(message_blocks)],
-        temperature=0.2,
-        max_tokens=max_tokens,
-    )
-    logging_helpers.log_agent_packet(role, "summary", result)
-    summary = (result.get("agent_response") or "").strip()
-    if not summary:
-        return None
-    if size != "":
-        summary = f"{summary} | size:{size}"
-    return summary
 
 def _modality_system_instructions(modality_kind: Optional[str]) -> str:
     if modality_kind == "image":
@@ -466,9 +439,9 @@ async def _generate_llm_summary(
         )
 
         # Extra guidance for web_search
-        if tool_id == "generic_tools.web_search":
+        if tool_id == "web_tools.web_search":
             system_prompt += (
-                "\nEXTRA FOR generic_tools.web_search:\n"
+                "\nEXTRA FOR web_tools.web_search:\n"
                 "- In Role & inputs: cluster queries into 1–3 short themes (3–5 words) and note site restrictions.\n"
                 "- In Output: state result count vs requested n (e.g. '1/10, sparse') and describe what dominates:\n"
                 "  'forum threads only', 'official API docs', 'mixed blogs'.\n"
@@ -546,10 +519,9 @@ async def _generate_llm_summary(
         user_message = create_cached_human_message(user_blocks)
         role = "solver.react.summary"
         async with with_accounting(
-                bundle_id,
-                track_id="A",
-                agent=role,
-                metadata={"track_id": "A", "agent": role},
+            bundle_id,
+            agent=role,
+            metadata={"agent": role},
         ):
             result = await stream_agent_to_json(
                 service,
@@ -561,7 +533,7 @@ async def _generate_llm_summary(
                 temperature=0.2,
                 max_tokens=token_cap,
             )
-            logging_helpers.log_agent_packet(role, "summary", result)
+        logging_helpers.log_agent_packet(role, "summary", result)
 
         summary = (result.get("agent_response") or "").strip()
         log.info(f"LLM summary generated ({len(summary)} chars)\n{summary}")
@@ -693,9 +665,9 @@ async def generate_llm_summary_json(
         )
 
         # Extra guidance for web_search → mapped into JSON fields
-        if tool_id == "generic_tools.web_search":
+        if tool_id == "web_tools.web_search":
             system_prompt += (
-                "\nEXTRA FOR generic_tools.web_search (JSON mapping):\n"
+                "\nEXTRA FOR web_tools.web_search (JSON mapping):\n"
                 "- Use input.call_reason to describe the search role, e.g. 'collect docs about API rate limits'.\n"
                 "- Put query themes and site restrictions into input.key_params, clustered into 1–3 short items.\n"
                 "- In output.structural_summary:\n"
@@ -783,10 +755,9 @@ async def generate_llm_summary_json(
 
         from kdcube_ai_app.infra.accounting import with_accounting
         async with with_accounting(
-                bundle_id,
-                track_id="A",
-                agent=role,
-                metadata={"track_id": "A", "agent": role},
+            bundle_id,
+            agent=role,
+            metadata={"agent": role},
         ):
             result = await stream_agent_to_json(
                 service,
@@ -842,7 +813,7 @@ def _summarize_web_search_results(
         tool_inputs: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
-    Decision-node-oriented summary for generic_tools.web_search.
+    Decision-node-oriented summary for web_tools.web_search.
 
     Goals:
       - Show search context (queries + objective preview)
@@ -1139,7 +1110,7 @@ async def build_summary_for_tool_output(
       - structured == True            → returns a ToolCallSummaryJSON instance.
     """
     # 1) Special-case: canonical web_search summarizer (non-LLM) – keep disabled for now
-    # if tool_id == "generic_tools.web_search" and not structured:
+    # if tool_id == "web_tools.web_search" and not structured:
     #     return _summarize_web_search_results(output, tool_inputs=tool_inputs)
 
     # 2) Normalize output once (best-effort JSON parse)

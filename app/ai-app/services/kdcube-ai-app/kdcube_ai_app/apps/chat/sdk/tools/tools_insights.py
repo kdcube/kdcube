@@ -3,19 +3,18 @@
 from typing import Literal
 
 # chat/sdk/tools/tools_insights.py
-
+# web_tools
+# rendering_tools
 BUILTIN_TOOLS = {
     "llm_tools.generate_content_llm",
-    "generic_tools.web_search",
-    "generic_tools.fetch_url_contents",
-    "generic_tools.write_pdf",
-    "generic_tools.write_pptx",
-    "generic_tools.write_docx",
-    "generic_tools.write_html",
-    "generic_tools.write_png",
-    "generic_tools.write_xlsx",
-    "generic_tools.write_file",
-    "codegen_tools.codegen_python",
+    "web_tools.web_search",
+    "web_tools.fetch_url_contents",
+    "rendering_tools.write_pdf",
+    "rendering_tools.write_pptx",
+    "rendering_tools.write_docx",
+    "rendering_tools.write_html",
+    "rendering_tools.write_png",
+    "rendering_tools.write_xlsx",
     "exec_tools.execute_code_python",
 }
 
@@ -49,13 +48,12 @@ CITATION_AWARE_WANT_SOURCES_LIST_TOOL_IDS = {
 }
 
 WRITE_TOOLS = {
-    "generic_tools.write_pdf",
-    "generic_tools.write_pptx",
-    "generic_tools.write_docx",
-    "generic_tools.write_html",
-    "generic_tools.write_png",
-    "generic_tools.write_xlsx",
-    "generic_tools.write_file",
+    "rendering_tools.write_pdf",
+    "rendering_tools.write_pptx",
+    "rendering_tools.write_docx",
+    "rendering_tools.write_html",
+    "rendering_tools.write_png",
+    "infra.write"
 }
 
 CODEGEN_TOOLS = {
@@ -64,19 +62,19 @@ CODEGEN_TOOLS = {
 
 # Which tools produce *raw source lists* that must be merged into the pool and re-SID'd
 SEARCH_TOOL_IDS = {
-    "generic_tools.web_search",
+    "web_tools.web_search",
 }
 
 FETCH_URI_TOOL_IDS = {
-    "generic_tools.fetch_url_contents",
+    "web_tools.fetch_url_contents",
 }
 GENERATIVE_TOOL_IDS = {
     "llm_tools.generate_content_llm",
 }
 
 CITABLE_TOOL_IDS = {
-    "generic_tools.web_search",
-    "generic_tools.fetch_url_contents",
+    "web_tools.web_search",
+    "web_tools.fetch_url_contents",
     "sdk_tools.kb_search",
     "ctx_tools.merge_sources",
 }
@@ -119,12 +117,12 @@ def should_isolate_tool_execution(tool_id: str) -> bool:
     return should_isolate_in_docker(tool_id) or is_write_tool(tool_id) or is_search_tool(tool_id) or is_fetch_uri_content_tool(tool_id)
 
 def should_isolate_in_docker(tool_id: str) -> bool:
-    # return tool_id == "generic_tools.write_file" or is_codegen_tool(tool_id)
-    # return is_codegen_tool(tool_id)
     return False
-    # return tool_id in ("generic_tools.write_file", "llm_tools.generate_content_llm") or is_codegen_tool(tool_id)
 
-def tool_isolation(tool_id: str) -> Literal["none", "docker", "local_network", "local"]:
+def is_source_producing_tool(tool_id: str) -> bool:
+    return is_search_tool(tool_id) or is_fetch_uri_content_tool(tool_id)
+
+def tool_isolation(tool_id: str) -> Literal["none", "docker", "local"]:
     if should_isolate_in_docker(tool_id):
         return "docker"
     elif should_isolate_tool_execution(tool_id):
@@ -135,10 +133,10 @@ def tool_isolation(tool_id: str) -> Literal["none", "docker", "local_network", "
 
 def default_mime_for_write_tool(tool_id: str) -> str:
     return {
-        "generic_tools.write_pdf":  "application/pdf",
-        "generic_tools.write_pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        "generic_tools.write_docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "generic_tools.write_html": "text/html",
-        "generic_tools.write_png":  "image/png",
-        "generic_tools.write_xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "rendering_tools.write_pdf":  "application/pdf",
+        "rendering_tools.write_pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "rendering_tools.write_docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "rendering_tools.write_html": "text/html",
+        "rendering_tools.write_png":  "image/png",
+        "rendering_tools.write_xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }.get(tool_id, "application/octet-stream")

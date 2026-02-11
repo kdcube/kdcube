@@ -18,8 +18,8 @@ The system is built around:
 1. A **canonical source object model** (`sid`, `title`, `url`, `text`, `content`, + metadata).
 2. A set of **tools** that produce or consume sources:
 
-    * `generic_tools.web_search`
-    * `generic_tools.fetch_url_contents`
+    * `web_tools.web_search`
+    * `web_tools.fetch_url_contents`
     * `llm_tools.generate_content_llm`
     * `write_*` renderers (for parsing citations from output content)
 3. A **citation protocol** that encodes how sources are referenced in different output formats.
@@ -79,7 +79,7 @@ All components should converge on this shape when passing sources around:
 
 ## 3. Source Lifecycle & Tools
 
-### 3.1 `generic_tools.web_search`
+### 3.1 `web_tools.web_search`
 
 `web_search` is responsible for:
 
@@ -92,7 +92,7 @@ The results are merged into the turn’s `sources_pool`.
 
 ---
 
-### 3.2 `generic_tools.fetch_url_contents`
+### 3.2 `web_tools.fetch_url_contents`
 
 `fetch_url_contents` fetches full content for specific URLs and returns canonical sources
 with `sid`, `url`, `title`, and `content`/`text`. These rows are merged into `sources_pool`.

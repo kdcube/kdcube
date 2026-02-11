@@ -22,6 +22,7 @@ interface BundleEntry {
     module?: string | null;
     singleton?: boolean | null;
     description?: string | null;
+    version?: string | null;
 }
 
 interface BundlesResponse {
@@ -406,6 +407,38 @@ const AIBundleDashboard: React.FC = () => {
     const [propsJson, setPropsJson] = useState<string>('{}');
     const [propsDefaultsJson, setPropsDefaultsJson] = useState<string>('{}');
     const [propsLoading, setPropsLoading] = useState<boolean>(false);
+    const bundleVersion = useMemo(() => {
+        try {
+            const parsed = JSON.parse(propsDefaultsJson || '{}');
+            return typeof parsed?.bundle_version === 'string' ? parsed.bundle_version : '';
+        } catch {
+            return '';
+        }
+    }, [propsDefaultsJson]);
+    const bundleSnapshotPath = useMemo(() => {
+        if (!bundleVersion || !propsBundleId || !propsTenant || !propsProject) return '';
+        return `cb/tenants/${propsTenant}/projects/${propsProject}/ai-bundle-snapshots/${propsBundleId}.${bundleVersion}.zip`;
+    }, [bundleVersion, propsBundleId, propsTenant, propsProject]);
+
+    const copyText = async (value: string) => {
+        if (!value) return;
+        try {
+            await navigator.clipboard.writeText(value);
+        } catch {
+            try {
+                const el = document.createElement('textarea');
+                el.value = value;
+                el.style.position = 'fixed';
+                el.style.opacity = '0';
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+            } catch {
+                // no-op
+            }
+        }
+    };
 
     const [form, setForm] = useState<BundleEntry>({
         id: '',
@@ -648,6 +681,7 @@ const AIBundleDashboard: React.FC = () => {
                                         <th className="px-4 py-3 text-left font-semibold">Module</th>
                                         <th className="px-4 py-3 text-left font-semibold">Singleton</th>
                                         <th className="px-4 py-3 text-left font-semibold">Description</th>
+                                        <th className="px-4 py-3 text-left font-semibold">Version</th>
                                         <th className="px-4 py-3 text-right font-semibold">Actions</th>
                                     </tr>
                                 </thead>
@@ -660,6 +694,7 @@ const AIBundleDashboard: React.FC = () => {
                                             <td className="px-4 py-3 text-gray-700">{b.module || '—'}</td>
                                             <td className="px-4 py-3 text-gray-700">{b.singleton ? 'true' : 'false'}</td>
                                             <td className="px-4 py-3 text-gray-600">{b.description || '—'}</td>
+                                            <td className="px-4 py-3 text-gray-600">{b.version || '—'}</td>
                                             <td className="px-4 py-3 text-right">
                                                 <div className="flex justify-end gap-2">
                                                     <Button variant="secondary" onClick={() => editBundle(b)}>Edit</Button>
@@ -670,7 +705,7 @@ const AIBundleDashboard: React.FC = () => {
                                     ))}
                                     {bundleList.length === 0 && (
                                         <tr>
-                                            <td colSpan={7} className="px-4 py-6 text-center text-gray-500">
+                                            <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
                                                 No bundles configured.
                                             </td>
                                         </tr>
@@ -683,7 +718,19 @@ const AIBundleDashboard: React.FC = () => {
 
                 <Card>
                     <CardHeader
-                        title="Bundle props"
+                        title={
+                            <div className="flex items-center gap-3">
+                                <span>Bundle props</span>
+                                {bundleVersion ? (
+                                    <div className="flex items-center gap-2">
+                                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-gray-900 text-white">
+                                            v{bundleVersion}
+                                        </span>
+                                        <Button variant="secondary" onClick={() => copyText(bundleVersion)}>Copy</Button>
+                                    </div>
+                                ) : null}
+                            </div>
+                        }
                         subtitle="Override bundle props per tenant/project. Reset to code defaults when needed."
                         action={
                             <div className="flex gap-2">
@@ -714,6 +761,14 @@ const AIBundleDashboard: React.FC = () => {
                                 </select>
                             </div>
                         </div>
+
+                        {bundleSnapshotPath ? (
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                                <span className="font-semibold">Snapshot path:</span>
+                                <code className="px-2 py-1 rounded bg-gray-100 border border-gray-200">{bundleSnapshotPath}</code>
+                                <Button variant="secondary" onClick={() => copyText(bundleSnapshotPath)}>Copy path</Button>
+                            </div>
+                        ) : null}
 
                         <div>
                             <label className="block text-sm font-medium text-gray-800 mb-2">Props JSON</label>

@@ -461,7 +461,7 @@ async def _stream_agent_sections_to_json(
         client_name: str,
         client_role: str,
         sys_prompt: str|SystemMessage,
-        user_msg: str,
+        user_msg: str|list,
         schema_model,
         on_thinking_delta=None,
         temperature: float = 0.2,
@@ -479,13 +479,28 @@ async def _stream_agent_sections_to_json(
     to the UI.
     """
     run_logger = AgentLogger("ThreeSectionStream", getattr(svc.config, "log_level", "INFO"))
+    def _msg_len(msg: str|list) -> int:
+        if isinstance(msg, str):
+            return len(msg)
+        total = 0
+        for b in (msg or []):
+            if not isinstance(b, dict):
+                continue
+            text = b.get("text")
+            if isinstance(text, str):
+                total += len(text)
+            base64 = b.get("base64")
+            if isinstance(base64, str):
+                total += len(base64)
+        return total
+
     sys_message_len = len(sys_prompt) if isinstance(sys_prompt, str) else len(sys_prompt.content)
     run_logger.start_operation(
         "three_section_stream",
         client_role=client_role,
         client_name=client_name,
         system_prompt_len=sys_message_len,
-        user_msg_len=len(user_msg),
+        user_msg_len=_msg_len(user_msg),
         expected_format=getattr(schema_model, "__name__", str(schema_model)),
     )
 
@@ -636,7 +651,7 @@ async def _stream_simple_structured_json(
         client_name: str,
         client_role: str,
         sys_prompt: str|SystemMessage,
-        user_msg: str,
+        user_msg: str|list|HumanMessage,
         schema_model,
         temperature: float = 0.2,
         max_tokens: int = 1200,
@@ -652,13 +667,28 @@ async def _stream_simple_structured_json(
     """
     run_logger = AgentLogger("SimpleStructuredStream", getattr(svc.config, "log_level", "INFO"))
 
+    def _msg_len(msg: str|list) -> int:
+        if isinstance(msg, str):
+            return len(msg)
+        total = 0
+        for b in (msg or []):
+            if not isinstance(b, dict):
+                continue
+            text = b.get("text")
+            if isinstance(text, str):
+                total += len(text)
+            base64 = b.get("base64")
+            if isinstance(base64, str):
+                total += len(base64)
+        return total
+
     sys_message_len = len(sys_prompt) if isinstance(sys_prompt, str) else len(sys_prompt.content)
     run_logger.start_operation(
         "simple_structured_stream",
         client_role=client_role,
         client_name=client_name,
         system_prompt_len=sys_message_len,
-        user_msg_len=len(user_msg),
+        user_msg_len=_msg_len(user_msg),
         expected_format=getattr(schema_model, "__name__", str(schema_model)),
     )
 
@@ -675,7 +705,8 @@ async def _stream_simple_structured_json(
     client = svc.get_client(client_name)
     cfg = svc.describe_client(client, role=client_role)
     system_message = SystemMessage(content=sys_prompt) if isinstance(sys_prompt, str) else sys_prompt
-    messages = [system_message, HumanMessage(content=user_msg)]
+    human_message = HumanMessage(content=user_msg) if isinstance(user_msg, str) else user_msg
+    messages = [system_message, human_message]
 
     await svc.stream_model_text_tracked(
         client,
@@ -954,7 +985,6 @@ class _TwoSectionParser:
                 m_int_internal = _search(INT2_RE)
                 m_int_thinking = _search(THINKING2_RE)
                 m_json         = _search(JSON2_RE)
-
                 candidates = [
                     (m_int_internal, "internal"),
                     (m_int_thinking, "internal"),

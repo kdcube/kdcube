@@ -21,7 +21,7 @@ def _run_in_executor_with_ctx(loop, fn, *args, **kwargs):
 
 def build_current_tool_imports(alias_map: dict[str, str]) -> str:
     """
-    alias_map: {"io_tools":"io_tools","ctx_tools":"ctx_tools","generic_tools":"generic_tools","llm_tools":"llm_tools", ...}
+    alias_map: {"io_tools":"io_tools","ctx_tools":"ctx_tools","web_tools":"web_tools","llm_tools":"llm_tools", ...}
     Returns a Markdown code block with python import lines.
     """
     # Always show the wrapper import first
@@ -158,7 +158,7 @@ def _fix_json_bools(src: str) -> str:
 def _max_sid_from_context(outdir: pathlib.Path) -> int:
     try:
         import json as _json
-        p = outdir / "context.json"
+        p = outdir / "timeline.json"
         if not p.exists():
             return 0
         data = _json.loads(p.read_text(encoding="utf-8"))
@@ -182,13 +182,6 @@ def _max_sid_from_context(outdir: pathlib.Path) -> int:
                 mx = max(mx, int(row.get("sid") or 0))
             except Exception:
                 pass
-        for turn in (data.get("prior_turns") or {}).values():
-            pool = (turn or {}).get("sources_pool") or []
-            for row in pool:
-                try:
-                    mx = max(mx, int(row.get("sid") or 0))
-                except Exception:
-                    pass
         return mx
     except Exception:
         return 0
@@ -1582,7 +1575,7 @@ class _InProcessRuntime:
             bundle_root: str|None,
             tool_modules: List[Tuple[str, object]],
             globals: Dict[str, Any] | None = None,
-            isolation: Optional[Literal["none", "local_network", "docker", "local"]] = "none",
+            isolation: Optional[Literal["none", "docker", "local", "fargate", "external"]] = "none",
             timeout_s: int = 90,
             extra_env: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
@@ -1604,9 +1597,24 @@ class _InProcessRuntime:
             if dyn_name and dyn_name not in tool_module_names:
                 tool_module_names.append(dyn_name)
 
+        # --- EXTERNAL BRANCH: distributed exec ---
+        runtime_mode = (os.environ.get("EXEC_RUNTIME_MODE") or "").strip().lower()
+        if isolation in ("fargate", "external") or runtime_mode in ("fargate", "external"):
+            from kdcube_ai_app.apps.chat.sdk.runtime.external import fargate as fargate_runtime
+            return await fargate_runtime.run_py_in_fargate(
+                workdir=workdir,
+                outdir=output_dir,
+                runtime_globals=g,
+                tool_module_names=tool_module_names,
+                logger=self.log,
+                timeout_s=timeout_s,
+                bundle_root=pathlib.Path(bundle_root).resolve() if bundle_root else None,
+                extra_env=extra_env,
+            )
+
         # --- DOCKER BRANCH: Just delegate, don't touch files ---
         if isolation == "docker":
-            from kdcube_ai_app.apps.chat.sdk.runtime.docker import docker as docker_runtime
+            from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
             network_mode = os.environ.get("PY_CODE_EXEC_NETWORK_MODE", "host")
             # Docker will handle everything - just pass globals as-is
             # (including PORTABLE_SPEC which supervisor needs)
@@ -1703,11 +1711,11 @@ class _InProcessRuntime:
         # Run subprocess
         return await _run_subprocess(
             entry_path=main_path,
-            cwd=workdir,
+            cwd=output_dir,
             env=child_env,
             timeout_s=timeout_s,
             outdir=output_dir,
-            allow_network=isolation != "local_network",
+            allow_network=True,
             exec_id=exec_id,
         )
 
@@ -1722,7 +1730,7 @@ class _InProcessRuntime:
             params: Dict[str, Any],
             call_reason: Optional[str] = None,
             globals: Dict[str, Any] | None = None,
-            isolation: Optional[Literal["none", "docker", "local_network", "local"]] = "none",
+            isolation: Optional[Literal["none", "docker", "local", "fargate", "external"]] = "none",
             timeout_s: int = 90,
     ) -> Dict[str, Any]:
         """

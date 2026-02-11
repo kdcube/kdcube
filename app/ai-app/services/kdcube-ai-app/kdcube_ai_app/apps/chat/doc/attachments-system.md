@@ -11,7 +11,7 @@ Key components:
 - Storage: `kdcube_ai_app/apps/chat/sdk/storage/conversation_store.py`
 - Preflight/AV: `kdcube_ai_app/infra/gateway/safe_preflight.py`
 - Attachment ingestion and conversion: `kdcube_ai_app/apps/chat/sdk/runtime/user_inputs.py`
-- Multimodal message composition: `kdcube_ai_app/apps/chat/sdk/context/retrieval/documenting.py`
+- Multimodal message composition: `kdcube_ai_app/apps/chat/sdk/runtime/solution/context/journal.py`
 - Rehosting to execution workspace: `kdcube_ai_app/apps/chat/sdk/runtime/solution/solution_workspace.py`
 - Codegen runtime usage: `kdcube_ai_app/apps/chat/sdk/runtime/solution/react/react.py`
 
@@ -64,7 +64,7 @@ Ingress enforces both per-file and total-message caps, sourced from
 - Total message cap (text + attachments): `MESSAGE_MAX_BYTES` (25 MB)
 
 When composing messages, `_messages_with_context(...)` in
-`kdcube_ai_app/apps/chat/sdk/context/retrieval/documenting.py` uses
+`kdcube_ai_app/apps/chat/sdk/runtime/solution/context/journal.py` uses
 `attachment_blocks(...)` to create multimodal content blocks for LLMs.
 These appear in tools such as `llm_tools.py` and the React toolchain.
 

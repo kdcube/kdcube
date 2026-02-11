@@ -54,7 +54,6 @@ def _rec_get(r, key, default=None):
 @dataclass
 class Ticket:
     ticket_id: str
-    track_id: str
     title: str
     description: str
     status: str
@@ -70,7 +69,6 @@ class Ticket:
     def _row_to_ticket_dict(r) -> Dict[str, Any]:
         return {
             "ticket_id": _rec_get(r, "ticket_id"),
-            "track_id": _rec_get(r, "track_id"),
             "title": _rec_get(r, "title"),
             "description": _rec_get(r, "description") or "",
             "status": _rec_get(r, "status") or "open",
@@ -120,7 +118,6 @@ class ConvTicketStore:
         ddl = f"""
         CREATE TABLE IF NOT EXISTS {self.schema}.conv_track_tickets (
           ticket_id TEXT PRIMARY KEY,
-          track_id TEXT NOT NULL,
           user_id TEXT NOT NULL,
           conversation_id TEXT NOT NULL,
           title TEXT NOT NULL,
@@ -139,7 +136,7 @@ class ConvTicketStore:
         
         -- Helpful indexes
         CREATE INDEX IF NOT EXISTS conv_track_tickets_lookup_idx
-          ON {self.schema}.conv_track_tickets (user_id, conversation_id, track_id, status, updated_at DESC);
+          ON {self.schema}.conv_track_tickets (user_id, conversation_id, status, updated_at DESC);
         CREATE INDEX IF NOT EXISTS conv_track_tickets_tags_gin
           ON {self.schema}.conv_track_tickets USING GIN (tags);
         -- If you use pgvector searches in prod, also:
@@ -151,7 +148,6 @@ class ConvTicketStore:
                 await con.execute(stmt)
 
     async def create_ticket(self, *,
-                            track_id: str,
                             user_id: str,
                             conversation_id: str,
                             turn_id: Optional[str] = None,
@@ -170,11 +166,11 @@ class ConvTicketStore:
         async with self._pool.acquire() as con:
             row = await con.fetchrow(
                 f"""INSERT INTO {self.schema}.conv_track_tickets
-                    (ticket_id, track_id, user_id, conversation_id, title, description,
+                    (ticket_id, user_id, conversation_id, title, description,
                      status, priority, assignee, tags, embedding, data, turn_id)
-                 VALUES ($1,$2,$3,$4,$5,$6,'open',$7,$8,$9,$10::vector,$11::jsonb,$12)
+                 VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8,$9::vector,$10::jsonb,$11)
                  RETURNING *""",
-                tid, track_id, user_id, conversation_id,
+                tid, user_id, conversation_id,
                 title, description, int(priority), assignee, (tags or []),
                 convert_embedding_to_string(v),
                 (data or {}), turn_id
@@ -224,7 +220,7 @@ class ConvTicketStore:
         async with self._pool.acquire() as con:
             await con.execute(q, *vals)
 
-    async def sem_search_tickets(self, *, track_id: str,
+    async def sem_search_tickets(self, *, conversation_id: str,
                                  query: str,
                                  embed_texts_fn: Callable[[List[str]], Awaitable[List[Any]]],
                                  top_k: int = 6) -> List[Ticket]:
@@ -233,15 +229,15 @@ class ConvTicketStore:
             rows = await con.fetch(
                 f"""SELECT *, 1 - (embedding <=> $2) AS score
                     FROM {self.schema}.conv_track_tickets
-                    WHERE track_id=$1 AND embedding IS NOT NULL
+                    WHERE conversation_id=$1 AND embedding IS NOT NULL
                     ORDER BY embedding <=> $2
                     LIMIT {int(top_k)}""",
-                track_id, convert_embedding_to_string(v)
+                conversation_id, convert_embedding_to_string(v)
             )
         out=[]
         for r in rows:
             out.append(Ticket(
-                ticket_id=r["ticket_id"], track_id=r["track_id"], title=r["title"], description=r["description"],
+                ticket_id=r["ticket_id"], title=r["title"], description=r["description"],
                 status=r["status"], priority=int(r["priority"] or 3), assignee=r["assignee"],
                 tags=list(r["tags"] or []), created_at=str(r["created_at"]), updated_at=str(r["updated_at"]),
                 data=dict(r["data"] or {}), turn_id=r["turn_id"]
@@ -253,7 +249,6 @@ class ConvTicketStore:
             *,
             user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
-            track_id: Optional[str] = None,
             turn_id: Optional[str] = None,
             status: Optional[str] = None
     ) -> List[Ticket]:
@@ -272,8 +267,6 @@ class ConvTicketStore:
             add("user_id=$n", user_id)
         if conversation_id is not None:
             add("conversation_id=$n", conversation_id)
-        if track_id is not None:
-            add("track_id=$n", track_id)
         if turn_id is not None:
             add("turn_id=$n", turn_id)
         if status is not None:
@@ -290,7 +283,6 @@ class ConvTicketStore:
             d = Ticket._row_to_ticket_dict(r)
             out.append(Ticket(
                 ticket_id=d["ticket_id"],
-                track_id=d["track_id"],
                 title=d["title"],
                 description=d["description"],
                 status=d["status"],
@@ -313,7 +305,7 @@ class ConvTicketStore:
         if not r:
             return None
         return Ticket(
-            ticket_id=r["ticket_id"], track_id=r["track_id"], title=r["title"], description=r["description"],
+            ticket_id=r["ticket_id"], title=r["title"], description=r["description"],
             status=r["status"], priority=int(r["priority"] or 3), assignee=r["assignee"],
             tags=list(r["tags"] or []), created_at=str(r["created_at"]), updated_at=str(r["updated_at"]),
             data=dict(r["data"] or {}), turn_id=r["turn_id"]

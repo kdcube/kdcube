@@ -567,7 +567,6 @@ async def process_chat_message(
                         fingerprint=session.fingerprint,
                         conversation_id=conversation_id,
                         turn_id=turn_id,
-                        track_id="A",
                         role="user",
                         filename=a.name or "file",
                         data=a.content,

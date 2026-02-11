@@ -6,7 +6,7 @@ It is aligned with `kdcube_ai_app/apps/chat/doc/execution/operations.md` and the
 - `kdcube_ai_app/apps/chat/sdk/runtime/solution/react/react.py`
 - `kdcube_ai_app/apps/chat/sdk/runtime/solution/react/execution.py`
 - `kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`
-- `kdcube_ai_app/apps/chat/sdk/runtime/docker/docker.py`
+- `kdcube_ai_app/apps/chat/sdk/runtime/external/docker.py`
 - `kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py`
 - `kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec.py`
 
@@ -117,7 +117,7 @@ Each React run creates a directory under `/exec-workspace`:
   work/
     main.py                    # injected and executed
   out/
-    context.json               # React context (written by chat)
+    timeline.json              # React timeline (written by chat)
     tool_calls_index.json      # tool call index (shared)
     exec_result_*.json         # exec tool outputs
     codegen_result_*.json      # codegen outputs
@@ -144,7 +144,7 @@ Each React run creates a directory under `/exec-workspace`:
   - `EXECUTOR_GID` (default 1000)
 
 **Why this matters:**
-- React (chat) writes `context.json`.
+- React (chat) writes `timeline.json`.
 - Executor writes `exec_result_*.json`, logs, and tool outputs.
 - Shared files must be **group-writable** by GID 1000.
 
@@ -203,11 +203,11 @@ sudo chmod -R g+rwX /path/to/exec-workspace
 Shared outdir is safe only if there is **one active executor per React run**.
 If you run multiple execs in parallel that write to the same outdir:
 
-- `context.json` and `tool_calls_index.json` can race.
+- `timeline.json` and `tool_calls_index.json` can race.
 - Result files should be uniquely named (`exec_result_<id>.json` already is).
 
 If parallel execs are added later:
-1) Add file locks around `context.json` and `tool_calls_index.json` writes.
+1) Add file locks around `timeline.json` and `tool_calls_index.json` writes.
 2) Ensure each exec uses a unique `EXECUTION_ID`.
 3) Consider per-exec subdirectories under `out/` if logs need isolation.
 

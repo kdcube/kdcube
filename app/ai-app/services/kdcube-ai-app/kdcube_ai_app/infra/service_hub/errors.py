@@ -84,6 +84,26 @@ class ServiceException(Exception):
         if cause is not None:
             self.__cause__ = cause
 
+
+def is_context_limit_error(err: ServiceError) -> bool:
+    code = (err.code or err.error_type or "").lower()
+    msg = (err.message or "").lower()
+    hay = " ".join([code, msg])
+    return any(
+        token in hay
+        for token in (
+            "context_length",
+            "context length",
+            "maximum context",
+            "max context",
+            "max tokens",
+            "token limit",
+            "too many tokens",
+            "input too long",
+            "prompt too long",
+        )
+    )
+
 def mk_llm_error(
         exc: Exception,
         stage: str,

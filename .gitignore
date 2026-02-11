@@ -195,3 +195,4 @@ logs/
 notebooks/
 articles/
 /app/ai-app/services/kdcube-ai-app/kdcube_ai_app/journal/
+/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/skills/draft_instructions/

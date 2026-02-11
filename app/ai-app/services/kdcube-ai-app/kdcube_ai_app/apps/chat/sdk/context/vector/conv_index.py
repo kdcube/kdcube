@@ -101,7 +101,7 @@ class ConvIndex:
             self, *, user_id: str, conversation_id: str
     ) -> Optional[Dict[str, Any]]:
         q = f"""
-          SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id, turn_id, bundle_id
+          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id
           FROM {self.schema}.conv_messages
           WHERE user_id=$1 AND conversation_id=$2
             AND role='artifact'
@@ -316,7 +316,6 @@ class ConvIndex:
             user_type: str = "anonymous",
             embedding: Optional[List[float]] = None,
             message_id: Optional[str] = None,
-            track_id: Optional[str] = None,
             turn_id: Optional[str] = None,
             bundle_id: Optional[str] = None,
     ) -> int:
@@ -325,8 +324,8 @@ class ConvIndex:
             q = f"""
                 INSERT INTO {self.schema}.conv_messages
                   (user_id, conversation_id, message_id, role, text, hosted_uri, ts,
-                   ttl_days, user_type, tags, embedding, track_id, turn_id, bundle_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,$13,$14)
+                   ttl_days, user_type, tags, embedding, turn_id, bundle_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::vector,$12,$13)
                 RETURNING id
             """
             rec = await con.fetchrow(
@@ -342,7 +341,6 @@ class ConvIndex:
                 user_type,
                 (tags or []),
                 convert_embedding_to_string(embedding) if embedding else None,
-                track_id,
                 turn_id,
                 bundle_id,
             )
@@ -357,7 +355,6 @@ class ConvIndex:
             top_k: int = 8,
             days: int = 90,
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
-            track_id: Optional[str] = None,
             bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         args = [user_id, conversation_id, list(roles), str(days), convert_embedding_to_string(query_embedding)]
@@ -369,15 +366,12 @@ class ConvIndex:
             "ts + (ttl_days || ' days')::interval >= now()",
             "embedding IS NOT NULL",
         ]
-        if track_id:
-            args.append(track_id)
-            where.append(f"track_id = ${len(args)}")
         if bundle_id:
             args.append(bundle_id)
             where.append(f"bundle_id = ${len(args)}")
 
         q = f"""
-            SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id, turn_id, bundle_id,
+            SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id,
                    1 - (embedding <=> $5::vector) AS score
             FROM {self.schema}.conv_messages
             WHERE {' AND '.join(where)}
@@ -399,7 +393,6 @@ class ConvIndex:
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
             any_tags: Optional[List[str]] = None,
             all_tags: Optional[List[str]] = None,
-            track_id: Optional[str] = None,
             bundle_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -427,15 +420,12 @@ class ConvIndex:
         if all_tags:
             args.append(all_tags)
             clauses.append(f"tags @> ${len(args)}::text[]")
-        if track_id:
-            args.append(track_id)
-            clauses.append(f"track_id = ${len(args)}")
         if bundle_id:
             args.append(bundle_id)
             clauses.append(f"bundle_id = ${len(args)}")
 
         q = f"""
-            SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id, turn_id, bundle_id,
+            SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id,
                    1 - (embedding <=> $5::vector) AS score
             FROM {self.schema}.conv_messages
             WHERE {' AND '.join(clauses)}
@@ -454,7 +444,6 @@ class ConvIndex:
             query_embedding: List[float],
             top_k: int = 8,
             days: int = 90,
-            track_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Returns nearest neighbors, each augmented with the *closest prior user*
@@ -474,10 +463,6 @@ class ConvIndex:
             "m.ts + (m.ttl_days || ' days')::interval >= now()",
             "m.embedding IS NOT NULL",
         ]
-        if track_id:
-            args.append(track_id)
-            where.append(f"m.track_id = ${len(args)}")
-
         q = f"""
         WITH hits AS (
           SELECT
@@ -490,7 +475,7 @@ class ConvIndex:
         )
         SELECT
           h.id AS hit_id, h.role AS hit_role, h.text AS hit_text, h.hosted_uri AS hit_hosted_uri,
-          h.ts AS hit_ts, h.tags AS hit_tags, h.track_id AS hit_track_id, h.turn_id AS hit_turn_id, h.score AS hit_score,
+          h.ts AS hit_ts, h.tags AS hit_tags, h.turn_id AS hit_turn_id, h.score AS hit_score,
         
           u.id AS user_id_msg, u.text AS user_text, u.hosted_uri AS user_hosted_uri, u.ts AS user_ts, u.turn_id AS user_turn_id,
           a.id AS assistant_id_msg, a.text AS assistant_text, a.hosted_uri AS assistant_hosted_uri, a.ts AS assistant_ts, a.turn_id AS assistant_turn_id
@@ -583,7 +568,6 @@ class ConvIndex:
                     user_type=user_type,
                     tags=meta.get("tags") or [],
                     embedding=emb,
-                    track_id=meta.get("track_id"),
                     turn_id=meta.get("turn_id"),
                     bundle_id=meta.get("bundle_id"),
                 )
@@ -606,12 +590,11 @@ class ConvIndex:
             *,
             user_id: str,
             conversation_id: Optional[str],
-            track_id: Optional[str],
             turn_id: Optional[str] = None,
             query_embedding: Optional[List[float]] = None,   # <-- now optional
             top_k: int = 12,
             days: int = 90,
-            scope: str = "track",  # 'track' | 'conversation' | 'user'
+            scope: str = "conversation",  # 'conversation' | 'user'
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
             any_tags: Optional[Sequence[str]] = None,  # OR
             all_tags: Optional[Sequence[str]] = None,  # AND (tags @> array)
@@ -652,16 +635,7 @@ class ConvIndex:
             sim_sql = "0.0::float AS sim"
 
         # scope
-        if scope == "track" and track_id:
-            args.append(track_id)
-            where.append(f"m.track_id = ${len(args)}")
-            if conversation_id:
-                args.append(conversation_id)
-                where.append(f"m.conversation_id = ${len(args)}")
-            if turn_id is not None:
-                args.append(turn_id)
-                where.append(f"m.turn_id = ${len(args)}")
-        elif scope == "conversation" and conversation_id:
+        if scope == "conversation" and conversation_id:
             args.append(conversation_id)
             where.append(f"m.conversation_id = ${len(args)}")
             if turn_id is not None:
@@ -746,7 +720,7 @@ class ConvIndex:
             FROM {self.schema}.conv_messages m
             WHERE {' AND '.join(where)}
           )
-          SELECT m.id, m.message_id, m.role, m.text, m.hosted_uri, m.ts, m.tags, m.track_id, m.turn_id, m.bundle_id,
+          SELECT m.id, m.message_id, m.role, m.text, m.hosted_uri, m.ts, m.tags, m.turn_id, m.bundle_id,
                  m.sim, m.rec, m.age_sec, m.rboost,
                  (0.70*m.sim + 0.25*exp(-ln(2) * m.age_sec / ({half_life_days_s}*24*3600.0)) + 0.05*m.rboost) AS score
                  {deps_select}
@@ -765,7 +739,6 @@ class ConvIndex:
             *,
             user_id: str,
             conversation_id: Optional[str] = None,
-            track_id: Optional[str] = None,
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
             any_tags: Optional[Sequence[str]] = None,
             all_tags: Optional[Sequence[str]] = None,
@@ -782,13 +755,7 @@ class ConvIndex:
             "ts >= now() - ($3::text || ' days')::interval",
             "ts + (ttl_days || ' days')::interval >= now()",
         ]
-        if track_id:
-            args.append(track_id)
-            where.append(f"track_id = ${len(args)}")
-            if conversation_id:
-                args.append(conversation_id)
-                where.append(f"conversation_id = ${len(args)}")
-        elif conversation_id:
+        if conversation_id:
             args.append(conversation_id)
             where.append(f"conversation_id = ${len(args)}")
         if turn_id is not None:
@@ -807,10 +774,61 @@ class ConvIndex:
             where.append(f"NOT (tags && ${len(args)}::text[])")
 
         q = f"""
-          SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id, turn_id, bundle_id
+          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id
           FROM {self.schema}.conv_messages
           WHERE {' AND '.join(where)}
           ORDER BY ts DESC
+          LIMIT {int(limit)}
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+        return [dict(r) for r in rows]
+
+    async def fetch_recent_after_ts(
+            self,
+            *,
+            user_id: str,
+            conversation_id: Optional[str] = None,
+            roles: tuple[str, ...] = ("user", "assistant", "artifact"),
+            any_tags: Optional[Sequence[str]] = None,
+            all_tags: Optional[Sequence[str]] = None,
+            not_tags: Optional[Sequence[str]] = None,
+            limit: int = 5000,
+            days: int = 365,
+            bundle_id: Optional[str] = None,
+            after_ts: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        args: List[Any] = [user_id, list(roles), str(days)]
+        where = [
+            "user_id = $1",
+            "role = ANY($2)",
+            "ts >= now() - ($3::text || ' days')::interval",
+            "ts + (ttl_days || ' days')::interval >= now()",
+        ]
+        if conversation_id:
+            args.append(conversation_id)
+            where.append(f"conversation_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"bundle_id = ${len(args)}")
+        if after_ts:
+            args.append(after_ts)
+            where.append(f"ts >= ${len(args)}::timestamptz")
+        if any_tags:
+            args.append(list(any_tags))
+            where.append(f"tags && ${len(args)}::text[]")
+        if all_tags:
+            args.append(list(all_tags))
+            where.append(f"tags @> ${len(args)}::text[]")
+        if not_tags:
+            args.append(list(not_tags))
+            where.append(f"NOT (tags && ${len(args)}::text[])")
+
+        q = f"""
+          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id
+          FROM {self.schema}.conv_messages
+          WHERE {' AND '.join(where)}
+          ORDER BY ts ASC
           LIMIT {int(limit)}
         """
         async with self._pool.acquire() as con:
@@ -823,7 +841,6 @@ class ConvIndex:
             user_id: str,
             conversation_id: str,
             query_embedding: List[float],
-            track_id: Optional[str],
             turn_id: Optional[str] = None,
             recent_limit: int = 30,  # deterministic
             recent_days: int = 30,
@@ -836,7 +853,6 @@ class ConvIndex:
         recent = await self.fetch_recent(
             user_id=user_id,
             conversation_id=conversation_id,
-            track_id=track_id,
             roles=roles,
             any_tags=topic_tags,
             limit=recent_limit,
@@ -848,12 +864,11 @@ class ConvIndex:
         sem = await self.search_context(
             user_id=user_id,
             conversation_id=conversation_id,
-            track_id=track_id,
             turn_id=turn_id,
             query_embedding=query_embedding,
             top_k=semantic_top_k,
             days=semantic_days,
-            scope=("track" if track_id else "conversation"),
+            scope="conversation",
             roles=roles,
             any_tags=topic_tags,
             include_deps=True,
@@ -869,10 +884,9 @@ class ConvIndex:
             *,
             user_id: str,
             conversation_id: str,
-            track_id: Optional[str],
             mention: str,
             mention_emb: Optional[List[float]],
-            prefer_kinds: Sequence[str] = ("solver.out.inline", "solver.program.presentation", "solver.out.file"),
+            prefer_kinds: Sequence[str] = ("solver.out.inline", "react.log.presentation", "solver.out.file"),
             window_limit: int = 40,
             turn_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
@@ -880,7 +894,6 @@ class ConvIndex:
         recent = await self.fetch_recent(
             user_id=user_id,
             conversation_id=conversation_id,
-            track_id=track_id,
             roles=("artifact",),
             any_tags=list(prefer_kinds),
             limit=window_limit,
@@ -898,12 +911,11 @@ class ConvIndex:
             sem = await self.search_context(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                track_id=track_id,
                 turn_id=turn_id,
                 query_embedding=mention_emb,
                 top_k=8,
                 days=365,
-                scope=("track" if track_id else "conversation"),
+                scope="conversation",
                 roles=("artifact",),
                 any_tags=list(prefer_kinds),
                 include_deps=True,
@@ -915,7 +927,7 @@ class ConvIndex:
 
     async def fetch_latest_summary(self, *, user_id: str, conversation_id: str, kind: str = "conversation.summary") -> Optional[Dict[str, Any]]:
         q = f"""
-          SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id
+          SELECT id, message_id, role, text, hosted_uri, ts, tags
           FROM {self.schema}.conv_messages
           WHERE user_id=$1 AND conversation_id=$2
             AND role='artifact' AND tags @> ARRAY[$3]::text[]
@@ -933,7 +945,7 @@ class ConvIndex:
         """
         q = f"""
         WITH cand AS (
-          SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id
+          SELECT id, message_id, role, text, hosted_uri, ts, tags
           FROM {self.schema}.conv_messages
           WHERE user_id=$1 AND conversation_id=$2
             AND role='artifact' AND tags @> ARRAY['kind:turn.log']::text[]
@@ -955,7 +967,7 @@ class ConvIndex:
           FROM tagged
           WHERE turn_key IS NOT NULL
         )
-        SELECT id, message_id, role, text, hosted_uri, ts, tags, track_id
+        SELECT id, message_id, role, text, hosted_uri, ts, tags
         FROM ranked
         WHERE rn = 1
         ORDER BY ts DESC
@@ -1222,7 +1234,6 @@ class ConvIndex:
             user_id: str,
             conversation_id: str,
             days: int = 365,                 # configurable window; mirrors other APIs
-            track_id: Optional[str] = None,  # optional scope-narrowing
             bundle_id: Optional[str] = None,
     ) -> int:
         """
@@ -1237,9 +1248,6 @@ class ConvIndex:
             "ts + (ttl_days || ' days')::interval >= now()",
             "turn_id IS NOT NULL"
         ]
-        if track_id:
-            args.append(track_id)
-            where.append(f"track_id = ${len(args)}")
         if bundle_id:
             args.append(bundle_id); where.append(f"bundle_id = ${len(args)}")
 
@@ -1258,7 +1266,6 @@ class ConvIndex:
             user_id: str,
             conversation_id: str,
             days: int = 365,
-            track_id: Optional[str] = None,
             bundle_id: Optional[str] = None,
             turn_ids: Optional[Sequence[str]] = None,
 
@@ -1278,10 +1285,6 @@ class ConvIndex:
             "m.ts >= now() - ($3::text || ' days')::interval",
             "m.ts + (m.ttl_days || ' days')::interval >= now()",
         ]
-        if track_id:
-            args.append(track_id)
-            where.append(f"m.track_id = ${len(args)}")
-
         if bundle_id:
             args.append(bundle_id); where.append(f"m.bundle_id = ${len(args)}")
 
@@ -1436,7 +1439,6 @@ class ConvIndex:
             *,
             user_id: str,
             conversation_id: Optional[str],
-            track_id: Optional[str],
             query_embedding: Optional[List[float]] = None,
             query_text: Optional[str] = None,
             search_roles: tuple[str, ...] = ("user", "assistant", "artifact"),  # roles to search for turn_id match
@@ -1444,7 +1446,7 @@ class ConvIndex:
             role_tag_filters: Optional[List[Dict[str, Any]]] = None,
             top_k: int = 8,
             days: int = 90,
-            scope: str = "track",
+            scope: str = "conversation",
             bundle_id: Optional[str] = None,
             half_life_days: float = 7.0,
     ) -> List[Dict[str, Any]]:
@@ -1505,13 +1507,7 @@ class ConvIndex:
             where.append("(" + " OR ".join(role_clauses) + ")")
 
         # Scope filters
-        if scope == "track" and track_id:
-            args.append(track_id)
-            where.append(f"m.track_id = ${len(args)}")
-            if conversation_id:
-                args.append(conversation_id)
-                where.append(f"m.conversation_id = ${len(args)}")
-        elif scope == "conversation" and conversation_id:
+        if scope == "conversation" and conversation_id:
             args.append(conversation_id)
             where.append(f"m.conversation_id = ${len(args)}")
 
@@ -1559,7 +1555,7 @@ class ConvIndex:
         )
         SELECT 
             log.id, log.message_id, log.role, log.text, log.hosted_uri, log.ts, log.tags,
-            log.track_id, log.turn_id, log.bundle_id,
+            log.turn_id, log.bundle_id,
             ut.sim,
             ut.rec,
             ut.score,

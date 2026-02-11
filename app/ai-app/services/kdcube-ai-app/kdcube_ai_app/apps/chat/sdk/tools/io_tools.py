@@ -27,10 +27,13 @@ except Exception:  # non-supervised environments, tests, etc.
     ToolStub = None
 
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import parse_tool_id
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_index import (
+    read_index,
+    reserve_tool_call_filename,
+    ensure_index_entry,
+)
 
 # ---------- basics ----------
-
-_INDEX_FILE = "tool_calls_index.json"
 
 _TOOL_SUBSYSTEM = None
 
@@ -58,7 +61,7 @@ def _outdir() -> pathlib.Path:
     return resolve_output_dir()
 
 def _sanitize_tool_id(tid: str) -> str:
-    # "generic_tools.web_search" -> "generic_tools_web_search"
+    # "web_tools.web_search" -> "web_tools"
     return re.sub(r"[^a-zA-Z0-9]+", "_", tid).strip("_")
 
 def _guess_mime(path: str, default: str = "application/octet-stream") -> str:
@@ -644,24 +647,7 @@ def _promote_tool_calls(raw_files: Dict[str, List[str]], outdir: pathlib.Path) -
     return promos
 
 
-# ---------- index helpers (for wrapper) ----------
-
-def _read_index(od: pathlib.Path) -> Dict[str, List[str]]:
-    p = od / _INDEX_FILE
-    if not p.exists():
-        return {}
-    try:
-        m = json.loads(p.read_text(encoding="utf-8")) or {}
-        # normalize shape
-        return {k: list(v or []) for k, v in m.items() if isinstance(v, list)}
-    except Exception:
-        return {}
-
-def _write_index(od: pathlib.Path, m: Dict[str, List[str]]) -> None:
-    (od / _INDEX_FILE).write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
-
-def _next_index(m: Dict[str, List[str]], tool_id: str) -> int:
-    return len(m.get(tool_id, []))
+# ---------- index helpers (delegated to runtime.tool_index) ----------
 
 
 # ---------- AgentIO tools ----------
@@ -685,10 +671,10 @@ class AgentIO:
     )
     async def tool_call(
             self,
-            fn: Annotated[Any, "Callable tool to invoke (e.g., generic_tools.web_search)."],
+            fn: Annotated[Any, "Callable tool to invoke (e.g., web_tools.web_search)."],
             params: Annotated[str | dict, "Tool parameters. Pass as JSON string or dict. Dict form supports bytes for binary content."] = "{}",
             call_reason: Annotated[Optional[str], "Short human reason for the call (5–12 words)."] = None,
-            tool_id: Annotated[Optional[str], "Qualified id like 'generic_tools.web_search'. If omitted, derived from fn.__module__+'.'+fn.__name__."] = None,
+            tool_id: Annotated[Optional[str], "Qualified id like 'web_tools.web_search'. If omitted, derived from fn.__module__+'.'+fn.__name__."] = None,
             filename: Annotated[Optional[str], "Override filename for the saved JSON (relative in OUTPUT_DIR)."] = None,
     ) -> Annotated[Any, "Raw return from the tool"]:
         # ---- Parse params: accept str (JSON) or dict ----
@@ -712,11 +698,10 @@ class AgentIO:
             name = getattr(fn, "__name__", "call") or "call"
             tid = f"{mod}.{name}".strip()
 
-        # ---- Index + filename (same logic as before) -----------------------
-        od   = _outdir()
-        idx  = _read_index(od)
-        i    = _next_index(idx, tid)
-        rel  = filename or f"{_sanitize_tool_id(tid)}-{i}.json"
+        # ---- Index + filename (timestamp suffix) ---------------------------
+        od = _outdir()
+        safe_tid = _sanitize_tool_id(tid)
+        rel = filename or reserve_tool_call_filename(od, tid, safe_tid)
 
         # ---- MODE 1: limited executor → delegate to supervisor via socket --
         if _is_limited_executor() and ToolStub is not None:
@@ -738,11 +723,9 @@ class AgentIO:
                         description=str(call_reason or ""),
                         data=ret,
                         params=final_params,
-                        index=i,
                         filename=rel,
                     )
-                    idx.setdefault(tid, []).append(rel)
-                    _write_index(od, idx)
+                    ensure_index_entry(od, tid, rel)
                     return ret
 
                 # Supervisor reported a logical error (but the call *did* happen)
@@ -761,11 +744,9 @@ class AgentIO:
                     description=str(call_reason or ""),
                     data=err_env,
                     params=final_params,
-                    index=i,
                     filename=rel,
                 )
-                idx.setdefault(tid, []).append(rel)
-                _write_index(od, idx)
+                ensure_index_entry(od, tid, rel)
                 # Preserve old semantics: surface failure as exception
                 raise RuntimeError(str(msg))
 
@@ -786,11 +767,9 @@ class AgentIO:
                         description=str(call_reason or ""),
                         data=err_env,
                         params=final_params,
-                        index=i,
                         filename=rel,
                     )
-                    idx.setdefault(tid, []).append(rel)
-                    _write_index(od, idx)
+                    ensure_index_entry(od, tid, rel)
                 finally:
                     # Preserve external behavior: re-raise
                     raise
@@ -825,13 +804,11 @@ class AgentIO:
                 description=str(call_reason or ""),
                 data=ret,  # raw
                 params=final_params,
-                index=i,
                 filename=rel,
             )
 
-            # Update index and return raw result unchanged
-            idx.setdefault(tid, []).append(rel)
-            _write_index(od, idx)
+            # Ensure index and return raw result unchanged
+            ensure_index_entry(od, tid, rel)
             return ret
 
         except Exception as e:
@@ -851,11 +828,9 @@ class AgentIO:
                     description=str(call_reason or ""),
                     data=err_env,  # stored in ret
                     params=final_params,
-                    index=i,
                     filename=rel,
                 )
-                idx.setdefault(tid, []).append(rel)
-                _write_index(od, idx)
+                ensure_index_entry(od, tid, rel)
             finally:
                 # Re-raise to keep external behavior identical
                 raise
@@ -871,7 +846,7 @@ class AgentIO:
             filename: Optional[str] = None,
     ) -> str:
         od = _outdir()
-        rel = filename or f"{_sanitize_tool_id(tool_id)}-{index}.json"
+        rel = filename or reserve_tool_call_filename(od, tool_id, _sanitize_tool_id(tool_id))
         path = od / rel
 
         # Decode params if string, or use directly if dict
@@ -944,7 +919,7 @@ class AgentIO:
 
         # 1) Merge tool-call index FIRST so we see all persisted calls
         raw_files = obj.get("raw_files") or {}
-        idx_map = _read_index(od)
+        idx_map = read_index(od)
         if idx_map:
             merged: Dict[str, List[str]] = {k: list(v) for k, v in (raw_files or {}).items()}
             for k, arr in idx_map.items():

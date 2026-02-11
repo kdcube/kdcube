@@ -57,7 +57,7 @@ TOOL_RUNTIME = {
 }
 ```
 
-Valid values: `none | local | local_network | docker`.
+Valid values: `none | local | docker`.
 
 If a tool is **not** present in the mapping, it runs in‑memory (unless the SDK default policy isolates it).
 

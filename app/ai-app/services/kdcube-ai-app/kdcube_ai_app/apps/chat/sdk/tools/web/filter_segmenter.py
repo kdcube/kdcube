@@ -191,15 +191,12 @@ async def filter_and_segment_stream(
     context = _get_context()
     context_snapshot = context.to_dict()
 
-    track_id = context_snapshot.get("track_id")
     bundle_id = context_snapshot.get("app_bundle_id")
 
     async with with_accounting(
             bundle_id,
-            track_id=track_id,
             agent=role,
             metadata={
-                "track_id": track_id,
                 "agent": role,
                 "agent_name": "Filter Segmenter LLM"
             }

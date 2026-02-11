@@ -21,7 +21,7 @@ class ConvTicketIndex:
     """
 
     def __init__(self, store: ConvTicketStore):
-        # has methods: list_tickets(track_id, status?), create_ticket(...), update_ticket(...), get_ticket(ticket_id)
+        # has methods: list_tickets(conversation_id, status?), create_ticket(...), update_ticket(...), get_ticket(ticket_id)
         self.store = store
 
     @staticmethod
@@ -91,18 +91,17 @@ class ConvTicketIndex:
         return out
 
     async def fetch_latest_open_ticket(self, *, user_id: str, conversation_id: str,
-                                       track_id: str, turn_id: Optional[str] = None, ) -> Optional[Ticket]:
+                                       turn_id: Optional[str] = None, ) -> Optional[Ticket]:
         """
-        Return the most recently updated OPEN ticket for the track, or None.
+        Return the most recently updated OPEN ticket for the conversation, or None.
         """
-        tickets = await self.store.list_tickets(user_id=user_id, conversation_id=conversation_id, track_id=track_id, turn_id=turn_id, status="open")
+        tickets = await self.store.list_tickets(user_id=user_id, conversation_id=conversation_id, turn_id=turn_id, status="open")
         # list_tickets already returns ordered by updated_at DESC per store implementation
         return next(iter(tickets), None)
 
     async def open_clarification_ticket(
             self,
             *,
-            track_id: str,
             user_id: str,
             conversation_id: str,
             title: str,
@@ -134,7 +133,6 @@ class ConvTicketIndex:
         description = "\n".join(desc_lines)
         ticket = await self.store.create_ticket(
             embed_texts_fn=embed_texts_fn,
-            track_id=track_id,
             user_id=user_id,
             conversation_id=conversation_id,
             turn_id=turn_id,

@@ -46,11 +46,7 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_meta_gin;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_chunk_tsv;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_emb_ivf;
 
--- ---------- Indexes: conv_track_programs ----------
-DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_programs_track_updated;
-
 -- ---------- Indexes: conv_track_tickets ----------
-DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_tickets_track;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_tickets_status;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_tickets_embedding;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_tickets_conv_user;
@@ -59,7 +55,6 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_tickets_turn;
 -- ---------- Tables ----------
 DROP TABLE IF EXISTS <SCHEMA>.conv_artifact_edges CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_track_tickets CASCADE;
-DROP TABLE IF EXISTS <SCHEMA>.conv_track_programs CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.rag_chunks CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_pref_exceptions CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_prefs CASCADE;

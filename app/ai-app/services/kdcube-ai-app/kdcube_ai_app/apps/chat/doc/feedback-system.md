@@ -102,7 +102,6 @@ graph TB
   "meta": {
     "rn": "ef:...:turn_1762441078644_qp8d27:artifact:artifact-2025-11-06T17-47-03-....",
     "turn_id": "turn_1762441078644_qp8d27",
-    "track_id": "A",
     "user_type": "privileged",
     "kind": "turn.log.reaction"
   },

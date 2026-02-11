@@ -14,7 +14,7 @@ from uuid import uuid4
 import aiohttp
 import requests
 import time
-from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict, Union
+from typing import Optional, Any, Dict, List, AsyncIterator, Callable, Awaitable, TypedDict, Union, Literal
 
 from pydantic import BaseModel, Field
 from langchain_core.embeddings import Embeddings
@@ -39,7 +39,7 @@ import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
 from kdcube_ai_app.infra.service_hub.message_utils import (
     extract_message_blocks,
     normalize_blocks,
-    blocks_to_text,
+    blocks_to_text, tools_to_anthropic_format, tools_to_openai_format, tools_to_gemini_format,
 )
 from kdcube_ai_app.infra.service_hub.openai import normalize_messages_for_openai
 
@@ -1458,7 +1458,7 @@ class ModelServiceBase:
 
 
     # ---------- streaming (kept, but slimmer) ----------
-    async def stream_model_text(
+    async def stream_model_text_old(
             self,
             client,
             messages: List[BaseMessage],
@@ -1804,179 +1804,6 @@ class ModelServiceBase:
 
             yield {"event": "final", "usage": usage, "model_name": model_name, "index": index}
             return
-        # if isinstance(client, ChatOpenAI):
-        #
-        #     # Convert block-based messages to OpenAI multimodal content
-        #     normalized_messages = await normalize_messages_for_openai(client, messages)
-        #
-        #     model_limitations = model_caps(model_name)
-        #     tools_support = model_limitations.get("tools", False)
-        #     reasoning_support = model_limitations.get("reasoning", False)
-        #     temperature_supported = model_limitations.get("temperature", False)
-        #
-        #     stream_kwargs = {
-        #         # "max_output_tokens": max_tokens,
-        #         # "max_tokens": max_tokens,
-        #         "extra_body": {
-        #             "text": {"format": {"type": "text"}, "verbosity": "medium"},
-        #         },
-        #     }
-        #     # Use correct token param based on model type
-        #     if reasoning_support:
-        #         stream_kwargs["max_output_tokens"] = max_tokens
-        #         stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
-        #     else:
-        #         stream_kwargs["max_tokens"] = max_tokens
-        #
-        #     if temperature_supported:
-        #         stream_kwargs["temperature"] = temperature
-        #     if tools and tools_support:
-        #         stream_kwargs["tools"] = tools
-        #         if tool_choice is not None:
-        #             stream_kwargs["tool_choice"] = tool_choice
-        #         stream_kwargs["parallel_tool_calls"] = False
-        #         web_search_tool = next((t for t in (tools or []) if t.get("type") == "web_search"), None)
-        #         if web_search_tool:
-        #            stream_kwargs["extra_body"]["include"] = ["web_search_call.action.sources"]
-        #     # if reasoning_support:
-        #     #    stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
-        #
-        #     usage, seen_citation_urls = {}, set()
-        #     source_registry: dict[str, dict] = {}
-        #     def _norm_url(u: str) -> str:
-        #         # simple normalization: strip whitespace + trailing slash
-        #         # (you can expand this: lowercase host, drop utm_* params, etc.)
-        #         if not u: return u
-        #         u = u.strip()
-        #         if u.endswith("/"): u = u[:-1]
-        #         return u
-        #
-        #     async for chunk in client.astream(normalized_messages, **stream_kwargs):
-        #         from langchain_core.messages import AIMessageChunk
-        #         index += 1
-        #
-        #         # Handle non-AIMessageChunk (legacy format)
-        #         if not isinstance(chunk, AIMessageChunk):
-        #             txt = getattr(chunk, "content", "") or getattr(chunk, "text", "")
-        #             if txt:
-        #                 # yield {"delta": txt, "index": index}
-        #                 # yield {"event": "text.delta", "text": txt, "stage": -1}
-        #                 yield {"event": "text.delta", "text": txt, "index": index, "stage": -1}
-        #             continue
-        #         yield {"all_event": chunk, "index": index}  # for debugging
-        #
-        #         # Extract usage metadata
-        #         if getattr(chunk, "usage_metadata", None):
-        #             um = chunk.usage_metadata or {}
-        #             usage = {
-        #                 "input_tokens": um.get("input_tokens", 0) or 0,
-        #                 "output_tokens": um.get("output_tokens", 0) or 0,
-        #                 "cache_read_input_tokens": (um.get("input_token_details") or {}).get("cache_read"),
-        #                 # "input_tokens_details": (um.get("input_token_details") or {}).get("cache_read"), # {'cache_read': 233344}
-        #                 # "output_tokens_details": (um.get("output_token_details") or {}).get("cache_read_input_tokens"), # {'reasoning': 1344}
-        #                 "input_tokens_details": um.get("input_token_details"),
-        #                 "output_tokens_details": um.get("output_token_details"),
-        #             }
-        #             usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
-        #
-        #         # Handle content - check if it's a string first (simple text delta)
-        #         content = chunk.content
-        #
-        #         # Case 1: Simple string content (non-reasoning models, or text deltas)
-        #         if isinstance(content, str):
-        #             if content:  # Only yield non-empty strings
-        #                 yield {"event": "text.delta", "text": content, "index": index, "stage": 0}
-        #             continue
-        #
-        #         # Case 2: List of content blocks (reasoning models, multimodal, etc.)
-        #         if not isinstance(content, list):
-        #             content = []
-        #
-        #         for b in content:
-        #             if not isinstance(b, dict):
-        #                 # Fallback: treat as string
-        #                 txt = str(b) if b else ""
-        #                 if txt:
-        #                     yield {"event": "text.delta", "text": txt, "index": index, "stage": 0}
-        #                 continue
-        #
-        #             btype = b.get("type")
-        #             bid = b.get("index", 0)  # 'stage' number for agentic models
-        #
-        #             # 1) Handle annotations (citations)
-        #             anns = b.get("annotations") or []
-        #             for ann in anns:
-        #                 if ann.get("type") == "url_citation":
-        #                     url = _norm_url(ann.get("url"))
-        #                     if not url:
-        #                         continue
-        #                     # mark as used in registry
-        #                     rec = source_registry.get(url) or {
-        #                         "url": url,
-        #                         "title": ann.get("title"),
-        #                         "first_seen_stage": bid,
-        #                         "tool_ids": set(),
-        #                         "ranks": [],
-        #                         "used_in_output": False,
-        #                         "citations": [],
-        #                     }
-        #                     rec["used_in_output"] = True
-        #                     rec["citations"].append({"start": ann.get("start_index"), "end": ann.get("end_index")})
-        #                     if not rec.get("title") and ann.get("title"):
-        #                         rec["title"] = ann["title"]
-        #                     source_registry[url] = rec
-        #
-        #                     # your existing outward-facing event (optional dedupe)
-        #                     if url not in seen_citation_urls:
-        #                         seen_citation_urls.add(url)
-        #                         yield {
-        #                             "event": "citation",
-        #                             "title": ann.get("title"),
-        #                             "url": url,
-        #                             "start": ann.get("start_index"),
-        #                             "end": ann.get("end_index"),
-        #                             "index": index,
-        #                             "stage": bid,
-        #                         }
-        #
-        #             # 2) Text output deltas (actual response content)
-        #             if btype in ("output_text", "text"):
-        #                 delta = b.get("text", "")
-        #                 # Always yield text deltas, even empty ones (for proper streaming)
-        #                 yield {"event": "text.delta", "text": delta, "index": index, "stage": bid}
-        #
-        #             # 3) Handle reasoning/thinking
-        #             elif btype == "reasoning":
-        #                 for si in b.get("summary") or []:
-        #                     if si:
-        #                         order_in_group = 0
-        #                         if isinstance(si, dict):
-        #                             s = si.get("text") or si.get("summary_text") or ""
-        #                             order_in_group = si.get("index", 0)
-        #                         else:
-        #                             s = str(si)
-        #                         # Only yield non-empty thinking deltas
-        #                         if s:
-        #                             yield {"event": "thinking.delta", "text": s, "stage": bid, "index": index, "group_index": order_in_group}
-        #
-        #             # 4) Handle tool calls (web search, etc.)
-        #             elif btype == "web_search_call":
-        #                 action = b.get("action") or {}
-        #                 status = b.get("status")
-        #                 yield {
-        #                     "event": "tool.search",
-        #                     "id": b.get("id"),
-        #                     "status": status,
-        #                     "query": action.get("query"),
-        #                     "sources": action.get("sources"),
-        #                     "index": index,
-        #                     "stage": bid,
-        #                 }
-        #
-        #     # 5) Final event with usage
-        #     index += 1
-        #     yield {"event": "final", "usage": usage, "model_name": model_name, "index": index}
-        #     return
 
         from kdcube_ai_app.infra.service_hub.gemini import GeminiModelClient
         # Gemini streaming
@@ -2026,6 +1853,562 @@ class ModelServiceBase:
             yield {"delta": text[i:i+30]}
         yield {"event": "final", "usage": res.get("usage", {}), "model_name": res.get("model_name", model_name)}
 
+    async def stream_model_text(
+            self,
+            client,
+            messages: List[BaseMessage],
+            *,
+            temperature: float = 0.3,
+            max_tokens: int = 1200,
+            max_thinking_tokens: int = 128,
+            client_cfg: ClientConfigHint | None = None,
+            role: Optional[str] = None,
+            tools: Optional[list] = None,
+            tool_choice: Optional[Union[str, dict, Literal["auto", "required", "none"]]] = None,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """
+        Stream model responses with universal tool calling support.
+        Emits events as they arrive - no accumulation until final.
+        """
+        cfg = client_cfg or (self.router.describe(role) if role else self.describe_client(client))
+        provider_name, model_name = cfg.provider, cfg.model_name
+
+        index = -1
+
+        # ========================================================================
+        # ANTHROPIC STREAMING WITH TOOLS
+        # ========================================================================
+        if provider_name == "anthropic" and hasattr(client, "messages"):
+            import anthropic
+            async_client = getattr(self.router, "_mk_anthropic_async")()
+
+            # Convert messages (existing logic with cache support)
+            sys_blocks = []
+            convo = []
+
+            for m in messages:
+                if isinstance(m, SystemMessage):
+                    message_blocks = extract_message_blocks(m)
+                    cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
+
+                    if message_blocks:
+                        sys_blocks.extend(normalize_blocks(message_blocks, default_cache_ctrl=cache_ctrl))
+                    else:
+                        block = {"type": "text", "text": m.content}
+                        if cache_ctrl:
+                            block["cache_control"] = cache_ctrl
+                        sys_blocks.append(block)
+
+                elif isinstance(m, HumanMessage):
+                    message_blocks = extract_message_blocks(m)
+                    cache_ctrl = (m.additional_kwargs or {}).get("cache_control")
+
+                    if message_blocks:
+                        content_blocks = normalize_blocks(message_blocks, default_cache_ctrl=cache_ctrl)
+                        convo.append({"role": "user", "content": content_blocks})
+                    else:
+                        if cache_ctrl:
+                            convo.append({
+                                "role": "user",
+                                "content": [{"type": "text", "text": m.content, "cache_control": cache_ctrl}]
+                            })
+                        else:
+                            convo.append({"role": "user", "content": m.content})
+
+                elif isinstance(m, AIMessage):
+                    # Handle tool calls in additional_kwargs
+                    addkw = m.additional_kwargs or {}
+                    tool_calls = addkw.get("tool_calls")
+
+                    if tool_calls:
+                        content_blocks = []
+                        if m.content:
+                            content_blocks.append({"type": "text", "text": m.content})
+                        for tc in tool_calls:
+                            content_blocks.append({
+                                "type": "tool_use",
+                                "id": tc.get("id"),
+                                "name": tc.get("name"),
+                                "input": tc.get("input", {})
+                            })
+                        convo.append({"role": "assistant", "content": content_blocks})
+                    else:
+                        convo.append({"role": "assistant", "content": m.content})
+
+            final_system = sys_blocks if sys_blocks else None
+
+            # Prepare stream kwargs
+            stream_kwargs = {
+                "model": model_name,
+                "system": final_system,
+                "messages": convo,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            }
+
+            # Add tools if provided
+            if tools:
+                stream_kwargs["tools"] = tools_to_anthropic_format(tools)
+
+                if tool_choice:
+                    if tool_choice == "required":
+                        stream_kwargs["tool_choice"] = {"type": "any"}
+                    elif tool_choice == "auto":
+                        stream_kwargs["tool_choice"] = {"type": "auto"}
+                    elif isinstance(tool_choice, dict) and "name" in tool_choice:
+                        stream_kwargs["tool_choice"] = {
+                            "type": "tool",
+                            "name": tool_choice["name"]
+                        }
+
+            # Track current tool use for streaming
+            current_tool_use = None
+
+            def _debug_anthropic_payload(final_system: Any, convo: Any) -> None:
+                def _block_preview(block: Any) -> str:
+                    if not isinstance(block, dict):
+                        text = str(block)
+                        return text.replace("\n", " ")[:200]
+                    btype = block.get("type") or "text"
+                    if btype == "text":
+                        text = block.get("text") or ""
+                        return str(text).replace("\n", " ")[:200]
+                    if btype in ("image", "document"):
+                        media = ""
+                        source = block.get("source")
+                        if isinstance(source, dict):
+                            media = source.get("media_type") or ""
+                        if not media:
+                            media = block.get("media_type") or ""
+                        media = media.strip() or "unknown"
+                        return f"<{btype} {media}>"
+                    return f"<{btype}>"
+
+                def _summarize_blocks(blocks: Any, label: str) -> List[str]:
+                    if not isinstance(blocks, list) or not blocks:
+                        return [f"  ({label}) none"]
+                    cached_idxs = []
+                    for i, b in enumerate(blocks):
+                        if isinstance(b, dict) and b.get("cache_control"):
+                            cached_idxs.append(i)
+                    lines: List[str] = []
+                    if not (cached_idxs and cached_idxs[0] == 0):
+                        lines.append(f"  [{label}.0] 0 {_block_preview(blocks[0])}")
+                    for n, idx in enumerate(cached_idxs):
+                        lines.append(f"  [{label}.cp.{n}] {idx} {_block_preview(blocks[idx])}")
+                    return lines
+
+                def _summarize_user_message(msg: Dict[str, Any]) -> List[str]:
+                    content = msg.get("content")
+                    if isinstance(content, list):
+                        return _summarize_blocks(content, "hum")
+                    if content is None:
+                        return ["  (hum) none"]
+                    return [f"  [hum.0] 0 {_block_preview({'type': 'text', 'text': str(content)})}"]
+
+                print("=== ANTHROPIC PAYLOAD DEBUG ===")
+                print("SYSTEM:")
+                for line in _summarize_blocks(final_system or [], "sys"):
+                    print(line)
+                print("MESSAGES:")
+                user_msg = next((m for m in (convo or []) if isinstance(m, dict) and m.get("role") == "user"), None)
+                if not user_msg:
+                    print("  (no user messages)")
+                else:
+                    for line in _summarize_user_message(user_msg):
+                        print(line)
+                print("================================")
+
+            _debug_anthropic_payload(final_system, convo)
+            async with async_client.messages.stream(**stream_kwargs) as stream:
+                index += 1
+
+                # Stream text deltas
+                async for text in stream.text_stream:
+                    if text:
+                        yield {"event": "text.delta", "text": text, "index": index}
+
+                # Get final message for tool uses
+                usage = {}
+                final_obj = None
+                if hasattr(stream, "get_final_message"):
+                    final_obj = await stream.get_final_message()
+                elif hasattr(stream, "get_final_response"):
+                    maybe = stream.get_final_response()
+                    final_obj = await maybe if asyncio.iscoroutine(maybe) else maybe
+
+                if final_obj:
+                    # Extract tool uses
+                    content = getattr(final_obj, "content", [])
+                    for block in content:
+                        block_type = getattr(block, "type", None)
+                        if block_type == "tool_use":
+                            yield {
+                                "event": "tool.use",
+                                "id": getattr(block, "id", ""),
+                                "name": getattr(block, "name", ""),
+                                "input": getattr(block, "input", {}),
+                                "index": index,
+                            }
+
+                    # Extract usage (EXISTING LOGIC PRESERVED)
+                    u = getattr(final_obj, "usage", None)
+                    if u:
+                        cache_creation = getattr(u, "cache_creation", None)
+                        if cache_creation:
+                            cache_creation = cache_creation.model_dump() if hasattr(cache_creation, "model_dump") else dict(cache_creation)
+                        usage = {
+                            "input_tokens": getattr(u, "input_tokens", 0) or 0,
+                            "output_tokens": getattr(u, "output_tokens", 0) or 0,
+                            "cache_creation_input_tokens": getattr(u, "cache_creation_input_tokens", 0) or 0,
+                            "cache_read_input_tokens": getattr(u, "cache_read_input_tokens", 0) or 0,
+                            **{"cache_creation": cache_creation if cache_creation else {}}
+                        }
+                        usage["total_tokens"] = usage["input_tokens"] + usage["output_tokens"]
+                nusage = _norm_usage_dict(usage)
+                yield {"event": "final", "usage": nusage, "model_name": model_name, "index": index}
+                return
+
+        # ========================================================================
+        # OPENAI STREAMING WITH TOOLS (ENHANCED - PRESERVING ALL EXISTING LOGIC)
+        # ========================================================================
+        if isinstance(client, ChatOpenAI):
+            normalized_messages = await normalize_messages_for_openai(client, messages)
+
+            model_limitations = model_caps(model_name)
+            tools_support = model_limitations.get("tools", False)
+            reasoning_support = model_limitations.get("reasoning", False)
+            temperature_supported = model_limitations.get("temperature", False)
+
+            stream_kwargs = {
+                "extra_body": {
+                    "text": {"format": {"type": "text"}, "verbosity": "medium"},
+                },
+            }
+
+            if reasoning_support:
+                stream_kwargs["max_output_tokens"] = max_tokens
+                stream_kwargs["extra_body"]["reasoning"] = {"effort": "medium", "summary": "auto"}
+            else:
+                stream_kwargs["max_tokens"] = max_tokens
+
+            if temperature_supported:
+                stream_kwargs["temperature"] = temperature
+
+            # Add tools if provided
+            if tools and tools_support:
+                stream_kwargs["tools"] = tools_to_openai_format(tools)
+                if tool_choice is not None:
+                    if tool_choice == "required":
+                        stream_kwargs["tool_choice"] = "required"
+                    elif tool_choice == "auto":
+                        stream_kwargs["tool_choice"] = "auto"
+                    elif tool_choice == "none":
+                        stream_kwargs["tool_choice"] = "none"
+                    elif isinstance(tool_choice, dict) and "name" in tool_choice:
+                        stream_kwargs["tool_choice"] = {
+                            "type": "function",
+                            "function": {"name": tool_choice["name"]}
+                        }
+                stream_kwargs["parallel_tool_calls"] = False
+
+                # Web search support (existing)
+                web_search_tool = next((t for t in (tools or []) if t.get("type") == "web_search"), None)
+                if web_search_tool:
+                    stream_kwargs["extra_body"]["include"] = ["web_search_call.action.sources"]
+
+            usage = {}
+            seen_citation_urls = set()
+            source_registry: dict[str, dict] = {}
+
+            # Track tool calls for final aggregation
+            tool_calls_accumulator = {}
+
+            def _norm_url(u: str) -> str:
+                if not u: return u
+                u = u.strip()
+                if u.endswith("/"): u = u[:-1]
+                return u
+
+            async for chunk in client.astream(normalized_messages, **stream_kwargs):
+                from langchain_core.messages import AIMessageChunk
+                index += 1
+
+                if not isinstance(chunk, AIMessageChunk):
+                    txt = getattr(chunk, "content", "") or getattr(chunk, "text", "")
+                    if txt:
+                        yield {"event": "text.delta", "text": txt, "index": index, "stage": -1}
+                    continue
+
+                yield {"all_event": chunk, "index": index}  # for debugging
+
+                # ====================================================================
+                # USAGE EXTRACTION (EXISTING LOGIC PRESERVED)
+                # ====================================================================
+                usage_found = False
+
+                if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                    um = chunk.usage_metadata
+                    usage = {
+                        "input_tokens": um.get("input_tokens", 0) or 0,
+                        "output_tokens": um.get("output_tokens", 0) or 0,
+                        "total_tokens": (um.get("input_tokens", 0) or 0) + (um.get("output_tokens", 0) or 0),
+                    }
+
+                    input_details = um.get("input_token_details")
+                    if input_details:
+                        cache_read = input_details.get("cache_read")
+                        if cache_read:
+                            usage["cache_read_input_tokens"] = cache_read
+                        usage["input_tokens_details"] = input_details
+
+                    output_details = um.get("output_token_details")
+                    if output_details:
+                        usage["output_tokens_details"] = output_details
+                        reasoning = output_details.get("reasoning")
+                        if reasoning:
+                            usage["reasoning_tokens"] = reasoning
+
+                    usage_found = True
+
+                if not usage_found and hasattr(chunk, "response_metadata"):
+                    rm = chunk.response_metadata or {}
+                    token_usage = rm.get("token_usage") or rm.get("usage")
+
+                    if token_usage and isinstance(token_usage, dict):
+                        usage = {
+                            "input_tokens": (
+                                    token_usage.get("prompt_tokens") or
+                                    token_usage.get("input_tokens") or 0
+                            ),
+                            "output_tokens": (
+                                    token_usage.get("completion_tokens") or
+                                    token_usage.get("output_tokens") or 0
+                            ),
+                        }
+                        usage["total_tokens"] = (
+                                token_usage.get("total_tokens") or
+                                usage["input_tokens"] + usage["output_tokens"]
+                        )
+                        usage_found = True
+
+                if not usage_found and hasattr(chunk, "additional_kwargs"):
+                    ak = chunk.additional_kwargs or {}
+                    if "usage" in ak and isinstance(ak["usage"], dict):
+                        token_usage = ak["usage"]
+                        usage = {
+                            "input_tokens": (
+                                    token_usage.get("prompt_tokens") or
+                                    token_usage.get("input_tokens") or 0
+                            ),
+                            "output_tokens": (
+                                    token_usage.get("completion_tokens") or
+                                    token_usage.get("output_tokens") or 0
+                            ),
+                        }
+                        usage["total_tokens"] = (
+                                token_usage.get("total_tokens") or
+                                usage["input_tokens"] + usage["output_tokens"]
+                        )
+                        usage_found = True
+
+                # ====================================================================
+                # TOOL CALL STREAMING (NEW - EMIT AS THEY ARRIVE)
+                # ====================================================================
+                if hasattr(chunk, "tool_call_chunks"):
+                    for tc_chunk in chunk.tool_call_chunks or []:
+                        tc_index = getattr(tc_chunk, "index", 0)
+                        tc_id = getattr(tc_chunk, "id", None)
+                        tc_name = getattr(tc_chunk, "name", None)
+                        tc_args = getattr(tc_chunk, "args", None)
+
+                        # Initialize accumulator if new tool call
+                        if tc_index not in tool_calls_accumulator:
+                            tool_calls_accumulator[tc_index] = {
+                                "id": tc_id or "",
+                                "name": tc_name or "",
+                                "arguments_chunks": []
+                            }
+                            # Emit tool call start event
+                            if tc_id or tc_name:
+                                yield {
+                                    "event": "tool.start",
+                                    "index": tc_index,
+                                    "id": tc_id or "",
+                                    "name": tc_name or "",
+                                    "chunk_index": index,
+                                }
+
+                        # Update accumulator
+                        if tc_id:
+                            tool_calls_accumulator[tc_index]["id"] = tc_id
+                        if tc_name:
+                            tool_calls_accumulator[tc_index]["name"] = tc_name
+                        if tc_args:
+                            tool_calls_accumulator[tc_index]["arguments_chunks"].append(tc_args)
+                            # Emit arguments delta event
+                            yield {
+                                "event": "tool.arguments_delta",
+                                "index": tc_index,
+                                "delta": tc_args,
+                                "chunk_index": index,
+                            }
+
+                # ====================================================================
+                # CONTENT PROCESSING (EXISTING LOGIC PRESERVED)
+                # ====================================================================
+                content = chunk.content
+
+                if isinstance(content, str):
+                    if content:
+                        yield {"event": "text.delta", "text": content, "index": index, "stage": 0}
+                    continue
+
+                if not isinstance(content, list):
+                    content = []
+
+                for b in content:
+                    if not isinstance(b, dict):
+                        txt = str(b) if b else ""
+                        if txt:
+                            yield {"event": "text.delta", "text": txt, "index": index, "stage": 0}
+                        continue
+
+                    btype = b.get("type")
+                    bid = b.get("index", 0)
+
+                    # Citations (existing)
+                    anns = b.get("annotations") or []
+                    for ann in anns:
+                        if ann.get("type") == "url_citation":
+                            url = _norm_url(ann.get("url"))
+                            if not url:
+                                continue
+                            rec = source_registry.get(url) or {
+                                "url": url,
+                                "title": ann.get("title"),
+                                "first_seen_stage": bid,
+                                "tool_ids": set(),
+                                "ranks": [],
+                                "used_in_output": False,
+                                "citations": [],
+                            }
+                            rec["used_in_output"] = True
+                            rec["citations"].append({"start": ann.get("start_index"), "end": ann.get("end_index")})
+                            if not rec.get("title") and ann.get("title"):
+                                rec["title"] = ann["title"]
+                            source_registry[url] = rec
+
+                            if url not in seen_citation_urls:
+                                seen_citation_urls.add(url)
+                                yield {
+                                    "event": "citation",
+                                    "title": ann.get("title"),
+                                    "url": url,
+                                    "start": ann.get("start_index"),
+                                    "end": ann.get("end_index"),
+                                    "index": index,
+                                    "stage": bid,
+                                }
+
+                    # Text deltas (existing)
+                    if btype in ("output_text", "text"):
+                        delta = b.get("text", "")
+                        yield {"event": "text.delta", "text": delta, "index": index, "stage": bid}
+
+                    # Thinking (existing)
+                    elif btype == "reasoning":
+                        for si in b.get("summary") or []:
+                            if si:
+                                order_in_group = 0
+                                if isinstance(si, dict):
+                                    s = si.get("text") or si.get("summary_text") or ""
+                                    order_in_group = si.get("index", 0)
+                                else:
+                                    s = str(si)
+                                if s:
+                                    yield {"event": "thinking.delta", "text": s, "stage": bid, "index": index, "group_index": order_in_group}
+
+                    # Web search tool (existing)
+                    elif btype == "web_search_call":
+                        action = b.get("action") or {}
+                        status = b.get("status")
+                        yield {
+                            "event": "tool.search",
+                            "id": b.get("id"),
+                            "status": status,
+                            "query": action.get("query"),
+                            "sources": action.get("sources"),
+                            "index": index,
+                            "stage": bid,
+                        }
+
+            # ====================================================================
+            # EMIT COMPLETED TOOL CALLS (FINAL)
+            # ====================================================================
+            for tc_index, tc_data in tool_calls_accumulator.items():
+                args_str = "".join(tc_data["arguments_chunks"])
+                try:
+                    args_dict = json.loads(args_str) if args_str else {}
+                except json.JSONDecodeError:
+                    args_dict = {"_raw": args_str}  # Preserve invalid JSON
+
+                yield {
+                    "event": "tool.use",
+                    "index": tc_index,
+                    "id": tc_data["id"],
+                    "name": tc_data["name"],
+                    "input": args_dict,
+                    "chunk_index": index,
+                }
+
+            # ====================================================================
+            # FINAL EVENT (EXISTING)
+            # ====================================================================
+            index += 1
+            yield {"event": "final", "usage": usage, "model_name": model_name, "index": index}
+            return
+
+        # ========================================================================
+        # GEMINI, CUSTOM, FALLBACK (EXISTING - UNCHANGED)
+        # ========================================================================
+        from kdcube_ai_app.infra.service_hub.gemini import GeminiModelClient
+        if isinstance(client, GeminiModelClient):
+            async for ev in client.astream(
+                    messages=messages,
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    thinking_budget=max_thinking_tokens,
+                    include_thoughts=True,
+                    tools=tools_to_gemini_format(tools) if tools else None,
+                    tool_choice=tool_choice,
+            ):
+                etype = ev.get("event")
+                if etype in ("text.delta", "thinking.delta", "tool.use"):
+                    index += 1
+                    yield {**ev, "index": index}
+                elif etype == "final":
+                    index += 1
+                    yield {
+                        "event": "final",
+                        "usage": ev.get("usage") or {},
+                        "model_name": ev.get("model_name") or model_name,
+                        "index": index,
+                    }
+            return
+
+        if isinstance(client, CustomModelClient):
+            async for ev in client.astream(messages, temperature=temperature, max_new_tokens=max_tokens):
+                yield ev
+            return
+
+        # Fallback
+        res = await self.call_model_text(client, messages, temperature=temperature, max_tokens=max_tokens, client_cfg=cfg)
+        text = res.get("text", "") or ""
+        for i in range(0, len(text), 30):
+            yield {"delta": text[i:i+30]}
+        yield {"event": "final", "usage": res.get("usage", {}), "model_name": res.get("model_name", model_name)}
+
     @track_llm(
         provider_extractor=ms_provider_extractor,
         model_extractor=ms_model_extractor,
@@ -2033,6 +2416,394 @@ class ModelServiceBase:
         metadata_extractor=ms_freeform_meta_extractor,
     )
     async def stream_model_text_tracked(
+                    self,
+                    client,
+                    messages: List[BaseMessage],
+                    *,
+                    on_delta: Callable[[str], Awaitable[None]],
+                    on_thinking: Optional[Callable[[Any], Awaitable[None]]] = None,
+                    on_tool_result_event: Optional[Callable[[Any], Awaitable[None]]] = None,
+                    on_event: Optional[Callable[[dict], Awaitable[None]]] = None,
+                    temperature: float = 0.3,
+                    max_tokens: int = 1200,
+                    max_thinking_tokens: int = 128,
+                    client_cfg: ClientConfigHint | None = None,
+                    role: Optional[str] = None,
+                    on_complete: Optional[Callable[[dict], Awaitable[None]]] = None,
+                    debug: bool = True,
+                    tools: Optional[list] = None,
+                    tool_choice: Optional[Union[str, dict]] = None,
+                    debug_citations: bool = False,
+            ) -> Dict[str, Any]:
+        """
+        Enhanced with native tool calling support.
+
+        New events handled:
+        - tool.start: Tool call begins (id, name known)
+        - tool.arguments_delta: Arguments streaming in
+        - tool.use: Complete tool call ready
+        """
+        slog = AgentLogger("StreamTracker", self.config.log_level)
+        cfg = client_cfg or (self.router.describe(role) if role else self.describe_client(client))
+
+        def _msg_preview(ms: List[BaseMessage]) -> dict:
+            try:
+                def _preview_text(m: BaseMessage) -> str:
+                    addkw = getattr(m, "additional_kwargs", {}) or {}
+                    blocks = addkw.get("message_blocks")
+                    if not blocks and isinstance(getattr(m, "content", None), list):
+                        blocks = m.content
+                    if blocks:
+                        norm_blocks = _normalize_anthropic_blocks(blocks)
+                        joined = "\n\n".join(
+                            b.get("text", "")
+                            for b in norm_blocks
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        )
+                        return joined
+                    return str(getattr(m, "content", "") or "")
+
+                sys = _preview_text(next((m for m in ms if isinstance(m, SystemMessage)), SystemMessage("")))[:200]
+                usr = _preview_text(next((m for m in ms if isinstance(m, HumanMessage)), HumanMessage("")))[:200]
+            except Exception:
+                sys, usr = "", ""
+            return {"system_preview": sys, "user_preview": usr}
+
+        msg_data = _msg_history(messages) if debug else _msg_preview(messages)
+
+        slog.start_operation(
+            "stream_model_text_tracked",
+            provider=cfg.provider,
+            model=cfg.model_name,
+            role=role,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            msg_count=len(messages),
+            has_tools=bool(tools),
+            **msg_data
+        )
+
+        final_chunks: list[str] = []
+        usage_out: Dict[str, Any] = {}
+        chunk_count = 0
+
+        # Aggregations
+        citations: list[dict] = []
+        seen_cite_urls: set[str] = set()
+
+        # Enhanced tool tracking
+        tool_calls_by_id: dict[str, dict] = {}  # id -> complete tool call
+        tool_calls_list: list[dict] = []         # arrival order
+        tool_calls_in_progress: dict = {}        # index -> streaming state
+
+        thoughts_grouped: list[str] = []
+        _current_thought_parts: list[str] = []
+        events = []
+
+        agentic_stage = -1
+
+        def _flush_thought_group():
+            nonlocal _current_thought_parts, thoughts_grouped
+            if _current_thought_parts:
+                thoughts_grouped.append("".join(_current_thought_parts))
+                _current_thought_parts = []
+
+        try:
+            async for ev in self.stream_model_text(
+                    client,
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    max_thinking_tokens=max_thinking_tokens,
+                    client_cfg=cfg,
+                    role=role,
+                    tools=tools,
+                    tool_choice=tool_choice,
+            ):
+                if on_event and "all_event" in ev:
+                    await on_event(ev["all_event"].model_dump())
+                events.append(ev)
+
+                etype = ev.get("event")
+
+                # ================================================================
+                # TEXT DELTA (existing)
+                # ================================================================
+                if etype == "text.delta":
+                    try:
+                        await on_delta(ev["text"])
+                    except Exception as cb_err:
+                        slog.log_error(cb_err, "on_delta_callback_failed")
+                    final_chunks.append(ev["text"])
+                    chunk_count += 1
+                    _flush_thought_group()
+                    continue
+
+                # ================================================================
+                # THINKING DELTA (existing)
+                # ================================================================
+                if etype == "thinking.delta":
+                    txt = ev.get("text") or ""
+                    _stage = ev.get("stage")
+                    if _stage is not None and _stage != agentic_stage:
+                        _flush_thought_group()
+                        agentic_stage = _stage
+                    if txt:
+                        _current_thought_parts.append(txt)
+                        if on_thinking:
+                            try:
+                                await on_thinking(ev)
+                            except Exception as cb_err:
+                                slog.log_error(cb_err, "on_thinking_callback_failed")
+                    continue
+
+                # ================================================================
+                # TOOL CALL START (NEW)
+                # ================================================================
+                if etype == "tool.start":
+                    tc_index = ev.get("index", 0)
+                    tc_id = ev.get("id", "")
+                    tc_name = ev.get("name", "")
+
+                    # Initialize streaming state
+                    tool_calls_in_progress[tc_index] = {
+                        "id": tc_id,
+                        "name": tc_name,
+                        "arguments_chunks": [],
+                        "started": True,
+                    }
+
+                    _flush_thought_group()
+
+                    # Notify UI that tool call is starting
+                    if on_tool_result_event:
+                        try:
+                            await on_tool_result_event({
+                                "type": "tool.start",
+                                "id": tc_id,
+                                "name": tc_name,
+                                "index": tc_index,
+                            })
+                        except Exception as cb_err:
+                            slog.log_error(cb_err, "on_tool_start_callback_failed")
+                    continue
+
+                # ================================================================
+                # TOOL ARGUMENTS DELTA (NEW)
+                # ================================================================
+                if etype == "tool.arguments_delta":
+                    tc_index = ev.get("index", 0)
+                    delta = ev.get("delta", "")
+
+                    if tc_index in tool_calls_in_progress:
+                        tool_calls_in_progress[tc_index]["arguments_chunks"].append(delta)
+
+                        # Optionally stream arguments to UI
+                        if on_tool_result_event:
+                            try:
+                                await on_tool_result_event({
+                                    "type": "tool.arguments_delta",
+                                    "index": tc_index,
+                                    "delta": delta,
+                                })
+                            except Exception as cb_err:
+                                slog.log_error(cb_err, "on_tool_arguments_delta_callback_failed")
+                    continue
+
+                # ================================================================
+                # TOOL USE COMPLETE (NEW - native tool calling)
+                # ================================================================
+                if etype == "tool.use":
+                    tid = ev.get("id") or f"tool_{len(tool_calls_list)+1}"
+                    tc_index = ev.get("index", 0)
+
+                    _flush_thought_group()
+
+                    # Build complete tool call
+                    call = {
+                        "id": tid,
+                        "name": ev.get("name"),
+                        "input": ev.get("input", {}),
+                        "type": "function",
+                        "index": tc_index,
+                    }
+
+                    # Add to registry
+                    tool_calls_by_id[tid] = call
+                    tool_calls_list.append(call)
+
+                    # Clean up progress tracking
+                    if tc_index in tool_calls_in_progress:
+                        del tool_calls_in_progress[tc_index]
+
+                    # Notify completion
+                    if on_tool_result_event:
+                        try:
+                            await on_tool_result_event({
+                                "type": "tool.use",
+                                "id": tid,
+                                "name": call["name"],
+                                "input": call["input"],
+                                "index": tc_index,
+                            })
+                        except Exception as cb_err:
+                            slog.log_error(cb_err, "on_tool_use_callback_failed")
+                    continue
+
+                # ================================================================
+                # TOOL.SEARCH (existing - web search specific)
+                # ================================================================
+                if etype == "tool.search":
+                    tid = ev.get("id") or f"search_{len(tool_calls_list)+1}"
+                    _stage = ev.get("stage")
+                    if _stage is not None and _stage != agentic_stage:
+                        _flush_thought_group()
+                        agentic_stage = _stage
+
+                    call = tool_calls_by_id.get(tid) or {}
+                    call["id"] = tid
+                    call["type"] = "web_search"
+                    if ev.get("query"):
+                        call["query"] = ev.get("query")
+                    call["status"] = ev.get("status") or call.get("status")
+                    if ev.get("sources"):
+                        call["sources"] = ev.get("sources")
+
+                    tool_calls_by_id[tid] = call
+                    tool_calls_list.append(call)
+
+                    if on_tool_result_event:
+                        try:
+                            await on_tool_result_event({"type": "tool.search", **call})
+                        except Exception as cb_err:
+                            slog.log_error(cb_err, "on_tool_search_callback_failed")
+                    continue
+
+                # ================================================================
+                # CITATION (existing)
+                # ================================================================
+                if etype == "citation":
+                    url = ev.get("url")
+                    if url and url not in seen_cite_urls:
+                        seen_cite_urls.add(url)
+                        citations.append({
+                            "title": ev.get("title"),
+                            "url": url,
+                            "start": ev.get("start"),
+                            "end": ev.get("end"),
+                        })
+
+                    if on_event:
+                        try:
+                            await on_event({"type": "citation", **ev})
+                        except Exception as cb_err:
+                            slog.log_error(cb_err, "on_citation_callback_failed")
+                    continue
+
+                # ================================================================
+                # FINAL (existing)
+                # ================================================================
+                if etype == "final":
+                    usage_out = ev.get("usage") or usage_out
+                    _flush_thought_group()
+                    continue
+
+                # ================================================================
+                # OTHER EVENTS (existing)
+                # ================================================================
+                if etype and on_event:
+                    try:
+                        await on_event(ev)
+                    except Exception as cb_err:
+                        slog.log_error(cb_err, "on_event_callback_failed")
+
+            # ================================================================
+            # FINALIZE
+            # ================================================================
+            full_text = "".join(final_chunks)
+            suspicious_tokens = None
+            if debug_citations:
+                suspicious_tokens = citation_utils.debug_only_suspicious_tokens(full_text)
+
+            slog.log_step(
+                "stream_finished",
+                {
+                    "chunks": chunk_count,
+                    "final_text_len": len(full_text),
+                    **({"final_text": full_text} if debug else {"final_text_preview": full_text[:600]}),
+                    "usage": usage_out,
+                    "provider": cfg.provider,
+                    "model": cfg.model_name,
+                    "role": role,
+                    "thought_groups": len(thoughts_grouped),
+                    "tool_calls": len(tool_calls_list),
+                    "citations": len(citations),
+                    "citation_debug": suspicious_tokens
+                },
+            )
+
+            ret = {
+                "text": full_text,
+                "usage": _norm_usage_dict(usage_out, debug=debug),
+                "provider_message_id": None,
+                "model_name": cfg.model_name,
+                "thoughts": thoughts_grouped,
+                "tool_calls": tool_calls_list,  # ← Now includes native tool calls
+                "citations": citations,
+                "service_error": None,
+            }
+
+            if on_complete:
+                try:
+                    await on_complete(ret)
+                    slog.log_step("on_complete_called", {"status": "ok", "final_text_len": len(full_text)})
+                except Exception as e:
+                    slog.log_error(e, "on_complete_failed")
+
+            slog.finish_operation(
+                True,
+                "stream_model_text_tracked_complete",
+                provider=cfg.provider,
+                model=cfg.model_name,
+                role=role,
+                tool_calls_count=len(tool_calls_list)
+            )
+            return ret
+
+        except Exception as e:
+            slog.log_error(e, "stream_loop_failed")
+            slog.finish_operation(
+                False,
+                "stream_model_text_tracked_failed",
+                provider=cfg.provider,
+                model=cfg.model_name,
+                role=role
+            )
+            svc_error = service_errors.mk_llm_error(
+                exc=e,
+                stage="stream_loop",
+                cfg=cfg,
+                service_name="StreamTracker",
+                context={"role": role},
+            )
+            return {
+                "text": f"Model call failed: {e}",
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                "provider_message_id": None,
+                "model_name": cfg.model_name,
+                "thoughts": [],
+                "tool_calls": [],
+                "citations": [],
+                "service_error": svc_error.model_dump()
+            }
+
+    @track_llm(
+        provider_extractor=ms_provider_extractor,
+        model_extractor=ms_model_extractor,
+        usage_extractor=_freeform_usage_extractor,
+        metadata_extractor=ms_freeform_meta_extractor,
+    )
+    async def stream_model_text_tracked_old(
             self,
             client,
             messages: List[BaseMessage],

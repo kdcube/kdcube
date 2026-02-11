@@ -5,9 +5,11 @@
 from __future__ import annotations
 
 import json
+import re
 import pathlib
 import uuid
 import textwrap
+import mimetypes
 from typing import Any, Dict, Optional, Annotated, Tuple, List
 
 import semantic_kernel as sk
@@ -45,17 +47,17 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
         return None, {"code": "invalid_artifacts", "message": "artifacts must be a non-empty list"}
 
     normalized: List[Dict[str, Any]] = []
+    seen_names: Dict[str, int] = {}
     for item in artifacts:
         if not isinstance(item, dict):
             continue
-        name = (item.get("name") or item.get("artifact_name") or item.get("artifact_id") or "").strip()
-        filename = (item.get("filename") or item.get("artifact_filename") or item.get("path") or "").strip()
-        mime = (item.get("mime") or "").strip()
+        raw_filename = item.get("filename")
+        filename = raw_filename.strip() if isinstance(raw_filename, str) else ""
         description = (item.get("description") or "").strip()
-        if not name or not filename or not mime or not description:
+        if not filename or not description:
             return None, {
                 "code": "invalid_artifact_spec",
-                "message": "Each artifact requires name, filename, mime, description",
+                "message": "Each artifact requires filename and description",
             }
         safe_filename = _safe_relpath(filename)
         if not safe_filename:
@@ -63,6 +65,30 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
                 "code": "invalid_filename",
                 "message": f"Invalid filename path: {filename}",
             }
+        if "/attachments/" in safe_filename:
+            return None, {
+                "code": "invalid_filename",
+                "message": "Contract filename must be under turn_<id>/files/ (attachments not allowed)",
+            }
+        if not re.match(r"^turn_[^/]+/files/", safe_filename):
+            return None, {
+                "code": "invalid_filename",
+                "message": (
+                    "filename must be OUT_DIR-relative and start with "
+                    "'turn_<id>/files/': "
+                    f"{filename}"
+                ),
+            }
+        leaf = pathlib.Path(safe_filename).name
+        name = pathlib.Path(leaf).stem or leaf
+        if not name:
+            name = f"artifact_{len(normalized) + 1}"
+        if name in seen_names:
+            seen_names[name] += 1
+            name = f"{name}_{seen_names[name]}"
+        else:
+            seen_names[name] = 1
+        mime = mimetypes.guess_type(leaf)[0] or "application/octet-stream"
         normalized.append(
             {
                 "name": name,
@@ -74,6 +100,113 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
     if not normalized:
         return None, {"code": "invalid_artifacts", "message": "No valid artifacts found"}
     return normalized, None
+
+
+def normalize_exec_contract_for_turn(
+    artifacts: Any,
+    *,
+    turn_id: str,
+) -> Tuple[Optional[List[Dict[str, Any]]], List[Dict[str, str]], Optional[Dict[str, Any]]]:
+    """
+    Normalize exec contract to current turn:
+    - contract entries must target turn_<id>/files/<name>
+    - if turn_id is missing in filename, rewrite to current turn
+    - attachments are forbidden in contract
+    Returns (normalized_list, rewrites, error)
+    """
+    if not turn_id:
+        return None, [], {"code": "missing_turn_id", "message": "turn_id is required to normalize exec contract"}
+    if artifacts is None:
+        return None, [], {"code": "missing_artifacts", "message": "artifacts list is required"}
+    if isinstance(artifacts, str):
+        try:
+            artifacts = json.loads(artifacts)
+        except Exception:
+            return None, [], {"code": "invalid_artifacts_json", "message": "artifacts must be a JSON array or list"}
+    if not isinstance(artifacts, list) or not artifacts:
+        return None, [], {"code": "invalid_artifacts", "message": "artifacts must be a non-empty list"}
+
+    rewrites: List[Dict[str, str]] = []
+    updated: List[Dict[str, Any]] = []
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        raw_filename = item.get("filename")
+        filename = raw_filename.strip() if isinstance(raw_filename, str) else ""
+        description = (item.get("description") or "").strip()
+        if not filename or not description:
+            return None, [], {
+                "code": "invalid_artifact_spec",
+                "message": "Each artifact requires filename and description",
+            }
+        if "/attachments/" in filename or filename.startswith("attachments/") or filename.startswith(f"{turn_id}/attachments/"):
+            return None, [], {
+                "code": "invalid_filename",
+                "message": "Contract filename must be under turn_<id>/files/ (attachments not allowed)",
+            }
+        rewritten = None
+        if filename.startswith("turn_"):
+            if not filename.startswith(f"{turn_id}/files/"):
+                return None, [], {
+                    "code": "invalid_filename",
+                    "message": "Contract filename must use current turn_id and files/ path",
+                }
+        elif filename.startswith("files/"):
+            rel = filename[len("files/") :]
+            rewritten = f"{turn_id}/files/{rel}"
+        else:
+            rewritten = f"{turn_id}/files/{filename}"
+        if rewritten:
+            rewrites.append({"original": filename, "rewritten": rewritten})
+            filename = rewritten
+
+        updated.append({"filename": filename, "description": description})
+
+    normalized, err = _normalize_artifacts_spec(updated)
+    if err:
+        return None, rewrites, err
+    return normalized, rewrites, None
+
+
+_QUALIFIED_PATH_RE = re.compile(r"turn_[A-Za-z0-9_]+/(files|attachments)/[A-Za-z0-9_./\\-]+")
+_UNQUALIFIED_PATH_RE = re.compile(r"(files|attachments)/[A-Za-z0-9_./\\-]+")
+
+
+def rewrite_exec_code_paths(
+    code: str,
+    *,
+    turn_id: str,
+) -> Tuple[str, List[Dict[str, str]]]:
+    """
+    Rewrite unqualified files/ or attachments/ paths in code to current turn_id.
+    Leaves already qualified turn_<id>/files|attachments paths intact.
+    Returns (rewritten_code, rewrites).
+    """
+    if not isinstance(code, str) or not code.strip() or not turn_id:
+        return code or "", []
+    qualified_spans = [(m.start(), m.end()) for m in _QUALIFIED_PATH_RE.finditer(code)]
+
+    def _inside_qualified(idx: int) -> bool:
+        for s, e in qualified_spans:
+            if s <= idx < e:
+                return True
+        return False
+
+    rewrites: List[Dict[str, str]] = []
+    out_parts: List[str] = []
+    last = 0
+    for m in _UNQUALIFIED_PATH_RE.finditer(code):
+        if _inside_qualified(m.start()):
+            continue
+        if m.start() > 0 and re.match(r"[A-Za-z0-9_]", code[m.start() - 1]):
+            continue
+        orig = m.group(0)
+        repl = f"{turn_id}/{orig}"
+        out_parts.append(code[last:m.start()] + repl)
+        last = m.end()
+        rewrites.append({"original": orig, "rewritten": repl})
+    out_parts.append(code[last:])
+    return "".join(out_parts), rewrites
 
 
 def build_exec_output_contract(
@@ -108,43 +241,43 @@ class ExecTools:
             "RUNTIME BEHAVIOR\n"
             "- The executor wraps your snippet into an async main() and runs it.\n"
             "- After execution, the executor checks for the requested output files.\n"
-            "- For each requested file that exists and is non-empty, an artifact is produced.\n"
-            "- Expected as a result of this snippet artifacts are described in out_artifacts_spec.\n"
+            "- Each requested file that exists and is non-empty is considered.\n"
+            "- Expected as a result of this snippet files are described in contract.\n"
             "\n"
             "INPUTS\n"
-            "1) `out_artifacts_spec` (list or JSON string, REQUIRED): list of artifact specs with fields:\n"
-            "   - name (artifact id)\n"
-            "   - filename (relative path in OUTPUT_DIR)\n"
-            "   - mime\n"
-            "   - description (text surrogate / promise of content)\n"
-            "   Each artifact is ALWAYS a file.\n"
+            "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
+            "   - filename (OUT_DIR‑relative; MUST start with turn_<id>/files/)\n"
+            "   - description (what this file contains / why it was produced)\n"
             "   These are outputs of this program that it promises to produce.\n"
             "2) `code` (string, REQUIRED): Python code snippet to run (inserted into async main()).\n"
             "3) `prog_name` (string, optional): short name of the program for UI labeling.\n"
             "\n"
             "FETCH_CTX (ADVANCED)\n"
-            "- If your snippet needs full context content that is not already visible, you may call\n"
+            "- If your snippet needs to load the text data for the artifact you see on timeline, you may call\n"
             "  ctx_tools.fetch_ctx inside the snippet using agent_io_tools.tool_call.\n"
-            "- This is ONLY allowed when the current generator is writing the code (react decision acting as codegenerator).\n"
+            "- This is ONLY allowed when the current generator is writing the code (when you act as a codegenerator and in your generated code).\n"
+            "- The paths allowed with this tool are only logical ar: so: tc:\n"
             "- Do NOT rely on fetch_ctx unless you are the code author for this run.\n"
             "\n"
             "Example:\n"
             "  resp = await agent_io_tools.tool_call(\n"
             "      fn=ctx_tools.fetch_ctx,\n"
-            "      params={\"path\": \"turn_123.slots.report_md.text\"},\n"
-            "      call_reason=\"Load prior report text\",\n"
+            "      params={\"path\": \"ar:turn_123.user.prompt\"},\n"
+            "      call_reason=\"Load user message for turn_123\",\n"
             "      tool_id=\"ctx_tools.fetch_ctx\"\n"
             "  )\n"
             "  if resp.get(\"err\"):\n"
             "      raise RuntimeError(resp[\"err\"])\n"
             "\n"
             "FILES & PATHS\n"
-            "- Input artifacts from context are available by their filenames under OUTPUT_DIR.\n"
-            "- Write your outputs to the provided `filename` paths under OUTPUT_DIR.\n"
+            "- Input artifacts from context are available by their filenames under OUTPUT_DIR/<turn_id>/files/.\n"
+            "- User attachments are available under OUTPUT_DIR/<turn_id>/attachments/.\n"
+            "- Write your outputs to the provided `filename` paths under OUTPUT_DIR/<turn_id>/files/.\n"
             "- `OUTPUT_DIR` is a global string path in the runtime; build paths like:\n"
-            "  `os.path.join(OUTPUT_DIR, \"my_file.ext\")` or `Path(OUTPUT_DIR) / \"my_file.ext\"`.\n"
+            "  `os.path.join(OUTPUT_DIR, \"<turn_id>/files/my_file.ext\")` or `Path(OUTPUT_DIR) / \"<turn_id>/attachments/user_file.ext\"`.\n"
             "- Network access is disabled in the sandbox; any network calls will fail.\n"
             "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
+            "- File MIME is inferred from filename extension (no mime in contract).\n"
             "\n"
             "AVAILABLE PACKAGES\n"
             f"{build_packages_installed_block()}\n"
@@ -156,7 +289,7 @@ class ExecTools:
     async def execute_code_python(
         self,
         code: Annotated[str, "Python code snippet (string). Inserted into async main()."],
-        out_artifacts_spec: Annotated[Any, "List or JSON string of artifact specs (name, filename, mime, description)."],
+        contract: Annotated[Any, "List or JSON string of artifact specs (filename, description)."],
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
     ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:
@@ -168,7 +301,7 @@ async def run_exec_tool(
     tool_manager: Any,
     output_contract: Dict[str, Any],
     code: str,
-    out_artifacts_spec: List[Dict[str, Any]],
+    contract: List[Dict[str, Any]],
     timeout_s: int,
     workdir: pathlib.Path,
     outdir: pathlib.Path,
@@ -265,7 +398,7 @@ async def run_exec_tool(
     # 4) build artifacts by checking requested files
     out_dyn: Dict[str, Any] = {}
     missing: List[str] = []
-    for a in out_artifacts_spec or []:
+    for a in contract or []:
         rel = a["filename"]
         p = outdir / rel
         if not p.exists() or p.stat().st_size <= 0:

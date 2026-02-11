@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_messages (
     user_type        TEXT NOT NULL DEFAULT 'anonymous',
     tags             TEXT[] NOT NULL DEFAULT '{}',
     embedding        VECTOR(1536),
-    track_id         TEXT,
     turn_id          TEXT
     );
 
@@ -50,9 +49,6 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_conversation_ts
   ON <SCHEMA>.conv_messages (user_id, conversation_id, ts DESC);
 
--- CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_user_conv_track_ts
---   ON <SCHEMA>.conv_messages (user_id, conversation_id, track_id, ts DESC);
-
 -- 0.2) Helpful indexes
 CREATE INDEX IF NOT EXISTS conv_messages_bundle_id_idx
   ON <SCHEMA>.conv_messages (bundle_id);
@@ -72,7 +68,7 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_conv_tags
 
 -- speed up recency & scope
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cm_scope_time ON <SCHEMA>.conv_messages
-  (user_id, conversation_id, track_id, role, ts DESC);
+  (user_id, conversation_id, role, ts DESC);
 
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cm_text_trgm
 ON <SCHEMA>.conv_messages USING gin (text gin_trgm_ops);
@@ -102,7 +98,6 @@ WHERE ts + (ttl_days || ' days')::interval < now();
 
 CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_tickets (
                                                            ticket_id   TEXT PRIMARY KEY,
-                                                           track_id    TEXT NOT NULL,
                                                            user_id     TEXT NOT NULL,
                                                            conversation_id TEXT NOT NULL,
                                                            turn_id     TEXT,
@@ -117,8 +112,6 @@ CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_tickets (
     embedding   VECTOR(1536),
     data JSONB NOT NULL DEFAULT '{}'::jsonb
     );
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_track
-  ON <SCHEMA>.conv_track_tickets (track_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_status
   ON <SCHEMA>.conv_track_tickets (status, priority DESC);
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_tickets_embedding
@@ -215,23 +208,3 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_rag_emb_ivf
 CREATE OR REPLACE VIEW <SCHEMA>.rag_chunks_active AS
 SELECT * FROM <SCHEMA>.rag_chunks
 WHERE expires_at IS NULL OR expires_at > now();
-
-CREATE TABLE IF NOT EXISTS <SCHEMA>.conv_track_programs (
-                                                            program_id      TEXT PRIMARY KEY,
-                                                            track_id        TEXT NOT NULL,
-                                                            user_id         TEXT NOT NULL,
-                                                            conversation_id TEXT NOT NULL,
-                                                            title           TEXT NOT NULL,
-                                                            language        TEXT NOT NULL DEFAULT 'python',
-                                                            code            TEXT NOT NULL,
-                                                            params          JSONB NOT NULL DEFAULT '{}'::jsonb,
-                                                            deliverables    JSONB NOT NULL DEFAULT '{}'::jsonb,
-                                                            status          TEXT NOT NULL DEFAULT 'active',
-                                                            revision        INT  NOT NULL DEFAULT 1,
-                                                            last_run_at     TIMESTAMPTZ,
-                                                            last_run_meta   JSONB NOT NULL DEFAULT '{}'::jsonb,
-                                                            created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_programs_track_updated
-  ON <SCHEMA>.conv_track_programs (track_id, updated_at DESC);

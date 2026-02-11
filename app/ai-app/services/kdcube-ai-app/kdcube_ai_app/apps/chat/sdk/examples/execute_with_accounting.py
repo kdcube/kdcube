@@ -2,12 +2,18 @@ import asyncio
 import os, uuid
 from typing import List, Callable
 
-from langchain_core.messages import SystemMessage, HumanMessage, BaseMessage
+from langchain_core.messages import BaseMessage
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.accounting import with_accounting
 from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session, bind_accounting
-from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, ConfigRequest, create_workflow_config
+from kdcube_ai_app.infra.service_hub.inventory import (
+    ModelServiceBase,
+    ConfigRequest,
+    create_workflow_config,
+    create_cached_system_message,
+    create_cached_human_message,
+)
 from kdcube_ai_app.storage.storage import create_storage_backend
 
 DEFAULT_MODEL = "claude-3-7-sonnet-20250219" # will be bound if no model specified for role
@@ -45,7 +51,7 @@ def configure_env():
         claude_api_key=settings.ANTHROPIC_API_KEY,
         google_api_key=settings.GOOGLE_API_KEY,
         selected_model=DEFAULT_MODEL,
-        role_models={ ROLE_FRIENDLY_ASSISTANT: {"provider": "anthropic", "model": haiku_4}},
+        role_models={ ROLE_FRIENDLY_ASSISTANT: {"provider": "anthropic", "model": sonnet_45}},
     )
 
     ms = ModelServiceBase(create_workflow_config(req))
@@ -140,11 +146,70 @@ if __name__ == "__main__":
         "system": SYSTEM,
     }
 
-    # msgs = [SystemMessage(content="You are concise."), HumanMessage(content="Say hi!")]
-    msgs = [SystemMessage(content="You are informatika teacher"), HumanMessage(content="In need to learn java on example project. I like gaming. Give me 5 bullets of my first actions in next 5 days.")]
-    fn = lambda: streaming(ms=ms,
-                           agent_name=ROLE_FRIENDLY_ASSISTANT,
-                           msgs=msgs)
+    system_msg = create_cached_system_message([
+        {"type": "text", "text": "You are informatika teacher", "cache": True},
+    ])
+
+    sys_msgs = [
+        create_cached_system_message([
+            {"type": "text", "text": "You are informatika teacher", "cache": True},
+        ]),
+        create_cached_system_message([
+            {"type": "text", "text": "You are informatika teacher", "cache": True},
+        ]),
+        create_cached_system_message([
+            {"type": "text", "text": "Now you are informatika teacher", "cache": True},
+        ]),
+        create_cached_system_message([
+            {"type": "text", "text": "Now you are informatika teacher", "cache": True},
+        ])
+    ]
+
+    PAD_TOKENS = 1024
+    pad_text = " ".join([f"pad{i}" for i in range(PAD_TOKENS)])
+
+    base_user_blocks: List[dict] = [
+        {"type": "text", "text": "In need to learn java on example project.", "cache": False},
+        {"type": "text", "text": "I like gaming. Give me 5 bullets of my first actions in next 5 days.", "cache": False},
+        {"type": "text", "text": pad_text, "cache": False},
+    ]
+    user_blocks: List[dict] = list(base_user_blocks)
+
+    def _debug_blocks(blocks: List[dict]) -> None:
+        approx_tokens = 0
+        print("User blocks:")
+        for i, b in enumerate(blocks, start=1):
+            flag = "cache" if b.get("cache") else "no-cache"
+            text = b.get("text") or ""
+            if b.get("type") == "text":
+                approx_tokens += len(text.split())
+            print(f"  {i:02d}. {flag} | {text}")
+        print(f"Approx tokens (text blocks): {approx_tokens}")
+        print()
+
+    async def _run_calls():
+        for i in range(1, 5):
+            for b in user_blocks:
+                b["cache"] = False
+            user_blocks.extend([
+                {"type": "text", "text": f"[call {i}] add block 1", "cache": False},
+                {"type": "text", "text": f"[call {i}] add block 2 (cached)", "cache": False},
+                {"type": "text", "text": f"[call {i}] add block 3", "cache": False},
+            ])
+            if len(user_blocks) >= 2:
+                user_blocks[-2]["cache"] = True
+            _debug_blocks(user_blocks)
+            user_msg = create_cached_human_message(user_blocks)
+            s = sys_msgs[i % len(sys_msgs)]
+            msgs = [s, user_msg]
+            await streaming(
+                ms=ms,
+                agent_name=ROLE_FRIENDLY_ASSISTANT,
+                msgs=msgs,
+            )
+
+    fn = _run_calls
+
 
     asyncio.run(run_with_accounting(TENANT_ID,
                                     PROJECT_ID,
@@ -153,4 +218,3 @@ if __name__ == "__main__":
                                     fn,
                                     record_metadata,
                                     accounting_attributes))
-

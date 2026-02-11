@@ -177,7 +177,7 @@ class ToolSubsystem:
         if not isinstance(val, str):
             return None
         v = val.strip().lower()
-        if v in ("none", "local", "local_network", "docker"):
+        if v in ("none", "local", "docker"):
             return v
         return None
 
@@ -765,6 +765,7 @@ class ToolSubsystem:
                     "module": self.bundle_spec.module,
                     "singleton": self.bundle_spec.singleton,
                     "description": self.bundle_spec.description,
+                    "version": getattr(self.bundle_spec, "version", None),
                 }
 
         return {

@@ -142,3 +142,68 @@ def blocks_to_gemini_parts(blocks: list) -> list[dict]:
         parts.append({"text": str(b)})
 
     return parts
+
+def normalize_tool_definition(tools: List[dict]) -> dict:
+    """
+    Convert provider-agnostic tool definitions to normalized format.
+
+    Input format:
+    {
+        "name": "web_search",
+        "description": "Search the web",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"}
+            },
+            "required": ["query"]
+        }
+    }
+    """
+    normalized = {}
+    for tool in tools or []:
+        normalized[tool["name"]] = {
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters") or tool.get("input_schema", {}),
+        }
+    return normalized
+
+
+def tools_to_anthropic_format(tools: List[dict]) -> List[dict]:
+    """Convert to Anthropic tool format."""
+    anthropic_tools = []
+    for tool in tools or []:
+        anthropic_tools.append({
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "input_schema": tool.get("parameters") or tool.get("input_schema", {})
+        })
+    return anthropic_tools
+
+
+def tools_to_openai_format(tools: List[dict]) -> List[dict]:
+    """Convert to OpenAI tool format."""
+    openai_tools = []
+    for tool in tools or []:
+        openai_tools.append({
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters") or tool.get("input_schema", {})
+            }
+        })
+    return openai_tools
+
+
+def tools_to_gemini_format(tools: List[dict]) -> List[dict]:
+    """Convert to Gemini tool format."""
+    # Gemini uses function_declarations
+    gemini_tools = []
+    for tool in tools or []:
+        gemini_tools.append({
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool.get("parameters") or tool.get("input_schema", {})
+        })
+    return gemini_tools

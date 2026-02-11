@@ -385,7 +385,7 @@ class ServiceUsage:
             cost_usd=d.get("cost_usd"),  # remains None if absent
         )
 
-def _norm_usage_dict(u: Dict[str, Any]) -> Dict[str, int]:
+def _norm_usage_dict(u: Dict[str, Any], debug: bool = False) -> Dict[str, int]:
     """Normalize OpenAI/Anthropic/custom usage into prompt/completion/total."""
     u = u or {}
 
@@ -420,6 +420,13 @@ def _norm_usage_dict(u: Dict[str, Any]) -> Dict[str, int]:
     }
     if visible_out:
         out["visible_output_tokens"] = visible_out
+    if debug:
+        try:
+            print("=== USAGE DEBUG ===")
+            print(json.dumps(out, indent=2, default=str))
+            print("===================")
+        except Exception:
+            print(f"=== USAGE DEBUG === {out}")
     return out
 
 def _approx_tokens_by_chars(text: str) -> Dict[str, int]:

@@ -118,7 +118,6 @@ async def generate_content_llm(
     logger.warning(f"[Context snapshot]:\n{context_snapshot}")
 
     rep_author = agent_name or "Content Generator LLM"
-    track_id = context_snapshot.get("track_id")
     bundle_id = context_snapshot.get("app_bundle_id")
     timezone = context_snapshot.get("timezone")
 
@@ -1036,11 +1035,9 @@ async def generate_content_llm(
 
         async with with_accounting(
                 bundle_id,
-                track_id=track_id,
                 agent=role_name,
                 artifact_name=artifact_name,
                 metadata={
-                    "track_id": track_id,
                     "agent": role_name,
                     "agent_name": agent_name,
                     "artifact_name": artifact_name,

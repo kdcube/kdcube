@@ -1,0 +1,911 @@
+[AVAILABLE COMMON TOOLS]
+Available tools extend agent capabilities with specific operations. Call tools using their full ID (e.g., generic_tools.web_search).
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔧 [1] io_tools.tool_call [async]
+
+   Execute a tool function and persist the call payload to OUTPUT_DIR as
+   JSON (indexing the filename per tool). Returns the tool's raw result.
+   Mandatory to use from generated code (and ONLY from generated code) to
+   invoke any catalog tool. Never should be called as a tool from
+   tool-calling agents.
+
+   📥 Parameters:
+       • fn: object
+         Callable tool to invoke (e.g., generic_tools.web_search).
+       • params: any (default={})
+       • call_reason: ['string'
+         'null'], Short human reason for the call (5–12 words).
+       • tool_id: ['string'
+         'null'], Qualified id like 'generic_tools.web_search'. If omitted,
+         derived from fn.__module__+'.'+fn.__name__.
+       • filename: ['string'
+         'null'], Override filename for the saved JSON (relative in
+         OUTPUT_DIR).
+
+   📤 Returns:
+       object — Raw return from the tool
+
+   📞 Usage: io_tools.tool_call(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [2] ctx_tools.fetch_ctx [async]
+
+   Fetch a single artifact from context.json by dot-path. Return shape is
+   ALWAYS a dict: {"ret": <value|null>, "err":
+   <null|{code,message,details?}>} USAGE RESTRICTION (HARD) - This tool may
+   ONLY be used by a code generation agent (the generator writing the code).
+   - Do NOT call this tool directly from planning/decision roles unless you
+   are authoring code. IMPORTANT NAMESPACES • All entities are artifacts
+   (user prompt, assistant completion, attachments, tool results, slots). •
+   Slots are contract deliverables for a turn (final outputs). Paths:
+   <turn_id>.slots... • Tool artifacts are intermediate artifacts produced
+   by tool calls in the CURRENT TURN ONLY. Paths: current_turn.artifacts...
+   PATH FORMAT • Root: <turn_id> or current_turn -> returns turn view
+   {turn_id,user,assistant,slots,artifacts} • Artifacts (ALL entities): -
+   <turn_id>.user.prompt - <turn_id>.assistant.completion -
+   <turn_id>.user.attachments.<artifact_name> -
+   current_turn.artifacts.<artifact_id> - <turn_id>.slots.<artifact_name>
+   You may append a leaf (.text/.summary/.mime/...) where applicable. •
+   Messages (compat aliases): <turn_id>.user | <turn_id>.assistant |
+   current_turn.user | current_turn.assistant Forgiving behavior: if the
+   agent accidentally appends segments (e.g. turn_12.assistant.whatever),
+   the tool will ignore extra segments and treat it as turn_12.assistant. •
+   Slots (deliverables): <turn_id>.slots | <turn_id>.slots.<slot> |
+   <turn_id>.slots.<slot>.<leaf> Allowed slot leaves: name, type,
+   description, summary, gaps, draft, sources_used, text, format, path,
+   mime, filename, . Hard rule: Slots NEVER allow '.value' ('.value' or
+   '.value.*' is an error). Forgiving behavior: if extra segments appear
+   after a valid slot leaf, they are ignored. • Tool results (CURRENT TURN
+   ONLY): current_turn.artifacts | current_turn.artifacts.<artifact_id> |
+   current_turn.artifacts.<artifact_id>.<leaf> |
+   current_turn.artifacts.<artifact_id>.value.<subkeys> Common tool_result
+   leaves: tool_id, value, summary, sources_used, timestamp, inputs,
+   call_record, artifact_type, content_lineage, error Structured traversal
+   rule: The high-level shape of the value reflects the shape of the tool
+   return value which produced it You may traverse inside tool_result.value
+   using dotted keys. If value is a JSON string, it is auto-parsed to allow
+   traversal. If you fetch the enclosing object, you will have to manage the
+   traversal on your own HARD RULES • 'literal:' anywhere in path => error •
+   turn_id normalization: - accepts shorthand without 'turn_' if it exists
+   (e.g. '12' -> 'turn_12' if present) - accepts the canonical current turn
+   id (e.g. 'turn_999') and normalizes it to 'current_turn' • historical
+   '<turn_id>.artifacts.*' is not stored. Forgiving behavior: historical
+   artifacts paths are rewritten to 'current_turn.artifacts.*'. • invalid
+   slot leaf => error WHAT YOU RECEIVE (TYPICAL TURN VIEW) When you call
+   with a ROOT path (just <turn_id> or 'current_turn'), you receive: {
+   "turn_id": "turn_123" | "current_turn", "user": <string|dict|null>,
+   "assistant": <string|dict|null>, "slots": { "<slot_name>": <slot_object>,
+   ... }, "artifacts": { "<artifact_id>": <tool_result_object>, ... } }
+   Notes: • For historical turns: artifacts is always {} (not stored
+   historically). • For current_turn: artifacts can be non-empty. CANONICAL
+   ARTIFACT SHAPE (ALL ENTITIES) { "artifact_name": "...", "artifact_tag":
+   "chat:user"|"chat:assistant"|"artifact:user.attachment"|"artifact:assistan
+   t.file"|..., "artifact_kind": "inline"|"file", "artifact_type"?: "...", #
+   optional human-readable type "format"?: "markdown"|"json"|"html"|..., #
+   for inline "mime"?: "text/plain"|"application/pdf"|..., # for file
+   "summary"?: "...", # semantic/structural summary (shown in journal)
+   "sources_used"?: [sid, sid, ...] # payload fields:
+   text/base64/path/filename/hosted_uri/rn/etc. } Common payload fields: -
+   text: inline content (prompt/completion/inline artifacts) - base64:
+   binary payload for attachments (if available) - summary:
+   semantic/structural summary of content - artifact_type: optional
+   human-readable type hint TYPICAL SLOT OBJECT SHAPE (in
+   turn_view.slots[slot_name]) Slots are produced by solver mapping and look
+   like one of these: INLINE SLOT: { "type": "inline", "format":
+   "text"|"markdown"|"json"|..., "text": "...", # authoritative text
+   representation "description": "...", "sources_used": [sid, sid, ...],
+   "summary"?: "...", "gaps"?: "...", "draft"?: true } FILE SLOT: { "type":
+   "file", "mime": "application/pdf"|"text/plain"|..., "path": "...", #
+   output path (often OUTPUT_DIR-relative) "filename"?: "...", "text":
+   "...", # authoritative surrogate text "description": "...",
+   "sources_used": [sid, sid, ...], "summary"?: "...", "gaps"?: "...",
+   "draft"?: true } TYPICAL TOOL RESULT OBJECT SHAPE (in
+   current_turn.artifacts[artifact_id]) { "tool_id": "...", "value": <any -
+   the shape defined by tool produced it, any nested shape will be clear
+   from playbook>, "summary": "...", "sources_used": [sid, sid, ...],
+   "timestamp": <float>, "inputs": { ... }, "call_record": {"rel":...,
+   "abs":...}, "artifact_type": "..."|null, "content_lineage"?:
+   ["current_turn.artifacts.X", ...], "error"?: { ... } } HOW TO OPERATE 1)
+   If you want to borwse the turn view in code, you can fetch entire turn: •
+   fetch_ctx("current_turn") • fetch_ctx("turn_123") 2) To retrieve the
+   individual slots (deliverables) or their attributes: •
+   fetch_ctx("turn_123.slots") • fetch_ctx("turn_123.slots.report_md") •
+   fetch_ctx("turn_123.slots.report_md.text") 3) For current-turn
+   intermediate artifacts and their results. Usually you are interested in
+   tool result <artifact_id>.value.content for non-file results and
+   <artifact_id>.value.text for files (might contain surrogate text) for
+   deep content connection or <artifact_id>.summary for structural /
+   semantic summary of the result content: •
+   fetch_ctx("current_turn.artifacts") •
+   fetch_ctx("current_turn.artifacts.web_1") •
+   fetch_ctx("current_turn.artifacts.web_1.value.content") 4) Use messages
+   if you need what the user/assistant said: • fetch_ctx("turn_123.user") •
+   fetch_ctx("turn_123.assistant") ERRORS If something cannot be resolved,
+   err is non-null, e.g.: { "ret": null, "err": {"code": "not_found",
+   "message": "Path not found", "details": {"normalized_path": "..."}} }
+   WHEN TO USE • After reading the program playbook, when you need to re-use
+   artifacts. • When you know (or suspect) a turn_id / slot name /
+   tool_result id and want to inspect it or connect this data to your flow.
+
+   📥 Parameters:
+       • path: string
+         Dot-path to an existing artifact, or a <turn_id> root.
+
+   📤 Returns:
+       object — dict: {ret, err}. Dict. Not a JSON string!
+
+   📞 Usage: ctx_tools.fetch_ctx(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [3] llm_tools.generate_content_llm [async]
+
+   Generate HTML/Markdown/JSON/YAML (or plain text) with multi-round
+   continuation and format/schema validation. Supports multimodal inputs via
+   `sources_list`. INPUT CHANNELS (SELF-CONTAINED): - instruction: custom
+   guidance and constraints for what to produce. - input_context: short
+   human-scale context or prior drafts (not raw sources). - sources_list:
+   structured sources for citations and evidence; may include multimodal
+   items (mime+base64). - skills: optional skill refs to inject full skill
+   instructions into the system prompt (e.g., SK1 or
+   skills.public.pdf-press). BEHAVIOR: - If `schema_json` is provided (JSON
+   Schema) AND target_format is json|yaml, the schema is INCLUDED in the
+   prompt and the model is REQUIRED to conform; output is validated
+   post-hoc. - If `cite_sources=true` and `sources_list` is non-empty, the
+   model MUST use citations: • inline [[S:n]] for Markdown/HTML, • sidecar
+   at the default /_citations path for JSON/YAML and managed_json_artifact.
+   - The result envelope ALWAYS includes `sources_used` (list of SIDs), even
+   if the content itself has no inline tokens. Downstream code must persist
+   this list into the target slot as `sources_used`. TOKEN BUDGET POLICY
+   (MANDATORY — READ BEFORE SETTING max_tokens): - `max_tokens` is a HARD
+   SAFETY CAP, NOT a cost-optimization knob. - Billing is based on tokens
+   ACTUALLY GENERATED; unused headroom is NOT billed. - Setting `max_tokens`
+   "low to save money" usually BACKFIRES: truncated/invalid
+   HTML/JSON/XML/YAML => validation fails => repair/retry rounds => MORE
+   total tokens and latency. - Therefore: setting `max_tokens` too low is
+   considered a correctness bug. STRUCTURED OUTPUTS REQUIRE HEADROOM (avoid
+   retries): - HTML/XML are the most fragile. Do NOT set low caps. - Note:
+   the runtime may silently FLOOR some formats (e.g. HTML) to a minimum;
+   lowering below that DOES NOT save money. - Closed-form requirement: your
+   output MUST be complete and self-contained (all tags/braces closed, no
+   placeholders). Incomplete structures cause validation failures and
+   retries. IMPORTANT: Do NOT try to control output size ONLY via
+   max_tokens. LLMs are poor token estimators (and you are probably an LLM
+   as well); a low cap will often produce broken markup/structures. Instead,
+   steer the generator using `instruction` so the output naturally fits the
+   quota: - Specify depth/detail level (brief vs detailed), number of
+   sections/items/rows, max bullets per section, maximum table rows, maximum
+   card count, whether to omit optional fields, and preferred concision. -
+   Example: "Generate 20 cards max, short 1–2 sentence descriptions, no long
+   prose, keep HTML minimal". - Example: "Return JSON with at most 30 items;
+   keep descriptions <= 120 chars; omit optional fields". If you need to
+   reduce cost, REDUCE OUTPUT SIZE via instruction (fewer items / less
+   detail), not by lowering max_tokens. PRACTICAL MAX_TOKENS HEURISTICS (use
+   to avoid truncation): - Prefer HIGHER caps for structured outputs;
+   headroom is cheap, retries are expensive. - For HTML: budget ~2–3x the
+   visible text size (markup + CSS + structure overhead). - For JSON/YAML:
+   budget ~1.5–2x the visible text size (keys/quotes/structure overhead). -
+   If you cannot estimate, set max_tokens to a safe high cap (e.g., 15k–20k)
+   and instead limit size via instruction. SPECIAL FORMAT:
+   managed_json_artifact - Use `target_format="managed_json_artifact"` when
+   you want ONE top-level JSON object whose string-valued fields are
+   multiple nested artifacts (summary, table, HTML view, etc.). - In this
+   mode, `artifact_name` MUST be a JSON object mapping top-level field names
+   to nested artifact formats, for example: {"summary_md": "markdown",
+   "details_html": "html"} Each value must be one of:
+   markdown,text,html,json,yaml,mermaid (xml is NOT supported). - The model
+   then returns a single JSON object with those keys; each value is a string
+   in that nested format. The streaming layer decodes each string and
+   streams it as a separate canvas artifact named exactly by the key, with
+   its declared format. CRITICAL RULES ABOUT INPUT CHANNELS (for planners /
+   ReAct agents): 1) `sources_list` is the ONLY channel for raw evidence
+   (search results, fetched pages, pricing docs, evidence lists). It should
+   contain structured items, not prose. 2) NEVER paste raw search/fetch JSON
+   or the same artifact that you map into `sources_list` into
+   `input_context` or `instruction`. Doing so doubles tokens and leaks noisy
+   markup into the prompt. 3) `input_context` is ONLY for human-scale
+   context: short notes, prior drafts, or small structured snippets. It must
+   stay relatively compact. 4) Multimodal inputs (images/PDFs as base64)
+   must go ONLY in `sources_list` items with `mime` + `base64`. Do not paste
+   base64 into `input_context` or `instruction`. RENDERING-AWARE GENERATION
+   (when output will be rendered by write_* tools): - If the output will be
+   rendered (e.g., HTML → write_pdf), design the content to satisfy the
+   renderer’s expectations. - Put layout/structure rules into `instruction`
+   (sections, headings, table shapes, image paths) so the renderer can
+   succeed. - Avoid unclosed tags, invalid nesting, or placeholder blocks;
+   rendering tools do not fix broken markup.
+
+   📥 Parameters:
+       • agent_name: string
+         Short name of this content creator, to distinguish this author in
+         the sequence of generative calls.
+       • instruction: string
+         What to produce (goal/contract). If the result of this tool will be
+         rendered further (e.g. md→pptx/docx), describe desired structure
+         and layout.
+       • artifact_name: string
+         Logical name of the artifact being produced (for tracking in logs).
+         - For normal formats (html|markdown|json|yaml|text), this is just a
+         string label. - For target_format="managed_json_artifact", this
+         MUST instead be a JSON object mapping top-level JSON field names to
+         nested artifact formats, e.g.: {"summary_md": "markdown",
+         "details_html": "html"} Each value must be one of:
+         markdown,text,html,json,yaml,mermaid (xml is NOT supported).
+       • input_context: ['string' [optional]
+         'null'], Optional base text or data to use. Never wire multimodal
+         data or raw search/fetch JSON here; those must go in sources_list.
+         Never duplicate here what you already wired to `sources_list`.
+       • target_format: string [default: markdown]
+         html|markdown|json|yaml|text|managed_json_artifact
+       • schema_json: string [optional]
+         Optional JSON Schema. If provided (and target_format is json|yaml),
+         the schema is inserted into the prompt and the model MUST produce
+         an output that validates against it.
+       • sources_list: array
+         List of sources: [{sid:int, title?:str, url?:str, text?:str,
+         content?:str, mime?:str, base64?:str, filename?:str, ...}]. This is
+         the ONLY channel for raw search results, citations, and multimodal
+         inputs. Do not also repeat the copy of these sources objects in
+         `input_context`.
+       • skills: ['array'
+         'null'], Optional list of skill refs for this generator agent to
+         acquire (e.g., 'skills.public.pdf-press' or 'SK1'). These skills
+         will be enriched in this generator system system instructions to
+         strengthen its capabilities.
+       • cite_sources: boolean [default: False]
+         If true and sources provided, require citations (inline for
+         Markdown/HTML; sidecar for JSON/YAML).
+       • max_tokens: integer [default: 7000]
+         HARD safety cap, not a cost knob. Billing is based on tokens
+         actually generated (unused headroom is not billed). Do NOT set low
+         max_tokens to 'save money' — for structured outputs it causes
+         truncation, invalid markup/JSON, validation failures, and
+         repair/retry rounds that cost MORE. Setting max_tokens too low is a
+         correctness bug. Do NOT rely on max_tokens alone to fit a budget:
+         steer output size via `instruction`
+         (depth/detail/items/rows/limits) so the model naturally fits within
+         the quota.
+       • model_strength: string [default: strong]
+         strong|regular. Hint: prefer strong for deeper reasoning, careful
+         synthesis, or format-sensitive precision; prefer regular for
+         simpler transforms, short summaries, or straightforward extraction.
+         If the task is highly RAG-oriented and relies mostly on external
+         sources (less on the model's prior knowledge), regular can be
+         enough. Default to strong when uncertain.
+       • temperature: number [default: 0.2]
+         Sampling temperature. Lower is more deterministic, higher is more
+         creative.
+       • strict: boolean [default: True]
+         If true, enforce format correctness, schema validity (if
+         schema_json is set), and presence of citations (when
+         cite_sources=true).
+
+   📤 Returns:
+       object — Envelope object: {ok:bool, content:str, format:str,
+       finished:bool, retries:int, reason?:str, stats?:object,
+       sources_used:[int] }
+
+   📞 Usage: llm_tools.generate_content_llm(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [4] llm_tools.sources_reconciler [async]
+
+   Filter web/KB sources down to those relevant to an objective and queries.
+   Returns JSON array of kept items with per-query and overall relevance and
+   short reasoning.Only use for sources that retrieved from unchecked
+   generator. Do not use for results of built-in search tools.
+
+   📥 Parameters:
+       • objective: string
+         Objective (what we are trying to achieve with these sources).
+       • queries: array
+         Array of queries [q1, q2, ...]. Each will be assigned a qid.
+       • sources_list: array
+         Array of {"sid": int, "title": str, "body": str}
+       • max_items: integer [default: 12]
+         Optional: cap of kept sources (default 12).
+
+   📤 Returns:
+       array — Array of kept sources: [{sid, verdict, o_relevance,
+       q_relevance:[{qid,score}], reasoning}]
+
+   📞 Usage: llm_tools.sources_reconciler(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [5] generic_tools.fetch_url_contents [async]
+
+   Fetch-only URL dereferencer (no search). Returns main text + status +
+   date metadata for each URL. ⚠️ TOOL SELECTION RULES: - Use ONLY when you
+   already have concrete HTTP/HTTPS URLs. - Never performs search or
+   discovery. - If you need to FIND pages, use web_search /
+   web_search_links. - Do not call web_search and fetch_url_contents for the
+   same discovery task. Objective-aware refinement is optional and
+   best-effort: URLs are never dropped; pages without reliable spans keep
+   full content (recall-first). Refinement modes: - 'none': full pages -
+   'balanced': target + context (50-70%) - 'recall': most body/min chrome
+   (80-95%) - 'precision': direct answers (20-50%, requires objective)
+   Without objective, refinement is ignored and full content is returned.
+
+   📥 Parameters:
+       • urls: any
+       • objective: ['string'
+         'null'], Optional objective (goal / task / question). Enables
+         refinement. Without it, content stays full.
+       • refinement: string [default: none]
+         Post-fetch content refinement (requires objective): - 'none':
+         Return full page content (default, fast) - 'balanced': Extract
+         target + supporting context (50-70% coverage) - 'recall': Extract
+         full content bodies, remove chrome (80-95% coverage) - 'precision':
+         Extract only directly relevant sections (20-50% coverage) Never
+         drops URLs; no/invalid spans => keep full content.
+
+   📤 Returns:
+       object — Object mapping each input URL to a result object: {
+       "https://example.com/article": { "status":
+       "success|timeout|paywall|error|...", "content": "<text>",
+       "content_length": 1234, "mime":
+       "text/html|application/pdf|image/png|...", "base64": "<data for
+       supported non-HTML files>", "size_bytes": 1234, "published_time_iso":
+       "..." | null, "modified_time_iso": "..." | null, ... } } If refined,
+       content may be trimmed; otherwise full.
+
+   📞 Usage: generic_tools.fetch_url_contents(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [6] generic_tools.read_file [async]
+
+   Read text from an OUT_DIR-relative path and return first n chars. Only
+   for text files. Path must be relative to OUT_DIR, e.g.
+   `current_turn/attachments/<filename>` or `turn_<id>/files/<filename>`
+   (attachments allowed). Do NOT pass absolute paths.
+
+   📥 Parameters:
+       • path: string
+         OUT_DIR-relative path to a readable text file (no absolute paths).
+       • n: integer [default: 4000]
+         Num of first char to return
+
+   📤 Returns:
+       string — First n characters of the file contents.
+
+   📞 Usage: generic_tools.read_file(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [7] generic_tools.web_search [async]
+
+   Web discovery tool (multi-query). Finds and deduplicates pages across
+   query variants. If an objective is provided (and the backend supports
+   it), the tool scores snippet relevance to the objective/queries and may
+   drop clearly irrelevant results. If fetch_content is true, it fetches
+   page text and can refine it to reduce boilerplate while preserving
+   recall. Use when you need to FIND pages. For known URLs only, use
+   fetch_url_contents. Refinement modes (post-fetch, objective-guided,
+   best-effort): - 'none': full pages (exploratory) - 'balanced': target +
+   context, 50-70% (default) - 'recall': content bodies, 80-95%
+   (comprehensive) - 'precision': direct answers only, 20-50% (narrow
+   questions)
+
+   📥 Parameters:
+       • queries: any
+       • objective: ['string'
+         'null'], Optional search objective (goal/question). Used for
+         snippet relevance scoring and content refinement.
+       • refinement: string [default: balanced]
+         Post-fetch content refinement:
+         'none'|'balanced'|'recall'|'precision'
+       • n: integer [default: 8]
+         Max unique results (1-20)
+       • fetch_content: boolean [default: True]
+         If true, fetch full page content according to 'refinement' option.
+         Increase tokens as stated in refinement modes. Use False if you
+         need to decide the fetch on your own. If false, return ranked
+         snippets/URLs only (no content attr).
+       • freshness: ['string'
+         'null'], Canonical freshness: 'day'|'week'|'month'|'year' or null.
+       • country: ['string'
+         'null'], Canonical country ISO2, e.g. 'DE', 'US'.
+       • safesearch: string [default: moderate]
+         Canonical safesearch: 'off'|'moderate'|'strict'.
+
+   📤 Returns:
+       array — Array of results:
+       [{sid,title,url,text,objective_relevance?,query_relevance?,content?,mi
+       me?,base64?,size_bytes?,...date/meta...}]. Scores (0..1) from snippet
+       reconciliation when enabled by backend. Content present only if
+       fetched; may be refined per mode. Non-HTML supported files return
+       mime/base64 instead of content.
+
+   📞 Usage: generic_tools.web_search(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [8] generic_tools.web_search_links [async]
+
+   Search web with multiple query variants and return ranked snippets and
+   URLs. Use this when you want to explore results before fetching full
+   pages. For full content of selected URLs, call `fetch_url_contents`.
+
+   📥 Parameters:
+       • queries: any
+       • objective: ['string'
+         'null'], Optional objective for snippet relevance scoring.
+       • n: integer [default: 8]
+         Max results (1-20)
+       • freshness: ['string'
+         'null'], Canonical freshness: 'day'|'week'|'month'|'year' or null.
+       • country: ['string'
+         'null'], Canonical country ISO2, e.g. 'DE', 'US'.
+       • safesearch: string [default: moderate]
+         Canonical safesearch: 'off'|'moderate'|'strict'.
+
+   📤 Returns:
+       array — Array: [{sid, title, url, text, objective_relevance?,
+       query_relevance?}, ...]. No `content` field. Pre-sorted by relevance.
+
+   📞 Usage: generic_tools.web_search_links(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [9] generic_tools.write_docx [async]
+
+   Render Markdown into a modern, well-styled DOCX. Returns the saved
+   filename (basename only). AUTHORING GUIDANCE - Use
+   skills.public.docx-press for Markdown structure, tables, and citation
+   handling. - Load with show_skills when needed: skills.public.docx-press.
+
+   📥 Parameters:
+       • path: string
+         Destination .docx filename (name or path; directories ignored —
+         saved in OUTPUT_DIR).
+       • content: string
+         Markdown to render. Use headings (#/##/###), bullets (-/*/1.), code
+         fences, blockquotes, pipe tables.
+       • title: ['string'
+         'null'], Optional document title (top of first page).
+       • include_sources_section: boolean [default: True]
+         Append a References section listing all provided sources.
+
+   📤 Returns:
+       string — Saved DOCX filename (basename).
+
+   📞 Usage: generic_tools.write_docx(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [10] generic_tools.write_file [async]
+
+   General-purpose file writer. Use when no specific write_* tool fits. Two
+   modes: 1. Direct: Pass content (str/bytes) 2. Copy: Pass source_path (for
+   files that already exist and must be 'registered') For BINARY content,
+   mandatory are: • full human-readable `content_description` of what's in
+   the file. • `mime`. Common use: Register files created by
+   openpyxl/PIL/pandas via source_path.Required for binary: mime +
+   content_description This tool also must be used to write the binary image
+   data.
+
+   📥 Parameters:
+       • path: string
+         Destination file path. '~' is expanded; parent dirs are
+         created.Extension should match content type: .txt/.json/.csv for
+         text, .png/.xlsx/.pdf for binary.
+       • content: any
+       • source_path: ['string'
+         'null'], Copy from path (mode 2, for 'registering' preexisting
+         files)
+       • encoding: string [default: utf-8]
+         Text encoding (mode 1 only and if used when content is str).
+         Default: 'utf-8'.
+       • mime: ['string'
+         'null'], MIME type for file. Mandatory if BINARY content
+       • content_description: ['string'
+         'null'], Full human-readable description of what the file contains.
+         Required if file is BINARY in both modes
+
+   📤 Returns:
+       string — Absolute path that was written.
+
+   📞 Usage: generic_tools.write_file(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [11] generic_tools.write_html [async]
+
+   Write an HTML file. Optionally resolves citations so [[S:n]] tokens and
+   <sup class="cite" data-sids="...">...</sup> placeholders become clickable
+   links (target=_blank). Returns saved path.
+
+   📥 Parameters:
+       • path: string
+         Destination .html filename (directories ignored — saved in
+         OUTPUT_DIR).
+       • content: string
+         HTML content to write. Can contain [[S:n]] tokens or <sup
+         class='cite' ...> placeholders.
+       • title: ['string'
+         'null'], Optional <title> if you pass raw body; ignored if full
+         HTML.
+       • first_only: boolean [default: False]
+         When multiple SIDs given, keep only the first when rendering inline.
+
+   📤 Returns:
+       string — Saved HTML path (absolute).
+
+   📞 Usage: generic_tools.write_html(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [12] generic_tools.write_pdf [async]
+
+   Render Markdown, HTML, or Mermaid diagrams to PDF **using Playwright +
+   headless Chromium** (JavaScript is executed; Chart.js/D3/etc. render).
+   Returns saved path. For professional PDF layouts (multi-page documents,
+   proper page breaks, compact spacing, domain-adaptive colors), use skill
+   'pdf-press' for comprehensive authoring guidance. === QUICK AUTHORING
+   ESSENTIALS === 1) PAGE & ORIENTATION • Define: <style>@page { size: A4
+   portrait; margin: 20mm; }</style> or @page { size: A4 landscape; } • Use
+   centered content column ≤ 700px (portrait) or ≤ 1000px (landscape) •
+   Avoid full-viewport wrappers (100vh/100vw) and fixed-position bars in
+   printable content 2) LAYOUT & BREAKS (Prevent Content Splitting) • Wrap
+   headings + content together: <section style='break-inside:avoid;
+   page-break-inside:avoid;'> • Max content block height: 220mm (portrait)
+   or 150mm (landscape) to avoid forced splits • Use tight spacing: padding
+   10-14px, margins 12-16px (not 20-40px) • Force page break:
+   style='page-break-before:always;' or style='page-break-after:always;' 3)
+   TABLES • Always provide <thead> and <tbody>. Avoid row/column spans that
+   split across pages • Wrap tables: <div
+   style='break-inside:avoid;'><h3>Title</h3><table>...</table></div> • Use
+   compact sizing: font-size:8.5pt; padding:4px 6px; line-height:1.3; •
+   Prefer narrower columns; allow wrapping (word-break:break-word) • If
+   >12-15 rows, split into multiple tables 4) TYPOGRAPHY • Body: 10pt,
+   line-height:1.5; Headers: h1=18pt max, h2=14pt, h3=12pt • Never use fonts
+   >20pt (except magazine covers up to 24pt) • Include webfonts early; avoid
+   late-loading fonts that reflow at print time 5) MEDIA (images/svg/canvas)
+   • Use responsive sizes: max-width:100%; height:auto; display:block; • For
+   charts/canvas, let them auto-size in CSS; avoid hardcoded pixel heights
+   >200mm • Wrap in figures: <figure style='break-inside:avoid;'><img
+   src='...'><figcaption>...</figcaption></figure> • Legends should wrap;
+   avoid cramped spaces 6) IMAGES (CRITICAL - Use File Paths, NOT Base64) •
+   MUST use relative file paths from OUT_DIR (the tool's output directory /
+   base_dir) • HTML mode: <img src='turn_id/files/chart.png' alt='Chart'>
+   when file is at OUT_DIR/turn_id/files/chart.png • Markdown mode:
+   ![Chart](turn_id/files/chart.png) when file is at
+   OUT_DIR/turn_id/files/chart.png • Do NOT embed base64 data URIs in
+   HTML/Markdown; they can crash headless Chromium on multi-page PDFs •
+   Ensure HTML/Markdown generator knows relative paths and their association
+   with visual content 7) DON'TS (cause clipping, overlaps, or ugly splits)
+   • Banner-style headers with 30px+ padding (wastes vertical space) •
+   Headings without break-inside:avoid wrappers (causes mid-text page
+   splits) • position:fixed/sticky in printable area • overflow:hidden on
+   large layout wrappers • transform:scale/translate on containers that
+   cross page boundaries • Single containers >250mm tall (will force ugly
+   mid-content split) FORMATS: 'markdown' (GitHub-flavored), 'html' (custom
+   layouts, JS execution), 'mermaid' (diagrams) SOURCES: Use
+   include_sources_section=True to append references (Markdown mode)
+   ORIENTATION: Set landscape=True for A4 landscape (default: portrait) For
+   comprehensive guidance on color schemes, multi-column layouts, scientific
+   papers, magazine styles, and complete templates → see skill 'pdf-press'
+
+   📥 Parameters:
+       • path: string
+         Destination .pdf path. '~' is expanded; parent dirs are created.
+       • content: string
+         Content to render (Markdown, HTML, or Mermaid code depending on
+         format).
+       • format: string [default: markdown]
+         Content format: 'markdown', 'html', or 'mermaid'
+       • title: ['string'
+         'null'], Optional document title.
+       • include_sources_section: boolean [default: True]
+         Append a 'Sources' section listing all passed sources. In Markdown
+         mode. Ignored in HTML mode
+       • landscape: boolean [default: False]
+         Render in landscape orientation
+
+   📤 Returns:
+       string — Absolute path to the written PDF.
+
+   📞 Usage: generic_tools.write_pdf(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [13] generic_tools.write_png [async]
+
+   Render Markdown, HTML, or Mermaid diagrams to PNG image using Playwright
+   + Chromium. Supports three formats: 'markdown', 'html' (control sizing
+   via CSS), or 'mermaid'. Returns saved path.Fitting guidance: prefer
+   full_page=True; increase width (e.g., 2200–3200) for wide diagrams; use
+   render_delay_ms=1000–2000 to allow Mermaid/layout to settle. File is
+   saved under OUTPUT_DIR.
+
+   📥 Parameters:
+       • path: string
+         Destination .png path. Directories are ignored; saved in OUTPUT_DIR.
+       • content: string
+         Renderable content. If format='mermaid', supply RAW Mermaid text
+         (no ``` fences). If 'markdown', supply Markdown (use ```mermaid
+         blocks for diagrams). If 'html', supply an HTML snippet.
+       • format: string [default: mermaid]
+         Content format: 'markdown', 'html', or 'mermaid'
+       • title: ['string'
+         'null'], Optional title (for Markdown mode).
+       • base_dir: ['string'
+         'null'], Base directory for resolving relative assets.
+       • render_delay_ms: integer [default: 1000]
+         Extra delay for JS rendering (useful for charts/diagrams).
+       • full_page: boolean [default: True]
+         Capture full scrollable page vs viewport only.
+       • width: ['integer' [default: 3000]
+         'null'], Viewport width in pixels (defaults to 1200).
+       • height: ['integer' [default: 2000]
+         'null'], Viewport height in pixels (only used if full_page=False).
+
+   📤 Returns:
+       string — Absolute path to the written PNG.
+
+   📞 Usage: generic_tools.write_png(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 [14] generic_tools.write_pptx [async]
+
+   Render HTML into a PPTX deck using python-pptx. Returns the saved
+   filename. For professional slide authoring (layouts, color schemes,
+   content budgets, citations): → Use skill 'pptx-press'
+   (skills.public.pptx-press) === QUICK ESSENTIALS === SLIDE STRUCTURE: •
+   One <section id='slide-N'> per slide • <h1>Slide Title</h1> + optional <p
+   class='subtitle'>Subtitle</p> • Supported body: h2/h3, p, ul/ol+li,
+   tables, callouts, two-column layouts • Inline: <strong>, <em>, <span
+   class='...'>, <sup class='cite'> for citations IMAGES (CRITICAL - Use
+   File Paths): • MUST use relative file paths from OUT_DIR, NOT base64 data
+   URIs • Pattern: <img src='turn_id/files/chart.png' width='640'> when file
+   at OUT_DIR/turn_id/files/chart.png • Sizing: width='640' or
+   style='width:5in; height:3in;' (supports px/pt/in) • Base64 URIs will
+   crash - always use file paths SUPPORTED CSS (others ignored): • color,
+   background/background-color (hex #RGB or #RRGGBB only) • font-size
+   (px/pt/em), line-height (number like 1.3) • padding (px/pt/in),
+   border-bottom (title underlines), border-left (accent bars) • .two-column
+   { gap }, .column { background; padding; border-left } • Tables: th/td
+   colors, tr:nth-child(even) striping CONTENT BUDGETS (to avoid aggressive
+   scaling): • Standard slide: 1 heading + 6 bullets OR 2 paragraphs OR 1
+   callout (~25-40 words) • Two-column: each column ≤ 1 h3 + 3 bullets OR 2
+   paragraphs; ~12 lines max/column • Tables: ≤6 columns, ≤8 rows • Titles:
+   ≤8 words; Subtitles: ≤12 words (one sentence) CITATIONS (HTML): • Inline:
+   <sup class='cite' data-sids='1,3'>[[S:1,3]]</sup> after factual claim •
+   data-sids: numeric IDs (comma-separated or range 2-4) • Inner text
+   [[S:...]] must mirror data-sids • Alternative: <div
+   class='footnotes'>[[S:n]] markers</div> • Sources slide auto-generated
+   when sources provided and include_sources_slide=True LAYOUT TIPS: •
+   Content auto-scales down (min ~70%) if too large - budget content to
+   avoid this • Two-column: <div class='two-column'><div
+   class='column'>...</div><div class='column'>...</div></div> • Callouts:
+   <div class='highlight-box'>...</div> or any div with
+   background+border-left • Lists indent ~0.25in; text wraps automatically
+   AVOID (ignored/unsupported): • min-height/100vh, flex/grid beyond
+   .two-column, gradients, box-shadow, border-radius •
+   position:fixed/sticky, transform, page-break properties • Base64 image
+   data URIs For comprehensive guidance on professional layouts, color
+   schemes, complete templates → see skill 'pptx-press'
+
+   📥 Parameters:
+       • path: string
+         Destination .pptx filename (name or path; directories ignored —
+         saved in OUTPUT_DIR).
+       • content: string [optional]
+         HTML (only HTML) to render. Use <section> per slide.
+       • title: ['string'
+         'null'], Optional deck title (title slide).
+       • include_sources_slide: boolean [default: False]
+         Append a 'Sources' slide if sources are given.
+       • base_dir: ['string'
+         'null'], Base dir for resolving relative images in HTML. Defaults
+         to OUTPUT_DIR.
+
+   📤 Returns:
+       string — Saved PPTX filename (basename).
+
+   📞 Usage: generic_tools.write_pptx(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[AVAILABLE INFRASTRUCTURE TOOLS]
+Available tools extend agent capabilities with specific operations. Call tools using their full ID (e.g., generic_tools.web_search).
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔧 [1] exec_tools.execute_code_python [async]
+
+   Execute a ready (pre-written) Python 3.11 program in the sandbox using
+   the same runtime mechanism as `codegen_tools.codegen_python`, but WITHOUT
+   code generation. WHEN TO USE - Use this tool ONLY when you already have
+   the code and need to run it. - The code you pass is a SNIPPET that is
+   inserted inside an async main() wrapper. - The snippet SHOULD use async
+   operations (await where needed). RUNTIME BEHAVIOR - The executor wraps
+   your snippet into an async main() and runs it. - After execution, the
+   executor checks for the requested output files. - For each requested file
+   that exists and is non-empty, an artifact is produced. - Expected as a
+   result of this snippet artifacts are described in out_artifacts_spec.
+   INPUTS 1) `out_artifacts_spec` (list or JSON string, REQUIRED): list of
+   artifact specs with fields: - name (artifact id) - filename (relative
+   path in OUTPUT_DIR) - mime - description (text surrogate / promise of
+   content) Each artifact is ALWAYS a file. These are outputs of this
+   program that it promises to produce. 2) `code` (string, REQUIRED): Python
+   code snippet to run (inserted into async main()). 3) `prog_name` (string,
+   optional): short name of the program for UI labeling. FETCH_CTX
+   (ADVANCED) - If your snippet needs full context content that is not
+   already visible, you may call ctx_tools.fetch_ctx inside the snippet
+   using agent_io_tools.tool_call. - This is ONLY allowed when the current
+   generator is writing the code (react decision acting as codegenerator). -
+   Do NOT rely on fetch_ctx unless you are the code author for this run.
+   Example: resp = await agent_io_tools.tool_call( fn=ctx_tools.fetch_ctx,
+   params={"path": "turn_123.slots.report_md.text"}, call_reason="Load prior
+   report text", tool_id="ctx_tools.fetch_ctx" ) if resp.get("err"): raise
+   RuntimeError(resp["err"]) FILES & PATHS - Input artifacts from context
+   are available by their filenames under OUTPUT_DIR. - Write your outputs
+   to the provided `filename` paths under OUTPUT_DIR. - `OUTPUT_DIR` is a
+   global string path in the runtime; build paths like:
+   `os.path.join(OUTPUT_DIR, "my_file.ext")` or `Path(OUTPUT_DIR) /
+   "my_file.ext"`. - Network access is disabled in the sandbox; any network
+   calls will fail. - Read/write outside OUTPUT_DIR or the current workdir
+   is not permitted. AVAILABLE PACKAGES [AVAILABLE PACKAGES] - Data: pandas,
+   numpy, openpyxl, xlsxwriter - Files: python-docx, python-pptx, pymupdf,
+   pypdf, reportlab, Pillow - Web: requests, aiohttp, httpx, playwright,
+   beautifulsoup4, lxml - Viz: matplotlib, seaborn, plotly, networkx,
+   graphviz, diagrams, folium - Text: markdown-it-py, pygments, jinja2,
+   python-dateutil - Utils: pydantic, orjson, python-dotenv, PyJWT, geopy
+   OUTPUT - A status dict indicating success/error and the produced file
+   artifacts.
+
+   📥 Parameters:
+       • code: string
+         Python code snippet (string). Inserted into async main().
+       • out_artifacts_spec: object
+         List or JSON string of artifact specs (name, filename, mime,
+         description).
+       • prog_name: ['string'
+         'null'], Short name of the program for UI labeling.
+       • timeout_s: ['integer'
+         'null'], Execution timeout seconds (default: 600).
+
+   📤 Returns:
+       object — Envelope: ok/out_dyn/out/error/summary.
+
+   📞 Usage: exec_tools.execute_code_python(...)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[SKILL CATALOG]
+The following skills are available to enhance agents capabilities. Use `skills.<NAMESPACE>.<SKILL_ID>` to load a skill's full documentation when needed or mention the skill.
+When suggesting skills, refer to the short IDs (e.g., SK1) only. Keep to 1–3 skills per step.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📦 [SK1] public.docx-press [Built-in] v2.0.0
+   document-creation • docx, markdown, tables, citations, images, headings
+
+   Teaches agents how to author Markdown that renders cleanly into DOCX,
+   with heading structure (up to 6 levels), tables, citations, and embedded
+   images.
+
+   🧮 Instruction size: 2289 tok
+
+   🛠️  Tools:
+       • generic_tools.write_docx (document rendering)
+         → Renders Markdown into a DOCX document.
+       • llm_tools.generate_content_llm (content generation)
+         → Generates structured Markdown with citations for DOCX.
+
+   📂 Path: skills.public.docx-press
+
+   ⚡ When to use:
+      • Generating Markdown for write_docx
+      • Building structured DOCX reports with deep heading hierarchies
+      • Including citations and a references section
+      • Embedding images in documents
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 [SK2] public.mermaid [Built-in] v1.0.0
+   visualization • mermaid, diagrams, flowcharts, syntax
+
+   Teaches agents how to write syntactically correct Mermaid diagrams that
+   render without errors. Covers common syntax pitfalls, quoting rules, and
+   validation patterns.
+
+   🧮 Instruction size: 1434 tok
+
+   📂 Path: skills.public.mermaid
+
+   ⚡ When to use:
+      • Generating Mermaid diagrams in markdown code blocks
+      • Fixing broken Mermaid that won't render
+      • Validating existing Mermaid code for syntax correctness
+      • Creating flowcharts, sequence diagrams, or other Mermaid visualizations
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 [SK3] public.pdf-press [Built-in] v1.0.0
+   document-creation • pdf, html, css, layout, typography, print-design
+
+   Teaches agents how to generate HTML and Markdown that renders beautifully
+   to PDF  with proper page breaks, compact professional layouts, domain-
+   adaptive color schemes,  and multi-column support for technical reports,
+   scientific papers, and magazine-style  documents.
+
+   🧮 Instruction size: 3916 tok
+
+   🛠️  Tools:
+       • generic_tools.write_pdf (document rendering)
+         → Renders text content, either html or markdown format, into PDF
+         → document
+       • llm_tools.generate_content_llm (document content generation)
+         → Generates the content with the needed layout, with the needed
+         → sources (plugged with `[S:<sid1>,<sid2>,..]` or
+         → `S[<sid.start>-<sid.end>]` tokens pointing to source pool sid)
+
+   📂 Path: skills.public.pdf-press
+
+   ⚡ When to use:
+      • Creating technical reports with multiple pages
+      • Building scientific papers with two-column layouts
+      • Designing magazine-style documents with varied column counts
+      • Ensuring content doesn't split awkwardly across page boundaries
+      • Generating professional PDFs with domain-adaptive color schemes
+      • Working with write_pdf tool for HTML rendering
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 [SK4] public.pptx-press [Built-in] v1.1.0
+   presentation-creation • pptx, slides, html, presentations, business, executive
+
+   Teaches agents how to author slide-structured HTML that renders
+   professionally to PPTX with proper sizing, styling, color schemes, and
+   citation handling for business presentations, technical decks, and
+   executive briefings.
+
+   🧮 Instruction size: 3727 tok
+
+   🛠️  Tools:
+       • generic_tools.write_pptx (slide rendering)
+         → Renders HTML slides into a PPTX deck.
+       • llm_tools.generate_content_llm (content generation)
+         → Generates slide HTML with citations and layout constraints.
+
+   📂 Path: skills.public.pptx-press
+
+   ⚡ When to use:
+      • Generating HTML for write_pptx tool
+      • Creating professional slide decks
+      • Building citation-aware presentations
+      • Designing executive briefings
+      • Making technical presentations with data
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📦 [SK5] public.url-gen [Built-in] v1.0.0
+   research • urls, fetch, discovery
+
+   Generate clean, human-facing URLs for fetch tools when external evidence
+   is needed.
+
+   🧮 Instruction size: 299 tok
+
+   🛠️  Tools:
+       • generic_tools.fetch_url_contents (fetch)
+         → Fetches content from the generated URLs for evidence gathering.
+
+   📂 Path: skills.public.url-gen
+
+   ⚡ When to use:
+      • You need external evidence and must provide URLs for fetch tools
+      • You are forming a list of sources to retrieve with fetch_url_contents
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+

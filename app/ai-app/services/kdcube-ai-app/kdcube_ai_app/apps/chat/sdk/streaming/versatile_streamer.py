@@ -90,6 +90,26 @@ def _next_possible_channel_prefix(text: str) -> Optional[int]:
     return m.start() if m else None
 
 
+def _strip_structured_fences(text: str) -> str:
+    """
+    Remove common fenced wrappers (```json ... ```) around structured content.
+    Keeps content intact if no fences are present.
+    """
+    if not text:
+        return text
+    s = text.strip()
+    if not s.startswith("```"):
+        return s
+    nl = s.find("\n")
+    if nl < 0:
+        return ""
+    s = s[nl + 1:]
+    end = s.rfind("```")
+    if end >= 0:
+        s = s[:end]
+    return s.strip()
+
+
 def _replace_citations(
         text: str,
         fmt: str,
@@ -389,6 +409,8 @@ async def stream_with_channels(
     results: Dict[str, ChannelResult] = {}
     for name, spec in channel_specs.items():
         raw = "".join(raw_by_channel.get(name, []))
+        if spec.format in ("json", "yaml", "xml", "html", "mermaid"):
+            raw = _strip_structured_fences(raw)
         obj = None
         if spec.model and raw:
             try:

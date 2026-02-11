@@ -42,6 +42,7 @@ Fields:
 - `module` (string, optional): dotted module name inside the path (required for zip/whl).
 - `singleton` (bool, optional): if true, the workflow instance is cached and reused.
 - `description` (string, optional).
+- `version` (string, optional): bundle version (computed content hash prefix).
 
 ### 2) Redis registry (source of truth at runtime)
 
@@ -86,17 +87,20 @@ Base entrypoint behavior:
 - `bundle_props_defaults` provides code defaults (override in the bundle entrypoint).
 - `refresh_bundle_props(...)` loads overrides from Redis (via KV cache) and merges with defaults.
 - `self.bundle_props` is available to the workflow at runtime.
+- `bundle_version` is injected into defaults from the live bundle configuration and is always returned
+  in props (read-only; not persisted in Redis).
 
 Implementation: [BaseEntrypoint](../../sdk/solutions/chatbot/entrypoint.py)
 
 ### Admin APIs for props
 
 - `GET /admin/integrations/bundles/{bundle_id}/props?tenant=...&project=...`
-  - Returns `{ props, defaults }` for the bundle.
+  - Returns `{ props, defaults }` for the bundle (includes `bundle_version` from live bundle config).
 
 - `POST /admin/integrations/bundles/{bundle_id}/props`
   - Body: `{ tenant?, project?, op: "replace"|"merge", props: {...} }`
   - Stores props in Redis (source of truth for overrides).
+  - `bundle_version` is ignored on write; it is controlled by code.
 
 - `POST /admin/integrations/bundles/{bundle_id}/props/reset-code`
   - Body: `{ tenant?, project? }`
@@ -156,6 +160,7 @@ Notes:
 - `priority` controls selection when multiple are present.
 - The loader passes only supported kwargs from: `comm_context`, `pg_pool`, `redis`.
 - If `singleton` is true (spec or decorator meta), the instance is cached.
+- Bundle version is computed from bundle content (hash prefix) on load.
 
 ### Optional: operations beyond `run`
 
