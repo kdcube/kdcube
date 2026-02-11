@@ -28,9 +28,7 @@ services:
       - path: ./.env.backend
         required: false
     ports:
-      - "5050:8050"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
+      - "5050:80"
     networks:
       - kdcube-internal
 
