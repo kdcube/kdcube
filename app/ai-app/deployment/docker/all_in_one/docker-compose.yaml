@@ -219,7 +219,7 @@ services:
     networks:
       - kdcube-internal
     ports:
-      - "127.0.0.1:8000:8010"
+      - "8010:8010"
 
   web-ui:
     image: kdcube-web-ui:latest
@@ -242,6 +242,8 @@ services:
         condition: service_started
     networks:
       - kdcube-internal
+    ports:
+      - "5173:80"
 
 #  proxylogin:
 #    image: proxylogin:latest
