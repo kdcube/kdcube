@@ -311,7 +311,7 @@ services:
       - POSTGRES_HOST=postgres-db
       
       # Path mappings for Docker-in-Docker
-      - HOST_KB_STORAGE_PATH=${HOST_KB_STORAGE_PATH}
+      - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
       - HOST_BUNDLES_PATH=${SITE_AGENTIC_BUNDLES_ROOT}
       - HOST_EXEC_WORKSPACE_PATH=${HOST_EXEC_WORKSPACE_PATH}
       
@@ -369,12 +369,12 @@ AWS_DEFAULT_REGION=us-east-1
 # These map container paths to actual host paths for sibling containers
 
 # macOS (development):
-HOST_KB_STORAGE_PATH=/Users/yourname/project/deployment/cicd/local/kdcube-storage
+HOST_KDCUBE_STORAGE_PATH=/Users/yourname/project/deployment/cicd/local/kdcube-storage
 HOST_BUNDLES_PATH=/Users/yourname/project/bundles
 HOST_EXEC_WORKSPACE_PATH=/Users/yourname/project/deployment/cicd/local/exec-workspace
 
 # Linux (production):
-# HOST_KB_STORAGE_PATH=/home/deploy/kdcube-storage
+# HOST_KDCUBE_STORAGE_PATH=/home/deploy/kdcube-storage
 # HOST_BUNDLES_PATH=/home/deploy/bundles
 # HOST_EXEC_WORKSPACE_PATH=/home/deploy/exec-workspace
 
@@ -438,7 +438,7 @@ docker ps -a | grep py-code-exec
 
 | Variable | Description | Example (macOS) | Example (Linux) |
 |----------|-------------|-----------------|-----------------|
-| `HOST_KB_STORAGE_PATH` | Host path for KB data | `/Users/you/deployment/kdcube-storage` | `/home/deploy/kdcube-storage` |
+| `HOST_KDCUBE_STORAGE_PATH` | Host path for KB data | `/Users/you/deployment/kdcube-storage` | `/home/deploy/kdcube-storage` |
 | `HOST_BUNDLES_PATH` | Host path for tool bundles | `/Users/you/bundles` | `/home/deploy/bundles` |
 | `HOST_EXEC_WORKSPACE_PATH` | Host path for execution | `/Users/you/deployment/exec-workspace` | `/home/deploy/exec-workspace` |
 

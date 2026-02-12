@@ -288,7 +288,7 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
     host_storage = ensure_absolute(
         console,
         "Host KB storage path",
-        env_main.entries.get("HOST_KB_STORAGE_PATH", (None, None))[1],
+        env_main.entries.get("HOST_KDCUBE_STORAGE_PATH", (None, None))[1],
         defaults.get("host_kb_storage"),
     )
     host_bundles = ensure_absolute(
@@ -304,10 +304,10 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
         defaults.get("host_exec_workspace"),
     )
 
-    update_env_value(env_main, "HOST_KB_STORAGE_PATH", host_storage)
+    update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
     update_env_value(env_main, "HOST_EXEC_WORKSPACE_PATH", host_exec)
-    update_env_value(env_backend, "HOST_KB_STORAGE_PATH", host_storage)
+    update_env_value(env_backend, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_backend, "HOST_BUNDLES_PATH", host_bundles)
     update_env_value(env_backend, "HOST_EXEC_WORKSPACE_PATH", host_exec)
 

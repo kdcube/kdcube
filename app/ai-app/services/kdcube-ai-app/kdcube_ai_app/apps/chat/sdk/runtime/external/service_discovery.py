@@ -52,7 +52,7 @@ def _translate_container_path_to_host(container_path: pathlib.Path) -> pathlib.P
               └── out/
 
     Inside chat-chat container:
-      /kdcube-storage/        → Host: {HOST_KB_STORAGE_PATH}
+      /kdcube-storage/        → Host: {HOST_KDCUBE_STORAGE_PATH}
       /bundles/           → Host: {HOST_BUNDLES_PATH}
       /exec-workspace/    → Host: {HOST_EXEC_WORKSPACE_PATH}
       /tmp/codegen_xxx/   → Redirected to /exec-workspace/codegen_xxx/
@@ -68,7 +68,7 @@ def _translate_container_path_to_host(container_path: pathlib.Path) -> pathlib.P
 
     # /kdcube-storage → host path from env
     if path_str.startswith("/kdcube-storage"):
-        host_kb_storage = os.environ.get("HOST_KB_STORAGE_PATH", "/kdcube-storage")
+        host_kb_storage = os.environ.get("HOST_KDCUBE_STORAGE_PATH", "/kdcube-storage")
         rel = os.path.relpath(path_str, "/kdcube-storage")
         return pathlib.Path(host_kb_storage) / rel
 

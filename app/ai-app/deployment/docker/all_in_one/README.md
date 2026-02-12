@@ -109,7 +109,7 @@ mkdir -p nginx/webroot
 # -----------------------------------------------------------------------------
 # DOCKER-IN-DOCKER PATH MAPPINGS
 # -----------------------------------------------------------------------------
-HOST_KB_STORAGE_PATH=/path/to/deployment/docker/all_in_one/data/kdcube-storage
+HOST_KDCUBE_STORAGE_PATH=/path/to/deployment/docker/all_in_one/data/kdcube-storage
 HOST_BUNDLES_PATH=/path/to/bundles                    # Your agentic apps
 HOST_EXEC_WORKSPACE_PATH=/path/to/deployment/docker/all_in_one/data/exec-workspace
 AGENTIC_BUNDLES_ROOT=/bundles                          # Mount path in container
