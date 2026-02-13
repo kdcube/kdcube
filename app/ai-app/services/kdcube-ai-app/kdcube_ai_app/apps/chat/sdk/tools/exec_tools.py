@@ -488,7 +488,7 @@ async def run_exec_tool(
 
     stderr_tail = ""
     try:
-        err_path = outdir / "runtime.err.log"
+        err_path = outdir / "logs/runtime.err.log"
         if err_path.exists():
             txt = err_path.read_text(encoding="utf-8", errors="ignore")
             stderr_tail = txt[-2000:] if len(txt) > 2000 else txt
@@ -522,6 +522,9 @@ async def run_exec_tool(
             err_msg = (error.get("description") or error.get("message") or "").strip() if error else ""
             err_code = (error.get("error") or error.get("code") or "exec_error") if error else "exec_error"
             lines.append(f"Runtime error: {err_code} — {err_msg}".strip())
+            if stderr_tail:
+                lines.append("Runtime stderr (tail):")
+                lines.append(stderr_tail.strip())
         if errors:
             lines.append("File errors:")
             for e in errors:

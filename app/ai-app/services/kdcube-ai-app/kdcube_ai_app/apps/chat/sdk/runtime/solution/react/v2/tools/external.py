@@ -90,13 +90,14 @@ async def handle_external_tool(*,
                 rewritten = True
             if rewritten and physical:
                 final_params["path"] = physical
-                notice_block(
-                    ctx_browser=ctx_browser,
-                    tool_call_id=tool_call_id,
-                    code="protocol_violation.path_rewritten",
-                    message="Rendering tool path was rewritten to current turn files/.",
-                    extra={"original": path_val, "rewritten": physical, "tool_id": tool_id},
-                )
+                if physical != path_val:
+                    notice_block(
+                        ctx_browser=ctx_browser,
+                        tool_call_id=tool_call_id,
+                        code="protocol_violation.path_rewritten",
+                        message="Rendering tool path was rewritten to current turn files/.",
+                        extra={"original": path_val, "rewritten": physical, "tool_id": tool_id},
+                    )
 
     # If exec tool: normalize contract/code + rehost any referenced historical files before execution
     if tools_insights.is_exec_tool(tool_id):
@@ -161,6 +162,13 @@ async def handle_external_tool(*,
                 message="Exec code referenced relative files/… paths; rewritten to current turn.",
                 extra={"rewritten": rewritten_paths},
             )
+            try:
+                ctx_browser.log.log(
+                    f"[react.v2] exec_path_rewritten: {rewritten_paths}",
+                    level="WARNING",
+                )
+            except Exception:
+                pass
         if paths:
             try:
                 rehost = await rehost_files_from_timeline(
@@ -399,7 +407,7 @@ async def handle_external_tool(*,
             if phys_path_override or rel_path_override:
                 phys_path = phys_path_override
                 rel_path = rel_path_override
-                if rewritten_override:
+                if rewritten_override and rewrite_original and phys_path and rewrite_original != phys_path:
                     notice_block(
                         ctx_browser=ctx_browser,
                         tool_call_id=tool_call_id,
@@ -415,13 +423,14 @@ async def handle_external_tool(*,
                 phys_path, rel_path, rewritten = normalize_physical_path(artifact_rel, turn_id=turn_id)
                 if rewritten:
                     original_path = (artifact_view.path or (artifact_view.raw.get("value") or {}).get("path") or artifact_id or "")
-                    notice_block(
-                        ctx_browser=ctx_browser,
-                        tool_call_id=tool_call_id,
-                        code="protocol_violation.path_rewritten",
-                        message="Artifact path contained a turn/files prefix; rewritten to current-turn relative path.",
-                        extra={"original": original_path, "normalized": phys_path},
-                    )
+                    if phys_path and original_path and original_path != phys_path:
+                        notice_block(
+                            ctx_browser=ctx_browser,
+                            tool_call_id=tool_call_id,
+                            code="protocol_violation.path_rewritten",
+                            message="Artifact path contained a turn/files prefix; rewritten to current-turn relative path.",
+                            extra={"original": original_path, "normalized": phys_path},
+                        )
         artifact_path = f"fi:{turn_id}.files/{rel_path}" if (turn_id and rel_path and visibility == "external") else f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json"
         physical_path = phys_path if (turn_id and rel_path and visibility == "external") else ""
         edited = detect_edit(
@@ -472,46 +481,19 @@ async def handle_external_tool(*,
                     pending = state.setdefault("pending_sources", [])
                     pending.extend(srcs)
         elif tools_insights.is_fetch_uri_content_tool(tool_id):
-            rows: List[Dict[str, Any]] = []
             data = output
             if isinstance(data, str):
                 try:
                     data = json.loads(data)
                 except Exception:
                     data = None
-            if isinstance(data, dict):
-                if "ret" in data:
-                    data = data.get("ret")
-            if isinstance(data, dict):
-                for url, payload in data.items():
-                    if not isinstance(url, str) or not url.strip() or not isinstance(payload, dict):
-                        continue
-                    row = {"url": url.strip()}
-                    content = (payload.get("content") or "").strip()
-                    if content:
-                        row["content"] = content
-                    title = payload.get("title")
-                    if isinstance(title, str) and title.strip():
-                        row["title"] = title.strip()
-                    for meta_key in (
-                        "published_time_iso",
-                        "modified_time_iso",
-                        "fetched_time_iso",
-                        "date_method",
-                        "date_confidence",
-                        "status",
-                        "content_length",
-                        "mime",
-                        "base64",
-                        "size_bytes",
-                        "fetch_status",
-                    ):
-                        if meta_key in payload:
-                            row[meta_key] = payload[meta_key]
-                    rows.append(row)
-            if rows:
-                pending = state.setdefault("pending_sources", [])
-                pending.extend(rows)
+            if isinstance(data, dict) and "ret" in data:
+                data = data.get("ret")
+            if isinstance(data, list):
+                rows = [r for r in data if isinstance(r, dict) and r.get("url")]
+                if rows:
+                    pending = state.setdefault("pending_sources", [])
+                    pending.extend(rows)
 
     state["last_tool_result"] = items
     state["last_tool_id"] = tool_id

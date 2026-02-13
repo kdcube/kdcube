@@ -1714,6 +1714,43 @@ class Timeline:
         (text/image/document) while preserving caching on the last emitted
         block per source block.
         """
+        def _short_tc_id(raw: str) -> str:
+            if not raw:
+                return "tc_????"
+            return f"tc_{raw[:4]}"
+
+        def _ts_line(val: str) -> str:
+            return f"[ts: {val}]" if val else ""
+
+        def _maybe_parse_json(val: str) -> Optional[Any]:
+            try:
+                return json.loads(val)
+            except Exception:
+                return None
+
+        def _derive_file_context_path(*, turn_id: str, raw_path: str) -> str:
+            path = (raw_path or "").strip()
+            if not path:
+                return ""
+            if path.startswith("fi:"):
+                return path
+            if path.startswith("turn_") and "/files/" in path:
+                tid, rel = path.split("/files/", 1)
+                return f"fi:{tid}.files/{rel}"
+            if "/files/" in path and ".files/" in path:
+                # already logical-ish
+                return f"fi:{path}"
+            if turn_id:
+                return f"fi:{turn_id}.files/{path.lstrip('/')}"
+            return path
+
+        def _sources_pool_range(rows: List[Dict[str, Any]]) -> str:
+            sids = [int(r.get("sid") or 0) for r in rows if isinstance(r, dict) and r.get("sid") is not None]
+            sids = [s for s in sids if s > 0]
+            if not sids:
+                return ""
+            return f"so:sources_pool[{sids[0]}-{sids[-1]}]"
+
         out: List[Dict[str, Any]] = []
         for b in (blocks or []):
             if not isinstance(b, dict):
@@ -1726,16 +1763,23 @@ class Timeline:
             path = (b.get("path") or "").strip()
             meta = b.get("meta") if isinstance(b.get("meta"), dict) else {}
             if btype == "turn.header":
-                text = f"[TURN {b.get('turn_id') or ''}]"
-                if ts:
-                    text += f"\n[ts: {ts}]"
+                turn_id = b.get("turn_id") or ""
+                started_at = ts
+                if started_at:
+                    text = f"[TURN {turn_id} (started at {started_at})]"
+                else:
+                    text = f"[TURN {turn_id}]"
             elif btype == "user.prompt":
-                prefix = f"[USER MESSAGE]"
-                if ts:
-                    prefix += f"\n[ts: {ts}]"
+                lines = []
+                ts_line = _ts_line(ts)
+                if ts_line:
+                    lines.append(ts_line)
+                lines.append("[USER MESSAGE]")
                 if path:
-                    prefix += f"\n[path: {path}]"
-                text = (prefix + "\n" + (text or "")).strip()
+                    lines.append(f"[path: {path}]")
+                if text:
+                    lines.append(text)
+                text = "\n".join(lines).strip()
             elif btype == "assistant.completion":
                 prefix = f"[ASSISTANT MESSAGE]"
                 if ts:
@@ -1745,7 +1789,11 @@ class Timeline:
                 text = (prefix + "\n" + (text or "")).strip()
             elif btype == "react.notes":
                 if isinstance(text, str):
-                    text = f"[AI Agent say]: {text}".strip()
+                    ts_line = _ts_line(ts)
+                    if ts_line:
+                        text = f"{ts_line}\n[AI Agent say]: {text}".strip()
+                    else:
+                        text = f"[AI Agent say]: {text}".strip()
             elif btype == "system.message":
                 prefix = f"[SYSTEM MESSAGE]"
                 if ts:
@@ -1775,6 +1823,154 @@ class Timeline:
                 if path:
                     prefix += f"\n[path: {path}]"
                 text = (prefix + "\n" + (text or "")).strip()
+            elif btype == "react.tool.call" and isinstance(text, str):
+                payload = _maybe_parse_json(text) if (b.get("mime") or "").strip() == "application/json" else None
+                tool_id = ""
+                tool_call_id = ""
+                params = None
+                if isinstance(payload, dict):
+                    tool_id = (payload.get("tool_id") or "").strip()
+                    tool_call_id = (payload.get("tool_call_id") or "").strip()
+                    params = payload.get("params")
+                if not tool_call_id:
+                    tool_call_id = (b.get("call_id") or "").strip()
+                short_id = _short_tc_id(tool_call_id)
+                lines = [""]
+                ts_line = _ts_line(ts)
+                if ts_line:
+                    lines.append(ts_line)
+                header = f"[TOOL CALL {short_id}]"
+                if tool_id:
+                    header += f" {tool_id}"
+                lines.append(header)
+                if isinstance(params, dict):
+                    params_out = dict(params)
+                    if isinstance(params_out.get("content"), str):
+                        content_val = params_out.get("content") or ""
+                        if len(content_val) > 100:
+                            file_path = _derive_file_context_path(
+                                turn_id=str(b.get("turn_id") or ""),
+                                raw_path=str(params_out.get("path") or ""),
+                            )
+                            suffix = f"... [truncated; see {file_path}]" if file_path else "... [truncated]"
+                            params_out["content"] = content_val[:100] + suffix
+                    lines.append(json.dumps(params_out, ensure_ascii=False, indent=2))
+                elif params is not None:
+                    lines.append(json.dumps(params, ensure_ascii=False, indent=2))
+                text = "\n".join([l for l in lines if l is not None]).strip()
+            elif btype == "react.tool.result":
+                mime_val = (b.get("mime") or "").strip()
+                tool_call_id = (b.get("call_id") or "").strip()
+                short_id = _short_tc_id(tool_call_id)
+                if mime_val == "application/json" and isinstance(text, str):
+                    payload = _maybe_parse_json(text)
+                    if isinstance(payload, dict) and payload.get("artifact_path") and payload.get("tool_id"):
+                        tool_id = (payload.get("tool_id") or "").strip()
+                        # Skip noisy meta blocks for read/search/fetch; content blocks will carry the info.
+                        if tool_id in {"react.read", "web_tools.web_search", "web_tools.web_fetch"}:
+                            text = ""
+                        else:
+                            lines = []
+                            ts_line = _ts_line(ts)
+                            if ts_line:
+                                lines.append(ts_line)
+                            header = f"[TOOL RESULT {short_id}]"
+                            if tool_id:
+                                header += f" {tool_id}"
+                            lines.append(header)
+                            ap = (payload.get("artifact_path") or "").strip()
+                            pp = (payload.get("physical_path") or "").strip()
+                            kind = (payload.get("kind") or "").strip()
+                            visibility = (payload.get("visibility") or "").strip()
+                            description = (payload.get("description") or "").strip()
+                            if kind == "file" and visibility == "external":
+                                lines.append("[Produced files]")
+                                file_line = pp or ap
+                                if file_line:
+                                    lines.append(f"- {file_line}")
+                                if description:
+                                    lines.append(f"Description: {description}")
+                            # Emit a cleaned meta JSON (no hosted_uri/rn/key/local_path).
+                            meta_out = {
+                                k: v
+                                for k, v in payload.items()
+                                if k in {
+                                    "artifact_path",
+                                    "physical_path",
+                                    "mime",
+                                    "kind",
+                                    "visibility",
+                                    "channel",
+                                    "tool_id",
+                                    "tool_call_id",
+                                    "edited",
+                                    "ts",
+                                    "size_bytes",
+                                    "description",
+                                    "write_warning",
+                                    "sources_used",
+                                    "tokens",
+                                    "error",
+                                }
+                                and v is not None
+                                and (not isinstance(v, str) or v.strip() != "")
+                            }
+                            if meta_out:
+                                lines.append(json.dumps(meta_out, ensure_ascii=False, indent=2))
+                            if payload.get("error"):
+                                err = payload.get("error") or {}
+                                code = err.get("code") or "error"
+                                msg = err.get("message") or ""
+                                lines.append(f"error: {code} {msg}".strip())
+                            text = "\n".join(lines).strip()
+                    elif isinstance(payload, dict) and "paths" in payload and "total_tokens" in payload:
+                        lines = []
+                        ts_line = _ts_line(ts)
+                        if ts_line:
+                            lines.append(ts_line)
+                        lines.append(f"[TOOL RESULT {short_id}] read summary")
+                        paths = payload.get("paths") or []
+                        if isinstance(paths, list) and paths:
+                            for row in paths:
+                                if not isinstance(row, dict):
+                                    continue
+                                p = row.get("path")
+                                if not p:
+                                    continue
+                                tok = row.get("tokens")
+                                if tok:
+                                    lines.append(f"- {p} (tokens={tok})")
+                                else:
+                                    lines.append(f"- {p}")
+                        missing = payload.get("missing") or []
+                        if missing:
+                            lines.append(f"missing: {missing}")
+                        text = "\n".join(lines).strip()
+                    elif isinstance(payload, list):
+                        range_path = _sources_pool_range(payload)
+                        lines = []
+                        ts_line = _ts_line(ts)
+                        if ts_line:
+                            lines.append(ts_line)
+                        header = f"[TOOL RESULT {short_id}]"
+                        if range_path:
+                            header += f" artifact_path: {range_path}"
+                        lines.append(header)
+                        # keep payload as-is
+                        lines.append(text)
+                        text = "\n".join([l for l in lines if l]).strip()
+                elif isinstance(text, str):
+                    # Non-JSON content blocks: prefix with tool result header.
+                    lines = []
+                    ts_line = _ts_line(ts)
+                    if ts_line:
+                        lines.append(ts_line)
+                    header = f"[TOOL RESULT {short_id}]"
+                    if path:
+                        header += f" path: {path}"
+                    lines.append(header)
+                    lines.append(text)
+                    text = "\n".join([l for l in lines if l]).strip()
             base64 = b.get("base64") or b.get("data")
             mime = (b.get("mime") or b.get("media_type") or "").strip() or None
             if btype == "react.note" and isinstance(text, str):

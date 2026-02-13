@@ -100,23 +100,60 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             except Exception:
                 pass
     total_tokens = 0
-    for item in items or []:
+    per_path: List[Dict[str, Any]] = []
+    items_by_path = {item.get("context_path"): item for item in (items or []) if item.get("context_path")}
+    for raw_path in artifact_paths:
+        path = raw_path
+        display_path = raw_path
+        if path.startswith("so:"):
+            path = path[len("so:"):]
+            display_path = raw_path
+        item = items_by_path.get(path)
+        if not item:
+            missing_artifacts.append(display_path or path)
+            per_path.append({"path": display_path, "missing": True})
+            add_block(ctx_browser, {
+                "turn": turn_id,
+                "type": "react.tool.result",
+                "call_id": tool_call_id,
+                "mime": "text/markdown",
+                "path": display_path or f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json",
+                "text": f"{display_path}: artifact is missing.",
+            })
+            continue
+
         art = item.get("artifact") or {}
-        ctx_path = item.get("context_path") or ""
+        ctx_path = item.get("context_path") or path
+        if display_path.startswith("so:"):
+            ctx_path = display_path
         meta_block = build_artifact_meta_block(
             turn_id=turn_id,
             tool_call_id=tool_call_id,
-            artifact={"artifact_kind": "inline", "visibility": "internal", "tool_id": tool_id, "tool_call_id": tool_call_id, "value": {"mime": None}},
+            artifact={"tool_id": tool_id, "tool_call_id": tool_call_id, "value": {}},
             artifact_path=ctx_path,
             physical_path="",
         )
         add_block(ctx_browser, meta_block)
+
+        tokens = 0
         art_text = art.get("text") if isinstance(art, dict) else None
+        art_base64 = art.get("base64") if isinstance(art, dict) else None
         art_fmt = (art.get("format") or "text").lower() if isinstance(art, dict) else "text"
+        art_mime = art.get("mime") if isinstance(art, dict) else None
+        if (not isinstance(art_text, str) or not art_text.strip()) and path.startswith("sources_pool["):
+            try:
+                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.layout import build_sources_pool_text
+                sources = ctx_browser.timeline.resolve_sources_pool(path)
+                if sources:
+                    art_text = build_sources_pool_text(sources_pool=sources)
+                    art_fmt = "text"
+            except Exception:
+                pass
         if isinstance(art_text, str) and art_text.strip():
             try:
                 from kdcube_ai_app.apps.chat.sdk.util import token_count
-                total_tokens += token_count(art_text)
+                tokens = token_count(art_text)
+                total_tokens += tokens
             except Exception:
                 pass
             if art_fmt in {"json"}:
@@ -133,17 +170,32 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "path": ctx_path or f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json",
                 "text": art_text,
             })
-    if items:
+        elif isinstance(art_base64, str) and art_base64:
+            add_block(ctx_browser, {
+                "turn": turn_id,
+                "type": "react.tool.result",
+                "call_id": tool_call_id,
+                "mime": art_mime or "application/octet-stream",
+                "path": ctx_path or f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json",
+                "base64": art_base64,
+            })
+        per_path_entry = {"path": ctx_path}
+        if tokens:
+            per_path_entry["tokens"] = tokens
+        per_path.append(per_path_entry)
+
+    if artifact_paths:
+        summary = {"paths": per_path, "total_tokens": total_tokens}
+        if missing_artifacts:
+            summary["missing"] = missing_artifacts
         add_block(ctx_browser, {
             "turn": turn_id,
             "type": "react.tool.result",
             "call_id": tool_call_id,
             "mime": "application/json",
             "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else "",
-            "text": json.dumps({"paths": artifact_paths, "tokens": total_tokens}, ensure_ascii=False),
+            "text": json.dumps(summary, ensure_ascii=False),
         })
-    if artifact_paths and not items:
-        missing_artifacts.extend(artifact_paths)
     if missing_artifacts:
         notice_block(
             ctx_browser=ctx_browser,

@@ -118,14 +118,14 @@ class WithReactWorkflow(BaseWorkflow):
                 })
 
                 # --- Contribute gate insights into timeline
-                gate_block = build_gate_stage_block(
-                    runtime=self.ctx_browser.runtime_ctx,
-                    gate_out=gate_payload,
-                    clarification_questions=list(getattr(scratchpad, "clarification_questions", []) or []),
-                )
-                self.ctx_browser.contribute(
-                    blocks=[gate_block],
-                )
+                # gate_block = build_gate_stage_block(
+                #     runtime=self.ctx_browser.runtime_ctx,
+                #     gate_out=gate_payload,
+                #     clarification_questions=list(getattr(scratchpad, "clarification_questions", []) or []),
+                # )
+                # self.ctx_browser.contribute(
+                #     blocks=[gate_block],
+                # )
                 scratchpad.clarification_questions = [q.strip() for q in (gate_payload.get("clarification_questions") or []) if q.strip()]
                 if scratchpad.clarification_questions:
                     try:

@@ -406,7 +406,7 @@ async def fetch_url_contents(
         )] = True,
         include_content_blocks: Annotated[bool, (
                 "If true, include ordered content blocks (text/image) derived from the page HTML."
-        )] = True,
+        )] = False,
         extraction_mode: str = "custom",
         refinement="none",
         objective: Optional[str] = None,

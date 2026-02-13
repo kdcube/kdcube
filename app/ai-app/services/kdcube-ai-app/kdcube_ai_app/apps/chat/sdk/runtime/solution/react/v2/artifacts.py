@@ -110,6 +110,9 @@ def build_artifact_meta_block(
     size_bytes = (artifact.get("value") or {}).get("size_bytes") or artifact.get("size_bytes")
     if size_bytes is not None:
         meta["size_bytes"] = size_bytes
+    description = (artifact.get("value") or {}).get("description") or artifact.get("description")
+    if description:
+        meta["description"] = description
     write_warning = (artifact.get("value") or {}).get("write_warning")
     if write_warning:
         meta["write_warning"] = write_warning
@@ -127,6 +130,12 @@ def build_artifact_meta_block(
         val = (artifact.get("value") or {}).get(key)
         if val:
             meta[key] = val
+    # Drop empty or None attributes to avoid confusing metadata.
+    meta = {
+        k: v
+        for k, v in meta.items()
+        if v is not None and (not isinstance(v, str) or v.strip() != "")
+    }
     return {
         "turn": turn_id,
         "type": "react.tool.result",

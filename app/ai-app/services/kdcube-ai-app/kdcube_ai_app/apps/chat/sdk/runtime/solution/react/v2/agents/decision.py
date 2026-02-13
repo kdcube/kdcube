@@ -132,10 +132,9 @@ SOURCES_AND_CITATIONS_V2 = """
 
 - Tools web.web_search and web.web_fetch automatically add the retrieved sources to the sources_pool.
   The sids in such tools results are the sids those sources have in the source pool.
-  When such tool is called, all items it brings are visible in the context so you do not need to read them additionally 
-  and can cite the sources which you see with the sid they have.
-  Whenever you need to retrieve certain source snippet with some sid because you do not se in it in visible context anymore, 
-  you must read it with react.read(paths=[so:sid]).  
+  When such tool is called, the returned snippets are visible in the context right away, so you can cite them directly.
+  Only use react.read if a needed snippet is no longer visible (e.g., hidden or truncated after cache TTL pruning).
+  In that case, read from sources_pool with react.read, e.g. react.read(paths=["so:sources_pool[1,2]"]).
   
 """
 

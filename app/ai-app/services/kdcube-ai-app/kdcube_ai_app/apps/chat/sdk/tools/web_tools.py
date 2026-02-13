@@ -45,6 +45,11 @@ def _error_result(*, code: str, message: str, where: str, managed: bool, ret: An
         "ret": ret,
     }
 
+def _strip_none_fields(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return item
+    return {k: v for k, v in item.items() if v is not None}
+
 
 class WebTools:
     # @kernel_function(
@@ -70,6 +75,8 @@ class WebTools:
                 "and may drop clearly irrelevant results.\n\n"
                 "Use when you need to FIND pages. For known URLs only, use web_fetch.\n"
                 "Returns an envelope: {ok, error, ret}.\n"
+                "Returned items are added to sources_pool with their sid. "
+                "You can use them immediately; only read from sources_pool later if a snippet is no longer visible.\n"
         )
     )
     async def web_search(
@@ -121,6 +128,8 @@ class WebTools:
             )
             for r in rows:
                 r.pop("provider", None)
+            if isinstance(rows, list):
+                rows = [_strip_none_fields(r) for r in rows if isinstance(r, dict)]
             return _ok_ret_result(rows)
         except Exception as e:
             msg = str(e).strip() or "web_search failed"
@@ -223,7 +232,9 @@ class WebTools:
                 "- 'recall': most body/min chrome (80-95%)\n"
                 "- 'precision': direct answers (20-50%, requires objective)\n"
                 "Without objective, refinement is ignored and full content is returned.\n"
-                "Returns an envelope: {ok, error, ret}."
+                "Returns an envelope: {ok, error, ret}.\n"
+                "Returned items are added to sources_pool with their sid. "
+                "You can use them immediately; only read from sources_pool later if a snippet is no longer visible."
         )
     )
     async def web_fetch(
@@ -238,7 +249,7 @@ class WebTools:
             "- 'precision': Extract only directly relevant sections (20-50% coverage)\n"
             "Never drops URLs; no/invalid spans => keep full content."
         )] = "none",
-    ) -> Annotated[dict, "Envelope: {ok, error, ret}. ret is a URL→result map."]:
+    ) -> Annotated[dict, "Envelope: {ok, error, ret}. ret is an array of results (same shape as web_search)."]:
         try:
             if isinstance(urls, str):
                 try:
@@ -255,7 +266,54 @@ class WebTools:
                 refinement=refinement,
                 objective=objective,
             )
-            return _ok_ret_result(ret)
+            items: list[dict] = []
+            if isinstance(ret, dict):
+                for url, row in ret.items():
+                    if not isinstance(row, dict):
+                        continue
+                    item: dict[str, Any] = {"url": url}
+                    title = (row.get("title") or row.get("name") or "").strip()
+                    if title:
+                        item["title"] = title
+                    text = (row.get("content") or row.get("text") or "").strip()
+                    if text:
+                        item["text"] = text
+                        # Keep full content for downstream if needed.
+                        item["content"] = text
+                    if row.get("mime"):
+                        item["mime"] = row.get("mime")
+                    if row.get("base64"):
+                        item["base64"] = row.get("base64")
+                    if row.get("size_bytes") is not None:
+                        item["size_bytes"] = row.get("size_bytes")
+                    if row.get("content_length") is not None:
+                        item["content_length"] = row.get("content_length")
+                    if row.get("status"):
+                        item["status"] = row.get("status")
+                    if row.get("error"):
+                        item["error"] = row.get("error")
+                    if row.get("source_type"):
+                        item["source_type"] = row.get("source_type")
+                    if row.get("fetched_time_iso"):
+                        item["fetched_time_iso"] = row.get("fetched_time_iso")
+                    if row.get("published_time_iso"):
+                        item["published_time_iso"] = row.get("published_time_iso")
+                    if row.get("modified_time_iso"):
+                        item["modified_time_iso"] = row.get("modified_time_iso")
+                    if row.get("date_method"):
+                        item["date_method"] = row.get("date_method")
+                    if row.get("date_confidence") is not None:
+                        item["date_confidence"] = row.get("date_confidence")
+                    if row.get("archive_snapshot_date"):
+                        item["archive_snapshot_date"] = row.get("archive_snapshot_date")
+                    if row.get("archive_snapshot_url"):
+                        item["archive_snapshot_url"] = row.get("archive_snapshot_url")
+                    if row.get("favicon"):
+                        item["favicon"] = row.get("favicon")
+                    if row.get("favicon_status"):
+                        item["favicon_status"] = row.get("favicon_status")
+                    items.append(_strip_none_fields(item))
+            return _ok_ret_result(items)
         except Exception as e:
             msg = str(e).strip() or "web_fetch failed"
             return _error_result(
@@ -263,7 +321,7 @@ class WebTools:
                 message=msg,
                 where="web_tools.web_fetch",
                 managed=False,
-                ret={},
+                ret=[],
             )
 
 

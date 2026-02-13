@@ -111,12 +111,9 @@ async def _execute_exec_tool(
     artifacts_spec = params.get("contract")
     code = params.get("code") or ""
     timeout_s = params.get("timeout_s") or 600
-    exec_id = _safe_exec_id(tool_execution_context.get("exec_id") or tool_call_id)
-    if exec_streamer:
-        try:
-            exec_streamer.set_execution_id(exec_id)
-        except Exception:
-            logger.log("[react.exec] Failed to set execution_id for exec tool widget" + traceback.format_exc(), level="WARNING")
+    exec_id = exec_streamer.execution_id
+    # exec_id = _safe_exec_id(tool_execution_context.get("exec_id") or tool_call_id)
+
     base_error = {
         "status": "error",
         "output": None,
@@ -664,7 +661,6 @@ async def execute_tool(
         tool_manager: ToolSubsystem,
         logger: AgentLogger,
         tool_call_id: Optional[str] = None,
-        artifacts_contract: list[dict] = None,
         exec_streamer: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """

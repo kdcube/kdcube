@@ -43,9 +43,15 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
         return [], []
     found = [m.group(1) for m in _CODE_PATH_RE.finditer(code)]
     rewritten: List[str] = []
+    def _has_turn_prefix(start_idx: int) -> bool:
+        if start_idx <= 0:
+            return False
+        prefix = code[max(0, start_idx - 64):start_idx]
+        return bool(re.search(r"turn_[A-Za-z0-9_]+/$", prefix))
+
     for m in _REL_FILES_RE.finditer(code):
         raw = m.group(0)
-        if raw.startswith("turn_"):
+        if _has_turn_prefix(m.start()):
             continue
         if turn_id:
             rewritten.append(f"{turn_id}/{raw}")
@@ -53,7 +59,7 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
             rewritten.append(raw)
     for m in _REL_ATTACHMENTS_RE.finditer(code):
         raw = m.group(0)
-        if raw.startswith("turn_"):
+        if _has_turn_prefix(m.start()):
             continue
         if turn_id:
             rewritten.append(f"{turn_id}/{raw}")
