@@ -844,21 +844,27 @@ class ReactSolverV2:
                 self.log.log(f"[react.v2] decision schema error: {error}", level="ERROR")
             except Exception:
                 pass
-
-                retries = int(state.get("decision_retries") or 0)
-                if retries < int(state.get("max_iterations") or 0):
-                    state["decision_retries"] = retries + 1
-                    state["retry_decision"] = True
-                    decision["notes"] = "ReactDecisionOutV2_schema_error; retry decision"
-                else:
-                    decision = {
-                        "action": "exit",
-                        "final_answer": "ReactDecisionOutV2_schema_error validation failed.",
-                        "notes": "ReactDecisionOutV2_schema_error",
-                    }
-                    action = "exit"
-                    tool_call = {}
-                    tool_id = ""
+            retries = int(state.get("decision_retries") or 0)
+            if retries < int(state.get("max_iterations") or 0):
+                state["decision_retries"] = retries + 1
+                state["retry_decision"] = True
+                decision["notes"] = "ReactDecisionOutV2_schema_error; retry decision"
+                try:
+                    self.log.log(
+                        f"[react.v2] retry decision after schema error (retries={state['decision_retries']})",
+                        level="INFO",
+                    )
+                except Exception:
+                    pass
+            else:
+                decision = {
+                    "action": "exit",
+                    "final_answer": "ReactDecisionOutV2_schema_error validation failed.",
+                    "notes": "ReactDecisionOutV2_schema_error",
+                }
+                action = "exit"
+                tool_call = {}
+                tool_id = ""
         else:
 
             decision = decision.get("agent_response") or {}
