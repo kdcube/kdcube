@@ -458,6 +458,7 @@ class BaseEntrypoint:
         haiku_3 = "claude-3-5-haiku-20241022"
         haiku_4 = "claude-haiku-4-5-20251001"
 
+
         return {
             "role_models": {
                 "ctx.reconciler":  {"provider": "anthropic", "model": haiku_4},

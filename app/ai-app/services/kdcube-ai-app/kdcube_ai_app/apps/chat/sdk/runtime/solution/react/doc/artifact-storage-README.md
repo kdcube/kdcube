@@ -19,6 +19,45 @@ Assistant‑produced files are stored in the conversation attachments path:
 s3://<bucket>/<prefix>/cb/tenants/<tenant>/projects/<project>/attachments/<role>/<user_id>/<conversation_id>/<turn_id>/<filename>
 ```
 
+## Conversation State Artifacts
+Conversation state is stored as two artifacts:
+- `artifact:conv.timeline.v1` — timeline blocks + conversation metadata (no sources_pool)
+- `artifact:conv:sources_pool` — sources pool only
+
+The sources pool payload is:
+```json
+{ "sources_pool": [ ... ] }
+```
+
+### PostgreSQL index record (conv_messages)
+Both artifacts are indexed in `conv_messages` with:
+- `role = "artifact"`
+- `tags` include `artifact:<kind>` and `turn:<turn_id>`
+- `text` is a compact JSON summary (not the full payload)
+
+**Timeline record (`artifact:conv.timeline.v1`)**
+`text` contains:
+```json
+{
+  "conversation_title": "...",
+  "conversation_started_at": "...",
+  "last_activity_at": "...",
+  "blocks_count": 18,
+  "sources_pool_count": 2,
+  "turn_ids": ["turn_..."]
+}
+```
+
+**Sources pool record (`artifact:conv:sources_pool`)**
+`text` contains:
+```json
+{
+  "sources_pool_count": 2,
+  "turn_ids": ["turn_..."],
+  "last_activity_at": "..."
+}
+```
+
 ## Paths (Stable)
 - Logical artifact path (used by `react.read` / `fetch_ctx`):
   - `ar:<turn_id>.user.prompt`

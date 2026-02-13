@@ -2,12 +2,12 @@
 
 The **timeline** is the single source of truth for turn context. It stores:
 - ordered **blocks** (user prompts, attachments, agent contributions, tool calls/results)
-- the **sources_pool**
-- conversation metadata (title, started_at)
+- conversation metadata (title, started_at, last_activity_at)
 - transient **announce** blocks (in‑memory only, not persisted)
  - **plan history blocks** (`react.plan` / `react.plan.ack`) persisted in the block stream
 
 It is persisted as a single artifact: `artifact:conv.timeline.v1`.
+The sources pool is persisted separately as `artifact:conv:sources_pool`.
 
 ## Stored payload
 ```
@@ -15,20 +15,24 @@ It is persisted as a single artifact: `artifact:conv.timeline.v1`.
   "version": 1,
   "ts": "2026-02-09T...",
   "blocks": [ ... ],
-  "sources_pool": [ ... ],
   "turn_ids": ["turn_...","turn_..."],
   "conversation_title": "...",
   "conversation_started_at": "...",
+  "last_activity_at": "...",
   "cache_last_touch_at": 1739078400,
   "cache_last_ttl_seconds": 1800
 }
 ```
 
 ## Lifecycle
-1) **Load** at turn start (from the latest timeline artifact).
-2) **Contribute** blocks as the turn progresses (gate/coordinator/react/final).
+1) **Load** at turn start (from the latest timeline + sources_pool artifacts).
+   - Loader: `ContextBrowser.load_timeline()` combines the latest
+     `artifact:conv.timeline.v1` + `artifact:conv:sources_pool`.
+2) **Contribute** blocks as the turn progresses (gate/react).
 3) **Render** a message view with cache points + optional sources/announce.
 4) **Persist** at end of turn.
+   - Persister: `Timeline.persist()` writes both artifacts:
+     `artifact:conv.timeline.v1` and `artifact:conv:sources_pool`.
 
 ### Persistence behavior
 If compaction occurred, the persisted timeline contains **only the post‑summary window** (summary + following blocks).
@@ -111,14 +115,18 @@ Debugging:
   with cache points marked (e.g., `=>[1]`).
 
 ## Storage location
-Timeline is stored as a single artifact:
-- **kind**: `artifact:conv.timeline.v1`
-- **role**: `artifact`
-- **payload**: timeline JSON (blocks + sources_pool + metadata)
-- **content_str**: compact summary (counts/title/turn_ids)
+Timeline is stored as:
+- **artifact**: `artifact:conv.timeline.v1`
+- **payload**: timeline JSON (blocks + metadata; no sources_pool)
+- **content_str**: compact summary (counts/title/turn_ids/last_activity_at)
 
-In S3 / DB this appears alongside other conversation artifacts.  
-It is fetched via `ctx_client.recent(kinds=("artifact:conv.timeline.v1",), ...)`.
+Sources pool is stored as:
+- **artifact**: `artifact:conv:sources_pool`
+- **payload**: `{ "sources_pool": [...] }`
+
+In S3 / DB these appear alongside other conversation artifacts.  
+They are fetched via `ctx_client.recent(kinds=("artifact:conv.timeline.v1",), ...)`
+and `ctx_client.recent(kinds=("artifact:conv:sources_pool",), ...)`.
 
 ## Block metadata
 Each block may include:

@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.infra import get_exec_workspac
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import (
     TIMELINE_KIND,
+    SOURCES_POOL_KIND,
     parse_timeline_payload,
     Timeline,
     extract_turn_ids_from_blocks,
@@ -28,7 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import (
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.proto import RuntimeCtx
 
 PROJECT_LOG_SLOTS = { "project_log" }
-SOURCES_POOL_ARTIFACT_TAG = "artifact:conv:sources_pool"
+SOURCES_POOL_ARTIFACT_TAG = f"artifact:{SOURCES_POOL_KIND}"
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +88,31 @@ class ContextBrowser:
 
         if timeline_payload is None:
             timeline_payload = {"blocks": [], "sources_pool": []}
+        # Load sources pool from separate artifact (latest)
+        try:
+            res_sp = await self.ctx_client.recent(
+                kinds=(f"artifact:{SOURCES_POOL_KIND}",),
+                roles=("artifact",),
+                limit=1,
+                days=days,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=True,
+            )
+            sp_items = list(res_sp.get("items") or [])
+            if sp_items:
+                sp_payload = unwrap_payload(sp_items[0]) or {}
+                if isinstance(sp_payload, dict):
+                    sources_pool = sp_payload.get("sources_pool")
+                elif isinstance(sp_payload, list):
+                    sources_pool = sp_payload
+                else:
+                    sources_pool = None
+                if isinstance(sources_pool, list):
+                    timeline_payload["sources_pool"] = sources_pool
+        except Exception:
+            pass
+        # Back-compat: if sources_pool artifact missing, keep any sources_pool inside timeline payload.
 
         self._timeline = Timeline.from_payload(timeline_payload, runtime=self._runtime_ctx, svc=self.svc)
         if not self._timeline.conversation_started_at:

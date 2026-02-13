@@ -9,10 +9,11 @@ import datetime, traceback, logging
 import pathlib, json, asyncio
 from typing import Optional, Sequence, List, Dict, Any, Union, Callable
 
-from kdcube_ai_app.apps.chat.sdk.util import _turn_id_from_tags_safe
+from kdcube_ai_app.apps.chat.sdk.util import _turn_id_from_tags_safe, ts_key, isoz
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import (
     TIMELINE_KIND,
+    SOURCES_POOL_KIND,
     parse_timeline_payload,
 )
 import kdcube_ai_app.apps.chat.sdk.tools.citations as citation_utils
@@ -34,7 +35,7 @@ UI_ARTIFACT_TAGS = {
     "chat:assistant"
 }
 
-SOURCES_POOL_ARTIFACT_TAG = "artifact:conv:sources_pool"
+SOURCES_POOL_ARTIFACT_TAG = f"artifact:{SOURCES_POOL_KIND}"
 
 FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
 CONV_START_FPS_TAG = "conv.start"
@@ -1745,18 +1746,6 @@ class ContextRAGClient:
         )
         return {"mode": "update", "id": int(existing["id"]), "message_id": message_id, "hosted_uri": hosted_uri}
 
-    async def list_conversations_(self, user_id: str):
-
-        FINGERPRINT_KIND = "artifact:turn.fingerprint.v1"
-        CONV_START_FPS_TAG = "conv.start"
-
-        conversation_id = None
-        data = await self.search(kinds=[FINGERPRINT_KIND],
-                                       user_id=user_id,
-                                       conversation_id=conversation_id,
-                                       all_tags=[CONV_START_FPS_TAG],
-                                       )
-
     async def list_conversations(
             self,
             user_id: str,
@@ -1787,37 +1776,58 @@ class ContextRAGClient:
             ]
           }
         """
-        rows = await self.idx.list_user_conversations(
+        # Fetch latest timeline artifacts and group by conversation
+        tag = f"artifact:{TIMELINE_KIND}"
+        fetch_limit = max(5000, int(last_n or 0) * 5) if last_n else 5000
+        rows = await self.idx.fetch_recent(
             user_id=user_id,
-            since=started_after,
-            limit=last_n,
+            roles=("artifact",),
+            any_tags=[tag],
             days=days,
-            include_conv_start_text=include_titles,
+            limit=fetch_limit,
             bundle_id=bundle_id,
         )
 
-        items: List[Dict[str, Any]] = []
+        by_conv: Dict[str, Dict[str, Any]] = {}
         for r in rows:
+            cid = r.get("conversation_id")
+            if not cid or cid in by_conv:
+                continue
+            txt = r.get("text") or ""
+            parsed = {}
+            if txt:
+                try:
+                    parsed = json.loads(txt)
+                except Exception:
+                    parsed = {}
+            started_at = parsed.get("conversation_started_at") or None
+            last_activity_at = parsed.get("last_activity_at") or r.get("ts")
+            if last_activity_at is not None:
+                try:
+                    last_activity_at = isoz(str(last_activity_at)) if not isinstance(last_activity_at, str) else isoz(last_activity_at)
+                except Exception:
+                    pass
+            title = parsed.get("conversation_title") if include_titles else None
             item = {
-                "conversation_id": r["conversation_id"],
-                "started_at": r.get("started_at"),
-                "last_activity_at": r.get("last_activity_at"),
+                "conversation_id": cid,
+                "started_at": started_at,
+                "last_activity_at": last_activity_at,
             }
-            if include_titles:
-                title = None
-                txt = r.get("conv_start_text")
-                if txt:
-                    # conv.start fingerprint is small JSON; try to parse title from text
-                    try:
-                        parsed = json.loads(txt)
-                        if isinstance(parsed, dict):
-                            v = parsed.get("conversation_title")
-                            title = str(v).strip() if v is not None else None
-                    except Exception:
-                        pass
-                if title:
-                    item["title"] = title
-            items.append(item)
+            if include_titles and title:
+                item["title"] = str(title).strip()
+            by_conv[cid] = item
+
+        items = list(by_conv.values())
+        if started_after is not None:
+            try:
+                cutoff = ts_key(started_after)
+            except Exception:
+                cutoff = float("-inf")
+            items = [i for i in items if ts_key(i.get("last_activity_at")) >= cutoff]
+
+        items.sort(key=lambda x: ts_key(x.get("last_activity_at")), reverse=True)
+        if last_n:
+            items = items[: max(1, int(last_n))]
 
         return {"user_id": user_id, "items": items}
 
@@ -1841,21 +1851,40 @@ class ContextRAGClient:
                 limit=1,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                with_payload=True,
+                with_payload=False,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
-                payload = unwrap_payload(ws_items[0]) or {}
-                parsed = parse_timeline_payload(payload)
-                title = (parsed.get("conversation_title") or "").strip()
+                timeline_metadata = ws_items[0]
+                timeline_metadata = json.parse(timeline_metadata.get("text")) or ""
+                title = (timeline_metadata.get("conversation_title") or "").strip()
                 if title:
                     conversation_title = title
-                conversation_started_at = (parsed.get("conversation_started_at") or "").strip() or None
+                conversation_started_at = (timeline_metadata.get("conversation_started_at") or "").strip() or None
         except Exception:
             conversation_title = None
             conversation_started_at = None
         ui_artifacts_tags = UI_ARTIFACT_TAGS
-
+        # sources_pool is stored separately as artifact:conv:sources_pool
+        sources_pool = []
+        try:
+            res_sp = await self.recent(
+                kinds=[f"artifact:{SOURCES_POOL_KIND}"],
+                roles=("artifact",),
+                limit=1,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                with_payload=True,
+            )
+            sp_items = list(res_sp.get("items") or [])
+            if sp_items:
+                sp_payload = unwrap_payload(sp_items[0]) or {}
+                if isinstance(sp_payload, dict) and isinstance(sp_payload.get("sources_pool"), list):
+                    sources_pool = sp_payload.get("sources_pool") or []
+                elif isinstance(sp_payload, list):
+                    sources_pool = sp_payload
+        except Exception:
+            sources_pool = []
         # 3) Get raw turn-tag occurrences (chronological, duplicates preserved)
         occurrences = await self.idx.get_conversation_turn_ids_from_tags(
             user_id=user_id,
@@ -1897,7 +1926,8 @@ class ContextRAGClient:
             "conversation_title": conversation_title,
             "started_at": started_at,
             "last_activity_at": last_activity_at,
-            "turns": turns
+            "turns": turns,
+            "sources_pool": sources_pool
         }
 
     async def conversation_exists(
@@ -1999,7 +2029,6 @@ class ContextRAGClient:
                 title = (parsed.get("conversation_title") or "").strip()
                 if title:
                     conversation_title = title
-                timeline_sources_pool = (parsed.get("sources_pool") or [])
                 logger.info(
                     "fetch_conversation_artifacts: timeline title=%s conversation_id=%s items=%d",
                     "set" if conversation_title else "missing",
@@ -2011,6 +2040,27 @@ class ContextRAGClient:
                     "fetch_conversation_artifacts: no timeline items conversation_id=%s",
                     conversation_id,
                 )
+            # Load sources pool from separate artifact
+            timeline_sources_pool = []
+            try:
+                res_sp = await self.recent(
+                    kinds=(f"artifact:{SOURCES_POOL_KIND}",),
+                    roles=("artifact",),
+                    limit=1,
+                    days=days,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    with_payload=True,
+                )
+                sp_items = list(res_sp.get("items") or [])
+                if sp_items:
+                    sp_payload = unwrap_payload(sp_items[0]) or {}
+                    if isinstance(sp_payload, dict) and isinstance(sp_payload.get("sources_pool"), list):
+                        timeline_sources_pool = sp_payload.get("sources_pool") or []
+                    elif isinstance(sp_payload, list):
+                        timeline_sources_pool = sp_payload
+            except Exception:
+                timeline_sources_pool = []
         except Exception:
             timeline_sources_pool = []
             conversation_title = None

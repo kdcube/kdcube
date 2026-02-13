@@ -114,8 +114,6 @@ class TurnScratchpad:
         # Assistant-originated signals across this conversation
         self.assistant_signals_user_level: Optional[List[dict]] = None
 
-        self.post_answer_blocks = []
-
     @property
     def user(self) -> str:
         return self._user

@@ -101,7 +101,7 @@ class ConvIndex:
             self, *, user_id: str, conversation_id: str
     ) -> Optional[Dict[str, Any]]:
         q = f"""
-          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id
+          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id, conversation_id
           FROM {self.schema}.conv_messages
           WHERE user_id=$1 AND conversation_id=$2
             AND role='artifact'
@@ -774,7 +774,7 @@ class ConvIndex:
             where.append(f"NOT (tags && ${len(args)}::text[])")
 
         q = f"""
-          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id
+          SELECT id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id, conversation_id
           FROM {self.schema}.conv_messages
           WHERE {' AND '.join(where)}
           ORDER BY ts DESC

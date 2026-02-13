@@ -82,6 +82,10 @@ class RuntimeCtx:
     cache_truncation_max_base64_chars: Optional[int] = None
     cache_truncation_keep_recent_images: Optional[int] = None
     cache_truncation_max_image_pdf_b64_sum: Optional[int] = None
+    # Optional hooks to inject blocks right before/after assistant completion is added to timeline.
+    # These are runtime-only and should not be serialized.
+    on_before_completion_contribution: Optional[Callable[[], Any]] = None
+    on_after_completion_contribution: Optional[Callable[[], Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {

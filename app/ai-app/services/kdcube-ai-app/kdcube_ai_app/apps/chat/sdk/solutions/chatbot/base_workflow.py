@@ -1108,8 +1108,20 @@ class BaseWorkflow():
         if scratchpad.answer:
             # Contribute pre-answer blocks (e.g., final ANNOUNCE)
             try:
-                pre_blocks = getattr(scratchpad, "pre_answer_blocks", None)
+                runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
+                pre_hook = getattr(runtime_ctx, "on_before_completion_contribution", None) if runtime_ctx else None
+                pre_blocks = pre_hook() if callable(pre_hook) else None
+                if callable(pre_hook):
+                    try:
+                        runtime_ctx.on_before_completion_contribution = None
+                    except Exception:
+                        pass
                 if pre_blocks:
+                    try:
+                        types = [b.get("type") for b in pre_blocks if isinstance(b, dict)]
+                        self.logger.log(f"[workflow] pre_completion_blocks: {types}", level="INFO")
+                    except Exception:
+                        pass
                     self.ctx_browser.contribute(blocks=list(pre_blocks))
             except Exception:
                 pass
@@ -1134,22 +1146,58 @@ class BaseWorkflow():
             await self.persist_assistant(scratchpad)
             # Post-answer blocks (react.state / react.exit)
             try:
-                post_blocks = getattr(scratchpad, "post_answer_blocks", None)
+                runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
+                post_hook = getattr(runtime_ctx, "on_after_completion_contribution", None) if runtime_ctx else None
+                post_blocks = post_hook() if callable(post_hook) else None
+                if callable(post_hook):
+                    try:
+                        runtime_ctx.on_after_completion_contribution = None
+                    except Exception:
+                        pass
                 if post_blocks:
+                    try:
+                        types = [b.get("type") for b in post_blocks if isinstance(b, dict)]
+                        self.logger.log(f"[workflow] post_completion_blocks: {types}", level="INFO")
+                    except Exception:
+                        pass
                     self.ctx_browser.contribute(blocks=list(post_blocks))
             except Exception:
                 pass
         else:
             # No assistant answer; still emit pre/post blocks if present
             try:
-                pre_blocks = getattr(scratchpad, "pre_answer_blocks", None)
+                runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
+                pre_hook = getattr(runtime_ctx, "on_before_completion_contribution", None) if runtime_ctx else None
+                pre_blocks = pre_hook() if callable(pre_hook) else None
+                if callable(pre_hook):
+                    try:
+                        runtime_ctx.on_before_completion_contribution = None
+                    except Exception:
+                        pass
                 if pre_blocks:
+                    try:
+                        types = [b.get("type") for b in pre_blocks if isinstance(b, dict)]
+                        self.logger.log(f"[workflow] pre_completion_blocks: {types}", level="INFO")
+                    except Exception:
+                        pass
                     self.ctx_browser.contribute(blocks=list(pre_blocks))
             except Exception:
                 pass
             try:
-                post_blocks = getattr(scratchpad, "post_answer_blocks", None)
+                runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
+                post_hook = getattr(runtime_ctx, "on_after_completion_contribution", None) if runtime_ctx else None
+                post_blocks = post_hook() if callable(post_hook) else None
+                if callable(post_hook):
+                    try:
+                        runtime_ctx.on_after_completion_contribution = None
+                    except Exception:
+                        pass
                 if post_blocks:
+                    try:
+                        types = [b.get("type") for b in post_blocks if isinstance(b, dict)]
+                        self.logger.log(f"[workflow] post_completion_blocks: {types}", level="INFO")
+                    except Exception:
+                        pass
                     self.ctx_browser.contribute(blocks=list(post_blocks))
             except Exception:
                 pass

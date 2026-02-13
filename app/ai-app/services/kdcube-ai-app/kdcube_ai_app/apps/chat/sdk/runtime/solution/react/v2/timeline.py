@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import hashlib
 import time
+import datetime as _dt
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Callable
 
@@ -21,9 +22,10 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     dedupe_sources_by_url,
     normalize_sources_any,
 )
-from kdcube_ai_app.apps.chat.sdk.util import token_count
+from kdcube_ai_app.apps.chat.sdk.util import token_count, isoz
 
 TIMELINE_KIND = "conv.timeline.v1"
+SOURCES_POOL_KIND = "conv:sources_pool"
 
 TIMELINE_FILENAME = "timeline.json"
 
@@ -66,15 +68,18 @@ def build_timeline_payload(
     conversation_started_at: Optional[str] = None,
     cache_last_touch_at: Optional[int] = None,
     cache_last_ttl_seconds: Optional[int] = None,
+    include_sources_pool: bool = True,
 ) -> Dict[str, Any]:
+    last_activity_at = _tail_ts(blocks or [])
     return {
         "version": 1,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "blocks": list(blocks or []),
-        "sources_pool": list(sources_pool or []),
+        "sources_pool": list(sources_pool or []) if include_sources_pool else [],
         "turn_ids": extract_turn_ids_from_blocks(blocks or []),
         "conversation_title": conversation_title or "",
         "conversation_started_at": conversation_started_at or "",
+        "last_activity_at": last_activity_at or "",
         "cache_last_touch_at": cache_last_touch_at,
         "cache_last_ttl_seconds": cache_last_ttl_seconds,
     }
@@ -112,9 +117,24 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "version": payload.get("version", 1),
         "conversation_title": payload.get("conversation_title") or "",
         "conversation_started_at": payload.get("conversation_started_at") or "",
+        "last_activity_at": payload.get("last_activity_at") or "",
         "cache_last_touch_at": cache_last_touch_at,
         "cache_last_ttl_seconds": cache_last_ttl_seconds,
     }
+
+
+def _tail_ts(blocks: List[Dict[str, Any]]) -> str:
+    if not blocks:
+        return ""
+    last = blocks[-1] if isinstance(blocks[-1], dict) else None
+    if not last:
+        return ""
+    ts = last.get("ts")
+    if isinstance(ts, (int, float)):
+        return _dt.datetime.fromtimestamp(float(ts), tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(ts, str):
+        return isoz(ts)
+    return ""
 
 
 def _collect_blocks(timeline: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -599,6 +619,7 @@ class Timeline:
                 conversation_started_at=self.conversation_started_at,
                 cache_last_touch_at=self.cache_last_touch_at,
                 cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+                include_sources_pool=False,
             )
             out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         except Exception:
@@ -1795,6 +1816,7 @@ class Timeline:
             conversation_started_at=self.conversation_started_at,
             cache_last_touch_at=self.cache_last_touch_at,
             cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+            include_sources_pool=False,
         )
         turn_ids = payload.get("turn_ids") or []
         extra_tags = [f"turn:{tid}" for tid in turn_ids if isinstance(tid, str) and tid]
@@ -1803,8 +1825,9 @@ class Timeline:
             {
                 "conversation_title": self.conversation_title or "",
                 "conversation_started_at": self.conversation_started_at or "",
+                "last_activity_at": payload.get("last_activity_at") or "",
                 "blocks_count": len(payload.get("blocks") or []),
-                "sources_pool_count": len(payload.get("sources_pool") or []),
+                "sources_pool_count": len(self.sources_pool or []),
                 "turn_ids": turn_ids,
             },
             ensure_ascii=False,
@@ -1822,3 +1845,28 @@ class Timeline:
             content_str=compact_text,
             extra_tags=extra_tags or None,
         )
+        try:
+            sources_payload = {"sources_pool": list(self.sources_pool or [])}
+            sources_text = json.dumps(
+                {
+                    "sources_pool_count": len(self.sources_pool or []),
+                    "turn_ids": turn_ids,
+                    "last_activity_at": payload.get("last_activity_at") or "",
+                },
+                ensure_ascii=False,
+            )
+            await ctx_client.save_artifact(
+                kind=SOURCES_POOL_KIND,
+                tenant=self.runtime.tenant or "",
+                project=self.runtime.project or "",
+                user_id=self.runtime.user_id or "",
+                conversation_id=self.runtime.conversation_id or "",
+                user_type=self.runtime.user_type or "",
+                turn_id=self.runtime.turn_id or "",
+                bundle_id=self.runtime.bundle_id,
+                content=sources_payload,
+                content_str=sources_text,
+                extra_tags=extra_tags or None,
+            )
+        except Exception:
+            pass

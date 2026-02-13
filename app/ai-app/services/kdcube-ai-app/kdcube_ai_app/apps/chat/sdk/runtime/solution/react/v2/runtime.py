@@ -310,8 +310,9 @@ class ReactSolverV2:
         self,
         *,
         code: str,
-        decision: Dict[str, Any],
         state: Dict[str, Any],
+        decision: Dict[str, Any] = None,
+        error: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> str:
         action = (decision.get("action") or "").strip()
@@ -329,6 +330,8 @@ class ReactSolverV2:
             return f"tool_call failed protocol validation for tool_id={tool_id or 'unknown'}."
         if code == "tool_signature_red":
             return f"tool params failed signature validation for tool_id={tool_id or 'unknown'}."
+        if code == "ReactDecisionOutV2_schema_error":
+            return f"Bad Protocol. ReactDecisionOutV2_schema_error, cannot parse agent output. {error}'."
         if final_answer and action == "call_tool":
             return f"final_answer present with action={action}."
         if extra:
@@ -818,196 +821,231 @@ class ReactSolverV2:
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         self._append_react_timing(round_idx=iteration, stage="decision", elapsed_ms=elapsed_ms)
         logging_helpers.log_agent_packet(role, "react.decision.v2", decision)
-        decision = decision.get("agent_response") or {}
-        if not isinstance(decision, dict):
-            decision = {}
+        error = (decision.get("log") or {}).get("error")
 
-        original_action = (decision.get("action") or "").strip()
-        has_final_answer = bool((decision.get("final_answer") or "").strip())
-        if original_action == "call_tool" and has_final_answer:
+        notes = None
+        action = None
+        if error:
             try:
-                if self.ctx_browser:
-                    self.ctx_browser.contribute_notice(
-                        code="protocol_violation.final_answer_with_tool_call",
-                        message=self._protocol_violation_message(
-                            code="final_answer_with_tool_call",
-                            decision={**decision, "action": "call_tool"},
-                            state=state,
-                        ),
-                        extra={"action": "call_tool"},
+                self.ctx_browser.contribute_notice(
+                    code="protocol_violation.ReactDecisionOutV2_schema_error",
+                    message=self._protocol_violation_message(
+                        code="ReactDecisionOutV2_schema_error",
+                        error=error,
+                        state=state,
                     )
-            except Exception:
-                pass
-            try:
-                self.log.log(
-                    f"[react.v2] final_answer present with call_tool; coercing to complete",
-                    level="ERROR",
                 )
+                self.log.log(f"[react.v2] decision schema error: {error}", level="ERROR")
             except Exception:
                 pass
-            decision["action"] = "complete"
-            decision["tool_call"] = None
 
-        validation_error = self._validate_decision(decision)
-        if validation_error:
-            try:
-                self.ctx_browser.contribute_notice(
-                    code=f"protocol_violation.{validation_error}",
-                    message=self._protocol_violation_message(
-                        code=validation_error,
-                        decision=decision,
-                        state=state,
-                    ),
-                    extra={"validation_error": validation_error},
-                )
-            except Exception:
-                pass
-            try:
-                self.log.log(
-                    f"[react.v2] decision validation failed: {validation_error} | decision={self._short_json(decision)}",
-                    level="ERROR",
-                )
-            except Exception:
-                pass
-            retries = int(state.get("decision_retries") or 0)
-            if retries < int(state.get("max_iterations") or 0):
-                state["decision_retries"] = retries + 1
-                state["retry_decision"] = True
-                decision = {"action": "call_tool", "notes": f"{validation_error}; retry decision"}
-                state["session_log"].append({
-                    "type": "decision_invalid",
-                    "iteration": iteration,
-                    "timestamp": time.time(),
-                    "error": validation_error,
-                })
-                state["last_decision"] = decision
-                return state
-            else:
-                decision = {"action": "exit", "final_answer": "Decision validation failed."}
-        action = (decision.get("action") or "").strip()
-        notes = (decision.get("notes") or "").strip()
-        tool_call = decision.get("tool_call") or {}
-        tool_id = (tool_call.get("tool_id") or "").strip()
+                retries = int(state.get("decision_retries") or 0)
+                if retries < int(state.get("max_iterations") or 0):
+                    state["decision_retries"] = retries + 1
+                    state["retry_decision"] = True
+                    decision["notes"] = "ReactDecisionOutV2_schema_error; retry decision"
+                else:
+                    decision = {
+                        "action": "exit",
+                        "final_answer": "ReactDecisionOutV2_schema_error validation failed.",
+                        "notes": "ReactDecisionOutV2_schema_error",
+                    }
+                    action = "exit"
+                    tool_call = {}
+                    tool_id = ""
+        else:
 
-        plan_steps = state.get("plan_steps") or []
-        if not plan_steps and self.ctx_browser:
-            try:
-                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.plan import collect_plan_snapshots, PlanSnapshot
-                plans_by_id, order = collect_plan_snapshots(self.ctx_browser.timeline.blocks)
-                if order:
-                    snap = PlanSnapshot.from_any(plans_by_id.get(order[-1]) or {})
-                    if snap and snap.steps:
-                        plan_steps = list(snap.steps)
-                        state["plan_steps"] = plan_steps
-            except Exception:
-                pass
-        try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.plan import apply_plan_updates
-            status_map = state.get("plan_status") or {}
-            status_map, plan_blocks = apply_plan_updates(
-                notes=notes,
-                plan_steps=plan_steps,
-                status_map=status_map if isinstance(status_map, dict) else {},
-                timeline_blocks=self.ctx_browser.timeline.blocks if self.ctx_browser else [],
-                turn_id=state.get("turn_id") or "",
-                iteration=iteration,
-                ts=time.time(),
-            )
-            if status_map:
-                state["plan_status"] = status_map
-            if plan_blocks and self.ctx_browser:
-                self.ctx_browser.contribute(blocks=plan_blocks)
-        except Exception:
-            pass
+            decision = decision.get("agent_response") or {}
+            if not isinstance(decision, dict):
+                decision = {}
 
-        exec_only_ids = {"ctx_tools.fetch_ctx"}
-        if action == "call_tool" and tool_id in exec_only_ids:
-            try:
-                self.ctx_browser.contribute_notice(
-                    code="protocol_violation.tool_not_allowed_in_react",
-                    message=self._protocol_violation_message(
-                        code="tool_not_allowed_in_react",
-                        decision=decision,
-                        state=state,
-                        extra={"tool_id": tool_id},
-                    ),
-                    extra={"tool_id": tool_id, "iteration": iteration},
-                )
-            except Exception:
-                pass
-            try:
-                self.log.log(f"[react.v2] tool_not_allowed_in_react: {tool_id}", level="ERROR")
-            except Exception:
-                pass
-            retries = int(state.get("decision_retries") or 0)
-            if retries < int(state.get("max_iterations") or 0):
-                state["decision_retries"] = retries + 1
-                state["retry_decision"] = True
-                decision["notes"] = "tool_not_allowed_in_react; retry decision"
-                action = "call_tool"
-            else:
-                decision = {
-                    "action": "exit",
-                    "final_answer": "Tool not allowed in react loop.",
-                    "notes": "tool_not_allowed_in_react",
-                }
-                action = "exit"
-        # Plan acknowledgements are informative only; do not block completion.
-        if action == "call_tool":
-            adapters_by_id = self._adapters_index(state.get("adapters") or [])
-            verdict = self._validate_tool_call_protocol(
-                tool_call=tool_call,
-                adapters_by_id=adapters_by_id,
-            )
-            protocol_entry = {
-                "type": "protocol_verify",
-                "iteration": iteration,
-                "timestamp": time.time(),
-                "tool_id": verdict.get("tool_id"),
-                "ok": bool(verdict.get("ok")),
-                "violations": verdict.get("violations") or [],
-            }
-            if verdict.get("ok"):
-                state["session_log"].append(protocol_entry)
-            else:
+            original_action = (decision.get("action") or "").strip()
+            has_final_answer = bool((decision.get("final_answer") or "").strip())
+            if original_action == "call_tool" and has_final_answer:
+                try:
+                    if self.ctx_browser:
+                        self.ctx_browser.contribute_notice(
+                            code="protocol_violation.final_answer_with_tool_call",
+                            message=self._protocol_violation_message(
+                                code="final_answer_with_tool_call",
+                                decision={**decision, "action": "call_tool"},
+                                state=state,
+                            ),
+                            extra={"action": "call_tool"},
+                        )
+                except Exception:
+                    pass
+                try:
+                    self.log.log(
+                        f"[react.v2] final_answer present with call_tool; coercing to complete",
+                        level="ERROR",
+                    )
+                except Exception:
+                    pass
+                decision["action"] = "complete"
+                decision["tool_call"] = None
+
+            validation_error = self._validate_decision(decision)
+            if validation_error:
                 try:
                     self.ctx_browser.contribute_notice(
-                        code="protocol_violation.tool_call_invalid",
+                        code=f"protocol_violation.{validation_error}",
                         message=self._protocol_violation_message(
-                            code="tool_call_invalid",
+                            code=validation_error,
                             decision=decision,
                             state=state,
                         ),
-                        extra={
-                            "violations": verdict.get("violations") or [],
-                            "tool_id": verdict.get("tool_id"),
-                            "iteration": iteration,
-                        },
+                        extra={"validation_error": validation_error},
                     )
                 except Exception:
                     pass
                 try:
                     self.log.log(
-                        f"[react.v2] tool_call_invalid: {verdict.get('violations')} | decision={self._short_json(decision)}",
+                        f"[react.v2] decision validation failed: {validation_error} | decision={self._short_json(decision)}",
                         level="ERROR",
                     )
                 except Exception:
                     pass
-                state["session_log"].append(protocol_entry)
                 retries = int(state.get("decision_retries") or 0)
                 if retries < int(state.get("max_iterations") or 0):
                     state["decision_retries"] = retries + 1
                     state["retry_decision"] = True
-                    decision["notes"] = "tool_call_invalid; retry decision"
+                    decision = {"action": "call_tool", "notes": f"{validation_error}; retry decision"}
+                    state["session_log"].append({
+                        "type": "decision_invalid",
+                        "iteration": iteration,
+                        "timestamp": time.time(),
+                        "error": validation_error,
+                    })
+                    state["last_decision"] = decision
+                    return state
+                else:
+                    decision = {"action": "exit", "final_answer": "Decision validation failed."}
+            action = (decision.get("action") or "").strip()
+            notes = (decision.get("notes") or "").strip()
+            tool_call = decision.get("tool_call") or {}
+            tool_id = (tool_call.get("tool_id") or "").strip()
+
+            plan_steps = state.get("plan_steps") or []
+            if not plan_steps and self.ctx_browser:
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.plan import collect_plan_snapshots, PlanSnapshot
+                    plans_by_id, order = collect_plan_snapshots(self.ctx_browser.timeline.blocks)
+                    if order:
+                        snap = PlanSnapshot.from_any(plans_by_id.get(order[-1]) or {})
+                        if snap and snap.steps:
+                            plan_steps = list(snap.steps)
+                            state["plan_steps"] = plan_steps
+                except Exception:
+                    pass
+            try:
+                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.plan import apply_plan_updates
+                status_map = state.get("plan_status") or {}
+                status_map, plan_blocks = apply_plan_updates(
+                    notes=notes,
+                    plan_steps=plan_steps,
+                    status_map=status_map if isinstance(status_map, dict) else {},
+                    timeline_blocks=self.ctx_browser.timeline.blocks if self.ctx_browser else [],
+                    turn_id=state.get("turn_id") or "",
+                    iteration=iteration,
+                    ts=time.time(),
+                )
+                if status_map:
+                    state["plan_status"] = status_map
+                if plan_blocks and self.ctx_browser:
+                    self.ctx_browser.contribute(blocks=plan_blocks)
+            except Exception:
+                pass
+
+            exec_only_ids = {"ctx_tools.fetch_ctx"}
+            if action == "call_tool" and tool_id in exec_only_ids:
+                try:
+                    self.ctx_browser.contribute_notice(
+                        code="protocol_violation.tool_not_allowed_in_react",
+                        message=self._protocol_violation_message(
+                            code="tool_not_allowed_in_react",
+                            decision=decision,
+                            state=state,
+                            extra={"tool_id": tool_id},
+                        ),
+                        extra={"tool_id": tool_id, "iteration": iteration},
+                    )
+                except Exception:
+                    pass
+                try:
+                    self.log.log(f"[react.v2] tool_not_allowed_in_react: {tool_id}", level="ERROR")
+                except Exception:
+                    pass
+                retries = int(state.get("decision_retries") or 0)
+                if retries < int(state.get("max_iterations") or 0):
+                    state["decision_retries"] = retries + 1
+                    state["retry_decision"] = True
+                    decision["notes"] = "tool_not_allowed_in_react; retry decision"
+                    action = "call_tool"
                 else:
                     decision = {
                         "action": "exit",
-                        "final_answer": "Tool call validation failed.",
-                        "notes": "tool_call_invalid",
+                        "final_answer": "Tool not allowed in react loop.",
+                        "notes": "tool_not_allowed_in_react",
                     }
                     action = "exit"
-                    tool_call = {}
-                    tool_id = ""
+            # Plan acknowledgements are informative only; do not block completion.
+            if action == "call_tool":
+                adapters_by_id = self._adapters_index(state.get("adapters") or [])
+                verdict = self._validate_tool_call_protocol(
+                    tool_call=tool_call,
+                    adapters_by_id=adapters_by_id,
+                )
+                protocol_entry = {
+                    "type": "protocol_verify",
+                    "iteration": iteration,
+                    "timestamp": time.time(),
+                    "tool_id": verdict.get("tool_id"),
+                    "ok": bool(verdict.get("ok")),
+                    "violations": verdict.get("violations") or [],
+                }
+                if verdict.get("ok"):
+                    state["session_log"].append(protocol_entry)
+                else:
+                    try:
+                        self.ctx_browser.contribute_notice(
+                            code="protocol_violation.tool_call_invalid",
+                            message=self._protocol_violation_message(
+                                code="tool_call_invalid",
+                                decision=decision,
+                                state=state,
+                            ),
+                            extra={
+                                "violations": verdict.get("violations") or [],
+                                "tool_id": verdict.get("tool_id"),
+                                "iteration": iteration,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    try:
+                        self.log.log(
+                            f"[react.v2] tool_call_invalid: {verdict.get('violations')} | decision={self._short_json(decision)}",
+                            level="ERROR",
+                        )
+                    except Exception:
+                        pass
+                    state["session_log"].append(protocol_entry)
+                    retries = int(state.get("decision_retries") or 0)
+                    if retries < int(state.get("max_iterations") or 0):
+                        state["decision_retries"] = retries + 1
+                        state["retry_decision"] = True
+                        decision["notes"] = "tool_call_invalid; retry decision"
+                    else:
+                        decision = {
+                            "action": "exit",
+                            "final_answer": "Tool call validation failed.",
+                            "notes": "tool_call_invalid",
+                        }
+                        action = "exit"
+                        tool_call = {}
+                        tool_id = ""
+
             # else:
             #     pass
 
@@ -1028,6 +1066,7 @@ class ReactSolverV2:
             except Exception:
                 sig_status = None
                 sig_issues = []
+
 
             if sig_status in ("yellow", "red"):
                 try:
@@ -1084,14 +1123,22 @@ class ReactSolverV2:
                     action = "exit"
                     tool_call = {}
                     tool_id = ""
-        if notes:
-            if tools_insights.is_exec_tool(tool_id) and exec_streamer_widget:
-                await exec_streamer_widget.emit_reasoning(notes)
+            if notes:
+                if tools_insights.is_exec_tool(tool_id) and exec_streamer_widget:
+                    await exec_streamer_widget.emit_reasoning(notes)
 
         if not state.get("retry_decision") and action in {"complete", "exit"}:
             state["exit_reason"] = action
             state["final_answer"] = (decision.get("final_answer") or "").strip()
             state["suggested_followups"] = decision.get("suggested_followups") or []
+            try:
+                sf = state.get("suggested_followups") or []
+                self.log.log(
+                    f"[react.v2] decision followups: count={len(sf)}",
+                    level="INFO",
+                )
+            except Exception:
+                pass
 
         try:
             if self.ctx_browser and notes:
@@ -1216,21 +1263,36 @@ class ReactSolverV2:
         if exit_block:
             post_blocks.append(exit_block)
         try:
-            if self.scratchpad is not None:
+            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
+            if runtime_ctx is not None:
                 if pre_blocks:
-                    existing = getattr(self.scratchpad, "pre_answer_blocks", None)
-                    if isinstance(existing, list):
-                        existing.extend(pre_blocks)
-                    else:
-                        self.scratchpad.pre_answer_blocks = list(pre_blocks)
+                    existing = getattr(runtime_ctx, "on_before_completion_contribution", None)
+                    def _hook_pre(blocks=pre_blocks, prior=existing):
+                        out = []
+                        if callable(prior):
+                            try:
+                                out.extend(prior() or [])
+                            except Exception:
+                                pass
+                        out.extend(list(blocks))
+                        blocks.clear()
+                        return out
+                    runtime_ctx.on_before_completion_contribution = _hook_pre
                 if post_blocks:
-                    existing = getattr(self.scratchpad, "post_answer_blocks", None)
-                    if isinstance(existing, list):
-                        existing.extend(post_blocks)
-                    else:
-                        self.scratchpad.post_answer_blocks = list(post_blocks)
+                    existing = getattr(runtime_ctx, "on_after_completion_contribution", None)
+                    def _hook_post(blocks=post_blocks, prior=existing):
+                        out = []
+                        if callable(prior):
+                            try:
+                                out.extend(prior() or [])
+                            except Exception:
+                                pass
+                        out.extend(list(blocks))
+                        blocks.clear()
+                        return out
+                    runtime_ctx.on_after_completion_contribution = _hook_post
         except Exception as ex:
-            self.log.log(f"[react.v2] post_answer_blocks: {ex}", level="ERROR")
+            self.log.log(f"[react.v2] completion_hooks: {ex}", level="ERROR")
 
         # Emit citations used in this turn (files already emitted on host)
         try:
