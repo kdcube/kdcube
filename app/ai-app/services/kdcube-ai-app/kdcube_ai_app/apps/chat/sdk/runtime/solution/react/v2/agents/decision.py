@@ -483,9 +483,9 @@ You never use them with react.* tools.
         include_skill_gallery=True,
     )
 
-    print(f"=== Tool Catalog for {agent_name} ===")
-    print(tool_block)
-    print("=== End of Tool Catalog ===")
+    #print(f"=== Tool Catalog for {agent_name} ===")
+    #print(tool_block)
+    #print("=== End of Tool Catalog ===")
 
     protocol = _get_2section_protocol(json_hint)
     system_msg = create_cached_system_message([

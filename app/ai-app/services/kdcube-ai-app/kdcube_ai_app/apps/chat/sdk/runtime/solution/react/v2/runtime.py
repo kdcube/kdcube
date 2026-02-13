@@ -833,6 +833,7 @@ class ReactSolverV2:
                         code="ReactDecisionOutV2_schema_error",
                         error=error,
                         state=state,
+                        decision={}
                     )
                 )
                 self.log.log(f"[react.v2] decision schema error: {error}", level="ERROR")

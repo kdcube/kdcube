@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, Tuple, List
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
-from kdcube_ai_app.apps.chat.sdk.util import _json_loads_loose
+from kdcube_ai_app.apps.chat.sdk.util import _json_loads_loose, _json_loads_loose_with_err
 
 logger = logging.getLogger(__name__)
 
@@ -1182,26 +1182,26 @@ async def _stream_agent_two_sections_to_json(
 
     if tail:
         try:
-            loaded = _json_loads_loose(tail) or {}
+            loaded, err = _json_loads_loose_with_err(tail)
             data = schema_model.model_validate(loaded).model_dump()
         except Exception as ex:
             logger.error(f"[_stream_agent_two_sections_to_json] JSON parse failed: {ex}\n.raw_json={raw_json}\nraw_json_clean={raw_json_clean}\ntail={tail}")
             data = None
 
-    if data is None and raw_json.strip():
-
-        fix_input = tail if tail.strip() else raw_json_clean
-        fix = await svc.format_fixer.fix_format(
-            raw_output=fix_input,
-            expected_format=getattr(schema_model, "__name__", str(schema_model)),
-            input_data=user_msg,
-            system_prompt=sys_prompt,
-        )
-        if fix.get("success"):
-            try:
-                data = schema_model.model_validate(fix["data"]).model_dump()
-            except Exception as ex:
-                err = f"JSON parse after format fix failed: {ex}"
+    # if data is None and raw_json.strip():
+    #
+    #     fix_input = tail if tail.strip() else raw_json_clean
+    #     fix = await svc.format_fixer.fix_format(
+    #         raw_output=fix_input,
+    #         expected_format=getattr(schema_model, "__name__", str(schema_model)),
+    #         input_data=user_msg,
+    #         system_prompt=sys_prompt,
+    #     )
+    #     if fix.get("success"):
+    #         try:
+    #             data = schema_model.model_validate(fix["data"]).model_dump()
+    #         except Exception as ex:
+    #             err = f"JSON parse after format fix failed: {ex}"
 
     if data is None:
         try:

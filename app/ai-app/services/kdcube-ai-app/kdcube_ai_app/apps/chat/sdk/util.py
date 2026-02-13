@@ -5,7 +5,7 @@ from __future__ import annotations
 
 # chat/sdk/util.py
 import time, orjson, hashlib, re, json, unicodedata
-from typing import Any, List, Dict, Optional, Union
+from typing import Any, List, Dict, Optional, Union, Tuple
 from datetime import datetime, timezone
 import datetime as dt
 import pathlib
@@ -271,6 +271,56 @@ def _json_loads_loose(text: str):
         except Exception as e2:
             print(f"Still failed after comma removal: {e2}")
             return None
+
+
+def _json_loads_loose_with_err(text: str) -> Tuple[Optional[Any], Optional[str]]:
+    """
+    Best-effort JSON loader that tolerates code fences and chatter.
+    Returns: (parsed_json, error_log_string)
+    """
+    try:
+        return json.loads(text), None
+    except Exception:
+        pass
+
+    # Extract JSON block
+    block = _extract_json_block(text)
+
+    if not block:
+        return None, "DEBUG: No JSON block extracted from text."
+
+    # Try parsing the block
+    try:
+        return json.loads(block), None
+    except Exception as e:
+        log_lines = []
+        log_lines.append(f"JSON parse error: {e}")
+        log_lines.append(f"Block length: {len(block)}")
+
+        start = 50
+        end = 85
+        snippet = block[start:end]
+        log_lines.append(f"\nCharacters {start}-{end}:")
+        log_lines.append(repr(snippet))
+        hex_codes = [f"{ord(c):04x} ({c!r})" for c in snippet]
+        log_lines.append(f"Hex codes: {hex_codes}")
+
+        start = max(0, 125)
+        end = min(len(block), 140)
+        snippet = block[start:end]
+        log_lines.append(f"\nCharacters {start}-{end}:")
+        log_lines.append(repr(snippet))
+        hex_codes = [f"{ord(c):04x} ({c!r})" for c in snippet]
+        log_lines.append(f"Hex codes: {hex_codes}")
+
+        # Try removing trailing commas
+        block_nc = re.sub(r",(\s*[}\]])", r"\1", block)
+        try:
+            return json.loads(block_nc), None
+        except Exception as e2:
+            log_lines.append(f"Still failed after comma removal: {e2}")
+            print(log_lines)
+            return None, "\n".join(log_lines)
 
 # ---------- simple markdown generation (NO type/stage mapping) ----------
 
