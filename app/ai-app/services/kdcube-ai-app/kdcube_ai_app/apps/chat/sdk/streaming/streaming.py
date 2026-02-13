@@ -1186,6 +1186,7 @@ async def _stream_agent_two_sections_to_json(
             data = schema_model.model_validate(loaded).model_dump()
         except Exception as ex:
             logger.error(f"[_stream_agent_two_sections_to_json] JSON parse failed: {ex}\n.raw_json={raw_json}\nraw_json_clean={raw_json_clean}\ntail={tail}")
+            err.join(f"\nreact.decision raw json: {raw_json}")
             data = None
 
     # if data is None and raw_json.strip():
