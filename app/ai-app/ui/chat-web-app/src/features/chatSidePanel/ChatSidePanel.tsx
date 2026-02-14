@@ -3,7 +3,9 @@ import {
     ArrowLeftRight,
     Bot,
     CircleDollarSign,
-    CirclePlus, Database,
+    CirclePlus,
+    Database,
+    LoaderCircle,
     MessageSquareMore,
     MessagesSquare,
     Search
@@ -20,15 +22,19 @@ import {
 import {formatDateToLocalString} from "../../utils/dateTimeUtils.ts";
 import {ConversationDescriptor} from "../conversations/conversationsTypes.ts";
 import {timeSortPredicate} from "../../utils/utils.ts";
-import {getChatPagePath} from "../../AppConfig.ts";
 import {useNavigate} from "react-router-dom";
 import {loadConversationList} from "../conversations/conversationsMiddleware.ts";
-import {newConversation, selectProject, selectTenant} from "../chat/chatStateSlice.ts";
+import {newConversation} from "../chat/chatStateSlice.ts";
 import {
-    useGetAIBundlesWidgetQuery, useGetConversationBrowserWidgetQuery,
-    useGetEconomicsWidgetQuery,
-    useGetGatewayWidgetQuery, useGetRedisBrowserWidgetQuery
+    GetWidgetParams,
+    useLazyGetAIBundlesWidgetQuery,
+    useLazyGetConversationBrowserWidgetQuery,
+    useLazyGetEconomicsWidgetQuery,
+    useLazyGetGatewayWidgetQuery,
+    useLazyGetRedisBrowserWidgetQuery
 } from "../widgetPanels/widgetPanels.ts";
+import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
+import {getChatPagePath} from "../chat/configHelper.ts";
 
 interface MenuButtonProps {
     children: ReactNode | ReactNode[];
@@ -169,89 +175,113 @@ const IFrameSrcDocPanel = ({visible, srcDoc, className}: IFrameSrcDocPanelProps)
     }, [className, srcDoc, visible])
 }
 
+interface PanelLoadingProps {
+    className?: string;
+}
+
+const PanelLoading = ({className}: PanelLoadingProps) => {
+    return useMemo(() => {
+        return <div className={className}>
+            <div className={"w-full h-full flex text-gray-200"}>
+                <IconContainer icon={LoaderCircle} className={"animate-spin duration-200"} containerClassName={"m-auto"}
+                               size={4}/>
+            </div>
+        </div>
+    }, [className])
+}
+
+interface PanelLoadingProps {
+    className?: string;
+}
+
+const PanelLoadingError = ({className}: PanelLoadingProps) => {
+    return useMemo(() => {
+        return <div className={className}>
+            <div className={"w-full h-full flex text-gray-200"}>
+                <div>Sorry, an error has occurred</div>
+            </div>
+        </div>
+    }, [className])
+}
+
+interface GenericWidgetPanelProps {
+    visible: boolean;
+    className?: string;
+    trigger: (params: GetWidgetParams, preferCache?: boolean) => void;
+    lastArg: {
+        data?: string | undefined;
+        isFetching: boolean;
+        isError: boolean;
+        isUninitialized: boolean;
+    }
+}
+
+const GenericPanel = ({visible, className, trigger, lastArg}: GenericWidgetPanelProps) => {
+    const {data, isFetching, isError, isUninitialized} = useMemo(() => {
+        return lastArg
+    }, [lastArg]);
+
+    const tenant = useAppSelector(selectTenant);
+    const project = useAppSelector(selectProject);
+
+    useEffect(() => {
+        if (visible && isUninitialized) trigger({tenant, project}, true)
+    }, [isUninitialized, project, tenant, trigger, visible]);
+
+    return useMemo(() => {
+        if (isFetching) {
+            return <PanelLoading className={className}/>
+        }
+        if (isError) {
+            return <PanelLoadingError className={className}/>
+        }
+        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
+    }, [className, data, isError, isFetching, visible])
+}
+
 interface WidgetPanelProps {
     visible: boolean;
     className?: string;
 }
 
 const EconomicsPanel = ({visible, className}: WidgetPanelProps) => {
-    const tenant = useAppSelector(selectTenant);
-    const project = useAppSelector(selectProject);
-    const {data, isFetching, isError} = useGetEconomicsWidgetQuery({tenant, project});
+    const [trigger, lastArg] = useLazyGetEconomicsWidgetQuery();
 
     return useMemo(() => {
-        if (isFetching) {
-            return null
-        }
-        if (isError) {
-            return null //todo: show error panel
-        }
-        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
-    }, [className, data, isError, isFetching, visible])
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+    }, [trigger, lastArg, visible, className]);
 }
 
 const AIBundlesPanel = ({visible, className}: WidgetPanelProps) => {
-    const tenant = useAppSelector(selectTenant);
-    const project = useAppSelector(selectProject);
-    const {data, isFetching, isError} = useGetAIBundlesWidgetQuery({tenant, project});
+    const [trigger, lastArg] = useLazyGetAIBundlesWidgetQuery();
 
     return useMemo(() => {
-        if (isFetching) {
-            return null
-        }
-        if (isError) {
-            return null //todo: show error panel
-        }
-        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
-    }, [className, data, isError, isFetching, visible])
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+    }, [trigger, lastArg, visible, className]);
 }
 
 const GatewayPanel = ({visible, className}: WidgetPanelProps) => {
-    const tenant = useAppSelector(selectTenant);
-    const project = useAppSelector(selectProject);
-    const {data, isFetching, isError} = useGetGatewayWidgetQuery({tenant, project});
+    const [trigger, lastArg] = useLazyGetGatewayWidgetQuery();
 
     return useMemo(() => {
-        if (isFetching) {
-            return null
-        }
-        if (isError) {
-            return null //todo: show error panel
-        }
-        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
-    }, [className, data, isError, isFetching, visible])
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+    }, [trigger, lastArg, visible, className]);
 }
 
 const ConvBrowserPanel = ({visible, className}: WidgetPanelProps) => {
-    const tenant = useAppSelector(selectTenant);
-    const project = useAppSelector(selectProject);
-    const {data, isFetching, isError} = useGetConversationBrowserWidgetQuery({tenant, project});
+    const [trigger, lastArg] = useLazyGetConversationBrowserWidgetQuery();
 
     return useMemo(() => {
-        if (isFetching) {
-            return null
-        }
-        if (isError) {
-            return null //todo: show error panel
-        }
-        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
-    }, [className, data, isError, isFetching, visible])
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+    }, [trigger, lastArg, visible, className]);
 }
 
 const RedisBrowserPanel = ({visible, className}: WidgetPanelProps) => {
-    const tenant = useAppSelector(selectTenant);
-    const project = useAppSelector(selectProject);
-    const {data, isFetching, isError} = useGetRedisBrowserWidgetQuery({tenant, project});
+    const [trigger, lastArg] = useLazyGetRedisBrowserWidgetQuery();
 
     return useMemo(() => {
-        if (isFetching) {
-            return null
-        }
-        if (isError) {
-            return null //todo: show error panel
-        }
-        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
-    }, [className, data, isError, isFetching, visible])
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+    }, [trigger, lastArg, visible, className]);
 }
 
 type Panels = "conversations" | "economics" | "ai_bundles" | "gateway" | "conv_browser" | "redis_browser" | null

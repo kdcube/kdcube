@@ -1,8 +1,7 @@
 import {Middleware, UnknownAction} from "@reduxjs/toolkit";
 import {ChatBase, ChatEventHandlers, ChatMessage, ChatRequest} from "../chatController/chatBase.ts";
-import {getChatSocketAddress} from "../../AppConfig.ts";
 import {v4 as uuidv4} from "uuid";
-import {AppStore} from "../../app/store.ts";
+import {AppStore, RootState} from "../../app/store.ts";
 import SocketIOChat from "../chatController/socketIOChat.ts";
 import {
     chatCompleted,
@@ -10,22 +9,22 @@ import {
     chatDelta,
     chatDisconnected,
     chatStarted,
-    clearUserInput, conversationStatus,
+    clearUserInput,
+    conversationStatus,
     disconnect,
     getUserAttachmentFile,
-    newTurn,
+    newTurn, selectChatConnected, selectChatStayConnected, selectConversationId, selectTurnOrder, selectTurns,
+    selectUserAttachments, selectUserMessage,
     setConversationId,
-    setProject,
-    setTenant,
-    setWorkingScope,
     startConnecting,
     stepUpdate,
     turnError
 } from "./chatStateSlice.ts";
-import {fetchUserProfile} from "../profile/profile.ts";
+import {fetchUserProfile, selectUserProfile} from "../profile/profile.ts";
 import SSEChat from "../chatController/sseChat.ts";
 import {UserAttachmentDescription, UserMessageRequest} from "./chatTypes.ts";
-import {setCredentials} from "../auth/authSlice.ts";
+import {selectAuthToken, selectIdToken, setCredentials} from "../auth/authSlice.ts";
+import {selectProject, selectTenant} from "./chatSettingsSlice.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -82,18 +81,21 @@ export const requestConversationStatus = (payload: string): RequestConversationS
 }
 
 type ChatSettingsAction =
-    ReturnType<typeof setProject>
-    | ReturnType<typeof setTenant>
-    | ReturnType<typeof setWorkingScope>
     | ReturnType<typeof startConnecting>
     | ReturnType<typeof disconnect>
     | ReturnType<typeof fetchUserProfile.fulfilled>
 
-type ChatAction = ConnectChatAction | DisconnectChatAction | SendChatMessageAction | ChatSettingsAction | RequestConversationStatusAction
+type ChatAction =
+    ConnectChatAction
+    | DisconnectChatAction
+    | SendChatMessageAction
+    | ChatSettingsAction
+    | RequestConversationStatusAction
 
 const getConversationHistory = (store: AppStore): ChatMessage[] => {
-    const turns = store.getState().chatState.turns;
-    return store.getState().chatState.turnOrder.reduce((previousValue, currentValue) => {
+    const state = store.getState() as RootState;
+    const turns = selectTurns(state);
+    return selectTurnOrder(state).reduce((previousValue, currentValue) => {
         const turn = turns[currentValue];
         previousValue.push({
             role: "user",
@@ -113,19 +115,23 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
         const dispatch = store.dispatch
         const createTransport = () => {
             console.debug("create transport", transportType);
+            const state = store.getState() as RootState;
+            const tenant = selectTenant(state)
+            const project = selectProject(state)
+            const baseUrl = window.location.origin
             switch (transportType) {
                 case "sse":
                     transport = new SSEChat({
-                        baseUrl: getChatSocketAddress(),
-                        tenant: store.getState().chatState.tenant,
-                        project: store.getState().chatState.project,
+                        baseUrl,
+                        tenant,
+                        project,
                     })
                     break;
                 case "websocket":
                     transport = new SocketIOChat({
-                        baseUrl: getChatSocketAddress(),
-                        tenant: store.getState().chatState.tenant,
-                        project: store.getState().chatState.project,
+                        baseUrl,
+                        tenant,
+                        project,
                     })
                     break;
                 default:
@@ -170,18 +176,18 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
         }
 
         const tryConnect = (store: AppStore) => {
-            const state = store.getState();
-            if (state.chatState.connected || !state.chatState.stayConnected) {
+            const state = store.getState() as RootState;
+            if (selectChatConnected(state) || !selectChatStayConnected(state)) {
                 return;
             }
-            const sessionId = store.getState().userProfile.profile?.sessionId
+            const sessionId = selectUserProfile(state)?.sessionId
             if (!sessionId) {
                 store.dispatch(fetchUserProfile())
                 return
             }
             transport.eventHandlers = eventHandlers;
-            transport.authToken = store.getState().auth.authToken;
-            transport.idToken = store.getState().auth.idToken;
+            transport.authToken = selectAuthToken(state);
+            transport.idToken = selectIdToken(state);
             transport.connect(sessionId);
         }
 
@@ -201,11 +207,11 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     transport.disconnect()
                     break;
                 case SEND_CHAT_MESSAGE: {
-                    const state = store.getState()
+                    const state = store.getState() as RootState;
                     const turnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
                     const request = (action as SendChatMessageAction).payload
 
-                    const message = request.message ?? state.chatState.userMessage
+                    const message = request.message ?? selectUserMessage(state)
 
                     let files: File[] | null
                     let attachments: UserAttachmentDescription[]
@@ -218,15 +224,15 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                                 size: file.size,
                             }
                         })
-                    } else if (state.chatState.userAttachments) {
-                        files = state.chatState.userAttachments.map((attachment) => {
+                    } else if (selectUserAttachments(state)) {
+                        files = selectUserAttachments(state).map((attachment) => {
                             const file = getUserAttachmentFile(attachment.fileKey)
                             if (!file) {
                                 throw new Error(`no user attachment with this key: ${attachment.fileKey}`);
                             }
                             return file
                         })
-                        attachments = state.chatState.userAttachments
+                        attachments = selectUserAttachments(state)
                     } else {
                         files = null
                         attachments = []
@@ -244,10 +250,8 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         attachments
                     }))
 
-                    let conversationId
-                    if (state.chatState.conversationId) {
-                        conversationId = state.chatState.conversationId
-                    } else {
+                    let conversationId = selectConversationId(state)
+                    if (!conversationId) {
                         conversationId = uuidv4()
                         dispatch(setConversationId(conversationId))
                     }
@@ -255,8 +259,8 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     const chatRequest: ChatRequest = {
                         message,
                         chat_history: sendChatHistory ? getConversationHistory(store) : undefined,
-                        project: state.chatState.project,
-                        tenant: state.chatState.tenant,
+                        project: selectProject(state),
+                        tenant: selectTenant(state),
                         turn_id: turnId,
                         //bundle_id: "", //todo: add bundle
                     }
@@ -272,17 +276,14 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                 case REQUEST_CONVERSATION_STATUS:
                     transport.requestConvStatus((action as RequestConversationStatusAction).payload).catch(console.error)
                     break
-                case setProject.type:
-                case setTenant.type:
-                case setWorkingScope.type:
-                    //todo update connection
-                    break;
-                case setCredentials.type:
+                case setCredentials.type: {
+                    const state = store.getState() as RootState;
                     if (transport) {
-                        transport.authToken = store.getState().auth.authToken
-                        transport.idToken = store.getState().auth.idToken
+                        transport.authToken = selectAuthToken(state)
+                        transport.idToken = selectIdToken(state)
                     }
                     break
+                }
             }
         }
 

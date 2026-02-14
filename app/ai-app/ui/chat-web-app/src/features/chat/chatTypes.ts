@@ -1,13 +1,21 @@
 import {Indexed, Timestamped} from "../../types/common.ts";
 import {RichLink, RNFile, TurnStep} from "../chatController/chatBase.ts";
+import {AuthConfig} from "../auth/authTypes.ts";
+
+
 
 export interface ChatSettings {
-    showMetadata: boolean;
+    auth: AuthConfig;
+    tenant: string;
+    project: string;
+    routesPrefix: string;
 }
 
-export interface WorkingScope {
-    project: string;
-    tenant: string;
+export interface ChatSettingsState {
+    isLoaded: boolean;
+    isLoading: boolean;
+    isLoadingError: boolean;
+    settings: ChatSettings;
 }
 
 export interface UserAttachmentDescription {
@@ -26,7 +34,7 @@ export interface ConversationState {
     conversationTitle?: string | null;
 }
 
-export interface ChatState extends WorkingScope, ConversationState {
+export interface ChatState extends ConversationState {
     stayConnected: boolean;
     connected: boolean;
     locked: boolean;
@@ -171,6 +179,7 @@ export interface SubsystemEvent extends TurnEvent<SubsystemEventData> {
 export interface Artifact<C> extends Timestamped {
     content: C;
     artifactType: string;
+    historical?: boolean;
 }
 
 export type UnknownArtifact = Artifact<unknown>;

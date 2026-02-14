@@ -2,14 +2,14 @@ import {Loader2} from "lucide-react";
 import {useEffect} from "react";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {logInCallback} from "./authMiddleware.ts";
-import {selectIsLoading, selectNavigateTo} from "./authSlice.ts";
+import {selectAuthIsLoading, selectNavigateTo} from "./authSlice.ts";
 import {useNavigate} from "react-router-dom";
 
 const AuthCallback = ()=>{
     const dispatch = useAppDispatch();
     const navigate = useNavigate();
 
-    const isLoading = useAppSelector(selectIsLoading);
+    const isLoading = useAppSelector(selectAuthIsLoading);
     const navigateTo = useAppSelector(selectNavigateTo);
 
     useEffect(() => {

@@ -1,0 +1,8 @@
+{
+  "auth": {
+    "authType": "none"
+  },
+  "tenant": "default",
+  "project": "default",
+  "routesPrefix": ""
+}

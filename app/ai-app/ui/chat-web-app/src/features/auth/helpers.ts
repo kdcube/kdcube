@@ -2,13 +2,14 @@ import {store} from "../../app/store.ts";
 import {User} from "oidc-client-ts";
 import {AppUser} from "./authTypes.ts";
 import {makeSerializable} from "../../utils/utils.ts";
+import {selectAuthToken, selectIdToken} from "./authSlice.ts";
 
 export function getDefaultAuthToken(): string | null | undefined {
-    return store.getState().auth.authToken;
+    return selectAuthToken(store.getState());
 }
 
 export function getDefaultIdToken(): string | null | undefined {
-    return store.getState().auth.idToken;
+    return selectIdToken(store.getState());
 }
 
 export function oAuthUserToAppUser(user: User): AppUser {

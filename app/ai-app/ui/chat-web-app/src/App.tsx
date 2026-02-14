@@ -1,51 +1,35 @@
-/*
- * SPDX-License-Identifier: MIT
- * Copyright (c) 2025 Elena Viter
- */
-
+import {useEffect, useMemo} from "react";
+import AppRouter from "./AppRouter.tsx";
 import './App.css'
-import {BrowserRouter as Router, Route, Routes} from "react-router-dom"
-import NotFoundPage from "./components/notfound/NotFoundPage.tsx";
-import {ReactNode, useCallback, useMemo} from "react";
-import KnowledgeBasePage from "./components/kb/KnowledgeBasePage.tsx";
-import {getChatPagePath, getDefaultRoutePrefix} from "./AppConfig.ts";
-import {store} from "./app/store.ts";
-import {Provider} from "react-redux";
-import Dummy from "./components/chat/Dummy.tsx";
-import AuthCallback from "./features/auth/AuthCallback.tsx";
-import WithAuthRequired from "./features/auth/WithAuthRequired.tsx";
-import ChatPage from "./components/chat/ChatPage.tsx";
+import {useAppDispatch, useAppSelector} from "./app/store.ts";
+import {
+    loadChatSettings,
+    selectChatSettingsLoaded,
+    selectChatSettingsLoading, selectChatSettingsLoadingError
+} from "./features/chat/chatSettingsSlice.ts";
 
-const prefix = getDefaultRoutePrefix();
+const App = () => {
+    const dispatch = useAppDispatch();
+    const settingsLoaded = useAppSelector(selectChatSettingsLoaded)
+    const settingsLoading = useAppSelector(selectChatSettingsLoading)
+    const settingsLoadingError = useAppSelector(selectChatSettingsLoadingError)
 
-
-function AppRouter() {
-    const withAuthRequired = useCallback((children: ReactNode | ReactNode[]) => {
-        return <WithAuthRequired>{children}</WithAuthRequired>
-    }, [])
-
-    const chatPagePath = useMemo(()=>{
-        return getChatPagePath();
-    }, [])
-
-    const chatPage = useMemo(() => {
-        return withAuthRequired(<ChatPage/>)
-    }, [withAuthRequired])
+    useEffect(() => {
+        if (!settingsLoaded && !settingsLoading && !settingsLoadingError) {
+            dispatch(loadChatSettings())
+        }
+    }, [dispatch, settingsLoaded, settingsLoading, settingsLoadingError]);
 
     return useMemo(() => {
-        return <Provider store={store}>
-            <Router>
-                <Routes>
-                    <Route path={`${prefix}/callback`} element={<AuthCallback/>}/>
-                    <Route path={chatPagePath} element={chatPage}/>
-                    <Route path={`${chatPagePath}/:conversationID`} element={chatPage}/>
-                    <Route path={`${prefix}/kb`} element={withAuthRequired(<KnowledgeBasePage/>)}/>
-                    <Route path={`${prefix}/dummy`} element={withAuthRequired(<Dummy/>)}/>
-                    <Route path='*' element={<NotFoundPage/>}/>
-                </Routes>
-            </Router>
-        </Provider>
-    }, [chatPage, withAuthRequired, chatPagePath])
+        if (settingsLoadingError) {
+            return <div>An error has occurred</div>
+        }
+
+        if (!settingsLoaded) {
+            return null;
+        }
+        return <AppRouter/>
+    }, [settingsLoaded, settingsLoadingError])
 }
 
-export default AppRouter
+export default App

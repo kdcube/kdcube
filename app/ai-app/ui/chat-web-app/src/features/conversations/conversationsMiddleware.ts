@@ -1,9 +1,16 @@
 import {Middleware, UnknownAction} from "@reduxjs/toolkit";
 import {AppStore} from "../../app/store.ts";
-import {chatConnected, loadConversation, newConversation, setConversationId} from "../chat/chatStateSlice.ts";
+import {
+    chatConnected,
+    loadConversation,
+    newConversation, selectChatConnected,
+    selectConversationId,
+    setConversationId
+} from "../chat/chatStateSlice.ts";
 import {fetchConversation, getConversations} from "./conversationsAPI.ts";
 import {
-    conversationStatusUpdateRequired,
+    conversationStatusUpdateRequired, selectConversationDescriptorsLoading, selectConversationLoading,
+    selectConversationStatusUpdateRequired,
     setConversationDescriptors,
     setConversationDescriptorsLoading,
     setConversationDescriptorsLoadingError,
@@ -35,6 +42,7 @@ import {WebSearchArtifactStreamReducer} from "../logExtensions/webSearch/WebSear
 import {CanvasArtifactStreamReducer} from "../logExtensions/canvas/CanvasArtifactStreamReducer.ts";
 import {IgnoredArtifactStreamReducer} from "../logExtensions/ignored/IgnoredArtifactStreamReducer.ts";
 import {TimelineTextArtifact, TimelineTextArtifactType} from "../logExtensions/timelineText/types.ts";
+import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 
 const LOAD_CONVERSATION_LIST = "conversations/loadConversationList"
 
@@ -78,9 +86,9 @@ const conversationsMiddleware = (): Middleware => {
     const loadConversationList = (store: AppStore) => {
         const dispatch = store.dispatch
         const state = store.getState()
-        if (state.conversations.conversationsDescriptorsLoading) return
+        if (selectConversationDescriptorsLoading(state)) return
         dispatch(setConversationDescriptorsLoading())
-        getConversations(state.chatState.tenant, state.chatState.project).then((conversations) => {
+        getConversations(selectTenant(state), selectProject(state)).then((conversations) => {
             const list = conversations.map((it): ConversationDescriptor => {
                 return {
                     id: it.conversation_id,
@@ -99,7 +107,7 @@ const conversationsMiddleware = (): Middleware => {
     const fetchConv = (store: AppStore, conversationId: string) => {
         const dispatch = store.dispatch
         const state = store.getState()
-        fetchConversation(state.chatState.tenant, state.chatState.project, conversationId).then((conversation) => {
+        fetchConversation(selectTenant(state), selectProject(state), conversationId).then((conversation) => {
             dispatch(loadConversation({
                 turnOrder: conversation.turns.map(it => it.turn_id),
                 turns: conversation.turns.reduce((previousValue, currentValue, i, arr) => {
@@ -236,6 +244,8 @@ const conversationsMiddleware = (): Middleware => {
                         turnArtifacts.push(...r.flush())
                     })
 
+                    turnArtifacts.forEach(a => a.historical = true)
+
                     previousValue[currentValue.turn_id] = {
                         id: currentValue.turn_id,
                         state: i < arr.length - 2 ? "finished" : "inProgress",
@@ -270,13 +280,13 @@ const conversationsMiddleware = (): Middleware => {
                 case LOAD_CONVERSATION: {
                     const state = store.getState()
                     const conversationId = (action as LoadConversationsAction).payload;
-                    if (conversationId === state.chatState.conversationId || (conversationId !== state.chatState.conversationId && state.conversations.conversationLoading))
+                    if (conversationId === selectConversationId(state) || (conversationId !== selectConversationId(state) && selectConversationLoading(state)))
                         break;
                     if (conversationId === null) {
                         dispatch(newConversation())
                     } else {
                         dispatch(setConversationLoading(conversationId))
-                        if (state.chatState.connected) {
+                        if (selectChatConnected(state)) {
                             fetchConv(store, conversationId)
                         } else {
                             dispatch(conversationStatusUpdateRequired())
@@ -286,8 +296,9 @@ const conversationsMiddleware = (): Middleware => {
                 }
                 case chatConnected.type: {
                     const state = store.getState()
-                    if (state.conversations.conversationLoading && state.conversations.conversationStatusUpdateRequired) {
-                        fetchConv(store, state.conversations.conversationLoading)
+                    const conversationLoading = selectConversationLoading(state)
+                    if (conversationLoading && selectConversationStatusUpdateRequired(state)) {
+                        fetchConv(store, conversationLoading)
                     }
                     break
                 }

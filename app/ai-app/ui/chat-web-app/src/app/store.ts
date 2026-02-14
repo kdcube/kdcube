@@ -6,11 +6,10 @@ import chatStateSlice from "../features/chat/chatStateSlice.ts";
 import userProfileSlice from "../features/profile/profile.ts";
 import {chatServiceMiddleware} from "../features/chat/chatServiceMiddleware.ts";
 import {authMiddleware} from "../features/auth/authMiddleware.ts";
-import {getAuthType} from "../AppConfig.ts";
-import chatSettingsSlice from "../features/chat/chatSettingsSlice.ts";
 import conversationsSlice from "../features/conversations/conversationsSlice.ts";
 import conversationsMiddleware from "../features/conversations/conversationsMiddleware.ts";
 import {widgetPanelsApiSlice} from "../features/widgetPanels/widgetPanels.ts";
+import chatSettingsSlice from "../features/chat/chatSettingsSlice.ts";
 
 export const store = configureStore({
     reducer: {
@@ -26,10 +25,11 @@ export const store = configureStore({
     },
     middleware: (getDefaultMiddleware) =>
         getDefaultMiddleware()
-            .concat(suggestedQuestionsApiSlice.middleware,
+            .concat(
+                suggestedQuestionsApiSlice.middleware,
                 widgetPanelsApiSlice.middleware,
                 chatServiceMiddleware("sse"),
-                authMiddleware(getAuthType()),
+                authMiddleware(),
                 conversationsMiddleware()
             ),
 })

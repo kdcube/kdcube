@@ -1,5 +1,4 @@
 import {User, UserManager, UserManagerSettings} from "oidc-client-ts";
-import {getOAuthConfig} from "../../AppConfig.ts";
 
 interface UserManageCallbacks {
     onAccessTokenExpiring?: (ev: unknown) => void;
@@ -12,8 +11,7 @@ interface UserManageCallbacks {
     onUserSessionChanged?: () => Promise<unknown>;
 }
 
-export function createDefaultUserManager(callbacks?: UserManageCallbacks, settings?: UserManagerSettings) {
-    settings = settings ?? getOAuthConfig();
+export function createDefaultUserManager(settings: UserManagerSettings, callbacks?: UserManageCallbacks) {
     const mgr = new UserManager(settings);
     const events = mgr.events;
 

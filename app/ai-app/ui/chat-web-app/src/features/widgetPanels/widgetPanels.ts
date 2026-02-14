@@ -1,5 +1,4 @@
 import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
-import {getChatBaseAddress, getExtraIdTokenHeaderName} from "../../AppConfig.ts";
 import {RootState} from "../../app/store.ts";
 import {
     AIBundlesResponse,
@@ -8,6 +7,8 @@ import {
     GatewayResponse,
     RedisBrowserResponse
 } from "./types.ts";
+import {selectAuthToken, selectIdToken} from "../auth/authSlice.ts";
+import {selectIdTokenHeaderName} from "../chat/chatSettingsSlice.ts";
 
 const EconomicsTag = "economics"
 const AIBundlesTag = "ai_bundles"
@@ -15,18 +16,24 @@ const GatewayTag = "gateway"
 const ConversationBrowserTag = "conversation_browser"
 const RedisBrowserTag = "redis_browser"
 
+export interface GetWidgetParams {
+    tenant: string
+    project: string
+}
+
 export const widgetPanelsApiSlice = createApi({
     reducerPath: 'widgetPanels',
     baseQuery: fetchBaseQuery({
-        baseUrl: getChatBaseAddress(),
         prepareHeaders(headers, {getState}) {
-            const token = (getState() as RootState).auth.authToken
+            const state = getState() as RootState
+            const token = selectAuthToken(state)
             if (token) {
                 headers.set('Authorization', `Bearer ${token}`)
             }
-            const idToken = (getState() as RootState).auth.idToken
-            if (idToken) {
-                headers.set(getExtraIdTokenHeaderName(), idToken)
+            const idToken = selectIdToken(state)
+            const idTokenHeaderName = selectIdTokenHeaderName(state)
+            if (idToken && idTokenHeaderName) {
+                headers.set(idTokenHeaderName, idToken)
             }
             return headers
         }
@@ -37,7 +44,7 @@ export const widgetPanelsApiSlice = createApi({
             tenant: string,
             project: string,
         }>({
-            query: ({tenant, project}) => {
+            query: ({tenant, project}: GetWidgetParams) => {
                 return {
                     url: `/integrations/bundles/${tenant}/${project}/operations/control_plane`,
                     method: 'POST',
@@ -56,7 +63,7 @@ export const widgetPanelsApiSlice = createApi({
             tenant: string,
             project: string,
         }>({
-            query: ({tenant, project}) => {
+            query: ({tenant, project}: GetWidgetParams) => {
                 return {
                     url: `/integrations/bundles/${tenant}/${project}/operations/ai_bundles`,
                     method: 'POST',
@@ -75,7 +82,7 @@ export const widgetPanelsApiSlice = createApi({
             tenant: string,
             project: string,
         }>({
-            query: ({tenant, project}) => {
+            query: ({tenant, project}: GetWidgetParams) => {
                 return {
                     url: `/integrations/bundles/${tenant}/${project}/operations/svc_gateway`,
                     method: 'POST',
@@ -94,7 +101,7 @@ export const widgetPanelsApiSlice = createApi({
             tenant: string,
             project: string,
         }>({
-            query: ({tenant, project}) => {
+            query: ({tenant, project}: GetWidgetParams) => {
                 return {
                     url: `/integrations/bundles/${tenant}/${project}/operations/conversation_browser`,
                     method: 'POST',
@@ -113,7 +120,7 @@ export const widgetPanelsApiSlice = createApi({
             tenant: string,
             project: string,
         }>({
-            query: ({tenant, project}) => {
+            query: ({tenant, project}: GetWidgetParams) => {
                 return {
                     url: `/integrations/bundles/${tenant}/${project}/operations/redis_browser`,
                     method: 'POST',

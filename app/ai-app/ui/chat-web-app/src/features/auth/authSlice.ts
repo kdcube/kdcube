@@ -1,16 +1,12 @@
 import {createSlice, PayloadAction} from "@reduxjs/toolkit";
-import {getAuthType, getHardcodedAuthToken} from "../../AppConfig.ts";
-import {AuthType, AppUser} from "./authTypes.ts";
+import {AppUser, AuthType} from "./authTypes.ts";
 import {RootState} from "../../app/store.ts";
-
-type AuthStage = "none" | "inProgress" | "authenticated";
 
 interface AuthState {
     authType: AuthType;
     loggedIn: boolean;
     loading: boolean;
     navigateTo: string | URL | null;
-    authStage: AuthStage
     user?: AppUser | null;
     authToken?: string | null;
     idToken?: string | null;
@@ -26,17 +22,12 @@ interface AuthAction {
 const authSlice = createSlice({
     name: 'auth',
     initialState: () => {
-        const authType = getAuthType();
         return {
-            loggedIn: authType === "none" || authType === "hardcoded",
+            loggedIn: false,
             loading: false,
             navigateTo: null,
-            authStage: authType === "none" || authType === "hardcoded" ? "authenticated" : "none",
-            authType: authType,
-            authToken: authType === "hardcoded" ? getHardcodedAuthToken() : null,
-            user: authType === "hardcoded" ? {
-                roles: ['kdcube:role:super-admin']
-            } : null
+            authToken: null,
+            user: null
         } as AuthState
     },
     reducers: {
@@ -67,11 +58,10 @@ const authSlice = createSlice({
 
 export const {setCredentials, setLoggedOut, startLoading, finishLoading} = authSlice.actions
 export const selectIsLoggedIn = (state: RootState) => state.auth.loggedIn
-export const selectIsLoading = (state: RootState) => state.auth.loading
+export const selectAuthIsLoading = (state: RootState) => state.auth.loading
 export const selectNavigateTo = (state: RootState) => state.auth.navigateTo
 export const selectAppUser = (state: RootState) => state.auth.user
 export const selectRoles = (state: RootState) => state.auth.user?.roles
-export const selectAuthType = (state: RootState) => state.auth.authType
 export const selectAuthToken = (state: RootState) => state.auth.authToken
 export const selectIdToken = (state: RootState) => state.auth.idToken
 

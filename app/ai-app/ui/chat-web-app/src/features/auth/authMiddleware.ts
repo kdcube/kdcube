@@ -1,6 +1,9 @@
 import {Middleware, UnknownAction} from "@reduxjs/toolkit";
-import {AuthType} from "./authTypes.ts";
-import CognitoAuth from "./cogitoAuth.ts";
+import CognitoAuth from "./cognitoAuth.ts";
+import {AppStore, RootState} from "../../app/store.ts";
+import {loadChatSettings, selectAuthConfig} from "../chat/chatSettingsSlice.ts";
+import {setCredentials} from "./authSlice.ts";
+import {HardcodedAuthConfig} from "./authTypes.ts";
 
 export const LOG_IN = "auth/LogIn"
 
@@ -59,21 +62,48 @@ export const logInCallback = (navigateTo?: string | URL | null): LogInCallbackAc
 
 export type AuthActions = LogInAction | LogOutAction | LogInCallbackAction
 
-export interface AuthMiddlewareProvider {
-    getMiddleware: () => Middleware
+export type HandleAction = (store: AppStore, action: AuthActions) => void
+
+export interface WithActionHandler {
+    handleAction: HandleAction
 }
 
-export const authMiddleware = (authType: AuthType): Middleware => {
-    let middlewareProvider: AuthMiddlewareProvider
-
-    switch (authType) {
-        case "none":
-        case "hardcoded":
-            return () => (next) => (action) => next(action)
-        case "cognito":
-            middlewareProvider = new CognitoAuth()
-            return middlewareProvider.getMiddleware()
-        default:
-            throw new Error("Unknown auth type");
-    }
+export const authMiddleware = (): Middleware => {
+    let handler: HandleAction | null = null;
+    return ((store) => (next: (action: unknown) => unknown) => (action: unknown) => {
+        next(action)
+        const state = store.getState() as RootState;
+        const authConfig = selectAuthConfig(state)
+        let handlerParent: WithActionHandler | null = null
+        switch ((action as UnknownAction).type) {
+            case loadChatSettings.fulfilled.type:
+                if (!handler) {
+                    switch (authConfig.authType) {
+                        case "none":
+                            store.dispatch(setCredentials({
+                                loggedIn: true,
+                            }));
+                            break;
+                        case "hardcoded":
+                            store.dispatch(setCredentials({
+                                loggedIn: true,
+                                authToken: (authConfig as HardcodedAuthConfig).token,
+                            }));
+                            break;
+                        case "cognito":
+                            handlerParent = new CognitoAuth()
+                            handler = handlerParent.handleAction.bind(handlerParent)
+                    }
+                }
+                break
+            case LOG_IN:
+            case LOG_IN_CALLBACK:
+            case LOG_OUT:
+                if (!handler) {
+                    throw new Error("auth action handler is not initialized");
+                }
+                handler(store as AppStore, action as AuthActions);
+                break;
+        }
+    })
 }

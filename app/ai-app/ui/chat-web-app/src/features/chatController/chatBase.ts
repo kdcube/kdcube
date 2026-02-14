@@ -1,5 +1,4 @@
 import {ISOTimestamped, Timestamped} from "../../types/common.ts";
-import {getExtraIdTokenHeaderName} from "../../AppConfig.ts";
 import {getClientTimezone} from "../../utils/dateTimeUtils.ts";
 
 export type EventStatus = "started" | "running" | "completed" | "error" | "skipped";
@@ -167,6 +166,7 @@ export interface ChatOptions {
     autoReconnect?: boolean;
     authToken?: string | null;
     idToken?: string | null;
+    idHeaderName?: string | null;
 }
 
 export abstract class ChatBase {
@@ -177,6 +177,7 @@ export abstract class ChatBase {
     protected _authToken?: string | null;
     protected _idToken?: string | null;
     protected _sessionId?: string | null;
+    protected _idHeaderName?: string | null;
 
     protected constructor(options: ChatOptions) {
         this._project = options.project;
@@ -185,6 +186,7 @@ export abstract class ChatBase {
         this._autoReconnect = options.autoReconnect;
         this._authToken = options.authToken;
         this._idToken = options.idToken;
+        this._idHeaderName = options.idHeaderName;
     }
 
     public get sessionId(): string | null | undefined {
@@ -249,7 +251,7 @@ export abstract class ChatBase {
 
     protected addIdHeader(base?: HeadersInit): Headers {
         const h = new Headers(base);
-        if (this._idToken) h.set("id_token", getExtraIdTokenHeaderName());
+        if (this._idToken && this._idHeaderName) h.set("id_token", this._idHeaderName);
         return h;
     };
 

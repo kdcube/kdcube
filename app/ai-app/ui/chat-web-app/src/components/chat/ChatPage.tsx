@@ -4,10 +4,10 @@ import {useEffect, useMemo} from "react";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {selectConversationId} from "../../features/chat/chatStateSlice.ts";
 import {loadConversations} from "../../features/conversations/conversationsMiddleware.ts";
-import {getChatPagePath} from "../../AppConfig.ts";
 import {selectIsConversationLoading} from "../../features/conversations/conversationsSlice.ts";
 import IconContainer from "../IconContainer.tsx";
 import {LoaderCircle} from "lucide-react";
+import {getChatPagePath} from "../../features/chat/configHelper.ts";
 
 function ChatPage() {
     const urlParams = useParams();

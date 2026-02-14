@@ -61,3 +61,4 @@ export const selectConversationDescriptorsLoading = (state: RootState) => state.
 export const selectConversationDescriptorsLoadingError = (state: RootState) => state.conversations.conversationsDescriptorsLoadingError
 export const selectIsConversationLoading = (state: RootState) => state.conversations.conversationLoading !== null
 export const selectConversationLoading = (state: RootState) => state.conversations.conversationLoading
+export const selectConversationStatusUpdateRequired = (state: RootState) => state.conversations.conversationStatusUpdateRequired

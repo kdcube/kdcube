@@ -12,7 +12,7 @@ export interface ChatLogExtension {
     component: ChatLogComponent
 }
 
-const chatLogExtensions: Record<string, ChatLogExtension> = {}
+const chatLogExtensions: Record<string, ChatLogExtension | undefined> = {}
 
 export const addChatLogExtension = (
     artifactType: string,
@@ -31,6 +31,6 @@ export const getChatLogTypes = ()=>{
     return Object.keys(chatLogExtensions)
 }
 
-export const getChatLogComponent = (artifactType: string): ChatLogComponent => {
-    return chatLogExtensions[artifactType].component;
+export const getChatLogComponent = (artifactType: string): ChatLogComponent | undefined => {
+    return chatLogExtensions[artifactType]?.component;
 }

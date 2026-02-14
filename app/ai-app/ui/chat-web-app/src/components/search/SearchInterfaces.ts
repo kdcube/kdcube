@@ -37,25 +37,6 @@ export interface EnhancedSearchResult {
     backtrack: BacktrackInfo;
 }
 
-export interface EnhancedKBSearchRequest {
-    query: string;
-    resource_id?: string;
-    top_k?: number;
-    include_backtrack?: boolean;
-    include_navigation?: boolean;
-}
-
-export interface EnhancedKBSearchResponse {
-    query: string;
-    results: EnhancedSearchResult[];
-    total_results: number;
-    search_metadata: {
-        enhanced_search: boolean;
-        backtrack_enabled: boolean;
-        navigation_enabled: boolean;
-        [key: string]: any;
-    };
-}
 
 export interface SearchPreviewContent {
     type: 'original' | 'extraction';

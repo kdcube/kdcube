@@ -34,11 +34,9 @@ const ChatCanvas = ({ref}: ChatCanvasProps) => {
     }, [artifacts, itemLink])
 
     const content = useMemo(() => {
-        console.debug(item)
         if (!item) return null
         const CanvasComponent = getCanvasItemComponent(item.artifactType)
         return <CanvasComponent item={item} />
-
     }, [item])
 
     return useMemo(() => {

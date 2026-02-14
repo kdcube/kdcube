@@ -1,6 +1,6 @@
-import {getChatBaseAddress} from "../../AppConfig.ts";
 import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
 import {RootState} from "../../app/store.ts";
+import {selectAuthToken} from "../auth/authSlice.ts";
 
 class Question {
     readonly id: string | number;
@@ -29,9 +29,8 @@ export type QuestionsPanelItem = Question | QuestionCategory;
 export const suggestedQuestionsApiSlice = createApi({
     reducerPath: 'suggestedQuestions',
     baseQuery: fetchBaseQuery({
-        baseUrl: getChatBaseAddress(),
         prepareHeaders(headers, { getState }) {
-            const token = (getState() as RootState).auth.authToken
+            const token = selectAuthToken(getState() as RootState)
             if (token) {
                 headers.set('authorization', `Bearer ${token}`)
             }

@@ -9,36 +9,42 @@ import {
     ConvStatusEnvelope,
     FilesStepEnvelope
 } from "../chatController/chatBase.ts";
-import {getWorkingScope} from "../../AppConfig.ts";
 import {v4 as uuidv4} from "uuid";
 import {
     AgentTiming,
     AnswerEvent,
     CanvasEvent,
     ChatState,
-    CodeExecCodeSubsystemEventData, CodeExecCodeSubsystemEventDataSubtype,
-    CodeExecContractSubsystemEventData, CodeExecContractSubsystemEventDataSubtype,
-    CodeExecEvent, CodeExecEventSubtypes,
+    CitationArtifact,
+    CodeExecCodeSubsystemEventData,
+    CodeExecCodeSubsystemEventDataSubtype,
+    CodeExecContractSubsystemEventData,
+    CodeExecContractSubsystemEventDataSubtype,
+    CodeExecEvent,
+    CodeExecEventSubtypes,
     CodeExecMetaEventData,
-    CodeExecObjectiveSubsystemEventData, CodeExecObjectiveSubsystemEventDataSubtype,
-    CodeExecProgramNameSubsystemEventData, CodeExecProgramNameSubsystemEventDataSubtype,
+    CodeExecObjectiveSubsystemEventData,
+    CodeExecObjectiveSubsystemEventDataSubtype,
+    CodeExecProgramNameSubsystemEventData,
+    CodeExecProgramNameSubsystemEventDataSubtype,
     CodeExecStatusSubsystemEventDataSubtype,
     ConversationState,
+    FileArtifact,
     NewChatTurnRequest,
     SubsystemEvent,
     SubsystemEventData,
+    ThinkingArtifact,
     ThinkingEvent,
     TimelineTextEvent,
-    CitationArtifact,
     TurnError,
-    FileArtifact,
-    ThinkingArtifact,
-    UnknownArtifact, WebSearchEvent, WebSearchEventSubtypes, WebSearchFilteredResultsSubsystemEventDataSubtype,
-    WebSearchHTMLViewSubsystemEventDataSubtype, WebSearchSubsystemEventData,
-    WorkingScope
+    WebSearchEvent,
+    WebSearchEventSubtypes,
+    WebSearchFilteredResultsSubsystemEventDataSubtype,
+    WebSearchHTMLViewSubsystemEventDataSubtype,
+    WebSearchSubsystemEventData
 } from "./chatTypes.ts";
 import {CodeExecArtifact, CodeExecArtifactType, CodeExecData} from "../logExtensions/codeExec/types.ts";
-import {WebSearchArtifact, WebSearchData, WebSearchArtifactType} from "../logExtensions/webSearch/types.ts";
+import {WebSearchArtifact, WebSearchArtifactType, WebSearchData} from "../logExtensions/webSearch/types.ts";
 import {CanvasArtifact, CanvasArtifactType} from "../logExtensions/canvas/types.ts";
 import {TimelineTextArtifact, TimelineTextArtifactType} from "../logExtensions/timelineText/types.ts";
 
@@ -261,13 +267,10 @@ const clearUserAttachmentsInternal = (state: WritableDraft<ChatState>) => {
 const chatStateSlice = createSlice({
     name: 'chatState',
     initialState: (): ChatState => {
-        const ws = getWorkingScope()
         return {
             stayConnected: false,
             connected: false,
             conversationId: undefined,
-            project: ws.project,
-            tenant: ws.tenant,
             turns: {},
             turnOrder: [],
             locked: false,
@@ -281,16 +284,6 @@ const chatStateSlice = createSlice({
         },
         disconnect: (state) => {
             state.stayConnected = false;
-        },
-        setProject(state, action: PayloadAction<string>) {
-            state.project = action.payload;
-        },
-        setTenant(state, action: PayloadAction<string>) {
-            state.tenant = action.payload;
-        },
-        setWorkingScope(state, action: PayloadAction<WorkingScope>) {
-            state.project = action.payload.project;
-            state.tenant = action.payload.tenant;
         },
         setConversationId(state, action: PayloadAction<string | null>) {
             state.conversationId = action.payload
@@ -717,9 +710,6 @@ const chatStateSlice = createSlice({
 export const {
     startConnecting,
     disconnect,
-    setProject,
-    setTenant,
-    setWorkingScope,
     setConversationId,
     chatConnected,
     chatDisconnected,
@@ -743,8 +733,6 @@ export const selectLocked = (state: RootState) => state.chatState.locked
 export const selectCurrentTurn = (state: RootState) => {
     return Object.entries(state.chatState.turns).map(([_unused, v]) => v).find(t => t.state === "inProgress")
 }
-export const selectProject = (state: RootState) => state.chatState.project
-export const selectTenant = (state: RootState) => state.chatState.tenant
 export const selectTurns = (state: RootState) => state.chatState.turns
 export const selectTurnOrder = (state: RootState) => state.chatState.turnOrder
 export const selectUserMessage = (state: RootState) => state.chatState.userMessage

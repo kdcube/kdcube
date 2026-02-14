@@ -1,8 +1,8 @@
-import {getChatBaseAddress} from "../../AppConfig.ts";
 import {appendCredentials} from "../../app/api/utils.ts";
 import {createSlice} from "@reduxjs/toolkit";
 import {createAppAsyncThunk} from "../../app/withTypes.ts";
 import {RootState} from "../../app/store.ts";
+import {chatAPIBasePath} from "../../BuildConfig.ts";
 
 interface UserProfile {
     sessionId: string | null;
@@ -69,7 +69,7 @@ const initialState: PostsState = {
 
 export const fetchUserProfile = createAppAsyncThunk('userProfile/fetch', async (_unused, {getState}) => {
 
-    const response = await fetch(`${getChatBaseAddress()}/profile`, {
+    const response = await fetch(`${chatAPIBasePath}/profile`, {
         method: "GET",
         headers: appendCredentials(getState().auth.authToken, [
             ["Content-Type", "application/json"]

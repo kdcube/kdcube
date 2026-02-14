@@ -1,6 +1,6 @@
-import {getChatBaseAddress} from "../../AppConfig.ts";
 import {handleContentDownload} from "../../components/shared.ts";
 import {getDefaultAuthToken} from "../../features/auth/helpers.ts";
+import {chatAPIBasePath} from "../../BuildConfig.ts";
 
 export function appendCredentials(accessToken: string | null | undefined, headers?: HeadersInit) {
     if (!headers) {
@@ -25,7 +25,7 @@ export function appendDefaultCredentialsHeader(headers?: HeadersInit) {
 export const getResourceByRN = async (rn: string) => {
     const headers = appendDefaultCredentialsHeader([["Content-Type", "application/json"]]);
     const res = await fetch(
-        `${getChatBaseAddress()}/api/cb/resources/by-rn`,
+        `${chatAPIBasePath}/api/cb/resources/by-rn`,
         {method: "POST", headers, body: JSON.stringify({rn: rn})}
     );
     if (!res.ok) {
@@ -37,7 +37,7 @@ export const getResourceByRN = async (rn: string) => {
 export const downloadBlob = async (path: string, accessToken?: string | null) => {
     const headers = appendCredentials(accessToken === undefined ? getDefaultAuthToken() : accessToken);
     const res = await fetch(
-        `${getChatBaseAddress()}${path}`,
+        `${chatAPIBasePath}${path}`,
         {headers}
     );
     if (!res.ok) {
