@@ -5,17 +5,71 @@ from __future__ import annotations
 
 import time
 import uuid
+import datetime as _dt
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.call as react_tools
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import add_block
+from kdcube_ai_app.apps.chat.sdk.util import isoz
 
 
 @dataclass
 class ReactRound:
     tool_id: str = ""
     tool_call_id: str = ""
+
+    @classmethod
+    def thinking(
+        cls,
+        *,
+        ctx_browser: Any,
+        decision: Optional[Dict[str, Any]] = None,
+        text: Optional[str] = None,
+        title: str,
+        iteration: int,
+    ) -> None:
+        if not ctx_browser:
+            return
+        thinking_info: Dict[str, Any] = {}
+        if isinstance(decision, dict):
+            channels = decision.get("channels") if isinstance(decision.get("channels"), dict) else {}
+            thinking_info = channels.get("thinking") if isinstance(channels.get("thinking"), dict) else {}
+            if text is None:
+                text = thinking_info.get("text") or decision.get("internal_thinking")
+        if not isinstance(text, str) or not text.strip():
+            return
+        def _to_iso(val: Any) -> str:
+            if isinstance(val, (int, float)):
+                ts_sec = val / 1000.0 if val > 1e12 else float(val)
+                return _dt.datetime.fromtimestamp(ts_sec, tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+            if isinstance(val, str):
+                return isoz(val)
+            return ""
+        started_at = _to_iso(thinking_info.get("started_at"))
+        finished_at = _to_iso(thinking_info.get("finished_at"))
+        turn_id = (ctx_browser.runtime_ctx.turn_id or "")
+        ts = started_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        meta: Dict[str, Any] = {
+            "channel": "thinking",
+            "title": title,
+            "iteration": iteration,
+            "hidden": True,
+        }
+        if started_at:
+            meta["started_at"] = started_at
+        if finished_at:
+            meta["finished_at"] = finished_at
+        add_block(ctx_browser, {
+            "type": "react.thinking",
+            "author": "react",
+            "turn_id": turn_id,
+            "ts": ts,
+            "mime": "text/markdown",
+            "path": f"ar:{turn_id}.react.thinking.{iteration}" if turn_id else "",
+            "text": text.strip(),
+            "meta": meta,
+        })
 
     @classmethod
     def note(

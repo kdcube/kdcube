@@ -186,8 +186,8 @@ def normalize_exec_contract_for_turn(
     return normalized, rewrites, None
 
 
-_QUALIFIED_PATH_RE = re.compile(r"turn_[A-Za-z0-9_]+/(files|attachments)/[A-Za-z0-9_./\\-]+")
-_UNQUALIFIED_PATH_RE = re.compile(r"(files|attachments)/[A-Za-z0-9_./\\-]+")
+_QUALIFIED_PATH_RE = re.compile(r"turn_[A-Za-z0-9_]+/(files|attachments)/[^\s'\"\)\];,]+")
+_UNQUALIFIED_PATH_RE = re.compile(r"(files|attachments)/[^\s'\"\)\];,]+")
 
 
 def rewrite_exec_code_paths(
@@ -529,17 +529,29 @@ async def run_exec_tool(
             lines.append("File errors:")
             for e in errors:
                 fname = e.get("filename") or e.get("artifact_id") or "unknown"
+                try:
+                    fname = pathlib.Path(fname).name
+                except Exception:
+                    pass
                 msg = e.get("message") or e.get("code") or "error"
                 lines.append(f"- {fname}: {msg}")
         if succeeded:
             lines.append("Succeeded:")
             for s in succeeded:
                 fname = s.get("filename") or s.get("artifact_id") or "unknown"
+                try:
+                    fname = pathlib.Path(fname).name
+                except Exception:
+                    pass
                 lines.append(f"- {fname}")
     else:
         lines.append("Produced files:")
         for s in succeeded:
             fname = s.get("filename") or s.get("artifact_id") or "unknown"
+            try:
+                fname = pathlib.Path(fname).name
+            except Exception:
+                pass
             lines.append(f"- {fname}")
     report_text = "\n".join(lines).strip()
 

@@ -173,7 +173,6 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         error=None,
         content_lineage=[],
         tool_call_id=tool_call_id,
-        tool_call_item_index=0,
         artifact_stats=None,
     )
     materialize_inline_artifact_to_file(

@@ -839,6 +839,26 @@ class _TwoSectionParser:
         self.on_json = on_json
         self.internal = ""
         self.json = ""
+        self.internal_started_at = None
+        self.internal_finished_at = None
+        self.json_started_at = None
+        self.json_finished_at = None
+
+    def _mark_internal_start(self) -> None:
+        if self.internal_started_at is None:
+            self.internal_started_at = time.time()
+
+    def _mark_internal_end(self) -> None:
+        if self.internal_finished_at is None:
+            self.internal_finished_at = time.time()
+
+    def _mark_json_start(self) -> None:
+        if self.json_started_at is None:
+            self.json_started_at = time.time()
+
+    def _mark_json_end(self) -> None:
+        if self.json_finished_at is None:
+            self.json_finished_at = time.time()
 
     @staticmethod
     def _skip_after_marker(buf: str, i: int) -> int:
@@ -1001,6 +1021,10 @@ class _TwoSectionParser:
 
                 end = self._skip_after_marker(self.buf, m.end())
                 self.emit_from = end
+                if kind == "internal":
+                    self._mark_internal_start()
+                else:
+                    self._mark_json_start()
                 self.mode = kind  # "internal" (both markers) or "json"
                 continue
 
@@ -1023,6 +1047,8 @@ class _TwoSectionParser:
                 if cleaned:
                     await self.on_internal(cleaned, completed=False)
                     self.internal += cleaned
+                self._mark_internal_end()
+                self._mark_json_start()
                 self.emit_from = self._skip_after_marker(self.buf, m_json.end())
                 self.mode = "json"
                 continue
@@ -1046,6 +1072,7 @@ class _TwoSectionParser:
             if cleaned:
                 await self.on_internal(cleaned, completed=False)
                 self.internal += cleaned
+            self._mark_internal_end()
 
             # FALLBACK: If no JSON section found, try to extract from internal
             if not self.json.strip():
@@ -1053,6 +1080,10 @@ class _TwoSectionParser:
                 json_content = self._extract_json_block_only(self.buf)
                 if json_content:
                     self.json = json_content
+            if self.json.strip() and self.json_started_at is None:
+                self.json_started_at = self.internal_finished_at or time.time()
+            if self.json.strip() and self.json_finished_at is None:
+                self.json_finished_at = self.internal_finished_at or time.time()
 
         elif self.mode == "json":
             tail = self.buf[self.emit_from:]
@@ -1063,6 +1094,7 @@ class _TwoSectionParser:
             # SAFEGUARD: Extract ONLY the JSON block, ignore any extra content
             # This protects against models that add content after the ```
             self.json = self._extract_json_block_only(self.json)
+            self._mark_json_end()
 
 async def _stream_agent_two_sections_to_json(
         svc: ModelServiceBase,
@@ -1170,6 +1202,18 @@ async def _stream_agent_two_sections_to_json(
                 "ok": ok_flag
             },
             "internal_thinking": parser.internal,  # already streamed
+            "channels": {
+                "thinking": {
+                    "text": parser.internal,
+                    "started_at": parser.internal_started_at,
+                    "finished_at": parser.internal_finished_at,
+                },
+                "json": {
+                    "text": parser.json,
+                    "started_at": parser.json_started_at,
+                    "finished_at": parser.json_finished_at,
+                },
+            },
         }
     # ========== END NEW ==========
 
@@ -1231,6 +1275,18 @@ async def _stream_agent_two_sections_to_json(
             "ok": ok_flag
         },
         "internal_thinking": parser.internal,  # already streamed
+        "channels": {
+            "thinking": {
+                "text": parser.internal,
+                "started_at": parser.internal_started_at,
+                "finished_at": parser.internal_finished_at,
+            },
+            "json": {
+                "text": parser.json,
+                "started_at": parser.json_started_at,
+                "finished_at": parser.json_finished_at,
+            },
+        },
     }
 
 async def stream_agent_to_json(

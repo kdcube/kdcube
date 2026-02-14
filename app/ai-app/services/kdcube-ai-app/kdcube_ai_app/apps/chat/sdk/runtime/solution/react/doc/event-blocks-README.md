@@ -22,6 +22,7 @@ Blocks are dicts with:
 - `react.plan`
 - `react.tool.call`
 - `react.tool.result`
+- `react.thinking` (internal thinking captured from decision stream; hidden by default)
 - `react.notes` (decision notes emitted before tool calls; user-visible)
 - `react.note` (internal notes written via `react.write(channel="internal")`)
 - `react.completion`
@@ -86,6 +87,19 @@ These notes are user-visible and rendered as:
 - a `react.note` block with `meta.channel="internal"`
 These notes are visible to agents (not to end users). They should be short, telegraphic, and tagged
 with `[P]` / `[D]` / `[S]` per the shared instruction.
+
+### Thinking blocks (react.thinking)
+Decision streaming captures the internal thinking section and stores it as a hidden block:
+- `type`: `react.thinking`
+- `mime`: `text/markdown`
+- `path`: `ar:<turn_id>.react.thinking.<iteration>`
+- `text`: thinking content
+- `meta.channel="thinking"`
+- `meta.title`: human‑readable label for UI (e.g., `solver.react.v2.decision (2)`)
+- `meta.hidden=true` (kept out of model render)
+
+These are **not** persisted as `conv.thinking.stream` artifacts anymore; UI artifacts are
+reconstructed from the turn log during fetch.
 
 Summary blocks include:
 - `type`: `conv.range.summary`

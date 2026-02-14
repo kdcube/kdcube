@@ -24,7 +24,7 @@ Reference implementations:
 | `turn.log` (`artifact:turn.log`)            | Yes             | No      | `kind:turn.log`, `artifact:turn.log`, `turn:<turn_id>`                      | End of turn when `TurnLog` is persisted.      | No                               | Minimal turn log: blocks produced this turn (JSON payload). |
 | `turn.log.reaction`                         | Yes             | No      | `artifact:turn.log.reaction`, `turn:<turn_id>`, `origin:<user|machine>`     | When feedback is added.                       | No                               | Feedback / reaction linked to a turn. |
 | `conv.range.summary`                        | No (index‑only) | Yes     | `artifact:conv.range.summary`, `turn:<turn_id>`                              | When context compaction runs.                 | Yes (summary text)               | Summary for a range of turns. |
-| `conv.thinking.stream`                      | Yes             | No      | `artifact:conv.thinking.stream`, `turn:<turn_id>`, `conversation`, `stream`  | End of turn (stream aggregation).             | No                               | Aggregated thinking stream blocks. |
+| `conv.thinking.stream`                      | No (synthesized) | No      | `artifact:conv.thinking.stream`, `turn:<turn_id>`                            | Fetch (from turn log timeline).                | No                               | Thinking items reconstructed from `react.thinking` blocks in turn log. |
 | `conv.artifacts.stream`                     | Yes             | No      | `artifact:conv.artifacts.stream`, `turn:<turn_id>`, `conversation`, `stream` | End of turn (stream aggregation).             | No                               | Aggregated canvas/tool stream blocks. |
 | `conv.timeline_text.stream`                 | Yes             | No      | `artifact:conv.timeline_text.stream`, `turn:<turn_id>`, `conversation`, `stream` | End of turn (stream aggregation).         | No                               | Aggregated timeline text blocks. |
 
@@ -45,7 +45,7 @@ See: `storage/sdk-store-README.md`
   artifact-<ts>-<id>-turn.log.json
   artifact-<ts>-<id>-conv.timeline.v1.json
   artifact-<ts>-<id>-conv.artifacts.stream.json
-  artifact-<ts>-<id>-conv.thinking.stream.json
+  (conv.thinking.stream is no longer persisted; it is synthesized during fetch)
   <attachment files...>
 
 <kdcube>/cb/tenants/<tenant>/projects/<project>/executions/privileged/<user_id>/<conversation_id>/<turn_id>/<exec_id>/

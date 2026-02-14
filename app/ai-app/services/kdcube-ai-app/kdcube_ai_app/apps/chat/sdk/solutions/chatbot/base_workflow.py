@@ -384,32 +384,21 @@ class BaseWorkflow():
         if not self.ctx_client:
             return
         try:
-            tenant = self._ctx["service"]["tenant"]
-            project = self._ctx["service"]["project"]
-            user_id = self._ctx["service"]["user"]
-            user_type = self._ctx["service"]["user_type"]
-            conversation_id = self._ctx["conversation"]["conversation_id"]
-            turn_id = self._ctx["conversation"]["turn_id"]
+            tenant = self.runtime_ctx.tenant
+            project = self.runtime_ctx.project
+            user_id = self.runtime_ctx.user_id
+            user_type = self.runtime_ctx.user_type
+            conversation_id = self.runtime_ctx.conversation_id
+            turn_id = self.runtime_ctx.turn_id
         except Exception:
             return
 
         all_deltas = self.comm.get_delta_aggregates(
             conversation_id=conversation_id, turn_id=turn_id, merge_text=True
         )
-        thinking_blocks = [d for d in all_deltas if d.get("marker") == "thinking" and (d.get("text") or d.get("chunks"))]
         canvas_and_tools_blocks = [d for d in all_deltas if d.get("marker") in ["canvas", "tool", "subsystem"] and (d.get("text") or d.get("chunks"))]
-        timeline_text_blocks = [d for d in all_deltas if d.get("marker") in ["timeline_text"] and (d.get("text") or d.get("chunks"))]
 
-        thinking_full = [
-            {"agent": item["agent"], "ts_first": item["ts_first"], "ts_last": item["ts_last"],
-             "text": item["text"], "chunks_num": len(item.get("chunks") or [])}
-            for item in thinking_blocks
-        ]
-        thinking_idx = [
-            {**{k: v for k, v in i.items() if k not in ("text", "chunks")},
-             "text_size": len(i.get("text") or ""), "chunks_num": len(i.get("chunks") or [])}
-            for i in thinking_blocks
-        ]
+        subsystem_blocks = [d for d in all_deltas if d.get("marker") in ["subsystem"] and (d.get("text") or d.get("chunks"))]
 
         canvas_full = [
             {**{k: v for k, v in item.items() if k != "chunks"},
@@ -423,31 +412,6 @@ class BaseWorkflow():
             for item in canvas_and_tools_blocks
         ]
 
-        timeline_text_full = [
-            {"agent": item["agent"], "ts_first": item["ts_first"], "ts_last": item["ts_last"],
-             "artifact_name": item.get("artifact_name"),
-             "text": item["text"], "chunks_num": len(item.get("chunks") or [])}
-            for item in timeline_text_blocks
-        ]
-        timeline_text_idx = [
-            {**{k: v for k, v in i.items() if k not in ("text", "chunks")},
-             "text_size": len(i.get("text") or ""), "chunks_num": len(i.get("chunks") or [])}
-            for i in timeline_text_blocks
-        ]
-
-        if thinking_blocks:
-            await self.ctx_browser.save_artifact(
-                kind="conv.thinking.stream",
-                tenant=tenant, project=project,
-                turn_id=turn_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                bundle_id=self.config.ai_bundle_spec.id,
-                user_type=user_type,
-                content={"version": "v1", "items": thinking_full},
-                content_str=json.dumps(thinking_idx),
-                extra_tags=["conversation", "stream"],
-            )
         if canvas_and_tools_blocks:
             await self.ctx_browser.save_artifact(
                 kind="conv.artifacts.stream",
@@ -460,19 +424,6 @@ class BaseWorkflow():
                 content={"version": "v1", "items": canvas_full},
                 content_str=json.dumps(canvas_idx),
                 extra_tags=["conversation", "stream", "canvas"],
-            )
-        if timeline_text_blocks:
-            await self.ctx_browser.save_artifact(
-                kind="conv.timeline_text.stream",
-                tenant=tenant, project=project,
-                turn_id=turn_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                bundle_id=self.config.ai_bundle_spec.id,
-                user_type=user_type,
-                content={"version": "v1", "items": timeline_text_full},
-                content_str=json.dumps(timeline_text_idx),
-                extra_tags=["conversation", "stream", "timeline_text"],
             )
 
         self.comm.clear_delta_aggregates(conversation_id=conversation_id, turn_id=turn_id)

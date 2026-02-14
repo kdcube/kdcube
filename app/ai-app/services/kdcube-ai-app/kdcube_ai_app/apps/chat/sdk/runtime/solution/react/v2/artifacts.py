@@ -269,7 +269,6 @@ def build_artifact_view(
     error: Optional[Dict[str, Any]] = None,
     content_lineage: List[str] | None = None,
     tool_call_id: str | None = None,
-    tool_call_item_index: int | None = None,
     artifact_stats: Optional[Dict[str, Any]] = None,
 ) -> "ArtifactView":
     value_norm = value
@@ -314,7 +313,6 @@ def build_artifact_view(
         "description": description or "",
         "channel": channel or "",
         "tool_call_id": tool_call_id,
-        "tool_call_item_index": tool_call_item_index,
         "error": error,
         "content_lineage": content_lineage or [],
     }

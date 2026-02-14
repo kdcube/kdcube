@@ -374,7 +374,6 @@ async def handle_external_tool(*,
             error=tr_error,
             content_lineage=content_lineage,
             tool_call_id=tool_call_id,
-            tool_call_item_index=None,
             artifact_stats=artifact_stats,
         )
         if tr_error and not is_exec:

@@ -24,6 +24,10 @@ Conversation state is stored as two artifacts:
 - `artifact:conv.timeline.v1` — timeline blocks + conversation metadata (no sources_pool)
 - `artifact:conv:sources_pool` — sources pool only
 
+The timeline snapshot includes `react.thinking` blocks (hidden) but **does not**
+persist a `conv.thinking.stream` artifact anymore. UI-facing thinking items are
+reconstructed from the turn log timeline during fetch.
+
 The sources pool payload is:
 ```json
 { "sources_pool": [ ... ] }

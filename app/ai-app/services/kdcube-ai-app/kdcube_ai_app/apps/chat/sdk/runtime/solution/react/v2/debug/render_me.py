@@ -6,6 +6,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import Timel
 
 runtime = RuntimeCtx()
 timeline_path = "/private/tmp/ctx_v2_a8en15mb/out/timeline.json"
+timeline_path = "/private/tmp/ctx_v2_gejt514p/out/timeline.json"
 with open(timeline_path, "r") as f:
     timeline_dict = json.loads(f.read())
 

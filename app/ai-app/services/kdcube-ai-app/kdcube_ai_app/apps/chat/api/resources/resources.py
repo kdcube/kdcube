@@ -4,8 +4,8 @@
 # chat/api/resources/resources.py
 from typing import List, Dict, Any, Optional
 import logging
-import json, io, mimetypes
-from urllib.parse import unquote
+import json, io, mimetypes, re
+from urllib.parse import unquote, quote
 
 from pydantic import BaseModel
 from fastapi import Depends, HTTPException, APIRouter, Request
@@ -41,8 +41,19 @@ class RNContentResponse(BaseModel):
 
 def _ok_headers(filename: str, mime: str, as_attachment: bool) -> dict:
     disp = "attachment" if as_attachment else "inline"
+    def _ascii_fallback(name: str) -> str:
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name or "").strip("._")
+        return safe or "file"
+    def _content_disposition(name: str) -> str:
+        try:
+            name.encode("latin-1")
+            return f'{disp}; filename="{name}"'
+        except Exception:
+            ascii_name = _ascii_fallback(name)
+            encoded = quote(name or "", safe="")
+            return f"{disp}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
     return {
-        "Content-Disposition": f'{disp}; filename="{filename}"',
+        "Content-Disposition": _content_disposition(filename),
         "Content-Type": mime,
     }
 

@@ -825,6 +825,17 @@ class ReactSolverV2:
         logging_helpers.log_agent_packet(role, "react.decision.v2", decision)
         error = (decision.get("log") or {}).get("error")
 
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.round import ReactRound
+            ReactRound.thinking(
+                ctx_browser=self.ctx_browser,
+                decision=decision,
+                title=f"solver.react.v2.decision ({iteration})",
+                iteration=iteration,
+            )
+        except Exception:
+            pass
+
         notes = None
         action = None
         tool_id = ""

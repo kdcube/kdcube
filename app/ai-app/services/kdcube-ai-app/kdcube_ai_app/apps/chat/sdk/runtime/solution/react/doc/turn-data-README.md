@@ -38,8 +38,8 @@ Expected types:
 - `artifact:user.attachment` (from turn log)
 - `artifact:assistant.file` (from turn log; external only)
 - `artifact:solver.program.citables` (from turn log sources_pool)
-- `artifact:conv.thinking.stream` (optional, emitted by communicator)
-- `artifact:conv.timeline_text.stream` (optional, emitted by communicator)
+- `artifact:conv.thinking.stream` (optional, synthesized from turn log)
+- `artifact:conv.timeline_text.stream` (optional, synthesized from turn log)
 - `artifact:conv.artifacts.stream` (optional, emitted by communicator)
 - `artifact:conv.user_shortcuts` (from turn log follow‑ups)
 - `artifact:conv.clarification_questions` (from turn log clarification stage)
@@ -97,7 +97,8 @@ From the reconstructed turn view:
 - **Display artifacts** (`kind=display`) are not emitted as `artifact:assistant.file`.
   If UI needs them, they must be surfaced via stream artifacts (conv.timeline_text.stream)
   or by adding a new artifact type.
-- Stream artifacts are still emitted by communicator and persisted by base workflow.
+- Stream artifacts `conv.thinking.stream` and `conv.timeline_text.stream` are now **synthesized**
+  from the turn log timeline (no longer persisted blobs).
 
 ## Action items
 - Decide whether display artifacts should be included in fetch output.

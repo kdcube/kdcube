@@ -28,9 +28,9 @@ _TEXT_MIMES = {
     "application/sql", "text/x-sql",
 }
 
-_CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|attachments)/[A-Za-z0-9_./\\-]+)")
-_REL_FILES_RE = re.compile(r"(?<![A-Za-z0-9_])files/[A-Za-z0-9_./\\-]+")
-_REL_ATTACHMENTS_RE = re.compile(r"(?<![A-Za-z0-9_])attachments/[A-Za-z0-9_./\\-]+")
+_CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|attachments)/[^\s'\"\)\];,]+)")
+_REL_FILES_RE = re.compile(r"(?<![A-Za-z0-9_])files/[^\s'\"\)\];,]+")
+_REL_ATTACHMENTS_RE = re.compile(r"(?<![A-Za-z0-9_])attachments/[^\s'\"\)\];,]+")
 _FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
 
 
@@ -836,6 +836,23 @@ class ApplicationHostingService:
         """
         if not self.comm:
             return
+        cleaned_files: List[Dict[str, Any]] = []
+        for item in files or []:
+            if not isinstance(item, dict):
+                continue
+            payload = dict(item)
+            data = payload.get("data")
+            if isinstance(data, dict):
+                meta = data.get("meta")
+                if isinstance(meta, dict):
+                    filename = meta.get("filename")
+                    if isinstance(filename, str) and filename.strip():
+                        meta = dict(meta)
+                        meta["filename"] = filename.strip().split("/")[-1]
+                        data = dict(data)
+                        data["meta"] = meta
+                        payload["data"] = data
+            cleaned_files.append(payload)
         if files:
             await self.comm.event(
                 agent="tooling",
@@ -843,7 +860,7 @@ class ApplicationHostingService:
                 title=f"Files Ready ({len(files)})",
                 step="files",
                 status="completed",
-                data={"count": len(files), "items": files},
+                data={"count": len(cleaned_files), "items": cleaned_files},
             )
         if citations:
             await self.comm.event(

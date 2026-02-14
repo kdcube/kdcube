@@ -25,9 +25,7 @@ logger = logging.getLogger(__name__)
 TURN_LOG_TAGS_BASE = ["kind:turn.log", "artifact:turn.log"]
 
 UI_ARTIFACT_TAGS = {
-    "artifact:conv.thinking.stream",
     "artifact:conv.artifacts.stream",
-    "artifact:conv.timeline_text.stream",
     "artifact:user.attachment",
     "artifact:turn.log.reaction",
     "artifact:conv.user_shortcuts",
@@ -176,27 +174,6 @@ class ContextRAGClient:
             return False
 
         kind = meta.get("kind")
-        if kind == "conv.timeline_text.stream":
-            try:
-                items = payload.get("items") if isinstance(payload, dict) else None
-                if isinstance(items, list) and items:
-                    # TODO: remove this filter once timeline channels are persisted directly (no stream duplication).
-                    if items[-1].get("artifact_name", "").startswith("react.final_answer."):
-                        items = list(items[:-1])
-                    payload["items"] = items
-                text_val = data.get("text")
-                if isinstance(text_val, str) and text_val.strip():
-                    try:
-                        idx_items = json.loads(text_val)
-                        if isinstance(idx_items, list) and idx_items:
-                            # TODO: remove this filter once timeline channels are persisted directly (no stream duplication).
-                            if idx_items[-1].get("artifact_name", "").startswith("react.final_answer."):
-                                idx_items = list(idx_items[:-1])
-                            data["text"] = json.dumps(idx_items, ensure_ascii=False)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
 
         item["data"] = data
         return True
@@ -1852,18 +1829,18 @@ class ContextRAGClient:
                 limit=1,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                with_payload=True,
+                with_payload=False,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
-                payload = unwrap_payload(ws_items[0]) or {}
-                parsed = parse_timeline_payload(payload)
-                title = (parsed.get("conversation_title") or "").strip()
+                timeline_metadata = ws_items[0]
+                timeline_metadata = json.loads(timeline_metadata.get("text") or "") or {}
+                title = (timeline_metadata.get("conversation_title") or "").strip()
                 if title:
                     conversation_title = title
-                conversation_started_at = (parsed.get("conversation_started_at") or "").strip() or None
-                if isinstance(parsed.get("sources_pool"), list):
-                    sources_pool = parsed.get("sources_pool") or []
+                conversation_started_at = (timeline_metadata.get("conversation_started_at") or "").strip() or None
+                if isinstance(timeline_metadata.get("sources_pool"), list):
+                    sources_pool = timeline_metadata.get("sources_pool") or []
         except Exception:
             conversation_title = None
             conversation_started_at = None
@@ -2004,17 +1981,17 @@ class ContextRAGClient:
                 days=days,
                 user_id=user_id,
                 conversation_id=conversation_id,
-                with_payload=True,
+                with_payload=False,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
-                payload = unwrap_payload(ws_items[0]) or {}
-                parsed = parse_timeline_payload(payload)
-                title = (parsed.get("conversation_title") or "").strip()
+                timeline_metadata = ws_items[0]
+                timeline_metadata = json.loads(timeline_metadata.get("text") or "") or {}
+                title = (timeline_metadata.get("conversation_title") or "").strip()
                 if title:
                     conversation_title = title
-                if isinstance(parsed.get("sources_pool"), list):
-                    timeline_sources_pool = parsed.get("sources_pool") or []
+                if isinstance(timeline_metadata.get("sources_pool"), list):
+                    timeline_sources_pool = timeline_metadata.get("sources_pool") or []
                 logger.info(
                     "fetch_conversation_artifacts: timeline title=%s conversation_id=%s items=%d",
                     "set" if conversation_title else "missing",
@@ -2207,6 +2184,73 @@ class ContextRAGClient:
                         "hosted_uri": None,
                         "bundle_id": turn_log_item.get("bundle_id"),
                         "data": {"payload": {"items": clar_qs}, "meta": {"kind": "conv.clarification_questions", "turn_id": tid}},
+                    })
+
+                timeline_items = [i for i in (view.get("timeline_text") or []) if isinstance(i, dict) and i.get("text")]
+                if timeline_items:
+                    cleaned: List[Dict[str, Any]] = []
+                    for it in timeline_items:
+                        item: Dict[str, Any] = {}
+                        for key in ("artifact_name", "text", "ts_first", "ts_last"):
+                            val = it.get(key)
+                            if val is not None:
+                                item[key] = val
+                        if item.get("text"):
+                            cleaned.append(item)
+                    if cleaned:
+                        out.append({
+                            "message_id": None,
+                            "type": "artifact:conv.timeline_text.stream",
+                            "ts": ts,
+                            "hosted_uri": None,
+                            "bundle_id": turn_log_item.get("bundle_id"),
+                            "data": {
+                                "payload": {"version": "v1", "items": cleaned},
+                                "meta": {"kind": "conv.timeline_text.stream", "turn_id": tid},
+                            },
+                        })
+
+                # Thinking blocks (from timeline) -> synthesize stream items for UI.
+                thinking_items: List[Dict[str, Any]] = []
+                for blk in blocks:
+                    if not isinstance(blk, dict):
+                        continue
+                    if blk.get("turn_id") != tid:
+                        continue
+                    if (blk.get("type") or "") != "react.thinking":
+                        continue
+                    txt = blk.get("text")
+                    if not isinstance(txt, str) or not txt.strip():
+                        continue
+                    meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+                    title = (meta.get("title") or "").strip() or "react"
+                    ts_val = blk.get("ts") or ts
+                    ts_ms = None
+                    try:
+                        sec = ts_key(ts_val)
+                        if sec != float("-inf"):
+                            ts_ms = int(sec * 1000)
+                    except Exception:
+                        ts_ms = None
+                    item = {
+                        "agent": title,
+                        "text": txt,
+                    }
+                    if ts_ms is not None:
+                        item["ts_first"] = ts_ms
+                        item["ts_last"] = ts_ms
+                    thinking_items.append(item)
+                if thinking_items:
+                    out.append({
+                        "message_id": None,
+                        "type": "artifact:conv.thinking.stream",
+                        "ts": ts,
+                        "hosted_uri": None,
+                        "bundle_id": turn_log_item.get("bundle_id"),
+                        "data": {
+                            "payload": {"version": "v1", "items": thinking_items},
+                            "meta": {"kind": "conv.thinking.stream", "turn_id": tid},
+                        },
                     })
 
             # Synthesized artifacts expected by frontend from turn_log data

@@ -735,6 +735,20 @@ def apply_cache_ttl_pruning(
     after_tokens = _estimate_blocks_tokens_safe(blocks)
     try:
         ttl_msg = _build_prune_message_text(ttl_seconds)
+        pruned_tokens = max(0, (before_tokens or 0) - (after_tokens or 0))
+        had_effect = (
+            bool(hidden_paths)
+            or bool(hidden_recent_paths)
+            or before_blocks != after_blocks
+            or pruned_tokens > 0
+        )
+        if not had_effect:
+            return {
+                "status": "no_effect",
+                "hidden_paths": hidden_paths,
+                "skip_old_turns": bool(skip_old_turns),
+                "truncated_blocks": 0,
+            }
         # One-time announce message (after budget in announce stack).
         if isinstance(getattr(timeline, "announce_blocks", None), list):
             timeline.announce_blocks.append({"text": ttl_msg, "type": "system.message"})

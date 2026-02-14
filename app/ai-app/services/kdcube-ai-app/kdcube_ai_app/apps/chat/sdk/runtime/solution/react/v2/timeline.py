@@ -22,7 +22,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     dedupe_sources_by_url,
     normalize_sources_any,
 )
-from kdcube_ai_app.apps.chat.sdk.util import token_count, isoz
+from kdcube_ai_app.apps.chat.sdk.util import token_count, isoz, ts_key
 
 TIMELINE_KIND = "conv.timeline.v1"
 SOURCES_POOL_KIND = "conv:sources_pool"
@@ -422,6 +422,7 @@ def _build_turn_view(
     suggested_followups = extract_followups_from_blocks(blocks)
     clarifications = extract_clarification_questions_from_blocks(blocks)
     used_sources = materialize_sources_by_sids(sources_pool, used_sids)
+    timeline_text_items = _extract_timeline_text_items(blocks, turn_id)
     return {
         "turn_id": turn_id,
         "user": {
@@ -435,9 +436,90 @@ def _build_turn_view(
         "attachments": attachments,
         "files": files,
         "citations": used_sources,
+        "timeline_text": timeline_text_items,
         "followups": suggested_followups,
         "clarification_questions": clarifications,
     }
+
+
+def _extract_timeline_text_items(blocks: List[Dict[str, Any]], turn_id: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if not blocks or not turn_id:
+        return items
+    text_by_path: Dict[str, Dict[str, Any]] = {}
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        if b.get("turn_id") != turn_id:
+            continue
+        path = (b.get("path") or "").strip()
+        if path and isinstance(b.get("text"), str):
+            text_by_path[path] = b
+
+    def _to_ms(ts_val: str) -> Optional[int]:
+        if not ts_val:
+            return None
+        try:
+            sec = ts_key(ts_val)
+            if sec == float("-inf"):
+                return None
+            return int(sec * 1000)
+        except Exception:
+            return None
+
+    idx = 0
+    for b in blocks:
+        if not isinstance(b, dict):
+            continue
+        if b.get("turn_id") != turn_id:
+            continue
+        btype = b.get("type") or ""
+        if btype == "react.notes":
+            text = b.get("text") or ""
+            if not isinstance(text, str) or not text.strip():
+                continue
+            ts_val = (b.get("ts") or "").strip()
+            ts_ms = _to_ms(ts_val)
+            item = {
+                "artifact_name": f"timeline_text.react.notes.{idx}",
+                "text": text,
+            }
+            if ts_ms is not None:
+                item["ts_first"] = ts_ms
+                item["ts_last"] = ts_ms
+            items.append(item)
+            idx += 1
+            continue
+        if btype != "react.tool.result":
+            continue
+        if (b.get("mime") or "").strip() != "application/json":
+            continue
+        meta = _parse_meta_json(b.get("text") or "")
+        if not isinstance(meta, dict):
+            continue
+        if (meta.get("channel") or "").strip() != "timeline_text":
+            continue
+        ap = (meta.get("artifact_path") or "").strip()
+        if not ap:
+            continue
+        content_block = text_by_path.get(ap)
+        if not content_block:
+            continue
+        content = content_block.get("text")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        ts_val = (content_block.get("ts") or b.get("ts") or "").strip()
+        ts_ms = _to_ms(ts_val)
+        item = {
+            "artifact_name": f"timeline_text.{turn_id}.{idx}",
+            "text": content,
+        }
+        if ts_ms is not None:
+            item["ts_first"] = ts_ms
+            item["ts_last"] = ts_ms
+        items.append(item)
+        idx += 1
+    return items
 
 
 def materialize_sources_by_sids(pool: List[Dict[str, Any]], sids: List[int]) -> List[Dict[str, Any]]:
@@ -1719,6 +1801,19 @@ class Timeline:
                 return "tc_????"
             return f"tc_{raw[:4]}"
 
+        def _call_id_from_path(p: str) -> str:
+            if not p:
+                return ""
+            try:
+                # tc:<turn_id>.tool_calls.<call_id>.out.json
+                if ".tool_calls." in p:
+                    tail = p.split(".tool_calls.", 1)[1]
+                    call_id = tail.split(".", 1)[0]
+                    return call_id
+            except Exception:
+                pass
+            return ""
+
         def _ts_line(val: str) -> str:
             return f"[ts: {val}]" if val else ""
 
@@ -1766,9 +1861,9 @@ class Timeline:
                 turn_id = b.get("turn_id") or ""
                 started_at = ts
                 if started_at:
-                    text = f"[TURN {turn_id} (started at {started_at})]"
+                    text = f"════════\n[TURN {turn_id} (started at {started_at})]"
                 else:
-                    text = f"[TURN {turn_id}]"
+                    text = f"════════\n[TURN {turn_id}]"
             elif btype == "user.prompt":
                 lines = []
                 ts_line = _ts_line(ts)
@@ -1834,6 +1929,8 @@ class Timeline:
                     params = payload.get("params")
                 if not tool_call_id:
                     tool_call_id = (b.get("call_id") or "").strip()
+                if not tool_call_id:
+                    tool_call_id = _call_id_from_path(path)
                 short_id = _short_tc_id(tool_call_id)
                 lines = [""]
                 ts_line = _ts_line(ts)
@@ -1861,6 +1958,8 @@ class Timeline:
             elif btype == "react.tool.result":
                 mime_val = (b.get("mime") or "").strip()
                 tool_call_id = (b.get("call_id") or "").strip()
+                if not tool_call_id:
+                    tool_call_id = _call_id_from_path(path)
                 short_id = _short_tc_id(tool_call_id)
                 if mime_val == "application/json" and isinstance(text, str):
                     payload = _maybe_parse_json(text)
@@ -1957,6 +2056,15 @@ class Timeline:
                             header += f" artifact_path: {range_path}"
                         lines.append(header)
                         # keep payload as-is
+                        lines.append(text)
+                        text = "\n".join([l for l in lines if l]).strip()
+                    elif isinstance(payload, dict):
+                        # Generic JSON payload (e.g. legacy fetch map): add tool result header.
+                        lines = []
+                        ts_line = _ts_line(ts)
+                        if ts_line:
+                            lines.append(ts_line)
+                        lines.append(f"[TOOL RESULT {short_id}]")
                         lines.append(text)
                         text = "\n".join([l for l in lines if l]).strip()
                 elif isinstance(text, str):
@@ -2062,6 +2170,7 @@ class Timeline:
                 "last_activity_at": payload.get("last_activity_at") or "",
                 "blocks_count": len(payload.get("blocks") or []),
                 "sources_pool_count": len(self.sources_pool or []),
+                "sources_pool": _compact_sources_pool_for_index(self.sources_pool or []),
                 "turn_ids": turn_ids,
             },
             ensure_ascii=False,
