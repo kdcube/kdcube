@@ -473,6 +473,251 @@ class ArtifactView:
             files.append(rec)
         return files
 
+    def save_inline(
+            self,
+            *,
+            workdir: pathlib.Path,
+            filename_hint: Optional[str] = None,
+            mime_hint: Optional[str] = None,
+            visibility: Optional[str] = None,
+    ) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+        artifact = dict(self.raw or {})
+        value = artifact.get("value")
+        artifact_id = (artifact.get("artifact_id") or "").strip()
+
+        # If already marked as file, ensure the file exists on disk.
+        if isinstance(value, dict) and value.get("type") == "file":
+            path = value.get("path")
+            if isinstance(path, str) and path.strip():
+                file_path = pathlib.Path(path)
+                if not file_path.is_absolute():
+                    file_path = workdir / file_path
+                if not file_path.exists():
+                    text = value.get("text")
+                    if text is None:
+                        text = value.get("content")
+                    if text is None:
+                        try:
+                            text = json.dumps(value, ensure_ascii=False, indent=2)
+                        except Exception:
+                            text = ""
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(str(text), encoding="utf-8")
+            return artifact, None
+
+        if (artifact.get("artifact_kind") or "").strip() == "file":
+            return artifact, None
+
+        text = None
+        fmt = None
+        if isinstance(value, dict):
+            fmt = value.get("format") if isinstance(value.get("format"), str) else None
+            if isinstance(value.get("content"), str):
+                text = value.get("content")
+            elif isinstance(value.get("text"), str):
+                text = value.get("text")
+        if text is None and isinstance(value, str):
+            text = value
+
+        if text is None:
+            try:
+                text = json.dumps(value, ensure_ascii=False, indent=2)
+                fmt = fmt or "json"
+            except Exception:
+                return artifact, None
+
+        ext = "txt"
+        if isinstance(fmt, str):
+            f = fmt.strip().lower()
+            if f in {"md", "markdown"}:
+                ext = "md"
+            elif f in {"json"}:
+                ext = "json"
+            elif f in {"html", "htm"}:
+                ext = "html"
+            elif f in {"yaml", "yml"}:
+                ext = "yaml"
+
+        files_dir = workdir
+        files_dir.mkdir(parents=True, exist_ok=True)
+        filename = str(filename_hint).strip() if isinstance(filename_hint, str) and filename_hint.strip() else ""
+        if not filename:
+            filename = (self.filename or "").strip()
+        if not filename:
+            filename = f"{artifact_id or 'artifact'}.{ext}"
+        elif "." not in filename:
+            filename = f"{filename}.{ext}"
+        file_path = files_dir / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(text, encoding="utf-8")
+
+        mime = str(mime_hint).strip() if isinstance(mime_hint, str) and mime_hint.strip() else ""
+        if not mime:
+            mime = (self.mime or "").strip()
+        if not mime:
+            try:
+                from kdcube_ai_app.tools.content_type import get_mime_type_enhanced
+                mime = get_mime_type_enhanced(filename)
+            except Exception:
+                mime = ""
+        if not mime:
+            if ext == "md":
+                mime = "text/markdown"
+            elif ext == "json":
+                mime = "application/json"
+            elif ext == "html":
+                mime = "text/html"
+            elif ext == "yaml":
+                mime = "application/x-yaml"
+            else:
+                mime = "text/plain"
+
+        if not (artifact.get("artifact_kind") or "").strip():
+            artifact["artifact_kind"] = "file"
+        final_visibility = visibility or (self.visibility or "").strip() or None
+        if final_visibility:
+            artifact["visibility"] = final_visibility
+        artifact["value"] = {
+            "type": "file",
+            "path": filename,
+            "text": text,
+            "mime": mime,
+            "filename": filename,
+        }
+        produced_file = {
+            "filename": filename,
+            "path": filename,
+            "artifact_name": artifact_id,
+            "mime": mime,
+            "size": len(text.encode("utf-8")),
+            "summary": artifact.get("summary") or "",
+            "visibility": final_visibility or "internal",
+            "kind": (artifact.get("artifact_kind") or "file"),
+        }
+        return artifact, produced_file
+
+
+    def physical_path(self, *, run_outdir: pathlib.Path) -> pathlib.Path:
+        """
+        Engineering helper: resolve absolute path for execution / IO.
+        Do NOT use for journal/presentation (those use OUT_DIR-relative paths).
+        """
+        if self.path:
+            return pathlib.Path(run_outdir) / self.path
+        return pathlib.Path("")
+
+    def artifact_path(self) -> str:
+        if self.turn_id and self.path:
+            return f"fi:{self.turn_id}.files/{self.path}"
+        return ""
+
+    def to_historical_format(self, *, max_tokens: int = 200) -> List[str]:
+        lines: List[str] = []
+        name = self.path or self.filename or "artifact"
+        lines.append(f"- {name}")
+        art_path = self.artifact_path() or (f"fi:{self.turn_id}.files" if self.turn_id else "")
+        if art_path:
+            lines.append(f"    artifact_path: {art_path}")
+        phys = f"{self.turn_id}/files/{self.path}" if self.turn_id and self.path else ""
+        if phys:
+            lines.append(f"    physical_path: {phys}")
+        meta = []
+        if self.tool_id:
+            meta.append(f"tool={self.tool_id}")
+        if self.tool_call_id:
+            meta.append(f"tool_call_id={self.tool_call_id}")
+        if self.kind:
+            meta.append(f"kind={self.kind}")
+        if self.visibility:
+            meta.append(f"visibility={self.visibility}")
+        if self.channel:
+            meta.append(f"channel={self.channel}")
+        if self.mime:
+            meta.append(f"mime={self.mime}")
+        if self.size_bytes is not None:
+            meta.append(f"size={self.size_bytes}B")
+        if meta:
+            lines.append("    meta: " + "; ".join(meta))
+        used_sids: List[str] = []
+        for s in self.sources_used or []:
+            if isinstance(s, (int, float)):
+                used_sids.append(f"S{int(s)}")
+            elif isinstance(s, dict) and isinstance(s.get("sid"), (int, float)):
+                used_sids.append(f"S{int(s.get('sid'))}")
+        if used_sids:
+            lines.append("    sources_used: " + ", ".join(used_sids))
+
+        content = (self.text or "").strip()
+        if content:
+            if token_count(content) <= max_tokens:
+                lines.append("    content:")
+                lines.append("    ```text")
+                lines.append(content)
+                lines.append("    ```")
+            elif self.summary:
+                lines.append(f"    summary: {self.summary}")
+            else:
+                lines.append("    content:")
+                lines.append("    ```text")
+                lines.append(_truncate(content, 1000))
+                lines.append("    ```")
+        elif self.summary:
+            lines.append(f"    summary: {self.summary}")
+        return lines
+
+    def to_current_format(self, *, max_tokens: int = 200, fallback_name: Optional[str] = None) -> List[str]:
+        lines: List[str] = []
+        name = self.path or self.filename or (fallback_name or "artifact")
+        lines.append(f"- {name}")
+        art_path = self.artifact_path() or (f"fi:{self.turn_id}.files" if self.turn_id else "")
+        if art_path:
+            lines.append(f"    artifact_path: {art_path}")
+        if self.turn_id and self.path:
+            lines.append(f"    physical_path: {self.turn_id}/files/{self.path}")
+        meta = []
+        if self.tool_id:
+            meta.append(f"tool={self.tool_id}")
+        if self.tool_call_id:
+            meta.append(f"tool_call_id={self.tool_call_id}")
+        if self.kind:
+            meta.append(f"kind={self.kind}")
+        if self.visibility:
+            meta.append(f"visibility={self.visibility}")
+        if self.channel:
+            meta.append(f"channel={self.channel}")
+        if self.mime:
+            meta.append(f"mime={self.mime}")
+        if self.size_bytes is not None:
+            meta.append(f"size={self.size_bytes}B")
+        if meta:
+            lines.append("    meta: " + "; ".join(meta))
+        used_sids: List[str] = []
+        for s in self.sources_used or []:
+            if isinstance(s, (int, float)):
+                used_sids.append(f"S{int(s)}")
+            elif isinstance(s, dict) and isinstance(s.get("sid"), (int, float)):
+                used_sids.append(f"S{int(s.get('sid'))}")
+        if used_sids:
+            lines.append("    sources_used: " + ", ".join(used_sids))
+
+        content = (self.text or "").strip()
+        if content:
+            if token_count(content) <= max_tokens:
+                lines.append("    content:")
+                lines.append("    ```text")
+                lines.append(content)
+                lines.append("    ```")
+            elif self.summary:
+                lines.append(f"    summary: {self.summary}")
+            else:
+                lines.append("    content:")
+                lines.append("    ```text")
+                lines.append(_truncate(content, 1000))
+                lines.append("    ```")
+        elif self.summary:
+            lines.append(f"    summary: {self.summary}")
+        return lines
+
 
 def normalize_file_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -486,246 +731,3 @@ def normalize_file_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         out["filename"] = filename.strip().split("/")[-1]
     return out
 
-def save_inline(
-    self,
-    *,
-    workdir: pathlib.Path,
-    filename_hint: Optional[str] = None,
-    mime_hint: Optional[str] = None,
-    visibility: Optional[str] = None,
-) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
-    artifact = dict(self.raw or {})
-    value = artifact.get("value")
-    artifact_id = (artifact.get("artifact_id") or "").strip()
-
-    # If already marked as file, ensure the file exists on disk.
-    if isinstance(value, dict) and value.get("type") == "file":
-        path = value.get("path")
-        if isinstance(path, str) and path.strip():
-            file_path = pathlib.Path(path)
-            if not file_path.is_absolute():
-                file_path = workdir / file_path
-            if not file_path.exists():
-                text = value.get("text")
-                if text is None:
-                    text = value.get("content")
-                if text is None:
-                    try:
-                        text = json.dumps(value, ensure_ascii=False, indent=2)
-                    except Exception:
-                        text = ""
-                file_path.parent.mkdir(parents=True, exist_ok=True)
-                file_path.write_text(str(text), encoding="utf-8")
-        return artifact, None
-
-    if (artifact.get("artifact_kind") or "").strip() == "file":
-        return artifact, None
-
-    text = None
-    fmt = None
-    if isinstance(value, dict):
-        fmt = value.get("format") if isinstance(value.get("format"), str) else None
-        if isinstance(value.get("content"), str):
-            text = value.get("content")
-        elif isinstance(value.get("text"), str):
-            text = value.get("text")
-    if text is None and isinstance(value, str):
-        text = value
-
-    if text is None:
-        try:
-            text = json.dumps(value, ensure_ascii=False, indent=2)
-            fmt = fmt or "json"
-        except Exception:
-            return artifact, None
-
-    ext = "txt"
-    if isinstance(fmt, str):
-        f = fmt.strip().lower()
-        if f in {"md", "markdown"}:
-            ext = "md"
-        elif f in {"json"}:
-            ext = "json"
-        elif f in {"html", "htm"}:
-            ext = "html"
-        elif f in {"yaml", "yml"}:
-            ext = "yaml"
-
-    files_dir = workdir
-    files_dir.mkdir(parents=True, exist_ok=True)
-    filename = str(filename_hint).strip() if isinstance(filename_hint, str) and filename_hint.strip() else ""
-    if not filename:
-        filename = (self.filename or "").strip()
-    if not filename:
-        filename = f"{artifact_id or 'artifact'}.{ext}"
-    elif "." not in filename:
-        filename = f"{filename}.{ext}"
-    file_path = files_dir / filename
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text(text, encoding="utf-8")
-
-    mime = str(mime_hint).strip() if isinstance(mime_hint, str) and mime_hint.strip() else ""
-    if not mime:
-        mime = (self.mime or "").strip()
-    if not mime:
-        try:
-            from kdcube_ai_app.tools.content_type import get_mime_type_enhanced
-            mime = get_mime_type_enhanced(filename)
-        except Exception:
-            mime = ""
-    if not mime:
-        if ext == "md":
-            mime = "text/markdown"
-        elif ext == "json":
-            mime = "application/json"
-        elif ext == "html":
-            mime = "text/html"
-        elif ext == "yaml":
-            mime = "application/x-yaml"
-        else:
-            mime = "text/plain"
-
-    if not (artifact.get("artifact_kind") or "").strip():
-        artifact["artifact_kind"] = "file"
-    final_visibility = visibility or (self.visibility or "").strip() or None
-    if final_visibility:
-        artifact["visibility"] = final_visibility
-    artifact["value"] = {
-        "type": "file",
-        "path": filename,
-        "text": text,
-        "mime": mime,
-        "filename": filename,
-    }
-    produced_file = {
-        "filename": filename,
-        "path": filename,
-        "artifact_name": artifact_id,
-        "mime": mime,
-        "size": len(text.encode("utf-8")),
-        "summary": artifact.get("summary") or "",
-        "visibility": final_visibility or "internal",
-        "kind": (artifact.get("artifact_kind") or "file"),
-    }
-    return artifact, produced_file
-
-def physical_path(self, *, run_outdir: pathlib.Path) -> pathlib.Path:
-    """
-    Engineering helper: resolve absolute path for execution / IO.
-    Do NOT use for journal/presentation (those use OUT_DIR-relative paths).
-    """
-    if self.path:
-        return pathlib.Path(run_outdir) / self.path
-    return pathlib.Path("")
-
-def artifact_path(self) -> str:
-    if self.turn_id and self.path:
-        return f"fi:{self.turn_id}.files/{self.path}"
-    return ""
-
-def to_historical_format(self, *, max_tokens: int = 200) -> List[str]:
-    lines: List[str] = []
-    name = self.path or self.filename or "artifact"
-    lines.append(f"- {name}")
-    art_path = self.artifact_path() or (f"fi:{self.turn_id}.files" if self.turn_id else "")
-    if art_path:
-        lines.append(f"    artifact_path: {art_path}")
-    phys = f"{self.turn_id}/files/{self.path}" if self.turn_id and self.path else ""
-    if phys:
-        lines.append(f"    physical_path: {phys}")
-    meta = []
-    if self.tool_id:
-        meta.append(f"tool={self.tool_id}")
-    if self.tool_call_id:
-        meta.append(f"tool_call_id={self.tool_call_id}")
-    if self.kind:
-        meta.append(f"kind={self.kind}")
-    if self.visibility:
-        meta.append(f"visibility={self.visibility}")
-    if self.channel:
-        meta.append(f"channel={self.channel}")
-    if self.mime:
-        meta.append(f"mime={self.mime}")
-    if self.size_bytes is not None:
-        meta.append(f"size={self.size_bytes}B")
-    if meta:
-        lines.append("    meta: " + "; ".join(meta))
-    used_sids: List[str] = []
-    for s in self.sources_used or []:
-        if isinstance(s, (int, float)):
-            used_sids.append(f"S{int(s)}")
-        elif isinstance(s, dict) and isinstance(s.get("sid"), (int, float)):
-            used_sids.append(f"S{int(s.get('sid'))}")
-    if used_sids:
-        lines.append("    sources_used: " + ", ".join(used_sids))
-
-    content = (self.text or "").strip()
-    if content:
-        if token_count(content) <= max_tokens:
-            lines.append("    content:")
-            lines.append("    ```text")
-            lines.append(content)
-            lines.append("    ```")
-        elif self.summary:
-            lines.append(f"    summary: {self.summary}")
-        else:
-            lines.append("    content:")
-            lines.append("    ```text")
-            lines.append(_truncate(content, 1000))
-            lines.append("    ```")
-    elif self.summary:
-        lines.append(f"    summary: {self.summary}")
-    return lines
-
-def to_current_format(self, *, max_tokens: int = 200, fallback_name: Optional[str] = None) -> List[str]:
-    lines: List[str] = []
-    name = self.path or self.filename or (fallback_name or "artifact")
-    lines.append(f"- {name}")
-    art_path = self.artifact_path() or (f"fi:{self.turn_id}.files" if self.turn_id else "")
-    if art_path:
-        lines.append(f"    artifact_path: {art_path}")
-    if self.turn_id and self.path:
-        lines.append(f"    physical_path: {self.turn_id}/files/{self.path}")
-    meta = []
-    if self.tool_id:
-        meta.append(f"tool={self.tool_id}")
-    if self.tool_call_id:
-        meta.append(f"tool_call_id={self.tool_call_id}")
-    if self.kind:
-        meta.append(f"kind={self.kind}")
-    if self.visibility:
-        meta.append(f"visibility={self.visibility}")
-    if self.channel:
-        meta.append(f"channel={self.channel}")
-    if self.mime:
-        meta.append(f"mime={self.mime}")
-    if self.size_bytes is not None:
-        meta.append(f"size={self.size_bytes}B")
-    if meta:
-        lines.append("    meta: " + "; ".join(meta))
-    used_sids: List[str] = []
-    for s in self.sources_used or []:
-        if isinstance(s, (int, float)):
-            used_sids.append(f"S{int(s)}")
-        elif isinstance(s, dict) and isinstance(s.get("sid"), (int, float)):
-            used_sids.append(f"S{int(s.get('sid'))}")
-    if used_sids:
-        lines.append("    sources_used: " + ", ".join(used_sids))
-
-    content = (self.text or "").strip()
-    if content:
-        if token_count(content) <= max_tokens:
-            lines.append("    content:")
-            lines.append("    ```text")
-            lines.append(content)
-            lines.append("    ```")
-        elif self.summary:
-            lines.append(f"    summary: {self.summary}")
-        else:
-            lines.append("    content:")
-            lines.append("    ```text")
-            lines.append(_truncate(content, 1000))
-            lines.append("    ```")
-    elif self.summary:
-        lines.append(f"    summary: {self.summary}")
-    return lines
