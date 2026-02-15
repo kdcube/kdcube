@@ -736,14 +736,14 @@ class RenderingTools:
                 managed=False,
             )
 
-    @kernel_function(
-        name="write_html",
-        description=(
-            "Write an HTML file. Optionally resolves citations so [[S:n]] tokens and "
-            "<sup class=\"cite\" data-sids=\"...\">...</sup> placeholders become clickable links "
-            "(target=_blank). Returns an envelope: {ok, error}."
-        )
-    )
+    # @kernel_function(
+    #     name="write_html",
+    #     description=(
+    #         "Write an HTML file. Optionally resolves citations so [[S:n]] tokens and "
+    #         "<sup class=\"cite\" data-sids=\"...\">...</sup> placeholders become clickable links "
+    #         "(target=_blank). Returns an envelope: {ok, error}."
+    #     )
+    # )
     async def write_html(
         self,
         path: Annotated[str, "Destination .html path under OUTPUT_DIR (relative path)."],

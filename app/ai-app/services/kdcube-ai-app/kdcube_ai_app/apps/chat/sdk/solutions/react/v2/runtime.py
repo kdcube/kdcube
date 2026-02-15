@@ -455,16 +455,43 @@ class ReactSolverV2:
                 "message": "tool_call.tool_id is missing or empty",
             })
         else:
-            if tool_id not in adapters_by_id and tool_id not in {"react.read", "react.write"}:
+            react_tool_ids = {
+                "react.read",
+                "react.write",
+                "react.plan",
+                "react.hide",
+                "react.memsearch",
+                "react.patch",
+                "react.search_files",
+            }
+            if tool_id not in adapters_by_id and tool_id not in react_tool_ids:
                 violations.append({
                     "code": "unknown_tool_id",
                     "message": f"tool_id '{tool_id}' is not in adapters/available tools",
                     "tool_id": tool_id,
                 })
         allowed_params: set[str] = set()
-        if tool_id in {"react.read", "react.write"}:
+        if tool_id in {
+            "react.read",
+            "react.write",
+            "react.plan",
+            "react.hide",
+            "react.memsearch",
+            "react.patch",
+            "react.search_files",
+        }:
             if tool_id == "react.read":
                 allowed_params.update({"paths"})
+            elif tool_id == "react.plan":
+                allowed_params.update({"mode", "steps"})
+            elif tool_id == "react.hide":
+                allowed_params.update({"path", "replacement"})
+            elif tool_id == "react.memsearch":
+                allowed_params.update({"query", "targets", "top_k", "days"})
+            elif tool_id == "react.patch":
+                allowed_params.update({"path", "channel", "patch", "kind"})
+            elif tool_id == "react.search_files":
+                allowed_params.update({"name_regex", "content_regex", "max_files", "max_bytes", "max_hits"})
             else:
                 allowed_params.update({"path", "channel", "content", "kind"})
         else:

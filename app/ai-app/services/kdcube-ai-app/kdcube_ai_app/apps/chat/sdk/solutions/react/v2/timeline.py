@@ -1939,6 +1939,35 @@ class Timeline:
             return f"so:sources_pool[{sids[0]}-{sids[-1]}]"
 
         out: List[Dict[str, Any]] = []
+        current_round_id: Optional[str] = None
+        round_idx = 0
+
+        def _round_header(idx: int) -> str:
+            return f"┌──────── ROUND {idx} ────────┐"
+
+        def _round_footer() -> str:
+            return "└────────────────────────┘"
+
+        def _indent_text_block(val: str) -> str:
+            if not val:
+                return val
+            return "\n".join(("  " + line) if line else "  " for line in val.splitlines())
+
+        def _extract_round_id(blk: Dict[str, Any]) -> Optional[str]:
+            btype_local = (blk.get("type") or "")
+            meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            if btype_local == "react.notes":
+                if (meta_local.get("action") or "").strip() == "call_tool":
+                    rid = (meta_local.get("tool_call_id") or meta_local.get("call_id") or "").strip()
+                    if rid:
+                        return rid
+            if btype_local in {"react.tool.call", "react.tool.result", "react.notice", "react.tool.code"}:
+                rid = (blk.get("call_id") or meta_local.get("tool_call_id") or "").strip()
+                if not rid:
+                    rid = _call_id_from_path((blk.get("path") or "").strip())
+                if rid:
+                    return rid
+            return None
         for b in (blocks or []):
             if not isinstance(b, dict):
                 continue
@@ -1949,13 +1978,38 @@ class Timeline:
             ts = str(raw_ts).strip() if raw_ts is not None else ""
             path = (b.get("path") or "").strip()
             meta = b.get("meta") if isinstance(b.get("meta"), dict) else {}
+            # Round boundaries (open/close)
+            round_id = _extract_round_id(b)
+            if round_id and round_id != current_round_id:
+                if current_round_id:
+                    out.append({"type": "text", "text": _round_footer()})
+                round_idx += 1
+                out.append({"type": "text", "text": _round_header(round_idx)})
+                current_round_id = round_id
+            elif current_round_id and not round_id:
+                out.append({"type": "text", "text": _round_footer()})
+                current_round_id = None
+
             if btype == "turn.header":
+                # Close any open round at turn boundary.
+                if current_round_id:
+                    out.append({"type": "text", "text": _round_footer()})
+                    current_round_id = None
+                round_idx = 0
                 turn_id = b.get("turn_id") or ""
                 started_at = ts
                 if started_at:
-                    text = f"════════\n[TURN {turn_id} (started at {started_at})]"
+                    text = "\n".join([
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        f"TURN {turn_id} (started at {started_at})",
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    ])
                 else:
-                    text = f"════════\n[TURN {turn_id}]"
+                    text = "\n".join([
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                        f"TURN {turn_id}",
+                        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                    ])
             elif btype == "user.prompt":
                 lines = []
                 ts_line = _ts_line(ts)
@@ -2100,6 +2154,14 @@ class Timeline:
                             if tool_id:
                                 header += f" {tool_id}"
                             lines.append(header)
+                            err = payload.get("error") or None
+                            if err:
+                                code = err.get("code") or "error"
+                                msg = err.get("message") or ""
+                                status_line = f"❌ ERROR: {code} {msg}".strip()
+                                lines.append(status_line)
+                            else:
+                                lines.append("✅ SUCCESS")
                             ap_line = (payload.get("artifact_path") or path or "").strip()
                             if ap_line:
                                 lines.append(f"artifact_path: {ap_line}")
@@ -2108,7 +2170,7 @@ class Timeline:
                             kind = (payload.get("kind") or "").strip()
                             visibility = (payload.get("visibility") or "").strip()
                             description = (payload.get("description") or "").strip()
-                            if kind == "file" and visibility == "external":
+                            if err is None and kind == "file" and visibility == "external":
                                 lines.append("[Produced files]")
                                 file_line = pp or ap
                                 if file_line:
@@ -2142,11 +2204,6 @@ class Timeline:
                             }
                             if meta_out:
                                 lines.append(json.dumps(meta_out, ensure_ascii=False, indent=2))
-                            if payload.get("error"):
-                                err = payload.get("error") or {}
-                                code = err.get("code") or "error"
-                                msg = err.get("message") or ""
-                                lines.append(f"error: {code} {msg}".strip())
                             text = "\n".join(lines).strip()
                     elif isinstance(payload, dict) and "paths" in payload and "total_tokens" in payload:
                         lines = []
@@ -2218,6 +2275,8 @@ class Timeline:
 
             emitted: List[Dict[str, Any]] = []
             if text:
+                if current_round_id:
+                    text = _indent_text_block(str(text))
                 emitted.append({"type": "text", "text": str(text)})
 
             if base64:
@@ -2233,6 +2292,8 @@ class Timeline:
             if cache:
                 emitted[-1]["cache"] = True
             out.extend(emitted)
+        if current_round_id:
+            out.append({"type": "text", "text": _round_footer()})
         return out
 
     def _format_message_blocks_debug(self, msg_blocks: List[Dict[str, Any]]) -> str:

@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 import pathlib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Dict, Optional, Tuple, Any
 import json
 import re
@@ -2074,11 +2074,25 @@ def render_pptx(
 ) -> str:
     """Render PowerPoint from HTML."""
 
+    def _safe_relpath(s: str, default_name: str = "deck.pptx") -> str:
+        s = (s or "").strip()
+        if not s:
+            return default_name
+        s = s.replace("\\", "/")
+        p = PurePosixPath(s)
+        if p.is_absolute() or any(part == ".." for part in p.parts):
+            return default_name
+        return str(p)
+
     outdir = resolve_output_dir()
-    filename = Path(path).name
-    if not filename.endswith('.pptx'):
-        filename += '.pptx'
-    outfile = outdir / filename
+    p = Path(path)
+    if p.is_absolute():
+        outfile = p
+    else:
+        rel = _safe_relpath(path, "deck.pptx")
+        if not rel.endswith(".pptx"):
+            rel += ".pptx"
+        outfile = outdir / rel
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
     prs = Presentation()
