@@ -16,7 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.accounting.aggregator import AccountingAggregator
 from kdcube_ai_app.storage.storage import create_storage_backend
 
-logger = logging.getLogger("OPEX.Routines")
+logger = logging.getLogger("Periodical.Routines")
 
 ACCOUNTING_TZ = ZoneInfo("Europe/Berlin")
 
@@ -87,6 +87,24 @@ def _get_cron_expression() -> str:
     if not expr:
         expr = "0 3 * * *"
     return expr
+
+def _bundle_cleanup_enabled() -> bool:
+    try:
+        return bool(get_settings().BUNDLE_CLEANUP_ENABLED)
+    except Exception:
+        return os.environ.get("BUNDLE_CLEANUP_ENABLED", "1").lower() in {"1", "true", "yes"}
+
+def _bundle_cleanup_interval_seconds() -> int:
+    try:
+        return int(get_settings().BUNDLE_CLEANUP_INTERVAL_SECONDS)
+    except Exception:
+        return int(os.environ.get("BUNDLE_CLEANUP_INTERVAL_SECONDS", "3600") or "3600")
+
+def _bundle_cleanup_lock_ttl_seconds() -> int:
+    try:
+        return int(get_settings().BUNDLE_CLEANUP_LOCK_TTL_SECONDS)
+    except Exception:
+        return int(os.environ.get("BUNDLE_CLEANUP_LOCK_TTL_SECONDS", "900") or "900")
 
 
 def _compute_next_run(now: datetime) -> datetime:
@@ -249,3 +267,84 @@ async def aggregation_scheduler_loop() -> None:
         await _run_daily_and_monthly_for_date(run_date)
 
 
+async def _run_bundle_cleanup_once() -> None:
+    if not _bundle_cleanup_enabled():
+        return
+    settings = get_settings()
+    tenant = settings.TENANT
+    project = settings.PROJECT
+    redis = await _get_agg_redis()
+    lock_key = f"bundles:cleanup:{tenant}:{project}"
+    token = str(uuid.uuid4())
+    lock_ttl = _bundle_cleanup_lock_ttl_seconds()
+
+    if redis:
+        got_lock = await redis.set(lock_key, token, ex=lock_ttl, nx=True)
+        if not got_lock:
+            logger.info(
+                "[Bundles] Cleanup lock held by another instance: %s", lock_key
+            )
+            return
+    else:
+        logger.info("[Bundles] Redis not configured; running cleanup without lock")
+
+    try:
+        from kdcube_ai_app.infra.plugin.bundle_registry import get_all
+        from kdcube_ai_app.infra.plugin.git_bundle import (
+            cleanup_old_git_bundles,
+            resolve_bundles_root,
+            bundle_dir_for_git,
+        )
+        from kdcube_ai_app.infra.plugin.bundle_refs import get_active_paths
+
+        active_paths = await get_active_paths(redis, tenant=tenant, project=project)
+        total_removed = 0
+        bundles = get_all() or {}
+        for bid, entry in bundles.items():
+            git_url = entry.get("git_url") or entry.get("git_repo")
+            if not git_url:
+                continue
+            base_dir = bundle_dir_for_git(bid, entry.get("git_ref"))
+            removed = cleanup_old_git_bundles(
+                bundle_id=base_dir,
+                bundles_root=resolve_bundles_root(),
+                active_paths=active_paths,
+            )
+            total_removed += removed
+        if total_removed:
+            logger.info("[Bundles] Cleanup removed %d old bundle dirs", total_removed)
+    except Exception:
+        logger.exception("[Bundles] Cleanup failed")
+    finally:
+        if redis:
+            try:
+                current_val = await redis.get(lock_key)
+                if current_val is not None and current_val.decode() == token:
+                    await redis.delete(lock_key)
+            except Exception:
+                logger.exception("[Bundles] Failed to release cleanup lock %s", lock_key)
+
+
+async def bundle_cleanup_loop() -> None:
+    """
+    Periodic cleanup loop for git bundles (safe across workers via Redis lock).
+    """
+    if not _bundle_cleanup_enabled():
+        logger.info("[Bundles] Cleanup loop disabled (BUNDLE_CLEANUP_ENABLED=0)")
+        return
+
+    interval = _bundle_cleanup_interval_seconds()
+    logger.info("[Bundles] Cleanup loop started (interval=%ss)", interval)
+    while True:
+        try:
+            await _run_bundle_cleanup_once()
+        except asyncio.CancelledError:
+            logger.info("[Bundles] Cleanup loop cancelled")
+            break
+        except Exception:
+            logger.exception("[Bundles] Cleanup loop error")
+        try:
+            await asyncio.sleep(interval)
+        except asyncio.CancelledError:
+            logger.info("[Bundles] Cleanup loop cancelled")
+            break

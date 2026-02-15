@@ -13,7 +13,7 @@ from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
 from kdcube_ai_app.apps.chat.sdk.context.memory.conv_memories import ConvMemoriesStore
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.browser import ContextBrowser
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.browser import ContextBrowser
 
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_index import ConvTicketIndex
@@ -23,11 +23,11 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitExc
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.turn_reporting import _format_ms_table, _format_ms_table_markdown
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad, TurnPhaseError
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.proto import RuntimeCtx
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.gate.gate_contract import GateOut
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.runtime import ReactSolverV2
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.turn_log import TurnLog
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.widgets.conversation_turn_work_status import \
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.gate.gate_contract import GateOut
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.runtime import ReactSolverV2
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.turn_log import TurnLog
+from kdcube_ai_app.apps.chat.sdk.solutions.widgets.conversation_turn_work_status import \
     ConversationTurnWorkStatus
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsystem_with_mcp, ToolSubsystem
 from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import ingest_user_attachments
@@ -42,7 +42,7 @@ from kdcube_ai_app.infra.service_hub.errors import ServiceException, ServiceErro
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger, ModelServiceBase, Config, _mid
 from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.solution_workspace import ApplicationHostingService
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import ApplicationHostingService
 from kdcube_ai_app.apps.chat.sdk.context.graph.graph_ctx import GraphCtx
 from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import (
     attachment_summary_index_text,
@@ -1024,7 +1024,7 @@ class BaseWorkflow():
 
         # Contribute user prompt + attachments to current turn log
         try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.layout import build_user_input_blocks
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_user_input_blocks
             self.ctx_browser.contribute(
                 blocks=build_user_input_blocks(
                     runtime=self.ctx_browser.runtime_ctx,
@@ -1078,7 +1078,7 @@ class BaseWorkflow():
                 pass
             # Contribute assistant completion to current turn log
             try:
-                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.layout import build_assistant_completion_blocks
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_assistant_completion_blocks
                 self.ctx_browser.contribute(
                     blocks=build_assistant_completion_blocks(
                         runtime=self.ctx_browser.runtime_ctx,

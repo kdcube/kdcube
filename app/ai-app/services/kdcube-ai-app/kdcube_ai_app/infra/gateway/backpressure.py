@@ -5,7 +5,7 @@
 
 import json
 import time
-import uuid
+import os
 from typing import Set, Dict, Any, Tuple
 
 from redis import asyncio as aioredis
@@ -1045,6 +1045,7 @@ class AtomicChatQueueManager:
         self.redis = None
         self.gateway_config = gateway_config
         self.monitor = monitor
+        self.max_queue_size = int(os.getenv("MAX_QUEUE_SIZE", "0") or "0")
 
         # Redis keys
         self.QUEUE_PREFIX = self.ns(REDIS.CHAT.PROMPT_QUEUE_PREFIX)
@@ -1068,6 +1069,7 @@ class AtomicChatQueueManager:
         local heartbeat_timeout = tonumber(ARGV[7])
         local current_time = tonumber(ARGV[8])
         local heartbeat_pattern = ARGV[9]
+        local max_queue_size = tonumber(ARGV[10])
         
         -- Count healthy chat REST processes
         local heartbeat_keys = redis.call('KEYS', heartbeat_pattern)
@@ -1102,6 +1104,12 @@ class AtomicChatQueueManager:
         local reg_queue = redis.call('LLEN', reg_queue_key) 
         local priv_queue = redis.call('LLEN', priv_queue_key)
         local total_queue = anon_queue + reg_queue + priv_queue
+
+        if max_queue_size and max_queue_size > 0 then
+            if total_queue >= max_queue_size then
+                return {0, "queue_size_exceeded", total_queue, 0, 0}
+            end
+        end
         
         -- Calculate dynamic thresholds
         local anon_threshold = math.floor(actual_capacity * (anonymous_threshold / hard_limit))
@@ -1190,7 +1198,8 @@ class AtomicChatQueueManager:
                 str(total_per_single_process),
                 str(self.gateway_config.monitoring.heartbeat_timeout_seconds),
                 str(time.time()),
-                heartbeat_pattern
+                heartbeat_pattern,
+                str(self.max_queue_size)
             )
 
             success = bool(result[0])

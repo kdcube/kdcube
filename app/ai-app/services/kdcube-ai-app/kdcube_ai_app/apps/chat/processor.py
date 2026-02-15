@@ -166,6 +166,7 @@ class EnhancedChatRequestProcessor:
     # ---------------- Config loop ----------------
     async def _config_listener_loop(self):
         import kdcube_ai_app.infra.namespaces as namespaces
+        from kdcube_ai_app.apps.chat.sdk.config import get_settings
         from kdcube_ai_app.infra.plugin.bundle_registry import (
             set_registry, serialize_to_env, get_all, get_default_id
         )
@@ -179,14 +180,19 @@ class EnhancedChatRequestProcessor:
         )
 
         try:
+            settings = get_settings()
+            tenant = settings.TENANT
+            project = settings.PROJECT
+            update_channel = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL.format(tenant=tenant, project=project)
+            cleanup_channel = namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL.format(tenant=tenant, project=project)
             pubsub = self.middleware.redis.pubsub()
             await pubsub.subscribe(
-                namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL,
-                namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL,
+                update_channel,
+                cleanup_channel,
             )
             logger.info(
                 "Subscribed to bundles channels: "
-                f"{namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL}, {namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL}"
+                f"{update_channel}, {cleanup_channel}"
             )
 
             async for message in pubsub.listen():
@@ -208,7 +214,6 @@ class EnhancedChatRequestProcessor:
                     except Exception:
                         logger.warning("Invalid registry payload; ignoring")
                         continue
-
                     set_registry(
                         {bid: be.model_dump() for bid, be in reg.bundles.items()},
                         reg.default_bundle_id
@@ -265,6 +270,12 @@ class EnhancedChatRequestProcessor:
 
                 if evt.get("type") == "bundles.cleanup":
                     from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+                    from kdcube_ai_app.infra.plugin.git_bundle import (
+                        cleanup_old_git_bundles,
+                        resolve_bundles_root,
+                        bundle_dir_for_git,
+                    )
+                    from kdcube_ai_app.infra.plugin.bundle_refs import get_active_paths
 
                     active_specs = []
                     for _bid, entry in (get_all() or {}).items():
@@ -281,6 +292,26 @@ class EnhancedChatRequestProcessor:
                         active_specs=active_specs,
                         drop_sys_modules=drop_sys_modules,
                     )
+                    # Git bundle cleanup (skip active refs from Redis)
+                    try:
+                        active_paths = await get_active_paths(
+                            self.middleware.redis,
+                            tenant=tenant,
+                            project=project,
+                        )
+                        bundles = get_all() or {}
+                        for _bid, entry in bundles.items():
+                            git_url = entry.get("git_url") or entry.get("git_repo")
+                            if not git_url:
+                                continue
+                            base_dir = bundle_dir_for_git(_bid, entry.get("git_ref"))
+                            cleanup_old_git_bundles(
+                                bundle_id=base_dir,
+                                bundles_root=resolve_bundles_root(),
+                                active_paths=active_paths,
+                            )
+                    except Exception as e:
+                        logger.warning(f"Git bundle cleanup failed: {e}")
                     logger.info(
                         "Applied bundles cleanup. "
                         f"evicted_modules={result.get('evicted_modules')}; "
@@ -407,6 +438,7 @@ class EnhancedChatRequestProcessor:
                         result = await asyncio.wait_for(
                             self.chat_handler(
                                 payload,
+
                             ),
                             timeout=self.task_timeout_sec,
                         )

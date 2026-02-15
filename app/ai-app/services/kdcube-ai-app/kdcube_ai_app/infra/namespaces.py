@@ -81,10 +81,11 @@ class CONFIG:
 
     class BUNDLES:
         BUNDLE_MAPPING_KEY_FMT = "kdcube:config:bundles:mapping:{tenant}:{project}"
-        UPDATE_CHANNEL = "kdcube:config:bundles:update"
+        UPDATE_CHANNEL = "kdcube:config:bundles:update:{tenant}:{project}"
         PROPS_KEY_FMT = "kdcube:config:bundles:props:{tenant}:{project}:{bundle_id}"
-        PROPS_UPDATE_CHANNEL = "kdcube:config:bundles:props:update"
-        CLEANUP_CHANNEL = "kdcube:config:bundles:cleanup"
+        PROPS_UPDATE_CHANNEL = "kdcube:config:bundles:props:update:{tenant}:{project}"
+        CLEANUP_CHANNEL = "kdcube:config:bundles:cleanup:{tenant}:{project}"
+        ACTIVE_REFS_KEY_FMT = "kdcube:config:bundles:refs:{tenant}:{project}"
 
     class GATEWAY:
         NAMESPACE = "kdcube:config:gateway"

@@ -44,10 +44,15 @@ logger = logging.getLogger("KBMonitoring.API")
 # Create router
 router = APIRouter()
 
+def _bundles_channel(fmt: str, *, tenant: str, project: str) -> str:
+    return fmt.format(tenant=tenant, project=project)
+
 class AdminBundlesUpdateRequest(BaseModel):
     op: str = "merge"  # "replace" | "merge"
     bundles: Dict[str, Dict[str, Any]]
     default_bundle_id: Optional[str] = None
+    tenant: Optional[str] = None
+    project: Optional[str] = None
 
 class BundleSuggestionsRequest(BaseModel):
     bundle_id: Optional[str] = None
@@ -66,6 +71,12 @@ class BundlePropsResetRequest(BaseModel):
 
 class BundleCleanupRequest(BaseModel):
     drop_sys_modules: bool = True
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+
+class BundleResetEnvRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
 
 def _ensure_chat_communicator(app) -> ChatRelayCommunicator:
     """
@@ -129,6 +140,10 @@ async def get_available_bundles(
                 "module": entry.module,
                 "singleton": bool(entry.singleton),
                 "version": getattr(entry, "version", None),
+                "git_url": getattr(entry, "git_url", None),
+                "git_ref": getattr(entry, "git_ref", None),
+                "git_subdir": getattr(entry, "git_subdir", None),
+                "git_commit": getattr(entry, "git_commit", None),
             }
             for bid, entry in reg.bundles.items()
         },
@@ -205,6 +220,15 @@ async def _load_bundle_props_defaults(
             version = getattr(version, "version", None)
         if version:
             defaults["bundle_version"] = str(version)
+    except Exception:
+        pass
+    try:
+        if getattr(spec_resolved, "git_commit", None):
+            defaults["git_commit"] = str(spec_resolved.git_commit)
+        if getattr(spec_resolved, "git_ref", None):
+            defaults["git_ref"] = str(spec_resolved.git_ref)
+        if getattr(spec_resolved, "git_url", None):
+            defaults["git_url"] = str(spec_resolved.git_url)
     except Exception:
         pass
     return defaults
@@ -290,7 +314,10 @@ async def set_bundle_props(
             "updated_by": session.username or session.user_id or "unknown",
             "ts": datetime.utcnow().isoformat() + "Z",
         }
-        await redis.publish(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
+        await redis.publish(
+            _bundles_channel(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
+            json.dumps(msg, ensure_ascii=False),
+        )
     except Exception as e:
         logger.error(f"Failed to publish props update: {e}")
 
@@ -328,7 +355,10 @@ async def reset_bundle_props_from_code(
             "updated_by": session.username or session.user_id or "unknown",
             "ts": datetime.utcnow().isoformat() + "Z",
         }
-        await redis.publish(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
+        await redis.publish(
+            _bundles_channel(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
+            json.dumps(msg, ensure_ascii=False),
+        )
     except Exception as e:
         logger.error(f"Failed to publish props reset: {e}")
 
@@ -340,22 +370,43 @@ async def admin_set_bundles(
         request: Request,
         session: UserSession = Depends(auth_without_pressure())
 ):
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
     from kdcube_ai_app.infra.plugin.bundle_registry import (
         set_registry, upsert_bundles, serialize_to_env, get_all, get_default_id
     )
     from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches
+    from kdcube_ai_app.infra.plugin.bundle_store import (
+        load_registry as store_load,
+        save_registry as store_save,
+        apply_update as store_apply,
+    )
 
-    if payload.op == "replace":
-        set_registry(payload.bundles, payload.default_bundle_id)
-    elif payload.op == "merge":
-        upsert_bundles(payload.bundles, payload.default_bundle_id)
+    # Persist to tenant/project registry in Redis
+    redis = request.app.state.middleware.redis
+    try:
+        current = await store_load(redis, tenant_id, project_id)
+        updated = store_apply(current, payload.op, payload.bundles, payload.default_bundle_id)
+        await store_save(redis, updated, tenant_id, project_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    # If targeting the current tenant/project, update in-memory registry/env too
+    if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+        if payload.op == "replace":
+            set_registry(payload.bundles, payload.default_bundle_id)
+        elif payload.op == "merge":
+            upsert_bundles(payload.bundles, payload.default_bundle_id)
+        else:
+            raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
+        reg = get_all()
+        default_id = get_default_id()
+        serialize_to_env(reg, default_id)
+        clear_agentic_caches()
     else:
-        raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
-
-    reg = get_all()
-    default_id = get_default_id()
-    serialize_to_env(reg, default_id)
-    clear_agentic_caches()
+        reg = {bid: be.model_dump() for bid, be in updated.bundles.items()}
+        default_id = updated.default_bundle_id
 
     # Publish to all nodes
     try:
@@ -364,11 +415,15 @@ async def admin_set_bundles(
             "op": payload.op,
             "bundles": payload.bundles,
             "default_bundle_id": payload.default_bundle_id,
+            "tenant": tenant_id,
+            "project": project_id,
             "updated_by": session.username or session.user_id or "unknown",
             "ts": datetime.utcnow().isoformat() + "Z"
         }
-        redis = request.app.state.middleware.redis
-        await redis.publish(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
+        await redis.publish(
+            _bundles_channel(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
+            json.dumps(msg, ensure_ascii=False),
+        )
     except Exception as e:
         logger.error(f"Failed to publish config update: {e}")
 
@@ -377,25 +432,30 @@ async def admin_set_bundles(
 @router.post("/admin/integrations/bundles/reset-env", status_code=200)
 async def admin_reset_bundles_from_env(
         request: Request,
-        session: UserSession = Depends(auth_without_pressure())
+        session: UserSession = Depends(auth_without_pressure()),
+        payload: Optional[BundleResetEnvRequest] = None,
 ):
+    settings = get_settings()
     from kdcube_ai_app.infra.plugin.bundle_store import reset_registry_from_env
     from kdcube_ai_app.infra.plugin.bundle_registry import set_registry, serialize_to_env
     from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches
 
+    tenant_id = (payload.tenant if payload else None) or settings.TENANT
+    project_id = (payload.project if payload else None) or settings.PROJECT
     redis = request.app.state.middleware.redis
 
     try:
         # Force overwrite Redis from env
-        reg = await reset_registry_from_env(redis)
+        reg = await reset_registry_from_env(redis, tenant_id, project_id)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
 
-    # Mirror to in-memory registry and env for consistency
     bundles_dict = {bid: entry.model_dump() for bid, entry in reg.bundles.items()}
-    set_registry(bundles_dict, reg.default_bundle_id)
-    serialize_to_env(bundles_dict, reg.default_bundle_id)
-    clear_agentic_caches()
+    # Mirror to in-memory registry/env only for current tenant/project
+    if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+        set_registry(bundles_dict, reg.default_bundle_id)
+        serialize_to_env(bundles_dict, reg.default_bundle_id)
+        clear_agentic_caches()
 
     # Broadcast to all servers
     msg = {
@@ -403,10 +463,15 @@ async def admin_reset_bundles_from_env(
         "op": "replace",
         "bundles": bundles_dict,
         "default_bundle_id": reg.default_bundle_id,
+        "tenant": tenant_id,
+        "project": project_id,
         "updated_by": session.username or session.user_id or "unknown",
         "ts": datetime.utcnow().isoformat() + "Z"
     }
-    await redis.publish(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, json.dumps(msg, ensure_ascii=False))
+    await redis.publish(
+        _bundles_channel(namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
+        json.dumps(msg, ensure_ascii=False),
+    )
 
     return {
         "status": "ok",
@@ -421,35 +486,46 @@ async def admin_cleanup_bundles(
         request: Request,
         session: UserSession = Depends(auth_without_pressure())
 ):
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
     from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
     from kdcube_ai_app.infra.plugin.bundle_registry import get_all
+    result = {"status": "ok"}
 
-    active_specs = []
-    for _bid, entry in (get_all() or {}).items():
-        try:
-            active_specs.append(AgenticBundleSpec(
-                path=entry.get("path"),
-                module=entry.get("module"),
-                singleton=bool(entry.get("singleton")),
-            ))
-        except Exception:
-            continue
+    # Only run local eviction when targeting this instance tenant/project
+    if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+        active_specs = []
+        for _bid, entry in (get_all() or {}).items():
+            try:
+                active_specs.append(AgenticBundleSpec(
+                    path=entry.get("path"),
+                    module=entry.get("module"),
+                    singleton=bool(entry.get("singleton")),
+                ))
+            except Exception:
+                continue
 
-    result = evict_inactive_specs(
-        active_specs=active_specs,
-        drop_sys_modules=bool(payload.drop_sys_modules),
-    )
-    result["status"] = "ok"
+        result = evict_inactive_specs(
+            active_specs=active_specs,
+            drop_sys_modules=bool(payload.drop_sys_modules),
+        )
+        result["status"] = "ok"
 
     try:
         msg = {
             "type": "bundles.cleanup",
             "drop_sys_modules": bool(payload.drop_sys_modules),
+            "tenant": tenant_id,
+            "project": project_id,
             "updated_by": session.username or session.user_id or "unknown",
             "ts": datetime.utcnow().isoformat() + "Z",
         }
         redis = request.app.state.middleware.redis
-        await redis.publish(namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL, json.dumps(msg, ensure_ascii=False))
+        await redis.publish(
+            _bundles_channel(namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL, tenant=tenant_id, project=project_id),
+            json.dumps(msg, ensure_ascii=False),
+        )
     except Exception as e:
         logger.error(f"Failed to publish bundles cleanup: {e}")
 

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 from kdcube_ai_app.apps.chat.sdk.tools.web.web_extractors import WebContentFetcher
 from kdcube_ai_app.apps.chat.sdk.tools.web.with_llm import filter_fetch_results
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.widgets.fetch_url_contents import (
+from kdcube_ai_app.apps.chat.sdk.solutions.widgets.fetch_url_contents import (
     FetchWebResourceWidget,
 )
 from kdcube_ai_app.apps.chat.sdk.tools.backends.web.inventory import _normalize_url

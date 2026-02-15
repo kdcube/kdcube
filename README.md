@@ -163,7 +163,7 @@ graph TD
 - Conversation memories: [Conversation Memories](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/memories-README.md)
 - Conversation artifacts: [Conversation Artifacts](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/solution/context/conversation-artifacts-README.md)
 - OPEX aggregations: [OPEX Aggregations](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/opex/README-AGGREGATIONS.md)
-- Code exec widget: [Code Exec Widget](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/solution/widgets/code-exec-widget-README.md)
+- Code exec widget: [Code Exec Widget](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/widgets/code-exec-widget-README.md)
 
 ### Knowledge Base
 - KB clients (REST & Socket.IO):

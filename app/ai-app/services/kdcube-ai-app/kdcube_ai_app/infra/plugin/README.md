@@ -414,7 +414,109 @@ export AGENTIC_BUNDLES_JSON='{
 }'
 ```
 
+### Git bundles (private or public)
+
+You can define a bundle by Git instead of a fixed path:
+
+```bash
+export AGENTIC_BUNDLES_JSON='{
+  "default_bundle_id": "demo.git",
+  "bundles": {
+    "demo.git": {
+      "id": "demo.git",
+      "git_url": "https://github.com/org/my-bundle.git",
+      "git_ref": "main",
+      "git_subdir": "bundle",
+      "module": "my_bundle.entrypoint",
+      "singleton": false
+    }
+  }
+}'
+```
+
+**Git fields**:
+`git_url` (required), `git_ref` (optional branch/tag/commit), `git_subdir` (optional path inside repo).
+
+**Where it is cloned**:  
+`HOST_BUNDLES_PATH` → `AGENTIC_BUNDLES_ROOT` → `/bundles` (fallback).
+
+---
+
+## Git credentials (private repos)
+
+For private repos, you must provide credentials in the runtime environment:
+
+**SSH (recommended)**
+- `GIT_SSH_KEY_PATH` — path to private key
+- `GIT_SSH_KNOWN_HOSTS` — optional known_hosts file
+- `GIT_SSH_STRICT_HOST_KEY_CHECKING` — `yes|no`
+
+Example:
+
+```bash
+export GIT_SSH_KEY_PATH=/secrets/id_rsa
+export GIT_SSH_KNOWN_HOSTS=/secrets/known_hosts
+export GIT_SSH_STRICT_HOST_KEY_CHECKING=yes
+```
+
+**HTTPS token**
+- use a token in the URL:
+  `https://<token>@github.com/org/repo.git`
+
+**Shallow clone (optional)**
+- `BUNDLE_GIT_SHALLOW=1` → depth=50
+- or `BUNDLE_GIT_CLONE_DEPTH=<N>`
+
+**Always pull (optional)**
+- `BUNDLE_GIT_ALWAYS_PULL=1` forces refresh on every bundle resolve.
+
 The runtime hot-reloads this registry across workers and clears loader caches on change.
+
+**Admin UI fields**
+- `path` (local bundle path) or `git_url` (clone from Git)
+- `git_ref` (branch/tag/commit)
+- `git_subdir` (optional path inside repo)
+
+**Bundle fields (summary)**
+
+| Field | Meaning |
+| --- | --- |
+| `id` | Bundle id used in routing/registry |
+| `path` | Filesystem path to bundle root |
+| `module` | Python entrypoint module |
+| `singleton` | Reuse workflow instance |
+| `version` | Bundle version (content hash) |
+| `git_url` | Git repo URL |
+| `git_ref` | Branch/tag/commit |
+| `git_subdir` | Subdirectory inside repo |
+| `git_commit` | Current HEAD commit |
+
+**Source of truth**
+- If `git_url` is set → git is the source of truth and `path` is derived.
+- Otherwise `path` is the source of truth.
+
+**Git bundle path derivation**
+
+```
+<bundles_root>/<bundle_id>__<git_ref>/<git_subdir?>
+```
+
+If `git_ref` is omitted:
+
+```
+<bundles_root>/<bundle_id>/<git_subdir?>
+```
+
+**Atomic updates (safe for in‑flight requests)**
+
+```
+<bundles_root>/<bundle_id>__<git_ref>__<timestamp>/<git_subdir?>
+```
+
+Controlled by:
+- `BUNDLE_GIT_ATOMIC=1`
+- `BUNDLE_GIT_KEEP`
+- `BUNDLE_GIT_TTL_HOURS`
 
 ---
 

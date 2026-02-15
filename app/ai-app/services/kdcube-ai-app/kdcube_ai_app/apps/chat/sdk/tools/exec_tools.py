@@ -430,7 +430,7 @@ async def run_exec_tool(
             continue
         # Validate produced file with heuristics
         try:
-            from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.artifact_analysis import analyze_write_tool_output
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import analyze_write_tool_output
             stats = analyze_write_tool_output(
                 file_path=str(rel),
                 mime=a.get("mime") or "",

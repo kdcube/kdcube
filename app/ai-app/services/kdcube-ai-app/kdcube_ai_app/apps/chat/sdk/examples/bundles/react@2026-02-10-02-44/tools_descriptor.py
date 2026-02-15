@@ -70,8 +70,8 @@ MCP_TOOL_SPECS: List[Dict[str, Any]] = [
 ]
 
 # Optional per-tool runtime overrides.
-    # Valid values: "none" | "local" | "docker"
+# Valid values: "none" | "local" - subprocess | "docker" | "fargate"
 TOOL_RUNTIME: Dict[str, str] = {
-    "generic_tools.web_search": "local",
-    "generic_tools.fetch_url_contents": "local",
+    "web_tools.web_search": "local",
+    "web_tools.fetch_url_contents": "local",
 }

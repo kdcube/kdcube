@@ -129,7 +129,7 @@ def _restore_bundle_if_present(
 ) -> Dict[str, Any]:
     uri = runtime_globals.get("BUNDLE_SNAPSHOT_URI")
     if not uri:
-        return runtime_globals
+        return _maybe_restore_bundle_from_git(runtime_globals, logger)
     bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
     bundle_id = None
     if isinstance(bundle_spec, dict):
@@ -142,6 +142,70 @@ def _restore_bundle_if_present(
         return rewrite_runtime_globals_for_bundle(runtime_globals, new_bundle_root=dest_root)
     except Exception as e:
         logger.log(f"[exec.bundle] Failed to restore bundle: {e}", "ERROR")
+        return runtime_globals
+
+
+def _maybe_restore_bundle_from_git(
+    runtime_globals: Dict[str, Any],
+    logger: AgentLogger,
+) -> Dict[str, Any]:
+    """
+    Optional fallback for future use: restore bundle from Git if snapshot URI is absent.
+    Uses git clone/fetch if git fields are provided in runtime_globals or env.
+    """
+    bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
+    git_url = (
+        runtime_globals.get("BUNDLE_GIT_URL")
+        or (bundle_spec.get("git_url") if isinstance(bundle_spec, dict) else None)
+        or os.environ.get("BUNDLE_GIT_URL")
+    )
+    if not git_url:
+        return runtime_globals
+    git_ref = (
+        runtime_globals.get("BUNDLE_GIT_REF")
+        or (bundle_spec.get("git_ref") if isinstance(bundle_spec, dict) else None)
+        or os.environ.get("BUNDLE_GIT_REF")
+        or ""
+    )
+    git_subdir = (
+        runtime_globals.get("BUNDLE_GIT_SUBDIR")
+        or (bundle_spec.get("git_subdir") if isinstance(bundle_spec, dict) else None)
+        or os.environ.get("BUNDLE_GIT_SUBDIR")
+        or ""
+    )
+
+    def _needs_bundle(globals_obj: Dict[str, Any]) -> bool:
+        tool_files = globals_obj.get("TOOL_MODULE_FILES") or {}
+        if isinstance(tool_files, dict) and any(v for v in tool_files.values()):
+            return True
+        raw_specs = globals_obj.get("RAW_TOOL_SPECS") or []
+        for spec in raw_specs:
+            if isinstance(spec, dict) and spec.get("ref"):
+                return True
+        return False
+
+    if not _needs_bundle(runtime_globals):
+        logger.log("[exec.bundle] Git bundle configured but no bundle tools requested; skipping git restore.", "INFO")
+        return runtime_globals
+
+    try:
+        from kdcube_ai_app.infra.plugin.git_bundle import ensure_git_bundle
+        bundle_id = bundle_spec.get("id") if isinstance(bundle_spec, dict) else None
+        bundle_dir = runtime_globals.get("BUNDLE_DIR") or bundle_id
+        exec_root_env = os.environ.get("EXEC_BUNDLE_ROOT")
+        bundles_root = pathlib.Path(exec_root_env).parent if exec_root_env else None
+        paths = ensure_git_bundle(
+            bundle_id=bundle_dir,
+            git_url=git_url,
+            git_ref=git_ref or None,
+            git_subdir=git_subdir or None,
+            bundles_root=bundles_root,
+            logger=logger,
+        )
+        logger.log(f"[exec.bundle] Restored bundle from git to {paths.bundle_root}", "INFO")
+        return rewrite_runtime_globals_for_bundle(runtime_globals, new_bundle_root=paths.bundle_root)
+    except Exception as e:
+        logger.log(f"[exec.bundle] Git restore failed: {e}", "ERROR")
         return runtime_globals
 
 
@@ -476,6 +540,17 @@ async def _async_main() -> int:
     runtime_globals = _restore_bundle_if_present(runtime_globals, logger)
     tool_module_names = _load_tool_module_names()
     spec_str = _portable_spec_str(runtime_globals)
+
+    # Debug helper: dump rewritten TOOL_MODULE_FILES after bundle restore
+    try:
+        tmf = runtime_globals.get("TOOL_MODULE_FILES") or {}
+        if isinstance(tmf, dict) and tmf:
+            items = list(tmf.items())
+            preview = {k: (str(v) if v is not None else None) for k, v in items[:50]}
+            more = f" (+{len(items) - len(preview)} more)" if len(items) > len(preview) else ""
+            logger.log(f"[entry] TOOL_MODULE_FILES={preview}{more}", level="INFO")
+    except Exception:
+        pass
 
     logger.log(
         f"[entry] workdir={workdir}, outdir={outdir}, "

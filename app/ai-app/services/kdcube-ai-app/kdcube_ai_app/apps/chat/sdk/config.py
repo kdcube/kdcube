@@ -60,6 +60,15 @@ class Settings(BaseSettings):
 
     DEFAULT_MODEL_LLM: str | None = "claude-3-7-sonnet-20250219"
 
+    # OPEX aggregation scheduler
+    OPEX_AGG_CRON: str = Field(default="0 3 * * *")
+
+    # Bundle cleanup + ref tracking
+    BUNDLE_CLEANUP_ENABLED: bool = Field(default=True)
+    BUNDLE_CLEANUP_INTERVAL_SECONDS: int = Field(default=3600)
+    BUNDLE_CLEANUP_LOCK_TTL_SECONDS: int = Field(default=900)
+    BUNDLE_REF_TTL_SECONDS: int = Field(default=3600)
+
     # Parse comma-separated CORS into list
     @classmethod
     def model_validate_env(cls, env: dict) -> dict:

@@ -25,7 +25,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.external.distributed_snapshot import (
     ensure_bundle_snapshot,
     restore_zip_to_dir,
 )
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.solution_workspace import build_exec_snapshot_workspace
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import build_exec_snapshot_workspace
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.environment import filter_host_environment
+from kdcube_ai_app.apps.chat.sdk.runtime.external.detect_aws_env import check_and_apply_cloud_environment
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 # Serialize output merge when multiple agents run in parallel.
 _MERGE_LOCKS: Dict[str, asyncio.Lock] = {}
@@ -49,6 +52,14 @@ class FargateRuntime(ExternalRuntime):
             or runtime_globals.get("RESULT_FILENAME")
             or "run"
         )
+        # Base env: filtered host env + explicit extras
+        base_env = filter_host_environment(os.environ.copy())
+        if request.extra_env:
+            base_env.update(request.extra_env)
+        try:
+            check_and_apply_cloud_environment(base_env, logger or AgentLogger("fargate.exec"))
+        except Exception:
+            pass
 
         snapshot = None
         snapshot_workdir = request.workdir
@@ -138,7 +149,25 @@ class FargateRuntime(ExternalRuntime):
                 logger.log("[fargate] Missing ECS config (cluster/task/container/subnets)", level="ERROR")
             return ExternalExecResult(ok=False, returncode=1, error="fargate_config_missing")
 
-        env = {
+        redis_url = base_env.get("REDIS_URL") or get_settings().REDIS_URL
+        if redis_url:
+            base_env["REDIS_URL"] = redis_url
+
+        bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
+        bundle_id = bundle_spec.get("id") if isinstance(bundle_spec, dict) else None
+        module_name = bundle_spec.get("module") if isinstance(bundle_spec, dict) else None
+        module_first_segment = module_name.split(".", 1)[0] if isinstance(module_name, str) and module_name else None
+        bundle_dir = module_first_segment or bundle_id
+        if bundle_dir:
+            runtime_globals["BUNDLE_DIR"] = bundle_dir
+            if logger:
+                logger.log(
+                    f"[fargate] bundle_dir={bundle_dir} exec_bundle_root=/workspace/bundles/{bundle_dir}",
+                    level="INFO",
+                )
+
+        env = dict(base_env or {})
+        env.update({
             "WORKDIR": "/workspace/work",
             "OUTPUT_DIR": "/workspace/out",
             "LOG_DIR": "/workspace/out/logs",
@@ -146,18 +175,9 @@ class FargateRuntime(ExternalRuntime):
             "EXECUTION_ID": str(exec_id),
             "RUNTIME_GLOBALS_JSON": json.dumps(runtime_globals, ensure_ascii=False, default=str),
             "RUNTIME_TOOL_MODULES": json.dumps(request.tool_module_names or [], ensure_ascii=False),
-        }
-
-        bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
-        bundle_id = bundle_spec.get("id") if isinstance(bundle_spec, dict) else None
-        if bundle_id:
-            env["EXEC_BUNDLE_ROOT"] = f"/workspace/bundles/{bundle_id}"
-
-        if request.extra_env:
-            for k, v in request.extra_env.items():
-                if k in {"WORKDIR", "OUTPUT_DIR"}:
-                    continue
-                env[k] = v
+        })
+        if bundle_dir:
+            env["EXEC_BUNDLE_ROOT"] = f"/workspace/bundles/{bundle_dir}"
 
         ecs = boto3.client("ecs")
         overrides = {

@@ -390,10 +390,16 @@ def rewrite_runtime_globals_for_bundle(
     def _rewrite_path(p: str) -> str:
         return p.replace(old_root, new_root, 1) if p.startswith(old_root) else p
 
+    def _rewrite_tool_file(p: str) -> Optional[str]:
+        if p.startswith(old_root):
+            return p.replace(old_root, new_root, 1)
+        # Paths outside bundle root are not available on remote; force import-by-name
+        return None
+
     tool_files = dict(out.get("TOOL_MODULE_FILES") or {})
     for k, v in list(tool_files.items()):
         if isinstance(v, str):
-            tool_files[k] = _rewrite_path(v)
+            tool_files[k] = _rewrite_tool_file(v)
     out["TOOL_MODULE_FILES"] = tool_files
 
     raw_specs = list(out.get("RAW_TOOL_SPECS") or [])
@@ -409,6 +415,14 @@ def rewrite_runtime_globals_for_bundle(
         if isinstance(bundle_spec.get("path"), str):
             bundle_spec["path"] = new_root
         out["BUNDLE_SPEC"] = bundle_spec
+
+    skills_desc = out.get("SKILLS_DESCRIPTOR")
+    if isinstance(skills_desc, dict):
+        csr = skills_desc.get("custom_skills_root")
+        if isinstance(csr, str) and csr.startswith(old_root):
+            skills_desc = dict(skills_desc)
+            skills_desc["custom_skills_root"] = csr.replace(old_root, new_root, 1)
+            out["SKILLS_DESCRIPTOR"] = skills_desc
 
     return out
 

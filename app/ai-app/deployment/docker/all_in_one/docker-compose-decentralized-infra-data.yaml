@@ -129,7 +129,7 @@ services:
       args:
         - UI_SOURCE_PATH=${UI_SOURCE_PATH}
         - UI_ENV_BUILD_RELATIVE=${UI_ENV_BUILD_RELATIVE}
-        - NGINX_CONFIG_FILE_PATH=${NGINX_UI_CONFIG_FILE_PATH}
+        - NGINX_UI_CONFIG_FILE_PATH=${NGINX_UI_CONFIG_FILE_PATH}
     env_file:
       - path: ${UI_ENV_FILE_PATH}
         required: false

@@ -1,6 +1,6 @@
 from typing import Any, Callable, Dict, List, Optional, Awaitable
 
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.browser import ContextBrowser
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.browser import ContextBrowser
 from kdcube_ai_app.infra.service_hub.errors import ServiceException, is_context_limit_error
 
 def _system_text_for_compaction(

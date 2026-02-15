@@ -739,7 +739,7 @@ async def process_chat_message(
                 },
                 "data": {
                     "message": f"System under pressure - request rejected ({reason})",
-                    "error_type": "enqueue_rejected",
+                    "error_type": "queue.enqueue_rejected",
                     "http_status": 503,
                     "retry_after": retry_after,
                     "reason": reason,
@@ -761,7 +761,7 @@ async def process_chat_message(
 
         return IngressResult(
             ok=False,
-            error_type="enqueue_rejected",
+            error_type="queue.enqueue_rejected",
             error=f"System under pressure - request rejected ({reason})",
             http_status=503,
             retry_after=retry_after,

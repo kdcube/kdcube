@@ -17,7 +17,7 @@ from kdcube_ai_app.infra.service_hub.multimodality import (
     MODALITY_MAX_IMAGE_BYTES,
     MODALITY_MAX_DOC_BYTES,
 )
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.artifact_analysis import prepare_summary_artifact
+from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import prepare_summary_artifact
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_local_paths_any
 
 

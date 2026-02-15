@@ -616,7 +616,7 @@ def create_sse_router(
 
             # keep retry_after semantics for pressure errors
             detail: Any
-            if error_type in ("enqueue_rejected",):
+            if error_type in ("queue.enqueue_rejected",):
                 detail = {
                     "error": "System under pressure",
                     "reason": result.reason,

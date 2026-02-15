@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ValidationError
 import kdcube_ai_app.infra.namespaces as namespaces
 
 REDIS_KEY_FMT = namespaces.CONFIG.BUNDLES.BUNDLE_MAPPING_KEY_FMT
-REDIS_CHANNEL = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
+REDIS_CHANNEL_FMT = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
 ADMIN_BUNDLE_ID = "kdcube.admin"
 
 
@@ -44,6 +44,10 @@ class BundleEntry(BaseModel):
     module: Optional[str] = None
     singleton: Optional[bool] = False
     description: Optional[str] = None
+    git_url: Optional[str] = None
+    git_ref: Optional[str] = None
+    git_subdir: Optional[str] = None
+    git_commit: Optional[str] = None
 
 class BundlesRegistry(BaseModel):
     default_bundle_id: Optional[str] = None
@@ -61,6 +65,14 @@ def redis_key(tenant: Optional[str]=None, project: Optional[str]=None) -> str:
         t = t or t2
         p = p or p2
     return REDIS_KEY_FMT.format(tenant=t, project=p)
+
+def update_channel(tenant: Optional[str]=None, project: Optional[str]=None) -> str:
+    t, p = tenant, project
+    if not t or not p:
+        t2, p2 = _tp_from_env()
+        t = t or t2
+        p = p or p2
+    return REDIS_CHANNEL_FMT.format(tenant=t, project=p)
 
 async def load_registry(redis, tenant: Optional[str] = None, project: Optional[str] = None) -> BundlesRegistry:
     """
@@ -111,7 +123,7 @@ async def publish_update(redis, reg: BundlesRegistry, *, tenant: Optional[str]=N
         "registry": reg.model_dump()
     }
     if actor: payload["actor"] = actor
-    await redis.publish(REDIS_CHANNEL, json.dumps(payload, ensure_ascii=False))
+    await redis.publish(update_channel(t, p), json.dumps(payload, ensure_ascii=False))
 
 async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Optional[str] = None) -> Optional[BundlesRegistry]:
     """
@@ -135,7 +147,7 @@ async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Opt
 
         reg = BundlesRegistry(
             default_bundle_id=default_id,
-            bundles={bid: BundleEntry(**b) for bid, b in bundles_dict.items()}
+            bundles={bid: _to_entry(bid, b) for bid, b in bundles_dict.items()}
         )
         if not reg.bundles:
             return None
@@ -168,7 +180,7 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
 
     reg = BundlesRegistry(
         default_bundle_id=default_id,
-        bundles={bid: BundleEntry(**b) for bid, b in bundles_dict.items()}
+        bundles={bid: _to_entry(bid, b) for bid, b in bundles_dict.items()}
     )
     reg = _ensure_admin_bundle(reg)
     await save_registry(redis, reg, tenant, project)
@@ -177,13 +189,31 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
 
 def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
     """Normalize incoming dict -> BundleEntry."""
+    git_url = v.get("git_url") or v.get("git_repo")
+    path_val = v.get("path") or ""
+    if not path_val and git_url:
+        try:
+            from kdcube_ai_app.infra.plugin.git_bundle import compute_git_bundle_paths
+            paths = compute_git_bundle_paths(
+                bundle_id=bid,
+                git_url=git_url,
+                git_ref=v.get("git_ref"),
+                git_subdir=v.get("git_subdir"),
+            )
+            path_val = str(paths.bundle_root)
+        except Exception:
+            path_val = ""
     return BundleEntry(
         id=bid,
         name=v.get("name"),
-        path=v["path"],
+        path=path_val or v.get("path") or "",
         module=v.get("module"),
         singleton=bool(v.get("singleton", False)),
         description=v.get("description"),
+        git_url=git_url,
+        git_ref=v.get("git_ref"),
+        git_subdir=v.get("git_subdir"),
+        git_commit=v.get("git_commit"),
     )
 
 def apply_update(

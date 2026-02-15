@@ -445,6 +445,8 @@ class BaseEntrypoint:
                 default_tenant=self.settings.TENANT,
                 default_project=self.settings.PROJECT,
                 default_app_bundle_id=self.config.ai_bundle_spec.id,
+                host_bundles_path=os.environ.get("HOST_BUNDLES_PATH"),
+                agentic_bundles_root=os.environ.get("AGENTIC_BUNDLES_ROOT"),
             )
             html = self._render_dashboard_html(content=output_content, title="AI Bundles")
             return [html]

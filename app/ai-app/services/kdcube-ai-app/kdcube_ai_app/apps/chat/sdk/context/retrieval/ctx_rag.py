@@ -11,7 +11,7 @@ from typing import Optional, Sequence, List, Dict, Any, Union, Callable
 
 from kdcube_ai_app.apps.chat.sdk.util import _turn_id_from_tags_safe, ts_key, isoz
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import (
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import (
     TIMELINE_KIND,
     SOURCES_POOL_KIND,
     parse_timeline_payload,
@@ -445,7 +445,7 @@ class ContextRAGClient:
             extra_tags: Optional[List[str]] = None
     ) -> Dict[str, Any]:
         """Writes artifact to store and/or index (see index_only/store_only flags)."""
-        from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.turn_log import TurnLog as V2TurnLog
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.turn_log import TurnLog as V2TurnLog
         log = V2TurnLog.from_dict(payload or {})
         md = log.to_markdown()
 
@@ -2111,8 +2111,8 @@ class ContextRAGClient:
             view: Dict[str, Any] = {}
 
             if blocks:
-                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import Timeline
-                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.proto import RuntimeCtx
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import Timeline
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
                 view = Timeline(runtime=RuntimeCtx()).build_turn_view(
                     turn_id=tid,
                     blocks=blocks,
@@ -2156,7 +2156,7 @@ class ContextRAGClient:
 
                 for f in view.get("files") or []:
                     if isinstance(f, dict):
-                        from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.artifacts import normalize_file_payload
+                        from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import normalize_file_payload
                         f = normalize_file_payload(f)
                     out.append({
                         "message_id": f.get("message_id"),

@@ -902,7 +902,7 @@ async def web_search(
 
     widget = None
     if emit_delta_fn and comm:
-        from kdcube_ai_app.apps.chat.sdk.runtime.solution.widgets.web_search import WebSearchWidget
+        from kdcube_ai_app.apps.chat.sdk.solutions.widgets.web_search import WebSearchWidget
 
         rel_weight = 0.60
         prov_weight = 0.25

@@ -13,6 +13,8 @@ interface AppSettings {
     defaultTenant: string;
     defaultProject: string;
     defaultAppBundleId: string;
+    hostBundlesPath: string;
+    agenticBundlesRoot: string;
 }
 
 interface BundleEntry {
@@ -23,6 +25,10 @@ interface BundleEntry {
     singleton?: boolean | null;
     description?: string | null;
     version?: string | null;
+    git_url?: string | null;
+    git_ref?: string | null;
+    git_subdir?: string | null;
+    git_commit?: string | null;
 }
 
 interface BundlesResponse {
@@ -59,6 +65,8 @@ class SettingsManager {
     private readonly PLACEHOLDER_TENANT = '{{' + 'DEFAULT_TENANT' + '}}';
     private readonly PLACEHOLDER_PROJECT = '{{' + 'DEFAULT_PROJECT' + '}}';
     private readonly PLACEHOLDER_BUNDLE_ID = '{{' + 'DEFAULT_APP_BUNDLE_ID' + '}}';
+    private readonly PLACEHOLDER_HOST_BUNDLES_PATH = '{{' + 'HOST_BUNDLES_PATH' + '}}';
+    private readonly PLACEHOLDER_AGENTIC_BUNDLES_ROOT = '{{' + 'AGENTIC_BUNDLES_ROOT' + '}}';
 
     private settings: AppSettings = {
         baseUrl: '{{CHAT_BASE_URL}}',
@@ -67,7 +75,9 @@ class SettingsManager {
         idTokenHeader: '{{ID_TOKEN_HEADER}}',
         defaultTenant: '{{DEFAULT_TENANT}}',
         defaultProject: '{{DEFAULT_PROJECT}}',
-        defaultAppBundleId: '{{DEFAULT_APP_BUNDLE_ID}}'
+        defaultAppBundleId: '{{DEFAULT_APP_BUNDLE_ID}}',
+        hostBundlesPath: '{{HOST_BUNDLES_PATH}}',
+        agenticBundlesRoot: '{{AGENTIC_BUNDLES_ROOT}}'
     };
 
     private configReceivedCallback: (() => void) | null = null;
@@ -120,6 +130,18 @@ class SettingsManager {
             : this.settings.defaultProject;
     }
 
+    getHostBundlesPath(): string {
+        return this.settings.hostBundlesPath === this.PLACEHOLDER_HOST_BUNDLES_PATH
+            ? ''
+            : this.settings.hostBundlesPath;
+    }
+
+    getAgenticBundlesRoot(): string {
+        return this.settings.agenticBundlesRoot === this.PLACEHOLDER_AGENTIC_BUNDLES_ROOT
+            ? ''
+            : this.settings.agenticBundlesRoot;
+    }
+
     updateSettings(partial: Partial<AppSettings>): void {
         this.settings = { ...this.settings, ...partial };
     }
@@ -167,6 +189,12 @@ class SettingsManager {
                     if (config.defaultAppBundleId) {
                         updates.defaultAppBundleId = config.defaultAppBundleId;
                     }
+                    if (config.hostBundlesPath) {
+                        updates.hostBundlesPath = config.hostBundlesPath;
+                    }
+                    if (config.agenticBundlesRoot) {
+                        updates.agenticBundlesRoot = config.agenticBundlesRoot;
+                    }
 
                     if (Object.keys(updates).length > 0) {
                         this.updateSettings(updates);
@@ -184,7 +212,8 @@ class SettingsManager {
                 data: {
                     requestedFields: [
                         'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
-                        'defaultTenant', 'defaultProject', 'defaultAppBundleId'
+                        'defaultTenant', 'defaultProject', 'defaultAppBundleId',
+                        'hostBundlesPath', 'agenticBundlesRoot'
                     ],
                     identity: identity
                 }
@@ -446,11 +475,40 @@ const AIBundleDashboard: React.FC = () => {
         path: '',
         module: '',
         singleton: false,
-        description: ''
+        description: '',
+        git_url: '',
+        git_ref: '',
+        git_subdir: ''
     });
     const formRef = useRef<HTMLDivElement | null>(null);
 
     const bundleList = useMemo(() => Object.values(bundles).sort((a, b) => a.id.localeCompare(b.id)), [bundles]);
+    const derivedGitPath = useMemo(() => {
+        if (!form.git_url) return '';
+        const id = form.id || '<bundle_id>';
+        const ref = (form.git_ref || '').trim();
+        const subdir = (form.git_subdir || '').trim();
+        const base = `<bundles_root>/${id}${ref ? `__${ref}` : ''}`;
+        return subdir ? `${base}/${subdir}` : base;
+    }, [form.git_url, form.git_ref, form.git_subdir, form.id]);
+    const derivedHostPath = useMemo(() => {
+        if (!form.git_url) return '';
+        const root = settings.getHostBundlesPath() || '<HOST_BUNDLES_PATH>';
+        const id = form.id || '<bundle_id>';
+        const ref = (form.git_ref || '').trim();
+        const subdir = (form.git_subdir || '').trim();
+        const base = `${root.replace(/\/+$/, '')}/${id}${ref ? `__${ref}` : ''}`;
+        return subdir ? `${base}/${subdir}` : base;
+    }, [form.git_url, form.git_ref, form.git_subdir, form.id]);
+    const derivedAgenticPath = useMemo(() => {
+        if (!form.git_url) return '';
+        const root = settings.getAgenticBundlesRoot() || '<AGENTIC_BUNDLES_ROOT>';
+        const id = form.id || '<bundle_id>';
+        const ref = (form.git_ref || '').trim();
+        const subdir = (form.git_subdir || '').trim();
+        const base = `${root.replace(/\/+$/, '')}/${id}${ref ? `__${ref}` : ''}`;
+        return subdir ? `${base}/${subdir}` : base;
+    }, [form.git_url, form.git_ref, form.git_subdir, form.id]);
 
     const loadBundles = async () => {
         try {
@@ -497,12 +555,12 @@ const AIBundleDashboard: React.FC = () => {
 
     const resetForm = () => {
         setEditingId(null);
-        setForm({ id: '', name: '', path: '', module: '', singleton: false, description: '' });
+        setForm({ id: '', name: '', path: '', module: '', singleton: false, description: '', git_url: '', git_ref: '', git_subdir: '' });
     };
 
     const saveBundle = async () => {
-        if (!form.id || !form.path) {
-            setError('Bundle id and path are required.');
+        if (!form.id || (!form.path && !form.git_url)) {
+            setError('Bundle id is required. Provide either a path or a git URL.');
             return;
         }
         try {
@@ -543,7 +601,10 @@ const AIBundleDashboard: React.FC = () => {
             path: entry.path || '',
             module: entry.module || '',
             singleton: !!entry.singleton,
-            description: entry.description || ''
+            description: entry.description || '',
+            git_url: entry.git_url || '',
+            git_ref: entry.git_ref || '',
+            git_subdir: entry.git_subdir || ''
         });
         setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0);
     };
@@ -682,6 +743,7 @@ const AIBundleDashboard: React.FC = () => {
                                         <th className="px-4 py-3 text-left font-semibold">Singleton</th>
                                         <th className="px-4 py-3 text-left font-semibold">Description</th>
                                         <th className="px-4 py-3 text-left font-semibold">Version</th>
+                                        <th className="px-4 py-3 text-left font-semibold">Git</th>
                                         <th className="px-4 py-3 text-right font-semibold">Actions</th>
                                     </tr>
                                 </thead>
@@ -695,6 +757,15 @@ const AIBundleDashboard: React.FC = () => {
                                             <td className="px-4 py-3 text-gray-700">{b.singleton ? 'true' : 'false'}</td>
                                             <td className="px-4 py-3 text-gray-600">{b.description || '—'}</td>
                                             <td className="px-4 py-3 text-gray-600">{b.version || '—'}</td>
+                                            <td className="px-4 py-3 text-gray-600">
+                                                {b.git_url ? (
+                                                    <div className="space-y-1">
+                                                        <div className="truncate max-w-[220px]" title={b.git_url || ''}>{b.git_url}</div>
+                                                        {b.git_ref && <div>ref: {b.git_ref}</div>}
+                                                        {b.git_commit && <div className="text-xs text-gray-500">commit: {b.git_commit.slice(0, 12)}</div>}
+                                                    </div>
+                                                ) : '—'}
+                                            </td>
                                             <td className="px-4 py-3 text-right">
                                                 <div className="flex justify-end gap-2">
                                                     <Button variant="secondary" onClick={() => editBundle(b)}>Edit</Button>
@@ -705,7 +776,7 @@ const AIBundleDashboard: React.FC = () => {
                                     ))}
                                     {bundleList.length === 0 && (
                                         <tr>
-                                            <td colSpan={8} className="px-4 py-6 text-center text-gray-500">
+                                            <td colSpan={9} className="px-4 py-6 text-center text-gray-500">
                                                 No bundles configured.
                                             </td>
                                         </tr>
@@ -799,7 +870,7 @@ const AIBundleDashboard: React.FC = () => {
                 <Card>
                     <CardHeader
                         title={editingId ? `Edit bundle: ${editingId}` : 'Add bundle'}
-                        subtitle="Provide id and path; module is optional unless using zip/whl."
+                        subtitle="Provide id and either path or git URL; module is optional unless using zip/whl."
                         action={editingId ? <Button variant="secondary" onClick={resetForm}>Cancel edit</Button> : undefined}
                     />
                     <CardBody className="space-y-5">
@@ -809,6 +880,62 @@ const AIBundleDashboard: React.FC = () => {
                             <InputField label="Name" value={form.name || ''} onChange={v => setForm({ ...form, name: v })} placeholder="Demo bundle" />
                             <InputField label="Path" value={form.path} onChange={v => setForm({ ...form, path: v })} placeholder="/bundles/demo" />
                             <InputField label="Module" value={form.module || ''} onChange={v => setForm({ ...form, module: v })} placeholder="demo.entrypoint" />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <InputField label="Git URL" value={form.git_url || ''} onChange={v => setForm({ ...form, git_url: v })} placeholder="https://github.com/org/repo.git" />
+                            <InputField label="Git Ref" value={form.git_ref || ''} onChange={v => setForm({ ...form, git_ref: v })} placeholder="main | v1.2.3 | <commit>" />
+                            <InputField label="Git Subdir" value={form.git_subdir || ''} onChange={v => setForm({ ...form, git_subdir: v })} placeholder="optional/subdir/inside/repo" />
+                        </div>
+                        <div className="rounded-xl border border-slate-200/70 bg-slate-50 px-4 py-3 text-xs text-slate-700">
+                            <div className="font-semibold mb-1">Resolved path preview</div>
+                            <div className="space-y-1">
+                                <div>
+                                    <span className="font-medium">HOST_BUNDLES_PATH:</span>{' '}
+                                    <code className="px-1 py-0.5 rounded bg-white border border-slate-200">
+                                        {settings.getHostBundlesPath() || '—'}
+                                    </code>
+                                </div>
+                                <div>
+                                    <span className="font-medium">AGENTIC_BUNDLES_ROOT:</span>{' '}
+                                    <code className="px-1 py-0.5 rounded bg-white border border-slate-200">
+                                        {settings.getAgenticBundlesRoot() || '—'}
+                                    </code>
+                                </div>
+                                <div>
+                                    <span className="font-medium">Current path:</span>{' '}
+                                    <code className="px-1 py-0.5 rounded bg-white border border-slate-200">{form.path || '—'}</code>
+                                </div>
+                                {derivedGitPath ? (
+                                    <div>
+                                        <span className="font-medium">Derived path (git template):</span>{' '}
+                                        <code className="px-1 py-0.5 rounded bg-white border border-slate-200">{derivedGitPath}</code>
+                                    </div>
+                                ) : null}
+                                {derivedHostPath ? (
+                                    <div>
+                                        <span className="font-medium">Derived path (HOST_BUNDLES_PATH):</span>{' '}
+                                        <code className="px-1 py-0.5 rounded bg-white border border-slate-200">{derivedHostPath}</code>
+                                    </div>
+                                ) : null}
+                                {derivedAgenticPath ? (
+                                    <div>
+                                        <span className="font-medium">Derived path (AGENTIC_BUNDLES_ROOT):</span>{' '}
+                                        <code className="px-1 py-0.5 rounded bg-white border border-slate-200">{derivedAgenticPath}</code>
+                                    </div>
+                                ) : null}
+                            </div>
+                            <div className="mt-2 text-[11px] text-slate-600">
+                                Updates take effect when the bundle path changes. For git bundles, use a new <code>git_ref</code>.
+                                For local bundles, deploy to a new path and update <code>path</code>.
+                            </div>
+                        </div>
+                        <div className="rounded-xl border border-amber-200/60 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                            <div className="font-semibold mb-1">Private Git repos</div>
+                            <div>Set one of:</div>
+                            <ul className="list-disc pl-5 space-y-1">
+                                <li><code>GIT_SSH_KEY_PATH</code> (+ optional <code>GIT_SSH_KNOWN_HOSTS</code>, <code>GIT_SSH_STRICT_HOST_KEY_CHECKING</code>)</li>
+                                <li>or embed a token in the URL: <code>https://&lt;token&gt;@github.com/org/repo.git</code></li>
+                            </ul>
                         </div>
                         <InputField label="Description" value={form.description || ''} onChange={v => setForm({ ...form, description: v })} placeholder="Optional description" />
 

@@ -11,7 +11,7 @@ import uuid
 import pathlib
 from typing import Any, Dict, List, Optional, Annotated, Callable, Awaitable
 
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.context import ReactContext
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.context import ReactContext
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 try:

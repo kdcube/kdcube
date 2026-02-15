@@ -30,6 +30,7 @@ from the accounting system using the RateCalculator.
 """
 
 _scheduler_task: Optional[asyncio.Task] = None
+_bundle_cleanup_task: Optional[asyncio.Task] = None
 logger = logging.getLogger("OPEX.API")
 
 @asynccontextmanager
@@ -37,12 +38,15 @@ async def opex_lifespan(app: FastAPI):
     """
     Router lifespan: start scheduler on startup, stop it on shutdown.
     """
-    global _scheduler_task
+    global _scheduler_task, _bundle_cleanup_task
 
     import kdcube_ai_app.apps.chat.api.opex.routines as routines
     if _scheduler_task is None:
         _scheduler_task = asyncio.create_task(routines.aggregation_scheduler_loop())
         logger.info("[OPEX Aggregator] Background scheduler task started")
+    if _bundle_cleanup_task is None:
+        _bundle_cleanup_task = asyncio.create_task(routines.bundle_cleanup_loop())
+        logger.info("[Bundles] Background cleanup task started")
 
     try:
         yield
@@ -55,6 +59,14 @@ async def opex_lifespan(app: FastAPI):
                 pass
             logger.info("[OPEX Aggregator] Background scheduler task stopped")
             _scheduler_task = None
+        if _bundle_cleanup_task is not None:
+            _bundle_cleanup_task.cancel()
+            try:
+                await _bundle_cleanup_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[Bundles] Background cleanup task stopped")
+            _bundle_cleanup_task = None
 
 # Create router
 router = APIRouter(lifespan=opex_lifespan)

@@ -9,6 +9,7 @@ import importlib.util
 import sys
 import inspect
 import types
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Any, Dict, List
@@ -240,6 +241,30 @@ def get_workflow_instance(
         * the chosen factory has decorator meta singleton=True
     """
     key = _cache_key(spec)
+
+    # Track active bundle references (best-effort, non-blocking)
+    try:
+        from kdcube_ai_app.infra.plugin.bundle_refs import touch_bundle_ref
+
+        def _tp_from_ctx(ctx: ChatTaskPayload) -> tuple[Optional[str], Optional[str]]:
+            t = getattr(getattr(ctx, "actor", None), "tenant_id", None)
+            p = getattr(getattr(ctx, "actor", None), "project_id", None)
+            if not t or not p:
+                t = t or getattr(getattr(ctx, "meta", None), "tenant", None)
+                p = p or getattr(getattr(ctx, "meta", None), "project", None)
+            return t, p
+
+        if redis is not None and spec.path:
+            t, p = _tp_from_ctx(comm_context)
+            coro = touch_bundle_ref(redis, path=spec.path, tenant=t, project=p)
+            if asyncio.iscoroutine(coro):
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(coro)
+                except RuntimeError:
+                    pass
+    except Exception:
+        pass
     # singleton cache hit?
     if spec.singleton and key in _singleton_cache:
         inst, mod = _singleton_cache[key]

@@ -549,7 +549,7 @@ class ContextTools:
             if p.startswith("sk:"):
                 return {"ret": None, "err": _err("invalid_path_skill", "fetch_ctx does not support sk: paths. Use react.read for skills before exec.")}
 
-            from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import resolve_artifact_from_timeline
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import resolve_artifact_from_timeline
 
             timeline = _read_timeline() or {}
             art = resolve_artifact_from_timeline(timeline, p)
