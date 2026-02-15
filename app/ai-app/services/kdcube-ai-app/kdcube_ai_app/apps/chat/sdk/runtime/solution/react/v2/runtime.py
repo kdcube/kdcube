@@ -823,7 +823,7 @@ class ReactSolverV2:
                 on_progress_delta=mainstream,
                 subscribers=subs,
                 agent_name=role,
-                max_tokens=6000,
+                max_tokens=20000,
                 user_blocks=blocks,
             )
 
