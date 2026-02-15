@@ -248,12 +248,12 @@ class ExecTools:
     @kernel_function(
         name="execute_code_python",
         description=(
-            "Execute a ready (pre-written) Python 3.11 program in the sandbox using the same\n"
-            "runtime mechanism as `codegen_tools.codegen_python`, but WITHOUT code generation.\n"
+            "Registers the sanbdbox to execute a Python 3.11 program in this sandbox.\n"
+            "Will wait for code to be mounted to start execution. You generate the code to execute in the dedicated channel called <channel:code>.\n"
+            "You cannot provide the code in the call of this function directly.\n"
             "\n"
-            "WHEN TO USE\n"
-            "- Use this tool ONLY when you already have the code and need to run it.\n"
-            "- The code you pass is a SNIPPET that is inserted inside an async main() wrapper.\n"
+            "[Requirements to code which can be executed by this tool]:\n"
+            "- Must be SNIPPET that is inserted inside an async main() wrapper.\n"
             "- The snippet SHOULD use async operations (await where needed).\n"
             "\n"
             "RUNTIME BEHAVIOR\n"
@@ -262,18 +262,17 @@ class ExecTools:
             "- Each requested file that exists and is non-empty is considered.\n"
             "- Expected as a result of this snippet files are described in contract.\n"
             "\n"
-            "INPUTS\n"
+            "[INPUTS]\n"
+            "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
             "   - filename (OUT_DIR‑relative; MUST start with turn_<id>/files/)\n"
             "   - description (what this file contains / why it was produced)\n"
             "   These are outputs of this program that it promises to produce.\n"
-            "2) `code` (string, REQUIRED): Python code snippet to run (inserted into async main()).\n"
-            "3) `prog_name` (string, optional): short name of the program for UI labeling.\n"
+            "2) `prog_name` (string, optional): short name of the program for UI labeling.\n"
             "\n"
             "FETCH_CTX (ADVANCED)\n"
             "- If your snippet needs to load the text data for the artifact you see on timeline, you may call\n"
             "  ctx_tools.fetch_ctx inside the snippet using agent_io_tools.tool_call.\n"
-            "- This is ONLY allowed when the current generator is writing the code (when you act as a codegenerator and in your generated code).\n"
             "- The paths allowed with this tool are only logical ar: so: tc:\n"
             "- Do NOT rely on fetch_ctx unless you are the code author for this run.\n"
             "\n"
@@ -306,8 +305,7 @@ class ExecTools:
     )
     async def execute_code_python(
         self,
-        code: Annotated[str, "Python code snippet (string). Inserted into async main()."],
-        contract: Annotated[Any, "List or JSON string of artifact specs (filename, description)."],
+        contract: Annotated[Any, "List or JSON string of artifact specs (filename, description) that you plan your future code to produce."],
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
     ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:

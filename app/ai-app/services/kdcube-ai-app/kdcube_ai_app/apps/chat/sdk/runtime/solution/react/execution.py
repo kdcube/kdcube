@@ -109,9 +109,9 @@ async def _execute_exec_tool(
     params = tool_execution_context.get("params") or {}
     from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import run_exec_tool, build_exec_output_contract
     artifacts_spec = params.get("contract")
-    code = params.get("code") or ""
+    code = ""
     timeout_s = params.get("timeout_s") or 600
-    exec_id = exec_streamer.execution_id
+    exec_id = exec_streamer.execution_id if exec_streamer else None
     # exec_id = _safe_exec_id(tool_execution_context.get("exec_id") or tool_call_id)
 
     base_error = {
@@ -132,19 +132,24 @@ async def _execute_exec_tool(
         payload["error"] = error_obj
         return payload
 
-    prog_name = (params.get("prog_name") or "").strip()
-    if exec_streamer and prog_name:
+    if exec_streamer:
         try:
-            await exec_streamer.emit_program_name(prog_name)
+            streamed_code = exec_streamer.get_code()
+            if streamed_code:
+                code = streamed_code
         except Exception:
-            logger.log("[react.exec] Failed to emit program name", level="WARNING")
+            pass
+    else:
+        error_obj = {
+            "code": "missing_streamer",
+            "message": "Exec tool requires code from the decision stream (exec streamer missing).",
+            "where": "exec_execution",
+            "managed": True,
+        }
+        summary = "Exec tool missing code stream"
+        return await _emit_exec_error(summary, error_obj)
 
     contract, normalized_artifacts, err = build_exec_output_contract(artifacts_spec)
-    if exec_streamer and contract:
-        try:
-            await exec_streamer.emit_contract(contract)
-        except Exception:
-            logger.log("[react.exec] Failed to emit execution contract", level="WARNING")
     if err:
         error_obj = {
             "code": err.get("code", "invalid_artifacts"),
@@ -156,12 +161,12 @@ async def _execute_exec_tool(
         return await _emit_exec_error(summary, error_obj)
     if not code:
         error_obj = {
-            "code": "missing_parameters",
-            "message": "Parameter 'code' is required for exec tool",
+            "code": "missing_code",
+            "message": "Exec tool requires code from <channel:code>.",
             "where": "exec_execution",
             "managed": True,
         }
-        summary = "Exec tool requires non-empty 'code' parameter"
+        summary = "Exec tool missing code from decision stream"
         return await _emit_exec_error(summary, error_obj)
     exec_t0 = time.perf_counter()
     envelope = await run_exec_tool(

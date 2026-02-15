@@ -23,6 +23,7 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
 - `started_at`: run start time in ISO format.
 - `debug_log_announce`: emit announce blocks in debug logs.
 - `debug_log_sources_pool`: emit sources pool in debug logs.
+- `debug_timeline`: when `true`, write the fully rendered model context to `debug/rendering/` (one file per render).
 - `session`: session-level configuration (see below).
 - `cache`: cache-related limits (see below).
 

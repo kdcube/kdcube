@@ -83,6 +83,11 @@ class CodegenChanneledStreamingWidget:
         self.program_name: Optional[str] = None
         self.current_status: Optional[str] = None
         self.event_log: List[dict] = []
+        self.captured_code: str = ""
+        self.contract_emitted = False
+        self.program_emitted = False
+        self.params_buffer: str = ""
+        self.params_parsed = False
 
     def set_execution_id(self, execution_id: Optional[str]) -> None:
         if execution_id:
@@ -126,6 +131,92 @@ class CodegenChanneledStreamingWidget:
             title="Program Name",
             language=None,
         )
+        self.program_emitted = True
+
+    def get_code(self) -> str:
+        return self.captured_code
+
+    def set_code(self, code: str) -> None:
+        self.captured_code = code or ""
+
+    async def capture_params(self, params: dict) -> None:
+        if not isinstance(params, dict):
+            return
+        prog_name = (params.get("prog_name") or "").strip()
+        if prog_name and not self.program_emitted:
+            await self.emit_program_name(prog_name)
+            self.program_emitted = True
+        contract_spec = params.get("contract")
+        if contract_spec and not self.contract_emitted:
+            try:
+                from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import build_exec_output_contract
+                contract, _, err = build_exec_output_contract(contract_spec)
+                if contract and not err:
+                    await self.emit_contract(contract)
+                    self.contract_emitted = True
+            except Exception:
+                return
+
+    async def feed_json(
+        self,
+        text: Optional[str] = None,
+        *,
+        completed: bool = False,
+        **_kwargs,
+    ) -> None:
+        if self.params_parsed:
+            return
+        chunk = text
+        if chunk is None:
+            chunk = text or ""
+        if chunk:
+            self.params_buffer += chunk
+        await self._try_parse_params(final=completed)
+
+    async def _try_parse_params(self, *, final: bool = False) -> None:
+        if self.params_parsed:
+            return
+        raw = (self.params_buffer or "").strip()
+        if not raw:
+            if final:
+                self.params_parsed = True
+            return
+        # Strip ```json fences if present.
+        if "```" in raw:
+            fence = raw
+            start = fence.find("```")
+            if start >= 0:
+                fence = fence[start + 3 :]
+                fence = fence.lstrip()
+                if fence.startswith("json"):
+                    fence = fence[4:]
+                end = fence.rfind("```")
+                if end >= 0:
+                    fence = fence[:end]
+                raw = fence.strip()
+        try:
+            data = json.loads(raw)
+        except Exception:
+            if final:
+                self.params_parsed = True
+            return
+        tool_call = data.get("tool_call") if isinstance(data, dict) else None
+        if not isinstance(tool_call, dict):
+            if final:
+                self.params_parsed = True
+            return
+        tool_id = (tool_call.get("tool_id") or "").strip()
+        if self.tool_id_value and tool_id != self.tool_id_value and not self.captured_code:
+            if final:
+                self.params_parsed = True
+            return
+        params = tool_call.get("params")
+        if isinstance(params, dict):
+            try:
+                await self.capture_params(params)
+            except Exception:
+                pass
+        self.params_parsed = True
 
     def _path_has(self, keys: List[str]) -> bool:
         stack = [k for k in self.path_stack if k]
@@ -201,6 +292,28 @@ class CodegenChanneledStreamingWidget:
         )
         self.subsystem_started = True
         self.subsystem_index += 1
+
+    async def feed_raw(self, chunk: str) -> None:
+        if not chunk:
+            return
+        self._log_event("feed_raw", size=len(chunk))
+        self.captured_code += chunk
+        await self._emit_chunk(chunk)
+
+    async def feed_code(
+        self,
+            text: Optional[str] = None,
+        *,
+        completed: bool = False,
+        **_kwargs,
+    ) -> None:
+        if completed:
+            await self.finish()
+            return
+        chunk = text
+        if chunk is None:
+            chunk = text or ""
+        await self.feed_raw(chunk)
 
     async def feed(self, chunk: str) -> None:
         if not chunk:
@@ -414,6 +527,7 @@ class CodegenChanneledStreamingWidget:
         )
         self.contract_index += 1
         await self.send_status(status="exec")
+        self.contract_emitted = True
 
     async def emit_status(self, *, status: str, error: Optional[dict] = None) -> None:
         self._log_event("emit_status", status=status, error=bool(error))
@@ -455,8 +569,8 @@ class DecisionExecCodeStreamer(CodegenChanneledStreamingWidget):
             agent=agent,
             artifact_name=artifact_name,
             execution_id=execution_id,
-            stream_xpath="tool_call.params.code",
-            tool_id_xpath="tool_call.tool_id",
+            stream_xpath="",
+            tool_id_xpath="",
             tool_id_value="exec_tools.execute_code_python",
         )
 

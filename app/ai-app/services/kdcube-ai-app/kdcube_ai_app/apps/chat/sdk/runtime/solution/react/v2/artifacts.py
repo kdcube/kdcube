@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, List
 from kdcube_ai_app.apps.chat.sdk.util import _truncate, token_count
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import extract_source_sids
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import tc_result_path
 
 
 def normalize_physical_path(path_value: str, *, turn_id: str) -> tuple[str, str, bool]:
@@ -141,7 +142,7 @@ def build_artifact_meta_block(
         "type": "react.tool.result",
         "call_id": tool_call_id,
         "mime": "application/json",
-        "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else "",
+        "path": artifact_path if (artifact_path or "").startswith("so:") else tc_result_path(turn_id=turn_id, call_id=tool_call_id),
         "text": json.dumps(meta, ensure_ascii=False, indent=2),
         "ts": ts,
     }
@@ -201,7 +202,7 @@ def build_tool_result_error_block(
         "type": "react.tool.result",
         "call_id": tool_call_id,
         "mime": "application/json",
-        "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else "",
+        "path": tc_result_path(turn_id=turn_id, call_id=tool_call_id),
         "text": json.dumps(payload, ensure_ascii=False, indent=2),
         "ts": ts,
     }
@@ -471,6 +472,19 @@ class ArtifactView:
             }
             files.append(rec)
         return files
+
+
+def normalize_file_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure filename is basename only (no directories).
+    """
+    if not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    filename = out.get("filename")
+    if isinstance(filename, str) and filename.strip():
+        out["filename"] = filename.strip().split("/")[-1]
+    return out
 
     def save_inline(
         self,

@@ -12,7 +12,12 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.timeline import (
     build_timeline_payload,
     TimelineView,
 )
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import tool_call_block, notice_block, add_block
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import (
+    tool_call_block,
+    notice_block,
+    add_block,
+    tc_result_path,
+)
 
 TOOL_SPEC = {
     "id": "react.memsearch",
@@ -165,7 +170,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
         state["error"] = {"where": "tool_execution", "error": f"memsearch_failed:{exc}", "managed": True}
         return state
 
-    artifact_path = f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else ""
+    artifact_path = tc_result_path(turn_id=turn_id, call_id=tool_call_id)
     meta_block = build_artifact_meta_block(
         turn_id=turn_id,
         tool_call_id=tool_call_id,

@@ -17,6 +17,18 @@ def add_block(ctx_browser, block: Dict[str, Any]) -> None:
         pass
 
 
+def tc_call_path(*, turn_id: str, call_id: str) -> str:
+    if not turn_id or not call_id:
+        return ""
+    return f"tc:{turn_id}.{call_id}.call"
+
+
+def tc_result_path(*, turn_id: str, call_id: str) -> str:
+    if not turn_id or not call_id:
+        return ""
+    return f"tc:{turn_id}.{call_id}.result"
+
+
 def tool_call_block(*, ctx_browser, tool_call_id: str, tool_id: str, payload: Dict[str, Any]) -> None:
     turn_id = (getattr(ctx_browser.runtime_ctx, "turn_id", "") or "")
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -28,7 +40,7 @@ def tool_call_block(*, ctx_browser, tool_call_id: str, tool_id: str, payload: Di
         "call_id": tool_call_id,
         "tool_id": tool_id,
         "mime": "application/json",
-        "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.in.json",
+        "path": tc_call_path(turn_id=turn_id, call_id=tool_call_id),
         "text": json.dumps(payload, ensure_ascii=False, indent=2),
         "ts": ts,
     })

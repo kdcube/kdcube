@@ -10,10 +10,8 @@ from kdcube_ai_app.infra.service_hub.inventory import (
     create_cached_system_message,
     create_cached_human_message,
 )
-from kdcube_ai_app.apps.chat.sdk.streaming.versatile_streamer import (
-    ChannelSpec,
-    stream_with_channels,
-)
+from kdcube_ai_app.apps.chat.sdk.streaming.streaming import _stream_agent_two_sections_to_json
+from kdcube_ai_app.apps.chat.sdk.util import _today_str, _now_up_to_minutes
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.layout import (
     build_tool_catalog,
     build_instruction_catalog_block,
@@ -24,7 +22,9 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     PROMPT_EXFILTRATION_GUARD,
     INTERNAL_AGENT_JOURNAL_GUARD,
     ATTACHMENT_AWARENESS_IMPLEMENTER,
+    ATTACHMENT_BINDING_DECISION,
     ISO_TOOL_EXECUTION_INSTRUCTION,
+    TEMPERATURE_GUIDANCE,
     ELABORATION_NO_CLARIFY,
     CITATION_TOKENS,
     USER_GENDER_ASSUMPTIONS,
@@ -44,10 +44,10 @@ WORK_WITH_DOCUMENTS_AND_IMAGES = """
 
 CODEGEN_BEST_PRACTICES_V2 = """
 [CODEGEN BEST PRACTICES (HARD)]:
-- You use <channel:code> to write the code. You never put the code in the json inside <channel:ReactDecisionOutV2>. Putting code in channel other than <channel:code> is a protocol violation.
-- Exec code must be input-driven: never reprint or regenerate source artifacts inside the program if they can be read programmatically.
-  However, if the source artifacts have complex structure and reusing them programmatically is error prone, 
-  make sure the needed, for code generation, artifacts are visible in the context so you can properly write the needed content in code.  
+- Exec code must be input-driven: never reprint or regenerate source artifacts inside the program.
+- If code and artifacts synthesized in it depend on prior data or skills for correctness, they must already be visible:
+  use react.read(artifacts paths) in the prior round to load needed artifacts and skills into visible context.
+  Active skills are marked with ACTIVE 💡 banner.
 - For programmatic access to those artifacts inside the snippet, use ctx_tools.fetch_ctx with the SAME paths
   you would pass to react.read (fi:<turn_id>.files/<path>, ar:<turn_id>..., tc:<turn_id>..., so:sources_pool[...]).
   fetch_ctx returns a canonical artifact dict: {path, kind, mime, sources_used, filepath?, text|base64}.
@@ -58,44 +58,41 @@ CODEGEN_BEST_PRACTICES_V2 = """
 - If file (binary) is needed, read it using its OUT_DIR-relative path from the visible context.
 - If you generate based on data, you MUST see that data in your visible context in full, 
   otherwise you must react.read it if you see its path in context.
+  If your progress requires skills, you must see them loaded and visible as ACTIVE 💡.
 - If planning helps, outline the steps very briefly in comments, then implement.
 - For complex code, start with a very brief plan comment to avoid dead/irrelevant code.
 
-During code execution round you structure your output in 3 channels as schematically shown below:
-<channel:thinking>...</channel:thinking>
-<channel:ReactDecisionOutV2>ReactDecisionOutV2 compatible output></channel:ReactDecisionOutV2>
-<channel:code>code snippet</channel:code>
 >> CODE EXECUTION TOOL RULES (HARD)
 - You MAY execute code ONLY by calling `exec_tools.execute_code_python`.
 - Do NOT call any other tool to execute code (Python/SQL/shell/etc.) and do not invent tools.
-- Writing code does NOT execute it. The code only runs ONLY when you say you want to call `exec_tools.execute_code_python` in <channel:ReactDecisionOutV2> and generate the code in <channel:code> channel.
-- The code you will provide in <channel:code> will be mounted to exec tool's execution environment and executed there.
-  You do not put the code in tool params. it does not accept code. Code must be provided separately in <channel:code>.
-- react.read, react.write and other react.* tools do NOT exist inside the exec environment; call them only as tools via action=call_tool.
+- Writer tools only write files; they must NOT be planned as a way to "run" code.
+- Writing code does NOT execute it. It runs ONLY when you call `exec_tools.execute_code_python` (with your snippet).
+- When calling exec, always set `tool_call.params.prog_name` (short program name).
+- react.read and react.write do NOT exist inside the exec environment; call them only as tools via action=call_tool.
 
 >> EXEC PREREQS (QUALITY + OWNERSHIP)
-- You must write the runnable snippet yourself in <channel:code>.
+- You must write the runnable snippet yourself and pass it as `tool_call.params.code`.
 - Do not proceed unless the evidence you need is fully available in the context and, if needed verbatim,
-  loaded via react.read so now visible in the context. If you see the artifact in full but it is considered as volatile (can be edited since last time you see it by someone else) or the user asks for freshness you might need to 
-  re-initiate the acquisition of that artifact - either from external source (web, knowledge base, user) or by react.read() instead of using the visible one from the context.
-- If you do not have enough information to write the code now, use react.read to read it first (artifacts, skills, sources).
+  loaded via react.read in the prior round. Only re-fetch if the source is volatile or the user asks for freshness.
+- If you do not have enough information to write the code now, use react.read to read it first.
+
+>> TYPICAL TWO-STEP PLAN FOR EXEC (WHEN NEEDED)
+1) Call react.read([...]) to read required content in full and load skills.
+2) On the next round, write the snippet and call `exec_tools.execute_code_python` with artifacts + code.
 
 >> EXEC OUTPUT CONTRACT (MANDATORY)
 - Exec artifacts are ALWAYS files.
-- `exec_tools.execute_code_python` `contract` (file artifacts to produce) and prog_name.
-- Required params: `contract`, `prog_name` (optional: `timeout_s`).
+- `exec_tools.execute_code_python` accepts `code` + `contract` (file artifacts to produce).
+- Required params: `code`, `contract`, `prog_name` (optional: `timeout_s`).
 - `contract` entries MUST include `filename`, `description`.
 - `filename` MUST be **relative to OUT_DIR** and MUST be nested under the current turn folder:
   `"<turn_id>/files/<path>"` (you choose `<path>`).
 - `description` is a **semantic + structural inventory** of the file (telegraphic): layout (tables/sections/charts/images),
   key entities/topics, objective.
 - Example: "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4; objective: revenue trend."
-- In order to execute this tool, you must write the code in <channel:code> channel. Then it will be executed by exec tool. The code execution must produce the files you defined in contract.
-  You will see these files in the context after execution of the tool, for binary files you will see their metadata and the evidence if they were created.  
-"""
-EXEC_SNIPPET_RULES = f"""
+
 >> EXEC SNIPPET RULES
-- `code` which you emit in channel:code is a SNIPPET inserted inside an async main(); do NOT generate boilerplate or your own main.
+- `code` is a SNIPPET inserted inside an async main(); do NOT generate boilerplate or your own main.
 - The snippet SHOULD use async operations (await where needed).
 - Do NOT import tools from the catalog; invoke tools via `await agent_io_tools.tool_call(...)`.
 - OUT_DIR is a global Path for runtime files. Use it as the prefix when reading any existing file.
@@ -105,38 +102,40 @@ EXEC_SNIPPET_RULES = f"""
   their physical path under OUT_DIR, e.g. `OUT_DIR / "<turn_id>/attachments/<filename>"`.
 - Example: `OUT_DIR / "<turn_id>/files/report.xlsx"` for files produced by assistant, <turn_id>/attachments/<filename> for user attachments .
 - Outputs MUST be written to the provided `filename` paths under OUT_DIR.
-- If your snippet must invoke built-in tools, follow the ISO tool execution rule: use `await agent_io_tools.tool_call(...)`. More details:
-{ISO_TOOL_EXECUTION_INSTRUCTION}
+- If your snippet must invoke built-in tools, follow the ISO tool execution rule: use `await agent_io_tools.tool_call(...)`.
+- You MAY use ctx_tools.fetch_ctx inside your snippet to load context (generated code only; never in tool_call rounds).
+- `io_tools.tool_call` is ONLY for generated code to invoke catalog tools. Do NOT call it directly in decision.
+- fetch_ctx only supports ar:, tc:, so: paths. It does NOT support fi:. For files/attachments use
+  physical OUT_DIR paths. 
 - If multiple artifacts are produced in the same code, prefer them to be **independent** (not built from each other) so they can be reviewed first.
 - Keep artifacts independent to avoid snowballing errors; validation happens only after exec completes.
 - Network access is disabled in the sandbox; any network calls will fail.
 - Read/write outside OUT_DIR or the current workdir is not permitted.
-- `io_tools.tool_call` is ONLY for generated code to invoke catalog tools. Do NOT call it directly in decision.
-[ ctx_tools.fetch_ctx or read file?]
-- You MAY use ctx_tools.fetch_ctx inside your snippet to load context (generated code only; never in tool_call rounds).
-- fetch_ctx only supports ar:, tc:, so: paths. It does NOT support fi:. For files/attachments use physical OUT_DIR paths. 
-- fetch_ctx only returns the object of shape {{path: logical path (ar:, so:..), mime, sources_used:[sid, sid, ...], text or base64 depending on mime}} so you may only read the text or base64 with this tool into code snippet.
-  If you need files, you access them directly with OUT_DIR-relative paths.
 """
 
 SOURCES_AND_CITATIONS_V2 = """
 [SOURCES & CITATIONS (HARD)]:
-When you produce the content with react.write(content) or if you directly write the content param value for rendering.write_* tools,
- or generate final_answer, you must cite the sources of the information you used to produce that content if you synthesized this information from those sources.
-Citations allow users to verify the claims and explore further.
-- When citing, ONLY use SIDs that exist in the current sources_pool which compact version you always see in the bottom of the context. 
-Do not invent sources or SIDs since they will appear as a broken citation markers in the user facing data.
+- When you need to record an artifact, call react.write.
+  The params MUST be ordered: path, channel, content, kind.
+- If generation depends on external evidence (search/fetch/attachments), first load those sources via react.read
+  so they appear in your visible context. Use sources_pool slices (e.g., so:sources_pool[2,3]) or artifact paths.
+- If the content must be generated by following strict rules (e.g. to be rendered by rendering_tools.write_*),
+  ensure you first read any required guidance that is already visible in the timeline.
+- Never cite summaries; use full content. Do not invent sources or SIDs.
+- When citing, ONLY use SIDs that exist in the current sources_pool.
 - Citation format depends on output format:
   - markdown/text: add [[S:1]] or [[S:1,3]] at end of the sentence/paragraph that contains the claim.
   - html: add <sup class="cite" data-sids="1,3">[[S:1,3]]</sup> immediately after the claim.
   - json/yaml: include a sidecar field "citations": [{"path": "<json pointer>", "sids": [1,3]}]
     pointing to the string field containing the claim.
+- If a claim cannot be supported by available sources, omit it or clearly label it as unsupported.
+
 - Tools web.web_search and web.web_fetch automatically add the retrieved sources to the sources_pool.
   The sids in such tools results are the sids those sources have in the source pool.
   When such tool is called, the returned snippets are visible in the context right away, so you can cite them directly.
   Only use react.read if a needed snippet is no longer visible (e.g., hidden or truncated after cache TTL pruning).
   In that case, read from sources_pool with react.read, e.g. react.read(paths=["so:sources_pool[1,2]"]).
-   
+  
 """
 
 class ToolCallDecisionV2(BaseModel):
@@ -154,12 +153,46 @@ class ReactDecisionOutV2(BaseModel):
     final_answer: Optional[str] = None
     suggested_followups: Optional[List[str]] = None
 
-def build_decision_system_text(
+def _get_2section_protocol(json_hint: str) -> str:
+    return (
+        "\n\n[CRITICAL OUTPUT PROTOCOL — TWO SECTIONS, IN THIS ORDER]:\n"
+        "• You MUST produce EXACTLY TWO SECTIONS (two channels) in this order.\n"
+        "• Use EACH START marker below EXACTLY ONCE.\n"
+        "• NEVER write any END markers like <<< END ... >>>.\n"
+        "• The SECOND section must be a fenced JSON block and contain ONLY JSON.\n\n"
+        "CHANNEL 1 — THINKING CHANNEL (user-facing status):\n"
+        "Marker:\n"
+        "<<< BEGIN INTERNAL THINKING >>>\n"
+        "Immediately after this marker, write a VERY SHORT, non-technical status for the user.\n"
+        "- 1–3 short sentences or up to 3 brief bullets.\n"
+        "- Plain language only: no JSON, no schema talk, no field names.\n"
+        "If you truly have nothing to add, output a single line with \"…\".\n\n"
+        "CHANNEL 2 — STRUCTURED JSON CHANNEL (ReactDecisionOutV2):\n"
+        "Marker:\n"
+        "<<< BEGIN STRUCTURED JSON >>>\n"
+        "Immediately after this marker, output ONLY a ```json fenced block with a single\n"
+        "ReactDecisionOutV2 object that matches the JSON shape hint below (note this is just a shape!):\n"
+        "```json\n"
+        f"{json_hint}\n"
+        "```\n\n"
+        "[STRICT RULES FOR CHANNEL 2 (JSON)]:\n"
+        "1. Channel 2 MUST contain ONLY a single JSON object.\n"
+        "2. JSON MUST be inside the ```json fenced block shown above.\n"
+        "3. DO NOT write any text before or after the JSON fence.\n"
+        "4. The JSON must be valid and conform to the ReactDecisionOutV2 schema.\n\n"
+    )
+
+
+async def react_decision_stream_v2(
+    svc: ModelServiceBase,
     *,
+    agent_name: str,
     adapters: List[Dict[str, Any]],
     infra_adapters: Optional[List[Dict[str, Any]]] = None,
+    on_progress_delta=None,
     max_tokens: int = 2200,
-) -> str:
+    user_blocks: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     thinking_budget = min(240, max(80, int(0.12 * max_tokens)))
 
     json_hint = (
@@ -180,7 +213,7 @@ def build_decision_system_text(
 
 Where to look in the visible context:
 - The timeline is ordered **oldest → newest** (newest at bottom). Each turn begins with `[TURN <turn_id>]`.
-- Within a turn, user prompt/attachments appear first, followed by AI assistant contributions such as tool call/result blocks and artifacts produced.
+- Within a turn, user prompt/attachments appear first, followed by agent contributions and tool call/result blocks.
 
 ### Context artifacts discovery and access (CRITICAL)
 You use these paths to: 
@@ -188,24 +221,29 @@ You use these paths to:
 2) to load content with react.read in react loop tool;
 3) to read content in your code (exec snippets) with ctx_tools.fetch_ctx.
 
-CRITICAL: You never use the filesystem paths in these cases
-CRITICAL: Filesystem paths can be used in exec snippets, in react.write, react.patch, rendering_tools.write_*
+CRITICAL: You never use the filesystem paths shown in context directly.
+CRITICAL: Filesystem paths only can be used in exec snippets.
 
 #### Path usage (Decision-only)
-- react.read (react) / ctx_tools.fetch_ctx (code) **require logical paths** (ar:/fi:/tc:/so:/su:).  
+- react.read / fetch_ctx **require logical paths** (ar:/fi:/tc:/so:/su:).  
   Example: `react.read(path="fi:<turn_id>.files/reports/summary.md")`
 - Tools that **write or patch files** expect **physical paths**:  
-  - `react.write(path="turn_<id>/files/draft.md", channel=..., content=..., kind=...)`  
   - `react.patch(path="turn_<id>/files/draft.md", patch="...")`  
   - `rendering_tools.write_pdf(path="turn_<id>/files/report.pdf", content=...)`  
-  - code which you generate for execution can use physical paths (relative to outdir).
+  - exec code uses the same physical paths.
 - If you pass a logical path to a physical‑path tool (or vice versa), the runtime will rewrite it and log a protocol notice.
 
 ### Using Search/Fetch results (SPECIAL RULE)
-- Search/fetch tool calls result are list of {sid, url, text, content, ..}, and the content (snippet of data from that source) can be large. 
-  Therefore the timeline management process can truncate such results in the visible context as the timeline progresses (older/large data pruning).
-  However, the results of such tools are added in the sources_pool. 
-- Whenever some sids are invisible/truncated while you need them, you can bring the selected sids into visibilty by reading them from sources pool with react.read(paths=["so:sources_pool[sid1, sid2, ..]"]) using slice operator, for the enumeration of SIDs `so:sources_pool[1,3,5]` or for range of sids `so:sources_pool[2:6]`
+- Search/fetch tool results are large. They are only available in full right after the tool call in its tool result block.
+  The result of such tools is added in the sources_pool and is only available from there afterward (sources_pool[sid1, sid2, ..]).
+  Each search / fetch tool result is summarized in its tool result block.
+- You never access the sources via that artifact, only via sources_pool. 
+- You never keep all sources at a time visible in the [FULL CONTEXT ARTIFACTS]. This might eat all context.
+  You request the sources with slice operator and use the either range of SIDs or the enumeration of SIDs when binding/reading them:
+  `sources_pool[1,3,5]` or `sources_pool[2:6]`.
+- You never bind/reference tool outputs via legacy `current_turn.*` paths.
+- You can also bind the same sources via `sources_pool[<sid>,...]`.
+- Use the [EXPLORED IN THIS TURN. WEB SEARCH/FETCH ARTIFACTS] section to see which SIDs each search/fetch produced.
 """
 
     PLANNING = """
@@ -213,7 +251,7 @@ Planning (optional, use react.plan only when it helps).
 - Use react.plan to create or update a plan. It appears in ANNOUNCE immediately.
 - Use it when the work is multi-step, ambiguous, or likely to span turns.
 - If the current plan still applies, do NOT call react.plan (treat it as active).
-- mode="new": create a new plan with ordered stwo sections: THINKING (≤240 toteps.
+- mode="new": create a new plan with ordered steps.
 - mode="update": replace the current plan with updated steps.
 - mode="close": clear the current plan when it is no longer relevant.
 
@@ -238,12 +276,13 @@ You are the Decision module inside a ReAct loop.
 {INTERNAL_NOTES_PRODUCER}
 {INTERNAL_NOTES_CONSUMER}
 {ATTACHMENT_AWARENESS_IMPLEMENTER}
+{TEMPERATURE_GUIDANCE}
+{ISO_TOOL_EXECUTION_INSTRUCTION}
 {ELABORATION_NO_CLARIFY}
 {CITATION_TOKENS}
 {PATHS_EXTENDED_GUIDE}
 {USER_GENDER_ASSUMPTIONS}
 {CODEGEN_BEST_PRACTICES_V2}
-{EXEC_SNIPPET_RULES}
 {SOURCES_AND_CITATIONS_V2}
 {WORK_WITH_DOCUMENTS_AND_IMAGES}
 {PLANNING}
@@ -258,21 +297,17 @@ You are the Decision module inside a ReAct loop.
 - The final_answer is the PRIMARY user response. It must contain everything the user needs to act,
   or a concise, complete summary with clear references to any attached documents you produced (e.g., “See the attached report…”).
   Do not rely on the timeline stream alone — final_answer is the main index of this turn.
-- You are responsible to produce response onto the user timeline nicely. Use react.write for user-visible content or internal notes.
+- You are responsible to produce response onto the user timeline nicely. Use react.write for user-visible content.
   Timeline is the main chat stream and should remain readable; avoid overloading it with large content.
   Use channel=timeline_text only for SHORT markdown status or brief summaries.
   Put LARGE content (even if markdown) or any non‑markdown (HTML/JSON/YAML/XML) on channel=canvas.
   Your work is printed on the timeline in order as you produce it.
 - When you completed the request or you are near to max iterations, wrap up and do best effort to answer from what you have. 
-  Final answer must be markdown. You must write it in the final_answer attribute and set the action=complete.
-  If you write final_answer, we consider the turn completed. final answer is the 'assistant response', it closes the turn. We stream it to a user timeline.
+Final answer must be markdown. You must write it in the final_answer attribute and set the action=complete.
+If you write final_answer, we consider the turn completed. final answer is the 'assistant response', it closes the turn. We stream it to a user timeline.
 - Avoid repeating large portions of content you already streamed; summarize and reference the attached document(s).
   If the task is simple, answer fully in final_answer without extra streaming.
-  If you want to make some illustrations before completing the turn, even if you do not need exploration, you first use react.write. final_answer must be last step in the turn.     
-- Ensure needed data/knowledge visible in context when needed: if generation depends on external evidence (search/fetch/attachments) which you do not see now in your visible context loaded (or maybe they are truncated), first load those sources via react.read so they appear in your visible context. Use sources_pool slices (e.g., so:sources_pool[sid,..]) for sources,  sk: for skills or ar: or fi: artifact paths with react.read.
-- If you see in catalog the skills that relate to the work you are going to do, make sure these skills are read in your visible context. Otherwise read with react.read(paths=[sk:..]). The skill which is 'read' is visible in the context in full and is marked as 💡.
-  Example: as one of the steps, you must generate the pptx and pdf. Learn best practices/advice by reading sk:public.pdf-press and sk:public.pptx-press if these skills are not visible as 'read' (💡) in context yet. Learning earlier helps plan better steps so to decide what is the best shape of the data / sequence of data transformation is optimal for the final result.
-
+If you want to make some illustrations before completing the turn, even if you do not need exploration, you first use react.write. final_answer must be last step in the turn.     
 Remember, you build the user timeline which allows them to efficiently stay in touch.
 - Track your progress: the system computes turn outcome from your plan acknowledgements (see below). Inaccurate marks are treated as protocol errors.
 
@@ -305,28 +340,8 @@ Remember, you build the user timeline which allows them to efficiently stay in t
   Anti‑pattern: do NOT stream long reports in timeline_text. If the content is large (even markdown), put it in canvas
   and summarize it in final_answer.
 
-[Tool Access (CRITICAL)]
-- The tools defined in the system instruction under [AVAILABLE COMMON TOOLS], [AVAILABLE REACT-LOOP TOOLS], and [AVAILABLE EXECUTION-ONLY TOOLS].
-- You have access to ALL available tools shown in these catalogs.
-
-[SKILLS (CRITICAL)]
-- Skills catalog is listed in [SKILL CATALOG]. Catalog only shows the skills registry briefly. Not the full content of the skills.
-- use react.read([...]) with skill IDs (e.g., sk:SK1 or sk:1 or sk:namespace.skill_id i.e. sk:public.pptx-press) to load them into visible context.
-  Once the skill is 'read' you see it with 💡banner which denotes the expanded skill content in the timeline.
-
 [REACT EVENTS, TOOL CALLS AND TOOL RESULTS, ARTIFACTS]
-Each tool call is saved under:
-  tc:<turn_id>.<tool_call_id>.call
-Each tool result is saved under:
-  tc:<turn_id>.<tool_call_id>.result
-Exception for web_search/web_fetch: the result is saved under
-  so:sources_pool[sid1-sid2]
-where sid1..sid2 are the first/last SIDs contributed by that call.
-Tool calls may also produce artifacts (files or display content). These appear in tool result blocks and can be read via react.read using their artifact paths.
-Example (schematic):
-  [TOOL RESULT tc_abcd] <tool_id>
-  artifact_path: fi:<turn_id>.files/report.xlsx   (or so:sources_pool[1-3] for web tools)
-  [Produced files] ... (e.g., rendering_tools.write_pdf / exec output / react.write with kind=file) or inline content if text
+Each time you call a tool we save its input in tc:<turn_id>.tool_calls.<tool_call_id>in.json and its output in tc:<turn_id>.tool_calls.<tool_call_id>out.json.
 You can see the tool call id for each tool call in its tool call block.
 For each tool call, we show the tool id, tool call id, params (including bindings), and tool result blocks.
 Protocol violations and errors are also shown after the tool call so you can verify correctness.
@@ -340,7 +355,6 @@ If you do not see the full content of an artifact in the visible context, you MU
 The artifact description includes the path you use with react.read and the tool id + tool call id they resulted from.
 Provide telegraphic notes in the root-level `notes` field when you call tools. We show these notes in the user timeline (user visible). 
 
-[ON BUILT-IN TOOLS]
 [CONTENT STREAMING AND CAPTURING TOOLS (HARD)]
 You have following tools to capture content which you produce in the named and distributable artifacts:
 - react.write: use to generate artifact. 
@@ -382,6 +396,7 @@ It is preferable to use react.write for streaming large content and use renderin
 
 [CAPTURING PROGRESS WITH ARTIFACTS]
 - One logical unit of work = one artifact path name.
+- Artifact path delimiter is . (e.g., "report.md", "analysis.findings.txt", "plan.v1.md").
   Physically this will create a file artifact with the name you provide and replace dots with slashes in the filesystem (e.g., "report.md" → report.md, "analysis.findings.txt" → analysis/findings.txt).
 - Physical paths are only used in exec snippets and rendering_tools.write_*.
 You never use them with react.* tools.
@@ -392,12 +407,21 @@ You never use them with react.* tools.
   - `visibility=external` means it was shared with the user. `visibility=internal` means it was never shared.
   - `channel` means the channel in which the artifact shared to a user (timeline_text|canvas|file). If no channel set, it was not shared.
 
+[Tool Access (CRITICAL)]
+- The tools are in the system instruction under [AVAILABLE COMMON TOOLS], [AVAILABLE REACT-LOOP TOOLS], and [AVAILABLE EXECUTION-ONLY TOOLS].
+- You have access to ALL available tools shown in these catalogs.
+
+[SKILLS (CRITICAL)]
+- Skills are listed in [SKILL CATALOG] and any loaded ones appear in your visible context with ACTIVE💡 banner.
+- Skills are shown originally only briefly (catalog); use react.read([...]) with skill IDs (e.g., sk:SK1 or sk:1) to load them into visible context with ACTIVE banner.
+
 [WORKING WITH ARTIFACTS, SOURCES, SKILLS (HARD RULE)]
-- You MUST read every artifact you modify or use to build based on it in full before editing/building on it.
+- You MUST read every artifact you modify or build on in full before editing/building on it.
   Use react.read([...]) to load the exact artifacts or sources or skills you need into your visible context.
 - If your work depends on skills, load them first with react.read and read them before acting.
-- Keep the visible artifacts/skills space sane: load what you need, unload what you no longer need (unload works only for recent blocks).
-- You may only refer to artifacts/skills that are visible in context. Binding or reading a non-existent artifact/skill is an error.
+- Keep the visible artifacts/skills space sane: load what you need, unload what you no longer need.
+- You may only refer to artifacts/skills that are visible in context. Binding or showing a non-existent artifact/skill is an error.
+- Use the tool call/result blocks and historical [TURN PROGRESS LOG] sections to plan; use react.read when you need full content.
 - If you generate or write content based on sources or prior artifacts, you MUST have those sources/artifacts visible in full in the current context.
 
 
@@ -410,8 +434,6 @@ You never use them with react.* tools.
    Regardless of whether you pick the kind='display' (no file shared) or kind='file' (stream and also share the file), we always capture it as a file artifact. 
    It is available for further reference in fi:<turn_id>.files/<path> with the <path> you provide (and for exec, with simply <path> as OUT_DIR-relative path).
    react.write params must be in order: path (use nice name), channel, content, kind.
-   So: when you need to record an artifact, call react.write.
-   The params MUST be STRICTLY ordered: path, channel, content, kind.
 5a) If you need a plan, call react.plan with mode=new/update/close and steps. Plans appear in ANNOUNCE and drive step acknowledgements.
    
 6) Use react.patch to update an existing file. react.patch params must be in order: path, channel, patch, kind.
@@ -433,6 +455,12 @@ You never use them with react.* tools.
 {artifacts_and_paths}
 """
 
+    sys_2 = (
+        "[OUTPUT FORMAT]\n"
+        f"Return exactly two sections: THINKING (≤{thinking_budget} tokens or '…') and JSON that conforms to ReactDecisionOutV2.\n"
+        "No text after JSON.\n"
+    )
+
     # Tool/skills catalogs
     infra_adapters = infra_adapters or []
     adapters = adapters or []
@@ -447,126 +475,25 @@ You never use them with react.* tools.
         include_skill_gallery=True,
     )
 
-    protocol = (
-        "CRITICAL: you have 3 channels and you must always write the proper content inside each channel."
-        "Output protocol (strict):\n"
-        "<channel:thinking> ... </channel:thinking>\n"
-        "<channel:ReactDecisionOutV2> ... </channel:ReactDecisionOutV2>\n"
-        "<channel:code> code generated </channel:code>\n\n"
-        "In <channel:thinking>, write a brief user-facing status in markdown\n"
-        "The thinking <channel:thinking> channel is shown to the user.\n"
-        "Keep it very short (1–2 sentences, no lists).\n\n"
-        "In <channel:ReactDecisionOutV2>, output ONLY a single ```json fenced block with\n"
-        "a ReactDecisionOutV2 object matching the shape hint below (no extra text):\n"
-        "```json\n"
-        f"{json_hint}\n"
-        "```\n\n"
-        "In <channel:code>, output ONLY the raw Python code snippet (no fencing, no any auxiliary text).\n"
-        "When you need to execute the code with exec_tools.execute_code_python tool, you MUST write code in this channel.\n"
-        "CRITICAL: Exec tool DOES NOT HAVE code parameter! Putting code in the tool call params is WRONG. Code goes only in <channel:code>!"
-    )
-    sys_msg = sys_1 + "\n" + "\n" + protocol + "\n" + tool_block
-    return sys_msg
+    #print(f"=== Tool Catalog for {agent_name} ===")
+    #print(tool_block)
+    #print("=== End of Tool Catalog ===")
 
-
-async def react_decision_stream_v2(
-    svc: ModelServiceBase,
-    *,
-    agent_name: str,
-    adapters: List[Dict[str, Any]],
-    infra_adapters: Optional[List[Dict[str, Any]]] = None,
-    on_progress_delta=None,
-    subscribers: Optional[Dict[str, List[Any]]] = None,
-    max_tokens: int = 2200,
-    user_blocks: Optional[List[Dict[str, Any]]] = None,
-) -> Dict[str, Any]:
-    system_text = build_decision_system_text(
-        adapters=adapters,
-        infra_adapters=infra_adapters,
-        max_tokens=max_tokens,
-    )
+    protocol = _get_2section_protocol(json_hint)
     system_msg = create_cached_system_message([
-        {"text": system_text, "cache": True},
+        {"text": sys_1 + "\n" + sys_2 + "\n" + protocol + "\n" + tool_block, "cache": True},
     ])
     user_msg = create_cached_human_message(user_blocks)
-    channels = [
-        ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
-        ChannelSpec(name="ReactDecisionOutV2", format="json", model=ReactDecisionOutV2, replace_citations=False, emit_marker="answer"),
-        ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
-    ]
 
-    async def _emit_delta(**kwargs):
-        # Never stream structured JSON channel to the main stream; it is handled via subscribers only.
-        if (kwargs.get("channel") or "") in {"ReactDecisionOutV2", "code"}:
-            if kwargs.get("channel") == "code":
-                pass
-            return
-        text = kwargs.get("text") or ""
-        completed = bool(kwargs.get("completed"))
-        if on_progress_delta is not None:
-            try:
-                await on_progress_delta(**kwargs)
-            except TypeError:
-                await on_progress_delta(text or "", completed=completed)
-
-    results, meta = await stream_with_channels(
+    response = await _stream_agent_two_sections_to_json(
         svc,
-        messages=[system_msg, user_msg],
-        role=agent_name,
-        channels=channels,
-        emit=_emit_delta,
-        agent=agent_name,
-        artifact_name="react.decision",
-        sources_list=None,
-        subscribers=subscribers,
+        client_name=agent_name,
+        client_role=agent_name,
+        sys_prompt=system_msg,
+        user_msg=user_msg,
+        schema_model=ReactDecisionOutV2,
+        on_progress_delta=on_progress_delta,
         max_tokens=max_tokens,
-        temperature=0.6,
-        return_full_raw=True,
+        temperature=0.6
     )
-
-    service_error = (meta or {}).get("service_error") if isinstance(meta, dict) else None
-
-    res_thinking = results.get("thinking")
-    res_json = results.get("ReactDecisionOutV2")
-    res_code = results.get("code")
-    thinking_raw = res_thinking.raw if res_thinking else ""
-    json_raw = res_json.raw if res_json else ""
-    code_raw = res_code.raw if res_code else ""
-    err = res_json.error if res_json else None
-
-    data = {}
-    if res_json and res_json.obj is not None:
-        try:
-            data = res_json.obj.model_dump()
-        except Exception:
-            data = res_json.obj
-    ok_flag = (service_error is None) and (err is None)
-
-    return {
-        "agent_response": data,
-        "log": {
-            "error": err,
-            "raw_data": json_raw,
-            "service_error": service_error,
-            "ok": ok_flag,
-        },
-        "raw": (meta or {}).get("raw") if isinstance(meta, dict) else None,
-        "internal_thinking": thinking_raw,
-        "channels": {
-            "thinking": {
-                "text": thinking_raw,
-                "started_at": res_thinking.started_at if res_thinking else None,
-                "finished_at": res_thinking.finished_at if res_thinking else None,
-            },
-            "ReactDecisionOutV2": {
-                "text": json_raw,
-                "started_at": res_json.started_at if res_json else None,
-                "finished_at": res_json.finished_at if res_json else None,
-            },
-            "code": {
-                "text": code_raw,
-                "started_at": res_code.started_at if res_code else None,
-                "finished_at": res_code.finished_at if res_code else None,
-            },
-        },
-    }
+    return response

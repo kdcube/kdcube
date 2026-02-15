@@ -27,6 +27,10 @@ INFRA_TOOL_IDS = {
     "ctx_tools.merge_sources",
 }
 
+PY_EXEC_ONLY_TOOL_IDS = {
+    "io_tools.tool_call",
+    "ctx_tools.fetch_ctx",
+}
 # Codegen-only infra tools (hidden from decision/common tool list).
 CODEGEN_ONLY_TOOL_IDS = {
     "io_tools.save_ret",

@@ -8,14 +8,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Callable, Awaitable, Tuple
+from typing import Any, Dict, List, Optional, Callable, Awaitable, Tuple, Union
 
 from pydantic import BaseModel
 
 from kdcube_ai_app.apps.chat.sdk.tools import citations as citations_module
 from kdcube_ai_app.apps.chat.sdk.streaming.artifacts_channeled_streaming import CompositeJsonArtifactStreamer
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase
+from kdcube_ai_app.apps.chat.sdk.util import _json_loads_loose_with_err
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,9 @@ class ChannelResult:
     raw: str
     obj: Optional[Any]
     used_sources: List[int]
+    started_at: Optional[float]
+    finished_at: Optional[float]
+    error: Optional[str]
 
 
 ChannelEmitFn = Callable[..., Awaitable[None]]
@@ -42,6 +47,29 @@ ChannelEmitFn = Callable[..., Awaitable[None]]
 
 OPEN_RE = re.compile(r"<channel:([a-zA-Z0-9_-]+)>", re.I)
 CLOSE_RE = re.compile(r"</channel:([a-zA-Z0-9_-]+)>", re.I)
+
+
+class ChannelSubscribers:
+    def __init__(self) -> None:
+        self._subs: Dict[str, List[ChannelEmitFn]] = {}
+
+    def subscribe(self, channel: str, fn: ChannelEmitFn) -> "ChannelSubscribers":
+        if not channel or fn is None:
+            return self
+        self._subs.setdefault(channel, []).append(fn)
+        return self
+
+    def extend(self, channel: str, fns: List[ChannelEmitFn]) -> "ChannelSubscribers":
+        if not channel or not fns:
+            return self
+        self._subs.setdefault(channel, []).extend(fns)
+        return self
+
+    def get(self, channel: str) -> List[ChannelEmitFn]:
+        return list(self._subs.get(channel) or [])
+
+    def to_dict(self) -> Dict[str, List[ChannelEmitFn]]:
+        return dict(self._subs)
 
 
 def _tag_holdback() -> int:
@@ -146,6 +174,7 @@ async def stream_with_channels(
         agent: str,
         artifact_name: Optional[str] = None,
         sources_list: Optional[List[Dict[str, Any]]] = None,
+        subscribers: Optional[Union[Dict[str, List[ChannelEmitFn]], ChannelSubscribers]] = None,
         max_tokens: int = 8000,
         temperature: float = 0.3,
         debug: bool = False,
@@ -170,6 +199,11 @@ async def stream_with_channels(
     """
     channel_specs = {c.name: c for c in channels}
     citation_map = citations_module.build_citation_map_from_sources(sources_list or [])
+    resolved_subscribers: Dict[str, List[ChannelEmitFn]] = {}
+    if isinstance(subscribers, ChannelSubscribers):
+        resolved_subscribers = subscribers.to_dict()
+    elif isinstance(subscribers, dict):
+        resolved_subscribers = subscribers
 
     buf = ""
     cursor = 0
@@ -178,15 +212,32 @@ async def stream_with_channels(
     raw_by_channel: Dict[str, List[str]] = {c.name: [] for c in channels}
     used_by_channel: Dict[str, set[int]] = {c.name: set() for c in channels}
     delta_counts: Dict[str, int] = {c.name: 0 for c in channels}
+    channel_times: Dict[str, Dict[str, Optional[float]]] = {
+        c.name: {"started_at": None, "finished_at": None} for c in channels
+    }
     citation_states: Dict[str, citations_module.CitationStreamState] = {}
     for spec in channels:
         if spec.replace_citations and spec.format in ("markdown", "text", "html") and citation_map:
             citation_states[spec.name] = citations_module.CitationStreamState()
 
+    async def _emit_subscribers(name: str, **kwargs) -> None:
+        if not resolved_subscribers:
+            return
+        subs = resolved_subscribers.get(name) or []
+        if not subs:
+            return
+        for fn in subs:
+            try:
+                await fn(**kwargs)
+            except Exception:
+                continue
+
     async def _emit_channel(name: str, raw_text: str) -> None:
         spec = channel_specs.get(name)
         if not spec:
             return
+        if raw_text and channel_times[name]["started_at"] is None:
+            channel_times[name]["started_at"] = time.time()
         scrubbed = _scrub_chunk(raw_text, strip_usage=spec.strip_usage)
         rendered = _replace_citations(
             scrubbed,
@@ -200,6 +251,17 @@ async def stream_with_channels(
         idx = delta_counts.get(name, 0)
         delta_counts[name] = idx + 1
         await emit(
+            text=rendered,
+            index=idx,
+            marker=spec.emit_marker or "answer",
+            agent=agent,
+            format=spec.format,
+            artifact_name=artifact_name,
+            channel=name,
+            completed=False,
+        )
+        await _emit_subscribers(
+            name,
             text=rendered,
             index=idx,
             marker=spec.emit_marker or "answer",
@@ -334,6 +396,7 @@ async def stream_with_channels(
 
             if is_close and current == tag_name:
                 await _flush_channel_citations(current)
+                channel_times[current]["finished_at"] = time.time()
                 cursor = tag_end
                 current = None
                 continue
@@ -342,6 +405,8 @@ async def stream_with_channels(
             if not is_close:
                 if current is not None:
                     await _flush_channel_citations(current)
+                if channel_times[tag_name]["started_at"] is None:
+                    channel_times[tag_name]["started_at"] = time.time()
                 current = tag_name
                 cursor = tag_end
                 continue
@@ -363,9 +428,25 @@ async def stream_with_channels(
             await composite_streamer.finish()
 
         # Emit completed markers per channel
+        now = time.time()
         for name, spec in channel_specs.items():
+            if channel_times[name]["started_at"] is None and raw_by_channel.get(name):
+                channel_times[name]["started_at"] = now
+            if channel_times[name]["finished_at"] is None and raw_by_channel.get(name):
+                channel_times[name]["finished_at"] = now
             idx = delta_counts.get(name, 0)
             await emit(
+                text="",
+                index=idx,
+                marker=spec.emit_marker or "answer",
+                agent=agent,
+                format=spec.format,
+                artifact_name=artifact_name,
+                channel=name,
+                completed=True,
+            )
+            await _emit_subscribers(
+                name,
                 text="",
                 index=idx,
                 marker=spec.emit_marker or "answer",
@@ -412,16 +493,26 @@ async def stream_with_channels(
         if spec.format in ("json", "yaml", "xml", "html", "mermaid"):
             raw = _strip_structured_fences(raw)
         obj = None
+        err: Optional[str] = None
         if spec.model and raw:
             try:
-                data = json.loads(raw)
-                obj = spec.model.model_validate(data)
-            except Exception:
+                data, err = _json_loads_loose_with_err(raw)
+                if data is not None:
+                    obj = spec.model.model_validate(data)
+                else:
+                    if err:
+                        err = f"{err}\nreact.decision raw json: {raw}"
+                    logger.error("Failed to parse channel %s into model %s: %s", name, spec.model, err)
+            except Exception as ex:
+                err = f"{ex}\nreact.decision raw json: {raw}"
                 logger.exception("Failed to parse channel %s into model %s", name, spec.model)
         results[name] = ChannelResult(
             raw=raw,
             obj=obj,
             used_sources=sorted(used_by_channel.get(name, set())),
+            started_at=channel_times[name]["started_at"],
+            finished_at=channel_times[name]["finished_at"],
+            error=err,
         )
 
     if return_full_raw:

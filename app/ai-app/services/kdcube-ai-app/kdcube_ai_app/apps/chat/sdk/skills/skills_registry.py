@@ -719,8 +719,7 @@ def skills_gallery_text(
     lines: List[str] = [
         "[SKILL CATALOG]",
         "The following skills are available to enhance agents capabilities. "
-        "Use `skills.<NAMESPACE>.<SKILL_ID>` to load a skill's full documentation when needed or mention the skill.",
-        "When suggesting skills, refer to the short IDs (e.g., SK1) only. Keep to 1–3 skills per step.",
+        "Use `sk:<NAMESPACE>.<SKILL_ID>` to load a skill's full documentation when needed. For example, sk:public.pdf-press",
         "",
         "═" * 79,
         "",

@@ -71,6 +71,7 @@ class RuntimeCtx:
     started_at: Optional[str] = ""
     debug_log_announce: bool = True
     debug_log_sources_pool: bool = False
+    debug_timeline: bool = False # if set, dump the timeline rendered view on render() to  rendered-YYYYMMDD-HHMMSS-<turn_id>-src|nosrc-ann|noann.txt
     session: RuntimeSessionConfig = field(default_factory=RuntimeSessionConfig)
     cache: RuntimeCacheConfig = field(default_factory=RuntimeCacheConfig)
     # Legacy cache fields (prefer RuntimeCtx.session).

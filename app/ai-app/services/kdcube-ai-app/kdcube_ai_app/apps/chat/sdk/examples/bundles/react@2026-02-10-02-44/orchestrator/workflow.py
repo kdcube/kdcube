@@ -12,7 +12,6 @@ from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import CTurnScratchpad
 from kdcube_ai_app.apps.chat.sdk.util import _tstart, _tend
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.layout import build_gate_stage_block
 from kdcube_ai_app.apps.chat.sdk.viz import logging_helpers
 
 from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
@@ -56,6 +55,7 @@ class WithReactWorkflow(BaseWorkflow):
         self.runtime_ctx.debug_log_announce = True
         self.runtime_ctx.debug_log_sources_pool = True
         self.runtime_ctx.max_iterations = 15
+        self.runtime_ctx.debug_timeline = True
 
     async def construct_turn_and_scratchpad(self, payload: dict) -> CTurnScratchpad:
         scratchpad = await super().construct_turn_and_scratchpad(payload)
@@ -167,7 +167,7 @@ class WithReactWorkflow(BaseWorkflow):
                 try:
                     await react.persist_workspace()
                 except Exception as ex:
-                    self.logger.log(traceback.format_exc())
+                    self.logger.log(traceback.format_exc(), level="ERROR")
                 await self._emit_turn_work_status(
                     [
                         "closing the loop",
@@ -180,14 +180,6 @@ class WithReactWorkflow(BaseWorkflow):
                 suggested_followups = [s.strip() for s in suggested_followups if isinstance(s, str) and s.strip()]
 
                 if answer_text:
-                    # if suggested_followups:
-                    #     # in order to later retrieve with fetch
-                    #     self.ctx_browser.contribute_suggested_followups(suggested_followups=suggested_followups)
-                    #     answer_text = (
-                    #         f"{answer_text}\n\n---\n\n"
-                    #         "Suggested followups:\n"
-                    #         + "\n".join(f"- {q}" for q in suggested_followups)
-                    #     )
                     scratchpad.answer = answer_text
                     scratchpad.suggested_followups = list(suggested_followups or [])
                     await self.emit_suggested_followups(suggested_followups=suggested_followups)
@@ -195,11 +187,6 @@ class WithReactWorkflow(BaseWorkflow):
                         await self.finish_turn(scratchpad, ok=True)
                     except Exception:
                         pass
-                    # if suggested_followups:
-                    #     try:
-                    #         await self._comm.followups(suggested_followups, agent="solver.react.v2")
-                    #     except Exception:
-                    #         pass
                     state["result"] = {"answer": answer_text, "suggested_followups": suggested_followups}
                     state["short_circuit"] = True
                 else:

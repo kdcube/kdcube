@@ -836,6 +836,7 @@ class ApplicationHostingService:
         """
         if not self.comm:
             return
+        from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.artifacts import normalize_file_payload
         cleaned_files: List[Dict[str, Any]] = []
         for item in files or []:
             if not isinstance(item, dict):
@@ -845,13 +846,10 @@ class ApplicationHostingService:
             if isinstance(data, dict):
                 meta = data.get("meta")
                 if isinstance(meta, dict):
-                    filename = meta.get("filename")
-                    if isinstance(filename, str) and filename.strip():
-                        meta = dict(meta)
-                        meta["filename"] = filename.strip().split("/")[-1]
-                        data = dict(data)
-                        data["meta"] = meta
-                        payload["data"] = data
+                    meta = normalize_file_payload(meta)
+                    data = dict(data)
+                    data["meta"] = meta
+                    payload["data"] = data
             cleaned_files.append(payload)
         if files:
             await self.comm.event(

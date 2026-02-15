@@ -94,7 +94,7 @@ class BaseWorkflow():
 
         self.conv_ticket_store = conv_ticket_store
         self.ticket_index = ConvTicketIndex(conv_ticket_store)
-        self.logger = AgentLogger("customer.orchestrator")
+        self.logger = AgentLogger("base.workflow")
 
         self._ctx = {}
 
@@ -1230,6 +1230,18 @@ class BaseWorkflow():
         # Defaults for generic path
         message = str(exc) or repr(exc)
         error_type = exc.__class__.__name__
+        if not isinstance(exc, ServiceException):
+            try:
+                safe_msg = self.message_resources_fn("server_error") if self.message_resources_fn else None
+            except Exception:
+                safe_msg = None
+            if safe_msg:
+                message = safe_msg
+            try:
+                extra_data["raw_error"] = str(exc)
+                extra_data["traceback"] = traceback.format_exc()
+            except Exception:
+                pass
 
         # ---- unwrap ServiceException / TurnPhaseError vs generic errors ----
         if isinstance(exc, ServiceException):
@@ -1297,7 +1309,8 @@ class BaseWorkflow():
             error_type = exc.code or "TurnPhaseError"
             extra_data = dict(exc.data or {})
         else:
-            message = str(exc) or repr(exc)
+            if not message:
+                message = str(exc) or repr(exc)
             error_type = exc.__class__.__name__
 
         # ---- log ----
@@ -1318,8 +1331,25 @@ class BaseWorkflow():
             "timings_markdown": ms_markdown,
             **extra_data,
         }
+        safe_data = data
+        try:
+            safe_data = json.loads(json.dumps(data, ensure_ascii=False, default=str))
+        except Exception:
+            safe_data = {
+                "agent": agent,
+                "stage": stage,
+                "error_type": error_type,
+            }
+        data_for_user = dict(safe_data)
+        # keep internals out of timeline-facing error payloads
+        for k in ("raw_error", "traceback"):
+            if k in data_for_user:
+                data_for_user.pop(k, None)
         if show_error_in_timeline:
-            await self.comm.error(message=message, data=data)
+            pass
+            # Emit error event for telemetry and an answer bubble for the user.
+            # await self.comm.error(message=message, agent="turn.error", data=data_for_user)
+            # await self.comm.delta(text=message, index=0, marker="answer", agent="turn_exception", completed=True)
         else:
             # Keep it out of timeline; still produce an "answer" bubble
             await self.comm.delta(text=message, index=0, marker="answer", agent="turn_exception", completed=True)

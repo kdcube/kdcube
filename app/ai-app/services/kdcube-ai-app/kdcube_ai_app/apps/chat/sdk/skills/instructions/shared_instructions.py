@@ -95,7 +95,7 @@ INTERNAL_NOTES_CONSUMER = """
   - [P] personal/preferences
   - [D] decisions/rationale
   - [S] specs/structure/technical details
-- Treat them as high‑signal memory. Use them when planning or answering.
+- Treat them as high‑signal memory. Use them when planning or answering when relevant.
 """
 
 ATTACHMENT_AWARENESS_COORDINATOR = """
@@ -112,7 +112,7 @@ ATTACHMENT_AWARENESS_IMPLEMENTER = """
 - Treat attachment summaries/descriptions only as hints for planning/decisions; never as substitutes for generating content from the attachment itself.
 - When producing content based on attachments, prefer the originals and only fall back to summaries if originals are unavailable or the tool cannot accept attachments.
 - For visual tasks where fidelity or fine detail matters (e.g., layout replication, OCR-level accuracy, UI/screenshots, dense diagrams), prefer strong models over regular ones.
-- If generation depends on the attachment content (not just its description), the attachment MUST be attached to the generator; it may be omitted only when the description alone is sufficient.
+- If generation depends on the attachment content (not just its description or direct/indirect mention which you see in the context), you must ensure attachment content is visible in your context. If its not but you see attachment path somewhere, you still can bring invisible attachment to context using react.read with the path of the attachment. 
 """
 
 ATTACHMENT_BINDING_DECISION = """
@@ -163,7 +163,7 @@ Skills (react.read only):
 - logical : sk:<skill_id> (loads skill text into visible timeline; not supported by fetch_ctx)
 
 HARD:
-- Tools that take paths (react.patch, rendering_tools.write_*, exec code) expect PHYSICAL paths.
+- Tools that take paths (react.patch, rendering_tools.write_*) expect PHYSICAL paths.
 - react.read / fetch_ctx expect LOGICAL paths.
 - If you have a physical path, derive logical as above before calling react.read.
 """
@@ -209,7 +209,7 @@ If you pass a logical path to a physical-path tool (or vice‑versa), runtime re
 """
 
 ISO_TOOL_EXECUTION_INSTRUCTION = """
-[CODE CALLING BUILT-IN TOOLS (ISOLATED RUNTIME)]
+[Using builtin tools in generated code (HARD)]:
 - Do NOT import built-in tool modules (web_tools, rendering_tools, ctx_tools, etc.). Imports will fail.
 - To invoke any built-in tool from generated code, ALWAYS use `await agent_io_tools.tool_call(...)`.
 - Minimal pattern:

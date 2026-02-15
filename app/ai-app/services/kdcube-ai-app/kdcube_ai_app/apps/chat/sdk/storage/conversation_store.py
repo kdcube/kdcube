@@ -407,6 +407,10 @@ class ConversationStore:
             srcp = pathlib.Path(src)
             if not srcp.exists():
                 return None, [], 0
+
+            # Define directories to exclude
+            EXCLUDE_DIRS = {".git", "__pycache__", "node_modules", ".pytest_cache", ".venv", "debug"}
+
             root_rel = self._join(base, f"{kind}.zip")
             files_meta: List[dict] = []
             file_count = 0
@@ -417,6 +421,11 @@ class ConversationStore:
                     for p in srcp.rglob("*"):
                         if not p.is_file():
                             continue
+
+                        # Skip if any parent directory is in EXCLUDE_DIRS
+                        if any(part in EXCLUDE_DIRS for part in p.relative_to(srcp).parts):
+                            continue
+
                         rel_under = str(p.relative_to(srcp)).replace("\\", "/")
                         zf.write(p, arcname=rel_under)
                         file_count += 1

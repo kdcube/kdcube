@@ -68,7 +68,7 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             mime="application/json",
-            path="tc:turn_123.tool_calls.abc.in.json",
+            path="tc:turn_123.abc.call",
             text='{"tool_id":"web_tools.web_search","tool_call_id":"abc"}',
         ),
         # react.write (display + file)
@@ -78,7 +78,7 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             mime="application/json",
-            path="tc:turn_123.tool_calls.write1.in.json",
+            path="tc:turn_123.write1.call",
             text='{"tool_id":"react.write","tool_call_id":"write1","params":{"path":"turn_123/files/draft.md","kind":"file"}}',
         ),
         tl._block(
@@ -87,7 +87,7 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             mime="application/json",
-            path="tc:turn_123.tool_calls.write1.out.json",
+            path="tc:turn_123.write1.result",
             text='{"artifact_path":"fi:turn_123.files/draft.md","physical_path":"turn_123/files/draft.md","tool_call_id":"write1","kind":"file","visibility":"external"}',
         ),
         tl._block(
@@ -106,7 +106,7 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
             turn_id=ctx.turn_id,
             ts=ctx.started_at,
             mime="application/json",
-            path="tc:turn_123.tool_calls.exec1.in.json",
+            path="tc:turn_123.exec1.call",
             text='{"tool_id":"exec_tools.execute_code_python","tool_call_id":"exec1","params":{"code":"open(\'turn_123/files/draft.md\').read()"}}',
         ),
     ])

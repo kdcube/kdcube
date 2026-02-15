@@ -180,6 +180,7 @@ await stream_with_channels(
     agent: str,
     artifact_name: Optional[str] = None,
     sources_list: Optional[List[Dict[str, Any]]] = None,
+    subscribers: Optional[Dict[str, List[ChannelEmitFn]] | ChannelSubscribers] = None,
     max_tokens: int = 8000,
     temperature: float = 0.3,
     debug: bool = False,
@@ -194,6 +195,8 @@ await stream_with_channels(
 - `raw`: concatenated raw channel content.
 - `obj`: parsed `pydantic` model if provided, else `None`.
 - `used_sources`: list of SIDs detected in raw channel content.
+- `started_at` / `finished_at`: timestamps for first/last streamed content (if any).
+- `error`: parse error (if any) when validating `model`.
 
 If `return_full_raw=True`, a second object is returned: `meta` with:
 - `raw`: full model text from `stream_model_text_tracked`
@@ -209,6 +212,11 @@ service_error = (meta or {}).get("service_error")
 if service_error:
     raise ServiceException(ServiceError.model_validate(service_error))
 ```
+
+`subscribers` lets you attach per‑channel side‑effects that run alongside `emit`.
+This is useful when you want a global “master stream” for all channels but still
+fan out a specific channel to specialized handlers (e.g., JSON artifacts to a
+timeline/record streamer).
 
 ## Usage Example
 
@@ -237,6 +245,7 @@ results, meta = await stream_with_channels(
     agent="my.agent",
     artifact_name="report",
     sources_list=sources_list,
+    subscribers=ChannelSubscribers().subscribe("usage", _usage_json_fanout),
     return_full_raw=True,
 )
 

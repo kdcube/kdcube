@@ -21,10 +21,12 @@ Blocks are dicts with:
 - `agent.log.header`
 - `react.plan`
 - `react.tool.call`
+- `react.tool.code` (exec code captured from decision stream)
 - `react.tool.result`
 - `react.thinking` (internal thinking captured from decision stream; hidden by default)
 - `react.notes` (decision notes emitted before tool calls; user-visible)
 - `react.note` (internal notes written via `react.write(channel="internal")`)
+- `react.decision.raw` (raw ReactDecisionOutV2 JSON; only on schema error retry)
 - `react.completion`
 - `react.plan.ack`
 - `conv.range.summary` (summary of earlier turns)
@@ -39,13 +41,13 @@ Blocks are dicts with:
 1) Tool Call
    - `type`: `react.tool.call`
    - `mime`: `application/json`
-   - `path`: `tc:<turn_id>.tool_calls.<call_id>.in.json`
+   - `path`: `tc:<turn_id>.<call_id>.call`
    - `text`: JSON payload `{tool_id, tool_call_id, params}`
 
 2) Tool Result
    - `type`: `react.tool.result`
    - `mime`: based on output (`application/json`, `text/markdown`, `image/png`, `application/pdf`, ...)
-   - `path`: `tc:<turn_id>.tool_calls.<call_id>.out.json`
+   - `path`: `tc:<turn_id>.<call_id>.result`
    - `text` or `base64` content
    - Metadata is encoded inside the JSON `text` payload for meta blocks:
      - `artifact_path`
@@ -55,7 +57,15 @@ Blocks are dicts with:
      - `visibility` (`external` | `internal`)
      - `tool_id`, `tool_call_id`
      - `sources_used` (list of SIDs, if any)
-    - `hosted_uri`, `rn`, `key`, `local_path` when available (external files after hosting)
+    - Hosting metadata is **not** rendered in the timeline block.
+
+3) Exec Code (react.tool.code)
+   - `type`: `react.tool.code`
+   - `mime`: `text/x-python` (or `text/plain`)
+   - `path`: `fi:<turn_id>.code.<call_id>`
+   - `text`: code content
+   - Rendered as:
+     `[AI Agent wrote code] fi:<turn_id>.code.<call_id>:\n<code>`
 
 ### Example: exec with missing output file
 ```json
@@ -101,6 +111,14 @@ Decision streaming captures the internal thinking section and stores it as a hid
 These are **not** persisted as `conv.thinking.stream` artifacts anymore; UI artifacts are
 reconstructed from the turn log during fetch.
 
+### Decision raw (react.decision.raw)
+On **schema error** retries, we store the raw JSON the model produced so it can see what went wrong:
+- `type`: `react.decision.raw`
+- `mime`: `application/json`
+- `path`: `ar:<turn_id>.react.decision.raw.<iteration>`
+- `text`: raw JSON from the ReactDecisionOutV2 channel
+- Rendered as `[REACT DECISION RAW]` followed by the raw JSON.
+
 Summary blocks include:
 - `type`: `conv.range.summary`
 - `meta.covered_turn_ids`: list of turn ids summarized
@@ -137,9 +155,11 @@ Blocks can be hidden with `react.hide(path, replacement_text)` (path is a logica
 - `ar:<turn_id>.user.prompt`
 - `ar:<turn_id>.assistant.completion`
 - `ar:<turn_id>.react.notes.<tool_call_id>`
+- `ar:<turn_id>.react.decision.raw.<iteration>`
 - `fi:<turn_id>.user.attachments/<name>`
 - `fi:<turn_id>.files/<relative_path>`
-- `tc:<turn_id>.tool_calls.<id>.in.json` / `.out.json`
+- `fi:<turn_id>.code.<call_id>`
+- `tc:<turn_id>.<call_id>.call` / `.result`
 - `so:sources_pool[...]`
 
 Physical (OUT_DIR‑relative):
@@ -172,28 +192,38 @@ id=plan_abc
 [AI Agent say]: Searching for top-rated restaurants in Wuppertal
 
 [react.tool.call] (JSON)
-{ "tool_id": "web_tools.web_search", "tool_call_id": "18f62649fb3b", "params": { ... } }
+{ "tool_id": "web_tools.web_search", "tool_call_id": "tc_18f62649fb3b", "params": { ... } }
 
 [react.tool.result] (JSON meta)
-{ "artifact_path": "tc:turn_1770603271112_2yz1lp.tool_calls.18f62649fb3b.out.json", "tool_call_id": "18f62649fb3b" }
+{ "artifact_path": "tc:turn_1770603271112_2yz1lp.tc_18f62649fb3b.result", "tool_call_id": "tc_18f62649fb3b" }
 
 [react.tool.result] (JSON content)
 [{ "sid": 1, "title": "...", "url": "https://..." }, { "sid": 2, "title": "...", "url": "https://..." }]
 
 [react.tool.call] (JSON)
-{ "tool_id": "react.patch", "tool_call_id": "6a3f1e0d9b21", "params": { "path": "turn_1770603271112_2yz1lp/files/draft.md", "patch": "..." } }
+{ "tool_id": "react.patch", "tool_call_id": "tc_6a3f1e0d9b21", "params": { "path": "turn_1770603271112_2yz1lp/files/draft.md", "patch": "..." } }
 
 [react.tool.result] (JSON meta)
 {
   "artifact_path": "fi:turn_1770603271112_2yz1lp.files/draft.md",
   "physical_path": "turn_1770603271112_2yz1lp/files/draft.md",
-  "tool_call_id": "6a3f1e0d9b21",
+  "tool_call_id": "tc_6a3f1e0d9b21",
   "edited": true
 }
 
 [react.note] (internal)
 [INTERNAL NOTE]
 [D] decided to use Wanderlog + TheFork as primary sources
+```
+
+### Exec ordering (notes → code → tool call)
+```
+[AI Agent say]: Converting the data into an Excel report
+[AI Agent wrote code] fi:turn_123.code.tc_abcd1234:
+<python code...>
+[TOOL CALL tc_abcd1234] exec_tools.execute_code_python
+Params:
+{ "contract": [ ... ], "prog_name": "weather_report" }
 ```
 
 ### artifact_path vs physical_path

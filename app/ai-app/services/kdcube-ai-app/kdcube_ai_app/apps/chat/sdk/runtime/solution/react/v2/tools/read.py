@@ -14,6 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import (
     tool_call_block,
     notice_block,
     add_block,
+    tc_result_path,
 )
 
 TOOL_SPEC = {
@@ -53,7 +54,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         },
     )
 
-    skill_paths = [p for p in paths if p.startswith("sk:") or p.startswith("SK") or p.startswith("skill:")]
+    skill_paths = [p for p in paths if p.startswith("sk:") or p.startswith("SK") or p.startswith("skill:") or p.startswith("skills.")]
     artifact_paths = [p for p in paths if p not in skill_paths]
     if skill_paths:
         try:
@@ -62,8 +63,22 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 build_skill_short_id_map,
                 build_skills_instruction_block,
             )
-            short_map = build_skill_short_id_map(consumer="solver.react.decision")
-            skill_ids = import_skillset(skill_paths, short_id_map=short_map)
+            short_map = build_skill_short_id_map(consumer="solver.react.decision.v2")
+            normalized_skills: List[str] = []
+            for raw in skill_paths:
+                s = str(raw or "").strip()
+                if not s:
+                    continue
+                if s.startswith("sk:"):
+                    s = s[len("sk:"):].strip()
+                if s.startswith("skill:"):
+                    s = s[len("skill:"):].strip()
+                if s.startswith("skills."):
+                    s = s[len("skills."):].strip()
+                if s.isdigit():
+                    s = f"SK{s}"
+                normalized_skills.append(s)
+            skill_ids = import_skillset(normalized_skills, short_id_map=short_map)
             loaded = state.setdefault("loaded_skills", set())
             if not isinstance(loaded, set):
                 loaded = set(loaded)
@@ -117,7 +132,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "type": "react.tool.result",
                 "call_id": tool_call_id,
                 "mime": "text/markdown",
-                "path": display_path or f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json",
+                "path": display_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
                 "text": f"{display_path}: artifact is missing.",
             })
             continue
@@ -167,7 +182,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "type": "react.tool.result",
                 "call_id": tool_call_id,
                 "mime": mime,
-                "path": ctx_path or f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json",
+                "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
                 "text": art_text,
             })
         elif isinstance(art_base64, str) and art_base64:
@@ -176,7 +191,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "type": "react.tool.result",
                 "call_id": tool_call_id,
                 "mime": art_mime or "application/octet-stream",
-                "path": ctx_path or f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json",
+                "path": ctx_path or tc_result_path(turn_id=turn_id, call_id=tool_call_id),
                 "base64": art_base64,
             })
         per_path_entry = {"path": ctx_path}
@@ -193,7 +208,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "type": "react.tool.result",
             "call_id": tool_call_id,
             "mime": "application/json",
-            "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else "",
+            "path": tc_result_path(turn_id=turn_id, call_id=tool_call_id),
             "text": json.dumps(summary, ensure_ascii=False),
         })
     if missing_artifacts:

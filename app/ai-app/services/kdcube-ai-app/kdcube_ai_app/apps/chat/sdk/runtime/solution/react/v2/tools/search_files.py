@@ -8,7 +8,12 @@ from typing import Any, Dict, List
 import json
 import pathlib
 
-from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import tool_call_block, notice_block, add_block
+from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import (
+    tool_call_block,
+    notice_block,
+    add_block,
+    tc_result_path,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools_.search_files import search_files
 
 TOOL_SPEC = {
@@ -74,7 +79,7 @@ async def handle_react_search_files(*, ctx_browser: Any, state: Dict[str, Any], 
         "type": "react.tool.result",
         "call_id": tool_call_id,
         "mime": "application/json",
-        "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else "",
+        "path": tc_result_path(turn_id=turn_id, call_id=tool_call_id),
         "text": json.dumps({"hits": hits}, ensure_ascii=False, indent=2),
     })
     state["last_tool_result"] = hits

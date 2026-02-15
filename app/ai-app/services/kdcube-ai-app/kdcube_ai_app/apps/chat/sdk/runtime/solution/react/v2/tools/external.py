@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 import json
 import pathlib
+import time
 
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.artifacts import (
     build_artifact_meta_block,
@@ -25,6 +26,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import (
     add_block,
     host_artifact_file,
     emit_hosted_files,
+    tc_result_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.solution_workspace import (
     extract_code_file_paths,
@@ -66,38 +68,7 @@ async def handle_external_tool(*,
         state["retry_decision"] = True
         return state
 
-    tool_call_block(
-        ctx_browser=ctx_browser,
-        tool_call_id=tool_call_id,
-        tool_id=tool_id,
-        payload={
-            "tool_id": tool_id,
-            "tool_call_id": tool_call_id,
-            "params": tool_call.get("params") or {},
-        },
-    )
-
-    # Normalize paths for rendering_tools.* (must be physical paths under current turn)
-    if tool_id.startswith("rendering_tools."):
-        path_val = final_params.get("path")
-        if isinstance(path_val, str) and path_val.strip():
-            turn_id = (ctx_browser.runtime_ctx.turn_id or "").strip()
-            physical, rel, rewritten = normalize_physical_path(path_val, turn_id=turn_id)
-            if "/attachments/" in physical:
-                # writing to attachments is not allowed; rewrite to files/<name>
-                rel = rel.split("/", 1)[-1] if rel else "output"
-                physical = f"{turn_id}/files/{rel}"
-                rewritten = True
-            if rewritten and physical:
-                final_params["path"] = physical
-                if physical != path_val:
-                    notice_block(
-                        ctx_browser=ctx_browser,
-                        tool_call_id=tool_call_id,
-                        code="protocol_violation.path_rewritten",
-                        message="Rendering tool path was rewritten to current turn files/.",
-                        extra={"original": path_val, "rewritten": physical, "tool_id": tool_id},
-                    )
+    exec_streamer = state.get("exec_code_streamer") if tools_insights.is_exec_tool(tool_id) else None
 
     # If exec tool: normalize contract/code + rehost any referenced historical files before execution
     if tools_insights.is_exec_tool(tool_id):
@@ -131,12 +102,45 @@ async def handle_external_tool(*,
         if normalized_contract is not None:
             final_params["contract"] = normalized_contract
 
-        code_txt = final_params.get("code")
+        code_txt = ""
+        if exec_streamer:
+            try:
+                code_txt = exec_streamer.get_code() or ""
+            except Exception:
+                code_txt = ""
+        if not code_txt:
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="protocol_violation.exec_missing_code",
+                message="Exec tool requires code in <channel:code>; no code was received.",
+                extra={"tool_id": tool_id},
+            )
+            try:
+                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.round import ReactRound
+                ReactRound.decision_raw(
+                    ctx_browser=ctx_browser,
+                    decision=state.get("last_decision_raw") or state.get("last_decision") or {},
+                    iteration=int(state.get("iteration") or 0),
+                    reason="missing_channel.code",
+                )
+            except Exception:
+                pass
+            state["retry_decision"] = True
+            return state
         code_rewrites = []
         if isinstance(code_txt, str):
             rewritten_code, code_rewrites = rewrite_exec_code_paths(code_txt, turn_id=turn_id)
             if rewritten_code != code_txt:
+                code_txt = rewritten_code
                 final_params["code"] = rewritten_code
+                if exec_streamer:
+                    try:
+                        exec_streamer.set_code(rewritten_code)
+                    except Exception:
+                        pass
+            elif code_txt:
+                final_params["code"] = code_txt
         if code_rewrites:
             notice_block(
                 ctx_browser=ctx_browser,
@@ -146,9 +150,34 @@ async def handle_external_tool(*,
                 extra={"rewritten": code_rewrites, "tool_id": tool_id},
             )
 
+        if code_txt:
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            lang = ""
+            if exec_streamer:
+                try:
+                    lang = (exec_streamer.subsystem_language or "").strip()
+                except Exception:
+                    lang = ""
+            mime = "text/x-python" if (lang or "").lower() in {"python", "py"} else "text/plain"
+            add_block(ctx_browser, {
+                "type": "react.tool.code",
+                "call_id": tool_call_id,
+                "tool_id": tool_id,
+                "mime": mime,
+                "path": f"fi:{turn_id}.code.{tool_call_id}" if turn_id else "",
+                "text": code_txt,
+                "ts": ts,
+                "meta": {
+                    "lang": lang or "python",
+                    "kind": "file",
+                    "tool_call_id": tool_call_id,
+                    "tool_id": tool_id,
+                },
+            })
+
         paths, rewritten_paths = extract_code_file_paths(
-            final_params.get("code"), turn_id=turn_id
-        ) if isinstance(final_params.get("code"), str) else ([], [])
+            code_txt, turn_id=turn_id
+        ) if isinstance(code_txt, str) else ([], [])
         try:
             if ctx_browser.timeline:
                 ctx_browser.timeline.write_local()
@@ -200,7 +229,39 @@ async def handle_external_tool(*,
             except Exception:
                 pass
 
-    exec_streamer = state.get("exec_code_streamer") if tools_insights.is_exec_tool(tool_id) else None
+    tool_call_block(
+        ctx_browser=ctx_browser,
+        tool_call_id=tool_call_id,
+        tool_id=tool_id,
+        payload={
+            "tool_id": tool_id,
+            "tool_call_id": tool_call_id,
+            "params": tool_call.get("params") or {},
+        },
+    )
+
+    # Normalize paths for rendering_tools.* (must be physical paths under current turn)
+    if tool_id.startswith("rendering_tools."):
+        path_val = final_params.get("path")
+        if isinstance(path_val, str) and path_val.strip():
+            turn_id = (ctx_browser.runtime_ctx.turn_id or "").strip()
+            physical, rel, rewritten = normalize_physical_path(path_val, turn_id=turn_id)
+            if "/attachments/" in physical:
+                # writing to attachments is not allowed; rewrite to files/<name>
+                rel = rel.split("/", 1)[-1] if rel else "output"
+                physical = f"{turn_id}/files/{rel}"
+                rewritten = True
+            if rewritten and physical:
+                final_params["path"] = physical
+                if physical != path_val:
+                    notice_block(
+                        ctx_browser=ctx_browser,
+                        tool_call_id=tool_call_id,
+                        code="protocol_violation.path_rewritten",
+                        message="Rendering tool path was rewritten to current turn files/.",
+                        extra={"original": path_val, "rewritten": physical, "tool_id": tool_id},
+                    )
+
     tool_response = await execute_tool(
         runtime_ctx=ctx_browser.runtime_ctx,
         tool_execution_context={
@@ -261,7 +322,7 @@ async def handle_external_tool(*,
             "type": "react.tool.result",
             "call_id": tool_call_id,
             "mime": "text/markdown",
-            "path": f"tc:{ctx_browser.runtime_ctx.turn_id}.tool_calls.{tool_call_id}.out.json" if ctx_browser.runtime_ctx.turn_id else "",
+            "path": tc_result_path(turn_id=ctx_browser.runtime_ctx.turn_id or "", call_id=tool_call_id),
             "text": report_text,
         })
     for idx, tr in enumerate(items):
@@ -430,8 +491,20 @@ async def handle_external_tool(*,
                             message="Artifact path contained a turn/files prefix; rewritten to current-turn relative path.",
                             extra={"original": original_path, "normalized": phys_path},
                         )
-        artifact_path = f"fi:{turn_id}.files/{rel_path}" if (turn_id and rel_path and visibility == "external") else f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json"
+        artifact_path = f"fi:{turn_id}.files/{rel_path}" if (turn_id and rel_path and visibility == "external") else tc_result_path(turn_id=turn_id, call_id=tool_call_id)
         physical_path = phys_path if (turn_id and rel_path and visibility == "external") else ""
+        if tools_insights.is_search_tool(tool_id) or tools_insights.is_fetch_uri_content_tool(tool_id):
+            try:
+                data = output
+                if isinstance(data, dict) and "ret" in data:
+                    data = data.get("ret")
+                if isinstance(data, list):
+                    sids = [int(r.get("sid") or 0) for r in data if isinstance(r, dict) and r.get("sid") is not None]
+                    sids = [s for s in sids if s > 0]
+                    if sids:
+                        artifact_path = f"so:sources_pool[{sids[0]}-{sids[-1]}]"
+            except Exception:
+                pass
         edited = detect_edit(
             timeline=getattr(ctx_browser, "timeline", None),
             artifact_path=artifact_path if artifact_path.startswith("fi:") else "",

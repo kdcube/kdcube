@@ -645,6 +645,7 @@ def build_instruction_catalog_block(
         react_tools: Optional[List[Dict[str, Any]]] = None,
         include_skill_gallery: bool = True,
 ) -> str:
+    from kdcube_ai_app.apps.chat.sdk.tools import tools_insights
     tools_list: List[Dict[str, Any]] = []
     if tool_catalog:
         tools_list = list(tool_catalog)
@@ -674,6 +675,25 @@ def build_instruction_catalog_block(
         if "examples" not in tool and doc.get("examples") is not None:
             tool["examples"] = doc.get("examples")
 
+    for tool in tools_list:
+        if not isinstance(tool, dict):
+            continue
+        tid = tool.get("id")
+        if tid != "exec_tools.execute_code_python":
+            continue
+        args = tool.get("args")
+        if isinstance(args, dict) and "code" in args:
+            args = dict(args)
+            args.pop("code", None)
+            tool["args"] = args
+        purpose = tool.get("purpose") or ""
+        if "channel:code" not in purpose:
+            note = (
+                "Code is provided via <channel:code> when using this tool from React decision; "
+                "omit params.code in JSON."
+            )
+            tool["purpose"] = f"{purpose}\n{note}".strip()
+
     react_tools = react_tools or []
     ids = {t.get("id") for t in tools_list if isinstance(t, dict)}
     for it in react_tools:
@@ -682,20 +702,45 @@ def build_instruction_catalog_block(
 
     tool_block = ""
     if tools_list:
-        react_only_ids = {"react.read", "react.write"}
-        exec_only_ids = {"ctx_tools.fetch_ctx"}
-        react_only = [t for t in tools_list if t.get("id") in react_only_ids]
-        exec_only = [t for t in tools_list if t.get("id") in exec_only_ids]
-        common = [t for t in tools_list if t.get("id") not in react_only_ids and t.get("id") not in exec_only_ids]
+        react_ids: set[str] = set()
+        for t in react_tools:
+            tid = (t or {}).get("id")
+            if isinstance(tid, str) and tid:
+                react_ids.add(tid)
+        for t in tools_list:
+            tid = (t or {}).get("id")
+            if isinstance(tid, str) and tid.startswith("react."):
+                react_ids.add(tid)
+
+        exec_ids: set[str] = set()
+        exec_ids.update(tools_insights.PY_EXEC_ONLY_TOOL_IDS)
+        for t in tools_list:
+            tid = (t or {}).get("id")
+            if not isinstance(tid, str) or not tid:
+                continue
+            if tid.startswith("web_tools."):
+                react_ids.add(tid)
+                continue
+            if tools_insights.is_exec_tool(tid):
+                react_ids.add(tid)
+                continue
+            # rendering_tools.write_* remain in common tools
+
+        react_only = [t for t in tools_list if t.get("id") in react_ids]
+        exec_only = [t for t in tools_list if t.get("id") in exec_ids and t.get("id") not in react_ids]
+        common = [
+            t for t in tools_list
+            if t.get("id") not in react_ids and t.get("id") not in exec_ids
+        ]
 
         parts_tools: List[str] = []
+        react_block = build_tools_block(react_only, header="[AVAILABLE REACT TOOLS]")
+        if react_block:
+            parts_tools.append(react_block)
         common_block = build_tools_block(common, header="[AVAILABLE COMMON TOOLS]")
         if common_block:
             parts_tools.append(common_block)
-        react_block = build_tools_block(react_only, header="[AVAILABLE REACT-LOOP TOOLS]")
-        if react_block:
-            parts_tools.append(react_block)
-        exec_block = build_tools_block(exec_only, header="[AVAILABLE EXECUTION-ONLY TOOLS]")
+        exec_block = build_tools_block(exec_only, header="[TOOLS AVAILABLE ONLY IN CODE SNIPPET]")
         if exec_block:
             parts_tools.append(exec_block)
         tool_block = "\n\n".join([p for p in parts_tools if p.strip()])

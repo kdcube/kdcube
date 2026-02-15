@@ -2155,6 +2155,9 @@ class ContextRAGClient:
                     replace_types["chat:assistant"] = True
 
                 for f in view.get("files") or []:
+                    if isinstance(f, dict):
+                        from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.artifacts import normalize_file_payload
+                        f = normalize_file_payload(f)
                     out.append({
                         "message_id": f.get("message_id"),
                         "type": "artifact:assistant.file",
@@ -2210,36 +2213,7 @@ class ContextRAGClient:
                             },
                         })
 
-                # Thinking blocks (from timeline) -> synthesize stream items for UI.
-                thinking_items: List[Dict[str, Any]] = []
-                for blk in blocks:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("turn_id") != tid:
-                        continue
-                    if (blk.get("type") or "") != "react.thinking":
-                        continue
-                    txt = blk.get("text")
-                    if not isinstance(txt, str) or not txt.strip():
-                        continue
-                    meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
-                    title = (meta.get("title") or "").strip() or "react"
-                    ts_val = blk.get("ts") or ts
-                    ts_ms = None
-                    try:
-                        sec = ts_key(ts_val)
-                        if sec != float("-inf"):
-                            ts_ms = int(sec * 1000)
-                    except Exception:
-                        ts_ms = None
-                    item = {
-                        "agent": title,
-                        "text": txt,
-                    }
-                    if ts_ms is not None:
-                        item["ts_first"] = ts_ms
-                        item["ts_last"] = ts_ms
-                    thinking_items.append(item)
+                thinking_items = [i for i in (view.get("thinking") or []) if isinstance(i, dict) and i.get("text")]
                 if thinking_items:
                     out.append({
                         "message_id": None,

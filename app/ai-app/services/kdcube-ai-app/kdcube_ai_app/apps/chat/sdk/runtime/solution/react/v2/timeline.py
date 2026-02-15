@@ -7,6 +7,7 @@ import json
 import hashlib
 import time
 import datetime as _dt
+import pathlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Callable
 
@@ -423,6 +424,7 @@ def _build_turn_view(
     clarifications = extract_clarification_questions_from_blocks(blocks)
     used_sources = materialize_sources_by_sids(sources_pool, used_sids)
     timeline_text_items = _extract_timeline_text_items(blocks, turn_id)
+    thinking_items = _extract_thinking_items(blocks, turn_id)
     return {
         "turn_id": turn_id,
         "user": {
@@ -437,6 +439,7 @@ def _build_turn_view(
         "files": files,
         "citations": used_sources,
         "timeline_text": timeline_text_items,
+        "thinking": thinking_items,
         "followups": suggested_followups,
         "clarification_questions": clarifications,
     }
@@ -519,6 +522,41 @@ def _extract_timeline_text_items(blocks: List[Dict[str, Any]], turn_id: str) -> 
             item["ts_last"] = ts_ms
         items.append(item)
         idx += 1
+    return items
+
+
+def _extract_thinking_items(blocks: List[Dict[str, Any]], turn_id: str) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    if not blocks or not turn_id:
+        return items
+    for blk in blocks:
+        if not isinstance(blk, dict):
+            continue
+        if blk.get("turn_id") != turn_id:
+            continue
+        if (blk.get("type") or "") != "react.thinking":
+            continue
+        txt = blk.get("text")
+        if not isinstance(txt, str) or not txt.strip():
+            continue
+        meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+        title = (meta.get("title") or "").strip() or "react"
+        ts_val = blk.get("ts") or ""
+        ts_ms = None
+        try:
+            sec = ts_key(ts_val)
+            if sec != float("-inf"):
+                ts_ms = int(sec * 1000)
+        except Exception:
+            ts_ms = None
+        item = {
+            "agent": title,
+            "text": txt,
+        }
+        if ts_ms is not None:
+            item["ts_first"] = ts_ms
+            item["ts_last"] = ts_ms
+        items.append(item)
     return items
 
 
@@ -1590,6 +1628,15 @@ class Timeline:
             include_announce=include_announce,
         )
         msg_blocks = self._blocks_to_message_blocks(visible_blocks)
+        if getattr(self.runtime, "debug_timeline", False):
+            try:
+                self._write_render_debug(
+                    msg_blocks,
+                    include_sources=include_sources,
+                    include_announce=include_announce,
+                )
+            except Exception:
+                pass
         if debug_log is not None:
             try:
                 debug_log(self._format_message_blocks_debug(msg_blocks))
@@ -1601,6 +1648,45 @@ class Timeline:
             except Exception:
                 pass
         return msg_blocks
+
+    def _write_render_debug(
+        self,
+        msg_blocks: List[Dict[str, Any]],
+        *,
+        include_sources: bool,
+        include_announce: bool,
+    ) -> None:
+        turn_id = (self.runtime.turn_id or "turn").strip() or "turn"
+        ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
+        flags = []
+        flags.append("src" if include_sources else "nosrc")
+        flags.append("ann" if include_announce else "noann")
+        name = f"rendered-{ts}-{turn_id}-{'-'.join(flags)}.txt"
+        root = pathlib.Path(__file__).resolve().parent / "debug" / "rendering"
+        root.mkdir(parents=True, exist_ok=True)
+        path = root / name
+        text = self._format_message_blocks_disk(msg_blocks)
+        path.write_text(text, encoding="utf-8")
+
+    def _format_message_blocks_disk(self, msg_blocks: List[Dict[str, Any]]) -> str:
+        lines: List[str] = []
+        cache_idx = 0
+        for b in (msg_blocks or []):
+            if not isinstance(b, dict):
+                continue
+            prefix = ""
+            if b.get("cache"):
+                cache_idx += 1
+                prefix = f"=>[{cache_idx}] "
+            btype = b.get("type") or "text"
+            if btype == "text":
+                lines.append(prefix + (b.get("text") or ""))
+            elif btype in {"image", "document"}:
+                media = b.get("media_type") or ("image/png" if btype == "image" else "application/pdf")
+                lines.append(prefix + f"<{btype} media_type={media}> ...BASE64")
+            else:
+                lines.append(prefix + f"<{btype}>")
+        return "\n".join(lines).rstrip()
 
     def render_base(self, *, cache_last: bool = False) -> List[Dict[str, Any]]:
         blocks = self._collect_blocks()
@@ -1799,7 +1885,7 @@ class Timeline:
         def _short_tc_id(raw: str) -> str:
             if not raw:
                 return "tc_????"
-            return f"tc_{raw[:4]}"
+            return raw
 
         def _call_id_from_path(p: str) -> str:
             if not p:
@@ -1810,6 +1896,12 @@ class Timeline:
                     tail = p.split(".tool_calls.", 1)[1]
                     call_id = tail.split(".", 1)[0]
                     return call_id
+                # tc:<turn_id>.<call_id>.call|result
+                if p.startswith("tc:"):
+                    tail = p[len("tc:"):]
+                    parts = tail.split(".")
+                    if len(parts) >= 3:
+                        return parts[1]
             except Exception:
                 pass
             return ""
@@ -1889,6 +1981,20 @@ class Timeline:
                         text = f"{ts_line}\n[AI Agent say]: {text}".strip()
                     else:
                         text = f"[AI Agent say]: {text}".strip()
+            elif btype == "react.decision.raw":
+                if isinstance(text, str):
+                    lines = []
+                    ts_line = _ts_line(ts)
+                    if ts_line:
+                        lines.append(ts_line)
+                    lines.append("[REACT DECISION RAW]")
+                    reason = ""
+                    if isinstance(meta, dict):
+                        reason = (meta.get("reason") or "").strip()
+                    if reason:
+                        lines.append(f"reason: {reason}")
+                    lines.append(text)
+                    text = "\n".join([l for l in lines if l]).strip()
             elif btype == "system.message":
                 prefix = f"[SYSTEM MESSAGE]"
                 if ts:
@@ -1918,6 +2024,21 @@ class Timeline:
                 if path:
                     prefix += f"\n[path: {path}]"
                 text = (prefix + "\n" + (text or "")).strip()
+            elif btype == "react.tool.code" and isinstance(text, str):
+                tool_call_id = (b.get("call_id") or "").strip()
+                if not tool_call_id:
+                    tool_call_id = _call_id_from_path(path)
+                lines = []
+                ts_line = _ts_line(ts)
+                if ts_line:
+                    lines.append(ts_line)
+                code_path = path or (f"fi:{turn_id}.code.{tool_call_id}" if turn_id and tool_call_id else "")
+                if code_path:
+                    lines.append(f"[AI Agent wrote code] {code_path}:")
+                else:
+                    lines.append("[AI Agent wrote code]:")
+                lines.append(text)
+                text = "\n".join([l for l in lines if l]).strip()
             elif btype == "react.tool.call" and isinstance(text, str):
                 payload = _maybe_parse_json(text) if (b.get("mime") or "").strip() == "application/json" else None
                 tool_id = ""
@@ -1940,6 +2061,8 @@ class Timeline:
                 if tool_id:
                     header += f" {tool_id}"
                 lines.append(header)
+                if path:
+                    lines.append(f"artifact_path: {path}")
                 if isinstance(params, dict):
                     params_out = dict(params)
                     if isinstance(params_out.get("content"), str):
@@ -1951,9 +2074,9 @@ class Timeline:
                             )
                             suffix = f"... [truncated; see {file_path}]" if file_path else "... [truncated]"
                             params_out["content"] = content_val[:100] + suffix
-                    lines.append(json.dumps(params_out, ensure_ascii=False, indent=2))
+                    lines.append("Params:\n" + json.dumps(params_out, ensure_ascii=False, indent=2))
                 elif params is not None:
-                    lines.append(json.dumps(params, ensure_ascii=False, indent=2))
+                    lines.append("Params:\n" + json.dumps(params, ensure_ascii=False, indent=2))
                 text = "\n".join([l for l in lines if l is not None]).strip()
             elif btype == "react.tool.result":
                 mime_val = (b.get("mime") or "").strip()
@@ -1977,6 +2100,9 @@ class Timeline:
                             if tool_id:
                                 header += f" {tool_id}"
                             lines.append(header)
+                            ap_line = (payload.get("artifact_path") or path or "").strip()
+                            if ap_line:
+                                lines.append(f"artifact_path: {ap_line}")
                             ap = (payload.get("artifact_path") or "").strip()
                             pp = (payload.get("physical_path") or "").strip()
                             kind = (payload.get("kind") or "").strip()
@@ -2028,6 +2154,8 @@ class Timeline:
                         if ts_line:
                             lines.append(ts_line)
                         lines.append(f"[TOOL RESULT {short_id}] read summary")
+                        if path:
+                            lines.append(f"artifact_path: {path}")
                         paths = payload.get("paths") or []
                         if isinstance(paths, list) and paths:
                             for row in paths:
@@ -2055,6 +2183,8 @@ class Timeline:
                         if range_path:
                             header += f" artifact_path: {range_path}"
                         lines.append(header)
+                        if path and not range_path:
+                            lines.append(f"artifact_path: {path}")
                         # keep payload as-is
                         lines.append(text)
                         text = "\n".join([l for l in lines if l]).strip()
@@ -2065,6 +2195,8 @@ class Timeline:
                         if ts_line:
                             lines.append(ts_line)
                         lines.append(f"[TOOL RESULT {short_id}]")
+                        if path:
+                            lines.append(f"artifact_path: {path}")
                         lines.append(text)
                         text = "\n".join([l for l in lines if l]).strip()
                 elif isinstance(text, str):
@@ -2074,9 +2206,9 @@ class Timeline:
                     if ts_line:
                         lines.append(ts_line)
                     header = f"[TOOL RESULT {short_id}]"
-                    if path:
-                        header += f" path: {path}"
                     lines.append(header)
+                    if path:
+                        lines.append(f"artifact_path: {path}")
                     lines.append(text)
                     text = "\n".join([l for l in lines if l]).strip()
             base64 = b.get("base64") or b.get("data")

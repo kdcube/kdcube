@@ -104,6 +104,46 @@ class ReactRound:
         })
 
     @classmethod
+    def decision_raw(
+        cls,
+        *,
+        ctx_browser: Any,
+        decision: Optional[Dict[str, Any]] = None,
+        iteration: int,
+        reason: Optional[str] = None,
+    ) -> None:
+        if not ctx_browser or not isinstance(decision, dict):
+            return
+        raw_text = (decision.get("raw") or "").strip()
+        if not raw_text:
+            raw_text = ((decision.get("log") or {}).get("raw_data") or "").strip()
+        if not raw_text:
+            return
+        if not reason:
+            channels = decision.get("channels") if isinstance(decision.get("channels"), dict) else {}
+            json_chan = channels.get("ReactDecisionOutV2") if isinstance(channels.get("ReactDecisionOutV2"), dict) else {}
+            if not isinstance(json_chan, dict) or not (json_chan.get("text") or "").strip():
+                reason = "missing_channel.ReactDecisionOutV2"
+        turn_id = (ctx_browser.runtime_ctx.turn_id or "")
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        meta: Dict[str, Any] = {
+            "channel": "raw",
+            "iteration": iteration,
+        }
+        if reason:
+            meta["reason"] = reason
+        add_block(ctx_browser, {
+            "type": "react.decision.raw",
+            "author": "react",
+            "turn_id": turn_id,
+            "ts": ts,
+            "mime": "application/json",
+            "path": f"ar:{turn_id}.react.decision.raw.{iteration}" if turn_id else "",
+            "text": raw_text,
+            "meta": meta,
+        })
+
+    @classmethod
     async def execute(cls,
                       react,
                       state: Dict[str, Any]) -> Dict[str, Any]:

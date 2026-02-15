@@ -36,7 +36,7 @@ from kdcube_ai_app.apps.chat.sdk.viz import logging_helpers
 
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
-from kdcube_ai_app.infra.service_hub.errors import ServiceException, is_context_limit_error
+import logging
 
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.widgets.conversation_turn_work_status import (
     ConversationTurnWorkStatus,
@@ -96,7 +96,18 @@ class ReactSolverV2:
         ctx_browser: Optional[ContextBrowser] = None,
     ) -> None:
         self.svc = service
-        self.log = logger
+        if isinstance(logger, AgentLogger):
+            self.log = logger
+        else:
+            name = getattr(logger, "name", None) or "react.v2"
+            level = "INFO"
+            try:
+                lvl = getattr(logger, "level", None)
+                if isinstance(lvl, int):
+                    level = logging.getLevelName(lvl)
+            except Exception:
+                level = "INFO"
+            self.log = AgentLogger(str(name), str(level))
         self.tools_subsystem = tools_subsystem
         self.skills_subsystem = skills_subsystem
         self.scratchpad = scratchpad
@@ -118,6 +129,17 @@ class ReactSolverV2:
     ) -> List[Dict[str, Any]]:
         if not self.ctx_browser:
             return []
+        await self._update_announce(iteration=iteration, max_iterations=max_iterations)
+        return await self.ctx_browser.timeline.render(
+            cache_last=True,
+            force_sanitize=force_sanitize,
+            include_sources=True,
+            include_announce=True,
+        )
+
+    async def _update_announce(self, *, iteration: int, max_iterations: int) -> None:
+        if not self.ctx_browser:
+            return
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.layout import build_announce_text
             active_block = build_announce_text(
@@ -151,12 +173,6 @@ class ReactSolverV2:
             )
         except Exception:
             pass
-        return await self.ctx_browser.timeline.render(
-            cache_last=True,
-            force_sanitize=force_sanitize,
-            include_sources=True,
-            include_announce=True,
-        )
 
     def _build_graph(self) -> StateGraph:
         wf = StateGraph(dict)
@@ -174,18 +190,20 @@ class ReactSolverV2:
         wf.add_edge("exit", END)
         return wf.compile()
 
-    def _mk_thinking_streamer(self, phase: str) -> Callable[[str], Awaitable[None]]:
-        counter = {"n": 0}
+    def _mk_mainstream(self, phase: str) -> Callable[..., Awaitable[None]]:
+        counters: Dict[str, int] = {}
 
-        async def emit_thinking_delta(text: str, completed: bool = False):
+        async def emit_delta(**kwargs):
+            text = kwargs.get("text") or ""
             if not text:
                 return
-            i = counter["n"]
-            counter["n"] += 1
+            marker = kwargs.get("marker") or kwargs.get("channel") or "thinking"
+            i = counters.get(marker, 0)
+            counters[marker] = i + 1
             author = f"{self.MODULE_AGENT_NAME}.{phase}"
-            await self.comm.delta(text=text, index=i, marker="thinking", agent=author, completed=completed)
+            await self.comm.delta(text=text, index=i, marker=marker, agent=author, completed=bool(kwargs.get("completed")))
 
-        return emit_thinking_delta
+        return emit_delta
 
     def _mk_exec_code_streamer(
         self,
@@ -200,7 +218,7 @@ class ReactSolverV2:
             artifact_name=f"react.exec.{artifact_suffix}",
             execution_id=execution_id,
         )
-        return self._wrap_json_streamer(streamer), streamer
+        return self._wrap_raw_streamer(streamer), streamer
 
     def _mk_content_streamers(
         self,
@@ -254,6 +272,18 @@ class ReactSolverV2:
             await streamer.feed(text)
 
         return emit_json_delta
+
+    def _wrap_raw_streamer(
+        self,
+        streamer: Any,
+    ) -> Callable[[str], Awaitable[None]]:
+        async def emit_raw_delta(text: str, completed: bool = False, **_kwargs):
+            if completed:
+                await streamer.finish()
+                return
+            await streamer.feed_raw(text)
+
+        return emit_raw_delta
 
     def _mk_timeline_streamer(
         self,
@@ -579,24 +609,12 @@ class ReactSolverV2:
             recursion_limit = max(20, (int(state.max_iterations) * 3) + 6)
             final_state = await self.graph.ainvoke(self._to_dict(state), config={"recursion_limit": recursion_limit})
         except Exception as exc:
-            self.log.log(f"[react.v2] Graph error: {exc}", level="ERROR")
+            tb = traceback.format_exc()
             try:
-                if self.ctx_browser:
-                    self.ctx_browser.contribute_notice(
-                        code="graph_error",
-                        message=str(exc),
-                        extra={"where": "react.v2"},
-                    )
+                self.log.log(f"[react.v2] Graph error: {exc}\n{tb}", level="ERROR")
             except Exception:
                 pass
-            final_state = self._to_dict(state)
-            final_state["exit_reason"] = "error"
-            final_state["error"] = {
-                "where": "react.v2",
-                "error": "graph_error",
-                "message": str(exc),
-                "managed": True,
-            }
+            raise RuntimeError(f"[react.v2] Graph error: {exc}\n{tb}") from exc
         finally:
             # workspace is managed by ContextBrowser; no CV reset here
             self._outdir_cv_token = None
@@ -739,7 +757,7 @@ class ReactSolverV2:
             a for a in extra_adapters if not tools_insights.is_codegen_tool(a["id"])
         ]
 
-        user_blocks = await self._render_timeline_with_announce(
+        await self._update_announce(
             iteration=iteration,
             max_iterations=int(state.get("max_iterations") or 0),
         )
@@ -750,8 +768,8 @@ class ReactSolverV2:
             agent=role,
             metadata={"agent": role},
         ):
-            thinking_streamer = self._mk_thinking_streamer(f"decision ({iteration})")
-            pending_tool_call_id = uuid.uuid4().hex[:12]
+            mainstream = self._mk_mainstream(f"decision ({iteration})")
+            pending_tool_call_id = f"tc_{uuid.uuid4().hex[:12]}"
             exec_id = f"exec_{pending_tool_call_id}"
             exec_streamer_idx = self._next_tool_streamer_idx(
                 pathlib.Path(state["outdir"]),
@@ -784,42 +802,47 @@ class ReactSolverV2:
         )
 
         async def _hub_on_json(text: str, completed: bool = False, **_kwargs):
-            await exec_streamer_fn(text, completed=completed)
             for fn in record_streamer_fns:
                 await fn(text, completed=completed)
             await timeline_streamer_fn(text, completed=completed)
 
-        thinking_streamer._on_json = _hub_on_json
         t0 = time.perf_counter()
-        try:
-            decision = await react_decision_stream_v2(
-                    svc=self.svc,
-                    adapters=announced_adapters,
-                    infra_adapters=extra_adapters_for_decision,
-                    on_progress_delta=thinking_streamer,
-                    agent_name=role,
-                    timezone=self.comm_context.user.timezone,
-                    max_tokens=6000,
-                    user_blocks=user_blocks,
-            )
-        except ServiceException as exc:
-            if not is_context_limit_error(exc.err):
-                raise
-            user_blocks = await self._render_timeline_with_announce(
-                iteration=iteration,
-                max_iterations=int(state.get("max_iterations") or 0),
-                force_sanitize=True,
-            )
-            decision = await react_decision_stream_v2(
+        from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.agent_retry import retry_with_compaction
+        from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.agents.decision import build_decision_system_text
+
+        async def _decision_agent(*, blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
+            from kdcube_ai_app.apps.chat.sdk.streaming.versatile_streamer import ChannelSubscribers
+            subs = ChannelSubscribers().subscribe("ReactDecisionOutV2", _hub_on_json)
+            if exec_streamer_widget is not None:
+                subs = subs.subscribe("ReactDecisionOutV2", exec_streamer_widget.feed_json)
+                subs = subs.subscribe("code", exec_streamer_widget.feed_code)
+            return await react_decision_stream_v2(
                 svc=self.svc,
                 adapters=announced_adapters,
                 infra_adapters=extra_adapters_for_decision,
-                on_progress_delta=thinking_streamer,
+                on_progress_delta=mainstream,
+                subscribers=subs,
                 agent_name=role,
-                timezone=self.comm_context.user.timezone,
                 max_tokens=6000,
-                user_blocks=user_blocks,
+                user_blocks=blocks,
             )
+
+        decision = await retry_with_compaction(
+            ctx_browser=self.ctx_browser,
+            system_text_fn=lambda: build_decision_system_text(
+                adapters=announced_adapters,
+                infra_adapters=extra_adapters_for_decision,
+                max_tokens=6000,
+            ),
+            render_params={
+                "cache_last": True,
+                "include_sources": True,
+                "include_announce": True,
+            },
+            agent_fn=_decision_agent,
+            emit_status=None,
+        )
+        state["last_decision_raw"] = decision
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         self._append_react_timing(round_idx=iteration, stage="decision", elapsed_ms=elapsed_ms)
         logging_helpers.log_agent_packet(role, "react.decision.v2", decision)
@@ -855,11 +878,30 @@ class ReactSolverV2:
                 self.log.log(f"[react.v2] decision schema error: {error}", level="ERROR")
             except Exception:
                 pass
+            try:
+                from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.round import ReactRound
+                ReactRound.decision_raw(
+                    ctx_browser=self.ctx_browser,
+                    decision=decision,
+                    iteration=iteration,
+                )
+            except Exception:
+                pass
             retries = int(state.get("decision_retries") or 0)
             if retries < int(state.get("max_iterations") or 0):
                 state["decision_retries"] = retries + 1
                 state["retry_decision"] = True
                 decision["notes"] = "ReactDecisionOutV2_schema_error; retry decision"
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.round import ReactRound
+                    ReactRound.decision_raw(
+                        ctx_browser=self.ctx_browser,
+                        decision=decision,
+                        iteration=iteration,
+                        reason="schema_error",
+                    )
+                except Exception:
+                    pass
                 try:
                     self.log.log(
                         f"[react.v2] retry decision after schema error (retries={state['decision_retries']})",

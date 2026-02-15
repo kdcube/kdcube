@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.tools.common import (
     add_block,
     host_artifact_file,
     emit_hosted_files,
+    tc_result_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.solution.react.v2.solution_workspace import rehost_files_from_timeline
 
@@ -229,7 +230,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         "type": "react.tool.result",
         "call_id": tool_call_id,
         "mime": "application/json",
-        "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.out.json" if turn_id else "",
+        "path": tc_result_path(turn_id=turn_id, call_id=tool_call_id),
         "text": json.dumps({"path": artifact_path, "ok": True}, ensure_ascii=False),
     })
 
