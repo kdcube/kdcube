@@ -856,20 +856,24 @@ class ReactSolverV2:
                 user_blocks=blocks,
             )
 
+        render_params = {
+            "cache_last": True,
+            "include_sources": True,
+            "include_announce": True,
+            "force_sanitize": bool(state.get("force_compaction_next_decision")),
+        }
         decision = await retry_with_compaction(
             ctx_browser=self.ctx_browser,
             system_text_fn=lambda: build_decision_system_text(
                 adapters=announced_adapters,
                 infra_adapters=extra_adapters_for_decision,
             ),
-            render_params={
-                "cache_last": True,
-                "include_sources": True,
-                "include_announce": True,
-            },
+            render_params=render_params,
             agent_fn=_decision_agent,
             emit_status=None,
         )
+        # Reset forced compaction once we have a decision attempt.
+        state["force_compaction_next_decision"] = False
         state["last_decision_raw"] = decision
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         self._append_react_timing(round_idx=iteration, stage="decision", elapsed_ms=elapsed_ms)
@@ -977,6 +981,12 @@ class ReactSolverV2:
 
             validation_error = self._validate_decision(decision)
             if validation_error:
+                if validation_error.startswith("invalid_action"):
+                    invalid_retries = int(state.get("invalid_action_retries") or 0) + 1
+                    state["invalid_action_retries"] = invalid_retries
+                    # If we see invalid_action repeatedly, force compaction on next decision.
+                    if invalid_retries >= 2:
+                        state["force_compaction_next_decision"] = True
                 try:
                     self.ctx_browser.contribute_notice(
                         code=f"protocol_violation.{validation_error}",
@@ -1018,6 +1028,9 @@ class ReactSolverV2:
                     return state
                 else:
                     decision = {"action": "exit", "final_answer": "Decision validation failed."}
+            else:
+                state["invalid_action_retries"] = 0
+                state["force_compaction_next_decision"] = False
             action = (decision.get("action") or "").strip()
             notes = (decision.get("notes") or "").strip()
             tool_call = decision.get("tool_call") or {}
