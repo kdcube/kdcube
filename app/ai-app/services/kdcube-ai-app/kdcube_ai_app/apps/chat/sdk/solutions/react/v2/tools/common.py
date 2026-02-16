@@ -53,6 +53,7 @@ def notice_block(
     code: str,
     message: str,
     extra: Optional[Dict[str, Any]] = None,
+    rel: Optional[str] = None,
 ) -> None:
     payload = {"code": code, "message": message}
     if extra:
@@ -63,6 +64,7 @@ def notice_block(
             message=message,
             extra=extra,
             call_id=tool_call_id,
+            meta={"rel": rel} if rel else None,
         )
         return
     except Exception:

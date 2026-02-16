@@ -53,6 +53,7 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
             code="protocol_violation.plan_mode",
             message="react.plan mode must be one of: new | update | close",
             extra={"mode": mode},
+            rel="call",
         )
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "bad_plan_mode", "managed": True}
@@ -66,6 +67,7 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
                 code="protocol_violation.plan_steps",
                 message="react.plan requires non-empty steps list for mode=new/update.",
                 extra={"mode": mode},
+                rel="call",
             )
             state["exit_reason"] = "error"
             state["error"] = {"where": "tool_execution", "error": "bad_plan_steps", "managed": True}
@@ -88,6 +90,7 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
         code="plan_closed",
         message="Plan closed by react.plan(mode=close).",
         extra={},
+        rel="result",
     )
     return state
 

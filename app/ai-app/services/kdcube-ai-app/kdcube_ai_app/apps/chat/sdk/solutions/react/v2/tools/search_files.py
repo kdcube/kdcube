@@ -70,6 +70,7 @@ async def handle_react_search_files(*, ctx_browser: Any, state: Dict[str, Any], 
             code="search_files_failed",
             message=f"search_files failed: {exc}",
             extra={"tool_id": tool_id},
+            rel="result",
         )
         state["last_tool_result"] = []
         return state

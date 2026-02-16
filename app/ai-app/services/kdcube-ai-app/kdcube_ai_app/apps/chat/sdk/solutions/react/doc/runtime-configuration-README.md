@@ -55,7 +55,15 @@ Limits for cache-related operations outside TTL pruning.
 
 | Setting                         | Description                                                                 | Default |
 |---------------------------------|-----------------------------------------------------------------------------|---------|
-| `editable_tail_size_in_tokens`  | Max token distance from static tail allowed for `react.hide`.        | `2000`  |
+| `editable_tail_size_in_tokens`  | Max token distance from static tail allowed for `react.hide`.               | `2000`  |
+| `cache_point_min_rounds`        | Minimum **total** rounds required before placing the pre‑tail checkpoint.   | `2`     |
+| `cache_point_offset_rounds`     | Distance (rounds) from tail to the pre‑tail checkpoint once placed.         | `4`     |
+
+These cache‑point settings are applied when rendering the timeline context and also
+gate `react.hide` (paths before the pre‑tail cache point cannot be hidden).
+
+Rounds are counted across the **visible timeline slice** (post‑compaction), which
+may include blocks from previous turns.
 
 ## Legacy Cache Fields
 

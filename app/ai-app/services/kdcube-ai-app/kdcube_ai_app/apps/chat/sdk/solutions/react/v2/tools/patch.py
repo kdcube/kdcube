@@ -76,6 +76,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
             code="protocol_violation.path_rewritten",
             message="Path contained a turn/files prefix; rewritten to current-turn relative path.",
             extra={"original": params.get("path"), "normalized": phys_path},
+            rel="call",
         )
     if not phys_path or not is_safe_relpath(rel_path):
         state["exit_reason"] = "error"
@@ -154,6 +155,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
             code="post_patch_check_failed",
             message=msg or "post-patch check failed",
             extra={"path": artifact_name},
+            rel="result",
         )
 
     artifact_view = build_artifact_view(

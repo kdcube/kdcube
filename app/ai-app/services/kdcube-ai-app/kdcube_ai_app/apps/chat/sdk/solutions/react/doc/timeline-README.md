@@ -57,12 +57,20 @@ When the visible window exceeds the model budget, the timeline compacts earlier 
   ...
 ```
 
-## Cache points
+## Cache points (round‑based)
 Timeline uses two cache checkpoints (see `context-caching-README.md`):
-- **checkpoint 1** (intermediate)
-- **checkpoint 2** (tail)
+- **checkpoint 1**: intermediate (pre‑tail)
+- **checkpoint 2**: tail
 
-Cache points are inserted when rendering the message blocks, not stored in timeline payload.
+Cache points are computed by **rounds** (tool_call_id plus the final completion round):
+- `RuntimeCtx.cache.cache_point_min_rounds`
+- `RuntimeCtx.cache.cache_point_offset_rounds`
+
+Cache points are inserted when rendering the message blocks, not stored in the timeline payload.
+`react.hide` cannot hide blocks **before** the pre‑tail checkpoint.
+
+Rounds are counted across the **visible timeline slice** (post‑compaction), which may
+include blocks from previous turns.
 
 ## Cache TTL pruning
 When `RuntimeCtx.session.cache_ttl_seconds` is set, the timeline applies TTL-based pruning on render:

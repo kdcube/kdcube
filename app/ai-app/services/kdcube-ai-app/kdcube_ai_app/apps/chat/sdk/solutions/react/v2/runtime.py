@@ -1066,6 +1066,7 @@ class ReactSolverV2:
                             extra={"tool_id": tool_id},
                         ),
                         extra={"tool_id": tool_id, "iteration": iteration},
+                        meta={"rel": "call"},
                     )
                 except Exception:
                     pass
@@ -1124,6 +1125,7 @@ class ReactSolverV2:
                                 "tool_id": verdict.get("tool_id"),
                                 "iteration": iteration,
                             },
+                            meta={"rel": "call"},
                         )
                     except Exception:
                         pass
@@ -1182,6 +1184,7 @@ class ReactSolverV2:
                         code="tool_signature_validation",
                         message=f"tool_signature_validation={sig_status}",
                         extra={"iteration": iteration, "tool_id": tool_id, "status": sig_status, "issues": sig_issues},
+                        meta={"rel": "call"},
                     )
                 except Exception:
                     pass
@@ -1204,6 +1207,7 @@ class ReactSolverV2:
                             state=state,
                         ),
                         extra={"violations": sig_issues, "tool_id": tool_id, "iteration": iteration},
+                        meta={"rel": "call"},
                     )
                 except Exception:
                     pass

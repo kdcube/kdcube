@@ -11,7 +11,10 @@ import pathlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Callable
 
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.caching import apply_cache_points
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.caching import (
+    apply_cache_points_rounds,
+    tail_rounds_from_path as cache_tail_rounds_from_path,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
     summarize_context_blocks_progressive,
@@ -1356,6 +1359,17 @@ class Timeline:
             return None
         return self._estimate_blocks_tokens(blocks[target_idx:])
 
+    def tail_rounds_from_path(self, path: str) -> Optional[int]:
+        """
+        Return the number of tool-call rounds between the target path and the end of the
+        static timeline (post-compaction, pre-tail). Includes the final completion round.
+        Used to enforce editable tail windows for react.hide.
+        """
+        if not isinstance(path, str) or not path.strip():
+            return None
+        blocks = self._slice_after_compaction_summary(self._collect_blocks())
+        return cache_tail_rounds_from_path(blocks, path)
+
     def unhide_paths(self, paths: List[str]) -> int:
         if not paths:
             return 0
@@ -1739,11 +1753,20 @@ class Timeline:
     def _apply_cache_markers(self, blocks: List[Dict[str, Any]], *, cache_last: bool) -> None:
         if not blocks:
             return
-        for b in blocks:
-            if isinstance(b, dict):
-                b.pop("cache", None)
-        # Prefer two cache points when possible (intermediate + last stable block).
-        apply_cache_points(blocks, min_blocks=2, offset=2)
+        cache_cfg = getattr(self.runtime, "cache", None)
+        min_rounds = 2
+        offset = 2
+        if cache_cfg is not None:
+            try:
+                min_rounds = int(getattr(cache_cfg, "cache_point_min_rounds", 2) or 2)
+            except Exception:
+                min_rounds = 2
+            try:
+                offset = int(getattr(cache_cfg, "cache_point_offset_rounds", 2) or 2)
+            except Exception:
+                offset = 2
+        # Prefer two cache points when possible (intermediate + last stable round).
+        apply_cache_points_rounds(blocks, min_rounds=min_rounds, offset=offset)
         if cache_last and blocks:
             blocks[-1]["cache"] = True
 

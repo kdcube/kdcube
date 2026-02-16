@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 import json
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.caching import is_before_pre_tail_cache
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     tool_call_block,
     notice_block,
@@ -69,12 +70,63 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     status = "not_found"
     tail_tokens = None
     tail_limit = None
+    before_cache = None
     cache_cfg = getattr(ctx_browser.runtime_ctx, "cache", None)
     if cache_cfg is not None:
         try:
             tail_limit = int(getattr(cache_cfg, "editable_tail_size_in_tokens", 0) or 0)
         except Exception:
             tail_limit = None
+    try:
+        blocks = ctx_browser.timeline._slice_after_compaction_summary(
+            ctx_browser.timeline._collect_blocks()
+        )
+        min_rounds = 2
+        offset = 2
+        if cache_cfg is not None:
+            try:
+                min_rounds = int(getattr(cache_cfg, "cache_point_min_rounds", 2) or 2)
+            except Exception:
+                min_rounds = 2
+            try:
+                offset = int(getattr(cache_cfg, "cache_point_offset_rounds", 2) or 2)
+            except Exception:
+                offset = 2
+        before_cache = is_before_pre_tail_cache(blocks, path, min_rounds=min_rounds, offset=offset)
+    except Exception:
+        before_cache = None
+    if before_cache:
+        status = "too_old"
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="hide_before_cache",
+            message="hide only supports paths after the intermediate cache point.",
+            extra={"path": path},
+            rel="result",
+        )
+        payload = {
+            "path": path,
+            "status": status,
+            "blocks_hidden": replaced,
+            "tokens_hidden": tokens_hidden,
+            "tail_tokens": tail_tokens,
+            "tail_limit": tail_limit,
+            "before_cache": True,
+        }
+        add_block(
+            ctx_browser,
+            {
+                "turn": turn_id,
+                "type": "react.tool.result",
+                "call_id": tool_call_id,
+                "mime": "application/json",
+                "path": tc_result_path(turn_id=turn_id, call_id=tool_call_id),
+                "text": json.dumps(payload, ensure_ascii=False, indent=2),
+            },
+        )
+        state["last_tool_result"] = payload
+        return state
     if tail_limit is not None:
         try:
             tail_tokens = ctx_browser.timeline.tail_tokens_from_path(path)
@@ -91,6 +143,7 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                     f"(tail_tokens={tail_tokens}, limit={tail_limit})."
                 ),
                 extra={"path": path, "tail_tokens": tail_tokens, "tail_limit": tail_limit},
+                rel="result",
             )
             payload = {
                 "path": path,
@@ -99,6 +152,8 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "tokens_hidden": tokens_hidden,
                 "tail_tokens": tail_tokens,
                 "tail_limit": tail_limit,
+                "tail_rounds": tail_rounds,
+                "tail_rounds_limit": tail_rounds_limit,
             }
             add_block(ctx_browser, {
                 "turn": turn_id,
@@ -126,6 +181,7 @@ async def handle_react_hide(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             code="hide_failed",
             message=f"hide failed: {exc}",
             extra={"path": path},
+            rel="result",
         )
 
     payload = {

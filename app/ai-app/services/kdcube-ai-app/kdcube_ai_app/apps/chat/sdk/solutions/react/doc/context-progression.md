@@ -97,7 +97,7 @@ Retry on context-limit:
 │ CURRENT TURN USER BLOCKS    │   (prompt + attachments)                  [stable]
 └────────────────────────────┘
 ┌────────────────────────────┐
-│ TURN PROGRESS LOG          │   (agent contributions, react logs)       [growing]
+│ TURN PROGRESS LOG          │   (agent contributions, react logs and finally final_answer)       [growing]
 └────────────────────────────┘
 ┌────────────────────────────┐
 │ SOURCES POOL (optional)     │   (tail, uncached)                        [ephemeral]

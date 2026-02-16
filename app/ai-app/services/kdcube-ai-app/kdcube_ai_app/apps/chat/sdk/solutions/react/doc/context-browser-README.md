@@ -120,6 +120,15 @@ Pass `include_sources=True` to `timeline(...)` to include it.
 
 ---
 
+## Cache points (round‑based)
+When `timeline.render(...)` is called, it inserts **two cache points** in the stable
+timeline window (see `context-caching-README.md`). These are computed by **rounds** (tool_call_id
+plus the final completion round) using:
+- `RuntimeCtx.cache.cache_point_min_rounds`
+- `RuntimeCtx.cache.cache_point_offset_rounds`
+
+This cache window also bounds `react.hide`: paths **before** the pre‑tail cache point cannot be hidden.
+
 ## Notes on compaction
 - `timeline(force_sanitize=True)` triggers compaction and inserts `conv.range.summary`.
 - Summaries are stored in the index and **not** in the turn log.

@@ -218,6 +218,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             code="read_paths_missing",
             message=f"react.read requested non-existent paths: {missing_artifacts}",
             extra={"missing": missing_artifacts, "tool_id": tool_id},
+            rel="result",
         )
     state["last_tool_result"] = []
     return state

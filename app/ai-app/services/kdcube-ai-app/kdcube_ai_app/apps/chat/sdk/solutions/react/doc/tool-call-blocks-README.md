@@ -60,6 +60,17 @@ When a decision uses `action=call_tool`, the timeline receives blocks in this or
 
 ---
 
+## react.hide (cache‑bounded)
+
+`react.hide` replaces a block with a short placeholder. It is **restricted** by:
+- `RuntimeCtx.cache.editable_tail_size_in_tokens`
+- **Pre‑tail cache checkpoint** (from `cache_point_*` settings)
+
+If the target path is **before** the pre‑tail cache point, the tool returns
+`code=hide_before_cache` and does not hide anything.
+
+---
+
 ## react.write(...)
 
 `react.write` always produces a meta block plus content.  

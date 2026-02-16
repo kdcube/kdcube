@@ -458,6 +458,7 @@ class ContextBrowser:
         message: str,
         extra: Optional[Dict[str, Any]] = None,
         call_id: Optional[str] = None,
+        meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Emit a react.notice block into the timeline (protocol violations, warnings).
@@ -481,6 +482,8 @@ class ContextBrowser:
             }
             if call_id:
                 block["call_id"] = call_id
+            if meta:
+                block["meta"] = meta
             self.contribute(blocks=[block])
         except Exception:
             pass

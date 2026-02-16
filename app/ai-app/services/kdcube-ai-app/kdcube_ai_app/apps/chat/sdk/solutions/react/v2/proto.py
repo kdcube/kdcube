@@ -43,10 +43,17 @@ class RuntimeSessionConfig:
 class RuntimeCacheConfig:
     # Limits for react.hide (editable tail window).
     editable_tail_size_in_tokens: int = 2000
+    # Cache markers: intermediate (pre-tail) and tail cache points are computed on rounds.
+    # min_rounds: minimum total rounds required before we place a pre-tail checkpoint at all.
+    cache_point_min_rounds: int = 2
+    # offset_rounds: distance (in rounds) from tail to the pre-tail checkpoint when it is placed.
+    cache_point_offset_rounds: int = 4
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "editable_tail_size_in_tokens": self.editable_tail_size_in_tokens,
+            "cache_point_min_rounds": self.cache_point_min_rounds,
+            "cache_point_offset_rounds": self.cache_point_offset_rounds,
         }
 
 
