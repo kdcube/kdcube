@@ -75,7 +75,7 @@ def notice_block(
         "type": "react.notice",
         "call_id": tool_call_id,
         "mime": "application/json",
-        "path": f"tc:{turn_id}.tool_calls.{tool_call_id}.notice.json" if turn_id else "",
+        "path": f"tc:{turn_id}.{tool_call_id}.notice" if turn_id else "",
         "text": json.dumps(payload, ensure_ascii=False, indent=2),
     })
 

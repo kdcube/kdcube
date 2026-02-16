@@ -283,13 +283,7 @@ def build_sources_pool_text(*, sources_pool: List[Dict[str, Any]]) -> str:
         lines.append("  (none)")
         lines.append("")
     else:
-        show_all = len(pool) <= 5
-        if show_all:
-            display = pool
-            tail = []
-        else:
-            display = pool[:3]
-            tail = pool[-1:]
+        display = pool
 
         def _emit(src: Dict[str, Any]) -> None:
             sid = int(src.get("sid") or 0)
@@ -313,12 +307,6 @@ def build_sources_pool_text(*, sources_pool: List[Dict[str, Any]]) -> str:
 
         for row in display:
             _emit(row)
-        if not show_all:
-            omitted = max(0, len(pool) - (len(display) + len(tail)))
-            lines.append(f"        [ ... {omitted} more ... ]")
-            lines.append("")
-            for row in tail:
-                _emit(row)
 
     lines.append(hr)
     lines.append("  Hint: to see the full snippet if not visible / hide if no need and big (example)")

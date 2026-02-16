@@ -73,7 +73,7 @@ Blocks are dicts with:
   "type": "react.tool.result",
   "call_id": "abc123",
   "mime": "application/json",
-  "path": "tc:turn_123.tool_calls.abc123.out.json",
+  "path": "tc:turn_123.abc123.result",
   "text": "{\n  \"tool_id\": \"exec_tools.execute_code_python\",\n  \"tool_call_id\": \"abc123\",\n  \"error\": {\n    \"code\": \"missing_artifact\",\n    \"message\": \"Artifact 'report_md' not produced\",\n    \"details\": {\"missing_artifact\": \"report_md\"}\n  },\n  \"ts\": \"2026-02-09T03:15:49Z\"\n}"
 }
 ```
@@ -236,11 +236,11 @@ physical_path : turn_1771234567890_abcd/files/reports/summary.md   # OUT_DIR‑r
 Blocks emitted:
 ```
 type: react.tool.call
-path: tc:turn_...tool_calls.<id>.in.json
+path: tc:turn_...<id>.call
 text: {"tool_id":"react.write",...}
 
 type: react.tool.result   (meta JSON)
-path: tc:turn_...tool_calls.<id>.out.json
+path: tc:turn_...<id>.result
 text: {
   "artifact_path":"fi:turn_...files/report.md",
   "physical_path":"turn_.../files/report.md",

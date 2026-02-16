@@ -324,6 +324,8 @@ Exception for web_search/web_fetch: the result is saved under
   so:sources_pool[sid1-sid2]
 where sid1..sid2 are the first/last SIDs contributed by that call.
 Tool calls may also produce artifacts (files or display content). These appear in tool result blocks and can be read via react.read using their artifact paths.
+The tool result block is a **rendered summary/metadata view** (status/errors + artifact metadata; inline output only for non‑file tools).
+It does **not** contain full file contents. If you need the actual content, read the artifact_path shown there.
 Example (schematic):
   [TOOL RESULT tc_abcd] <tool_id>
   artifact_path: fi:<turn_id>.files/report.xlsx   (or so:sources_pool[1-3] for web tools)

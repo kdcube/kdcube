@@ -177,6 +177,15 @@ class ReactSolverV2:
             pass
 
     def _build_graph(self) -> StateGraph:
+
+        def failing_node(state: Dict[str, Any]):
+            """Simulate a tool/API failure"""
+            try:
+                raise ValueError("PPTX file was not produced")
+            except Exception as exc:
+                tb = traceback.format_exc()
+                raise RuntimeError(f"[react.v2] Error control {exc}/{tb}") from exc
+
         wf = StateGraph(dict)
         wf.add_node("decision", self._decision_node)
         wf.add_node("tool_execution", self._tool_execution_node)

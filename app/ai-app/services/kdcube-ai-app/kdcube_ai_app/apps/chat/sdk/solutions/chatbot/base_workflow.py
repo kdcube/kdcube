@@ -1033,6 +1033,41 @@ class BaseWorkflow():
                     block_factory=self.ctx_browser.timeline.block,
                 ),
             )
+            # Add attachments to sources_pool so local attachment paths are citable.
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.sources import merge_sources_pool_for_attachment_rows
+                turn_id = self.ctx_browser.runtime_ctx.turn_id if self.ctx_browser and self.ctx_browser.runtime_ctx else ""
+                new_rows = []
+                for att in (scratchpad.user_attachments or []):
+                    if not isinstance(att, dict):
+                        continue
+                    filename = (att.get("filename") or att.get("name") or "").strip()
+                    if not filename or not turn_id:
+                        continue
+                    local_path = f"{turn_id}/attachments/{filename}"
+                    hosted_uri = (att.get("hosted_uri") or att.get("source_path") or att.get("path") or att.get("key") or "").strip()
+                    row = {
+                        "url": hosted_uri or local_path,
+                        "title": filename,
+                        "text": "",
+                        "source_type": "attachment",
+                        "mime": (att.get("mime") or att.get("mime_type") or "").strip(),
+                        "size_bytes": att.get("size") or att.get("size_bytes"),
+                        "local_path": local_path,
+                        "artifact_path": f"fi:{turn_id}.user.attachments/{filename}",
+                        "turn_id": turn_id,
+                    }
+                    if hosted_uri:
+                        row["hosted_uri"] = hosted_uri
+                    if att.get("rn"):
+                        row["rn"] = att.get("rn")
+                    if att.get("key"):
+                        row["key"] = att.get("key")
+                    new_rows.append(row)
+                if new_rows:
+                    merge_sources_pool_for_attachment_rows(ctx_browser=self.ctx_browser, rows=new_rows)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -1346,9 +1381,9 @@ class BaseWorkflow():
             if k in data_for_user:
                 data_for_user.pop(k, None)
         if show_error_in_timeline:
-            pass
+            # pass
             # Emit error event for telemetry and an answer bubble for the user.
-            # await self.comm.error(message=message, agent="turn.error", data=data_for_user)
+            await self.comm.error(message=message, agent="turn.error", data=data_for_user)
             # await self.comm.delta(text=message, index=0, marker="answer", agent="turn_exception", completed=True)
         else:
             # Keep it out of timeline; still produce an "answer" bubble

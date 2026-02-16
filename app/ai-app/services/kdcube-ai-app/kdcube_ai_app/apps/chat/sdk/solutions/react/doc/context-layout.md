@@ -97,7 +97,7 @@ All paths use concrete `turn_id` (no `current_turn` namespace):
 - `ar:<turn_id>.react.notes.<tool_call_id>`
 - `fi:<turn_id>.user.attachments/<name>`
 - `fi:<turn_id>.files/<relative_path>`
-- `tc:<turn_id>.tool_calls.<id>.in.json` / `.out.json`
+- `tc:<turn_id>.<id>.call` / `.result`
 - `so:sources_pool[...]`
 
 ## Visible Timeline (rendered order)
@@ -145,7 +145,7 @@ id=plan_abc
 
 [react.tool.result] (JSON meta)
 {
-  "artifact_path": "tc:turn_1770603271112_2yz1lp.tool_calls.18f62649fb3b.out.json",
+  "artifact_path": "tc:turn_1770603271112_2yz1lp.18f62649fb3b.result",
   "tool_call_id": "18f62649fb3b",
   "mime": "application/json"
 }

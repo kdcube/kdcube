@@ -8,10 +8,12 @@ Common behaviors
 - All react tools are invoked as a call_tool action.
 - If decision `notes` are present, a `react.notes` block is emitted **before** the tool call.
 - All tool calls append a react.tool.call block (params only) and one or more react.tool.result blocks.
+- Tool result blocks are **rendered views** (status/errors + artifact metadata; inline output only for non‑file tools).
+  They do **not** contain full file contents; use the `artifact_path` shown there to read the artifact.
 - Artifacts created by tools are referenced by stable paths (use turn_id, never current_turn):
   - fi:<turn_id>.files/<relative_path>
   - ar:<turn_id>.artifacts.<artifact_path>
-  - tc:<turn_id>.tool_calls.<id>.in.json / .out.json
+  - tc:<turn_id>.<id>.call / .result
 
 react.read
 - Purpose: load an existing artifact into the timeline for inspection.
@@ -81,7 +83,7 @@ Example result block (simplified):
   "type": "react.tool.result",
   "call_id": "<tool_call_id>",
   "mime": "application/json",
-  "path": "tc:<turn_id>.tool_calls.<id>.out.json",
+  "path": "tc:<turn_id>.<id>.result",
   "text": "[{'turn_id': 'turn_123', 'text': '...', 'score': 0.84, 'ts': '2026-02-01T...Z'}]"
 }
 ```
@@ -97,7 +99,7 @@ Params:
 - replacement: str (SECOND FIELD). Replacement text.
 Example result (simplified):
 ```json
-{ "type": "react.tool.result", "path": "tc:turn_123.tool_calls.abc.out.json", "mime": "application/json", "text": "{...}" }
+{ "type": "react.tool.result", "path": "tc:turn_123.abc.result", "mime": "application/json", "text": "{...}" }
 ```
 
 react.search_files
@@ -109,7 +111,7 @@ Params:
 - max_hits: int (optional). Default 200.
 Example result (simplified):
 ```json
-{ "type": "react.tool.result", "path": "tc:turn_123.tool_calls.abc.out.json", "mime": "application/json", "text": "{...}" }
+{ "type": "react.tool.result", "path": "tc:turn_123.abc.result", "mime": "application/json", "text": "{...}" }
 ```
 
 Notes

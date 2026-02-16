@@ -477,7 +477,7 @@ class ContextBrowser:
                 "turn_id": turn_id,
                 "ts": time.time(),
                 "mime": "application/json",
-                "path": f"tc:{turn_id}.tool_calls.{call_id}.notice.json" if (turn_id and call_id) else "",
+                "path": f"tc:{turn_id}.{call_id}.notice" if (turn_id and call_id) else "",
                 "text": json.dumps(payload, ensure_ascii=False, indent=2),
             }
             if call_id:

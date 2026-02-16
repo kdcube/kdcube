@@ -155,7 +155,7 @@ Physical → Logical mapping:
   physical: <turn_id>/files/<relpath>
   logical : fi:<turn_id>.files/<relpath>
 - Tool call results:
-  logical : tc:<turn_id>.tool_calls.<call_id>.in.json / .out.json
+  logical : tc:<turn_id>.<call_id>.call / .result
 - Summaries:
   logical : su:<turn_id>.conv.range.summary
 
@@ -185,12 +185,14 @@ PATHS_EXTENDED_GUIDE = """
 - Skills (react.read only):
     - `sk:<skill_id>` (loads a skill into visible timeline; not supported by fetch_ctx)
 - Tool calls:
-    - `tc:<turn_id>.tool_calls.<tool_call_id>.in.json` (brings full json content of the tool call input, including params with bindings)
-    - `tc:<turn_id>.tool_calls.<tool_call_id>.out.json` (brings full json content of the tool call output, including result. If there are artifacts related to this tool call, they will be listed in the tool result)
+    - `tc:<turn_id>.<tool_call_id>.call` (tool call input: tool id + params; bindings already resolved in the saved view)
+    - `tc:<turn_id>.<tool_call_id>.result` (rendered tool result block: status/errors + artifact metadata; inline output only for non‑file tools)
+      If you need the actual artifact content, read the artifact_path listed in the tool result (e.g., `fi:<turn_id>.files/...`).
 You will see these paths in the tool result blocks for each artifact from ar: and fi: namespace.
 
 #### Supported physical paths
-For artifacts from fi: and tc: namespace you will also see their physical relative paths.
+For artifacts in the **fi:** namespace you will also see their physical relative paths.
+`tc:` paths are logical timeline entries and do not have physical paths.
 Physical relative paths can be only used in exec snippets, in react.patch tool and as a param to rendering_tools.*. 
 Using physical relative paths with react.read will result in protocol violation error.  
 Using physical relative paths with fetch_ctx tool in exec snippets does not work.

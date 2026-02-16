@@ -32,6 +32,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
     extract_code_file_paths,
     rehost_files_from_timeline,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.sources import (
+    ensure_rendering_assets,
+    merge_sources_pool_for_attachment_rows,
+    merge_sources_pool_for_file_rows,
+)
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 
 TOOL_SPEC = None  # external tools are dynamic
@@ -261,6 +266,18 @@ async def handle_external_tool(*,
                         message="Rendering tool path was rewritten to current turn files/.",
                         extra={"original": path_val, "rewritten": physical, "tool_id": tool_id},
                     )
+        # Ensure referenced local assets (files/attachments) exist under OUT_DIR for rendering.
+        try:
+            await ensure_rendering_assets(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                tool_id=tool_id,
+                content=final_params.get("content"),
+                outdir=pathlib.Path(state["outdir"]),
+                notice_fn=notice_block,
+            )
+        except Exception:
+            pass
 
     tool_response = await execute_tool(
         runtime_ctx=ctx_browser.runtime_ctx,
@@ -510,6 +527,23 @@ async def handle_external_tool(*,
             artifact_path=artifact_path if artifact_path.startswith("fi:") else "",
             tool_call_id=tool_call_id,
         )
+        # Add produced files to sources_pool (so file/attachment paths can be cited).
+        if visibility == "external" and physical_path:
+            try:
+                merge_sources_pool_for_file_rows(
+                    ctx_browser=ctx_browser,
+                    rows=[{
+                        "physical_path": physical_path,
+                        "artifact_path": artifact_path,
+                        "mime": artifact_view.mime or "",
+                        "size_bytes": artifact_view.size_bytes,
+                        "filename": artifact_view.filename or pathlib.Path(physical_path).name,
+                        "turn_id": turn_id,
+                        "raw": (artifact_view.raw or {}),
+                    }],
+                )
+            except Exception:
+                pass
         meta_block = build_artifact_meta_block(
             turn_id=turn_id,
             tool_call_id=tool_call_id,

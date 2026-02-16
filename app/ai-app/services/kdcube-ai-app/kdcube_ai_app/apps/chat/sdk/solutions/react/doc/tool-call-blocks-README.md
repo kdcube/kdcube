@@ -44,19 +44,21 @@ When a decision uses `action=call_tool`, the timeline receives blocks in this or
 
 2. **Tool call**
    - `type`: `react.tool.call`
-   - `path`: `tc:<turn_id>.tool_calls.<tool_call_id>.in.json`
+   - `path`: `tc:<turn_id>.<tool_call_id>.call`
    - `text`: JSON `{tool_id, tool_call_id, params, ts}`
    - Notes are **not** embedded in the call payload.
 
 3. **Notices (optional)**
    - `type`: `react.notice`
-   - `path`: `tc:<turn_id>.tool_calls.<tool_call_id>.notice.json`
+   - `path`: `tc:<turn_id>.<tool_call_id>.notice`
    - Used for protocol violations, path rewrites, tool errors, etc.
 
 4. **Tool results**
    - One or more `react.tool.result` blocks:
      - **Meta block** (JSON) with `artifact_path`, `physical_path`, `mime`, `kind`, `visibility`, `tool_id`, `tool_call_id`, etc.
      - **Content block** (text or base64) when applicable.
+   - The tool result path (`tc:<turn_id>.<tool_call_id>.result`) is a **rendered view** (status/errors + metadata).
+     It does **not** contain full file contents. Read the `artifact_path` shown there to access full content.
 
 ---
 
@@ -100,11 +102,11 @@ For write tools we also validate the output file and record:
 { "type": "react.notes", "path": "ar:turn_1.react.notes.abc", "text": "Drafting summary" }
 
 // react.tool.call (content truncated)
-{ "type": "react.tool.call", "path": "tc:turn_1.tool_calls.abc.in.json",
+{ "type": "react.tool.call", "path": "tc:turn_1.abc.call",
   "text": "{ \"tool_id\": \"react.write\", \"tool_call_id\": \"abc\", \"params\": {\"content\": \"# Report... [truncated.. see fi:turn_1.files/report.md]\", ...} }" }
 
 // react.tool.result (meta, tokens included if available)
-{ "type": "react.tool.result", "path": "tc:turn_1.tool_calls.abc.out.json",
+{ "type": "react.tool.result", "path": "tc:turn_1.abc.result",
   "text": "{ \"artifact_path\": \"fi:turn_1.files/report.md\", \"physical_path\": \"turn_1/files/report.md\", \"kind\": \"display\", \"visibility\": \"external\", \"tokens\": 1234, \"size_bytes\": 1842 }" }
 
 // content
@@ -140,7 +142,7 @@ Write validation applies here too (`size_bytes`, `write_warning`, missing/empty 
 **Example (PDF)**
 ```json
 // meta
-{ "type": "react.tool.result", "path": "tc:turn_1.tool_calls.def.out.json",
+{ "type": "react.tool.result", "path": "tc:turn_1.def.result",
   "text": "{ \"artifact_path\": \"fi:turn_1.files/report.pdf\", \"physical_path\": \"turn_1/files/report.pdf\", \"mime\": \"application/pdf\", \"kind\": \"file\", \"visibility\": \"external\" }" }
 
 // binary
@@ -152,7 +154,7 @@ Write validation applies here too (`size_bytes`, `write_warning`, missing/empty 
 ## exec_tools.execute_code_* (contracted outputs)
 
 Exec tools produce:
-- A **text report** at `tc:<turn_id>.tool_calls.<tool_call_id>.out.json` describing runtime error (if any),
+- A **text report** at `tc:<turn_id>.<tool_call_id>.result` describing runtime error (if any),
   file‑level errors, and the list of produced files.
 - Per‑file blocks **only for produced artifacts** (meta + optional binary/text).
 - For **text files**, exec will embed up to **20 KB** of file content in the content block
@@ -188,7 +190,7 @@ All errors are consolidated into the text report.
 Blocks:
 1) `react.notes` (optional)  
 2) `react.tool.call`  
-3) **Exec report** (text) at `tc:...out.json`  
+3) **Exec report** (text) at `tc:...result`  
 4) For each produced artifact:  
    - `react.tool.result` (meta JSON)  
    - optional binary block (pdf/image)  
@@ -199,7 +201,7 @@ Blocks:
 Blocks:
 1) `react.notes` (optional)  
 2) `react.tool.call`  
-3) **Exec report** (text) at `tc:...out.json`  
+3) **Exec report** (text) at `tc:...result`  
 4) For each **produced** artifact: meta (+ binary if pdf/image)  
 
 ### Case C: Partial contract produced + runtime error
@@ -207,13 +209,13 @@ Blocks:
 Blocks:
 1) `react.notes` (optional)  
 2) `react.tool.call`  
-3) **Exec report** (text) at `tc:...out.json`  
+3) **Exec report** (text) at `tc:...result`  
 4) For each produced artifact: meta (+ binary if pdf/image)  
 
 **Exec report example (one success, one failure)**
 ```json
 { "type": "react.tool.result",
-  "path": "tc:turn_1.tool_calls.xyz.out.json",
+  "path": "tc:turn_1.xyz.result",
   "mime": "text/markdown",
   "text": "Runtime error: execution_failed — Missing output files: turn_1/files/report.xlsx\nFile errors:\n- turn_1/files/report.xlsx: file not produced\nSucceeded:\n- turn_1/files/summary.pdf"
 }
@@ -239,15 +241,15 @@ By the time timeline blocks are built:
 **Example (simplified)**
 ```json
 // tool call
-{ "type": "react.tool.call", "path": "tc:turn_1.tool_calls.s1.in.json",
+{ "type": "react.tool.call", "path": "tc:turn_1.s1.call",
   "text": "{ \"tool_id\": \"web_tools.web_search\", \"tool_call_id\": \"s1\", \"params\": {\"queries\": [\"best restaurants wuppertal\"], \"n\": 5} }" }
 
 // meta
-{ "type": "react.tool.result", "path": "tc:turn_1.tool_calls.s1.out.json",
-  "text": "{ \"artifact_path\": \"tc:turn_1.tool_calls.s1.out.json\", \"mime\": \"application/json\", \"kind\": \"file\", \"visibility\": \"internal\" }" }
+{ "type": "react.tool.result", "path": "tc:turn_1.s1.result",
+  "text": "{ \"artifact_path\": \"tc:turn_1.s1.result\", \"mime\": \"application/json\", \"kind\": \"file\", \"visibility\": \"internal\" }" }
 
 // content (results list)
-{ "type": "react.tool.result", "path": "tc:turn_1.tool_calls.s1.out.json",
+{ "type": "react.tool.result", "path": "tc:turn_1.s1.result",
   "mime": "application/json",
   "text": "[{\"sid\":1,\"title\":\"...\",\"url\":\"https://...\"},{\"sid\":2,\"title\":\"...\",\"url\":\"https://...\"}]"
 }
@@ -264,15 +266,15 @@ By the time timeline blocks are built:
 **Example (simplified)**
 ```json
 // tool call
-{ "type": "react.tool.call", "path": "tc:turn_1.tool_calls.f1.in.json",
+{ "type": "react.tool.call", "path": "tc:turn_1.f1.call",
   "text": "{ \"tool_id\": \"web_tools.web_fetch\", \"tool_call_id\": \"f1\", \"params\": {\"urls\": [\"https://example.com\"]} }" }
 
 // meta
-{ "type": "react.tool.result", "path": "tc:turn_1.tool_calls.f1.out.json",
-  "text": "{ \"artifact_path\": \"tc:turn_1.tool_calls.f1.out.json\", \"mime\": \"application/json\", \"kind\": \"file\", \"visibility\": \"internal\" }" }
+{ "type": "react.tool.result", "path": "tc:turn_1.f1.result",
+  "text": "{ \"artifact_path\": \"tc:turn_1.f1.result\", \"mime\": \"application/json\", \"kind\": \"file\", \"visibility\": \"internal\" }" }
 
 // content (fetch payload)
-{ "type": "react.tool.result", "path": "tc:turn_1.tool_calls.f1.out.json",
+{ "type": "react.tool.result", "path": "tc:turn_1.f1.result",
   "mime": "application/json",
   "text": "{\"https://example.com\": {\"content\": \"...\", \"title\": \"Example\"}}"
 }

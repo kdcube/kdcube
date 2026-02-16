@@ -70,6 +70,11 @@ class WithReactWorkflow(BaseWorkflow):
             async def _gate_node(state: Dict[str, Any]) -> Dict[str, Any]:
                 # --- Gate agent
                 t2, ms2 = _tstart()
+                # try:
+                #     raise RuntimeError("Simulated error for testing")
+                # except Exception as exc:
+                #     raise RuntimeError(f"[react.v2] Error control") from exc
+
                 async with with_accounting(
                     self.config.ai_bundle_spec.id,
                     agent="gate.simple",

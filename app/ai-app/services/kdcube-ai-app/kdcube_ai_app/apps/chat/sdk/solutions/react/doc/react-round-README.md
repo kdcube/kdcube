@@ -14,7 +14,7 @@ Tool call blocks are JSON text blocks with metadata:
 - `type`: `react.tool.call`
 - `call_id`: tool call id
 - `mime`: `application/json`
-- `path`: `tc:<turn_id>.tool_calls.<call_id>.in.json`
+- `path`: `tc:<turn_id>.<call_id>.call`
 - `text`: JSON payload `{tool_id, tool_call_id, reasoning, params}`
 
 ## Tool Result Blocks
@@ -45,4 +45,4 @@ Tool result blocks are emitted per artifact or per result type:
 - Artifacts via `ar:<turn_id>.artifacts.<path>`
 - Files via `fi:<turn_id>.files/<filepath>`
 - Sources via `so:sources_pool[...]`
-- Tool call payloads via `tc:<turn_id>.tool_calls.<id>.in.json` or `.out.json`
+- Tool call payloads via `tc:<turn_id>.<id>.call` or `.result`

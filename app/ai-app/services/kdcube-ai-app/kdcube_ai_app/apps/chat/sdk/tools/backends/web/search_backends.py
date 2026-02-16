@@ -959,6 +959,7 @@ async def web_search(
             widget_artifact_name=f"Web Fetch [{agent_suffix}]",
             widget_title=fetch_agent_label,
             namespaced_kv_cache=namespaced_kv_cache,
+            include_content_blocks=False
         )
         new_rows = fetched_rows
         if fetched_rows and len(fetched_rows) > 1:

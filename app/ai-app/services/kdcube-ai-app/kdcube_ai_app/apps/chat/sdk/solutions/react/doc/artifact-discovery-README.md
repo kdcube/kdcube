@@ -13,7 +13,7 @@ Stable identifier used in `react.read` / `fetch_ctx`. Examples:
 - `fi:<turn_id>.user.attachments/<name>`
 - `so:sources_pool[...]`
 - `su:<turn_id>.conv.range.summary`
-- `tc:<turn_id>.tool_calls.<call_id>.out.json`
+- `tc:<turn_id>.<call_id>.result`
 
 **Physical path**  
 OUT_DIR‑relative path used for `react.patch`, rendering tools, and exec code file I/O.
@@ -85,6 +85,46 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 Compaction summarizes **blocks**, not artifacts. Artifact metadata must remain visible:
 - Compaction serializer includes `artifact_path`, `physical_path`, `mime`, and `tool_call_id`.
 - This preserves discovery even if older blocks are summarized.
+
+## Artifact Mentions Cache Misses → Pull
+
+When rendering tools (e.g., `rendering_tools.write_pdf`, `write_pptx`, `write_png`) receive
+HTML/Markdown content, that content may reference **local artifacts** that are not currently
+present in the execution workspace (OUT_DIR). We treat these as **cache misses** and pull
+the required assets before rendering.
+
+### How it works
+
+1) **Local path mentions**
+   - The content is scanned for local paths (`turn_<id>/files/...` and `turn_<id>/attachments/...`).
+   - For each referenced path, the runtime rehosts that file into OUT_DIR.
+   - If any are missing, a tool notice is emitted (`tool_call_error.missing_assets`).
+
+2) **SID mentions**
+   - The content is scanned for citation tokens (`[[S:n]]`).
+   - Each SID is resolved against `sources_pool`.
+   - If a SID maps to a file/attachment source (via `local_path` or `artifact_path`),
+     that file is rehosted into OUT_DIR.
+   - If a SID is missing in sources_pool, a warning notice is emitted
+     (`tool_call_warning.missing_sources`).
+
+### Required sources_pool metadata
+
+To enable SID→file resolution, file/attachment sources MUST carry:
+- `local_path` (e.g., `turn_123/attachments/photo.png`)
+- `artifact_path` (e.g., `fi:turn_123.user.attachments/photo.png`)
+- `source_type` = `attachment` or `file`
+
+These fields are populated automatically for:
+- **User attachments** at turn start (source_type=`attachment`)
+- **Produced files** (exec/render/write tools) when hosted (source_type=`file`)
+
+### Why this matters
+
+Rendering tools run in isolated workspaces and only see **OUT_DIR**. Rehosting ensures:
+- `<img src="turn_123/attachments/x.png">` renders correctly
+- `[[S:n]]` that references a file source becomes renderable
+- Tool outputs are reproducible even when prior turns are compacted
 
 ## Examples
 

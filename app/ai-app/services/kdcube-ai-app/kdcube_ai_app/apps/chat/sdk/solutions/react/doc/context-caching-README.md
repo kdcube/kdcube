@@ -13,6 +13,8 @@ are compacted.
 This yields **three** cache anchors in the stable prefix when a previous turn exists.
 If the tail cache breaks, the additional checkpoint still provides a usable cached prefix.
 
+system message
+timeline
 ## Schematic (cache points)
 ```
 ... previous turns ...
