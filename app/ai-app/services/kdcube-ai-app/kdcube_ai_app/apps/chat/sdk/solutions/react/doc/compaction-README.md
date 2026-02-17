@@ -133,26 +133,26 @@ The cache points are placed on **specific blocks**, not “between” turns:
 
 1) **Prev‑turn cache point** → the *last block* immediately before the current turn header.  
 2) **Pre‑tail cache point** → the *last block* of round `N‑4` from the tail (if enough rounds).  
-3) **Tail cache point** → the *last block* in the visible stream.
+3) **Tail cache point** → the *last block* in the visible stream.  
 
 ### Example (enough rounds for pre‑tail)
-Current turn is **TURN E**; tail = last block of TURN E; offset = 4 rounds.
+Current turn is **TURN E**. Round ends are denoted with `·end`.
 
 ```
 Before:
-  [TURN A] [TURN B] [TURN C] [TURN D] [TURN E]
-         ^ pre‑tail cache (end of TURN A, N‑4)
-                                    ^ prev‑turn cache (end of TURN D)
-                                             ^ tail cache (end of TURN E)
+  [TURN A·end] [TURN B·end] [TURN C·end] [TURN D·end] [TURN E·end]
+   ^ pre‑tail cache (end of TURN A, N‑4)
+                                ^ prev‑turn cache (end of TURN D)
+                                          ^ tail cache (end of TURN E)
 ```
 
 After compaction (summary covers A..C; visible D..E):
 
 ```
 After compaction (in memory):
-  [SUMMARY(A..C)] [TURN D] [TURN E]
-                         ^ prev‑turn cache (end of TURN D)
-                                  ^ tail cache (end of TURN E)
+  [SUMMARY(A..C)] [TURN D·end] [TURN E·end]
+                     ^ prev‑turn cache (end of TURN D)
+                               ^ tail cache (end of TURN E)
   (pre‑tail cache is omitted if visible rounds < min_rounds)
 ```
 
@@ -160,10 +160,10 @@ If the cut lands inside TURN C:
 
 ```
 Before:
-  [TURN A] [TURN B] [TURN C (prefix)] [TURN C (tail)] [TURN D] [TURN E]
+  [TURN A·end] [TURN B·end] [TURN C(prefix)] [TURN C·end] [TURN D·end] [TURN E·end]
 
 After compaction (in memory):
-  [SUMMARY(A..B + C‑prefix)] [TURN C (tail)] [TURN D] [TURN E]
+  [SUMMARY(A..B + C‑prefix)] [TURN C·end] [TURN D·end] [TURN E·end]
 ```
 
 ---
