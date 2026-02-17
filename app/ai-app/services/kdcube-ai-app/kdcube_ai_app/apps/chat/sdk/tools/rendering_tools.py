@@ -24,7 +24,7 @@ except Exception:
 import kdcube_ai_app.apps.chat.sdk.tools.md_utils as md_utils
 from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir, resolve_workdir, \
     load_sources_pool_from_disk
-from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any
+from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any, extract_local_paths_any
 from kdcube_ai_app.apps.chat.sdk.tools.ctx_tools import SourcesUsedStore
 from kdcube_ai_app.apps.chat.sdk.tools.docx_renderer import render_docx
 from kdcube_ai_app.apps.chat.sdk.tools.pptx_renderer import render_pptx
@@ -68,6 +68,44 @@ def _update_sources_used_for_filename(filename: str, content: str) -> None:
     store = SourcesUsedStore()
     store.load()
     store.upsert([{"filename": filename, "sids": sids}])
+
+
+def _log_asset_resolution(content: str, base_dir: pathlib.Path, *, tool_name: str) -> None:
+    """
+    Debug helper: log where relative assets will resolve from (base_dir + cwd)
+    and whether they exist.
+    """
+    if not isinstance(content, str) or not content.strip():
+        return
+    try:
+        paths = extract_local_paths_any(content)
+    except Exception:
+        return
+    if not paths:
+        return
+    try:
+        cwd = pathlib.Path(os.getcwd()).resolve()
+    except Exception:
+        cwd = pathlib.Path(os.getcwd())
+    try:
+        base_dir = base_dir.resolve()
+    except Exception:
+        base_dir = pathlib.Path(base_dir)
+    logger.info("%s: asset resolution base_dir=%s cwd=%s", tool_name, base_dir, cwd)
+    for rel in paths:
+        if not rel or rel.startswith(("/", "\\")):
+            continue
+        abs_base = (base_dir / rel).resolve()
+        abs_cwd = (cwd / rel).resolve()
+        logger.info(
+            "%s: asset %s base_dir=%s exists=%s cwd=%s exists=%s",
+            tool_name,
+            rel,
+            abs_base,
+            abs_base.exists(),
+            abs_cwd,
+            abs_cwd.exists(),
+        )
 
 
 def _ensure_html_wrapper(content: str, *, title: Optional[str] = None) -> str:
@@ -245,6 +283,7 @@ class RenderingTools:
             _update_sources_used_for_filename(fname, content)
             sources = load_sources_pool_from_disk()
             _warn_on_data_uri(content, "write_pptx")
+            _log_asset_resolution(content, pathlib.Path(base_dir), tool_name="write_pptx")
 
             resolve_citations: Annotated[bool, "Convert [[S:n]] tokens into hyperlinks."] = True
             await asyncio.to_thread(
@@ -321,6 +360,8 @@ class RenderingTools:
                 content = textwrap.dedent(content).strip()
 
             _update_sources_used_for_filename(fname, content)
+            if format in ("html", "markdown"):
+                _log_asset_resolution(content, pathlib.Path(base_dir), tool_name="write_png")
 
             if format == "mermaid":
                 html_content = f"""<!DOCTYPE html>
@@ -552,6 +593,8 @@ class RenderingTools:
             if format in ("html", "markdown"):
                 _warn_on_data_uri(content, "write_pdf")
             _update_sources_used_for_filename(fname, content)
+            if format in ("html", "markdown"):
+                _log_asset_resolution(content, pathlib.Path(base_dir), tool_name="write_pdf")
 
             if format == "mermaid":
                 import html as html_lib

@@ -336,7 +336,25 @@ class AsyncMarkdownPDF:
 
     @staticmethod
     def _base_href_for(path: Optional[Path]) -> Optional[str]:
-        return path.resolve().parent.as_uri() + "/" if path else None
+        if not path:
+            return None
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        try:
+            if resolved.exists() and resolved.is_dir():
+                return resolved.as_uri() + "/"
+        except Exception:
+            pass
+        # Treat as file path (or unknown) -> use parent directory
+        try:
+            if resolved.suffix:
+                return resolved.parent.as_uri() + "/"
+        except Exception:
+            pass
+        # Fallback: assume directory
+        return resolved.as_uri() + "/"
 
     def markdown_to_html(self, markdown_source: str, base_href: Optional[str], title: str) -> str:
         renderer = _PygmentsRenderer()
