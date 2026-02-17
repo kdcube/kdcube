@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import pathlib
+import logging
 from typing import Any, Dict, List, Optional, Callable
 
 from kdcube_ai_app.apps.chat.sdk.tools.citations import (
@@ -13,6 +14,22 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import rehost_files_from_timeline
+
+logger = logging.getLogger(__name__)
+
+
+def _log_render_assets(ctx_browser: Any, message: str, *, level: str = "INFO") -> None:
+    try:
+        log = getattr(ctx_browser, "log", None)
+        if log and hasattr(log, "log"):
+            log.log(message, level=level)
+            return
+    except Exception:
+        pass
+    try:
+        getattr(logger, level.lower())(message)
+    except Exception:
+        pass
 
 
 def _bump_sources_pool_next_sid(pool: List[Dict[str, Any]]) -> None:
@@ -160,6 +177,23 @@ async def ensure_rendering_assets(
                     paths=sid_rehost,
                     outdir=outdir,
                 )
+                try:
+                    rehosted = rehost.get("rehosted") or []
+                    missing = rehost.get("missing") or []
+                    if rehosted:
+                        _log_render_assets(
+                            ctx_browser,
+                            f"[rendering.assets] rehosted (by SID): {rehosted}",
+                            level="INFO",
+                        )
+                    if missing:
+                        _log_render_assets(
+                            ctx_browser,
+                            f"[rendering.assets] missing (by SID): {missing}",
+                            level="WARNING",
+                        )
+                except Exception:
+                    pass
                 missing = rehost.get("missing") or []
                 if missing and notice_fn:
                     notice_fn(
@@ -193,6 +227,23 @@ async def ensure_rendering_assets(
             paths=rehost_paths,
             outdir=outdir,
         )
+        try:
+            rehosted = rehost.get("rehosted") or []
+            missing = rehost.get("missing") or []
+            if rehosted:
+                _log_render_assets(
+                    ctx_browser,
+                    f"[rendering.assets] rehosted (by path): {rehosted}",
+                    level="INFO",
+                )
+            if missing:
+                _log_render_assets(
+                    ctx_browser,
+                    f"[rendering.assets] missing (by path): {missing}",
+                    level="WARNING",
+                )
+        except Exception:
+            pass
         missing = rehost.get("missing") or []
         if missing and notice_fn:
             notice_fn(

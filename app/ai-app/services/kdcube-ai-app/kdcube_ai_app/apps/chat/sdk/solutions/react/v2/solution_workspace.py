@@ -320,15 +320,32 @@ async def rehost_files_from_timeline(
                 continue
             by_turn_attachments.setdefault(tid, []).append(rel)
 
-    for turn_id, rels in by_turn.items():
+    async def _resolve_artifact(*, turn_id: str, rel: str, kind: str) -> Optional[Dict[str, Any]]:
+        artifact_path = (
+            f"fi:{turn_id}.files/{rel}"
+            if kind == "files"
+            else f"fi:{turn_id}.user.attachments/{rel}"
+        )
+        # 1) Prefer current in-memory timeline (covers current turn before persistence).
+        try:
+            timeline = getattr(ctx_browser, "timeline", None)
+            if timeline:
+                artifact = timeline.resolve_artifact(artifact_path)
+                if isinstance(artifact, dict):
+                    return artifact
+        except Exception:
+            pass
+        # 2) Fall back to persisted turn log.
         try:
             turn_log = await ctx_browser.get_turn_log(turn_id=turn_id)
         except Exception:
             turn_log = {}
         contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
+        return resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, artifact_path)
+
+    for turn_id, rels in by_turn.items():
         for rel in rels:
-            artifact_path = f"fi:{turn_id}.files/{rel}"
-            artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, artifact_path)
+            artifact = await _resolve_artifact(turn_id=turn_id, rel=rel, kind="files")
             if not isinstance(artifact, dict):
                 missing.append(f"{turn_id}/files/{rel}")
                 continue
@@ -380,14 +397,8 @@ async def rehost_files_from_timeline(
                 errors.append(f"rehost_failed:{turn_id}/files/{rel}:{e}")
 
     for turn_id, rels in by_turn_attachments.items():
-        try:
-            turn_log = await ctx_browser.get_turn_log(turn_id=turn_id)
-        except Exception:
-            turn_log = {}
-        contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
         for rel in rels:
-            artifact_path = f"fi:{turn_id}.user.attachments/{rel}"
-            artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, artifact_path)
+            artifact = await _resolve_artifact(turn_id=turn_id, rel=rel, kind="attachments")
             if not isinstance(artifact, dict):
                 missing.append(f"{turn_id}/attachments/{rel}")
                 continue
