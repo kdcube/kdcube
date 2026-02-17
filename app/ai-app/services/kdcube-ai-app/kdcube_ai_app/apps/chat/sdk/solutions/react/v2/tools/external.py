@@ -279,6 +279,14 @@ async def handle_external_tool(*,
         except Exception:
             pass
 
+    # Ensure timeline.json is flushed before running isolated tools (rendering/exec).
+    try:
+        if tools_insights.should_isolate_tool_execution(tool_id) or tools_insights.is_exec_tool(tool_id):
+            if ctx_browser.timeline:
+                ctx_browser.timeline.write_local()
+    except Exception:
+        pass
+
     tool_response = await execute_tool(
         runtime_ctx=ctx_browser.runtime_ctx,
         tool_execution_context={
@@ -437,6 +445,15 @@ async def handle_external_tool(*,
                         "message": artifact_stats.get("write_error"),
                         "where": "artifact_analysis",
                     }
+        sources_used: List[Any] = []
+        if tool_id.startswith("rendering_tools."):
+            try:
+                from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any
+                content_val = final_params.get("content")
+                if isinstance(content_val, str) and content_val.strip():
+                    sources_used = extract_citation_sids_any(content_val) or []
+            except Exception:
+                sources_used = []
         artifact_view = build_artifact_view(
             turn_id=turn_id,
             is_current=True,
@@ -448,7 +465,7 @@ async def handle_external_tool(*,
             visibility=visibility,
             description="",
             channel=None,
-            sources_used=[],
+            sources_used=sources_used,
             inputs=final_params,
             call_record_rel=tool_response.get("call_record_rel"),
             call_record_abs=tool_response.get("call_record_abs"),
