@@ -159,6 +159,7 @@ def build_announce_text(
     timezone: Optional[str],
     timeline_blocks: List[Dict[str, Any]],
     constraints: Optional[List[str]] = None,
+    mode: str = "full",
 ) -> str:
     def _fmt_elapsed(seconds: float) -> str:
         total = max(0, int(seconds))
@@ -183,9 +184,20 @@ def build_announce_text(
         iter_display = max(1, min(iter_display, iter_total))
     remaining_iter = max(0, iter_total - iter_display) if iter_total > 0 else 0
 
+    mode = (mode or "full").strip().lower()
+    show_title = mode != "budget"
+    show_temporal = mode == "full"
+    show_plan = mode in {"full", "turn_finalize"}
+    show_constraints = mode == "full"
+
     lines: List[str] = []
-    lines.extend(_mk_box(f"ANNOUNCE — Iteration {iter_display}/{iter_total}"))
-    lines.append("")
+    if show_title:
+        if mode == "turn_finalize":
+            title = "Turn completed with these stats"
+        else:
+            title = f"ANNOUNCE — Iteration {iter_display}/{iter_total}"
+        lines.extend(_mk_box(title))
+        lines.append("")
 
     bar_len = 10
     if iter_total > 0:
@@ -205,62 +217,64 @@ def build_announce_text(
         except Exception:
             pass
 
-    try:
-        now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-        today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-        tz = (timezone or "UTC").strip()
+    if show_temporal:
+        try:
+            now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+            today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+            tz = (timezone or "UTC").strip()
+            lines.append("")
+            lines.append("[AUTHORITATIVE TEMPORAL CONTEXT (GROUND TRUTH)]")
+            lines.append(f"  user_timezone: {tz}")
+            lines.append(f"  current_utc_timestamp: {now}")
+            lines.append(f"  current_utc_date: {today}")
+            lines.append("  All relative dates MUST be interpreted against this context.")
+        except Exception:
+            pass
+
+    if show_plan:
         lines.append("")
-        lines.append("[AUTHORITATIVE TEMPORAL CONTEXT (GROUND TRUTH)]")
-        lines.append(f"  user_timezone: {tz}")
-        lines.append(f"  current_utc_timestamp: {now}")
-        lines.append(f"  current_utc_date: {today}")
-        lines.append("  All relative dates MUST be interpreted against this context.")
-    except Exception:
-        pass
-
-    lines.append("")
-    lines.append("[ACTIVE PLAN]")
-    try:
-        plans_by_id, order = collect_plan_snapshots(timeline_blocks)
-        if order:
-            lines.append("  - plans:")
-            snapshots: List[PlanSnapshot] = []
-            for pid in order:
-                snap = PlanSnapshot.from_any(plans_by_id.get(pid) or {})
-                if snap:
-                    snapshots.append(snap)
-            for idx, snap in enumerate(snapshots, start=1):
-                suffix = " (current)" if idx == len(snapshots) else ""
-                last_ts = snap.last_ts or snap.created_ts
-                header = f"    • plan #{idx}{suffix}"
-                if last_ts:
-                    header += f" last={last_ts}"
-                lines.append(header)
-                for step_idx, step in enumerate(snap.steps or [], start=1):
-                    mark = snap.status_mark(step_idx)
-                    lines.append(f"      {mark} [{step_idx}] {step}")
-            current_snap = snapshots[-1] if snapshots else None
-            if current_snap:
-                summary = current_snap.plan_summary()
-                lines.append(
-                    f"  - plan_status: done={summary.get('done')} failed={summary.get('failed')} pending={summary.get('pending')}"
-                )
-                lines.append(f"  - plan_complete: {str(bool(summary.get('complete'))).lower()}")
-                last_ts = current_snap.last_ts or current_snap.created_ts
-                if last_ts:
-                    lines.append(f"  - plan_last_update: {last_ts}")
-        else:
+        lines.append("[ACTIVE PLAN]")
+        try:
+            plans_by_id, order = collect_plan_snapshots(timeline_blocks)
+            if order:
+                lines.append("  - plans:")
+                snapshots: List[PlanSnapshot] = []
+                for pid in order:
+                    snap = PlanSnapshot.from_any(plans_by_id.get(pid) or {})
+                    if snap:
+                        snapshots.append(snap)
+                for idx, snap in enumerate(snapshots, start=1):
+                    suffix = " (current)" if idx == len(snapshots) else ""
+                    last_ts = snap.last_ts or snap.created_ts
+                    header = f"    • plan #{idx}{suffix}"
+                    if last_ts:
+                        header += f" last={last_ts}"
+                    lines.append(header)
+                    for step_idx, step in enumerate(snap.steps or [], start=1):
+                        mark = snap.status_mark(step_idx)
+                        lines.append(f"      {mark} [{step_idx}] {step}")
+                current_snap = snapshots[-1] if snapshots else None
+                if current_snap:
+                    summary = current_snap.plan_summary()
+                    lines.append(
+                        f"  - plan_status: done={summary.get('done')} failed={summary.get('failed')} pending={summary.get('pending')}"
+                    )
+                    lines.append(f"  - plan_complete: {str(bool(summary.get('complete'))).lower()}")
+                    last_ts = current_snap.last_ts or current_snap.created_ts
+                    if last_ts:
+                        lines.append(f"  - plan_last_update: {last_ts}")
+            else:
+                lines.append("  - plans: none")
+        except Exception:
             lines.append("  - plans: none")
-    except Exception:
-        lines.append("  - plans: none")
 
-    lines.append("")
-    lines.append("[CONSTRAINTS]")
-    if constraints:
-        for item in constraints:
-            if not item:
-                continue
-            lines.append(f"  - {item}")
+    if show_constraints and constraints:
+        filtered = [item for item in constraints if item]
+        if filtered:
+            lines.append("")
+            lines.append("[CONSTRAINTS]")
+            for item in filtered:
+                lines.append(f"  - {item}")
 
     return "\n".join(lines) + "\n"
 

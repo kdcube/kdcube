@@ -2624,6 +2624,10 @@ async def search_context(
     hits = []
 
     for t in targets:
+        if not isinstance(t, dict):
+            if logger:
+                logger.log(f"search_context: skipping non-dict target {t!r}", "WARN")
+            continue
         where = t.get("where", "assistant")
         query = (t.get("query") or "")[:256]
         if not query:

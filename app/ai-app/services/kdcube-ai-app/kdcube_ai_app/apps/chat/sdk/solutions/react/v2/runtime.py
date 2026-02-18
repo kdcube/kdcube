@@ -144,15 +144,16 @@ class ReactSolverV2:
             return
         try:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_announce_text
+            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
             active_block = build_announce_text(
                 iteration=iteration,
                 max_iterations=max_iterations,
                 started_at=getattr(self.scratchpad, "started_at", "") or "",
-                timezone=getattr(self.ctx_browser.runtime_ctx, "timezone", None) if self.ctx_browser else None,
+                timezone=getattr(runtime_ctx, "timezone", None) if runtime_ctx else None,
                 timeline_blocks=self.ctx_browser.timeline.blocks,
                 constraints=None,
+                mode=getattr(runtime_ctx, "announce_mode", "full") if runtime_ctx else "full",
             )
-            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
             debug_announce = bool(getattr(runtime_ctx, "debug_log_announce", False))
             debug_sources = bool(getattr(runtime_ctx, "debug_log_sources_pool", False))
             if debug_announce:
@@ -1366,12 +1367,27 @@ class ReactSolverV2:
             }, ensure_ascii=False, indent=2),
         }
 
-        # persist final ANNOUNCE to contrib log, then clear announce
+        # persist final turn stats to contrib log, then clear announce
         try:
-            announce_blocks = self.ctx_browser.timeline.announce_blocks
-            if announce_blocks:
-                pre_blocks.extend(announce_blocks)
-            self.ctx_browser.announce(blocks=None)
+            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
+            final_text = ""
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_announce_text
+                final_text = build_announce_text(
+                    iteration=int(state.get("iteration") or 0),
+                    max_iterations=int(state.get("max_iterations") or 0),
+                    started_at=getattr(self.scratchpad, "started_at", "") or "",
+                    timezone=getattr(runtime_ctx, "timezone", None) if runtime_ctx else None,
+                    timeline_blocks=self.ctx_browser.timeline.blocks if self.ctx_browser else [],
+                    constraints=None,
+                    mode="turn_finalize",
+                ).strip()
+            except Exception:
+                final_text = ""
+            if final_text:
+                pre_blocks.append({"text": final_text})
+            if self.ctx_browser:
+                self.ctx_browser.announce(blocks=None)
         except Exception:
             self.log.log(traceback.format_exc())
         # persist react_state snapshot as a contribution block

@@ -591,15 +591,30 @@ def _build_generic_replacement(block: Dict[str, Any], cfg: TruncationConfig) -> 
 
 
 def _build_skill_prune_message(path: str) -> str:
-    label = (path or "").strip() or "skill"
-    return f"[content removed by pruning, reread with react.read if needed: {label}]"
+    label = (path or "").strip()
+    kind = "artifact"
+    if label.startswith("sk:"):
+        kind = "skill"
+    elif label.startswith("so:"):
+        kind = "source"
+    elif label.startswith("fi:"):
+        kind = "file"
+    elif label.startswith("ar:"):
+        kind = "artifact"
+    elif label.startswith("tc:"):
+        kind = "tool result"
+    if label:
+        return f"[content removed by pruning, reread with react.read if needed: {kind} {label}]"
+    return "[content removed by pruning, reread with react.read if needed]"
 
 
 def _build_prune_message_text(ttl_seconds: int) -> str:
     return (
         "[SYSTEM MESSAGE] Context was pruned because the session TTL "
         f"({ttl_seconds}s) was exceeded. Some blocks were hidden. "
-        "Use react.read(path) to restore a logical path (fi:/ar:/so:/sk:)."
+        "Pruning does NOT remove artifacts: their logical paths (fi:/ar:/so:/sk:) still exist. "
+        "Check recent tool calls/notes for relevant artifact paths and use react.read(path) to restore them if needed. "
+        "If the needed content is already visible, use it directly and do NOT call react.read or react.memsearch."
     )
 
 
@@ -978,9 +993,6 @@ def apply_cache_ttl_pruning(
                 "skip_old_turns": bool(skip_old_turns),
                 "truncated_blocks": 0,
             }
-        # One-time announce message (after budget in announce stack).
-        if isinstance(getattr(timeline, "announce_blocks", None), list):
-            timeline.announce_blocks.append({"text": ttl_msg, "type": "system.message"})
         # Persist a timeline block describing the prune event.
         turn_id = (getattr(getattr(timeline, "runtime", None), "turn_id", "") or "")
         should_add = True

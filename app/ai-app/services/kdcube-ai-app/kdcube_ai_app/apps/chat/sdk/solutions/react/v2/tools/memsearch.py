@@ -78,9 +78,19 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
     conversation_id = ctx_browser.runtime_ctx.conversation_id
     turn_id = ctx_browser.runtime_ctx.turn_id
     try:
+        # search_context expects list[dict] with {"where","query"}; map targets to that shape
+        search_targets: List[Dict[str, Any]] = []
+        seen_where = set()
+        for t in targets:
+            where = "user" if t == "attachment" else t
+            if not where or where in seen_where:
+                continue
+            search_targets.append({"where": where, "query": query})
+            seen_where.add(where)
+
         best_tid, hits = await ctx_browser.search(
             custom_score_fn=score_function,
-            targets=targets,
+            targets=search_targets,
             user=user,
             conv=conversation_id,
             scoring_mode="hybrid",
@@ -102,7 +112,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                     sources_pool=turn_log.get("sources_pool") or [],
                 )
                 tv = TimelineView.from_payload(timeline_payload)
-            except Exception:
+            except Exception as ex:
                 continue
 
             snippets: List[Dict[str, Any]] = []

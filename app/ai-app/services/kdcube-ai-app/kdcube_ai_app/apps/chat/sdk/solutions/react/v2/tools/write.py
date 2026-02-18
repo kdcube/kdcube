@@ -77,6 +77,8 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "missing_artifact_name", "managed": True}
         return state
+    ext_notice = None
+    rewrite_notice = None
     if channel == "canvas":
         try:
             ext = pathlib.Path(artifact_name).suffix.lower()
@@ -84,29 +86,23 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             ext = ""
         allowed_exts = {".md", ".markdown", ".html", ".htm", ".mermaid", ".mmd", ".json", ".yaml", ".yml", ".txt", ".xml"}
         if ext and ext not in allowed_exts:
-            notice_block(
-                ctx_browser=ctx_browser,
-                tool_call_id=tool_call_id,
-                code="protocol_violation.write_extension_mismatch",
-                message=(
+            ext_notice = {
+                "code": "protocol_violation.write_extension_mismatch",
+                "message": (
                     "react.write(canvas) supports only text formats. "
                     "Use .md/.html/.mmd/.json/.yaml/.txt/.xml or use rendering_tools.write_* for binary files."
                 ),
-                extra={"path": artifact_name, "ext": ext},
-                rel="call",
-            )
+                "extra": {"path": artifact_name, "ext": ext},
+            }
     phys_path, rel_path, rewritten = normalize_physical_path(
         artifact_name, turn_id=ctx_browser.runtime_ctx.turn_id or ""
     )
     if rewritten:
-        notice_block(
-            ctx_browser=ctx_browser,
-            tool_call_id=tool_call_id,
-            code="protocol_violation.path_rewritten",
-            message=f"Path rewritten to current-turn path: {phys_path}",
-            extra={"original": params.get("path"), "normalized": phys_path},
-            rel="call",
-        )
+        rewrite_notice = {
+            "code": "protocol_violation.path_rewritten",
+            "message": f"Path rewritten to current-turn path: {phys_path}",
+            "extra": {"original": params.get("path"), "normalized": phys_path},
+        }
     if not phys_path or not is_safe_relpath(rel_path):
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "unsafe_path", "managed": True}
@@ -136,7 +132,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             except Exception:
                 content_str = str(raw_content)
         snippet = content_str[:100]
-        suffix = f"[truncated.. see {artifact_path}]" if artifact_path else "[truncated.. see output artifact]"
+        suffix = f"... [see {artifact_path}]" if artifact_path else "... [see output artifact]"
         display_params["content"] = f"{snippet} {suffix}".strip()
     tool_call_block(
         ctx_browser=ctx_browser,
@@ -148,6 +144,24 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             "params": display_params,
         },
     )
+    if rewrite_notice:
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code=rewrite_notice["code"],
+            message=rewrite_notice["message"],
+            extra=rewrite_notice.get("extra"),
+            rel="call",
+        )
+    if ext_notice:
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code=ext_notice["code"],
+            message=ext_notice["message"],
+            extra=ext_notice.get("extra"),
+            rel="call",
+        )
 
     tokens_written = 0
     if isinstance(text, str) and text:
@@ -245,24 +259,25 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             should_emit=(kind == "file" and channel != "internal"),
         )
         abs_path = pathlib.Path(state["outdir"]) / artifact_name
-        if not abs_path.exists():
-            notice_block(
-                ctx_browser=ctx_browser,
-                tool_call_id=tool_call_id,
-                code="react.write.hosting_failed",
-                message="Hosting failed (file missing). User will not receive a downloadable file.",
-                extra={"physical_path": artifact_name, "outdir": str(state.get("outdir") or "")},
-                rel="result",
-            )
-        elif (react.hosting_service and react.comm) and not hosted:
-            notice_block(
-                ctx_browser=ctx_browser,
-                tool_call_id=tool_call_id,
-                code="react.write.hosting_failed",
-                message="Hosting failed (no hosted result). User will not receive a downloadable file.",
-                extra={"physical_path": artifact_name, "outdir": str(state.get("outdir") or "")},
-                rel="result",
-            )
+        if kind != "display":
+            if not abs_path.exists():
+                notice_block(
+                    ctx_browser=ctx_browser,
+                    tool_call_id=tool_call_id,
+                    code="react.write.hosting_failed",
+                    message="Hosting failed (file missing). User will not receive a downloadable file.",
+                    extra={"physical_path": artifact_name, "outdir": str(state.get("outdir") or "")},
+                    rel="result",
+                )
+            elif (react.hosting_service and react.comm) and not hosted:
+                notice_block(
+                    ctx_browser=ctx_browser,
+                    tool_call_id=tool_call_id,
+                    code="react.write.hosting_failed",
+                    message="Hosting failed (no hosted result). User will not receive a downloadable file.",
+                    extra={"physical_path": artifact_name, "outdir": str(state.get("outdir") or "")},
+                    rel="result",
+                )
     artifact_rel = (rel_path or "").strip()
     artifact_path = f"fi:{turn_id}.files/{artifact_rel}" if (turn_id and artifact_rel) else ""
     physical_path = artifact_name

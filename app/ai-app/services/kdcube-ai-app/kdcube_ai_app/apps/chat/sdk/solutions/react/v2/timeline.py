@@ -2217,6 +2217,8 @@ class Timeline:
                     else:
                         text = f"[AI Agent say]: {text}".strip()
             elif btype == "react.decision.raw":
+                if not getattr(self.runtime, "render_decision_raw", False):
+                    continue
                 if isinstance(text, str):
                     lines = []
                     ts_line = _ts_line(ts)
@@ -2230,12 +2232,21 @@ class Timeline:
                         lines.append(f"reason: {reason}")
                     lines.append(text)
                     text = "\n".join([l for l in lines if l]).strip()
+            elif btype == "react.state":
+                if not getattr(self.runtime, "render_react_state", False):
+                    continue
+            elif btype == "react.exit":
+                if not getattr(self.runtime, "render_react_exit", False):
+                    continue
             elif btype == "system.message":
                 prefix = f"[SYSTEM MESSAGE]"
                 if ts:
                     prefix += f"\n[ts: {ts}]"
                 if path:
-                    prefix += f"\n[path: {path}]"
+                    if isinstance(meta, dict) and meta.get("kind") == "cache_ttl_pruned":
+                        path = ""
+                    if path:
+                        prefix += f"\n[path: {path}]"
                 text = (prefix + "\n" + (text or "")).strip()
             elif btype == "user.attachment.meta":
                 name = (meta.get("filename") or "").strip() or _attachment_name_from_path(path)
@@ -2303,7 +2314,12 @@ class Timeline:
                     params_out = dict(params)
                     if isinstance(params_out.get("content"), str):
                         content_val = params_out.get("content") or ""
-                        if len(content_val) > 100:
+                        content_lower = content_val.lower()
+                        has_see_ref = any(
+                            token in content_lower
+                            for token in ("see fi:", "see so:", "see sk:", "see ar:", "see tc:")
+                        )
+                        if (not has_see_ref) and len(content_val) > 100:
                             file_path = _derive_file_context_path(
                                 turn_id=str(b.get("turn_id") or ""),
                                 raw_path=str(params_out.get("path") or ""),
