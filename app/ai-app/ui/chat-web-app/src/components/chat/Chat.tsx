@@ -14,36 +14,9 @@ import ChatHeader from "./ChatHeader.tsx";
 import AnimatedExpander from "../AnimatedExpander.tsx";
 import ChatCanvas from "../../features/canvas/ChatCanvas.tsx";
 import {CanvasItemLink, ChatCanvasContext, ChatCanvasContextValue} from "../../features/canvas/canvasContext.tsx";
-import {
-    addCanvasItemExtension,
-    getCanvasArtifactTypes,
-    getCanvasItemLinkGenerator
-} from "../../features/extensions/canvasExtensions.tsx";
-import {CodeExecArtifactType} from "../../features/logExtensions/codeExec/types.ts";
-import {CanvasArtifactType} from "../../features/logExtensions/canvas/types.ts";
-import CanvasItem from "../../features/logExtensions/canvas/CanvasItem.tsx";
-import {getCanvasArtifactLink, matchesCanvasArtifact} from "../../features/logExtensions/canvas/utils.ts";
-import {WebSearchArtifactType} from "../../features/logExtensions/webSearch/types.ts";
-import WebSearchCanvasItem from "../../features/logExtensions/webSearch/WebSearchCanvasItem.tsx";
-import {getWebSearchArtifactLink, matchesWebSearchArtifact} from "../../features/logExtensions/webSearch/utils.ts";
-import {addChatLogExtension} from "../../features/extensions/logExtesnions.ts";
-import {CanvasLogItem} from "../../features/logExtensions/canvas/CanvasLogItem.tsx";
-import CodeExecLogItem from "../../features/logExtensions/codeExec/CodeExecLogItem.tsx";
-import WebSearchLogItem from "../../features/logExtensions/webSearch/WebSearchLogItem.tsx";
-import {TimelineTextArtifactType} from "../../features/logExtensions/timelineText/types.ts";
-import TimelineTextLogItem from "../../features/logExtensions/timelineText/TimelineTextLogItem.tsx";
+import {getCanvasArtifactTypes, getCanvasItemLinkGenerator} from "../../features/extensions/canvasExtensions.ts";
 import useSharedConfigProvider from "../../features/sharedConfigProvider/sharedConfigProvider.tsx";
 import ConversationTitle from "../../features/conversationTitle/ConversationTitle.tsx";
-
-//chat log extensions
-addChatLogExtension(CanvasArtifactType, CanvasLogItem)
-addChatLogExtension(CodeExecArtifactType, CodeExecLogItem)
-addChatLogExtension(WebSearchArtifactType, WebSearchLogItem)
-addChatLogExtension(TimelineTextArtifactType, TimelineTextLogItem)
-
-// canvas extension
-addCanvasItemExtension(CanvasArtifactType, CanvasItem, getCanvasArtifactLink, matchesCanvasArtifact)
-addCanvasItemExtension(WebSearchArtifactType, WebSearchCanvasItem, getWebSearchArtifactLink, matchesWebSearchArtifact)
 
 const SingleChatApp: React.FC = () => {
     const currentTurn = useAppSelector(selectCurrentTurn);

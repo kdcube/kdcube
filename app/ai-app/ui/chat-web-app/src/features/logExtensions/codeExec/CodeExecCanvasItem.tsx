@@ -7,7 +7,7 @@ import {
 } from "../../../components/chat/ChatInterface/markdownRenderUtils.tsx";
 import {appendCodeMarkdown, cleanupCode} from "../../canvas/utils.ts";
 import {CodeExecArtifact, CodeExecArtifactType} from "./types.ts";
-import {ArtifactComponentProps} from "../../extensions/canvasExtensions.tsx";
+import {ArtifactComponentProps} from "../../extensions/canvasExtensions.ts";
 
 const CodeExecCanvasItem = ({item}: ArtifactComponentProps) => {
     if (item.artifactType !== CodeExecArtifactType) {

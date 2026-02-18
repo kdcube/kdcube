@@ -1,8 +1,8 @@
 import {UnknownArtifact} from "../../chat/chatTypes.ts";
-import {ArtifactStreamDataItem, ArtifactStreamReducer} from "../../conversations/conversationsTypes.ts";
+import {ArtifactStreamDataItem, ArtifactStreamParser} from "../../conversations/conversationsTypes.ts";
 import {CanvasArtifact, CanvasArtifactType} from "./types.ts";
 
-export class CanvasArtifactStreamReducer implements ArtifactStreamReducer {
+export class CanvasArtifactStreamReducer implements ArtifactStreamParser {
     private artifacts: CanvasArtifact[] = []
 
     process(artifactData: ArtifactStreamDataItem) {

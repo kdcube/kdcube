@@ -3,13 +3,16 @@ import {AppStore} from "../../app/store.ts";
 import {
     chatConnected,
     loadConversation,
-    newConversation, selectChatConnected,
+    newConversation,
+    selectChatConnected,
     selectConversationId,
     setConversationId
 } from "../chat/chatStateSlice.ts";
 import {fetchConversation, getConversations} from "./conversationsAPI.ts";
 import {
-    conversationStatusUpdateRequired, selectConversationDescriptorsLoading, selectConversationLoading,
+    conversationStatusUpdateRequired,
+    selectConversationDescriptorsLoading,
+    selectConversationLoading,
     selectConversationStatusUpdateRequired,
     setConversationDescriptors,
     setConversationDescriptorsLoading,
@@ -18,7 +21,7 @@ import {
 } from "./conversationsSlice.ts";
 import {
     ArtifactStreamData,
-    ArtifactStreamReducer,
+    ArtifactStreamParser,
     AssistantFileData,
     CitationsData,
     ConversationDescriptor,
@@ -37,10 +40,6 @@ import {
 } from "../chat/chatTypes.ts";
 import {RichLink, RNFile} from "../chatController/chatBase.ts";
 import {requestConversationStatus} from "../chat/chatServiceMiddleware.ts";
-import {CodeExecArtifactStreamReducer} from "../logExtensions/codeExec/CodeExecArtifactStreamReducer.ts";
-import {WebSearchArtifactStreamReducer} from "../logExtensions/webSearch/WebSearchArtifactStreamReducer.ts";
-import {CanvasArtifactStreamReducer} from "../logExtensions/canvas/CanvasArtifactStreamReducer.ts";
-import {IgnoredArtifactStreamReducer} from "../logExtensions/ignored/IgnoredArtifactStreamReducer.ts";
 import {TimelineTextArtifact, TimelineTextArtifactType} from "../logExtensions/timelineText/types.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 
@@ -75,14 +74,13 @@ type ConversationURLAction = LoadConversationsAction
     | ReturnType<typeof setConversationId>
     | ReturnType<typeof chatConnected>;
 
-const conversationsMiddleware = (): Middleware => {
-    const artifactStreamReducers: ArtifactStreamReducer[] = [
-        new IgnoredArtifactStreamReducer(),
-        new CanvasArtifactStreamReducer(),
-        new CodeExecArtifactStreamReducer(),
-        new WebSearchArtifactStreamReducer()
-    ];
+const artifactStreamParsers: ArtifactStreamParser[] = [];
 
+export const addArtifactStreamParsers = (...parsers: ArtifactStreamParser[]) => {
+    artifactStreamParsers.push(...parsers);
+}
+
+const conversationsMiddleware = (): Middleware => {
     const loadConversationList = (store: AppStore) => {
         const dispatch = store.dispatch
         const state = store.getState()
@@ -203,7 +201,7 @@ const conversationsMiddleware = (): Middleware => {
                                 const dto = it.data as ArtifactStreamData;
                                 dto.payload.items.forEach(a => {
                                     let processed = false
-                                    artifactStreamReducers.forEach(r => {
+                                    artifactStreamParsers.forEach(r => {
                                         processed = processed || r.process(a)
                                     })
                                     if (!processed) {
@@ -240,7 +238,7 @@ const conversationsMiddleware = (): Middleware => {
                         }
                     })
 
-                    artifactStreamReducers.forEach(r => {
+                    artifactStreamParsers.forEach(r => {
                         turnArtifacts.push(...r.flush())
                     })
 

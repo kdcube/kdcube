@@ -65,7 +65,7 @@ export interface ArtifactStreamData {
     },
 }
 
-export interface ArtifactStreamReducer {
+export interface ArtifactStreamParser {
     process(artifactData: ArtifactStreamDataItem): boolean
 
     flush(): UnknownArtifact[]

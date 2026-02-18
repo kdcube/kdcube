@@ -1,4 +1,4 @@
-import {ArtifactStreamDataItem, ArtifactStreamReducer} from "../../conversations/conversationsTypes.ts";
+import {ArtifactStreamDataItem, ArtifactStreamParser} from "../../conversations/conversationsTypes.ts";
 import {
     CodeExecCodeSubsystemEventDataSubtype,
     CodeExecContractSubsystemEventDataSubtype,
@@ -9,7 +9,7 @@ import {
 } from "../../chat/chatTypes.ts";
 import {CodeExecArtifact, CodeExecArtifactType} from "./types.ts";
 
-export class CodeExecArtifactStreamReducer implements ArtifactStreamReducer {
+export class CodeExecArtifactStreamReducer implements ArtifactStreamParser {
     private artifacts: CodeExecArtifact[] = []
 
     private getCodeExecArtifact(executionId: string, defaultTimestamp: number): CodeExecArtifact {

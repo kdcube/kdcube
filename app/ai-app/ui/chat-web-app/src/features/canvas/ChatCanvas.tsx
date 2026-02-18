@@ -7,7 +7,7 @@ import {
     getArtifactLinkComparator,
     getCanvasItemComponent,
     isCanvasArtifactType
-} from "../extensions/canvasExtensions.tsx";
+} from "../extensions/canvasExtensions.ts";
 
 interface ChatCanvasProps {
     ref?: RefObject<HTMLDivElement | null>;

@@ -10,7 +10,7 @@ import {closeUpMarkdown} from "../../../components/WordStreamingEffects.tsx";
 import MermaidDiagram from "../../../components/MermaidDiagram.tsx";
 import {appendCodeMarkdown, cleanupCode} from "../../canvas/utils.ts";
 import {CanvasArtifact, CanvasArtifactType} from "./types.ts";
-import {ArtifactComponentProps} from "../../extensions/canvasExtensions.tsx";
+import {ArtifactComponentProps} from "../../extensions/canvasExtensions.ts";
 
 const getCanvasContentType = (format: string | null | undefined) => {
     if (!format) {

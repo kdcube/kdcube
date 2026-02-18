@@ -1,6 +1,6 @@
 import {WebSearchArtifact, WebSearchArtifactType} from "./types.ts";
 import {useMemo} from "react";
-import {ArtifactComponentProps} from "../../extensions/canvasExtensions.tsx";
+import {ArtifactComponentProps} from "../../extensions/canvasExtensions.ts";
 
 const WebSearchCanvasItem = ({item}: ArtifactComponentProps) => {
     if (item.artifactType !== WebSearchArtifactType) {
