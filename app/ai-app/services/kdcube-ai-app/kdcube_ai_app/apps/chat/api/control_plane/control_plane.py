@@ -108,6 +108,14 @@ class SetSubscriptionOverdraftRequest(BaseModel):
     overdraft_limit_usd: Optional[float] = Field(None, description="None = unlimited, 0 = no overdraft")
     notes: Optional[str] = None
 
+class ReapSubscriptionReservationsRequest(BaseModel):
+    user_id: str
+    period_key: Optional[str] = Field(
+        None,
+        description="Optional explicit period_key; if omitted, uses the active subscription period",
+    )
+    limit: int = Field(500, ge=1, le=2000)
+
 class SweepSubscriptionRolloversRequest(BaseModel):
     user_id: Optional[str] = None
     limit: int = Field(200, ge=1, le=2000)
@@ -871,6 +879,76 @@ async def list_subscription_ledger(
         })
 
     return {"status": "ok", "count": len(ledger), "ledger": ledger}
+
+@router.post("/subscriptions/reservations/reap")
+async def reap_subscription_reservations(
+        payload: ReapSubscriptionReservationsRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    redis = getattr(router.state, "redis", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    period_desc = None
+    if payload.period_key:
+        schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+        table = SubscriptionBudgetLimiter.BUDGET_TABLE
+        sql = f"""
+            SELECT period_key, period_start, period_end
+            FROM {schema}.{table}
+            WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
+        """
+        async with pg_pool.acquire() as c:
+            row = await c.fetchrow(sql, settings.TENANT, settings.PROJECT, payload.user_id, payload.period_key)
+        if not row:
+            raise HTTPException(status_code=404, detail="subscription period not found")
+        period_desc = {
+            "period_key": row["period_key"],
+            "period_start": row["period_start"],
+            "period_end": row["period_end"],
+        }
+    else:
+        mgr = _get_control_plane_manager(router)
+        sub = await mgr.subscription_mgr.get_subscription(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+        )
+        if not sub:
+            raise HTTPException(status_code=404, detail="subscription not found")
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
+        period_desc = build_subscription_period_descriptor(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+            provider=getattr(sub, "provider", "internal") or "internal",
+            stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
+            period_end=getattr(sub, "next_charge_at", None),
+            period_start=getattr(sub, "last_charged_at", None),
+        )
+
+    limiter = SubscriptionBudgetLimiter(
+        pg_pool=pg_pool,
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+        period_key=period_desc["period_key"],
+        period_start=period_desc["period_start"],
+        period_end=period_desc["period_end"],
+    )
+    project_budget = ProjectBudgetLimiter(redis, pg_pool, tenant=settings.TENANT, project=settings.PROJECT)
+    expired = await limiter.reap_expired_reservations(limit=payload.limit, project_budget=project_budget)
+    bal = await limiter.get_subscription_budget_balance()
+
+    return {
+        "status": "ok",
+        "user_id": payload.user_id,
+        "period_key": period_desc["period_key"],
+        "expired": int(expired),
+        "subscription_balance": bal,
+    }
 
 @router.post("/subscriptions/internal/renew-once")
 async def renew_internal_subscription_once(

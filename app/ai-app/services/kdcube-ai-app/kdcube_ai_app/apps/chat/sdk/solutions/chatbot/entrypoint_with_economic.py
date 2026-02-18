@@ -530,6 +530,25 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 period_start=period_desc["period_start"],
                 period_end=period_desc["period_end"],
             )
+            try:
+                expired = await subscription_budget_limiter.reap_expired_reservations(
+                    project_budget=self.budget_limiter,
+                )
+                if expired:
+                    _log(
+                        "subscription_budget",
+                        "Reaped expired subscription reservations",
+                        expired=int(expired),
+                        period_key=period_desc["period_key"],
+                    )
+            except Exception as e:
+                _log(
+                    "subscription_budget",
+                    "Failed to reap expired subscription reservations",
+                    "WARN",
+                    error=str(e),
+                    period_key=period_desc["period_key"],
+                )
             subscription_budget = await subscription_budget_limiter.get_subscription_budget_balance()
             subscription_available_usd = float(subscription_budget.get("available_usd") or 0.0)
             subscription_balance_usd = float(subscription_budget.get("balance_usd") or 0.0)
@@ -861,134 +880,131 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         tier_reserved_tokens = 0
         usd_per_token = float(llm_output_price_usd_per_token(anthropic, sonnet_45))
 
-        if lane == "tier":
-            tier_limit, scope = effective_policy.effective_allowed_tokens()
-            scope_for_lock = str(scope or "month")
-            await _acquire_quota_lock_or_deny(scope=scope_for_lock)
+        async def _cleanup_reservations(reason: str) -> None:
+            try:
+                await _release_quota_lock_if_held()
+            except Exception as ex:
+                _log("quota_lock", f"Failed to release quota_lock ({reason})", "WARN", error=str(ex))
 
             try:
-                tier_reserved_tokens = int(getattr(admit, "reserved_tokens", 0) or 0)
-                tier_reservation_id = getattr(admit, "reservation_id", None)
-                tier_reservation_active = (lane == "tier" and tier_reserved_tokens > 0 and tier_reservation_id is not None)
-
-                tier_covered_tokens_est = tier_reserved_tokens
-                overflow_tokens_est = int(est_turn_tokens) - int(tier_covered_tokens_est)
-                if tier_limit is None:
-                    tier_remaining = est_turn_tokens
-                    tokens_spent_stat = f'Tokens spent from tier in this month: {int(admit.snapshot.get("tok_month", 0) or 0)}'
-                else:
-                    tok_so_far = int(admit.snapshot.get(f"tok_{scope}", 0) or 0)
-                    tokens_spent_stat = f"Tokens spent from tier in this {scope}: {tok_so_far}"
-                    tier_remaining = max(int(tier_limit) - int(tok_so_far), 0)
-
-                _log(
-                    "reserve.plan",
-                    "Reservation plan (tier lane)",
-                    est_turn_tokens=est_turn_tokens,
-                    tokens_spent_stat=tokens_spent_stat,
-                    tier_limit=tier_limit,
-                    tier_remaining=tier_remaining,
-                    tier_covered_tokens_est=tier_covered_tokens_est,
-                    overflow_tokens_est=overflow_tokens_est,
-                    usd_per_token=usd_per_token,
-                )
-
-                if tier_covered_tokens_est <= 0:
-                    if budget_bypass:
+                if app_reservation_active and app_reservation_id:
+                    if not funding_limiter:
                         _log(
-                            "reserve.plan",
-                            "Budget bypass: zero tier reservation; skipping paid switch",
+                            "reserve.app",
+                            f"Skipped {funding_label} reservation release ({reason}); no funding limiter",
                             "WARN",
-                            est_turn_tokens=est_turn_tokens,
-                            tier_reserved_tokens=tier_reserved_tokens,
+                            reservation_id=str(app_reservation_id),
                         )
-                    elif not user_can_pay_turn:
-                        await _econ_fail(
-                            code="tier_exhausted_no_personal",
-                            title="Tier exhausted",
-                            message="Tier exhausted and user cannot pay from personal credits.",
-                            event_type="rate_limit.denied",
-                            data={
-                                "reason": "tier_exhausted",
-                                "bundle_id": bundle_id,
-                                "subject_id": self.subj,
-                                "user_type": user_type,
-                                "snapshot": admit.snapshot,
-                                "lane": "deny",
-                            },
+                    elif funding_source == "subscription":
+                        await funding_limiter.release_reservation(
+                            reservation_id=app_reservation_id,
+                            note=None,
+                            project_budget=self.budget_limiter,
                         )
                     else:
-                        await _emit_event(
-                            type="rate_limit.lane_switch",
-                            status="running",
-                            title="Switching to personal credits",
-                            data={
-                                "reason": "tier_tokens_exhausted_for_turn",
-                                "bundle_id": bundle_id,
-                                "subject_id": self.subj,
-                                "user_type": user_type,
-                                "snapshot": admit.snapshot,
-                                "lane_from": "tier",
-                                "lane_to": "paid",
-                            },
+                        await funding_limiter.release_reservation(reservation_id=app_reservation_id, note=None)
+                    if funding_limiter:
+                        _log(
+                            "reserve.app",
+                            f"Released {funding_label} reservation ({reason})",
+                            reservation_id=str(app_reservation_id),
                         )
+            except Exception as ex:
+                _log("reserve.app", f"Failed to release {funding_label} reservation ({reason})", "WARN", error=str(ex))
 
-                        await _switch_tier_to_paid_or_die(switch_reason="tier_tokens_exhausted_for_turn")
-                else:
-                    if not budget_bypass:
-                        app_reserved_usd = float(tier_covered_tokens_est) * float(usd_per_token) * SAFETY_MARGIN
-                        app_reservation_id = uuid4()
+            try:
+                if personal_reservation_active and personal_reservation_id:
+                    await self.cp_manager.user_credits_mgr.release_lifetime_token_reservation(
+                        tenant=tenant, project=project, user_id=user_id,
+                        reservation_id=personal_reservation_id,
+                        reason=f"run: cleanup {reason}",
+                    )
+                    _log("reserve.personal", f"Released personal reservation ({reason})", reservation_id=personal_reservation_id)
+            except Exception as ex:
+                _log("reserve.personal", f"Failed to release personal reservation ({reason})", "WARN", error=str(ex))
 
-                        try:
-                            reserve_kwargs = dict(
-                                reservation_id=app_reservation_id,
-                                bundle_id=bundle_id,
-                                provider=None,
-                                request_id=turn_id,
-                                amount_usd=float(app_reserved_usd),
-                                ttl_sec=900,
-                                notes=f"tier reserve: est_turn={est_turn_tokens}, tier_cover_est={tier_covered_tokens_est}, ref=anthropic/claude-sonnet-4-5-20250929",
-                            )
-                            if funding_source == "project":
-                                reserve_kwargs["user_id"] = user_id
+            try:
+                if tier_reservation_active and tier_reservation_id:
+                    await self.rl.release_token_reservation(
+                        bundle_id=bundle_id, subject_id=self.subj,
+                        reservation_id=tier_reservation_id,
+                        now=tier_admit_now,
+                    )
+                    _log("rl.reserve", f"Released tier token reservation ({reason})", reservation_id=tier_reservation_id)
+            except Exception as ex:
+                _log("rl.reserve", f"Failed to release tier reservation ({reason})", "WARN", error=str(ex))
 
-                            rr = await funding_limiter.reserve(**reserve_kwargs)
-                            app_reservation_active = True
+            try:
+                if not lock_released:
+                    await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
+                    _log("rl.release", f"Released lock ({reason})", lock_id=lock_id)
+            except Exception as ex:
+                _log("rl.release", f"Failed to release lock ({reason})", "WARN", error=str(ex))
+
+        try:
+            if lane == "tier":
+                tier_limit, scope = effective_policy.effective_allowed_tokens()
+                scope_for_lock = str(scope or "month")
+                await _acquire_quota_lock_or_deny(scope=scope_for_lock)
+
+                try:
+                    tier_reserved_tokens = int(getattr(admit, "reserved_tokens", 0) or 0)
+                    tier_reservation_id = getattr(admit, "reservation_id", None)
+                    tier_reservation_active = (lane == "tier" and tier_reserved_tokens > 0 and tier_reservation_id is not None)
+
+                    tier_covered_tokens_est = tier_reserved_tokens
+                    overflow_tokens_est = int(est_turn_tokens) - int(tier_covered_tokens_est)
+                    if tier_limit is None:
+                        tier_remaining = est_turn_tokens
+                        tokens_spent_stat = f'Tokens spent from tier in this month: {int(admit.snapshot.get("tok_month", 0) or 0)}'
+                    else:
+                        tok_so_far = int(admit.snapshot.get(f"tok_{scope}", 0) or 0)
+                        tokens_spent_stat = f"Tokens spent from tier in this {scope}: {tok_so_far}"
+                        tier_remaining = max(int(tier_limit) - int(tok_so_far), 0)
+
+                    _log(
+                        "reserve.plan",
+                        "Reservation plan (tier lane)",
+                        est_turn_tokens=est_turn_tokens,
+                        tokens_spent_stat=tokens_spent_stat,
+                        tier_limit=tier_limit,
+                        tier_remaining=tier_remaining,
+                        tier_covered_tokens_est=tier_covered_tokens_est,
+                        overflow_tokens_est=overflow_tokens_est,
+                        usd_per_token=usd_per_token,
+                    )
+
+                    if tier_covered_tokens_est <= 0:
+                        if budget_bypass:
                             _log(
-                                "reserve.app",
-                                f"Reserved {funding_label} (tier lane)",
-                                reservation_id=str(rr.reservation_id),
-                                app_reserved_usd=rr.reserved_usd,
-                                expires_at=rr.expires_at,
-                                snapshot=dataclasses.asdict(rr.snapshot),
+                                "reserve.plan",
+                                "Budget bypass: zero tier reservation; skipping paid switch",
+                                "WARN",
+                                est_turn_tokens=est_turn_tokens,
+                                tier_reserved_tokens=tier_reserved_tokens,
                             )
-                        except BudgetInsufficientFunds as e:
-                            _log("reserve.app", f"{funding_label.title()} reservation denied", "WARN", error=str(e), app_reserved_usd=app_reserved_usd)
-
-                            if not user_can_pay_turn:
-                                await _econ_fail(
-                                    code=f"{funding_source}_budget_reservation_failed_no_personal",
-                                    title=f"Insufficient {funding_label}",
-                                    message=f"{funding_label.title()} cannot reserve tier funds and user cannot pay.",
-                                    event_type="rate_limit.project_exhausted" if funding_source == "project" else "rate_limit.subscription_exhausted",
-                                    data={
-                                        "reason": f"{funding_source}_budget_reservation_failed",
-                                        "bundle_id": bundle_id,
-                                        "subject_id": self.subj,
-                                        "user_type": user_type,
-                                        "funding_source": funding_source,
-                                        "funding_budget": funding_budget,
-                                        "app_reserved_usd": app_reserved_usd,
-                                        "user_budget_tokens": user_budget_tokens,
-                                    },
-                                )
-
+                        elif not user_can_pay_turn:
+                            await _econ_fail(
+                                code="tier_exhausted_no_personal",
+                                title="Tier exhausted",
+                                message="Tier exhausted and user cannot pay from personal credits.",
+                                event_type="rate_limit.denied",
+                                data={
+                                    "reason": "tier_exhausted",
+                                    "bundle_id": bundle_id,
+                                    "subject_id": self.subj,
+                                    "user_type": user_type,
+                                    "snapshot": admit.snapshot,
+                                    "lane": "deny",
+                                },
+                            )
+                        else:
                             await _emit_event(
                                 type="rate_limit.lane_switch",
                                 status="running",
                                 title="Switching to personal credits",
                                 data={
-                                    "reason": "app_budget_reservation_failed",
+                                    "reason": "tier_tokens_exhausted_for_turn",
                                     "bundle_id": bundle_id,
                                     "subject_id": self.subj,
                                     "user_type": user_type,
@@ -997,90 +1013,162 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                     "lane_to": "paid",
                                 },
                             )
-                            await _switch_tier_to_paid_or_die(switch_reason="app_budget_reservation_failed")
 
-                        if overflow_tokens_est > 0:
-                            ok = await self.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
-                                tenant=tenant,
-                                project=project,
-                                user_id=user_id,
-                                reservation_id=turn_id,
-                                tokens=int(overflow_tokens_est),
-                                ttl_sec=900,
-                                bundle_id=bundle_id,
-                                notes=f"auto-reserve: lane=tier, overflow={overflow_tokens_est}, est_turn={est_turn_tokens}",
-                            )
-                            if not ok:
-                                await _econ_fail(
-                                    code="personal_reservation_failed_tier",
-                                    title="Insufficient personal credits",
-                                    message="Insufficient personal credits to cover overflow.",
-                                    event_type="rate_limit.denied",
+                            await _switch_tier_to_paid_or_die(switch_reason="tier_tokens_exhausted_for_turn")
+                    else:
+                        if not budget_bypass:
+                            app_reserved_usd = float(tier_covered_tokens_est) * float(usd_per_token) * SAFETY_MARGIN
+                            app_reservation_id = uuid4()
+
+                            try:
+                                reserve_kwargs = dict(
+                                    reservation_id=app_reservation_id,
+                                    bundle_id=bundle_id,
+                                    provider=None,
+                                    request_id=turn_id,
+                                    amount_usd=float(app_reserved_usd),
+                                    ttl_sec=900,
+                                    notes=f"tier reserve: est_turn={est_turn_tokens}, tier_cover_est={tier_covered_tokens_est}, ref=anthropic/claude-sonnet-4-5-20250929",
+                                )
+                                if funding_source == "project":
+                                    reserve_kwargs["user_id"] = user_id
+
+                                rr = await funding_limiter.reserve(**reserve_kwargs)
+                                app_reservation_active = True
+                                _log(
+                                    "reserve.app",
+                                    f"Reserved {funding_label} (tier lane)",
+                                    reservation_id=str(rr.reservation_id),
+                                    app_reserved_usd=rr.reserved_usd,
+                                    expires_at=rr.expires_at,
+                                    snapshot=dataclasses.asdict(rr.snapshot),
+                                )
+                            except BudgetInsufficientFunds as e:
+                                _log("reserve.app", f"{funding_label.title()} reservation denied", "WARN", error=str(e), app_reserved_usd=app_reserved_usd)
+
+                                if not user_can_pay_turn:
+                                    await _econ_fail(
+                                        code=f"{funding_source}_budget_reservation_failed_no_personal",
+                                        title=f"Insufficient {funding_label}",
+                                        message=f"{funding_label.title()} cannot reserve tier funds and user cannot pay.",
+                                        event_type="rate_limit.project_exhausted" if funding_source == "project" else "rate_limit.subscription_exhausted",
+                                        data={
+                                            "reason": f"{funding_source}_budget_reservation_failed",
+                                            "bundle_id": bundle_id,
+                                            "subject_id": self.subj,
+                                            "user_type": user_type,
+                                            "funding_source": funding_source,
+                                            "funding_budget": funding_budget,
+                                            "app_reserved_usd": app_reserved_usd,
+                                            "user_budget_tokens": user_budget_tokens,
+                                        },
+                                    )
+
+                                await _emit_event(
+                                    type="rate_limit.lane_switch",
+                                    status="running",
+                                    title="Switching to personal credits",
                                     data={
-                                        "reason": "personal_reservation_failed",
+                                        "reason": "app_budget_reservation_failed",
                                         "bundle_id": bundle_id,
                                         "subject_id": self.subj,
                                         "user_type": user_type,
-                                        "tokens_required": int(overflow_tokens_est),
-                                        "lane": lane,
+                                        "snapshot": admit.snapshot,
+                                        "lane_from": "tier",
+                                        "lane_to": "paid",
                                     },
                                 )
-                            personal_reservation_id = turn_id
-                            personal_reserved_tokens = int(overflow_tokens_est)
-                            personal_reservation_active = True
-                            _log("reserve.personal", "Reserved personal overflow tokens", reservation_id=turn_id, tokens_reserved=personal_reserved_tokens)
-            finally:
-                try:
-                    await _release_quota_lock_if_held()
-                except Exception as ex:
-                    _log("quota_lock", "Failed to release quota_lock", "WARN", error=str(ex))
+                                await _switch_tier_to_paid_or_die(switch_reason="app_budget_reservation_failed")
 
-        if lane == "paid" and not personal_reservation_active and not budget_bypass:
-            if not (tier_balance and tier_balance.has_lifetime_budget()):
-                await _econ_fail(
-                    code="paid_lane_requires_personal_budget",
-                    title="Insufficient personal credits",
-                    message="Paid lane requires personal lifetime budget.",
-                    event_type="rate_limit.denied",
-                    data={
-                        "reason": "no_personal_budget",
-                        "bundle_id": bundle_id,
-                        "subject_id": self.subj,
-                        "user_type": user_type,
-                        "lane": lane,
-                    },
+                            if overflow_tokens_est > 0:
+                                ok = await self.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
+                                    tenant=tenant,
+                                    project=project,
+                                    user_id=user_id,
+                                    reservation_id=turn_id,
+                                    tokens=int(overflow_tokens_est),
+                                    ttl_sec=900,
+                                    bundle_id=bundle_id,
+                                    notes=f"auto-reserve: lane=tier, overflow={overflow_tokens_est}, est_turn={est_turn_tokens}",
+                                )
+                                if not ok:
+                                    await _econ_fail(
+                                        code="personal_reservation_failed_tier",
+                                        title="Insufficient personal credits",
+                                        message="Insufficient personal credits to cover overflow.",
+                                        event_type="rate_limit.denied",
+                                        data={
+                                            "reason": "personal_reservation_failed",
+                                            "bundle_id": bundle_id,
+                                            "subject_id": self.subj,
+                                            "user_type": user_type,
+                                            "tokens_required": int(overflow_tokens_est),
+                                            "lane": lane,
+                                        },
+                                    )
+                                personal_reservation_id = turn_id
+                                personal_reserved_tokens = int(overflow_tokens_est)
+                                personal_reservation_active = True
+                                _log("reserve.personal", "Reserved personal overflow tokens", reservation_id=turn_id, tokens_reserved=personal_reserved_tokens)
+                finally:
+                    try:
+                        await _release_quota_lock_if_held()
+                    except Exception as ex:
+                        _log("quota_lock", "Failed to release quota_lock", "WARN", error=str(ex))
+
+            if lane == "paid" and not personal_reservation_active and not budget_bypass:
+                if not (tier_balance and tier_balance.has_lifetime_budget()):
+                    await _econ_fail(
+                        code="paid_lane_requires_personal_budget",
+                        title="Insufficient personal credits",
+                        message="Paid lane requires personal lifetime budget.",
+                        event_type="rate_limit.denied",
+                        data={
+                            "reason": "no_personal_budget",
+                            "bundle_id": bundle_id,
+                            "subject_id": self.subj,
+                            "user_type": user_type,
+                            "lane": lane,
+                        },
+                    )
+
+                ok = await self.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
+                    tenant=tenant,
+                    project=project,
+                    user_id=user_id,
+                    reservation_id=turn_id,
+                    tokens=int(est_turn_tokens),
+                    ttl_sec=900,
+                    bundle_id=bundle_id,
+                    notes=f"auto-reserve paid: lane=paid, est_turn={est_turn_tokens}",
                 )
+                if not ok:
+                    await _econ_fail(
+                        code="personal_reservation_failed_paid",
+                        title="Insufficient personal credits",
+                        message="Insufficient personal credits to run this request.",
+                        event_type="rate_limit.denied",
+                        data={
+                            "reason": "personal_reservation_failed",
+                            "bundle_id": bundle_id,
+                            "subject_id": self.subj,
+                            "user_type": user_type,
+                            "tokens_required": int(est_turn_tokens),
+                            "lane": lane,
+                        },
+                    )
 
-            ok = await self.cp_manager.user_credits_mgr.reserve_lifetime_tokens(
-                tenant=tenant,
-                project=project,
-                user_id=user_id,
-                reservation_id=turn_id,
-                tokens=int(est_turn_tokens),
-                ttl_sec=900,
-                bundle_id=bundle_id,
-                notes=f"auto-reserve paid: lane=paid, est_turn={est_turn_tokens}",
-            )
-            if not ok:
-                await _econ_fail(
-                    code="personal_reservation_failed_paid",
-                    title="Insufficient personal credits",
-                    message="Insufficient personal credits to run this request.",
-                    event_type="rate_limit.denied",
-                    data={
-                        "reason": "personal_reservation_failed",
-                        "bundle_id": bundle_id,
-                        "subject_id": self.subj,
-                        "user_type": user_type,
-                        "tokens_required": int(est_turn_tokens),
-                        "lane": lane,
-                    },
-                )
-
-            personal_reservation_id = turn_id
-            personal_reserved_tokens = int(est_turn_tokens)
-            personal_reservation_active = True
-            _log("reserve.personal", "Reserved personal tokens (paid lane)", reservation_id=turn_id, tokens_reserved=personal_reserved_tokens)
+                personal_reservation_id = turn_id
+                personal_reserved_tokens = int(est_turn_tokens)
+                personal_reservation_active = True
+                _log("reserve.personal", "Reserved personal tokens (paid lane)", reservation_id=turn_id, tokens_reserved=personal_reserved_tokens)
+        except EconomicsLimitException:
+            await _cleanup_reservations("pre_run_fail")
+            raise
+        except Exception as e:
+            _log("error", "Exception during pre-run reservations", "ERROR", error=str(e))
+            await _cleanup_reservations("pre_run_fail")
+            raise
 
         econ_ctx = {
             "lane": lane,
@@ -1348,53 +1436,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             raise
 
         finally:
-            try:
-                await _release_quota_lock_if_held()
-            except Exception as ex:
-                _log("quota_lock", "Failed to release quota_lock in finally", "WARN", error=str(ex))
-
-            try:
-                if app_reservation_active and app_reservation_id:
-                    if funding_source == "subscription":
-                        await funding_limiter.release_reservation(
-                            reservation_id=app_reservation_id,
-                            note=None,
-                            project_budget=self.budget_limiter,
-                        )
-                    else:
-                        await funding_limiter.release_reservation(reservation_id=app_reservation_id, note=None)
-                    _log("reserve.app", f"Released {funding_label} reservation in finally", reservation_id=str(app_reservation_id))
-            except Exception as ex:
-                _log("reserve.app", f"Failed to release {funding_label} reservation in finally", "WARN", error=str(ex))
-
-            try:
-                if personal_reservation_active and personal_reservation_id:
-                    await self.cp_manager.user_credits_mgr.release_lifetime_token_reservation(
-                        tenant=tenant, project=project, user_id=user_id,
-                        reservation_id=personal_reservation_id,
-                        reason="run: finally cleanup",
-                    )
-                    _log("reserve.personal", "Released personal reservation in finally", reservation_id=personal_reservation_id)
-            except Exception as ex:
-                _log("reserve.personal", "Failed to release personal reservation in finally", "WARN", error=str(ex))
-
-            try:
-                if tier_reservation_active and tier_reservation_id:
-                    await self.rl.release_token_reservation(
-                        bundle_id=bundle_id, subject_id=self.subj,
-                        reservation_id=tier_reservation_id,
-                        now=tier_admit_now,
-                    )
-                    _log("rl.reserve", "Released tier token reservation in finally", reservation_id=tier_reservation_id)
-            except Exception as ex:
-                _log("rl.reserve", "Failed to release tier reservation in finally", "WARN", error=str(ex))
-
-            try:
-                if not lock_released:
-                    await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
-                    _log("rl.release", "Released lock in finally", lock_id=lock_id)
-            except Exception as ex:
-                _log("rl.release", "Failed to release lock in finally", "WARN", error=str(ex))
+            await _cleanup_reservations("finally")
 
             try:
                 if acct is not None:
