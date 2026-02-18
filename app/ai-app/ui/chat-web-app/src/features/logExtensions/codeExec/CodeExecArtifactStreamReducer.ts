@@ -1,13 +1,13 @@
 import {ArtifactStreamDataItem, ArtifactStreamParser} from "../../conversations/conversationsTypes.ts";
 import {
-    CodeExecCodeSubsystemEventDataSubtype,
-    CodeExecContractSubsystemEventDataSubtype,
-    CodeExecObjectiveSubsystemEventDataSubtype,
-    CodeExecProgramNameSubsystemEventDataSubtype,
-    CodeExecStatusSubsystemEventDataSubtype,
     UnknownArtifact
 } from "../../chat/chatTypes.ts";
-import {CodeExecArtifact, CodeExecArtifactType} from "./types.ts";
+import {
+    CodeExecArtifact, CodeExecArtifactType, CodeExecCodeSubsystemEventDataSubtype,
+    CodeExecContractSubsystemEventDataSubtype,
+    CodeExecObjectiveSubsystemEventDataSubtype,
+    CodeExecProgramNameSubsystemEventDataSubtype, CodeExecStatusSubsystemEventDataSubtype
+} from "./types.ts";
 
 export class CodeExecArtifactStreamReducer implements ArtifactStreamParser {
     private artifacts: CodeExecArtifact[] = []

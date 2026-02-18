@@ -3,7 +3,6 @@ import {RichLink, RNFile, TurnStep} from "../chatController/chatBase.ts";
 import {AuthConfig} from "../auth/authTypes.ts";
 
 
-
 export interface ChatSettings {
     auth: AuthConfig;
     tenant: string;
@@ -81,7 +80,6 @@ export interface CanvasEventData {
     title?: string | null;
     content: string;
     contentType: string;
-    subType: string | null;
 }
 
 export interface CanvasEvent extends TurnEvent<CanvasEventData> {
@@ -106,80 +104,6 @@ export interface SubsystemEventData {
 
 export interface SubsystemEvent extends TurnEvent<SubsystemEventData> {
     eventType: "subsystem";
-}
-
-export interface WebSearchSubsystemEventData extends SubsystemEventData {
-    searchId: string;
-}
-
-export const WebSearchFilteredResultsSubsystemEventDataSubtype = "web_search.filtered_results"
-
-export interface WebSearchFilteredResultsSubsystemEventData extends WebSearchSubsystemEventData {
-    subtype: typeof WebSearchFilteredResultsSubsystemEventDataSubtype
-}
-
-export const WebSearchHTMLViewSubsystemEventDataSubtype = "web_search.html_view"
-
-export interface WebSearchHTMLViewSubsystemEventData extends WebSearchSubsystemEventData {
-    subtype: typeof WebSearchHTMLViewSubsystemEventDataSubtype
-}
-
-export const WebSearchEventSubtypes = [WebSearchFilteredResultsSubsystemEventDataSubtype, WebSearchHTMLViewSubsystemEventDataSubtype]
-
-export interface CodeExecSubsystemEventData extends SubsystemEventData {
-    executionId: string;
-}
-
-export type WebSearchMetaEventData = WebSearchFilteredResultsSubsystemEventData | WebSearchHTMLViewSubsystemEventData
-
-export type WebSearchEvent = TurnEvent<WebSearchMetaEventData>
-
-export const CodeExecCodeSubsystemEventDataSubtype = "code_exec.code"
-
-export interface CodeExecCodeSubsystemEventData extends CodeExecSubsystemEventData {
-    subtype: typeof CodeExecCodeSubsystemEventDataSubtype
-    language: string;
-}
-
-export const CodeExecProgramNameSubsystemEventDataSubtype = "code_exec.program.name"
-
-export interface CodeExecProgramNameSubsystemEventData extends CodeExecSubsystemEventData {
-    subtype: typeof CodeExecProgramNameSubsystemEventDataSubtype
-}
-
-export const CodeExecObjectiveSubsystemEventDataSubtype = "code_exec.objective"
-
-export interface CodeExecObjectiveSubsystemEventData extends CodeExecSubsystemEventData {
-    subtype: typeof CodeExecObjectiveSubsystemEventDataSubtype
-}
-
-export const CodeExecContractSubsystemEventDataSubtype = "code_exec.contract"
-
-export interface CodeExecContractSubsystemEventData extends CodeExecSubsystemEventData {
-    subtype: typeof CodeExecContractSubsystemEventDataSubtype
-}
-
-export const CodeExecStatusSubsystemEventDataSubtype = "code_exec.status"
-
-export interface CodeExecStatusSubsystemEventData extends CodeExecSubsystemEventData {
-    subtype: typeof CodeExecStatusSubsystemEventDataSubtype
-}
-
-export const CodeExecEventSubtypes = [CodeExecCodeSubsystemEventDataSubtype, CodeExecProgramNameSubsystemEventDataSubtype,
-    CodeExecObjectiveSubsystemEventDataSubtype, CodeExecContractSubsystemEventDataSubtype, CodeExecStatusSubsystemEventDataSubtype]
-
-export type CodeExecMetaEventData = CodeExecCodeSubsystemEventData
-    | CodeExecProgramNameSubsystemEventData
-    | CodeExecObjectiveSubsystemEventData
-    | CodeExecStatusSubsystemEventData
-    | CodeExecContractSubsystemEventData
-
-export type CodeExecEvent = TurnEvent<CodeExecMetaEventData>
-
-export const ConversationStatusSubsystemEventDataSubtype = "conversation.turn.status"
-
-export interface ConversationStatusSubsystemEventData extends SubsystemEventData {
-    subtype: typeof ConversationStatusSubsystemEventDataSubtype
 }
 
 export interface Artifact<C> extends Timestamped {

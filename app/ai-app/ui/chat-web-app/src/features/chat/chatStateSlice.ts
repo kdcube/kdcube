@@ -16,20 +16,7 @@ import {
     CanvasEvent,
     ChatState,
     CitationArtifact,
-    CodeExecCodeSubsystemEventData,
-    CodeExecCodeSubsystemEventDataSubtype,
-    CodeExecContractSubsystemEventData,
-    CodeExecContractSubsystemEventDataSubtype,
-    CodeExecEvent,
-    CodeExecEventSubtypes,
-    CodeExecMetaEventData,
-    CodeExecObjectiveSubsystemEventData,
-    CodeExecObjectiveSubsystemEventDataSubtype,
-    CodeExecProgramNameSubsystemEventData,
-    CodeExecProgramNameSubsystemEventDataSubtype,
-    CodeExecStatusSubsystemEventDataSubtype,
     ConversationState,
-    ConversationStatusSubsystemEventDataSubtype,
     FileArtifact,
     NewChatTurnRequest,
     SubsystemEvent,
@@ -37,18 +24,49 @@ import {
     ThinkingArtifact,
     ThinkingEvent,
     TimelineTextEvent,
-    TurnError,
+    TurnError
+} from "./chatTypes.ts";
+import {
+    CodeExecArtifact,
+    CodeExecArtifactType,
+    CodeExecCodeSubsystemEventData,
+    CodeExecCodeSubsystemEventDataSubtype,
+    CodeExecContractSubsystemEventData,
+    CodeExecContractSubsystemEventDataSubtype,
+    CodeExecData,
+    CodeExecEvent,
+    CodeExecEventSubtypes,
+    CodeExecMetaEventData,
+    CodeExecObjectiveSubsystemEventData,
+    CodeExecObjectiveSubsystemEventDataSubtype,
+    CodeExecProgramNameSubsystemEventData,
+    CodeExecProgramNameSubsystemEventDataSubtype,
+    CodeExecStatusSubsystemEventDataSubtype
+} from "../logExtensions/codeExec/types.ts";
+import {
+    WebSearchArtifact,
+    WebSearchArtifactType,
+    WebSearchData,
     WebSearchEvent,
     WebSearchEventSubtypes,
     WebSearchFilteredResultsSubsystemEventDataSubtype,
     WebSearchHTMLViewSubsystemEventDataSubtype,
     WebSearchSubsystemEventData
-} from "./chatTypes.ts";
-import {CodeExecArtifact, CodeExecArtifactType, CodeExecData} from "../logExtensions/codeExec/types.ts";
-import {WebSearchArtifact, WebSearchArtifactType, WebSearchData} from "../logExtensions/webSearch/types.ts";
+} from "../logExtensions/webSearch/types.ts";
 import {CanvasArtifact, CanvasArtifactType} from "../logExtensions/canvas/types.ts";
 import {TimelineTextArtifact, TimelineTextArtifactType} from "../logExtensions/timelineText/types.ts";
-import {ConversationStatusArtifact, ConversationStatusArtifactType} from "../logExtensions/conversationStatus/types.ts";
+import {
+    ConversationStatusArtifact,
+    ConversationStatusArtifactType,
+    ConversationStatusSubsystemEventData,
+    ConversationStatusSubsystemEventDataSubtype
+} from "../logExtensions/conversationStatus/types.ts";
+import {
+    WebFetchArtifact,
+    WebFetchArtifactType,
+    WebFetchSubsystemEventData,
+    WebFetchSubsystemEventDataSubtype
+} from "../logExtensions/webFetch/types.ts";
 
 const userAttachmentMapping = new Map<string, File>();
 
@@ -128,7 +146,6 @@ const reduceCanvasEvents = (events: CanvasEvent[], name: string): CanvasArtifact
 
     const firstEvent = itemEvents[0]
     const contentType = firstEvent.data.contentType === "text" ? (firstEvent.data.content.startsWith('```') ? "markdown" : firstEvent.data.contentType) : firstEvent.data.contentType
-    const subType = firstEvent.data.subType
     const complete = itemEvents.findIndex(item => item.completed) >= 0
     const content = itemEvents.map(entry => entry.data.content).join("")
     const title = firstEvent.data.title
@@ -142,7 +159,6 @@ const reduceCanvasEvents = (events: CanvasEvent[], name: string): CanvasArtifact
             content: cleanUpCanvasItemContent(content, contentType),
             title,
             contentType,
-            subType,
         }
     }
 }
@@ -527,8 +543,7 @@ const chatStateSlice = createSlice({
                     turn.answer = turnEvents.map(event => event.data.text).join("")
                     break;
                 }
-                case "canvas":
-                case "tool": {
+                case "canvas": {
                     const event: CanvasEvent = {
                         eventType: "canvas",
                         index,
@@ -540,7 +555,6 @@ const chatStateSlice = createSlice({
                             title: env.extra.title as string,
                             content: textDelta ?? "",
                             contentType: env.extra.format as string,
-                            subType: marker === "tool" ? "webSearch" : null,
                         }
                     }
 
@@ -669,10 +683,34 @@ const chatStateSlice = createSlice({
                                 subtype,
                                 title,
                                 text: textDelta
-                            } as SubsystemEventData
+                            } as ConversationStatusSubsystemEventData
+                            break
+                        case WebFetchSubsystemEventDataSubtype:
+                            reducer = () => {
+                                const executionId = env.extra.execution_id as string
+                                turn.artifacts = turn.artifacts.filter(c => c.artifactType !== WebFetchArtifactType || (c as WebFetchArtifact).content.executionId !== executionId)
+                                const artifact: WebFetchArtifact = {
+                                    artifactType: WebFetchArtifactType,
+                                    timestamp,
+                                    content: {
+                                        name,
+                                        executionId,
+                                        title,
+                                        items: JSON.parse(textDelta).urls
+                                    },
+                                }
+                                turn.artifacts.push(artifact)
+                            }
+                            data = {
+                                name,
+                                subtype,
+                                title,
+                                text: textDelta,
+                                executionId: env.extra.execution_id as string,
+                            } as WebFetchSubsystemEventData
                             break
                         default:
-                            console.warn("unknown subtype", env)
+                            console.warn("unknown subsystem event subtype", env)
                             data = {
                                 name,
                                 subtype,

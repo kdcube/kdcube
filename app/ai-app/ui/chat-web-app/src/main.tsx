@@ -23,12 +23,16 @@ import {IgnoredArtifactStreamReducer} from "./features/logExtensions/ignored/Ign
 import {CanvasArtifactStreamReducer} from "./features/logExtensions/canvas/CanvasArtifactStreamReducer.ts";
 import {CodeExecArtifactStreamReducer} from "./features/logExtensions/codeExec/CodeExecArtifactStreamReducer.ts";
 import {WebSearchArtifactStreamReducer} from "./features/logExtensions/webSearch/WebSearchArtifactStreamReducer.ts";
+import {WebFetchArtifactStreamReducer} from "./features/logExtensions/webFetch/WebFetchArtifactStreamReducer.ts";
+import {WebFetchArtifactType} from "./features/logExtensions/webFetch/types.ts";
+import WebFetchLogItem from "./features/logExtensions/webFetch/WebFetchLogItem.tsx";
 
 //chat log extensions
 addChatLogExtension(CanvasArtifactType, CanvasLogItem)
 addChatLogExtension(CodeExecArtifactType, CodeExecLogItem)
 addChatLogExtension(WebSearchArtifactType, WebSearchLogItem)
 addChatLogExtension(TimelineTextArtifactType, TimelineTextLogItem)
+addChatLogExtension(WebFetchArtifactType, WebFetchLogItem)
 
 //canvas extension
 addCanvasItemExtension(CanvasArtifactType, CanvasItem, getCanvasArtifactLink, matchesCanvasArtifact)
@@ -36,10 +40,11 @@ addCanvasItemExtension(WebSearchArtifactType, WebSearchCanvasItem, getWebSearchA
 
 //artifact stream parsers (for conversation loader)
 addArtifactStreamParsers(
-    new IgnoredArtifactStreamReducer(),
+    new IgnoredArtifactStreamReducer({marker:"subsystem", subtypes: ["conversation.turn.status"]}),
     new CanvasArtifactStreamReducer(),
     new CodeExecArtifactStreamReducer(),
-    new WebSearchArtifactStreamReducer()
+    new WebSearchArtifactStreamReducer(),
+    new WebFetchArtifactStreamReducer()
 )
 
 createRoot(document.getElementById('root')!).render(

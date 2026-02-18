@@ -1,10 +1,11 @@
 import {
-    UnknownArtifact,
-    WebSearchFilteredResultsSubsystemEventDataSubtype,
-    WebSearchHTMLViewSubsystemEventDataSubtype
+    UnknownArtifact
 } from "../../chat/chatTypes.ts";
 import {ArtifactStreamDataItem, ArtifactStreamParser} from "../../conversations/conversationsTypes.ts";
-import {WebSearchArtifact, WebSearchArtifactType} from "./types.ts";
+import {
+    WebSearchArtifact, WebSearchArtifactType,
+    WebSearchFilteredResultsSubsystemEventDataSubtype, WebSearchHTMLViewSubsystemEventDataSubtype
+} from "./types.ts";
 
 export class WebSearchArtifactStreamReducer implements ArtifactStreamParser {
     private artifacts: WebSearchArtifact[] = []

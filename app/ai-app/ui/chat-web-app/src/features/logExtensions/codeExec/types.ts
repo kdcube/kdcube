@@ -1,5 +1,5 @@
 import {Timestamped} from "../../../types/common.ts";
-import {Artifact} from "../../chat/chatTypes.ts";
+import {Artifact, SubsystemEventData, TurnEvent} from "../../chat/chatTypes.ts";
 
 export interface CodeExecBase<T> extends Timestamped {
     name: string;
@@ -49,3 +49,49 @@ export const CodeExecArtifactType = "code_exec";
 export interface CodeExecArtifact extends Artifact<CodeExecData> {
     artifactType: typeof CodeExecArtifactType;
 }
+
+export interface CodeExecSubsystemEventData extends SubsystemEventData {
+    executionId: string;
+}
+
+export const CodeExecCodeSubsystemEventDataSubtype = "code_exec.code"
+
+export interface CodeExecCodeSubsystemEventData extends CodeExecSubsystemEventData {
+    subtype: typeof CodeExecCodeSubsystemEventDataSubtype
+    language: string;
+}
+
+export const CodeExecProgramNameSubsystemEventDataSubtype = "code_exec.program.name"
+
+export interface CodeExecProgramNameSubsystemEventData extends CodeExecSubsystemEventData {
+    subtype: typeof CodeExecProgramNameSubsystemEventDataSubtype
+}
+
+export const CodeExecObjectiveSubsystemEventDataSubtype = "code_exec.objective"
+
+export interface CodeExecObjectiveSubsystemEventData extends CodeExecSubsystemEventData {
+    subtype: typeof CodeExecObjectiveSubsystemEventDataSubtype
+}
+
+export const CodeExecContractSubsystemEventDataSubtype = "code_exec.contract"
+
+export interface CodeExecContractSubsystemEventData extends CodeExecSubsystemEventData {
+    subtype: typeof CodeExecContractSubsystemEventDataSubtype
+}
+
+export const CodeExecStatusSubsystemEventDataSubtype = "code_exec.status"
+
+export interface CodeExecStatusSubsystemEventData extends CodeExecSubsystemEventData {
+    subtype: typeof CodeExecStatusSubsystemEventDataSubtype
+}
+
+export const CodeExecEventSubtypes = [CodeExecCodeSubsystemEventDataSubtype, CodeExecProgramNameSubsystemEventDataSubtype,
+    CodeExecObjectiveSubsystemEventDataSubtype, CodeExecContractSubsystemEventDataSubtype, CodeExecStatusSubsystemEventDataSubtype]
+
+export type CodeExecMetaEventData = CodeExecCodeSubsystemEventData
+    | CodeExecProgramNameSubsystemEventData
+    | CodeExecObjectiveSubsystemEventData
+    | CodeExecStatusSubsystemEventData
+    | CodeExecContractSubsystemEventData
+
+export type CodeExecEvent = TurnEvent<CodeExecMetaEventData>

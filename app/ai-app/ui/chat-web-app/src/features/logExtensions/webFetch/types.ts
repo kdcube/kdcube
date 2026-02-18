@@ -1,4 +1,4 @@
-import {Artifact} from "../../chat/chatTypes.ts";
+import {Artifact, SubsystemEventData} from "../../chat/chatTypes.ts";
 
 export interface WebFetchDataItem {
     url: string,
@@ -12,8 +12,8 @@ export interface WebFetchDataItem {
 
 export interface WebFetchArtifactData {
     name: string;
+    executionId: string;
     title?: string;
-    objective?: string;
     items: WebFetchDataItem[];
 }
 
@@ -21,5 +21,11 @@ export const WebFetchArtifactType = "web_fetch.results";
 
 export interface WebFetchArtifact extends Artifact<WebFetchArtifactData> {
     artifactType: typeof WebFetchArtifactType;
-    complete?: boolean;
+}
+
+export const WebFetchSubsystemEventDataSubtype = "web_fetch.results"
+
+export interface WebFetchSubsystemEventData extends SubsystemEventData {
+    subtype: typeof WebFetchSubsystemEventDataSubtype
+    executionId: string
 }
