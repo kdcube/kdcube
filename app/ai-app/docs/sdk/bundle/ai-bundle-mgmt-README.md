@@ -433,6 +433,31 @@ Admin APIs:
 - `POST /admin/integrations/bundles/reset-env`
 - `POST /admin/integrations/bundles/cleanup`
 
+### CLI: delete bundle registry key (per tenant/project)
+
+`admin_reset_bundles_from_env` does **not** delete the registry; it overwrites Redis from `AGENTIC_BUNDLES_JSON`.  
+To remove the mapping for a specific tenant/project, delete the Redis key directly:
+
+```bash
+TENANT="your-tenant"
+PROJECT="your-project"
+KEY="kdcube:config:bundles:mapping:${TENANT}:${PROJECT}"
+
+redis-cli -u "$REDIS_URL" DEL "$KEY"
+```
+
+Optional preview:
+
+```bash
+redis-cli -u "$REDIS_URL" EXISTS "$KEY"
+```
+
+If `REDIS_URL` is not set, use host/port/password/db instead:
+
+```bash
+redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" -a "$REDIS_PASSWORD" -n "$REDIS_DB" DEL "$KEY"
+```
+
 ### Bundle props (runtime overrides)
 
 Per bundle overrides are stored in Redis:

@@ -15,6 +15,7 @@ interface AppSettings {
     defaultTenant: string;
     defaultProject: string;
     defaultAppBundleId: string;
+    stripeDashboardBaseUrl: string;
 }
 
 interface QuotaPolicy {
@@ -239,6 +240,70 @@ interface Subscription {
     updated_at: string;
 }
 
+interface SubscriptionBalance {
+    period_key?: string | null;
+    period_start?: string | null;
+    period_end?: string | null;
+    status?: string | null;
+    balance_usd: number;
+    reserved_usd: number;
+    available_usd: number;
+    balance_tokens?: number | null;
+    reserved_tokens?: number | null;
+    available_tokens?: number | null;
+    topup_usd?: number | null;
+    rolled_over_usd?: number | null;
+    spent_usd?: number | null;
+    lifetime_added_usd?: number | null;
+    lifetime_spent_usd?: number | null;
+    reference_model?: string;
+}
+
+interface SubscriptionPeriod {
+    period_key: string;
+    period_start: string;
+    period_end: string;
+    status: string;
+    balance_usd: number;
+    reserved_usd: number;
+    available_usd: number;
+    topup_usd: number;
+    rolled_over_usd: number;
+    spent_usd: number;
+    closed_at?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+    notes?: string | null;
+}
+
+interface SubscriptionLedgerEntry {
+    id: number;
+    period_key: string;
+    amount_cents: number;
+    amount_usd: number;
+    kind: string;
+    note?: string | null;
+    reservation_id?: string | null;
+    bundle_id?: string | null;
+    provider?: string | null;
+    request_id?: string | null;
+    created_at?: string | null;
+}
+
+interface PendingStripeRequest {
+    kind: string;
+    external_id: string;
+    user_id: string | null;
+    amount_cents: number | null;
+    amount_usd: number | null;
+    tokens: number | null;
+    currency: string | null;
+    status: string;
+    metadata: any;
+    created_at: string | null;
+    updated_at: string | null;
+}
+
 interface EconomicsReference {
     reference_provider: string;
     reference_model: string;
@@ -257,6 +322,7 @@ class SettingsManager {
     private readonly PLACEHOLDER_TENANT = '{{' + 'DEFAULT_TENANT' + '}}';
     private readonly PLACEHOLDER_PROJECT = '{{' + 'DEFAULT_PROJECT' + '}}';
     private readonly PLACEHOLDER_BUNDLE_ID = '{{' + 'DEFAULT_APP_BUNDLE_ID' + '}}';
+    private readonly PLACEHOLDER_STRIPE_DASHBOARD = '{{' + 'STRIPE_DASHBOARD_BASE_URL' + '}}';
 
     private settings: AppSettings = {
         baseUrl: '{{CHAT_BASE_URL}}',
@@ -265,7 +331,8 @@ class SettingsManager {
         idTokenHeader: '{{ID_TOKEN_HEADER}}',
         defaultTenant: '{{DEFAULT_TENANT}}',
         defaultProject: '{{DEFAULT_PROJECT}}',
-        defaultAppBundleId: '{{DEFAULT_APP_BUNDLE_ID}}'
+        defaultAppBundleId: '{{DEFAULT_APP_BUNDLE_ID}}',
+        stripeDashboardBaseUrl: '{{STRIPE_DASHBOARD_BASE_URL}}'
     };
 
     private configReceivedCallback: (() => void) | null = null;
@@ -325,6 +392,13 @@ class SettingsManager {
             : this.settings.defaultAppBundleId;
     }
 
+    getStripeDashboardBaseUrl(): string {
+        if (!this.settings.stripeDashboardBaseUrl || this.settings.stripeDashboardBaseUrl === this.PLACEHOLDER_STRIPE_DASHBOARD) {
+            return 'https://dashboard.stripe.com';
+        }
+        return this.settings.stripeDashboardBaseUrl;
+    }
+
     hasPlaceholderSettings(): boolean {
         return this.settings.baseUrl === this.PLACEHOLDER_BASE_URL;
     }
@@ -376,6 +450,9 @@ class SettingsManager {
                     if (config.defaultAppBundleId) {
                         updates.defaultAppBundleId = config.defaultAppBundleId;
                     }
+                    if (config.stripeDashboardBaseUrl) {
+                        updates.stripeDashboardBaseUrl = config.stripeDashboardBaseUrl;
+                    }
 
                     if (Object.keys(updates).length > 0) {
                         this.updateSettings(updates);
@@ -397,7 +474,7 @@ class SettingsManager {
                 data: {
                     requestedFields: [
                         'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
-                        'defaultTenant', 'defaultProject', 'defaultAppBundleId'
+                        'defaultTenant', 'defaultProject', 'defaultAppBundleId', 'stripeDashboardBaseUrl'
                     ],
                     identity: identity
                 }
@@ -749,7 +826,7 @@ class ControlPlaneAPI {
         return response.json();
     }
 
-    async getSubscription(userId: string): Promise<{ status: string; subscription: Subscription | null }> {
+    async getSubscription(userId: string): Promise<{ status: string; subscription: Subscription | null; subscription_balance?: SubscriptionBalance | null }> {
         const response = await this.fetchWithAuth(
             this.getFullUrl(`/subscriptions/user/${userId}`)
         );
@@ -774,6 +851,38 @@ class ControlPlaneAPI {
         return response.json();
     }
 
+    async listSubscriptionPeriods(
+        userId: string,
+        status: 'open' | 'closed' | 'all' = 'closed',
+        limit: number = 50,
+        offset: number = 0
+    ): Promise<{ status: string; count: number; periods: SubscriptionPeriod[] }> {
+        const qp = new URLSearchParams();
+        qp.set('status', status);
+        qp.set('limit', String(limit));
+        qp.set('offset', String(offset));
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl(`/subscriptions/periods/${userId}`)}?${qp.toString()}`
+        );
+        return response.json();
+    }
+
+    async listSubscriptionLedger(
+        userId: string,
+        periodKey: string,
+        limit: number = 200,
+        offset: number = 0
+    ): Promise<{ status: string; count: number; ledger: SubscriptionLedgerEntry[] }> {
+        const qp = new URLSearchParams();
+        qp.set('period_key', periodKey);
+        qp.set('limit', String(limit));
+        qp.set('offset', String(offset));
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl(`/subscriptions/ledger/${userId}`)}?${qp.toString()}`
+        );
+        return response.json();
+    }
+
     async renewInternalSubscriptionOnce(payload: {
         userId: string;
         chargeAt?: string | null;
@@ -790,6 +899,140 @@ class ControlPlaneAPI {
                     idempotency_key: payload.idempotencyKey ?? null,
                 }),
             }
+        );
+        return response.json();
+    }
+
+    async topupSubscriptionBudget(userId: string, usdAmount: number, notes?: string, forceTopup: boolean = false): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.getFullUrl('/subscriptions/budget/topup'),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    usd_amount: usdAmount,
+                    notes,
+                    force_topup: forceTopup
+                })
+            }
+        );
+        return response.json();
+    }
+
+    async setSubscriptionOverdraft(userId: string, overdraftLimitUsd: number | null, notes?: string): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.getFullUrl('/subscriptions/budget/overdraft'),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId,
+                    overdraft_limit_usd: overdraftLimitUsd,
+                    notes
+                })
+            }
+        );
+        return response.json();
+    }
+
+    async sweepSubscriptionRollovers(userId?: string): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.getFullUrl('/subscriptions/rollover/sweep'),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: userId || null,
+                    limit: 200
+                })
+            }
+        );
+        return response.json();
+    }
+
+    async refundWallet(payload: {
+        userId: string;
+        paymentIntentId: string;
+        usdAmount?: number | null;
+        notes?: string;
+    }): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.getFullUrl('/wallet/refund'),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: payload.userId,
+                    payment_intent_id: payload.paymentIntentId,
+                    usd_amount: payload.usdAmount ?? null,
+                    notes: payload.notes
+                })
+            }
+        );
+        return response.json();
+    }
+
+    async cancelSubscription(payload: {
+        userId?: string;
+        stripeSubscriptionId?: string;
+        notes?: string;
+    }): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.getFullUrl('/subscriptions/cancel'),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    user_id: payload.userId ?? null,
+                    stripe_subscription_id: payload.stripeSubscriptionId ?? null,
+                    notes: payload.notes
+                })
+            }
+        );
+        return response.json();
+    }
+
+    async reconcileStripe(kind: 'all' | 'wallet_refund' | 'subscription_cancel' = 'all'): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.getFullUrl('/stripe/reconcile'),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind, limit: 200 })
+            }
+        );
+        return response.json();
+    }
+
+    async listPendingStripeRequests(
+        kind: 'all' | 'wallet_refund' | 'subscription_cancel' = 'all',
+        limit: number = 200,
+        offset: number = 0
+    ): Promise<{ status: string; count: number; items: PendingStripeRequest[] }> {
+        const qp = new URLSearchParams();
+        qp.set('kind', kind);
+        qp.set('limit', String(limit));
+        qp.set('offset', String(offset));
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl('/stripe/pending')}?${qp.toString()}`
+        );
+        return response.json();
+    }
+
+    async listPendingEconomicsEvents(
+        kind?: string,
+        userId?: string,
+        limit: number = 200,
+        offset: number = 0
+    ): Promise<{ status: string; count: number; items: PendingStripeRequest[] }> {
+        const qp = new URLSearchParams();
+        if (kind) qp.set('kind', kind);
+        if (userId) qp.set('user_id', userId);
+        qp.set('limit', String(limit));
+        qp.set('offset', String(offset));
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl('/economics/pending')}?${qp.toString()}`
         );
         return response.json();
     }
@@ -997,6 +1240,23 @@ function formatDateTime(iso: string | null | undefined): string {
     if (!iso) return '—';
     const d = new Date(iso);
     return Number.isNaN(d.getTime()) ? String(iso) : d.toLocaleString();
+}
+
+function stripeUrl(path: string): string {
+    const base = settings.getStripeDashboardBaseUrl().replace(/\/$/, '');
+    const clean = path.replace(/^\//, '');
+    return `${base}/${clean}`;
+}
+
+function stripeLinkForPending(item: PendingStripeRequest): { id: string; url: string } | null {
+    const md = item.metadata || {};
+    const refundId = md.stripe_refund_id;
+    const subId = md.stripe_subscription_id;
+    const piId = md.payment_intent_id;
+    if (refundId) return { id: String(refundId), url: stripeUrl(`refunds/${refundId}`) };
+    if (subId) return { id: String(subId), url: stripeUrl(`subscriptions/${subId}`) };
+    if (piId) return { id: String(piId), url: stripeUrl(`payments/${piId}`) };
+    return null;
 }
 
 type DueState = 'inactive' | 'overdue' | 'due_soon' | 'scheduled' | 'not_scheduled';
@@ -1319,6 +1579,39 @@ const ControlPlaneAdmin: React.FC = () => {
 
     const [subLookupUserId, setSubLookupUserId] = useState<string>('');
     const [subscription, setSubscription] = useState<Subscription | null>(null);
+    const [subBudgetUserId, setSubBudgetUserId] = useState<string>('');
+    const [subBudgetUsdAmount, setSubBudgetUsdAmount] = useState<string>('');
+    const [subBudgetNotes, setSubBudgetNotes] = useState<string>('');
+    const [subBudgetForceTopup, setSubBudgetForceTopup] = useState<boolean>(false);
+    const [subOverdraftUsd, setSubOverdraftUsd] = useState<string>('');
+    const [subSweepUserId, setSubSweepUserId] = useState<string>('');
+    const [subscriptionBalance, setSubscriptionBalance] = useState<SubscriptionBalance | null>(null);
+
+    const [walletRefundUserId, setWalletRefundUserId] = useState<string>('');
+    const [walletRefundPaymentIntentId, setWalletRefundPaymentIntentId] = useState<string>('');
+    const [walletRefundUsdAmount, setWalletRefundUsdAmount] = useState<string>('');
+    const [walletRefundNotes, setWalletRefundNotes] = useState<string>('');
+
+    const [cancelSubUserId, setCancelSubUserId] = useState<string>('');
+    const [cancelSubStripeId, setCancelSubStripeId] = useState<string>('');
+    const [cancelSubNotes, setCancelSubNotes] = useState<string>('');
+
+    const [stripeReconcileKind, setStripeReconcileKind] = useState<'all' | 'wallet_refund' | 'subscription_cancel'>('all');
+    const [pendingStripeKind, setPendingStripeKind] = useState<'all' | 'wallet_refund' | 'subscription_cancel'>('all');
+    const [pendingStripeItems, setPendingStripeItems] = useState<PendingStripeRequest[]>([]);
+    const [loadingPendingStripe, setLoadingPendingStripe] = useState<boolean>(false);
+
+    const [pendingEconomicsKind, setPendingEconomicsKind] = useState<string>('');
+    const [pendingEconomicsUserId, setPendingEconomicsUserId] = useState<string>('');
+    const [pendingEconomicsItems, setPendingEconomicsItems] = useState<PendingStripeRequest[]>([]);
+    const [loadingPendingEconomics, setLoadingPendingEconomics] = useState<boolean>(false);
+
+    const [subHistoryUserId, setSubHistoryUserId] = useState<string>('');
+    const [subHistoryStatus, setSubHistoryStatus] = useState<'closed' | 'open' | 'all'>('closed');
+    const [subPeriods, setSubPeriods] = useState<SubscriptionPeriod[]>([]);
+    const [subLedger, setSubLedger] = useState<SubscriptionLedgerEntry[]>([]);
+    const [subSelectedPeriodKey, setSubSelectedPeriodKey] = useState<string>('');
+    const [loadingHistory, setLoadingHistory] = useState<boolean>(false);
 
     const [subsProviderFilter, setSubsProviderFilter] = useState<string>('');
     const [subsList, setSubsList] = useState<Subscription[]>([]);
@@ -1686,10 +1979,12 @@ const ControlPlaneAdmin: React.FC = () => {
         clearMessages();
         setLoadingAction(true);
         setSubscription(null);
+        setSubscriptionBalance(null);
 
         try {
             const res = await api.getSubscription(subLookupUserId.trim());
             setSubscription(res.subscription);
+            setSubscriptionBalance(res.subscription_balance || null);
             if (!res.subscription) setSuccess('No subscription found for this user.');
         } catch (err) {
             setError((err as Error).message);
@@ -1713,6 +2008,201 @@ const ControlPlaneAdmin: React.FC = () => {
             setError((err as Error).message);
         } finally {
             setLoadingData(false);
+        }
+    };
+
+    const handleTopupSubscriptionBudget = async (e: React.FormEvent) => {
+        e.preventDefault();
+        clearMessages();
+        setLoadingAction(true);
+
+        try {
+            const res = await api.topupSubscriptionBudget(
+                subBudgetUserId.trim(),
+                parseFloat(subBudgetUsdAmount),
+                subBudgetNotes || undefined,
+                subBudgetForceTopup
+            );
+            setSuccess(`Subscription balance topped up for ${subBudgetUserId}: $${subBudgetUsdAmount}`);
+            setSubBudgetUsdAmount('');
+            setSubBudgetNotes('');
+            setSubBudgetForceTopup(false);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleSetSubscriptionOverdraft = async (e: React.FormEvent) => {
+        e.preventDefault();
+        clearMessages();
+        setLoadingAction(true);
+
+        const limitVal = subOverdraftUsd.trim() === '' ? null : parseFloat(subOverdraftUsd);
+        try {
+            await api.setSubscriptionOverdraft(subBudgetUserId.trim(), limitVal, subBudgetNotes || undefined);
+            setSuccess(`Subscription overdraft updated for ${subBudgetUserId}`);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleSweepSubscriptionRollovers = async (e: React.FormEvent) => {
+        e.preventDefault();
+        clearMessages();
+        setLoadingAction(true);
+
+        try {
+            const res = await api.sweepSubscriptionRollovers(subSweepUserId.trim() || undefined);
+            const moved = res?.moved_usd != null ? `$${Number(res.moved_usd).toFixed(2)}` : 'N/A';
+            setSuccess(`Sweep complete. Moved: ${moved}`);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleLoadSubscriptionPeriods = async (e: React.FormEvent) => {
+        e.preventDefault();
+        clearMessages();
+        setLoadingHistory(true);
+
+        try {
+            const uid = subHistoryUserId.trim();
+            if (!uid) {
+                setError('User ID is required to load subscription periods.');
+                return;
+            }
+            const res = await api.listSubscriptionPeriods(uid, subHistoryStatus, 50, 0);
+            setSubPeriods(res.periods || []);
+            setSubLedger([]);
+            setSubSelectedPeriodKey('');
+            if (!res.periods || res.periods.length === 0) {
+                setSuccess('No subscription periods found for this user.');
+            }
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingHistory(false);
+        }
+    };
+
+    const handleLoadSubscriptionLedger = async (periodKey: string) => {
+        if (!periodKey) return;
+        clearMessages();
+        setLoadingHistory(true);
+        setSubSelectedPeriodKey(periodKey);
+        setSubLedger([]);
+
+        try {
+            const uid = subHistoryUserId.trim();
+            if (!uid) {
+                setError('User ID is required to load ledger entries.');
+                return;
+            }
+            const res = await api.listSubscriptionLedger(uid, periodKey, 200, 0);
+            setSubLedger(res.ledger || []);
+            if (!res.ledger || res.ledger.length === 0) {
+                setSuccess('No ledger entries for this period.');
+            }
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingHistory(false);
+        }
+    };
+
+    const handleWalletRefund = async (e: React.FormEvent) => {
+        e.preventDefault();
+        clearMessages();
+        setLoadingAction(true);
+
+        try {
+            const usdVal = walletRefundUsdAmount.trim() === '' ? null : parseFloat(walletRefundUsdAmount);
+            const res = await api.refundWallet({
+                userId: walletRefundUserId.trim(),
+                paymentIntentId: walletRefundPaymentIntentId.trim(),
+                usdAmount: usdVal,
+                notes: walletRefundNotes || undefined
+            });
+            setSuccess(res.message || 'Refund requested; awaiting Stripe confirmation.');
+            setWalletRefundUsdAmount('');
+            setWalletRefundNotes('');
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleCancelSubscription = async (e: React.FormEvent) => {
+        e.preventDefault();
+        clearMessages();
+        setLoadingAction(true);
+
+        try {
+            const res = await api.cancelSubscription({
+                userId: cancelSubUserId.trim() || undefined,
+                stripeSubscriptionId: cancelSubStripeId.trim() || undefined,
+                notes: cancelSubNotes || undefined,
+            });
+            setSuccess(res.message || 'Cancellation requested; awaiting Stripe confirmation.');
+            setCancelSubNotes('');
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleStripeReconcile = async () => {
+        clearMessages();
+        setLoadingAction(true);
+        try {
+            const res = await api.reconcileStripe(stripeReconcileKind);
+            setSuccess(`Stripe reconcile complete. Applied=${res.applied ?? 0}, Failed=${res.failed ?? 0}`);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAction(false);
+        }
+    };
+
+    const handleLoadPendingStripe = async () => {
+        clearMessages();
+        setLoadingPendingStripe(true);
+        try {
+            const res = await api.listPendingStripeRequests(pendingStripeKind, 200, 0);
+            setPendingStripeItems(res.items || []);
+            if (!res.items || res.items.length === 0) {
+                setSuccess('No pending Stripe requests.');
+            }
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingPendingStripe(false);
+        }
+    };
+
+    const handleLoadPendingEconomics = async () => {
+        clearMessages();
+        setLoadingPendingEconomics(true);
+        try {
+            const kind = pendingEconomicsKind.trim() || undefined;
+            const userId = pendingEconomicsUserId.trim() || undefined;
+            const res = await api.listPendingEconomicsEvents(kind, userId, 200, 0);
+            setPendingEconomicsItems(res.items || []);
+            if (!res.items || res.items.length === 0) {
+                setSuccess('No pending economics events.');
+            }
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingPendingEconomics(false);
         }
     };
 
@@ -3214,13 +3704,84 @@ const ControlPlaneAdmin: React.FC = () => {
                                                 )}
                                             </div>
 
+                                            {subscriptionBalance && (
+                                                <div className="pt-4 border-t border-gray-200/70 space-y-2">
+                                                    <div className="text-sm font-semibold text-gray-900">Subscription balance</div>
+                                                    <div className="text-xs text-gray-600">
+                                                        Reference: {subscriptionBalance.reference_model || 'anthropic/claude-sonnet-4-5-20250929'}
+                                                    </div>
+                                                    {subscriptionBalance.period_start && subscriptionBalance.period_end && (
+                                                        <div className="text-xs text-gray-600">
+                                                            Period: {formatDateTime(subscriptionBalance.period_start)} → {formatDateTime(subscriptionBalance.period_end)}
+                                                        </div>
+                                                    )}
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                                                        <div className="rounded-xl bg-white border border-gray-200/70 p-3">
+                                                            <div className="text-gray-600">Balance</div>
+                                                            <div className="font-semibold text-gray-900">
+                                                                ${Number(subscriptionBalance.balance_usd || 0).toFixed(2)}
+                                                            </div>
+                                                            {subscriptionBalance.balance_tokens != null && (
+                                                                <div className="text-xs text-gray-500">
+                                                                    {Number(subscriptionBalance.balance_tokens).toLocaleString()} tokens
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="rounded-xl bg-white border border-gray-200/70 p-3">
+                                                            <div className="text-gray-600">Reserved</div>
+                                                            <div className="font-semibold text-gray-900">
+                                                                ${Number(subscriptionBalance.reserved_usd || 0).toFixed(2)}
+                                                            </div>
+                                                            {subscriptionBalance.reserved_tokens != null && (
+                                                                <div className="text-xs text-gray-500">
+                                                                    {Number(subscriptionBalance.reserved_tokens).toLocaleString()} tokens
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                        <div className="rounded-xl bg-white border border-gray-200/70 p-3">
+                                                            <div className="text-gray-600">Available</div>
+                                                            <div className="font-semibold text-gray-900">
+                                                                ${Number(subscriptionBalance.available_usd || 0).toFixed(2)}
+                                                            </div>
+                                                            {subscriptionBalance.available_tokens != null && (
+                                                                <div className="text-xs text-gray-500">
+                                                                    {Number(subscriptionBalance.available_tokens).toLocaleString()} tokens
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                                                        <div className="rounded-xl bg-white border border-gray-200/70 p-3">
+                                                            <div className="text-gray-600">Period top-up</div>
+                                                            <div className="font-semibold text-gray-900">
+                                                                ${Number(subscriptionBalance.topup_usd ?? subscriptionBalance.lifetime_added_usd ?? 0).toFixed(2)}
+                                                            </div>
+                                                        </div>
+                                                        <div className="rounded-xl bg-white border border-gray-200/70 p-3">
+                                                            <div className="text-gray-600">Period spent</div>
+                                                            <div className="font-semibold text-gray-900">
+                                                                ${Number(subscriptionBalance.spent_usd ?? subscriptionBalance.lifetime_spent_usd ?? 0).toFixed(2)}
+                                                            </div>
+                                                        </div>
+                                                        <div className="rounded-xl bg-white border border-gray-200/70 p-3">
+                                                            <div className="text-gray-600">Rolled over</div>
+                                                            <div className="font-semibold text-gray-900">
+                                                                ${Number(subscriptionBalance.rolled_over_usd || 0).toFixed(2)}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
+
                                             {/* Internal ops */}
                                             {subscription.provider === 'internal' &&
                                                 subscription.status === 'active' &&
                                                 (subscription.tier === 'paid' || subscription.tier === 'premium') && (
                                                     <div className="pt-4 border-t border-gray-200/70 flex flex-wrap items-center justify-between gap-3">
                                                         <div className="text-xs text-gray-600">
-                                                            Manual billing: renew will top-up budget and advance next due date.
+                                                            Manual billing: renew will top-up subscription balance and advance next due date.
                                                         </div>
 
                                                         <Button
@@ -3236,6 +3797,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                                                     // refresh displayed subscription
                                                                     const fresh = await api.getSubscription(subscription.user_id);
                                                                     setSubscription(fresh.subscription);
+                                                                    setSubscriptionBalance(fresh.subscription_balance || null);
                                                                 } catch (err) {
                                                                     setError((err as Error).message);
                                                                 } finally {
@@ -3247,6 +3809,518 @@ const ControlPlaneAdmin: React.FC = () => {
                                                         </Button>
                                                     </div>
                                                 )}
+                                        </div>
+                                    )}
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Subscription Balance Admin"
+                                    subtitle="Manual top-ups and overdraft configuration for a user's subscription balance."
+                                />
+                                <CardBody className="space-y-6">
+                                    <form onSubmit={handleTopupSubscriptionBudget} className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <Input
+                                                label="User ID *"
+                                                value={subBudgetUserId}
+                                                onChange={(e) => setSubBudgetUserId(e.target.value)}
+                                                placeholder="user123"
+                                                required
+                                            />
+                                            <Input
+                                                label="Top-up USD *"
+                                                type="number"
+                                                value={subBudgetUsdAmount}
+                                                onChange={(e) => setSubBudgetUsdAmount(e.target.value)}
+                                                placeholder="50"
+                                                required
+                                            />
+                                            <Input
+                                                label="Notes"
+                                                value={subBudgetNotes}
+                                                onChange={(e) => setSubBudgetNotes(e.target.value)}
+                                                placeholder="Optional notes"
+                                            />
+                                        </div>
+                                        <label className="flex items-center gap-2 text-sm text-gray-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={subBudgetForceTopup}
+                                                onChange={(e) => setSubBudgetForceTopup(e.target.checked)}
+                                                className="h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-900/20"
+                                            />
+                                            Force topup (allow multiple in the same billing period)
+                                        </label>
+                                        <Button type="submit" disabled={loadingAction}>
+                                            {loadingAction ? 'Processing…' : 'Top-up Subscription Balance'}
+                                        </Button>
+                                    </form>
+
+                                    <form onSubmit={handleSetSubscriptionOverdraft} className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <Input
+                                                label="User ID *"
+                                                value={subBudgetUserId}
+                                                onChange={(e) => setSubBudgetUserId(e.target.value)}
+                                                placeholder="user123"
+                                                required
+                                            />
+                                            <Input
+                                                label="Overdraft Limit USD (blank = unlimited)"
+                                                type="number"
+                                                value={subOverdraftUsd}
+                                                onChange={(e) => setSubOverdraftUsd(e.target.value)}
+                                                placeholder="0"
+                                            />
+                                            <Input
+                                                label="Notes"
+                                                value={subBudgetNotes}
+                                                onChange={(e) => setSubBudgetNotes(e.target.value)}
+                                                placeholder="Optional notes"
+                                            />
+                                        </div>
+                                        <Button type="submit" variant="secondary" disabled={loadingAction}>
+                                            {loadingAction ? 'Updating…' : 'Set Overdraft'}
+                                        </Button>
+                                    </form>
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Wallet Refund (Stripe)"
+                                    subtitle="Refund a Stripe payment_intent. Credits are removed immediately; finalization happens via Stripe webhook."
+                                />
+                                <CardBody className="space-y-4">
+                                    <form onSubmit={handleWalletRefund} className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                            <Input
+                                                label="User ID *"
+                                                value={walletRefundUserId}
+                                                onChange={(e) => setWalletRefundUserId(e.target.value)}
+                                                placeholder="user123"
+                                                required
+                                            />
+                                            <Input
+                                                label="Payment Intent ID *"
+                                                value={walletRefundPaymentIntentId}
+                                                onChange={(e) => setWalletRefundPaymentIntentId(e.target.value)}
+                                                placeholder="pi_..."
+                                                required
+                                            />
+                                            <Input
+                                                label="Refund USD (blank = full)"
+                                                type="number"
+                                                value={walletRefundUsdAmount}
+                                                onChange={(e) => setWalletRefundUsdAmount(e.target.value)}
+                                                placeholder="25.00"
+                                            />
+                                            <Input
+                                                label="Notes"
+                                                value={walletRefundNotes}
+                                                onChange={(e) => setWalletRefundNotes(e.target.value)}
+                                                placeholder="Optional notes"
+                                            />
+                                        </div>
+                                        <Button type="submit" variant="danger" disabled={loadingAction}>
+                                            {loadingAction ? 'Processing…' : 'Request Refund'}
+                                        </Button>
+                                    </form>
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Cancel Stripe Subscription"
+                                    subtitle="Request cancellation at period end (current balance remains usable)."
+                                />
+                                <CardBody className="space-y-4">
+                                    <form onSubmit={handleCancelSubscription} className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <Input
+                                                label="User ID"
+                                                value={cancelSubUserId}
+                                                onChange={(e) => setCancelSubUserId(e.target.value)}
+                                                placeholder="user123"
+                                            />
+                                            <Input
+                                                label="Stripe Subscription ID"
+                                                value={cancelSubStripeId}
+                                                onChange={(e) => setCancelSubStripeId(e.target.value)}
+                                                placeholder="sub_..."
+                                            />
+                                            <Input
+                                                label="Notes"
+                                                value={cancelSubNotes}
+                                                onChange={(e) => setCancelSubNotes(e.target.value)}
+                                                placeholder="Optional notes"
+                                            />
+                                        </div>
+                                        <Button type="submit" variant="secondary" disabled={loadingAction}>
+                                            {loadingAction ? 'Submitting…' : 'Request Cancellation'}
+                                        </Button>
+                                    </form>
+                                    <div className="text-xs text-gray-500">
+                                        Provide either User ID or Stripe Subscription ID.
+                                    </div>
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Stripe Reconcile"
+                                    subtitle="Check pending Stripe refund/cancel requests if a webhook was missed."
+                                />
+                                <CardBody className="space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                                        <Select
+                                            label="Kind"
+                                            value={stripeReconcileKind}
+                                            onChange={(e) => setStripeReconcileKind(e.target.value as 'all' | 'wallet_refund' | 'subscription_cancel')}
+                                            options={[
+                                                { value: 'all', label: 'all' },
+                                                { value: 'wallet_refund', label: 'wallet_refund' },
+                                                { value: 'subscription_cancel', label: 'subscription_cancel' },
+                                            ]}
+                                        />
+                                        <div className="md:col-span-2">
+                                            <Button type="button" variant="secondary" disabled={loadingAction} onClick={handleStripeReconcile}>
+                                                {loadingAction ? 'Reconciling…' : 'Run Reconcile'}
+                                            </Button>
+                                        </div>
+                                    </div>
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Pending Stripe Requests"
+                                    subtitle="Audit view for pending refunds/cancellations."
+                                    action={
+                                        <Button variant="secondary" onClick={handleLoadPendingStripe} disabled={loadingPendingStripe}>
+                                            {loadingPendingStripe ? 'Loading…' : 'Refresh'}
+                                        </Button>
+                                    }
+                                />
+                                <CardBody className="space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <Select
+                                            label="Kind filter"
+                                            value={pendingStripeKind}
+                                            onChange={(e) => setPendingStripeKind(e.target.value as 'all' | 'wallet_refund' | 'subscription_cancel')}
+                                            options={[
+                                                { value: 'all', label: 'all' },
+                                                { value: 'wallet_refund', label: 'wallet_refund' },
+                                                { value: 'subscription_cancel', label: 'subscription_cancel' },
+                                            ]}
+                                        />
+                                    </div>
+
+                                    {pendingStripeItems.length === 0 ? (
+                                        <EmptyState message="No pending Stripe requests loaded." icon="🧾" />
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-gray-50 border-b border-gray-200/70">
+                                                <tr className="text-gray-600">
+                                                    <th className="px-6 py-4 text-left font-semibold">Kind</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">User</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Amount</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Tokens</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Stripe ID</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Open</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">External ID</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Created</th>
+                                                </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-200/70">
+                                                {pendingStripeItems.map((p) => {
+                                                    const stripeLink = stripeLinkForPending(p);
+                                                    return (
+                                                    <tr key={`${p.kind}:${p.external_id}`} className="hover:bg-gray-50/70 transition-colors">
+                                                        <td className="px-6 py-4 text-gray-700">{p.kind}</td>
+                                                        <td className="px-6 py-4 text-gray-700">{p.user_id || '—'}</td>
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            {p.amount_usd != null ? `$${Number(p.amount_usd).toFixed(2)}` : '—'}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            {p.tokens != null ? Number(p.tokens).toLocaleString() : '—'}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">{stripeLink?.id || '—'}</td>
+                                                        <td className="px-6 py-4">
+                                                            {stripeLink ? (
+                                                                <a
+                                                                    href={stripeLink.url}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    className="text-gray-900 underline"
+                                                                >
+                                                                    Open
+                                                                </a>
+                                                            ) : (
+                                                                <span className="text-gray-400">—</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-500">{p.external_id}</td>
+                                                        <td className="px-6 py-4 text-gray-600">{formatDateTime(p.created_at)}</td>
+                                                    </tr>
+                                                );
+                                                })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Pending Economics Events"
+                                    subtitle="All pending internal economics events (not just Stripe)."
+                                    action={
+                                        <Button variant="secondary" onClick={handleLoadPendingEconomics} disabled={loadingPendingEconomics}>
+                                            {loadingPendingEconomics ? 'Loading…' : 'Refresh'}
+                                        </Button>
+                                    }
+                                />
+                                <CardBody className="space-y-4">
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <Input
+                                            label="Kind filter (optional)"
+                                            value={pendingEconomicsKind}
+                                            onChange={(e) => setPendingEconomicsKind(e.target.value)}
+                                            placeholder="subscription_rollover"
+                                        />
+                                        <Input
+                                            label="User ID filter (optional)"
+                                            value={pendingEconomicsUserId}
+                                            onChange={(e) => setPendingEconomicsUserId(e.target.value)}
+                                            placeholder="user123"
+                                        />
+                                        <div className="flex items-end">
+                                            <Button type="button" variant="secondary" disabled={loadingPendingEconomics} onClick={handleLoadPendingEconomics}>
+                                                {loadingPendingEconomics ? 'Loading…' : 'Load'}
+                                            </Button>
+                                        </div>
+                                    </div>
+
+                                    {pendingEconomicsItems.length === 0 ? (
+                                        <EmptyState message="No pending economics events loaded." icon="🧾" />
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-gray-50 border-b border-gray-200/70">
+                                                <tr className="text-gray-600">
+                                                    <th className="px-6 py-4 text-left font-semibold">Kind</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">User</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Amount</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Tokens</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Stripe ID</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Open</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">External ID</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Created</th>
+                                                </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-200/70">
+                                                {pendingEconomicsItems.map((p) => {
+                                                    const stripeLink = stripeLinkForPending(p);
+                                                    return (
+                                                    <tr key={`${p.kind}:${p.external_id}`} className="hover:bg-gray-50/70 transition-colors">
+                                                        <td className="px-6 py-4 text-gray-700">{p.kind}</td>
+                                                        <td className="px-6 py-4 text-gray-700">{p.user_id || '—'}</td>
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            {p.amount_usd != null ? `$${Number(p.amount_usd).toFixed(2)}` : '—'}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            {p.tokens != null ? Number(p.tokens).toLocaleString() : '—'}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">{stripeLink?.id || '—'}</td>
+                                                        <td className="px-6 py-4">
+                                                            {stripeLink ? (
+                                                                <a
+                                                                    href={stripeLink.url}
+                                                                    target="_blank"
+                                                                    rel="noreferrer"
+                                                                    className="text-gray-900 underline"
+                                                                >
+                                                                    Open
+                                                                </a>
+                                                            ) : (
+                                                                <span className="text-gray-400">—</span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-500">{p.external_id}</td>
+                                                        <td className="px-6 py-4 text-gray-600">{formatDateTime(p.created_at)}</td>
+                                                    </tr>
+                                                );
+                                                })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Sweep Unused Subscription Balances"
+                                    subtitle="Moves unused subscription balance to project budget for due subscriptions."
+                                />
+                                <CardBody className="space-y-4">
+                                    <form onSubmit={handleSweepSubscriptionRollovers} className="space-y-4">
+                                        <div className="flex gap-3">
+                                            <Input
+                                                label="User ID (optional)"
+                                                value={subSweepUserId}
+                                                onChange={(e) => setSubSweepUserId(e.target.value)}
+                                                placeholder="user123"
+                                                className="flex-1"
+                                            />
+                                            <Button type="submit" variant="secondary" disabled={loadingAction}>
+                                                {loadingAction ? 'Sweeping…' : 'Sweep Now'}
+                                            </Button>
+                                        </div>
+                                    </form>
+                                </CardBody>
+                            </Card>
+
+                            <Card>
+                                <CardHeader
+                                    title="Subscription Period History"
+                                    subtitle="Closed periods and ledger entries for a user's subscription."
+                                />
+                                <CardBody className="space-y-4">
+                                    <form onSubmit={handleLoadSubscriptionPeriods} className="space-y-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                            <Input
+                                                label="User ID *"
+                                                value={subHistoryUserId}
+                                                onChange={(e) => setSubHistoryUserId(e.target.value)}
+                                                placeholder="user123"
+                                                required
+                                            />
+                                            <Select
+                                                label="Period status"
+                                                value={subHistoryStatus}
+                                                onChange={(e) => setSubHistoryStatus(e.target.value as 'closed' | 'open' | 'all')}
+                                                options={[
+                                                    { value: 'closed', label: 'closed' },
+                                                    { value: 'open', label: 'open' },
+                                                    { value: 'all', label: 'all' },
+                                                ]}
+                                            />
+                                            <div className="flex items-end">
+                                                <Button type="submit" variant="secondary" disabled={loadingHistory}>
+                                                    {loadingHistory ? 'Loading…' : 'Load Periods'}
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    </form>
+
+                                    {subPeriods.length === 0 ? (
+                                        <EmptyState message="No subscription periods loaded." icon="📚" />
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-sm">
+                                                <thead className="bg-gray-50 border-b border-gray-200/70">
+                                                <tr className="text-gray-600">
+                                                    <th className="px-6 py-4 text-left font-semibold">Period</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Status</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Topup</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Spent</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Rolled</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Balance</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Closed</th>
+                                                    <th className="px-6 py-4 text-left font-semibold">Actions</th>
+                                                </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-200/70">
+                                                {subPeriods.map((p) => (
+                                                    <tr
+                                                        key={p.period_key}
+                                                        className={p.period_key === subSelectedPeriodKey ? 'bg-gray-50/80' : 'hover:bg-gray-50/70 transition-colors'}
+                                                    >
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            <div className="font-medium text-gray-900">{formatDateTime(p.period_start)} → {formatDateTime(p.period_end)}</div>
+                                                            <div className="text-xs text-gray-500">{p.period_key}</div>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">{p.status}</td>
+                                                        <td className="px-6 py-4 text-gray-700">${Number(p.topup_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-6 py-4 text-gray-700">${Number(p.spent_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-6 py-4 text-gray-700">${Number(p.rolled_over_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-6 py-4 text-gray-700">${Number(p.balance_usd || 0).toFixed(2)}</td>
+                                                        <td className="px-6 py-4 text-gray-600">{formatDateTime(p.closed_at)}</td>
+                                                        <td className="px-6 py-4">
+                                                            <Button
+                                                                type="button"
+                                                                variant="secondary"
+                                                                disabled={loadingHistory}
+                                                                onClick={() => handleLoadSubscriptionLedger(p.period_key)}
+                                                            >
+                                                                {loadingHistory && p.period_key === subSelectedPeriodKey ? 'Loading…' : 'View Ledger'}
+                                                            </Button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+
+                                    {subSelectedPeriodKey && (
+                                        <div className="pt-4 border-t border-gray-200/70 space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <div className="text-sm text-gray-600">
+                                                    Ledger for period: <span className="font-medium text-gray-900">{subSelectedPeriodKey}</span>
+                                                </div>
+                                                <Button
+                                                    type="button"
+                                                    variant="secondary"
+                                                    disabled={loadingHistory}
+                                                    onClick={() => handleLoadSubscriptionLedger(subSelectedPeriodKey)}
+                                                >
+                                                    {loadingHistory ? 'Refreshing…' : 'Refresh Ledger'}
+                                                </Button>
+                                            </div>
+
+                                            {subLedger.length === 0 ? (
+                                                <EmptyState message="No ledger entries for this period." icon="🧾" />
+                                            ) : (
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm">
+                                                        <thead className="bg-gray-50 border-b border-gray-200/70">
+                                                        <tr className="text-gray-600">
+                                                            <th className="px-6 py-4 text-left font-semibold">Time</th>
+                                                            <th className="px-6 py-4 text-left font-semibold">Kind</th>
+                                                            <th className="px-6 py-4 text-left font-semibold">Amount</th>
+                                                            <th className="px-6 py-4 text-left font-semibold">Provider</th>
+                                                            <th className="px-6 py-4 text-left font-semibold">Note</th>
+                                                            <th className="px-6 py-4 text-left font-semibold">Request</th>
+                                                        </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-gray-200/70">
+                                                        {subLedger.map((l) => {
+                                                            const amt = Number(l.amount_usd || 0);
+                                                            const sign = amt >= 0 ? '+' : '-';
+                                                            return (
+                                                                <tr key={l.id} className="hover:bg-gray-50/70 transition-colors">
+                                                                    <td className="px-6 py-4 text-gray-600">{formatDateTime(l.created_at)}</td>
+                                                                    <td className="px-6 py-4 text-gray-700">{l.kind}</td>
+                                                                    <td className="px-6 py-4 font-semibold text-gray-900">
+                                                                        {sign}${Math.abs(amt).toFixed(2)}
+                                                                    </td>
+                                                                    <td className="px-6 py-4 text-gray-700">{l.provider || '—'}</td>
+                                                                    <td className="px-6 py-4 text-gray-700">{l.note || '—'}</td>
+                                                                    <td className="px-6 py-4 text-gray-500">{l.request_id || '—'}</td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
                                         </div>
                                     )}
                                 </CardBody>

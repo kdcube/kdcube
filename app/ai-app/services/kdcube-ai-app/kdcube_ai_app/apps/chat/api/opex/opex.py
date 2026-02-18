@@ -9,8 +9,9 @@ from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Request, APIRouter, Query, FastAPI
 from contextlib import asynccontextmanager
 
-from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency, auth_without_pressure
+from kdcube_ai_app.apps.chat.api.resolvers import require_auth, auth_without_pressure
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.accounting.usage import price_table
 from kdcube_ai_app.storage.storage import create_storage_backend
@@ -31,6 +32,7 @@ from the accounting system using the RateCalculator.
 
 _scheduler_task: Optional[asyncio.Task] = None
 _bundle_cleanup_task: Optional[asyncio.Task] = None
+_subscription_rollover_task: Optional[asyncio.Task] = None
 logger = logging.getLogger("OPEX.API")
 
 @asynccontextmanager
@@ -38,7 +40,7 @@ async def opex_lifespan(app: FastAPI):
     """
     Router lifespan: start scheduler on startup, stop it on shutdown.
     """
-    global _scheduler_task, _bundle_cleanup_task
+    global _scheduler_task, _bundle_cleanup_task, _subscription_rollover_task
 
     import kdcube_ai_app.apps.chat.api.opex.routines as routines
     if _scheduler_task is None:
@@ -47,6 +49,9 @@ async def opex_lifespan(app: FastAPI):
     if _bundle_cleanup_task is None:
         _bundle_cleanup_task = asyncio.create_task(routines.bundle_cleanup_loop())
         logger.info("[Bundles] Background cleanup task started")
+    if _subscription_rollover_task is None and routines.subscription_rollover_enabled():
+        _subscription_rollover_task = asyncio.create_task(routines.subscription_rollover_scheduler_loop())
+        logger.info("[Subscription Rollover] Background scheduler task started")
 
     try:
         yield
@@ -67,6 +72,14 @@ async def opex_lifespan(app: FastAPI):
                 pass
             logger.info("[Bundles] Background cleanup task stopped")
             _bundle_cleanup_task = None
+        if _subscription_rollover_task is not None:
+            _subscription_rollover_task.cancel()
+            try:
+                await _subscription_rollover_task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[Subscription Rollover] Background scheduler task stopped")
+            _subscription_rollover_task = None
 
 # Create router
 router = APIRouter(lifespan=opex_lifespan)
@@ -719,7 +732,7 @@ async def get_turn_usage_by_agent(
 @router.get("/health")
 async def health_check(
         request: Request,
-        session: UserSession = Depends(get_user_session_dependency())
+        session: UserSession = Depends(require_auth(RequireUser()))
 ):
     """Health check endpoint for accounting API"""
     try:

@@ -174,10 +174,13 @@ async def run_py_code(
         # Logging configuration (ADDED)
         "LOG_DIR",
         "LOG_LEVEL",
+        "LOG_FORMAT",
         "LOG_MAX_MB",
         "LOG_BACKUP_COUNT",
         "RESULT_FILENAME",
         "EXECUTION_ID",
+        "EXECUTION_SANDBOX",
+        "EXEC_USER_LOG_MODE",
         "EXECUTION_MODE",
         "EXEC_NO_UNEXPECTED_EXIT"
     }
@@ -271,5 +274,11 @@ async def run_py_code(
         outdir=output_dir,
         allow_network=False,
     )
-    log.log(f"[py_code_exec] _run_subprocess returned: {res}", level="INFO")
+    if isinstance(res, dict):
+        ok = res.get("ok", True)
+        rc = res.get("returncode")
+        log.log(
+            f"[py_code_exec] _run_subprocess finished: ok={ok} returncode={rc}",
+            level="INFO",
+        )
     return res

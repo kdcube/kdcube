@@ -3,6 +3,32 @@
 This module supports multiple authentication providers and several token transport
 options across REST, SSE, and Socket.IO.
 
+## How auth works (current)
+
+1) **Token extraction**  
+Tokens are extracted from headers or cookies (REST/SSE), or from Socket.IO auth payload.
+
+2) **Authentication**  
+The gateway authenticates the access token (and optional ID token) and builds a
+`UserSession`.
+
+3) **User type classification**  
+User type is derived from roles:
+- **Privileged**: any role in `PRIVILEGED_ROLES` (`kdcube:role:super-admin`, `kdcube:role:admin`)
+- **Paid**: any role in `PAID_ROLES` (`kdcube:role:paid`)
+- **Registered**: authenticated user with any other role
+- **Anonymous**: no valid token
+
+4) **Requirements enforcement**  
+`RequireUser()` now means:
+- user is **non‑anonymous**
+- user has **at least one role**
+
+5) **Session ownership enforcement**  
+If a request includes `User-Session-ID` (header) or `user_session_id` (query param),
+the gateway verifies that this session belongs to the authenticated user. Unknown or
+mismatched sessions are rejected (401/403).
+
 ## Supported auth providers
 
 1) Cognito (production)
@@ -49,6 +75,7 @@ Notes:
   [chat web app](../apps/chat/api/web_app.py) before gateway processing.
 - For Socket.IO, the gateway session upgrade uses auth payload first, then cookies
   in [ingress chat core](../apps/chat/api/ingress/chat_core.py).
+- If cookies are present, they are treated as valid credentials (same as headers).
 
 ## Configuration
 
@@ -57,6 +84,17 @@ Common environment variables:
 - `AUTH_TOKEN_COOKIE_NAME` (default `__Secure-LATC`)
 - `ID_TOKEN_COOKIE_NAME` (default `__Secure-LITC`)
 - `IDP_DB_PATH` (SimpleIDP user token map)
+
+## Roles (current)
+
+Common role names in this codebase (non‑exhaustive):
+- `kdcube:role:super-admin` → privileged
+- `kdcube:role:admin` → privileged
+- `kdcube:role:paid` → paid
+- `kdcube:role:chat-user` → registered
+- `kdcube:role:service` → service accounts (registered unless explicitly privileged)
+
+Role sets are defined in `kdcube_ai_app/auth/AuthManager.py`.
 
 ## References
 - Gateway/auth adapters:

@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # OPEX aggregation scheduler
     OPEX_AGG_CRON: str = Field(default="0 3 * * *")
 
+    # Subscription rollover scheduler
+    SUBSCRIPTION_ROLLOVER_ENABLED: bool = Field(default=True)
+    SUBSCRIPTION_ROLLOVER_CRON: str = Field(default="15 * * * *")
+    SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS: int = Field(default=900)
+    SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT: int = Field(default=500)
+
     # Bundle cleanup + ref tracking
     BUNDLE_CLEANUP_ENABLED: bool = Field(default=True)
     BUNDLE_CLEANUP_INTERVAL_SECONDS: int = Field(default=3600)

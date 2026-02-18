@@ -47,10 +47,11 @@ from kdcube_ai_app.infra.namespaces import CONFIG
 
 # Import our simplified components
 from kdcube_ai_app.apps.chat.api.resolvers import (
-    get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency,
+    get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency, require_auth,
     INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, auth_without_pressure, get_tenant, _announce_startup,
     get_pg_pool, get_conversation_system
 )
+from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserType, UserSession
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -491,7 +492,7 @@ async def get_profile(session: UserSession = Depends(get_user_session_dependency
         }
 
 @app.get("/landing/models")
-async def get_available_models(session: UserSession = Depends(get_user_session_dependency())):
+async def get_available_models(session: UserSession = Depends(require_auth(RequireUser()))):
     """Get available model configurations"""
     return {
         "available_models": {
@@ -508,7 +509,7 @@ async def get_available_models(session: UserSession = Depends(get_user_session_d
     }
 
 @app.get("/landing/embedders")
-async def get_available_embedders(session: UserSession = Depends(get_user_session_dependency())):
+async def get_available_embedders(session: UserSession = Depends(require_auth(RequireUser()))):
     """Get available embedding configurations"""
     available_embedders = {
         "available_embedders": {
@@ -558,7 +559,7 @@ async def health_check():
     }
 
 @app.get("/debug/session")
-async def debug_session(session: UserSession = Depends(get_user_session_dependency())):
+async def debug_session(session: UserSession = Depends(require_auth(RequireUser()))):
     """Debug endpoint to see current session"""
     return {
         "session": session.__dict__,

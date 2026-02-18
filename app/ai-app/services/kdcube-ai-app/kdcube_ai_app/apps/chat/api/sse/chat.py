@@ -17,10 +17,10 @@ from typing import Optional, Dict, Any, List
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 
-from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency
+from kdcube_ai_app.apps.chat.api.resolvers import require_auth
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import _iso
-from kdcube_ai_app.auth.AuthManager import AuthenticationError
+from kdcube_ai_app.auth.AuthManager import AuthenticationError, RequireUser
 from kdcube_ai_app.auth.sessions import UserSession, UserType
 
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
@@ -269,7 +269,7 @@ def create_sse_router(
     async def sse_stream(
         request: Request,
         stream_id: str,
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
         # direct-message id for this connection
         # Query auth (parity with Socket.IO connect)
         user_session_id: Optional[str] = None,
@@ -420,7 +420,7 @@ def create_sse_router(
     async def sse_chat(
             request: Request,
             stream_id: str,
-            session: UserSession = Depends(get_user_session_dependency()),
+            session: UserSession = Depends(require_auth(RequireUser())),
             # multipart support (attachments)
             message: Optional[str] = Form(None),
             attachment_meta: Optional[str] = Form(None),
@@ -648,7 +648,7 @@ def create_sse_router(
     @router.post("/conv_status.get")
     async def sse_conv_status_get(
             data: Dict[str, Any],
-            session: UserSession = Depends(get_user_session_dependency()),
+            session: UserSession = Depends(require_auth(RequireUser())),
     ):
         conv_id = (data or {}).get("conversation_id") or session.session_id
         bundle_id = data.get("bundle_id")

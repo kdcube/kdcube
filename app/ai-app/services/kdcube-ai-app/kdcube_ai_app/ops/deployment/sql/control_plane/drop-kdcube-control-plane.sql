@@ -1,7 +1,7 @@
 -- =========================================
 -- drop-kdcube-control-plane.sql
--- Drops objects created by deploy-kdcube-control-plane.sql
--- (Approach A: split tier + personal credits)
+-- Aggressive cleanup for legacy + current control plane objects.
+-- Safe to run before a fresh deploy.
 -- =========================================
 
 -- =========================================
@@ -17,7 +17,6 @@ END $$;
 -- =========================================
 -- Drop triggers (guarded by table existence)
 -- =========================================
-
 DO $$
 BEGIN
     IF to_regclass('kdcube_control_plane.user_tier_overrides') IS NOT NULL THEN
@@ -63,6 +62,30 @@ BEGIN
     IF to_regclass('kdcube_control_plane.tenant_project_budget') IS NOT NULL THEN
         DROP TRIGGER IF EXISTS trg_cp_budget_updated_at
           ON kdcube_control_plane.tenant_project_budget;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF to_regclass('kdcube_control_plane.user_subscription_budget') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS trg_cp_sub_budget_updated_at
+          ON kdcube_control_plane.user_subscription_budget;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF to_regclass('kdcube_control_plane.user_subscription_budget_settings') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS trg_cp_sub_budget_settings_updated_at
+          ON kdcube_control_plane.user_subscription_budget_settings;
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF to_regclass('kdcube_control_plane.user_subscription_period_budget') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS trg_cp_sub_period_budget_updated_at
+          ON kdcube_control_plane.user_subscription_period_budget;
     END IF;
 END $$;
 
@@ -120,6 +143,23 @@ DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_budget_resv_lookup;
 DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_budget_ledger_tenant_project_time;
 DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_budget_ledger_reservation;
 
+-- user_subscription_budget (legacy)
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_budget_lookup;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_budget_resv_active;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_budget_resv_lookup;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_budget_ledger_tp_user_time;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_budget_ledger_reservation;
+
+-- user_subscription_budget_settings
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_budget_settings_lookup;
+
+-- user_subscription_period_budget
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_period_budget_lookup;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_period_resv_active;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_period_resv_lookup;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_period_ledger_tp_user_time;
+DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_sub_period_ledger_reservation;
+
 -- user_subscriptions
 DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_us_due_internal;
 DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_us_provider_status;
@@ -136,7 +176,18 @@ DROP INDEX IF EXISTS kdcube_control_plane.idx_cp_ext_econ_events_lookup;
 -- External economics events (independent)
 DROP TABLE IF EXISTS kdcube_control_plane.external_economics_events;
 
--- Subscriptions (independent)
+-- Subscription period budgets (current)
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_period_ledger;
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_period_reservations;
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_period_budget;
+
+-- Subscription budgets (legacy)
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_budget_ledger;
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_budget_reservations;
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_budget;
+
+-- Subscription settings + subscriptions
+DROP TABLE IF EXISTS kdcube_control_plane.user_subscription_budget_settings;
 DROP TABLE IF EXISTS kdcube_control_plane.user_subscriptions;
 
 -- Token reservations depend on user_lifetime_credits
@@ -172,9 +223,9 @@ BEGIN
 END $$;
 
 -- =========================================
--- Optional: Drop schema (if you want it gone)
+-- Drop schema (aggressive cleanup)
 -- =========================================
--- DROP SCHEMA IF EXISTS kdcube_control_plane CASCADE;
+DROP SCHEMA IF EXISTS kdcube_control_plane CASCADE;
 
 -- NOTE:
 -- We do NOT drop pgcrypto here because it is commonly shared across schemas.

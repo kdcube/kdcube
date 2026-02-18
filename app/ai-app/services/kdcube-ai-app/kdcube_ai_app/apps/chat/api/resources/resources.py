@@ -11,10 +11,10 @@ from pydantic import BaseModel
 from fastapi import Depends, HTTPException, APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency, get_project, get_tenant_dep
+from kdcube_ai_app.apps.chat.api.resolvers import require_auth, get_project, get_tenant_dep
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
-from kdcube_ai_app.auth.AuthManager import PRIVILEGED_ROLES
+from kdcube_ai_app.auth.AuthManager import PRIVILEGED_ROLES, RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.tools.content_type import get_mime_type_enhanced
 
@@ -100,7 +100,7 @@ def _pick_namespace_exists(store: ConversationStore, tenant: str, project: str,
 @router.post("/by-rn", response_model=RNContentResponse)
 async def chatbot_content_by_rn(req: RNContentRequest,
                                 request: Request,
-                                session: UserSession = Depends(get_user_session_dependency())):
+                                session: UserSession = Depends(require_auth(RequireUser()))):
     p = _parse_chatbot_rn(req.rn)
     tenant, project, stage = p["tenant"], p["project"], p["stage"]
     owner_id, conv_id, turn_id, role = p["user_id"], p["conversation_id"], p["turn_id"], p["role"]
@@ -244,7 +244,7 @@ async def preview_cb_attachment(
     turn_id: str = "",
     filename: str = "",
     attached: Optional[bool] = False,
-    session: UserSession = Depends(get_user_session_dependency()),
+    session: UserSession = Depends(require_auth(RequireUser())),
 ):
     try:
         if not _is_owner_or_privileged(owner_id, session):
@@ -280,7 +280,7 @@ async def download_cb_attachment(
     conversation_id: str = "",
     turn_id: str = "",
     filename: str = "",
-    session: UserSession = Depends(get_user_session_dependency()),
+    session: UserSession = Depends(require_auth(RequireUser())),
 ):
     return await preview_cb_attachment(tenant, project, owner_id, conversation_id, turn_id, filename, True, session)
 
@@ -296,7 +296,7 @@ async def preview_cb_exec_file(
     kind: str = "",
     path: str = "",
     attached: Optional[bool] = False,
-    session: UserSession = Depends(get_user_session_dependency()),
+    session: UserSession = Depends(require_auth(RequireUser())),
 ):
     try:
         if not _is_owner_or_privileged(owner_id, session):
@@ -332,7 +332,7 @@ async def download_cb_exec_file(
     turn_id: str = "",
     kind: str = "",
     path: str = "",
-    session: UserSession = Depends(get_user_session_dependency()),
+    session: UserSession = Depends(require_auth(RequireUser())),
 ):
     # owner or privileged only
     if not _is_owner_or_privileged(owner_id, session):

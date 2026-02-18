@@ -63,7 +63,8 @@ def _append_errors_log(message: str) -> None:
     try:
         log_dir = pathlib.Path(os.environ.get("LOG_DIR", "logs"))
         log_dir.mkdir(parents=True, exist_ok=True)
-        errlog_path = log_dir / "errors.log"
+        prefix = os.environ.get("LOG_FILE_PREFIX", "executor")
+        errlog_path = log_dir / f"{prefix}.log"
         ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
         exec_id = os.environ.get("EXECUTION_ID") or "unknown"
         header = f"\n===== EXECUTION {exec_id} START {ts} =====\n"
@@ -649,7 +650,24 @@ async def _async_main() -> int:
         timeout_s=timeout_s or 600,
     )
 
-    logger.log(f"[entry] run_py_code() finished with result={res}", level="INFO")
+    if isinstance(res, dict):
+        logger.log(
+            f"[entry] run_py_code() finished: ok={res.get('ok', True)} "
+            f"returncode={res.get('returncode')} error={res.get('error')}",
+            level="INFO",
+        )
+    else:
+        logger.log("[entry] run_py_code() finished", level="INFO")
+    if isinstance(res, dict):
+        ok = res.get("ok", True)
+        error = res.get("error")
+        if not ok or error:
+            summary = res.get("error_summary") or (str(error) if error else "")
+            if not summary and res.get("returncode") is not None:
+                summary = f"subprocess failed (returncode={res.get('returncode')})"
+            if summary:
+                logger.log(f"[entry] ERROR: {summary}", level="ERROR")
+                _append_errors_log(f"[entry] ERROR: {summary}")
 
     # 🔹 4.5 Dump communicator delta cache from supervisor side
     _dump_delta_cache_file(outdir, logger)
@@ -687,6 +705,7 @@ async def _async_main() -> int:
 
 def main() -> None:
     try:
+        os.environ.setdefault("EXECUTION_SANDBOX", "docker")
         # Single, global logging setup for this process
         logging_config.configure_logging()
         rc = asyncio.run(_async_main())

@@ -97,6 +97,30 @@ class FastAPIGatewayAdapter:
             user_utc_offset_min=_parse_int(request.headers.get(CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME) or request.headers.get(CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME.lower()),)
         )
 
+    def _extract_user_session_id(self, request: Request) -> Optional[str]:
+        user_session_id = request.headers.get("User-Session-ID") or request.query_params.get("user_session_id")
+        if user_session_id:
+            user_session_id = user_session_id.strip()
+        return user_session_id or None
+
+    async def _enforce_user_session_ownership(self, request: Request, session: UserSession) -> None:
+        """
+        If a user_session_id is provided, ensure it belongs to the authenticated user.
+        This prevents reuse of stolen session IDs across accounts.
+        """
+        user_session_id = self._extract_user_session_id(request)
+        if not user_session_id:
+            return
+        if not session.user_id:
+            raise HTTPException(status_code=401, detail="No user in session")
+        requested = await self.gateway.session_manager.get_session_by_id(user_session_id)
+        if not requested:
+            raise HTTPException(status_code=401, detail="Unknown session")
+        if requested.user_type == UserType.ANONYMOUS:
+            raise HTTPException(status_code=401, detail="Anonymous sessions are not allowed")
+        if not requested.user_id or requested.user_id != session.user_id:
+            raise HTTPException(status_code=403, detail="Session does not belong to current user")
+
     async def resolve_session(self, request: Request) -> UserSession:
         """
         AuthN/AuthZ + session resolution only.
@@ -150,6 +174,7 @@ class FastAPIGatewayAdapter:
                 bypass_throttling,
                 bypass_gate=bypass_gate
             )
+            await self._enforce_user_session_ownership(request, session)
             return session
 
 

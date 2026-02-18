@@ -126,7 +126,7 @@ async def _execute_exec_tool(
             try:
                 await exec_streamer.emit_status(status="error", error=error_obj)
             except Exception:
-                logger.log("[react.exec] Failed to emit execution status", level="WARNING")
+                logger.log("[exec] Failed to emit execution status", level="WARNING")
         payload = dict(base_error)
         payload["summary"] = summary
         payload["error"] = error_obj

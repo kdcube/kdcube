@@ -79,6 +79,7 @@ def configure_logging():
     # Install our handlers
     root.addHandler(console_handler)
     root.addHandler(file_handler)
+    _ensure_exec_banner(file_handler)
 
     # Route warnings.warn(...) into logging
     logging.captureWarnings(True)
@@ -125,3 +126,31 @@ def configure_logging():
     # (optional) also quiet engineio ping/pong
     logging.getLogger("engineio").setLevel(logging.WARNING)
     logging.getLogger("engineio.server").setLevel(logging.WARNING)
+
+
+def _ensure_exec_banner(handler: logging.Handler) -> None:
+    if not os.getenv("EXECUTION_SANDBOX"):
+        return
+    exec_id = os.getenv("EXECUTION_ID")
+    if not exec_id:
+        return
+    base = getattr(handler, "baseFilename", None)
+    if not base:
+        return
+    path = Path(base)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        banner = f"===== EXECUTION {exec_id} START {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} =====\n"
+        if path.exists():
+            try:
+                with open(path, "rb") as f:
+                    f.seek(max(0, path.stat().st_size - 2048))
+                    tail = f.read().decode("utf-8", errors="ignore")
+                if f"===== EXECUTION {exec_id} START" in tail:
+                    return
+            except Exception:
+                pass
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n" + banner)
+    except Exception:
+        pass

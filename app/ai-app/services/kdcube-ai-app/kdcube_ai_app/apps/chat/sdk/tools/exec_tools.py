@@ -15,6 +15,22 @@ from typing import Any, Dict, Optional, Annotated, Tuple, List
 import semantic_kernel as sk
 
 from kdcube_ai_app.apps.chat.sdk.runtime.iso_runtime import _InProcessRuntime, build_packages_installed_block
+from kdcube_ai_app.apps.chat.sdk.runtime.diagnose import (
+    read_log_tail,
+    extract_exec_segment,
+    extract_error_lines,
+    extract_traceback_blocks,
+    merge_infra_logs,
+    find_user_code_start_line,
+    remap_traceback_line_numbers,
+)
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
+    snapshot_outdir,
+    diff_snapshots,
+    format_diff,
+    build_items_from_diff,
+    build_deleted_notices,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
@@ -35,6 +51,8 @@ def _safe_relpath(path: str) -> Optional[str]:
     return str(p)
 
 EXEC_TEXT_PREVIEW_MAX_BYTES = 20000
+INFRA_LOG_TAIL_CHARS = 12000
+USER_LOG_TAIL_CHARS = 4000
 TEXT_MIME_TYPES = {
     "application/json",
     "application/xml",
@@ -51,6 +69,15 @@ def _is_text_mime(mime: str) -> bool:
     if mime.startswith("text/"):
         return True
     return mime in TEXT_MIME_TYPES
+
+
+def _strip_exec_banner(text: str) -> str:
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if lines and lines[0].startswith("===== EXECUTION "):
+        return "\n".join(lines[1:]).lstrip()
+    return text
 
 
 def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
@@ -311,6 +338,64 @@ class ExecTools:
     ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:
         pass
 
+    # @kernel_function(
+    #     name="execute_code_python_side_effect",
+    #     description=(
+    #         "Registers the sanbdbox to execute a Python 3.11 program in this sandbox.\n"
+    #         "Will wait for code to be mounted to start execution. You generate the code to execute in the dedicated channel called <channel:code>.\n"
+    #         "You cannot provide the code in the call of this function directly.\n"
+    #         "\n"
+    #         "[Requirements to code which can be executed by this tool]:\n"
+    #         "- Must be SNIPPET that is inserted inside an async main() wrapper.\n"
+    #         "- The snippet SHOULD use async operations (await where needed).\n"
+    #         "\n"
+    #         "RUNTIME BEHAVIOR\n"
+    #         "- The executor wraps your snippet into an async main() and runs it.\n"
+    #         "- After execution, outputs are inferred by diffing out/ (side-effects).\n"
+    #         "\n"
+    #         "[INPUTS]\n"
+    #         "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
+    #         "1) `prog_name` (string, optional): short name of the program for UI labeling.\n"
+    #         "\n"
+    #         "FETCH_CTX (ADVANCED)\n"
+    #         "- If your snippet needs to load the text data for the artifact you see on timeline, you may call\n"
+    #         "  ctx_tools.fetch_ctx inside the snippet using agent_io_tools.tool_call.\n"
+    #         "- The paths allowed with this tool are only logical ar: so: tc:\n"
+    #         "- Do NOT rely on fetch_ctx unless you are the code author for this run.\n"
+    #         "\n"
+    #         "Example:\n"
+    #         "  resp = await agent_io_tools.tool_call(\n"
+    #         "      fn=ctx_tools.fetch_ctx,\n"
+    #         "      params={\"path\": \"ar:turn_123.user.prompt\"},\n"
+    #         "      call_reason=\"Load user message for turn_123\",\n"
+    #         "      tool_id=\"ctx_tools.fetch_ctx\"\n"
+    #         "  )\n"
+    #         "  if resp.get(\"err\"):\n"
+    #         "      raise RuntimeError(resp[\"err\"])\n"
+    #         "\n"
+    #         "FILES & PATHS\n"
+    #         "- Input artifacts from context are available by their filenames under OUTPUT_DIR/<turn_id>/files/.\n"
+    #         "- User attachments are available under OUTPUT_DIR/<turn_id>/attachments/.\n"
+    #         "- Write your outputs to OUTPUT_DIR/<turn_id>/files/.\n"
+    #         "- `OUTPUT_DIR` is a global string path in the runtime; build paths like:\n"
+    #         "  `os.path.join(OUTPUT_DIR, \"<turn_id>/files/my_file.ext\")` or `Path(OUTPUT_DIR) / \"<turn_id>/attachments/user_file.ext\"`.\n"
+    #         "- Network access is disabled in the sandbox; any network calls will fail.\n"
+    #         "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
+    #         "\n"
+    #         "AVAILABLE PACKAGES\n"
+    #         f"{build_packages_installed_block()}\n"
+    #         "\n"
+    #         "OUTPUT\n"
+    #         "- A status dict indicating success/error and the produced file artifacts.\n"
+    #     ),
+    # )
+    async def execute_code_python_side_effect(
+        self,
+        prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
+        timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
+    ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:
+        pass
+
 
 async def run_exec_tool(
     *,
@@ -485,14 +570,74 @@ async def run_exec_tool(
             "filename": rel,
         })
 
-    stderr_tail = ""
+    infra_tail = ""
+    user_log_tail = ""
+    user_code_start_line = None
     try:
-        err_path = outdir / "logs/runtime.err.log"
-        if err_path.exists():
-            txt = err_path.read_text(encoding="utf-8", errors="ignore")
-            stderr_tail = txt[-2000:] if len(txt) > 2000 else txt
+        user_code_start_line = find_user_code_start_line(workdir / "main.py")
+        merged_infra = merge_infra_logs(
+            log_dir=outdir / "logs",
+            exec_id=exec_id,
+            max_chars=INFRA_LOG_TAIL_CHARS,
+        )
+        infra_path = outdir / "logs" / "infra.log"
+        runtime_path = infra_path if infra_path.exists() else (outdir / "logs" / "runtime.err.log")
+        if merged_infra and merged_infra.strip():
+            infra_tail = merged_infra
+        else:
+            infra_tail = extract_exec_segment(
+                read_log_tail(runtime_path, max_chars=INFRA_LOG_TAIL_CHARS),
+                exec_id,
+            )
+        user_log_tail = extract_exec_segment(
+            read_log_tail(outdir / "logs/user.log", max_chars=USER_LOG_TAIL_CHARS),
+            exec_id,
+        )
     except Exception:
         pass
+
+    if user_code_start_line:
+        infra_tail = remap_traceback_line_numbers(infra_tail, user_code_start_line)
+        user_log_tail = remap_traceback_line_numbers(user_log_tail, user_code_start_line)
+
+    user_log_error_lines = extract_error_lines(user_log_tail)
+    user_error_lines = user_log_error_lines
+    user_tracebacks = extract_traceback_blocks(user_log_tail)
+    if user_tracebacks:
+        blocks = [b.strip() for b in user_tracebacks.split("\n\n") if b.strip()]
+        seen = set()
+        uniq = []
+        for b in blocks:
+            if b in seen:
+                continue
+            seen.add(b)
+            uniq.append(b)
+        user_tracebacks = "\n\n".join(uniq)
+    program_err_in_log = bool(user_log_tail and (user_log_error_lines or "Traceback" in user_log_tail))
+    program_err_extra = False
+
+    infra_text = infra_tail or ""
+    if isinstance(run_res, dict):
+        run_stderr = (run_res.get("stderr_tail") or "").strip()
+        if run_stderr and run_stderr not in infra_text:
+            infra_text = (infra_text + "\n" + run_stderr).strip()
+        run_summary = (run_res.get("error_summary") or "").strip()
+        if run_summary and run_summary not in infra_text:
+            infra_text = (infra_text + "\n" + run_summary).strip()
+
+    infra_error_lines = extract_error_lines(infra_text)
+    infra_tracebacks = extract_traceback_blocks(infra_text)
+    if infra_tracebacks:
+        blocks = [b.strip() for b in infra_tracebacks.split("\n\n") if b.strip()]
+        seen = set()
+        uniq = []
+        for b in blocks:
+            if b in seen:
+                continue
+            seen.add(b)
+            uniq.append(b)
+        infra_tracebacks = "\n\n".join(uniq)
+    infra_has_err = bool(infra_error_lines or infra_tracebacks)
 
     runtime_ok = bool(run_res.get("ok", True))
     ok = len(missing) == 0 and len(errors) == 0 and runtime_ok
@@ -508,43 +653,31 @@ async def run_exec_tool(
             "error": err_code,
             "description": desc,
             "managed": True,
-            "details": {"missing": missing, "run": run_res, "stderr_tail": stderr_tail},
+            "details": {"missing": missing, "run": run_res, "stderr_tail": infra_text},
         }
 
     # Build human-readable report text
     lines: List[str] = []
     has_file_errors = bool(errors)
-    if (not runtime_ok) or has_file_errors:
-        if runtime_ok:
-            lines.append("Runtime error: none")
-        else:
-            err_msg = (error.get("description") or error.get("message") or "").strip() if error else ""
-            err_code = (error.get("error") or error.get("code") or "exec_error") if error else "exec_error"
-            lines.append(f"Runtime error: {err_code} — {err_msg}".strip())
-            if stderr_tail:
-                lines.append("Runtime stderr (tail):")
-                lines.append(stderr_tail.strip())
-        if errors:
-            lines.append("File errors:")
-            for e in errors:
-                fname = e.get("filename") or e.get("artifact_id") or "unknown"
-                try:
-                    fname = pathlib.Path(fname).name
-                except Exception:
-                    pass
-                msg = e.get("message") or e.get("code") or "error"
-                lines.append(f"- {fname}: {msg}")
-        if succeeded:
-            lines.append("Succeeded:")
-            for s in succeeded:
-                fname = s.get("filename") or s.get("artifact_id") or "unknown"
-                try:
-                    fname = pathlib.Path(fname).name
-                except Exception:
-                    pass
-                lines.append(f"- {fname}")
+    err_msg = (error.get("description") or error.get("message") or "").strip() if error else ""
+    err_code = (error.get("error") or error.get("code") or "exec_error") if error else "exec_error"
+    if ok:
+        lines.append("Status: success")
     else:
-        lines.append("Produced files:")
+        lines.append(f"Status: error — {err_code}: {err_msg}".strip())
+
+    if errors:
+        lines.append("File errors:")
+        for e in errors:
+            fname = e.get("filename") or e.get("artifact_id") or "unknown"
+            try:
+                fname = pathlib.Path(fname).name
+            except Exception:
+                pass
+            msg = e.get("message") or e.get("code") or "error"
+            lines.append(f"- {fname}: {msg}")
+    if succeeded:
+        lines.append("Succeeded:")
         for s in succeeded:
             fname = s.get("filename") or s.get("artifact_id") or "unknown"
             try:
@@ -552,6 +685,18 @@ async def run_exec_tool(
             except Exception:
                 pass
             lines.append(f"- {fname}")
+
+    if infra_has_err:
+        lines.append("Infra errors (infra.log):")
+        if infra_error_lines:
+            lines.append(infra_error_lines.strip())
+        if infra_tracebacks:
+            lines.append(infra_tracebacks.strip())
+
+    user_log_display = _strip_exec_banner(user_log_tail)
+    if user_log_display:
+        lines.append("Program log (tail):")
+        lines.append(user_log_display.strip())
     report_text = "\n".join(lines).strip()
 
     items_list = []
@@ -614,8 +759,84 @@ async def run_exec_tool(
         "items": items_list,
         "errors": errors,
         "succeeded": succeeded,
+        "user_out_tail": user_log_tail,
+        "user_err_tail": "",
+        "runtime_err_tail": infra_text,
+        "user_error_lines": user_error_lines,
+        "user_tracebacks": user_tracebacks,
+        "runtime_error_lines": infra_error_lines,
+        "runtime_tracebacks": infra_tracebacks,
         "project_log": None,
     }
+
+
+async def run_exec_tool_no_contract(
+    *,
+    tool_manager: Any,
+    code: str,
+    timeout_s: int,
+    workdir: pathlib.Path,
+    outdir: pathlib.Path,
+    logger: Optional[AgentLogger] = None,
+    exec_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Execute code without an output contract (side-effects mode).
+    This still runs in the same isolated runtime and returns logs/summary.
+    """
+    return await run_exec_tool(
+        tool_manager=tool_manager,
+        output_contract={},
+        code=code,
+        contract=[],
+        timeout_s=timeout_s,
+        workdir=workdir,
+        outdir=outdir,
+        logger=logger,
+        exec_id=exec_id,
+    )
+
+
+async def run_exec_tool_side_effects(
+    *,
+    tool_manager: Any,
+    code: str,
+    timeout_s: int,
+    workdir: pathlib.Path,
+    outdir: pathlib.Path,
+    logger: Optional[AgentLogger] = None,
+    exec_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Execute code without a contract and report side-effects by diffing outdir.
+    """
+    before = snapshot_outdir(outdir)
+    envelope = await run_exec_tool_no_contract(
+        tool_manager=tool_manager,
+        logger=logger,
+        code=code,
+        timeout_s=timeout_s,
+        workdir=workdir,
+        outdir=outdir,
+        exec_id=exec_id,
+    )
+    after = snapshot_outdir(outdir)
+    diff = diff_snapshots(before, after)
+    diff_text = format_diff(diff)
+
+    items = build_items_from_diff(outdir, diff)
+    items.extend(build_deleted_notices(diff))
+
+    report_text = (envelope.get("report_text") or "").strip()
+    side_effects_hdr = "Side-effects (out/ diff):"
+    if report_text:
+        report_text = f"{report_text}\n{side_effects_hdr}\n{diff_text}"
+    else:
+        report_text = f"{side_effects_hdr}\n{diff_text}"
+    envelope["report_text"] = report_text
+    envelope["workspace_diff"] = diff
+    envelope["items"] = items
+    return envelope
 
 
 # module-level exports

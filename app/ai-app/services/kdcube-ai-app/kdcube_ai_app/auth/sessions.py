@@ -381,12 +381,16 @@ class UserSession:
 
     def to_user(self) -> User:
         """Convert session to User object for auth validation"""
+        user_type_val = None
+        if self.user_type is not None:
+            user_type_val = self.user_type.value if isinstance(self.user_type, UserType) else str(self.user_type)
         return User(
             username=self.username or self.fingerprint,
             email=self.email,
             name=self.username,
             roles=self.roles,
-            permissions=self.permissions
+            permissions=self.permissions,
+            user_type=user_type_val,
         )
 
     def serialize_to_dict(self):

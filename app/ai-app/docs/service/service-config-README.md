@@ -105,3 +105,39 @@ These settings are now **first‑class** in `Settings` (`apps/chat/sdk/config.py
 | `BUNDLE_CLEANUP_LOCK_TTL_SECONDS` | `900`       | Redis lock TTL for cleanup loop           |
 
 The cleanup loop uses Redis locks to avoid multi‑worker collisions.
+
+## Economics
+
+Economics requires PostgreSQL (control‑plane schema) and Redis (rate limiting + analytics).
+Stripe and email are optional but recommended for production.
+
+**Control plane schema**
+
+Deploy the economics schema before enabling control plane endpoints:
+
+- [deploy-kdcube-control-plane.sql](services/kdcube-ai-app/kdcube_ai_app/ops/deployment/sql/control_plane/deploy-kdcube-control-plane.sql)
+
+**Stripe configuration**
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `STRIPE_SECRET_KEY` | _(unset)_ | Stripe API key (preferred) |
+| `STRIPE_API_KEY` | _(unset)_ | Fallback Stripe API key |
+| `STRIPE_WEBHOOK_SECRET` | _(unset)_ | Webhook signature verification |
+
+If `STRIPE_WEBHOOK_SECRET` is not set, webhook payloads are accepted without signature verification (not recommended).
+
+**Admin email notifications**
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `EMAIL_ENABLED` | `true` | Enable admin email notifications |
+| `EMAIL_HOST` | _(unset)_ | SMTP host |
+| `EMAIL_PORT` | `587` | SMTP port |
+| `EMAIL_USER` | _(unset)_ | SMTP username |
+| `EMAIL_PASSWORD` | _(unset)_ | SMTP password |
+| `EMAIL_FROM` | _(EMAIL_USER)_ | From address |
+| `EMAIL_TO` | `lena@nestlogic.com` | Default recipient |
+| `EMAIL_USE_TLS` | `true` | Enable TLS |
+
+Admin emails are sent for wallet refunds and subscription cancels/reconciles.

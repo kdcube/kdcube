@@ -17,6 +17,18 @@ interface AppSettings {
     agenticBundlesRoot: string;
 }
 
+interface Scope {
+    tenant?: string;
+    project?: string;
+}
+
+interface TenantProjectItem {
+    tenant: string;
+    project: string;
+    schema?: string;
+    source?: string;
+}
+
 interface BundleEntry {
     id: string;
     name?: string | null;
@@ -34,23 +46,29 @@ interface BundleEntry {
 interface BundlesResponse {
     available_bundles: Record<string, BundleEntry>;
     default_bundle_id?: string | null;
+    tenant?: string;
+    project?: string;
 }
 
 interface BundlesUpdatePayload {
     op: 'merge' | 'replace';
     bundles: Record<string, BundleEntry>;
     default_bundle_id?: string | null;
+    tenant?: string;
+    project?: string;
 }
 
 interface BundlePropsPayload {
-    tenant: string;
-    project: string;
+    tenant?: string;
+    project?: string;
     op: 'replace' | 'merge';
     props: Record<string, unknown>;
 }
 
 interface BundleCleanupPayload {
     drop_sys_modules: boolean;
+    tenant?: string;
+    project?: string;
 }
 
 // =============================================================================
@@ -262,6 +280,57 @@ function makeAuthHeaders(base?: HeadersInit): Headers {
     return appendAuthHeaders(headers);
 }
 
+function normalizeScope(tenant: string, project: string): Scope {
+    const t = (tenant || '').trim();
+    const p = (project || '').trim();
+    return {
+        tenant: t || undefined,
+        project: p || undefined
+    };
+}
+
+function formatScopeLabel(tenant?: string, project?: string): string {
+    const t = (tenant || '').trim();
+    const p = (project || '').trim();
+    if (t && p) return `${t} / ${p}`;
+    if (t) return t;
+    if (p) return p;
+    return '';
+}
+
+function parseScopeValue(value: string): Scope {
+    const raw = (value || '').trim();
+    if (!raw) return {};
+    let tenant = raw;
+    let project = '';
+    if (raw.includes('::')) {
+        [tenant, project] = raw.split('::', 2);
+    } else if (raw.includes('/')) {
+        [tenant, project] = raw.split('/', 2);
+    }
+    return normalizeScope((tenant || '').trim(), (project || '').trim());
+}
+
+function buildScopeParams(scope?: Scope): string {
+    if (!scope) return '';
+    const params = new URLSearchParams();
+    if (scope.tenant) params.set('tenant', scope.tenant);
+    if (scope.project) params.set('project', scope.project);
+    const query = params.toString();
+    return query ? `?${query}` : '';
+}
+
+function withScope<T extends Record<string, unknown>>(payload: T, scope?: Scope): T & Scope {
+    const out: Record<string, unknown> = { ...payload };
+    if (scope?.tenant && out.tenant === undefined) {
+        out.tenant = scope.tenant;
+    }
+    if (scope?.project && out.project === undefined) {
+        out.project = scope.project;
+    }
+    return out as T & Scope;
+}
+
 // =============================================================================
 // Integrations API Client
 // =============================================================================
@@ -283,70 +352,81 @@ class IntegrationsAPI {
         return response;
     }
 
-    async listBundles(): Promise<BundlesResponse> {
-        const response = await this.fetchWithAuth(this.buildUrl('/bundles'));
+    async listTenantProjects(): Promise<TenantProjectItem[]> {
+        const response = await this.fetchWithAuth(
+            `${settings.getBaseUrl()}/api/admin/control-plane/conversations/tenant-projects`
+        );
+        const data = await response.json();
+        return data.items || [];
+    }
+
+    async listBundles(scope?: Scope): Promise<BundlesResponse> {
+        const response = await this.fetchWithAuth(this.buildUrl(`/bundles${buildScopeParams(scope)}`));
         return response.json();
     }
 
-    async updateBundles(payload: BundlesUpdatePayload): Promise<any> {
+    async updateBundles(payload: BundlesUpdatePayload, scope?: Scope): Promise<any> {
         const response = await this.fetchWithAuth(
             this.buildUrl('/bundles'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(withScope(payload, scope))
             }
         );
         return response.json();
     }
 
-    async resetFromEnv(): Promise<any> {
+    async resetFromEnv(scope?: Scope): Promise<any> {
         const response = await this.fetchWithAuth(
             this.buildUrl('/bundles/reset-env'),
-            { method: 'POST' }
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(withScope({}, scope))
+            }
         );
         return response.json();
     }
 
-    async cleanupBundles(payload: BundleCleanupPayload): Promise<any> {
+    async cleanupBundles(payload: BundleCleanupPayload, scope?: Scope): Promise<any> {
         const response = await this.fetchWithAuth(
             this.buildUrl('/bundles/cleanup'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(withScope(payload, scope))
             }
         );
         return response.json();
     }
 
-    async getBundleProps(bundleId: string, tenant: string, project: string): Promise<any> {
-        const params = new URLSearchParams({ tenant, project });
+    async getBundleProps(bundleId: string, scope?: Scope): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.buildUrl(`/bundles/${encodeURIComponent(bundleId)}/props?${params.toString()}`)
+            this.buildUrl(`/bundles/${encodeURIComponent(bundleId)}/props${buildScopeParams(scope)}`)
         );
         return response.json();
     }
 
-    async setBundleProps(bundleId: string, payload: BundlePropsPayload): Promise<any> {
+    async setBundleProps(bundleId: string, payload: BundlePropsPayload, scope?: Scope): Promise<any> {
         const response = await this.fetchWithAuth(
             this.buildUrl(`/bundles/${encodeURIComponent(bundleId)}/props`),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(withScope(payload, scope))
             }
         );
         return response.json();
     }
 
-    async resetBundlePropsFromCode(bundleId: string, payload: { tenant: string; project: string }): Promise<any> {
+    async resetBundlePropsFromCode(bundleId: string, scope?: Scope): Promise<any> {
         const response = await this.fetchWithAuth(
             this.buildUrl(`/bundles/${encodeURIComponent(bundleId)}/props/reset-code`),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
+                body: JSON.stringify(withScope({}, scope))
             }
         );
         return response.json();
@@ -408,7 +488,8 @@ const InputField: React.FC<{
     value: string;
     onChange: (v: string) => void;
     placeholder?: string;
-}> = ({ label, value, onChange, placeholder }) => (
+    listId?: string;
+}> = ({ label, value, onChange, placeholder, listId }) => (
     <div>
         <label className="block text-sm font-medium text-gray-800 mb-2">{label}</label>
         <input
@@ -416,6 +497,7 @@ const InputField: React.FC<{
             value={value}
             onChange={e => onChange(e.target.value)}
             placeholder={placeholder}
+            list={listId}
         />
     </div>
 );
@@ -426,16 +508,30 @@ const InputField: React.FC<{
 
 const AIBundleDashboard: React.FC = () => {
     const [loading, setLoading] = useState(true);
+    const [configReady, setConfigReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [bundles, setBundles] = useState<Record<string, BundleEntry>>({});
     const [defaultBundleId, setDefaultBundleId] = useState<string>('');
     const [editingId, setEditingId] = useState<string | null>(null);
-    const [propsTenant, setPropsTenant] = useState(settings.getDefaultTenant());
-    const [propsProject, setPropsProject] = useState(settings.getDefaultProject());
+    const [scopeTenant, setScopeTenant] = useState(settings.getDefaultTenant());
+    const [scopeProject, setScopeProject] = useState(settings.getDefaultProject());
+    const [scopeInput, setScopeInput] = useState(
+        formatScopeLabel(settings.getDefaultTenant(), settings.getDefaultProject())
+    );
+    const [tenantProjects, setTenantProjects] = useState<TenantProjectItem[]>([]);
+    const [tenantProjectsLoading, setTenantProjectsLoading] = useState(false);
+    const [tenantProjectsError, setTenantProjectsError] = useState<string | null>(null);
     const [propsBundleId, setPropsBundleId] = useState<string>('');
     const [propsJson, setPropsJson] = useState<string>('{}');
     const [propsDefaultsJson, setPropsDefaultsJson] = useState<string>('{}');
     const [propsLoading, setPropsLoading] = useState<boolean>(false);
+    const registryScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
+    const propsScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
+    const draftScope = useMemo(() => parseScopeValue(scopeInput), [scopeInput]);
+    const scopeDirty = useMemo(() => {
+        const applied = normalizeScope(scopeTenant, scopeProject);
+        return applied.tenant !== draftScope.tenant || applied.project !== draftScope.project;
+    }, [scopeTenant, scopeProject, draftScope]);
     const bundleVersion = useMemo(() => {
         try {
             const parsed = JSON.parse(propsDefaultsJson || '{}');
@@ -445,9 +541,9 @@ const AIBundleDashboard: React.FC = () => {
         }
     }, [propsDefaultsJson]);
     const bundleSnapshotPath = useMemo(() => {
-        if (!bundleVersion || !propsBundleId || !propsTenant || !propsProject) return '';
-        return `cb/tenants/${propsTenant}/projects/${propsProject}/ai-bundle-snapshots/${propsBundleId}.${bundleVersion}.zip`;
-    }, [bundleVersion, propsBundleId, propsTenant, propsProject]);
+        if (!bundleVersion || !propsBundleId || !scopeTenant || !scopeProject) return '';
+        return `cb/tenants/${scopeTenant}/projects/${scopeProject}/ai-bundle-snapshots/${propsBundleId}.${bundleVersion}.zip`;
+    }, [bundleVersion, propsBundleId, scopeTenant, scopeProject]);
 
     const copyText = async (value: string) => {
         if (!value) return;
@@ -510,13 +606,13 @@ const AIBundleDashboard: React.FC = () => {
         return subdir ? `${base}/${subdir}` : base;
     }, [form.git_url, form.git_ref, form.git_subdir, form.id]);
 
-    const loadBundles = async () => {
+    const loadBundles = async (scopeOverride?: Scope) => {
         try {
             setLoading(true);
-            const data = await api.listBundles();
+            const data = await api.listBundles(scopeOverride ?? registryScope);
             setBundles(data.available_bundles || {});
             setDefaultBundleId(data.default_bundle_id || '');
-            if (!propsBundleId) {
+            if (!propsBundleId || !(propsBundleId in (data.available_bundles || {}))) {
                 setPropsBundleId(data.default_bundle_id || '');
             }
             setError(null);
@@ -531,7 +627,7 @@ const AIBundleDashboard: React.FC = () => {
         if (!propsBundleId) return;
         try {
             setPropsLoading(true);
-            const data = await api.getBundleProps(propsBundleId, propsTenant, propsProject);
+            const data = await api.getBundleProps(propsBundleId, propsScope);
             const props = data.props || {};
             const defaults = data.defaults || {};
             setPropsJson(JSON.stringify(props, null, 2));
@@ -544,14 +640,44 @@ const AIBundleDashboard: React.FC = () => {
     };
 
     useEffect(() => {
-        settings.onConfigReceived(() => loadBundles());
-        settings.setupParentListener().then(loadBundles).catch(loadBundles);
+        const applyDefaults = () => {
+            const nextTenant = settings.getDefaultTenant();
+            const nextProject = settings.getDefaultProject();
+            setScopeTenant(nextTenant);
+            setScopeProject(nextProject);
+            setScopeInput(formatScopeLabel(nextTenant, nextProject));
+        };
+
+        settings.setupParentListener()
+            .then(() => {
+                applyDefaults();
+                setConfigReady(true);
+            })
+            .catch(() => {
+                applyDefaults();
+                setConfigReady(true);
+            });
     }, []);
+
+    useEffect(() => {
+        if (!configReady) return;
+        loadBundles();
+    }, [configReady]);
+
+    useEffect(() => {
+        if (!configReady) return;
+        setTenantProjectsLoading(true);
+        setTenantProjectsError(null);
+        api.listTenantProjects()
+            .then(setTenantProjects)
+            .catch((err) => setTenantProjectsError(err.message || 'Failed to load tenant/projects'))
+            .finally(() => setTenantProjectsLoading(false));
+    }, [configReady]);
 
     useEffect(() => {
         if (!propsBundleId) return;
         loadProps();
-    }, [propsBundleId, propsTenant, propsProject]);
+    }, [propsBundleId, scopeTenant, scopeProject]);
 
     const resetForm = () => {
         setEditingId(null);
@@ -569,7 +695,7 @@ const AIBundleDashboard: React.FC = () => {
                 op: 'merge',
                 bundles: { [payload.id]: payload },
                 default_bundle_id: defaultBundleId || undefined
-            });
+            }, registryScope);
             resetForm();
             await loadBundles();
         } catch (e: any) {
@@ -586,7 +712,7 @@ const AIBundleDashboard: React.FC = () => {
                 op: 'replace',
                 bundles: next,
                 default_bundle_id: nextDefault || undefined
-            });
+            }, registryScope);
             await loadBundles();
         } catch (e: any) {
             setError(e.message || 'Failed to delete bundle');
@@ -615,7 +741,7 @@ const AIBundleDashboard: React.FC = () => {
                 op: 'merge',
                 bundles: {},
                 default_bundle_id: defaultBundleId || undefined
-            });
+            }, registryScope);
             await loadBundles();
         } catch (e: any) {
             setError(e.message || 'Failed to update default bundle');
@@ -624,7 +750,7 @@ const AIBundleDashboard: React.FC = () => {
 
     const resetFromEnv = async () => {
         try {
-            await api.resetFromEnv();
+            await api.resetFromEnv(registryScope);
             await loadBundles();
         } catch (e: any) {
             setError(e.message || 'Failed to reset from env');
@@ -633,7 +759,7 @@ const AIBundleDashboard: React.FC = () => {
 
     const cleanupBundles = async () => {
         try {
-            await api.cleanupBundles({ drop_sys_modules: true });
+            await api.cleanupBundles({ drop_sys_modules: true }, registryScope);
         } catch (e: any) {
             setError(e.message || 'Failed to cleanup bundles');
         }
@@ -647,11 +773,9 @@ const AIBundleDashboard: React.FC = () => {
         try {
             const parsed = propsJson.trim() ? JSON.parse(propsJson) : {};
             await api.setBundleProps(propsBundleId, {
-                tenant: propsTenant,
-                project: propsProject,
                 op,
                 props: parsed
-            });
+            }, propsScope);
             await loadProps();
         } catch (e: any) {
             setError(e.message || 'Failed to update props');
@@ -664,14 +788,21 @@ const AIBundleDashboard: React.FC = () => {
             return;
         }
         try {
-            await api.resetBundlePropsFromCode(propsBundleId, {
-                tenant: propsTenant,
-                project: propsProject
-            });
+            await api.resetBundlePropsFromCode(propsBundleId, propsScope);
             await loadProps();
         } catch (e: any) {
             setError(e.message || 'Failed to reset props from code');
         }
+    };
+
+    const applyScope = async () => {
+        const parsed = parseScopeValue(scopeInput);
+        const nextTenant = parsed.tenant || '';
+        const nextProject = parsed.project || '';
+        setScopeTenant(nextTenant);
+        setScopeProject(nextProject);
+        setScopeInput(formatScopeLabel(nextTenant, nextProject));
+        await loadBundles(parsed);
     };
 
     if (loading) {
@@ -697,6 +828,41 @@ const AIBundleDashboard: React.FC = () => {
                         Manage dynamic bundles (plugins) and set the default bundle for the tenant/project.
                     </p>
                 </div>
+
+                <Card>
+                    <CardHeader title="Tenant / Project" subtitle="All registry and bundle props operations use this scope." />
+                    <CardBody>
+                        <InputField
+                            label="Tenant / Project"
+                            value={scopeInput}
+                            onChange={v => setScopeInput(v)}
+                            placeholder={formatScopeLabel(settings.getDefaultTenant(), settings.getDefaultProject())}
+                            listId="tenant-project-options"
+                        />
+                        <datalist id="tenant-project-options">
+                            {tenantProjects.map((tp) => {
+                                const value = formatScopeLabel(tp.tenant, tp.project);
+                                return (
+                                    <option key={`${tp.tenant}::${tp.project}`} value={value} label={value} />
+                                );
+                            })}
+                        </datalist>
+                        <div className="mt-4 flex items-center gap-3">
+                            <Button variant="primary" onClick={applyScope} disabled={!scopeDirty}>
+                                Apply scope
+                            </Button>
+                            {!scopeDirty ? (
+                                <span className="text-xs text-gray-500">Scope is up to date.</span>
+                            ) : null}
+                            {tenantProjectsLoading ? (
+                                <span className="text-xs text-gray-500">Loading tenant/projects…</span>
+                            ) : null}
+                            {!tenantProjectsLoading && tenantProjectsError ? (
+                                <span className="text-xs text-red-600">{tenantProjectsError}</span>
+                            ) : null}
+                        </div>
+                    </CardBody>
+                </Card>
 
                 {error && (
                     <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -815,22 +981,18 @@ const AIBundleDashboard: React.FC = () => {
                         }
                     />
                     <CardBody className="space-y-5">
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <InputField label="Tenant" value={propsTenant} onChange={v => setPropsTenant(v)} placeholder="home" />
-                            <InputField label="Project" value={propsProject} onChange={v => setPropsProject(v)} placeholder="demo" />
-                            <div>
-                                <label className="block text-sm font-medium text-gray-800 mb-2">Bundle ID</label>
-                                <select
-                                    className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white text-sm"
-                                    value={propsBundleId}
-                                    onChange={e => setPropsBundleId(e.target.value)}
-                                >
-                                    <option value="">—</option>
-                                    {bundleList.map(b => (
-                                        <option key={b.id} value={b.id}>{b.id}</option>
-                                    ))}
-                                </select>
-                            </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-800 mb-2">Bundle ID</label>
+                            <select
+                                className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white text-sm"
+                                value={propsBundleId}
+                                onChange={e => setPropsBundleId(e.target.value)}
+                            >
+                                <option value="">—</option>
+                                {bundleList.map(b => (
+                                    <option key={b.id} value={b.id}>{b.id}</option>
+                                ))}
+                            </select>
                         </div>
 
                         {bundleSnapshotPath ? (

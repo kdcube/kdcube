@@ -6,7 +6,7 @@
 import asyncio
 from typing import Optional
 import uuid, os, logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from zoneinfo import ZoneInfo
 from croniter import croniter
 
@@ -15,10 +15,13 @@ import redis.asyncio as aioredis
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.accounting.aggregator import AccountingAggregator
 from kdcube_ai_app.storage.storage import create_storage_backend
+from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import SubscriptionManager
+from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 
 logger = logging.getLogger("Periodical.Routines")
 
 ACCOUNTING_TZ = ZoneInfo("Europe/Berlin")
+SUBSCRIPTION_TZ = ZoneInfo("UTC")
 
 _scheduler_task: Optional[asyncio.Task] = None
 _aggregator: Optional[AccountingAggregator] = None
@@ -87,6 +90,119 @@ def _get_cron_expression() -> str:
     if not expr:
         expr = "0 3 * * *"
     return expr
+
+def subscription_rollover_enabled() -> bool:
+    try:
+        return bool(get_settings().SUBSCRIPTION_ROLLOVER_ENABLED)
+    except Exception:
+        return os.environ.get("SUBSCRIPTION_ROLLOVER_ENABLED", "1").lower() in {"1", "true", "yes"}
+
+def _get_subscription_rollover_cron_expression() -> str:
+    expr = None
+    try:
+        _settings = get_settings()
+        expr = getattr(_settings, "SUBSCRIPTION_ROLLOVER_CRON", None)
+    except Exception:
+        expr = None
+
+    expr = expr or os.getenv("SUBSCRIPTION_ROLLOVER_CRON")
+    if not expr:
+        expr = "15 * * * *"
+    return expr
+
+def _subscription_rollover_lock_ttl_seconds() -> int:
+    try:
+        return int(get_settings().SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS)
+    except Exception:
+        return int(os.environ.get("SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS", "900") or "900")
+
+def _subscription_rollover_sweep_limit() -> int:
+    try:
+        return int(get_settings().SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT)
+    except Exception:
+        return int(os.environ.get("SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT", "500") or "500")
+
+def _compute_next_subscription_rollover_run(now: datetime) -> datetime:
+    expr = _get_subscription_rollover_cron_expression()
+    try:
+        it = croniter(expr, now)
+        return it.get_next(datetime)
+    except Exception:
+        logger.exception(
+            "[Subscription Rollover] Invalid cron expression '%s', falling back to '15 * * * *'",
+            expr,
+        )
+        it = croniter("15 * * * *", now)
+        return it.get_next(datetime)
+
+
+async def run_subscription_rollover_sweep_once(*, actor: str = "scheduler") -> dict:
+    if not subscription_rollover_enabled():
+        return {"status": "disabled", "count": 0, "moved_usd": 0.0}
+
+    settings = get_settings()
+    tenant = settings.TENANT
+    project = settings.PROJECT
+    limit = _subscription_rollover_sweep_limit()
+
+    from kdcube_ai_app.apps.chat.api.resolvers import get_pg_pool
+
+    pg_pool = await get_pg_pool()
+    if not pg_pool:
+        logger.warning("[Subscription Rollover] PG pool not available; skipping sweep")
+        return {"status": "error", "count": 0, "moved_usd": 0.0, "message": "pg_pool unavailable"}
+
+    redis = await _get_agg_redis()
+    lock_key = f"subscription:rollover:{tenant}:{project}"
+    token = str(uuid.uuid4())
+    lock_ttl = _subscription_rollover_lock_ttl_seconds()
+
+    if redis:
+        got_lock = await redis.set(lock_key, token, ex=lock_ttl, nx=True)
+        if not got_lock:
+            logger.info("[Subscription Rollover] Another instance holds lock %s; skipping", lock_key)
+            return {"status": "skipped", "count": 0, "moved_usd": 0.0, "message": "lock_held"}
+    else:
+        logger.info("[Subscription Rollover] Redis not configured; running without distributed lock")
+
+    try:
+        mgr = SubscriptionManager(pg_pool=pg_pool)
+
+        def project_budget_factory(t: str, p: str) -> ProjectBudgetLimiter:
+            return ProjectBudgetLimiter(redis, pg_pool, tenant=t, project=p)
+
+        total = 0
+        moved_total = 0.0
+        while True:
+            res = await mgr.sweep_due_subscription_rollovers(
+                tenant=tenant,
+                project=project,
+                now=datetime.now(timezone.utc),
+                limit=limit,
+                project_budget_factory=project_budget_factory,
+                actor=actor,
+            )
+            total += int(res.get("count") or 0)
+            moved_total += float(res.get("moved_usd") or 0.0)
+            if int(res.get("count") or 0) < int(limit):
+                break
+
+        logger.info(
+            "[Subscription Rollover] Sweep done tenant=%s project=%s count=%s moved_usd=%.2f",
+            tenant, project, total, moved_total
+        )
+        return {"status": "ok", "count": total, "moved_usd": moved_total}
+    except Exception:
+        logger.exception("[Subscription Rollover] Sweep failed")
+        raise
+    finally:
+        if redis:
+            try:
+                current_val = await redis.get(lock_key)
+                if current_val is not None and current_val.decode() == token:
+                    await redis.delete(lock_key)
+            except Exception:
+                logger.exception("[Subscription Rollover] Failed to release lock %s", lock_key)
 
 def _bundle_cleanup_enabled() -> bool:
     try:
@@ -265,6 +381,51 @@ async def aggregation_scheduler_loop() -> None:
             next_run.isoformat(),
         )
         await _run_daily_and_monthly_for_date(run_date)
+
+
+async def subscription_rollover_scheduler_loop() -> None:
+    """
+    Background loop:
+
+      - reads cron from SUBSCRIPTION_ROLLOVER_CRON (or settings.SUBSCRIPTION_ROLLOVER_CRON)
+      - waits until the next scheduled time in UTC
+      - sweeps due subscription rollovers
+      - repeats forever
+    """
+    if not subscription_rollover_enabled():
+        logger.info("[Subscription Rollover] Scheduler disabled (SUBSCRIPTION_ROLLOVER_ENABLED=0)")
+        return
+
+    logger.info(
+        "[Subscription Rollover] Scheduler loop started (tz=%s, cron=%s)",
+        SUBSCRIPTION_TZ,
+        _get_subscription_rollover_cron_expression(),
+    )
+
+    while True:
+        now = datetime.now(SUBSCRIPTION_TZ)
+        next_run = _compute_next_subscription_rollover_run(now)
+
+        sleep_seconds = (next_run - now).total_seconds()
+        logger.info(
+            "[Subscription Rollover] Sleeping %.0f seconds until next run at %s",
+            sleep_seconds,
+            next_run.isoformat(),
+        )
+
+        try:
+            await asyncio.sleep(sleep_seconds)
+        except asyncio.CancelledError:
+            logger.info("[Subscription Rollover] Scheduler loop cancelled")
+            break
+
+        try:
+            await run_subscription_rollover_sweep_once(actor="scheduler")
+        except asyncio.CancelledError:
+            logger.info("[Subscription Rollover] Scheduler loop cancelled")
+            break
+        except Exception:
+            logger.exception("[Subscription Rollover] Scheduler run failed")
 
 
 async def _run_bundle_cleanup_once() -> None:

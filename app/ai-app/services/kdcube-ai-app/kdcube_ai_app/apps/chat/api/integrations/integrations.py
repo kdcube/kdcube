@@ -16,9 +16,10 @@ from uuid import uuid4
 from pydantic import BaseModel
 from fastapi import Depends, HTTPException, Request, APIRouter
 
-from kdcube_ai_app.apps.chat.api.resolvers import get_user_session_dependency, auth_without_pressure, REDIS_URL
+from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure, REDIS_URL, require_auth
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest
 from kdcube_ai_app.apps.chat.sdk.protocol import ServiceCtx, ConversationCtx, ChatTaskUser, ChatTaskPayload, \
     ChatTaskActor, ChatTaskRequest, ChatTaskRouting
@@ -114,24 +115,36 @@ def _ensure_chat_communicator(app) -> ChatRelayCommunicator:
 @router.get("/admin/integrations/bundles")
 async def get_available_bundles(
         request: Request,
-        session: UserSession = Depends(get_user_session_dependency())
+        tenant: Optional[str] = None,
+        project: Optional[str] = None,
+        session: UserSession = Depends(require_auth(
+            RequireUser(),
+        ))
 ):
     """
     Returns configured bundles for selection in the UI.
     Read from Redis (source of truth), fallback to in-memory if needed.
     """
+    settings = get_settings()
+    tenant_id = tenant or settings.TENANT
+    project_id = project or settings.PROJECT
     try:
         redis = request.app.state.middleware.redis  # set in web_app during startup
-        reg = await load_registry(redis)
+        reg = await load_registry(redis, tenant_id, project_id)
     except Exception:
-        # fall back to in-memory (should be rare)
-        reg = BundlesRegistry(
-            default_bundle_id=get_default_id(),
-            bundles={bid: BundleEntry(**info) for bid, info in get_all().items()}
-        )
+        if tenant_id == settings.TENANT and project_id == settings.PROJECT:
+            # fall back to in-memory (should be rare)
+            reg = BundlesRegistry(
+                default_bundle_id=get_default_id(),
+                bundles={bid: BundleEntry(**info) for bid, info in get_all().items()}
+            )
+        else:
+            raise HTTPException(status_code=503, detail="Failed to load bundles registry for tenant/project")
 
     return {
-            "available_bundles": {
+        "tenant": tenant_id,
+        "project": project_id,
+        "available_bundles": {
             bid: {
                 "id": bid,
                 "name": entry.name,
@@ -538,7 +551,9 @@ async def call_bundle_op(
         payload: BundleSuggestionsRequest,
         request: Request,
         operation: str = "suggestions", # news, etc.
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(
+            RequireUser(),
+        ))
 ):
     """
     Load (or reuse singleton) bundle instance and, if defined, call its `suggestions(...)`.

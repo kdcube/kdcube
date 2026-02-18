@@ -4,6 +4,7 @@
 # # kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py
 import contextvars
 import io
+import re
 import json
 import os, sys
 import asyncio
@@ -268,6 +269,8 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
     out: bytes = b""
     err: bytes = b""
     timed_out = False
+    stderr_tail = ""
+    error_summary = ""
 
     try:
         # Read and wait at the same time; avoids pipe deadlock
@@ -297,24 +300,22 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
     finally:
         try:
             log_dir = outdir / "logs"
-            out_path = log_dir / "runtime.out.log"
             err_path = log_dir / "runtime.err.log"
-            errlog_path = log_dir / "errors.log"
             log_dir.mkdir(parents=True, exist_ok=True)
 
             ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
             eid = (exec_id or env.get("EXECUTION_ID") or "unknown")
             header = f"\n===== EXECUTION {eid} START {ts} =====\n".encode("utf-8")
 
-            with open(out_path, "ab") as f:
+            with open(err_path, "ab") as f:
                 f.write(header)
                 if out:
+                    f.write(b"[stdout]\n")
                     f.write(out)
                     if not out.endswith(b"\n"):
                         f.write(b"\n")
-            with open(err_path, "ab") as f:
-                f.write(header)
                 if err:
+                    f.write(b"[stderr]\n")
                     f.write(err)
                     if not err.endswith(b"\n"):
                         f.write(b"\n")
@@ -323,20 +324,35 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
                 reason = "timeout" if timed_out else f"returncode={proc.returncode}"
                 err_txt = err.decode("utf-8", errors="ignore")
                 tail = err_txt[-4000:] if err_txt else ""
-                with open(errlog_path, "ab") as f:
-                    f.write(header)
-                    f.write(f"[runtime] {reason}\n".encode("utf-8"))
-                    if tail:
-                        f.write(tail.encode("utf-8", errors="ignore"))
-                        if not tail.endswith("\n"):
-                            f.write(b"\n")
+                stderr_tail = tail
+                if err_txt:
+                    for line in err_txt.splitlines():
+                        if re.search(r"\\b\\w+Error\\b", line) or "Exception" in line:
+                            error_summary = line.strip()
+                            break
+                if timed_out and not error_summary:
+                    error_summary = f"timeout after {timeout_s}s"
+                if error_summary:
+                    diag = f"[runtime] ERROR: {error_summary}\n".encode("utf-8")
+                    with open(err_path, "ab") as f:
+                        f.write(diag)
         except Exception:
             pass
 
     if timed_out:
-        return {"error": "timeout", "seconds": timeout_s}
+        return {
+            "error": "timeout",
+            "seconds": timeout_s,
+            "stderr_tail": stderr_tail,
+            "error_summary": error_summary,
+        }
 
-    return {"ok": proc.returncode == 0, "returncode": proc.returncode}
+    return {
+        "ok": proc.returncode == 0,
+        "returncode": proc.returncode,
+        "stderr_tail": stderr_tail,
+        "error_summary": error_summary,
+    }
 
 def _build_injected_header(*, globals_src: str, imports_src: str) -> str:
     from textwrap import dedent
@@ -344,7 +360,7 @@ def _build_injected_header(*, globals_src: str, imports_src: str) -> str:
 # === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
 from pathlib import Path
 import json as _json
-import os, importlib, asyncio, atexit, signal, sys, traceback
+import os, importlib, asyncio, atexit, signal, sys, traceback, time
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
@@ -373,6 +389,71 @@ try:
         wd = os.environ.get("WORKDIR")
         if wd:
             WORKDIR_CV.set(wd)
+except Exception:
+    pass
+
+# --- Redirect user stdout/stderr to dedicated logs ---
+_user_log_dir = OUT_DIR / "logs"
+try:
+    _user_log_dir.mkdir(parents=True, exist_ok=True)
+    _user_out = open(_user_log_dir / "user.log", "a", buffering=1)
+    _exec_id = os.environ.get("EXECUTION_ID") or "unknown"
+    _ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    _banner = f"===== EXECUTION {_exec_id} START {_ts} =====\\n"
+    _user_out.write(_banner)
+    _user_log_mode = (os.environ.get("EXEC_USER_LOG_MODE") or "include_logging").strip().lower()
+    sys.stdout = _user_out
+    sys.stderr = _user_out
+    try:
+        import logging as _logging
+        import logging.handlers as _logging_handlers
+        _root = _logging.getLogger()
+        _runtime_handler = None
+        for _h in list(_root.handlers):
+            if isinstance(_h, (_logging_handlers.RotatingFileHandler, _logging.FileHandler)) and _runtime_handler is None:
+                _runtime_handler = _h
+            _root.removeHandler(_h)
+        _fmt = os.environ.get("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        if _user_log_mode == "include_logging":
+            _user_handler = _logging.StreamHandler(sys.stdout)
+            _user_handler.setLevel(_root.level)
+            _user_handler.setFormatter(_logging.Formatter(_fmt))
+            _root.addHandler(_user_handler)
+        elif _runtime_handler:
+            _root.addHandler(_runtime_handler)
+        if _runtime_handler:
+            for _name in (
+                "agent.runtime",
+                "py_code_exec",
+                "py_code_exec_entry",
+                "executor",
+                "supervisor",
+                "supervisor.entry",
+            ):
+                _lg = _logging.getLogger(_name)
+                _lg.propagate = False
+                _lg.addHandler(_runtime_handler)
+        user_logger = _logging.getLogger("user")
+        user_logger.setLevel(_root.level)
+        user_logger.propagate = False
+        _user_logger_handler = _logging.StreamHandler(sys.stdout)
+        _user_logger_handler.setLevel(_root.level)
+        _user_logger_handler.setFormatter(_logging.Formatter(_fmt))
+        user_logger.addHandler(_user_logger_handler)
+        user_logger.propagate = False
+        _user_logger_handler = _logging.StreamHandler(sys.stdout)
+        _user_logger_handler.setLevel(_root.level)
+        _user_logger_handler.setFormatter(_logging.Formatter(_fmt))
+        user_logger.addHandler(_user_logger_handler)
+    except Exception:
+        pass
+    def _close_user_logs():
+        try:
+            _user_out.flush()
+            _user_out.close()
+        except Exception:
+            pass
+    atexit.register(_close_user_logs)
 except Exception:
     pass
 
@@ -817,6 +898,7 @@ except Exception as _comm_err:
     print(f"[ERROR] ChatCommunicator failed: {_comm_err}", file=sys.stderr)
     
 # === END COMMUNICATOR SETUP ===
+# === USER CODE START ===
 ''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
 
 def _build_iso_injected_header(*, globals_src: str, imports_src: str) -> str:
@@ -837,7 +919,7 @@ def _build_iso_injected_header(*, globals_src: str, imports_src: str) -> str:
 # === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
 from pathlib import Path
 import json as _json
-import os, asyncio, atexit, signal, sys, importlib
+import os, asyncio, atexit, signal, sys, importlib, time
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
@@ -1150,6 +1232,7 @@ except Exception:
 atexit.register(_on_atexit)
 
 # === END HEADER ===
+# === USER CODE START ===
 ''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
 
 def _build_iso_injected_header_step_artifacts(*, globals_src: str, imports_src: str) -> str:
@@ -1170,7 +1253,7 @@ def _build_iso_injected_header_step_artifacts(*, globals_src: str, imports_src: 
 # === AGENT-RUNTIME HEADER (auto-injected, do not edit) ===
 from pathlib import Path
 import json as _json
-import os, asyncio, atexit, signal, sys, importlib
+import os, asyncio, atexit, signal, sys, importlib, time
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
@@ -1209,6 +1292,67 @@ result_filename = (
     or "result.json"
 )
 print(f"Effective result filename: {result_filename}")
+
+# --- Redirect user stdout/stderr to dedicated logs (after header prints) ---
+_user_log_dir = OUT_DIR / "logs"
+try:
+    _user_log_dir.mkdir(parents=True, exist_ok=True)
+    _user_out = open(_user_log_dir / "user.log", "a", buffering=1)
+    _exec_id = os.environ.get("EXECUTION_ID") or "unknown"
+    _ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime())
+    _banner = f"===== EXECUTION {_exec_id} START {_ts} =====\\n"
+    _user_out.write(_banner)
+    _user_log_mode = (os.environ.get("EXEC_USER_LOG_MODE") or "include_logging").strip().lower()
+    sys.stdout = _user_out
+    sys.stderr = _user_out
+    try:
+        import logging as _logging
+        import logging.handlers as _logging_handlers
+        _root = _logging.getLogger()
+        _runtime_handler = None
+        for _h in list(_root.handlers):
+            if isinstance(_h, (_logging_handlers.RotatingFileHandler, _logging.FileHandler)) and _runtime_handler is None:
+                _runtime_handler = _h
+            _root.removeHandler(_h)
+        _fmt = os.environ.get("LOG_FORMAT", "%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        if _user_log_mode == "include_logging":
+            _user_handler = _logging.StreamHandler(sys.stdout)
+            _user_handler.setLevel(_root.level)
+            _user_handler.setFormatter(_logging.Formatter(_fmt))
+            _root.addHandler(_user_handler)
+        elif _runtime_handler:
+            _root.addHandler(_runtime_handler)
+        if _runtime_handler:
+            for _name in (
+                "agent.runtime",
+                "py_code_exec",
+                "py_code_exec_entry",
+                "executor",
+                "supervisor",
+                "supervisor.entry",
+            ):
+                _lg = _logging.getLogger(_name)
+                _lg.propagate = False
+                _lg.addHandler(_runtime_handler)
+        user_logger = _logging.getLogger("user")
+        user_logger.setLevel(_root.level)
+        user_logger.propagate = False
+        _user_logger_handler = _logging.StreamHandler(sys.stdout)
+        _user_logger_handler.setLevel(_root.level)
+        _user_logger_handler.setFormatter(_logging.Formatter(_fmt))
+        user_logger.addHandler(_user_logger_handler)
+        user_logger.propagate = False
+    except Exception:
+        pass
+    def _close_user_logs():
+        try:
+            _user_out.flush()
+            _user_out.close()
+        except Exception:
+            pass
+    atexit.register(_close_user_logs)
+except Exception:
+    pass
 
 # --- Skills descriptor (if provided)
 # Harmless no-op guard: executor doesn't use skills directly, but some tool modules
@@ -1555,6 +1699,7 @@ except Exception:
 atexit.register(_on_atexit)
 
 # === END HEADER ===
+# === USER CODE START ===
 ''').replace('<GLOBALS_SRC>', globals_src).replace('<TOOL_IMPORTS_SRC>', imports_src)
 
 class _InProcessRuntime:
@@ -1601,6 +1746,8 @@ class _InProcessRuntime:
         runtime_mode = (os.environ.get("EXEC_RUNTIME_MODE") or "").strip().lower()
         if isolation in ("fargate", "external") or runtime_mode in ("fargate", "external"):
             from kdcube_ai_app.apps.chat.sdk.runtime.external import fargate as fargate_runtime
+            extra_env = extra_env or {}
+            extra_env.setdefault("EXECUTION_SANDBOX", "fargate")
             return await fargate_runtime.run_py_in_fargate(
                 workdir=workdir,
                 outdir=output_dir,
@@ -1616,6 +1763,8 @@ class _InProcessRuntime:
         if isolation == "docker":
             from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
             network_mode = os.environ.get("PY_CODE_EXEC_NETWORK_MODE", "host")
+            extra_env = extra_env or {}
+            extra_env.setdefault("EXECUTION_SANDBOX", "docker")
             # Docker will handle everything - just pass globals as-is
             # (including PORTABLE_SPEC which supervisor needs)
             return await docker_runtime.run_py_in_docker(

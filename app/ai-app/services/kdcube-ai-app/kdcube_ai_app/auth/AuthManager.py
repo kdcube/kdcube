@@ -22,6 +22,7 @@ class User(BaseModel):
     name: Optional[str] = None
     roles: Optional[list] = []
     permissions: Optional[list] = []
+    user_type: Optional[str] = None
 
     @property
     def id(self):
@@ -65,6 +66,14 @@ class RequirementBase(BaseModel, metaclass=ABCMeta):
 class RequireUser(RequirementBase):
     def validate_requirement(self, user: "User") -> Optional[RequirementValidationError]:
         if user is None:
+            return RequirementValidationError("User is required.", HTTP_401_UNAUTHORIZED)
+        user_type = getattr(user, "user_type", None)
+        if isinstance(user_type, str) and user_type.lower() == "anonymous":
+            return RequirementValidationError("User is required.", HTTP_401_UNAUTHORIZED)
+        roles = getattr(user, "roles", None) or []
+        if not roles:
+            return RequirementValidationError("User has no roles assigned.", HTTP_403_FORBIDDEN)
+        if any(isinstance(r, str) and r.lower() == "anonymous" for r in roles):
             return RequirementValidationError("User is required.", HTTP_401_UNAUTHORIZED)
         return None
 

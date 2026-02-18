@@ -30,6 +30,7 @@ from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
+from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.infra.accounting.usage import (
     llm_output_price_usd_per_token,
     quote_tokens_for_usd,
@@ -71,6 +72,11 @@ def _usd_from_tokens(tokens: Optional[int]) -> Optional[float]:
         2,
     )
 
+def _usd_from_cents(cents: Optional[int]) -> Optional[float]:
+    if cents is None:
+        return None
+    return float(cents) / 100.0
+
 # ============================================================================
 # Request/Response Models
 # ============================================================================
@@ -90,6 +96,21 @@ class InternalRenewOnceRequest(BaseModel):
     user_id: str = Field(..., description="User id to renew")
     charge_at: datetime | None = Field(None, description="Optional charge timestamp (default now UTC)")
     idempotency_key: str | None = Field(None, description="Optional explicit idempotency key")
+
+class TopUpSubscriptionBudgetRequest(BaseModel):
+    user_id: str
+    usd_amount: float = Field(..., gt=0)
+    notes: Optional[str] = None
+    force_topup: bool = Field(False, description="Allow multiple topups within the same billing period")
+
+class SetSubscriptionOverdraftRequest(BaseModel):
+    user_id: str
+    overdraft_limit_usd: Optional[float] = Field(None, description="None = unlimited, 0 = no overdraft")
+    notes: Optional[str] = None
+
+class SweepSubscriptionRolloversRequest(BaseModel):
+    user_id: Optional[str] = None
+    limit: int = Field(200, ge=1, le=2000)
 
 class GrantTrialRequest(BaseModel):
     """
@@ -155,6 +176,27 @@ class AddLifetimeCreditsRequest(BaseModel):
     ref_model: str = Field(default="claude-sonnet-4-5-20250929", description="Reference model")
     purchase_id: Optional[str] = Field(None, description="Payment/transaction ID")
     notes: Optional[str] = Field(None, description="Purchase notes")
+
+
+class WalletRefundRequest(BaseModel):
+    """Refund lifetime credits by Stripe payment_intent_id (partial allowed)."""
+    user_id: str = Field(..., description="User ID")
+    payment_intent_id: str = Field(..., description="Stripe payment_intent id")
+    usd_amount: Optional[float] = Field(None, gt=0, description="Refund amount in USD (default = full refundable)")
+    notes: Optional[str] = Field(None, description="Refund notes")
+
+
+class CancelSubscriptionRequest(BaseModel):
+    """Cancel a Stripe subscription (at period end)."""
+    user_id: Optional[str] = Field(None, description="User ID (optional if stripe_subscription_id provided)")
+    stripe_subscription_id: Optional[str] = Field(None, description="Stripe subscription id")
+    notes: Optional[str] = Field(None, description="Cancel notes")
+
+
+class StripeReconcileRequest(BaseModel):
+    """Reconcile pending Stripe-related requests (refunds/cancels)."""
+    kind: str = Field("all", description="all|wallet_refund|subscription_cancel")
+    limit: int = Field(200, ge=1, le=2000)
 
 
 class SetQuotaPolicyRequest(BaseModel):
@@ -558,6 +600,49 @@ async def add_lifetime_credits(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/wallet/refund")
+async def refund_wallet(
+        payload: WalletRefundRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    """
+    Refund lifetime credits (Stripe payment_intent). Immediate credit removal; Stripe confirmation finalizes.
+    """
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    redis = getattr(router.state.middleware, "redis", None)
+    if not pg_pool or not redis:
+        raise HTTPException(status_code=503, detail="Dependencies not initialized")
+
+    mgr = _get_control_plane_manager(router)
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import StripeEconomicsAdminService
+
+    svc = StripeEconomicsAdminService(
+        pg_pool=pg_pool,
+        user_credits_mgr=mgr.user_credits_mgr,
+        subscription_mgr=mgr.subscription_mgr,
+        ref_provider=REF_PROVIDER,
+        ref_model=REF_MODEL,
+    )
+
+    try:
+        res = await svc.request_wallet_refund(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+            payment_intent_id=payload.payment_intent_id,
+            usd_amount=payload.usd_amount,
+            notes=payload.notes,
+            actor=session.username or session.user_id,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Wallet refund failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/tier-balance/lifetime-balance/{user_id}")
 async def get_lifetime_balance(
         user_id: str,
@@ -616,7 +701,41 @@ async def get_subscription(user_id: str, session: UserSession = Depends(auth_wit
         project=settings.PROJECT,
         user_id=user_id,
     )
-    return {"status": "ok", "subscription": sub.__dict__ if sub else None}
+    subscription_balance = None
+
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if sub and pg_pool:
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
+        period_desc = build_subscription_period_descriptor(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=user_id,
+            provider=getattr(sub, "provider", "internal") or "internal",
+            stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
+            period_end=getattr(sub, "next_charge_at", None),
+            period_start=getattr(sub, "last_charged_at", None),
+        )
+        limiter = SubscriptionBudgetLimiter(
+            pg_pool=pg_pool,
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=user_id,
+            period_key=period_desc["period_key"],
+            period_start=period_desc["period_start"],
+            period_end=period_desc["period_end"],
+        )
+        bal = await limiter.get_subscription_budget_balance()
+        subscription_balance = dict(bal)
+        subscription_balance["balance_tokens"] = _tokens_from_usd(bal.get("balance_usd"))
+        subscription_balance["reserved_tokens"] = _tokens_from_usd(bal.get("reserved_usd"))
+        subscription_balance["available_tokens"] = _tokens_from_usd(bal.get("available_usd"))
+        subscription_balance["reference_model"] = f"{REF_PROVIDER}/{REF_MODEL}"
+
+    return {
+        "status": "ok",
+        "subscription": sub.__dict__ if sub else None,
+        "subscription_balance": subscription_balance,
+    }
 
 
 @router.get("/subscriptions/list")
@@ -640,6 +759,119 @@ async def list_subscriptions(
     )
     return {"status": "ok", "count": len(subs), "subscriptions": [s.__dict__ for s in subs]}
 
+@router.get("/subscriptions/periods/{user_id}")
+async def list_subscription_periods(
+        user_id: str,
+        status: str | None = Query("closed"),
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    if status and status not in ("open", "closed", "all"):
+        raise HTTPException(status_code=400, detail="status must be open, closed, or all")
+
+    schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+    table = SubscriptionBudgetLimiter.BUDGET_TABLE
+
+    clauses = ["tenant=$1", "project=$2", "user_id=$3"]
+    args: list = [settings.TENANT, settings.PROJECT, user_id]
+    idx = 4
+    if status and status != "all":
+        clauses.append(f"status=${idx}")
+        args.append(status)
+        idx += 1
+
+    sql = f"""
+        SELECT *
+        FROM {schema}.{table}
+        WHERE {" AND ".join(clauses)}
+        ORDER BY period_end DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """
+    args.extend([limit, offset])
+
+    async with pg_pool.acquire() as c:
+        rows = await c.fetch(sql, *args)
+
+    periods = []
+    for row in rows:
+        bal_c = int(row["balance_cents"] or 0)
+        res_c = int(row["reserved_cents"] or 0)
+        topup_c = int(row["topup_cents"] or 0)
+        rolled_c = int(row["rolled_over_cents"] or 0)
+        spent_c = topup_c - rolled_c - bal_c
+        available_c = bal_c - res_c
+
+        periods.append({
+            "period_key": row["period_key"],
+            "period_start": row["period_start"],
+            "period_end": row["period_end"],
+            "status": row["status"],
+            "balance_usd": _usd_from_cents(bal_c),
+            "reserved_usd": _usd_from_cents(res_c),
+            "available_usd": _usd_from_cents(available_c),
+            "topup_usd": _usd_from_cents(topup_c),
+            "rolled_over_usd": _usd_from_cents(rolled_c),
+            "spent_usd": _usd_from_cents(spent_c),
+            "closed_at": row["closed_at"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "notes": row["notes"],
+        })
+
+    return {"status": "ok", "count": len(periods), "periods": periods}
+
+@router.get("/subscriptions/ledger/{user_id}")
+async def list_subscription_ledger(
+        user_id: str,
+        period_key: str = Query(...),
+        limit: int = Query(200, ge=1, le=2000),
+        offset: int = Query(0, ge=0),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+    table = SubscriptionBudgetLimiter.LEDGER_TABLE
+
+    sql = f"""
+        SELECT id, period_key, amount_cents, kind, note,
+               reservation_id, bundle_id, provider, request_id, created_at
+        FROM {schema}.{table}
+        WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
+        ORDER BY created_at DESC
+        LIMIT $5 OFFSET $6
+    """
+    async with pg_pool.acquire() as c:
+        rows = await c.fetch(sql, settings.TENANT, settings.PROJECT, user_id, period_key, limit, offset)
+
+    ledger = []
+    for row in rows:
+        amount_cents = int(row["amount_cents"] or 0)
+        ledger.append({
+            "id": row["id"],
+            "period_key": row["period_key"],
+            "amount_cents": amount_cents,
+            "amount_usd": _usd_from_cents(amount_cents),
+            "kind": row["kind"],
+            "note": row["note"],
+            "reservation_id": row["reservation_id"],
+            "bundle_id": row["bundle_id"],
+            "provider": row["provider"],
+            "request_id": row["request_id"],
+            "created_at": row["created_at"],
+        })
+
+    return {"status": "ok", "count": len(ledger), "ledger": ledger}
+
 @router.post("/subscriptions/internal/renew-once")
 async def renew_internal_subscription_once(
         payload: InternalRenewOnceRequest,
@@ -654,14 +886,12 @@ async def renew_internal_subscription_once(
 
     mgr = _get_control_plane_manager(router)
 
-    budget = ProjectBudgetLimiter(redis, pg_pool, tenant=settings.TENANT, project=settings.PROJECT)
-
     try:
         res = await mgr.subscription_mgr.renew_internal_subscription_once(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=payload.user_id,
-            budget=budget,
+            subscription_budget=None,
             charged_at=payload.charge_at,
             idempotency_key=payload.idempotency_key,
             actor=session.username or session.user_id,
@@ -677,6 +907,238 @@ async def renew_internal_subscription_once(
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/subscriptions/cancel")
+async def cancel_subscription(
+        payload: CancelSubscriptionRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    redis = getattr(router.state.middleware, "redis", None)
+    if not pg_pool or not redis:
+        raise HTTPException(status_code=503, detail="Dependencies not initialized")
+
+    mgr = _get_control_plane_manager(router)
+
+    if not payload.user_id and not payload.stripe_subscription_id:
+        raise HTTPException(status_code=400, detail="user_id or stripe_subscription_id is required")
+
+    # Internal subscriptions: cancel immediately (no Stripe)
+    if payload.user_id:
+        sub = await mgr.subscription_mgr.get_subscription(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+        )
+        if sub and sub.provider == "internal":
+            # Direct update for internal
+            async with pg_pool.acquire() as conn:
+                await conn.execute(f"""
+                    UPDATE {mgr.subscription_mgr.CP}.{mgr.subscription_mgr.TABLE}
+                    SET status='canceled', next_charge_at=NULL, updated_at=NOW()
+                    WHERE tenant=$1 AND project=$2 AND user_id=$3 AND provider='internal'
+                """, settings.TENANT, settings.PROJECT, payload.user_id)
+            return {"status": "ok", "action": "applied", "message": "Internal subscription canceled"}
+
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import StripeEconomicsAdminService
+    svc = StripeEconomicsAdminService(
+        pg_pool=pg_pool,
+        user_credits_mgr=mgr.user_credits_mgr,
+        subscription_mgr=mgr.subscription_mgr,
+        ref_provider=REF_PROVIDER,
+        ref_model=REF_MODEL,
+    )
+
+    try:
+        res = await svc.request_subscription_cancel(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+            stripe_subscription_id=payload.stripe_subscription_id,
+            notes=payload.notes,
+            actor=session.username or session.user_id,
+        )
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Subscription cancel failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/subscriptions/budget/topup")
+async def topup_subscription_budget(
+        payload: TopUpSubscriptionBudgetRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    mgr = _get_control_plane_manager(router)
+    sub = await mgr.subscription_mgr.get_subscription(
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+    )
+    if not sub:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
+    period_desc = build_subscription_period_descriptor(
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+        provider=getattr(sub, "provider", "internal") or "internal",
+        stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
+        period_end=getattr(sub, "next_charge_at", None),
+        period_start=getattr(sub, "last_charged_at", None),
+    )
+
+    limiter = SubscriptionBudgetLimiter(
+        pg_pool=pg_pool,
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+        period_key=period_desc["period_key"],
+        period_start=period_desc["period_start"],
+        period_end=period_desc["period_end"],
+    )
+
+    notes = payload.notes or f"admin topup by {session.username or session.user_id}"
+    if payload.force_topup:
+        notes = f"{notes} [force]" if notes else f"admin force topup by {session.username or session.user_id}"
+
+    res = await limiter.topup_subscription_budget(
+        usd_amount=float(payload.usd_amount),
+        notes=notes,
+        request_id=f"admin:subscription_topup:{payload.user_id}",
+        allow_multiple_topups=bool(payload.force_topup),
+    )
+    return {"status": "ok", "force_topup": bool(payload.force_topup), **res}
+
+@router.post("/subscriptions/budget/overdraft")
+async def set_subscription_overdraft(
+        payload: SetSubscriptionOverdraftRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    mgr = _get_control_plane_manager(router)
+    sub = await mgr.subscription_mgr.get_subscription(
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+    )
+    if not sub:
+        raise HTTPException(status_code=404, detail="subscription not found")
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
+    period_desc = build_subscription_period_descriptor(
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+        provider=getattr(sub, "provider", "internal") or "internal",
+        stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
+        period_end=getattr(sub, "next_charge_at", None),
+        period_start=getattr(sub, "last_charged_at", None),
+    )
+
+    limiter = SubscriptionBudgetLimiter(
+        pg_pool=pg_pool,
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        user_id=payload.user_id,
+        period_key=period_desc["period_key"],
+        period_start=period_desc["period_start"],
+        period_end=period_desc["period_end"],
+    )
+    snap = await limiter.set_overdraft_limit(
+        overdraft_limit_usd=payload.overdraft_limit_usd,
+        notes=payload.notes or f"admin overdraft by {session.username or session.user_id}",
+    )
+    return {"status": "ok", "snapshot": snap.__dict__}
+
+@router.post("/subscriptions/rollover/sweep")
+async def sweep_subscription_rollovers(
+        payload: SweepSubscriptionRolloversRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    redis = getattr(router.state.middleware, "redis", None)
+    if not pg_pool or not redis:
+        raise HTTPException(status_code=503, detail="Dependencies not initialized")
+
+    mgr = _get_control_plane_manager(router)
+    now = datetime.now(timezone.utc)
+
+    if payload.user_id:
+        sub = await mgr.subscription_mgr.get_subscription(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+        )
+        if not sub:
+            raise HTTPException(status_code=404, detail="subscription not found")
+        if not sub.next_charge_at or sub.next_charge_at > now:
+            return {
+                "status": "ok",
+                "action": "not_due",
+                "message": "subscription not due for rollover",
+                "user_id": payload.user_id,
+                "next_charge_at": sub.next_charge_at.isoformat() if sub.next_charge_at else None,
+            }
+
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
+        period_desc = build_subscription_period_descriptor(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+            provider=getattr(sub, "provider", "internal") or "internal",
+            stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
+            period_end=sub.next_charge_at,
+            period_start=sub.last_charged_at,
+        )
+        subscription_budget = SubscriptionBudgetLimiter(
+            pg_pool=pg_pool,
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+            period_key=period_desc["period_key"],
+            period_start=period_desc["period_start"],
+            period_end=period_desc["period_end"],
+        )
+        project_budget = ProjectBudgetLimiter(redis, pg_pool, tenant=settings.TENANT, project=settings.PROJECT)
+        period_key = period_desc["period_key"]
+
+        res = await mgr.subscription_mgr.rollover_unused_balance_once(
+            tenant=settings.TENANT,
+            project=settings.PROJECT,
+            user_id=payload.user_id,
+            subscription_budget=subscription_budget,
+            project_budget=project_budget,
+            period_key=period_key,
+            period_end=period_desc["period_end"],
+            actor=session.username or session.user_id,
+        )
+        return {"status": "ok", **res, "user_id": payload.user_id}
+
+    def project_budget_factory(tenant: str, project: str) -> ProjectBudgetLimiter:
+        return ProjectBudgetLimiter(redis, pg_pool, tenant=tenant, project=project)
+
+    res = await mgr.subscription_mgr.sweep_due_subscription_rollovers(
+        tenant=settings.TENANT,
+        project=settings.PROJECT,
+        now=now,
+        limit=payload.limit,
+        project_budget_factory=project_budget_factory,
+        actor=session.username or session.user_id,
+    )
+    return res
 
 
 # ============================================================================
@@ -764,13 +1226,24 @@ async def stripe_webhook(
     user_credits_mgr = mgr.user_credits_mgr
     subscription_mgr = mgr.subscription_mgr
 
-    def budget_factory(tenant: str, project: str) -> ProjectBudgetLimiter:
+    def subscription_budget_factory(tenant: str, project: str, user_id: str, period_key: str, period_start: datetime, period_end: datetime) -> SubscriptionBudgetLimiter:
+        return SubscriptionBudgetLimiter(
+            pg_pool=pg_pool,
+            tenant=tenant,
+            project=project,
+            user_id=user_id,
+            period_key=period_key,
+            period_start=period_start,
+            period_end=period_end,
+        )
+    def project_budget_factory(tenant: str, project: str) -> ProjectBudgetLimiter:
         return ProjectBudgetLimiter(redis, pg_pool, tenant=tenant, project=project)
 
     handler = StripeEconomicsWebhookHandler(
         pg_pool=pg_pool,
         user_credits_mgr=user_credits_mgr,
-        budget_limiter_factory=budget_factory,
+        subscription_budget_factory=subscription_budget_factory,
+        project_budget_factory=project_budget_factory,
         subscription_mgr=subscription_mgr,
         default_tenant=settings.TENANT,
         default_project=settings.PROJECT,
@@ -784,6 +1257,163 @@ async def stripe_webhook(
         raise HTTPException(status_code=500, detail=result.get("message"))
 
     return result
+
+@router.post("/stripe/reconcile")
+async def reconcile_stripe_requests(
+        payload: StripeReconcileRequest,
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    redis = getattr(router.state.middleware, "redis", None)
+    if not pg_pool or not redis:
+        raise HTTPException(status_code=503, detail="Dependencies not initialized")
+
+    mgr = _get_control_plane_manager(router)
+    from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import StripeEconomicsAdminService
+
+    svc = StripeEconomicsAdminService(
+        pg_pool=pg_pool,
+        user_credits_mgr=mgr.user_credits_mgr,
+        subscription_mgr=mgr.subscription_mgr,
+        ref_provider=REF_PROVIDER,
+        ref_model=REF_MODEL,
+    )
+
+    try:
+        res = await svc.reconcile_pending_requests(kind=payload.kind, limit=payload.limit)
+        return res
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Stripe reconcile failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stripe/pending")
+async def list_pending_stripe_requests(
+        kind: str = Query("all", description="all|wallet_refund|subscription_cancel"),
+        limit: int = Query(200, ge=1, le=2000),
+        offset: int = Query(0, ge=0),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    kind = (kind or "all").lower()
+    if kind not in ("all", "wallet_refund", "subscription_cancel"):
+        raise HTTPException(status_code=400, detail="kind must be all|wallet_refund|subscription_cancel")
+
+    schema = "kdcube_control_plane"
+    tbl = "external_economics_events"
+    where = ["source='internal'", "status='pending'", "tenant=$1", "project=$2"]
+    args: list = [settings.TENANT, settings.PROJECT]
+    idx = 3
+    if kind != "all":
+        where.append(f"kind=${idx}")
+        args.append(kind)
+        idx += 1
+
+    sql = f"""
+        SELECT kind, external_id, tenant, project, user_id,
+               amount_cents, tokens, currency, status,
+               metadata, created_at, updated_at
+        FROM {schema}.{tbl}
+        WHERE {" AND ".join(where)}
+        ORDER BY created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """
+    args.extend([limit, offset])
+
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+
+    items = []
+    for r in rows:
+        amt_c = r["amount_cents"]
+        items.append({
+            "kind": r["kind"],
+            "external_id": r["external_id"],
+            "tenant": r["tenant"],
+            "project": r["project"],
+            "user_id": r["user_id"],
+            "amount_cents": int(amt_c) if amt_c is not None else None,
+            "amount_usd": _usd_from_cents(int(amt_c)) if amt_c is not None else None,
+            "tokens": int(r["tokens"]) if r["tokens"] is not None else None,
+            "currency": r["currency"],
+            "status": r["status"],
+            "metadata": r["metadata"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        })
+
+    return {"status": "ok", "count": len(items), "items": items}
+
+
+@router.get("/economics/pending")
+async def list_pending_economics_events(
+        kind: Optional[str] = Query(None, description="optional kind filter"),
+        user_id: Optional[str] = Query(None),
+        limit: int = Query(200, ge=1, le=2000),
+        offset: int = Query(0, ge=0),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    schema = "kdcube_control_plane"
+    tbl = "external_economics_events"
+
+    where = ["source='internal'", "status='pending'", "tenant=$1", "project=$2"]
+    args: list = [settings.TENANT, settings.PROJECT]
+    idx = 3
+    if kind:
+        where.append(f"kind=${idx}")
+        args.append(kind)
+        idx += 1
+    if user_id:
+        where.append(f"user_id=${idx}")
+        args.append(user_id)
+        idx += 1
+
+    sql = f"""
+        SELECT kind, external_id, tenant, project, user_id,
+               amount_cents, tokens, currency, status,
+               metadata, created_at, updated_at
+        FROM {schema}.{tbl}
+        WHERE {" AND ".join(where)}
+        ORDER BY created_at DESC
+        LIMIT ${idx} OFFSET ${idx + 1}
+    """
+    args.extend([limit, offset])
+
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+
+    items = []
+    for r in rows:
+        amt_c = r["amount_cents"]
+        items.append({
+            "kind": r["kind"],
+            "external_id": r["external_id"],
+            "tenant": r["tenant"],
+            "project": r["project"],
+            "user_id": r["user_id"],
+            "amount_cents": int(amt_c) if amt_c is not None else None,
+            "amount_usd": _usd_from_cents(int(amt_c)) if amt_c is not None else None,
+            "tokens": int(r["tokens"]) if r["tokens"] is not None else None,
+            "currency": r["currency"],
+            "status": r["status"],
+            "metadata": r["metadata"],
+            "created_at": r["created_at"],
+            "updated_at": r["updated_at"],
+        })
+
+    return {"status": "ok", "count": len(items), "items": items}
 
 # ============================================================================
 # Policy Management Endpoints - Admin Only
@@ -1160,6 +1790,7 @@ async def get_user_budget_breakdown(
         pg_pool=pg_pool,
         redis=redis,
         credits_mgr=mgr.user_credits_mgr,  # reuse existing manager instance
+        subscription_mgr=mgr.subscription_mgr,
     )
 
     return await svc.get_user_budget_breakdown(

@@ -401,6 +401,140 @@ SELECT
 FROM kdcube_control_plane.tenant_project_budget;
 
 -- =========================================
+-- USER SUBSCRIPTION BUDGET SETTINGS (per-user)
+-- =========================================
+CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscription_budget_settings (
+    tenant VARCHAR(255) NOT NULL,
+    project VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+
+    overdraft_limit_cents BIGINT DEFAULT 0,
+    notes TEXT DEFAULT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    PRIMARY KEY (tenant, project, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_budget_settings_lookup
+  ON kdcube_control_plane.user_subscription_budget_settings(tenant, project, user_id);
+
+DROP TRIGGER IF EXISTS trg_cp_sub_budget_settings_updated_at ON kdcube_control_plane.user_subscription_budget_settings;
+CREATE TRIGGER trg_cp_sub_budget_settings_updated_at
+  BEFORE UPDATE ON kdcube_control_plane.user_subscription_budget_settings
+  FOR EACH ROW EXECUTE FUNCTION kdcube_control_plane.update_updated_at();
+
+-- =========================================
+-- USER SUBSCRIPTION PERIOD BUDGET (per-billing-cycle)
+-- =========================================
+CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscription_period_budget (
+    tenant VARCHAR(255) NOT NULL,
+    project VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    period_key TEXT NOT NULL,
+
+    period_start TIMESTAMPTZ NOT NULL,
+    period_end   TIMESTAMPTZ NOT NULL,
+
+    status TEXT NOT NULL DEFAULT 'open'
+      CHECK (status IN ('open','closed')),
+
+    balance_cents BIGINT NOT NULL DEFAULT 0,
+    reserved_cents BIGINT NOT NULL DEFAULT 0,
+
+    topup_cents BIGINT NOT NULL DEFAULT 0,
+    rolled_over_cents BIGINT NOT NULL DEFAULT 0,
+
+    closed_at TIMESTAMPTZ NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    notes TEXT DEFAULT NULL,
+
+    PRIMARY KEY (tenant, project, user_id, period_key),
+
+    CONSTRAINT chk_cp_sub_period_reserved_nonneg CHECK (reserved_cents >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_budget_lookup
+  ON kdcube_control_plane.user_subscription_period_budget(tenant, project, user_id, period_end DESC);
+
+DROP TRIGGER IF EXISTS trg_cp_sub_period_budget_updated_at ON kdcube_control_plane.user_subscription_period_budget;
+CREATE TRIGGER trg_cp_sub_period_budget_updated_at
+  BEFORE UPDATE ON kdcube_control_plane.user_subscription_period_budget
+  FOR EACH ROW EXECUTE FUNCTION kdcube_control_plane.update_updated_at();
+
+CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscription_period_reservations (
+    reservation_id UUID PRIMARY KEY,
+
+    tenant  VARCHAR(255) NOT NULL,
+    project VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    period_key TEXT NOT NULL,
+
+    bundle_id VARCHAR(255) DEFAULT NULL,
+    provider  VARCHAR(255) DEFAULT NULL,
+    request_id VARCHAR(255) DEFAULT NULL,
+
+    amount_cents BIGINT NOT NULL,
+    actual_spent_cents BIGINT DEFAULT NULL,
+
+    status kdcube_control_plane.budget_reservation_status NOT NULL DEFAULT 'active',
+
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    committed_at TIMESTAMPTZ DEFAULT NULL,
+    released_at  TIMESTAMPTZ DEFAULT NULL,
+    notes        TEXT  DEFAULT NULL,
+
+    CONSTRAINT fk_cp_sub_period_resv_budget
+      FOREIGN KEY (tenant, project, user_id, period_key)
+      REFERENCES kdcube_control_plane.user_subscription_period_budget (tenant, project, user_id, period_key)
+      ON DELETE CASCADE,
+
+    CONSTRAINT chk_cp_sub_period_resv_amount_pos CHECK (amount_cents > 0),
+    CONSTRAINT chk_cp_sub_period_resv_actual_nonneg CHECK (actual_spent_cents IS NULL OR actual_spent_cents >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_active
+  ON kdcube_control_plane.user_subscription_period_reservations (tenant, project, user_id, period_key, status, expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_lookup
+  ON kdcube_control_plane.user_subscription_period_reservations (tenant, project, user_id, period_key, reservation_id);
+
+CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscription_period_ledger (
+    id BIGSERIAL PRIMARY KEY,
+
+    tenant  VARCHAR(255) NOT NULL,
+    project VARCHAR(255) NOT NULL,
+    user_id VARCHAR(255) NOT NULL,
+    period_key TEXT NOT NULL,
+
+    amount_cents BIGINT NOT NULL, -- signed
+    kind VARCHAR(64) NOT NULL,
+    note TEXT DEFAULT NULL,
+
+    reservation_id UUID DEFAULT NULL,
+    bundle_id VARCHAR(255) DEFAULT NULL,
+    provider  VARCHAR(255) DEFAULT NULL,
+    request_id VARCHAR(255) DEFAULT NULL,
+
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT fk_cp_sub_period_ledger_budget
+      FOREIGN KEY (tenant, project, user_id, period_key)
+      REFERENCES kdcube_control_plane.user_subscription_period_budget (tenant, project, user_id, period_key)
+      ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_tp_user_time
+  ON kdcube_control_plane.user_subscription_period_ledger (tenant, project, user_id, period_key, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_reservation
+  ON kdcube_control_plane.user_subscription_period_ledger (reservation_id);
+
+-- =========================================
 -- SUBSCRIPTIONS (TIER)
 -- =========================================
 CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscriptions (

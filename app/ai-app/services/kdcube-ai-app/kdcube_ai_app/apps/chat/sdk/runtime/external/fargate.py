@@ -12,6 +12,7 @@ Planned flow:
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import os
 import pathlib
@@ -173,6 +174,7 @@ class FargateRuntime(ExternalRuntime):
             "LOG_DIR": "/workspace/out/logs",
             "LOG_FILE_PREFIX": "executor",
             "EXECUTION_ID": str(exec_id),
+            "EXECUTION_SANDBOX": "fargate",
             "RUNTIME_GLOBALS_JSON": json.dumps(runtime_globals, ensure_ascii=False, default=str),
             "RUNTIME_TOOL_MODULES": json.dumps(request.tool_module_names or [], ensure_ascii=False),
         })
@@ -317,9 +319,26 @@ async def run_py_in_fargate(
         extra_env=extra_env,
     )
     res = await runtime.run(req, logger=logger)
+    stderr_tail = ""
+    error_summary = ""
+    if not res.ok:
+        try:
+            err_path = pathlib.Path(outdir) / "logs" / "runtime.err.log"
+            if err_path.exists():
+                err_txt = err_path.read_text(encoding="utf-8", errors="ignore")
+                stderr_tail = err_txt[-4000:] if err_txt else ""
+                if err_txt:
+                    for line in err_txt.splitlines():
+                        if re.search(r"\\b\\w+Error\\b", line) or "Exception" in line:
+                            error_summary = line.strip()
+                            break
+        except Exception:
+            pass
     return {
         "ok": res.ok,
         "returncode": res.returncode,
         "error": res.error,
         "seconds": res.seconds,
+        "stderr_tail": stderr_tail,
+        "error_summary": error_summary,
     }

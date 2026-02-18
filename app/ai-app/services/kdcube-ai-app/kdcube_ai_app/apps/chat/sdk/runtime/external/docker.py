@@ -4,6 +4,7 @@
 # kdcube_ai_app/apps/chat/sdk/runtime/docker/docker.py
 
 import asyncio
+import re
 import datetime as _dt
 import json
 import os
@@ -207,6 +208,7 @@ async def run_py_in_docker(
     base_env["OUTPUT_DIR"]            = "/workspace/out"
     base_env["LOG_DIR"]               = "/workspace/out/logs"
     base_env["LOG_FILE_PREFIX"]       = "supervisor"
+    base_env.setdefault("EXECUTION_SANDBOX", "docker")
 
     img = image or _DEFAULT_IMAGE
     to = timeout_s or _DEFAULT_TIMEOUT_S
@@ -245,6 +247,8 @@ async def run_py_in_docker(
     out: bytes = b""
     err: bytes = b""
     timed_out = False
+    stderr_tail = ""
+    error_summary = ""
 
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=to)
@@ -272,7 +276,6 @@ async def run_py_in_docker(
         log_dir = outdir / "logs"
         out_path = log_dir / "docker.out.log"
         err_path = log_dir / "docker.err.log"
-        errlog_path = log_dir / "errors.log"
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = _dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
         header = f"\n===== EXECUTION {exec_id} START {ts} =====\n".encode("utf-8")
@@ -292,24 +295,39 @@ async def run_py_in_docker(
             reason = "timeout" if timed_out else f"returncode={proc.returncode}"
             err_txt = err.decode("utf-8", errors="ignore")
             tail = err_txt[-4000:] if err_txt else ""
-            with open(errlog_path, "ab") as f:
-                f.write(header)
-                f.write(f"[docker] {reason}\n".encode("utf-8"))
-                if tail:
-                    f.write(tail.encode("utf-8", errors="ignore"))
-                    if not tail.endswith("\n"):
-                        f.write(b"\n")
+            stderr_tail = tail
+            if err_txt:
+                for line in err_txt.splitlines():
+                    if re.search(r"\\b\\w+Error\\b", line) or "Exception" in line:
+                        error_summary = line.strip()
+                        break
+            if timed_out and not error_summary:
+                error_summary = f"timeout after {to}s"
+            if error_summary:
+                diag = f"[docker] ERROR: {error_summary}\n".encode("utf-8")
+                with open(err_path, "ab") as f:
+                    f.write(diag)
     except Exception:
         # Best-effort only
         pass
 
     if timed_out:
         log.log(f"[docker.exec] Timeout after {to}s", level="ERROR")
-        return {"error": "timeout", "seconds": to}
+        return {
+            "error": "timeout",
+            "seconds": to,
+            "stderr_tail": stderr_tail,
+            "error_summary": error_summary,
+        }
 
     rc = proc.returncode
     ok = (rc == 0)
     if not ok:
         log.log(f"[docker.exec] Container exited with {rc}", level="ERROR")
 
-    return {"ok": ok, "returncode": rc}
+    return {
+        "ok": ok,
+        "returncode": rc,
+        "stderr_tail": stderr_tail,
+        "error_summary": error_summary,
+    }

@@ -15,6 +15,8 @@ import asyncpg
 from redis.asyncio import Redis
 
 from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import SubscriptionManager
+from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -578,6 +580,120 @@ class UserCreditsManager:
         await self._invalidate(tenant, project, user_id)
         return dict(row)
 
+    async def refund_lifetime_tokens(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user_id: str,
+            tokens: int,
+            usd_amount: float,
+            conn: Optional[asyncpg.Connection] = None,
+    ) -> dict:
+        """
+        Refund (remove) lifetime tokens/amount.
+        Ensures refundable = purchased - consumed - reserved >= tokens.
+        """
+        if tokens <= 0 or usd_amount <= 0:
+            existing = await self.get_user_credits(tenant=tenant, project=project, user_id=user_id)
+            return existing or {
+                "tenant": tenant, "project": project, "user_id": user_id,
+                "lifetime_tokens_purchased": 0, "lifetime_tokens_consumed": 0,
+                "lifetime_usd_purchased": 0,
+            }
+
+        async def _apply(c: asyncpg.Connection) -> asyncpg.Record:
+            bal = await c.fetchrow(f"""
+                SELECT lifetime_tokens_purchased AS purchased,
+                       lifetime_tokens_consumed AS consumed,
+                       lifetime_usd_purchased AS usd_purchased
+                FROM {self.CP}.{self.TABLE}
+                WHERE tenant=$1 AND project=$2 AND user_id=$3
+                  AND active=TRUE
+                FOR UPDATE
+            """, tenant, project, user_id)
+            if not bal:
+                raise ValueError("lifetime credits not found")
+
+            purchased = int(bal["purchased"] or 0)
+            consumed = int(bal["consumed"] or 0)
+            reserved = await self._reserved_sum(conn=c, tenant=tenant, project=project, user_id=user_id)
+            available = purchased - consumed - reserved
+            if available < int(tokens):
+                raise ValueError(f"insufficient refundable tokens: available={available}, requested={int(tokens)}")
+
+            row = await c.fetchrow(f"""
+                UPDATE {self.CP}.{self.TABLE}
+                SET lifetime_tokens_purchased = lifetime_tokens_purchased - $4,
+                    lifetime_usd_purchased = GREATEST(lifetime_usd_purchased - $5, 0),
+                    updated_at = NOW()
+                WHERE tenant=$1 AND project=$2 AND user_id=$3
+                RETURNING *
+            """, tenant, project, user_id, int(tokens), float(usd_amount))
+            return row
+
+        if conn:
+            row = await _apply(conn)
+        else:
+            if not self._pg_pool:
+                raise RuntimeError("PostgreSQL pool not initialized")
+            async with self._pg_pool.acquire() as c:
+                async with c.transaction():
+                    row = await _apply(c)
+
+        await self._invalidate(tenant, project, user_id)
+        return dict(row)
+
+    async def restore_lifetime_tokens(
+            self,
+            *,
+            tenant: str,
+            project: str,
+            user_id: str,
+            tokens: int,
+            usd_amount: float,
+            conn: Optional[asyncpg.Connection] = None,
+    ) -> dict:
+        """
+        Restore (add back) lifetime tokens/amount after a failed refund.
+        Does not alter last_purchase_* fields.
+        """
+        if tokens <= 0 or usd_amount <= 0:
+            existing = await self.get_user_credits(tenant=tenant, project=project, user_id=user_id)
+            return existing or {
+                "tenant": tenant, "project": project, "user_id": user_id,
+                "lifetime_tokens_purchased": 0, "lifetime_tokens_consumed": 0,
+                "lifetime_usd_purchased": 0,
+            }
+
+        sql = f"""
+            INSERT INTO {self.CP}.{self.TABLE} (
+                tenant, project, user_id,
+                lifetime_tokens_purchased,
+                lifetime_tokens_consumed,
+                lifetime_usd_purchased,
+                active
+            ) VALUES ($1,$2,$3,$4,0,$5,TRUE)
+            ON CONFLICT (tenant, project, user_id)
+            DO UPDATE SET
+                lifetime_tokens_purchased = {self.CP}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
+                lifetime_usd_purchased    = {self.CP}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
+                active                    = TRUE,
+                updated_at                = NOW()
+            RETURNING *
+        """
+
+        if conn:
+            row = await conn.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount))
+        else:
+            if not self._pg_pool:
+                raise RuntimeError("PostgreSQL pool not initialized")
+            async with self._pg_pool.acquire() as c:
+                row = await c.fetchrow(sql, tenant, project, user_id, int(tokens), float(usd_amount))
+
+        await self._invalidate(tenant, project, user_id)
+        return dict(row)
+
     async def deduct_lifetime_tokens(self, *, tenant: str, project: str, user_id: str, tokens: int) -> int:
         """
         Simple deduction (not reservation-aware).
@@ -959,11 +1075,13 @@ class UserBudgetBreakdownService:
             redis: Redis,
             tier_balance_snapshot_mgr: Optional[UserTierBalanceSnapshotManager] = None,
             credits_mgr: Optional[UserCreditsManager] = None,
+            subscription_mgr: Optional[SubscriptionManager] = None,
     ):
         self._pg_pool = pg_pool
         self._redis = redis
         self._tier_snapshot = tier_balance_snapshot_mgr or UserTierBalanceSnapshotManager(pg_pool=pg_pool)
         self._credits_mgr = credits_mgr or UserCreditsManager(pg_pool=pg_pool, redis=redis)
+        self._subscription_mgr = subscription_mgr or SubscriptionManager(pg_pool=pg_pool)
 
     @staticmethod
     def _policy_to_dict(p) -> dict:
@@ -1008,7 +1126,7 @@ class UserBudgetBreakdownService:
             UserEconomicsRateLimiter,
             _merge_policy_with_tier_balance,
         )
-        from kdcube_ai_app.infra.accounting.usage import llm_output_price_usd_per_token
+        from kdcube_ai_app.infra.accounting.usage import llm_output_price_usd_per_token, quote_tokens_for_usd
 
         bundle_ids = bundle_ids or ["*"]
 
@@ -1140,6 +1258,69 @@ class UserBudgetBreakdownService:
                 "reference_model": f"{reference_provider}/{reference_model}",
             }
 
+        # -------- subscription balance (per-user) --------
+        subscription_payload = None
+        if self._subscription_mgr:
+            sub = await self._subscription_mgr.get_subscription(
+                tenant=tenant, project=project, user_id=user_id
+            )
+            if sub:
+                from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
+                period_desc = build_subscription_period_descriptor(
+                    tenant=tenant,
+                    project=project,
+                    user_id=user_id,
+                    provider=getattr(sub, "provider", "internal") or "internal",
+                    stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
+                    period_end=getattr(sub, "next_charge_at", None),
+                    period_start=getattr(sub, "last_charged_at", None),
+                )
+                limiter = SubscriptionBudgetLimiter(
+                    pg_pool=self._pg_pool,
+                    tenant=tenant,
+                    project=project,
+                    user_id=user_id,
+                    period_key=period_desc["period_key"],
+                    period_start=period_desc["period_start"],
+                    period_end=period_desc["period_end"],
+                )
+                sub_bal = await limiter.get_subscription_budget_balance()
+
+                def _tokens_from_usd(usd_amount: Optional[float]) -> Optional[int]:
+                    if usd_amount is None:
+                        return None
+                    tokens, _ = quote_tokens_for_usd(
+                        usd_amount=float(usd_amount),
+                        ref_provider=reference_provider,
+                        ref_model=reference_model,
+                    )
+                    return int(tokens)
+
+                subscription_payload = {
+                    "has_subscription": True,
+                    "active": bool(getattr(sub, "status", None) == "active"),
+                    "tier": getattr(sub, "tier", None),
+                    "status": getattr(sub, "status", None),
+                    "provider": getattr(sub, "provider", None),
+                    "monthly_price_cents": getattr(sub, "monthly_price_cents", None),
+                    "period_key": sub_bal.get("period_key"),
+                    "period_start": self._dt(sub_bal.get("period_start")),
+                    "period_end": self._dt(sub_bal.get("period_end")),
+                    "period_status": sub_bal.get("status"),
+                    "balance_usd": float(sub_bal.get("balance_usd") or 0.0),
+                    "reserved_usd": float(sub_bal.get("reserved_usd") or 0.0),
+                    "available_usd": float(sub_bal.get("available_usd") or 0.0),
+                    "balance_tokens": _tokens_from_usd(sub_bal.get("balance_usd")),
+                    "reserved_tokens": _tokens_from_usd(sub_bal.get("reserved_usd")),
+                    "available_tokens": _tokens_from_usd(sub_bal.get("available_usd")),
+                    "topup_usd": float(sub_bal.get("topup_usd") or 0.0),
+                    "rolled_over_usd": float(sub_bal.get("rolled_over_usd") or 0.0),
+                    "spent_usd": float(sub_bal.get("spent_usd") or 0.0),
+                    "lifetime_added_usd": float(sub_bal.get("lifetime_added_usd") or 0.0),
+                    "lifetime_spent_usd": float(sub_bal.get("lifetime_spent_usd") or 0.0),
+                    "reference_model": f"{reference_provider}/{reference_model}",
+                }
+
         base_policy_payload = self._policy_to_dict(base_policy)
         effective_policy_payload = self._policy_to_dict(effective_policy)
         for payload in (base_policy_payload, effective_policy_payload):
@@ -1175,6 +1356,7 @@ class UserBudgetBreakdownService:
                 "percentage_used": percentage_used,
             },
             "lifetime_credits": credits_payload,
+            "subscription_balance": subscription_payload,
             "active_reservations": reservations_payload,
             "reference_model": f"{reference_provider}/{reference_model}",
         }

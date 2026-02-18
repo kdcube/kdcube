@@ -13,10 +13,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 
 from kdcube_ai_app.apps.chat.api.resolvers import (
-    get_user_session_dependency,
+    require_auth,
     get_conversation_system,
     get_pg_pool,
 )
+from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle
 from kdcube_ai_app.apps.chat.sdk.tools.citations import strip_base64_from_citables_artifact
@@ -162,7 +163,7 @@ async def list_conversations(
         started_after: Optional[str] = Query(default=None, description="ISO8601 timestamp"),
         days: int = Query(default=365, ge=1, le=3650),
         include_titles: bool = Query(default=True),
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
@@ -185,7 +186,7 @@ async def list_conversations(
     return data
 
 @router.get("/{tenant}/{project}/{conversation_id}/status", response_model=ConversationStatus)
-async def conversation_status(tenant: str, project: str, conversation_id: str, session: UserSession = Depends(get_user_session_dependency())):
+async def conversation_status(tenant: str, project: str, conversation_id: str, session: UserSession = Depends(require_auth(RequireUser()))):
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
     st = await router.state.conversation_browser.get_conversation_state(
@@ -198,7 +199,7 @@ async def conversation_details(
         tenant: str,
         project: str,
         conversation_id: str,
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
@@ -225,7 +226,7 @@ async def fetch_conversation(
         project: str,
         conversation_id: str,
         req: ConversationFetchRequest = Body(...),
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
     Fetch UI-visible artifacts for a conversation. Optional:
@@ -267,7 +268,7 @@ async def delete_conversation(
         tenant: str,
         project: str,
         conversation_id: str,
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
     Hard-delete a conversation (and related artifacts) for the authenticated user.
@@ -345,7 +346,7 @@ async def submit_turn_feedback(
         conversation_id: str,
         turn_id: str,
         req: TurnFeedbackRequest = Body(...),
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
     Submit, update, or clear user feedback for a specific turn.
@@ -522,7 +523,7 @@ async def fetch_turns_with_feedbacks(
         project: str,
         conversation_id: str,
         req: ConversationFeedbackTurnsRequest = Body(...),
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
     Return all turns in a conversation that have feedbacks (or reactions), each with:
@@ -578,7 +579,7 @@ async def conversations_with_feedbacks_in_period(
         tenant: str,
         project: str,
         req: ConversationsInPeriodRequest = Body(...),
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
     Aggregate conversations (and optionally turns) that have feedback reactions within a time window.

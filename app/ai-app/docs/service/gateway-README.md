@@ -36,11 +36,20 @@ The HTTP middleware in `apps/chat/api/web_app.py` resolves the session and appli
 
 - **Default**: REST is **session‑only** (bypass throttling/backpressure).
 - **Guarded REST**: exact heavy endpoints are classified as `CHAT_INGRESS` and **are gated**.
+- **Session ownership check**: if a request includes `User-Session-ID` (header) or
+  `user_session_id` (query param), the gateway **verifies that this session belongs
+  to the authenticated user**. Mismatches are rejected (401/403).
 
 Key files:
 - [web_app.py](../../apps/chat/api/web_app.py)
 - [gateway_policy.py](../../apps/middleware/gateway_policy.py)
 - [gateway.py](../../apps/middleware/gateway.py)
+
+### Auth requirements (non‑anonymous access)
+Endpoints using `require_auth(RequireUser())` **must be authenticated**:
+- `RequireUser` now enforces **non‑anonymous** sessions **and at least one role**.
+- This applies uniformly across REST, SSE, and Socket.IO.
+- `/profile` remains session‑only (anonymous allowed).
 
 ### Chat ingress (full gateway checks)
 Chat ingestion **does** run full gateway protection:
