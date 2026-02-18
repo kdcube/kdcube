@@ -209,7 +209,7 @@ class SubscriptionManager:
           $4,'active',$5,
           $6::timestamptz,
           CASE
-            WHEN $4 IN ('paid','premium') AND $5 > 0 THEN $6::timestamptz
+            WHEN $4 IN ('paid','premium') AND $5 > 0 THEN ($6::timestamptz + interval '1 month')
             ELSE NULL
           END,
           NULL,
@@ -230,7 +230,7 @@ class SubscriptionManager:
               COALESCE(
                 {tbl}.next_charge_at,
                 ({tbl}.last_charged_at + interval '1 month'),
-                $6::timestamptz
+                ($6::timestamptz + interval '1 month')
               )
             ELSE NULL
           END,
