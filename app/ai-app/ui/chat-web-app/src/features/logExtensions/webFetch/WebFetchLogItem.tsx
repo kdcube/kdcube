@@ -2,9 +2,8 @@ import {ChatLogComponentProps} from "../../extensions/logExtesnions.ts";
 import {useMemo, useState} from "react";
 import IconContainer from "../../../components/IconContainer.tsx";
 import {WebFetchArtifact, WebFetchArtifactType, WebFetchDataItem} from "./types.ts";
-import {BanknoteX, Check, Download, Ellipsis, GlobeOff} from "lucide-react";
+import {Download, Ellipsis} from "lucide-react";
 import IconLoader from "../../../components/IconLoader.tsx";
-import {retry} from "@reduxjs/toolkit/query";
 
 const WebFetchLogItem = ({item}: ChatLogComponentProps) => {
     const maxVisibleLinks = 3;

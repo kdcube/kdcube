@@ -97,6 +97,69 @@ export interface ConvStatusEnvelope {
     data: { state: "idle" | "in_progress" | "error"; updated_at: string; current_turn_id?: string | null };
 }
 
+export type RateLimitEventStep = "rate_limit.warning"
+    | "rate_limit.denied"
+    | "rate_limit.snapshot"; // optional, if you want a periodic push
+
+export interface RateLimitLimits {
+    requests_per_day?: number | null;
+    requests_per_month?: number | null;
+    total_requests?: number | null;
+    tokens_per_hour?: number | null;
+    tokens_per_day?: number | null;
+    tokens_per_month?: number | null;
+    max_concurrent?: number | null;
+}
+
+export type RateLimitRemaining = RateLimitLimits
+
+export interface RateLimitSnapshot {
+    req_hour?: number;
+    req_day?: number;
+    req_month?: number;
+    req_total?: number;
+    tok_hour?: number;
+    tok_day?: number;
+    tok_month?: number;
+    in_flight?: number;
+}
+
+export interface RateLimitPayload {
+    bundle_id: string;
+    subject_id: string;
+    user_type: string;
+
+    limits: RateLimitLimits;
+    remaining: RateLimitRemaining;
+
+    violations: string[];
+    messages_remaining: number | null;
+
+    retry_after_sec: number | null;
+    retry_scope: "hour" | "day" | "month" | "total" | null;
+
+    retry_after_hours?: number | null;
+
+    snapshot?: RateLimitSnapshot;
+    reason?: string | null;
+}
+
+export interface ChatServiceEnvelope {
+    type: "chat.service";
+    conversation?: ConversationInfo | null;
+    event: {
+        step: RateLimitEventStep;        // 👈 kind of service event
+        status: "started" | "running" | "completed" | "error" | "skipped";               // "running" | "error" | ...
+        title?: string | null;
+        agent?: string | null;          // e.g. "bundle.rate_limiter"
+        scope?: "user" | "project" | "tenant" | "bundle";
+    };
+    data: {
+        rate_limit: RateLimitPayload;
+        [k: string]: unknown;
+    };
+}
+
 export interface ChatErrorEnvelope extends BaseEnvelope {
     type: "chat.error";
     data: { error: string; [k: string]: unknown };
@@ -157,6 +220,7 @@ export interface ChatEventHandlers {
     onChatError?: (env: ChatErrorEnvelope) => void;
     onConvStatus?: (env: ConvStatusEnvelope) => void;
     onSessionInfo?: (info: SessionInfo) => void;
+    onChatService?: (env: ChatServiceEnvelope) => void;
 }
 
 export interface ChatOptions {

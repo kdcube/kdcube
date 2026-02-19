@@ -167,6 +167,9 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             onSessionInfo: (info) => {
 
             },
+            onChatService: (env) => {
+                console.debug(env)
+            },
             onConnectError: error => {
                 console.error("Unable to connect to Chat's web socket. Retry in 5 sec", error)
                 setTimeout(() => {

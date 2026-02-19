@@ -4,7 +4,7 @@ import {
     ChatDeltaEnvelope,
     ChatErrorEnvelope,
     ChatOptions,
-    ChatRequest,
+    ChatRequest, ChatServiceEnvelope,
     ChatStartEnvelope,
     ChatStepEnvelope
 } from "./chatBase.ts";
@@ -172,6 +172,7 @@ class SocketIOChat extends ChatBase {
         bind<ChatStepEnvelope>("chat_step", this._eventHandlers?.onChatStep);
         bind<ChatCompleteEnvelope>("chat_complete", this._eventHandlers?.onChatComplete);
         bind<ChatErrorEnvelope>("chat_error", this._eventHandlers?.onChatError);
+        bind<ChatServiceEnvelope>("chat_service", this._eventHandlers?.onChatService);
 
         bind<SessionInfoEnvelope>("session_info", (info: SessionInfoEnvelope) => {
             if (info?.session_id) this._sessionId = info.session_id;
