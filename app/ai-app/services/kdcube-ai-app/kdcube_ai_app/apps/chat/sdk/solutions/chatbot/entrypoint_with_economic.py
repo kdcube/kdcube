@@ -150,9 +150,9 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 requests_per_day=100,
                 requests_per_month=30000,
                 total_requests=None,
-                tokens_per_hour=500_000,
-                tokens_per_day=2_000_000,
-                tokens_per_month=30_000_000,
+                tokens_per_hour=133_333,
+                tokens_per_day=333_333,
+                tokens_per_month=666_666,
             ),
             "payasyougo": QuotaPolicy(
                 max_concurrent=2,
@@ -1342,13 +1342,19 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
             now = datetime.utcnow().replace(tzinfo=timezone.utc)
 
-            if lane == "tier":
+            use_subscription_funding = (
+                funding_source == "subscription"
+                and not budget_bypass
+                and (lane != "paid" or paid_funding_source == "subscription")
+            )
+            project_funding = funding_source == "project" and not budget_bypass
+
+            if budget_bypass or use_subscription_funding or project_funding:
+                tier_covered_tokens = int(ranked_tokens)
+            elif lane == "tier":
                 tier_covered_tokens = min(int(ranked_tokens), int(tier_reserved_tokens))
             else:
                 tier_covered_tokens = 0
-
-            if budget_bypass:
-                tier_covered_tokens = int(ranked_tokens)
 
             overflow_tokens = max(int(ranked_tokens) - int(tier_covered_tokens), 0)
 
@@ -1358,12 +1364,10 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 tier_covered_usd = float(total_cost) * safe_frac(float(tier_covered_tokens), float(ranked_tokens))
                 overflow_usd = float(total_cost) * safe_frac(float(overflow_tokens), float(ranked_tokens))
 
-            use_subscription_funding = (
-                funding_source == "subscription"
-                and not budget_bypass
-                and (lane != "paid" or paid_funding_source == "subscription")
-            )
             if use_subscription_funding and total_cost > 0:
+                tier_covered_usd = float(total_cost)
+                overflow_usd = 0.0
+            if project_funding and total_cost > 0:
                 tier_covered_usd = float(total_cost)
                 overflow_usd = 0.0
 
@@ -1527,11 +1531,12 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 )
 
             if not lock_released:
-                if lane == "tier" and tier_reservation_id:
+                tokens_to_commit = int(ranked_tokens) if ranked_tokens > 0 else int(tier_covered_tokens)
+                if lane == "tier":
                     await self.rl.commit_with_reservation(
                         bundle_id=bundle_id,
                         subject_id=self.subj,
-                        tokens=int(tier_covered_tokens),
+                        tokens=tokens_to_commit,
                         lock_id=lock_id,
                         reservation_id=tier_reservation_id,
                         now=tier_admit_now,
@@ -1543,8 +1548,24 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     tier_reserved_tokens = 0
                     _log(
                         "rl.commit",
-                        "RL committed (tier tokens) and lock released (reservation finalized)",
-                        tokens=int(tier_covered_tokens),
+                        "RL committed (actual tokens) and lock released (reservation finalized)",
+                        tokens=tokens_to_commit,
+                    )
+                elif lane == "paid":
+                    await self.rl.commit_with_reservation(
+                        bundle_id=bundle_id,
+                        subject_id=self.subj,
+                        tokens=tokens_to_commit,
+                        lock_id=lock_id,
+                        reservation_id=None,
+                        now=tier_admit_now,
+                        inc_request=1,
+                    )
+                    lock_released = True
+                    _log(
+                        "rl.commit",
+                        "RL committed (paid lane)",
+                        tokens=tokens_to_commit,
                     )
                 else:
                     await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
