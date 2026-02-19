@@ -784,6 +784,50 @@ class ConvIndex:
             rows = await con.fetch(q, *args)
         return [dict(r) for r in rows]
 
+    async def fetch_latest_reactions(
+            self,
+            *,
+            user_id: str,
+            conversation_id: Optional[str],
+            turn_ids: Optional[Sequence[str]] = None,
+            days: int = 365,
+            bundle_id: Optional[str] = None,
+            since_ts: Optional[str] = None,
+            limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
+        args: List[Any] = [user_id, str(days)]
+        where = [
+            "user_id = $1",
+            "role = 'artifact'",
+            "ts >= now() - ($2::text || ' days')::interval",
+            "ts + (ttl_days || ' days')::interval >= now()",
+            "tags @> ARRAY['artifact:turn.log.reaction']::text[]",
+        ]
+        if conversation_id:
+            args.append(conversation_id)
+            where.append(f"conversation_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"bundle_id = ${len(args)}")
+        if since_ts:
+            args.append(since_ts)
+            where.append(f"ts >= ${len(args)}::timestamptz")
+        if turn_ids:
+            args.append(list(turn_ids))
+            where.append(f"turn_id = ANY(${len(args)}::text[])")
+
+        q = f"""
+          SELECT DISTINCT ON (turn_id)
+                 id, message_id, role, text, hosted_uri, ts, tags, turn_id, bundle_id, conversation_id
+          FROM {self.schema}.conv_messages
+          WHERE {' AND '.join(where)}
+          ORDER BY turn_id, ts DESC
+          LIMIT {int(limit)}
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+        return [dict(r) for r in rows]
+
     async def fetch_recent_after_ts(
             self,
             *,

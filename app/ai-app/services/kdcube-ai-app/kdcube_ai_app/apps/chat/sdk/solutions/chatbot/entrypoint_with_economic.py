@@ -268,6 +268,19 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             except Exception as e:
                 _log("telemetry", "Failed to emit service_event", "WARN", error=str(e), event_type=type)
 
+        async def _emit_analytics_event(*, type: str, status: str, title: str, data: dict):
+            try:
+                await self.comm.service_event(
+                    type=type,
+                    step="analytics",
+                    status=status,
+                    title=title,
+                    agent="bundle.rate_limiter",
+                    data=data,
+                )
+            except Exception as e:
+                _log("telemetry", "Failed to emit analytics event", "WARN", error=str(e), event_type=type)
+
         async def _econ_fail(*, code: str, title: str, message: str, event_type: str, data: dict):
             payload = dict(data)
             payload["code"] = code
@@ -1354,6 +1367,49 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             )
             project_funding = funding_source == "project" and not budget_bypass
 
+            def _post_run_snapshot(snapshot: dict, *, ranked: int, reserved: int, lane_name: str) -> dict:
+                post = dict(snapshot or {})
+                for key in ("req_day", "req_month", "req_total"):
+                    post[key] = int(post.get(key, 0) or 0) + 1
+                if lane_name == "tier":
+                    for key in ("tok_hour", "tok_day", "tok_month"):
+                        base = int(post.get(key, 0) or 0)
+                        post[key] = max(base - int(reserved or 0), 0) + int(ranked or 0)
+                else:
+                    for key in ("tok_hour", "tok_day", "tok_month"):
+                        post[key] = int(post.get(key, 0) or 0) + int(ranked or 0)
+                post["in_flight"] = max(int(post.get("in_flight", 0) or 0) - 1, 0)
+                return post
+
+            def _post_run_violations(policy: QuotaPolicy, snapshot: dict) -> list[str]:
+                violations: list[str] = []
+                def over(limit: Optional[int], used: int) -> bool:
+                    return limit is not None and used > int(limit)
+                if over(policy.requests_per_day, int(snapshot.get("req_day", 0) or 0)):
+                    violations.append("requests_per_day")
+                if over(policy.requests_per_month, int(snapshot.get("req_month", 0) or 0)):
+                    violations.append("requests_per_month")
+                if over(policy.total_requests, int(snapshot.get("req_total", 0) or 0)):
+                    violations.append("total_requests")
+                if over(policy.tokens_per_hour, int(snapshot.get("tok_hour", 0) or 0)):
+                    violations.append("tokens_per_hour")
+                if over(policy.tokens_per_day, int(snapshot.get("tok_day", 0) or 0)):
+                    violations.append("tokens_per_day")
+                if over(policy.tokens_per_month, int(snapshot.get("tok_month", 0) or 0)):
+                    violations.append("tokens_per_month")
+                return violations
+
+            post_run_snapshot = None
+            post_run_violations = []
+            if effective_policy and not budget_bypass:
+                post_run_snapshot = _post_run_snapshot(
+                    admit_snapshot_pre,
+                    ranked=int(ranked_tokens),
+                    reserved=int(tier_reserved_tokens),
+                    lane_name=lane,
+                )
+                post_run_violations = _post_run_violations(effective_policy, post_run_snapshot)
+
             if budget_bypass or use_subscription_funding or project_funding:
                 tier_covered_tokens = int(ranked_tokens)
             elif lane == "tier":
@@ -1576,6 +1632,40 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     await self.rl.release(bundle_id=bundle_id, subject_id=self.subj, lock_id=lock_id)
                     lock_released = True
                     _log("rl.release", "RL lock released", lane=lane)
+
+            if post_run_violations and not budget_bypass:
+                post_reason = "|".join(post_run_violations)
+                post_insight = compute_quota_insight(
+                    policy=effective_policy,
+                    snapshot=post_run_snapshot or {},
+                    reason=post_reason,
+                    used_tier_override=admit.used_tier_override if admit else False,
+                    user_budget_tokens=user_budget_tokens,
+                    now=now,
+                )
+                payload = dataclasses.asdict(post_insight)
+                payload.update({
+                    "bundle_id": bundle_id,
+                    "subject_id": self.subj,
+                    "user_type": user_type,
+                    "lane": lane,
+                    "ranked_tokens": int(ranked_tokens),
+                    "snapshot": post_run_snapshot,
+                    "reason": post_reason,
+                })
+                await _emit_analytics_event(
+                    type="analytics.rate_limit.post_run_exceeded",
+                    status="completed",
+                    title="Post-run limit exceeded",
+                    data=payload,
+                )
+                await _econ_fail(
+                    code="post_run_limit_exceeded",
+                    title="Limit exceeded",
+                    message="Request exceeded your plan limit after completion. Please try again later.",
+                    event_type="rate_limit.post_run_exceeded",
+                    data=payload,
+                )
 
         except EconomicsLimitException:
             raise

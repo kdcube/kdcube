@@ -159,6 +159,8 @@ def build_announce_text(
     timezone: Optional[str],
     timeline_blocks: List[Dict[str, Any]],
     constraints: Optional[List[str]] = None,
+    feedback_updates: Optional[List[Dict[str, Any]]] = None,
+    feedback_incorporated: bool = False,
     mode: str = "full",
 ) -> str:
     def _fmt_elapsed(seconds: float) -> str:
@@ -267,6 +269,37 @@ def build_announce_text(
                 lines.append("  - plans: none")
         except Exception:
             lines.append("  - plans: none")
+
+    if feedback_updates and mode != "turn_finalize":
+        updates = [u for u in (feedback_updates or []) if isinstance(u, dict)]
+        if updates:
+            lines.append("")
+            origins = {str(u.get("origin") or "").strip().lower() for u in updates}
+            if origins and origins.issubset({"user", ""}):
+                lines.append("[NEW USER FEEDBACKS]")
+            else:
+                lines.append("[NEW FEEDBACKS]")
+            for u in updates:
+                turn_id = str(u.get("turn_id") or "").strip()
+                turn_ts = str(u.get("turn_ts") or "").strip()
+                fb_ts = str(u.get("feedback_ts") or "").strip()
+                reaction = u.get("reaction")
+                text = str(u.get("text") or "").strip()
+                parts = []
+                if turn_id:
+                    parts.append(f"turn {turn_id}")
+                if turn_ts:
+                    parts.append(f"turn_ts={turn_ts}")
+                if fb_ts:
+                    parts.append(f"feedback_ts={fb_ts}")
+                if reaction is not None:
+                    parts.append(f"reaction={reaction}")
+                if text:
+                    parts.append(f"text={text}")
+                if parts:
+                    lines.append("  - " + " | ".join(parts))
+            if feedback_incorporated:
+                lines.append("  (incorporated into turn timeline)")
 
     if show_constraints and constraints:
         filtered = [item for item in constraints if item]

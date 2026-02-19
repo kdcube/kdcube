@@ -346,6 +346,41 @@ class ContextRAGClient:
 
         return {"items": items}
 
+    async def fetch_latest_feedback_reactions(
+            self,
+            *,
+            user_id: str,
+            conversation_id: str,
+            turn_ids: Optional[List[str]] = None,
+            days: int = 365,
+            bundle_id: Optional[str] = None,
+            since_ts: Optional[str] = None,
+            limit: int = 1000,
+    ) -> Dict[str, Any]:
+        rows = await self.idx.fetch_latest_reactions(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            turn_ids=turn_ids,
+            days=days,
+            bundle_id=bundle_id,
+            since_ts=since_ts,
+            limit=limit,
+        )
+        items = []
+        for r in rows:
+            items.append({
+                "id": r["id"],
+                "message_id": r["message_id"],
+                "role": r["role"],
+                "text": r.get("text") or "",
+                "ts": r["ts"].isoformat() if hasattr(r["ts"], "isoformat") else r["ts"],
+                "tags": list(r.get("tags") or []),
+                "turn_id": r.get("turn_id"),
+                "bundle_id": r.get("bundle_id"),
+                "hosted_uri": r.get("hosted_uri"),
+            })
+        return {"items": items}
+
     async def recent_after_ts(
             self,
             *,
@@ -856,6 +891,15 @@ class ContextRAGClient:
             original_embedding = turn_log_item.get("embedding")
             original_tags = turn_log_item.get("tags") or []
 
+            # Build compact feedback text for index (SQL) entry
+            feedback_text = ""
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.feeback import Feedback
+                fb_helper = Feedback(ctx_client=None, logger_obj=logger)
+                feedback_text = fb_helper.build_turn_log_index_text(list(tl.get("feedbacks") or []))
+            except Exception:
+                feedback_text = ""
+
             # Write new blob
             hosted_uri, message_id, rn = await self.store.put_message(
                 tenant=tenant, project=project, user=user, fingerprint=None,
@@ -875,6 +919,7 @@ class ContextRAGClient:
                 hosted_uri=hosted_uri,
                 tags=tags,
                 ts=original_ts,
+                text=feedback_text if feedback_text else "",
             )
             return True
 
@@ -905,6 +950,12 @@ class ContextRAGClient:
             )
 
         payload = {"reaction": reaction}
+        try:
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.feeback import Feedback
+            fb_helper = Feedback(ctx_client=None, logger_obj=logger)
+            reaction_text = fb_helper.format_reaction_text(reaction)
+        except Exception:
+            reaction_text = str(reaction)
 
         # Build tags with origin
         tags = ["artifact:turn.log.reaction", f"turn:{turn_id}", f"origin:{origin}"]
@@ -915,7 +966,7 @@ class ContextRAGClient:
             conversation_id=conversation_id,
             bundle_id=bundle_id,
             role="artifact",
-            text=f"[turn.log.reaction]\n{reaction}",
+            text=f"[turn.log.reaction] {reaction_text}",
             payload=payload,
             meta={"kind": "turn.log.reaction", "turn_id": turn_id, "origin": origin},
             id="turn.log.reaction",
@@ -926,7 +977,7 @@ class ContextRAGClient:
             user_id=user, conversation_id=conversation_id, turn_id=turn_id,
             bundle_id=bundle_id,
             role="artifact",
-            text=f"[turn.log.reaction] {reaction}", hosted_uri=hosted_uri, ts=payload["reaction"]["ts"],
+            text=f"[turn.log.reaction] {reaction_text}", hosted_uri=hosted_uri, ts=payload["reaction"]["ts"],
             tags=tags,
             ttl_days=365, user_type=user_type, embedding=None, message_id=message_id
         )
@@ -1040,6 +1091,15 @@ class ContextRAGClient:
             original_embedding = turn_log_item.get("embedding")  # Preserve embedding!
             original_tags = turn_log_item.get("tags") or []
 
+            # Build compact feedback text for index (SQL) entry
+            feedback_text = ""
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.feeback import Feedback
+                fb_helper = Feedback(ctx_client=None, logger_obj=logger)
+                feedback_text = fb_helper.build_turn_log_index_text(list(turn_log_dict.get("feedbacks") or []))
+            except Exception:
+                feedback_text = ""
+
             # 9) Write NEW S3 blob with updated payload
             hosted_uri, message_id, rn = await self.store.put_message(
                 tenant=tenant,
@@ -1070,7 +1130,7 @@ class ContextRAGClient:
                 hosted_uri=hosted_uri,
                 tags=merged_tags,
                 ts=original_ts,  # PRESERVE original timestamp
-                # text is NOT passed, so it won't be updated in PostgreSQL
+                text=feedback_text if feedback_text else "",
             )
 
             logger.info(

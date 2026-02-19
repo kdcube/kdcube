@@ -601,6 +601,41 @@ The path /exec-workspace/codegen_xxx is not shared from the host
 
 ---
 
+### Issue: `mounts denied` for `/tmp/ctx_*` when running chat service locally
+
+**Symptom:**
+```
+The path /tmp/ctx_v2_xxx/work is not shared from the host
+```
+
+**Cause:**
+When the chat service runs on the host (PyCharm / local Python), the exec workspace defaults to `/tmp`.  
+Docker Desktop only allows mounts from shared paths (usually `/Users/...`).
+
+**Solutions:**
+
+1. **Preferred: set a shared exec workspace root**
+   - In your local run config (PyCharm or shell):
+```
+EXEC_WORKSPACE_ROOT=/Users/<you>/kdcube/exec-workspace
+```
+   - Ensure the folder exists and is writable:
+```
+mkdir -p /Users/<you>/kdcube/exec-workspace
+```
+
+2. **Alternative: add `/tmp` to Docker Desktop file sharing (Mac/Windows)**
+   - Docker Desktop → Settings → Resources → File Sharing
+   - Add `/tmp` and `/private/tmp` (macOS uses `/private/tmp`)
+
+3. **Verify paths in logs**
+   - Look for:
+```
+[solver.codegen] workdir=/Users/<you>/kdcube/exec-workspace/ctx_v2_xxx/work
+```
+
+---
+
 ### Issue: Workspaces not visible on host
 
 **Symptom:**

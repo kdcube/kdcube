@@ -1,0 +1,113 @@
+# Service Dev Env (Local Run)
+
+| Variable | Purpose | File | Service/Scope |
+|---|---|---|---|
+| `DEFAULT_PROJECT_NAME` | Default project name | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker (local) |
+| `DEFAULT_TENANT` | Default tenant id | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker (local) |
+| `TENANT_ID` | Tenant id (service identity) | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker (local) |
+| `POSTGRES_USER` | Postgres user | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `POSTGRES_PASSWORD` | Postgres password | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `POSTGRES_DATABASE` | Postgres database name | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `POSTGRES_PORT` | Postgres port | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `POSTGRES_SSL` | Enable SSL for Postgres | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `POSTGRES_DB` | Postgres container DB name | `deployment/docker/devenv/sample_env/.env.backend` | local Postgres |
+| `PGPORT` | Postgres port for client tools | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `SELF_HOSTED_SERVING_ENDPOINT` | Custom model serving endpoint | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `REDIS_PASSWORD` | Redis password | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `REDIS_URL` | Redis connection URL | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `KDCUBE_STORAGE_PATH` | Storage backend path or S3 URI | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `ORCHESTRATOR_WORKER_CONCURRENCY` | Worker concurrency for orchestrator | `deployment/docker/devenv/sample_env/.env.backend` | worker/orchestrator |
+| `CB_ORCHESTRATOR_TYPE` | Orchestrator name | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `CB_RELAY_IDENTITY` | Redis pubsub identity | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `DRAMATIQ_PROCESSES` | Dramatiq worker process count | `deployment/docker/devenv/sample_env/.env.backend` | worker |
+| `MAX_QUEUE_SIZE` | Hard cap for enqueue | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `MAX_CONCURRENT_CHAT` | Max concurrent tasks per processor | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `CHAT_TASK_TIMEOUT_SEC` | Per-task timeout (seconds) | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `KB_PARALLELISM` | KB service parallelism | `deployment/docker/devenv/sample_env/.env.backend` | kb |
+| `CHAT_APP_PARALLELISM` | Chat app parallelism | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `HEARTBEAT_INTERVAL` | Heartbeat interval (seconds) | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `OPENAI_API_KEY` | OpenAI API key | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `HUGGING_FACE_API_TOKEN` | Hugging Face token | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `ANTHROPIC_API_KEY` | Anthropic API key | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `BRAVE_API_KEY` | Brave Search API key | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `GEMINI_CACHE_ENABLED` | Enable Gemini cache | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `GEMINI_CACHE_TTL_SECONDS` | Gemini cache TTL | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `APP_DOMAIN` | CORS allow domain | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `TORCH_DEVICE` | Marker torch device (CPU/GPU) | `deployment/docker/devenv/sample_env/.env.backend` | kb |
+| `AUTH_PROVIDER` | Auth provider (simple|cognito) | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `EXTRA_ID_TOKEN_HEADER` | Extra ID token header name | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `COGNITO_REGION` | Cognito region | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `COGNITO_USER_POOL_ID` | Cognito user pool id | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `COGNITO_APP_CLIENT_ID` | Cognito app client id | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `COGNITO_SERVICE_CLIENT_ID` | Cognito service client id | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `JWKS_CACHE_TTL_SECONDS` | JWKS cache TTL | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `OIDC_SERVICE_ADMIN_USERNAME` | OIDC service admin username | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `OIDC_SERVICE_ADMIN_PASSWORD` | OIDC service admin password | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `ODIC_SERVICE_USER_EMAIL` | Service user email | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `AGENTIC_BUNDLES_ROOT` | Bundles root inside container | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `HOST_BUNDLES_PATH` | Host bundles root (for mounts) | `deployment/docker/devenv/sample_env/.env.backend` | local/dev |
+| `DEFAULT_LLM_MODEL_ID` | Default LLM model | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `DEFAULT_EMBEDDING_MODEL_ID` | Default embedding model | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `APP_AV_SCAN` | Enable AV scan | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `APP_AV_TIMEOUT_S` | AV scan timeout | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `CLAMAV_HOST` | ClamAV host | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `CLAMAV_PORT` | ClamAV port | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `AWS_REGION` | AWS region | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `AWS_DEFAULT_REGION` | AWS default region | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `NO_PROXY` | No-proxy hosts | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `AWS_EC2_METADATA_DISABLED` | Allow EC2 IMDS | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `AWS_SDK_LOAD_CONFIG` | Load AWS config file | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
+| `TOOLS_WEB_SEARCH_FETCH_CONTENT` | Enable web fetch | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `WEB_FETCH_RESOURCES_MEDIUM` | Medium cookies JSON | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `WEB_SEARCH_AGENTIC_THINKING_BUDGET` | Web search thinking budget | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `WEB_SEARCH_PRIMARY_BACKEND` | Primary web search backend | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `WEB_SEARCH_BACKEND` | Web search backend | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `WEB_SEARCH_HYBRID_MODE` | Hybrid mode (sequential|parallel) | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `WEB_SEARCH_SEGMENTER` | Search segmenter | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `OPEX_AGG_CRON` | Accounting aggregation schedule | `deployment/docker/devenv/sample_env/.env.backend` | worker |
+| `BUNDLE_CLEANUP_ENABLED` | Enable bundle cleanup loop | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `BUNDLE_CLEANUP_INTERVAL_SECONDS` | Cleanup interval | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `BUNDLE_CLEANUP_LOCK_TTL_SECONDS` | Cleanup lock TTL | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `BUNDLE_REF_TTL_SECONDS` | Active bundle ref TTL | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `LOG_LEVEL` | Log level | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `LOG_MAX_MB` | Log rotation size | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `LOG_BACKUP_COUNT` | Log rotation count | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `LOG_DIR` | Log directory | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `LOG_FILE_PREFIX` | Log file prefix | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `PY_CODE_EXEC_IMAGE` | Executor image name | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `PY_CODE_EXEC_TIMEOUT` | Executor timeout (seconds) | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `PY_CODE_EXEC_NETWORK_MODE` | Executor network mode | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `ACCOUNTING_SERVICES` | Accounting services JSON | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
+| `AUTH_TOKEN_COOKIE_NAME` | Auth token cookie name | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `ID_TOKEN_COOKIE_NAME` | ID token cookie name | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `MCP_CACHE_TTL_SECONDS` | MCP cache TTL | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `INSTANCE_ID` | Instance id for services | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb/worker |
+| `CHAT_WEB_APP_CONFIG_FILE_PATH` | Frontend config JSON path | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+
+**Optional or commented variables in sample env**
+
+| Variable | Purpose | File | Service/Scope |
+|---|---|---|---|
+| `CHAT_WEB_APP_KB_BASE` | KB base URL in UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_KB_SOCKET` | KB socket URL in UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_KB_SOCKETIO_PATH` | KB Socket.IO path | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_CHAT_BASE` | Chat base URL in UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_CHAT_SOCKET` | Chat socket URL in UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_CHAT_SOCKETIO_PATH` | Chat Socket.IO path | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_MONITORING_BASE` | Monitoring base URL | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_DEFAULT_TENANT` | Default tenant in UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_DEFAULT_PROJECT` | Default project in UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_PROJECT` | Project for UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_AUTH_TYPE` | Auth mode for UI | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_EXTRA_ID_TOKEN_HEADER` | Extra ID token header | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_TOTP_APP_NAME` | TOTP app name | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_TOTP_ISSUER` | TOTP issuer | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_PROXY_LOGIN_BASE` | Proxy login base path | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_OIDC_SCOPE` | OIDC scope | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_OIDC_CLIENT_ID` | OIDC client id | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_OIDC_AUTHORITY` | OIDC authority URL | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_HARDCODED_AUTH_TOKEN` | Hardcoded auth token | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+| `CHAT_WEB_APP_DEFAULT_ROUTE_PREFIX` | Default route prefix | `deployment/docker/devenv/sample_env/.env.frontend` | frontend |
+
+**Notes**
+These variables must be present in the local process environment (shell or IDE run config) for dev runs. Docker-only `.env` files are not automatically loaded by PyCharm.

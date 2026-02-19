@@ -85,6 +85,7 @@ def build_timeline_payload(
     conversation_started_at: Optional[str] = None,
     cache_last_touch_at: Optional[int] = None,
     cache_last_ttl_seconds: Optional[int] = None,
+    last_known_feedback_ts: Optional[str] = None,
     include_sources_pool: bool = True,
 ) -> Dict[str, Any]:
     last_activity_at = _tail_ts(blocks or [])
@@ -99,6 +100,7 @@ def build_timeline_payload(
         "last_activity_at": last_activity_at or "",
         "cache_last_touch_at": cache_last_touch_at,
         "cache_last_ttl_seconds": cache_last_ttl_seconds,
+        "last_known_feedback_ts": last_known_feedback_ts or "",
     }
 
 
@@ -126,6 +128,11 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             cache_last_ttl_seconds = int(cache_last_ttl_seconds)
         except Exception:
             cache_last_ttl_seconds = None
+    last_known_feedback_ts = payload.get("last_known_feedback_ts")
+    if isinstance(last_known_feedback_ts, str):
+        last_known_feedback_ts = last_known_feedback_ts.strip()
+    else:
+        last_known_feedback_ts = ""
     return {
         "blocks": blocks,
         "sources_pool": sources_pool,
@@ -137,6 +144,7 @@ def parse_timeline_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
         "last_activity_at": payload.get("last_activity_at") or "",
         "cache_last_touch_at": cache_last_touch_at,
         "cache_last_ttl_seconds": cache_last_ttl_seconds,
+        "last_known_feedback_ts": last_known_feedback_ts,
     }
 
 
@@ -794,6 +802,7 @@ class Timeline:
     conversation_started_at: str = ""
     cache_last_touch_at: Optional[int] = None
     cache_last_ttl_seconds: Optional[int] = None
+    last_known_feedback_ts: str = ""
 
     def __post_init__(self) -> None:
         self.blocks = list(self.blocks or [])
@@ -823,6 +832,7 @@ class Timeline:
             conversation_started_at=str(parsed.get("conversation_started_at") or ""),
             cache_last_touch_at=parsed.get("cache_last_touch_at"),
             cache_last_ttl_seconds=parsed.get("cache_last_ttl_seconds"),
+            last_known_feedback_ts=parsed.get("last_known_feedback_ts") or "",
         )
 
     def to_payload(self) -> Dict[str, Any]:
@@ -833,6 +843,7 @@ class Timeline:
             conversation_started_at=self.conversation_started_at,
             cache_last_touch_at=self.cache_last_touch_at,
             cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+            last_known_feedback_ts=self.last_known_feedback_ts,
         )
 
     def _blocks_for_persist(self) -> List[Dict[str, Any]]:
@@ -856,6 +867,7 @@ class Timeline:
                 conversation_started_at=self.conversation_started_at,
                 cache_last_touch_at=self.cache_last_touch_at,
                 cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+                last_known_feedback_ts=self.last_known_feedback_ts,
                 include_sources_pool=True,
             )
             out_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -918,6 +930,32 @@ class Timeline:
         else:
             self.announce_blocks = [b for b in (blocks or []) if isinstance(b, dict)]
 
+    def is_cache_hot(self) -> bool:
+        """
+        Best-effort check: whether cache TTL is active and has not expired since last touch.
+        Used to decide if we can mutate historical blocks without invalidating cache.
+        """
+        try:
+            session = getattr(self.runtime, "session", None)
+            ttl_seconds = getattr(session, "cache_ttl_seconds", None) if session is not None else None
+            if ttl_seconds is None:
+                ttl_seconds = getattr(self.runtime, "cache_ttl_seconds", None)
+            ttl = int(ttl_seconds or 0)
+        except Exception:
+            ttl = 0
+        if ttl <= 0:
+            return False
+        last_touch = self.cache_last_touch_at
+        try:
+            last_touch_val = int(last_touch) if last_touch is not None else None
+        except Exception:
+            last_touch_val = None
+        if last_touch_val is None:
+            return False
+        try:
+            return (int(time.time()) - last_touch_val) < ttl
+        except Exception:
+            return False
     def visible_paths(self) -> set[str]:
         paths: set[str] = set()
         blocks = self._apply_hidden_replacements(self._collect_blocks())
@@ -2233,6 +2271,23 @@ class Timeline:
                 if text:
                     lines.append(text)
                 text = "\n".join(lines).strip()
+            elif btype == "turn.feedback":
+                lines = []
+                origin = (meta.get("origin") or "").strip().lower() if isinstance(meta, dict) else ""
+                if origin == "user":
+                    lines.append("[USER FEEDBACK]")
+                elif origin:
+                    lines.append("[AUTO FEEDBACK]")
+                else:
+                    lines.append("[FEEDBACK]")
+                if ts:
+                    lines.append(f"[ts: {ts}]")
+                reaction = meta.get("reaction") if isinstance(meta, dict) else None
+                if reaction is not None:
+                    lines.append(f"reaction: {reaction}")
+                if text:
+                    lines.append(text)
+                text = "\n".join(lines).strip()
             elif btype == "react.notes":
                 if isinstance(text, str):
                     ts_line = _ts_line(ts)
@@ -2607,6 +2662,7 @@ class Timeline:
             conversation_started_at=self.conversation_started_at,
             cache_last_touch_at=self.cache_last_touch_at,
             cache_last_ttl_seconds=self.cache_last_ttl_seconds,
+            last_known_feedback_ts=self.last_known_feedback_ts,
             include_sources_pool=True,
         )
         turn_ids = payload.get("turn_ids") or []

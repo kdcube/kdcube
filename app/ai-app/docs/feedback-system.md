@@ -23,6 +23,23 @@ The feedback system lets **users** (explicit) and the **machine** (inferred) att
 * **Reaction artifact** — `artifact:turn.log.reaction` (authoritative, small, indexed)
 * **Turn log** — `artifact:turn.log` (rich S3 blob; optionally mirrors feedbacks)
 
+React v2 also **surfaces feedback to the agent** via the timeline/announce:
+
+* **Cache cold** (TTL expired or disabled): feedback is injected into the target turn as a `turn.feedback` block.
+* **Cache hot** (TTL active & fresh): feedback is **not** injected into history; it appears only in ANNOUNCE.
+
+### Fast index access
+
+For quick feedback discovery without fetching turn-log blobs:
+
+- `artifact:turn.log.reaction` rows store the **reaction JSON** in `conv_messages.text`
+  (prefix `[turn.log.reaction] ...`).
+- `artifact:turn.log` rows store a **compact feedback summary** in `conv_messages.text`
+  (prefix `[turn.log.feedbacks] {...}`).
+
+React v2 uses reaction artifacts for timeline refresh; turn logs are used in
+`memsearch` and conversation fetch APIs.
+
 ### Lifecycle (high level)
 
 1. **Receive/Detect feedback** (user API or machine inference)
@@ -71,6 +88,37 @@ graph TB
     Q1["Turns with feedback (per conversation)"]
     Q2[Conversations with feedback in period]
   end
+```
+
+---
+
+## Timeline & Announce Integration (React v2)
+
+When a React v2 session renders a timeline:
+
+1. **Collect feedbacks** for the conversation (from `artifact:turn.log` and `artifact:turn.log.reaction`).
+2. **Filter** to turns present in the timeline.
+3. **If cache is cold**, insert a `turn.feedback` block as the last block in the target turn.
+4. **If cache is hot**, do **not** mutate the timeline; include the feedback in ANNOUNCE instead.
+
+**Block shape (timeline):**
+
+```
+type: "turn.feedback"
+path: "ar:<turn_id>.feedback.<key>"
+meta: {
+  origin: "user" | "machine",
+  reaction: "ok" | "not_ok" | "neutral" | null,
+  confidence: <float>,
+  from_turn_id: "<turn_id>"
+}
+```
+
+**Announce shape (cache hot):**
+
+```
+[NEW USER FEEDBACKS]
+  - turn <turn_id> | turn_ts=<turn_ts> | feedback_ts=<ts> | reaction=<reaction> | text=<text>
 ```
 
 ---

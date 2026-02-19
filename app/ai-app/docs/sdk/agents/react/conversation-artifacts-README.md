@@ -36,6 +36,13 @@ Reference implementations:
   UI artifacts in the fetch payload.
 - User attachments and produced files are hosted separately (rn/hosted_uri) and referenced
   via block metadata; they are not standalone conversation artifacts here.
+- Feedback is persisted as `artifact:turn.log.reaction` and mirrored into `artifact:turn.log`.
+  When cache is cold, React v2 injects `turn.feedback` blocks into the timeline and those
+  blocks are persisted inside `conv.timeline.v1`.
+- `artifact:turn.log.reaction` rows store reaction JSON in `conv_messages.text`
+  (`[turn.log.reaction] ...`) for fast index-only reads.
+- `artifact:turn.log` rows store compact feedback summaries in `conv_messages.text`
+  (`[turn.log.feedbacks] {...}`) for fast index-only reads.
 - The timeline artifact stores only a lightweight sources_pool snapshot for indexing/local access;
   the full pool lives in `conv:sources_pool` and is loaded at turn start.
 - Loading happens in `ContextBrowser.load_timeline` (`kdcube_ai_app/apps/chat/sdk/solutions/react/v2/browser.py`).

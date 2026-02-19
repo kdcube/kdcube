@@ -72,10 +72,38 @@ def get_exec_workspace_root() -> pathlib.Path:
     This ensures temporary execution directories are created in a location
     that's accessible to sibling containers when running Docker-in-Docker.
     """
+    # Allow explicit override for dev setups (e.g., Docker Desktop file sharing)
+    env_root = os.environ.get("EXEC_WORKSPACE_ROOT")
+    if env_root:
+        # Keep this log minimal to avoid noise
+        try:
+            from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+            AgentLogger("exec.workspace").log(f"EXEC_WORKSPACE_ROOT override: {env_root}", level="INFO")
+        except Exception:
+            pass
+        return pathlib.Path(env_root)
     if _is_running_in_docker():
+        try:
+            from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+            AgentLogger("exec.workspace").log("EXEC_WORKSPACE_ROOT default: /exec-workspace (docker)", level="INFO")
+        except Exception:
+            pass
         return pathlib.Path("/exec-workspace")
-    else:
-        return pathlib.Path("/tmp")
+    # Host-only fallback to HOST_EXEC_WORKSPACE_PATH
+    host_root = os.environ.get("HOST_EXEC_WORKSPACE_PATH")
+    if host_root:
+        try:
+            from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+            AgentLogger("exec.workspace").log(f"HOST_EXEC_WORKSPACE_PATH fallback: {host_root}", level="INFO")
+        except Exception:
+            pass
+        return pathlib.Path(host_root)
+    try:
+        from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+        AgentLogger("exec.workspace").log("EXEC_WORKSPACE_ROOT default: /tmp (host)", level="INFO")
+    except Exception:
+        pass
+    return pathlib.Path("/tmp")
 
 
 def _is_running_in_docker() -> bool:

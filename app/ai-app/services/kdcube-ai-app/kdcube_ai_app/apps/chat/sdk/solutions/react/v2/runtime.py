@@ -145,6 +145,10 @@ class ReactSolverV2:
         try:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_announce_text
             runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
+            try:
+                await self.ctx_browser.refresh_feedbacks()
+            except Exception:
+                pass
             active_block = build_announce_text(
                 iteration=iteration,
                 max_iterations=max_iterations,
@@ -152,6 +156,8 @@ class ReactSolverV2:
                 timezone=getattr(runtime_ctx, "timezone", None) if runtime_ctx else None,
                 timeline_blocks=self.ctx_browser.timeline.blocks,
                 constraints=None,
+                feedback_updates=self.ctx_browser.feedback_updates if self.ctx_browser else None,
+                feedback_incorporated=self.ctx_browser.feedback_updates_integrated if self.ctx_browser else False,
                 mode=getattr(runtime_ctx, "announce_mode", "full") if runtime_ctx else "full",
             )
             debug_announce = bool(getattr(runtime_ctx, "debug_log_announce", False))
