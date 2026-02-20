@@ -55,6 +55,7 @@ Tracks (quota counters are global per tenant/project; accounting still uses bund
 - Requests: day / rolling‑30‑day / total counters
 - Tokens: rolling‑hour / day / rolling‑30‑day counters
 - Last turn: `last_turn_tokens`, `last_turn_at`
+- Bundle index: `kdcube:economics:rl:bundles:{subject_id}` (set of bundle IDs, 90‑day TTL)
 
 Policy source:
 - Base policy comes from **plan_id** (not role).

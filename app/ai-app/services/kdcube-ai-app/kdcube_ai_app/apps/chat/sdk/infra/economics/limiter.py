@@ -16,6 +16,7 @@ from kdcube_ai_app.infra.namespaces import REDIS
 
 # Global enforcement scope (per tenant/project via subject_id).
 GLOBAL_BUNDLE_ID = "__project__"
+BUNDLE_INDEX_TTL_SEC = 90 * 24 * 60 * 60  # 90 days
 
 # --------- helpers (keys / time) ---------
 def _k(ns: str, bundle: str, subject: str, *parts: str) -> str:
@@ -26,6 +27,9 @@ def _k(ns: str, bundle: str, subject: str, *parts: str) -> str:
     Example: kdcube:economics:rl:kdcube.codegen.orchestrator:tenant-a:project-x:user123:locks
     """
     return ":".join([ns, bundle, subject, *parts])
+
+def _bundle_index_key(ns: str, subject: str) -> str:
+    return f"{ns}:bundles:{subject}"
 
 def _ymd(dt: datetime) -> str:  return dt.strftime("%Y%m%d")
 def _ymdh(dt: datetime) -> str: return dt.strftime("%Y%m%d%H")
@@ -388,7 +392,8 @@ return 1
 #  1..9  same as _LUA_COMMIT (req/tok/last/locks)
 #  10    resv_index_zset
 #  11    resv_data_hash
-#  12    commit_dedupe_ke
+#  12    commit_dedupe_key
+#  13    bundle_index
 # ARGV:
 #  1 inc_req
 #  2 inc_tokens
@@ -398,6 +403,8 @@ return 1
 #  6 now_ts
 #  7 lock_id
 #  8 resv_id
+#  9 bundle_id
+# 10 bundle_index_ttl
 _LUA_COMMIT_WITH_RESERVATION = r"""
 local d_reqs = KEYS[1]
 local m_reqs = KEYS[2]
@@ -411,6 +418,7 @@ local locks  = KEYS[9]
 local resv_idx = KEYS[10]
 local resv_map = KEYS[11]
 local dedupe = KEYS[12]
+local bundle_idx = KEYS[13]
 
 local inc_req  = tonumber(ARGV[1])
 local inc_tok  = tonumber(ARGV[2])
@@ -420,6 +428,8 @@ local exp_hour = tonumber(ARGV[5])
 local now_ts   = tonumber(ARGV[6])
 local lock_id  = ARGV[7]
 local resv_id  = ARGV[8]
+local bundle_id = ARGV[9]
+local bundle_ttl = tonumber(ARGV[10]) or 0
 
 local function redis_now()
   local t = redis.call('TIME')
@@ -513,6 +523,13 @@ end
 redis.call("SET", last_t, tostring(inc_tok or 0))
 redis.call("SET", last_a, tostring(now_ts))
 
+if bundle_idx and bundle_idx ~= "" and bundle_id and bundle_id ~= "" then
+  redis.call("SADD", bundle_idx, bundle_id)
+  if bundle_ttl and bundle_ttl > 0 then
+    redis.call("EXPIRE", bundle_idx, bundle_ttl)
+  end
+end
+
 -- release concurrency slot
 if lock_id and lock_id ~= "" then
   redis.call("ZREM", locks, lock_id)
@@ -576,8 +593,8 @@ return {1, current + 1, maxc}
 """
 
 # Atomic commit: +1 request, +tokens into hour/day/month, write last_turn_*, release lock
-# KEYS: d_reqs, m_reqs, t_reqs, h_toks_prefix, d_toks, m_toks, last_tok, last_at, locks_zset, commit_dedupe_key
-# ARGV: inc_req, inc_tokens, exp_day, exp_mon, exp_hour, now_ts, lock_id
+# KEYS: d_reqs, m_reqs, t_reqs, h_toks_prefix, d_toks, m_toks, last_tok, last_at, locks_zset, commit_dedupe_key, bundle_index
+# ARGV: inc_req, inc_tokens, exp_day, exp_mon, exp_hour, now_ts, lock_id, bundle_id, bundle_index_ttl
 _LUA_COMMIT = r"""
 local d_reqs = KEYS[1]
 local m_reqs = KEYS[2]
@@ -589,6 +606,7 @@ local last_t = KEYS[7]
 local last_a = KEYS[8]
 local locks  = KEYS[9]
 local dedupe = KEYS[10]
+local bundle_idx = KEYS[11]
 
 local inc_req  = tonumber(ARGV[1])
 local inc_tok  = tonumber(ARGV[2])
@@ -597,6 +615,8 @@ local exp_mon  = tonumber(ARGV[4])
 local exp_hour = tonumber(ARGV[5])
 local now_ts   = tonumber(ARGV[6])
 local lock_id  = ARGV[7]
+local bundle_id = ARGV[8]
+local bundle_ttl = tonumber(ARGV[9]) or 0
 
 local function redis_now()
   local t = redis.call('TIME')
@@ -640,6 +660,13 @@ end
 
 redis.call('SET', last_t, tostring(inc_tok))
 redis.call('SET', last_a, tostring(now_ts))
+
+if bundle_idx and bundle_idx ~= "" and bundle_id and bundle_id ~= "" then
+  redis.call("SADD", bundle_idx, bundle_id)
+  if bundle_ttl and bundle_ttl > 0 then
+    redis.call("EXPIRE", bundle_idx, bundle_ttl)
+  end
+end
 
 if lock_id and lock_id ~= '' then
   redis.call('ZREM', locks, lock_id)
@@ -1052,18 +1079,20 @@ class UserEconomicsRateLimiter:
         k_last_t = _k(self.ns, bundle_id, subject_id, "last_turn_tokens")
         k_last_a = _k(self.ns, bundle_id, subject_id, "last_turn_at")
         k_locks  = _k(self.ns, bundle_id, subject_id, "locks")
+        k_bundle_idx = _bundle_index_key(self.ns, subject_id)
 
         # Dedupe key MUST include a non-empty identifier.
         k_commit = _k(self.ns, bundle_id, subject_id, "commit", str(lock_id))
 
         await self.r.eval(
             _LUA_COMMIT,
-            10,
+            11,
             *_strs(
                 k_req_d, k_req_m, k_req_t,
                 k_tok_h_prefix, k_tok_d, k_tok_m,
                 k_last_t, k_last_a, k_locks,
                 k_commit,
+                k_bundle_idx,
             ),
             *_strs(
                 1,                      # +1 request
@@ -1073,6 +1102,8 @@ class UserEconomicsRateLimiter:
                 _eoh(now),              # hour EXPIREAT
                 int(now.timestamp()),   # last_at
                 str(lock_id),           # release this member
+                str(bundle_id),         # bundle id for index
+                int(BUNDLE_INDEX_TTL_SEC),
             ),
         )
 
@@ -1138,27 +1169,40 @@ class UserEconomicsRateLimiter:
 
         # Find all bundles for this user if not specified
         if not bundle_ids or (len(bundle_ids) == 1 and bundle_ids[0] == "*"):
-            # Scan Redis for all bundle keys
-            pattern = f"{self.ns}:*:{subject_id}:reqs:total"
-            cursor = 0
             found_bundles = set()
-            ns_prefix = f"{self.ns}:"
+            # Prefer per-user bundle index (fast)
+            try:
+                idx_key = _bundle_index_key(self.ns, subject_id)
+                members = await self.r.smembers(idx_key)
+                for m in (members or []):
+                    if isinstance(m, (bytes, bytearray)):
+                        m = m.decode("utf-8", errors="ignore")
+                    if m:
+                        found_bundles.add(str(m))
+            except Exception:
+                pass
 
-            while True:
-                cursor, keys = await self.r.scan(cursor, match=pattern, count=100)
-                for key in keys:
-                    # Extract bundle_id from key pattern: kdcube:economics:rl:{bundle}:{subject}:reqs:total
-                    key_str = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
-                    if not key_str.startswith(ns_prefix):
-                        continue
-                    # key: "{ns}:{bundle}:{subject}:reqs:total"
-                    rest = key_str[len(ns_prefix):]          # "{bundle}:{subject}:reqs:total"
-                    bundle_id = rest.split(":", 1)[0]        # "{bundle}"
-                    if bundle_id:
-                        found_bundles.add(bundle_id)
+            # Fallback: scan Redis keys (legacy)
+            if not found_bundles:
+                pattern = f"{self.ns}:*:{subject_id}:reqs:total"
+                cursor = 0
+                ns_prefix = f"{self.ns}:"
 
-                if cursor == 0:
-                    break
+                while True:
+                    cursor, keys = await self.r.scan(cursor, match=pattern, count=100)
+                    for key in keys:
+                        # Extract bundle_id from key pattern: kdcube:economics:rl:{bundle}:{subject}:reqs:total
+                        key_str = key.decode() if isinstance(key, (bytes, bytearray)) else str(key)
+                        if not key_str.startswith(ns_prefix):
+                            continue
+                        # key: "{ns}:{bundle}:{subject}:reqs:total"
+                        rest = key_str[len(ns_prefix):]          # "{bundle}:{subject}:reqs:total"
+                        bundle_id = rest.split(":", 1)[0]        # "{bundle}"
+                        if bundle_id:
+                            found_bundles.add(bundle_id)
+
+                    if cursor == 0:
+                        break
 
             bundle_ids = list(found_bundles)
 
@@ -1377,6 +1421,7 @@ class UserEconomicsRateLimiter:
 
         k_resv_idx = _k(self.ns, bundle_id, subject_id, "toks_resv:index")
         k_resv_map = _k(self.ns, bundle_id, subject_id, "toks_resv:data")
+        k_bundle_idx = _bundle_index_key(self.ns, subject_id)
 
         # Dedupe must be stable and non-empty.
         commit_id = str(lock_id or reservation_id)
@@ -1384,13 +1429,14 @@ class UserEconomicsRateLimiter:
 
         await self.r.eval(
             _LUA_COMMIT_WITH_RESERVATION,
-            12,
+            13,
             *_strs(
                 k_req_d, k_req_m, k_req_t,
                 k_tok_h_prefix, k_tok_d, k_tok_m,
                 k_last_t, k_last_a, k_locks,
                 k_resv_idx, k_resv_map,
-                k_commit
+                k_commit,
+                k_bundle_idx,
             ),
             *_strs(
                 int(inc_request or 0),
@@ -1401,6 +1447,8 @@ class UserEconomicsRateLimiter:
                 int(now.timestamp()),
                 lock_id or "",
                 str(reservation_id or ""),
+                str(bundle_id),
+                int(BUNDLE_INDEX_TTL_SEC),
                 ),
         )
 
