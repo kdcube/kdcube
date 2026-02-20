@@ -1,0 +1,41 @@
+FROM python:3.12-slim
+
+ENV PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl ca-certificates \
+    fonts-noto fonts-noto-cjk fonts-noto-color-emoji \
+    libmagic1 file \
+    && rm -rf /var/lib/apt/lists/* && apt-get clean
+
+# Isolated venv
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install Python deps
+COPY services/kdcube-ai-app/requirements-chat.txt requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Install browser deps separately to keep pip layer cacheable
+RUN python -m playwright install --with-deps chromium
+
+# Create unprivileged user for executor (but entrypoint runs as root)
+RUN groupadd --gid 1001 executor && \
+    useradd --uid 1001 --gid 1001 --no-create-home executor
+
+# --- Environment variables ---
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/opt/app \
+    PATH="/opt/venv/bin:$PATH" \
+    PY_CODE_EXEC_TIMEOUT=600
+
+# --- App code ---
+# Copy app to /opt/app so kdcube_ai_app is at /opt/app/kdcube_ai_app
+COPY services/kdcube-ai-app/ /opt/app/
+
+WORKDIR /workspace
+
+# --- Entrypoint ---
+ENTRYPOINT ["python", "/opt/app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py"]

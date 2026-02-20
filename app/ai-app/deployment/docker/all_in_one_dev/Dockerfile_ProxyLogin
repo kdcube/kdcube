@@ -1,0 +1,32 @@
+FROM golang:1.25-alpine AS builder
+
+RUN apk add --no-cache git
+
+WORKDIR /build
+
+ARG GIT_BRANCH=master
+
+RUN git clone --branch ${GIT_BRANCH} --single-branch https://github.com/CrackUp89/ProxyLogin.git .
+
+RUN go mod download
+
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/proxylogin proxylogin/cmd/proxylogin
+
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates curl
+
+RUN addgroup -g 2222 proxylogin && \
+    adduser -D -u 2222 -G proxylogin --home /home/proxylogin/ proxylogin
+
+WORKDIR /proxylogin
+
+COPY --from=builder /build/proxylogin .
+
+RUN chown proxylogin:proxylogin proxylogin
+
+USER proxylogin
+
+HEALTHCHECK --interval=5s --timeout=5s --retries=3 CMD curl -f http://localhost/v1/health || exit 1
+
+CMD ["./proxylogin", "serve"]

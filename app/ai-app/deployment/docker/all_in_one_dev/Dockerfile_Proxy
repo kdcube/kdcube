@@ -1,0 +1,15 @@
+FROM nginx:alpine
+
+# Build argument for nginx config path (relative to build context)
+ARG NGINX_CONFIG_FILE_PATH
+
+# Copy nginx configuration from customer repo
+COPY ${NGINX_CONFIG_FILE_PATH} /etc/nginx/nginx.conf
+
+# Create webroot for Let's Encrypt
+# RUN mkdir -p /var/www/letsencrypt
+
+# EXPOSE 80 443
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

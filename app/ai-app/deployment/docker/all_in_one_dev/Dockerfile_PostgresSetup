@@ -1,0 +1,25 @@
+# deployment/docker/all_in_one/Dockerfile_PostgresSetup
+
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app
+
+# Create non-root user
+RUN groupadd --gid 1000 appuser && \
+    useradd --uid 1000 --gid 1000 --create-home --shell /bin/bash appuser
+
+WORKDIR /app
+
+# Minimal deps for the deploy script
+COPY services/kdcube-ai-app/requirements-dbdeploy.txt .
+RUN pip install --no-cache-dir -r requirements-dbdeploy.txt
+
+# Copy sources (run from source, not as a package)
+COPY --chown=appuser:appuser services/kdcube-ai-app/ .
+
+# Run as non-root
+USER appuser
+
+CMD ["python", "kdcube_ai_app/ops/deployment/sql/deploy_project.py"]
