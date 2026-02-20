@@ -268,6 +268,17 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         //bundle_id: "", //todo: add bundle
                     }
 
+                    console.info(
+                        "[chat.send] sending chat message",
+                        {
+                            conversationId,
+                            turnId,
+                            hasMessage: Boolean(message),
+                            attachments: attachments.length,
+                            ts: new Date().toISOString(),
+                        }
+                    )
+
                     transport.sendChatMessage(conversationId, chatRequest, files).then(() => {
                         dispatch(clearUserInput())
                     }).catch(err => {

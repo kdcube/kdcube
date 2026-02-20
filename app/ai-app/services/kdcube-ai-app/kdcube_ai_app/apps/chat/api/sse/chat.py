@@ -426,6 +426,7 @@ def create_sse_router(
             attachment_meta: Optional[str] = Form(None),
             files: List[UploadFile] = File(default=[]),
     ):
+        logger.info(f"[sse_chat] received request session={session.session_id} stream_id={stream_id}")
 
         ctx = build_sse_request_context(request, session=session)
         if os.environ.get("CHAT_SSE_REJECT_ANONYMOUS", "1") == "1":
@@ -543,6 +544,14 @@ def create_sse_router(
         message_data["turn_id"] = turn_id
         conversation_id = message_data.get("conversation_id") or session.session_id
         message_data["conversation_id"] = conversation_id
+        logger.info(
+            "[sse_chat] parsed request session=%s stream_id=%s conversation_id=%s turn_id=%s text_len=%s",
+            session.session_id,
+            stream_id,
+            conversation_id,
+            turn_id,
+            len(base_text),
+        )
 
         # ---------- attachments (transport → RawAttachment) ----------
         raw_attachments: List[RawAttachment] = []
