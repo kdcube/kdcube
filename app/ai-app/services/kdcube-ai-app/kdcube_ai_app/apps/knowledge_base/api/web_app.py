@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
-
+import json
 import os, traceback
 
 import logging
@@ -14,6 +14,8 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv, find_dotenv
+
+from kdcube_ai_app.apps.utils.cors import configure_cors
 
 load_dotenv(find_dotenv())
 
@@ -97,26 +99,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="KB API", description="KB API", lifespan=lifespan)
 
-allowed_origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:4000",
-    "http://localhost:5173",
-    "http://localhost:8050",
-]
-
-app_domain = os.environ.get("APP_DOMAIN")
-if app_domain:
-    allowed_origins.append(f"http://{app_domain}")
-    allowed_origins.append(f"https://{app_domain}")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+configure_cors(app)
 
 # ================================================================================
 #                            KB INITIALIZATION

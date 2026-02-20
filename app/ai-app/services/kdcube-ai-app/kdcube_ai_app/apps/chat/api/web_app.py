@@ -15,10 +15,11 @@ import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from dotenv import load_dotenv, find_dotenv
+
+from kdcube_ai_app.apps.utils.cors import configure_cors
 
 load_dotenv(find_dotenv())
 
@@ -31,7 +32,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec
 from kdcube_ai_app.infra.rendering.link_preview import close_shared_link_preview
 from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 
-from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
+from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 
 from kdcube_ai_app.apps.middleware.gateway import STATE_FLAG, STATE_SESSION, STATE_USER_TYPE
 from kdcube_ai_app.apps.middleware.token_extract import extract_auth_tokens_from_query_params
@@ -48,7 +49,7 @@ from kdcube_ai_app.infra.namespaces import CONFIG
 # Import our simplified components
 from kdcube_ai_app.apps.chat.api.resolvers import (
     get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency, require_auth,
-    INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, auth_without_pressure, get_tenant, _announce_startup,
+    INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, auth_without_pressure, _announce_startup,
     get_pg_pool, get_conversation_system
 )
 from kdcube_ai_app.auth.AuthManager import RequireUser
@@ -62,24 +63,6 @@ from kdcube_ai_app.apps.chat.api.socketio.chat import create_socketio_chat_handl
 from kdcube_ai_app.apps.chat.api.sse.chat import create_sse_router, SSEHub
 
 logger = logging.getLogger(__name__)
-
-
-# ================================
-# APPLICATION SETUP
-# ================================
-# CORS setup
-allowed_origins = [
-    "http://localhost:3000",
-    "http://localhost:3001",
-    "http://localhost:4000",
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "http://localhost:8050",
-    "http://localhost:5175",
-]
-app_domain = os.environ.get("APP_DOMAIN")
-if app_domain:
-    allowed_origins.append(f"https://{app_domain}")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -375,13 +358,7 @@ app = FastAPI(
 )
 
 # CORS middleware for React frontend
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+configure_cors(app)
 
 # ================================
 # MIDDLEWARE
