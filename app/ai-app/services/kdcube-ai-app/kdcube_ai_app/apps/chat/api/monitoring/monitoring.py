@@ -95,6 +95,52 @@ async def reset_circuit_breaker_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _burst_sim_enabled() -> bool:
+    return os.getenv("MONITORING_BURST_ENABLE", "0").lower() in {"1", "true", "yes", "on"}
+
+
+@router.get("/admin/burst/users")
+async def get_burst_users(session: UserSession = Depends(auth_without_pressure())):
+    """
+    Dev-only helper: expose SimpleIDP tokens for burst simulation in the monitoring UI.
+    Controlled by MONITORING_BURST_ENABLE=1 and AUTH_PROVIDER=simple.
+    """
+    if not _burst_sim_enabled():
+        raise HTTPException(status_code=404, detail="Burst simulator is disabled")
+
+    if os.getenv("AUTH_PROVIDER", "simple").lower() != "simple":
+        raise HTTPException(status_code=400, detail="Burst simulator requires AUTH_PROVIDER=simple")
+
+    try:
+        from kdcube_ai_app.apps.middleware.simple_idp import IDP_DB_PATH
+        with open(IDP_DB_PATH, "r") as f:
+            users = json.load(f)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to load SimpleIDP users: {e}")
+
+    groups = {"admin": [], "registered": [], "paid": []}
+    for token, user in (users or {}).items():
+        roles = set(user.get("roles") or [])
+        entry = {
+            "token": token,
+            "user_id": user.get("sub") or user.get("user_id"),
+            "username": user.get("username"),
+            "roles": list(roles),
+        }
+        if "kdcube:role:super-admin" in roles:
+            groups["admin"].append(entry)
+        elif "kdcube:role:paid" in roles:
+            groups["paid"].append(entry)
+        else:
+            groups["registered"].append(entry)
+
+    return {
+        "enabled": True,
+        "counts": {k: len(v) for k, v in groups.items()},
+        "users": groups,
+    }
+
+
 
 @router.get("/monitoring/system")
 async def get_system_monitoring(

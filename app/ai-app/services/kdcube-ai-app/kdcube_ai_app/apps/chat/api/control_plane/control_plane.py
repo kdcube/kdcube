@@ -7,7 +7,7 @@
 Control Plane API
 
 Provides REST endpoints for managing:
-1. User tier balance (tier overrides + lifetime budget)
+1. User plan balance (plan overrides + lifetime credits)
 2. Plan quota policies (base limits by plan id)
 3. Application budget policies (spending limits per provider - NO bundle_id!)
 
@@ -17,11 +17,12 @@ Admin-only access with similar patterns to OPEX API.
 """
 
 from typing import Optional
+import json
 import logging
 import os
 
 from pydantic import BaseModel, Field
-from fastapi import Depends, HTTPException, Request, APIRouter, Query, Header
+from fastapi import Depends, HTTPException, Request, APIRouter, Query, Header, Response
 from datetime import datetime, timedelta, timezone
 
 from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure
@@ -86,9 +87,43 @@ def _normalize_role(role: Optional[str]) -> Optional[str]:
         return None
     return role.strip().lower()
 
+async def _resolve_role_from_session(
+        redis,
+        *,
+        tenant: str,
+        project: str,
+        user_id: str,
+) -> Optional[str]:
+    if not redis or not user_id:
+        return None
+    try:
+        from kdcube_ai_app.infra.namespaces import REDIS, ns_key
+        prefix = ns_key(REDIS.SESSION, tenant=tenant, project=project)
+        keys = [
+            f"{prefix}:paid:{user_id}",
+            f"{prefix}:registered:{user_id}",
+        ]
+        for key in keys:
+            raw = await redis.get(key)
+            if not raw:
+                continue
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode("utf-8", errors="ignore")
+            try:
+                payload = json.loads(raw)
+            except Exception:
+                continue
+            session_role = payload.get("user_type") or payload.get("role")
+            if session_role:
+                return str(session_role).strip().lower()
+    except Exception:
+        return None
+    return None
+
 async def _resolve_plan_id_for_user(
         *,
         mgr,
+        redis,
         tenant: str,
         project: str,
         user_id: str,
@@ -99,6 +134,13 @@ async def _resolve_plan_id_for_user(
         return explicit_plan_id, "explicit"
 
     role_norm = _normalize_role(role)
+    if not role_norm:
+        role_norm = await _resolve_role_from_session(
+            redis,
+            tenant=tenant,
+            project=project,
+            user_id=user_id,
+        )
     if role_norm in ("privileged", "admin"):
         return DEFAULT_PLAN_ADMIN, "role"
     if role_norm == "anonymous":
@@ -122,17 +164,6 @@ async def _resolve_plan_id_for_user(
     if has_active_subscription:
         return (getattr(sub, "plan_id", None) or DEFAULT_PLAN_PAYG), "subscription"
 
-    wallet_tokens = await mgr.user_credits_mgr.get_lifetime_balance(
-        tenant=tenant,
-        project=project,
-        user_id=user_id,
-    )
-    if wallet_tokens and int(wallet_tokens) > 0:
-        return DEFAULT_PLAN_PAYG, "wallet"
-
-    if role_norm == "paid":
-        return DEFAULT_PLAN_PAYG, "role"
-
     return DEFAULT_PLAN_FREE, "role"
 
 # ============================================================================
@@ -148,9 +179,6 @@ class CreateSubscriptionRequest(BaseModel):
     stripe_price_id: str | None = None
     stripe_customer_id: str | None = None
     monthly_price_cents_hint: int | None = None
-
-    # Legacy/compat (ignored if plan_id is provided)
-    tier: str | None = Field(None, description="Legacy tier hint (deprecated)")
 
 class UpsertSubscriptionPlanRequest(BaseModel):
     plan_id: str = Field(..., description="Plan identifier")
@@ -173,11 +201,6 @@ class TopUpSubscriptionBudgetRequest(BaseModel):
     notes: Optional[str] = None
     force_topup: bool = Field(False, description="Allow multiple topups within the same billing period")
 
-class SetSubscriptionOverdraftRequest(BaseModel):
-    user_id: str
-    overdraft_limit_usd: Optional[float] = Field(None, description="None = unlimited, 0 = no overdraft")
-    notes: Optional[str] = None
-
 class ReapSubscriptionReservationsRequest(BaseModel):
     user_id: str
     period_key: Optional[str] = Field(
@@ -197,9 +220,9 @@ class SweepSubscriptionRolloversRequest(BaseModel):
 
 class GrantTrialRequest(BaseModel):
     """
-    Grant temporary tier OVERRIDE (7-day trial).
+    Grant temporary plan override (7-day trial).
 
-    **IMPORTANT:** This OVERRIDES the user's base tier, does NOT add to it.
+    **IMPORTANT:** This OVERRIDES the user's base plan, does NOT add to it.
 
     Example:
     - Free user normally has: 10 req/day
@@ -207,7 +230,7 @@ class GrantTrialRequest(BaseModel):
     - During trial: User gets exactly 100 req/day (NOT 110)
     - After trial expires: User reverts to 10 req/day
 
-    These quotas RESET daily/monthly like tier limits.
+    These quotas RESET daily/monthly like plan limits.
     """
     user_id: str = Field(..., description="User ID")
     days: int = Field(7, description="Trial duration in days")
@@ -223,14 +246,14 @@ class GrantTrialRequest(BaseModel):
     notes: Optional[str] = Field(None, description="Notes")
 
 
-class UpdateTierBudgetRequest(BaseModel):
+class UpdatePlanOverrideRequest(BaseModel):
     """
-    Update user's tier budget (tier override).
+    Update user's plan override.
 
     Like trial but more flexible - can set exact limits and expiry.
     Supports PARTIAL UPDATES - only updates fields you provide!
 
-    **IMPORTANT:** This OVERRIDES the user's base tier, does NOT add to it.
+    **IMPORTANT:** This OVERRIDES the user's base plan, does NOT add to it.
     """
     user_id: str = Field(..., description="User ID")
     requests_per_day: Optional[int] = Field(None, description="Requests/day (OVERRIDES base)")
@@ -251,7 +274,7 @@ class AddLifetimeCreditsRequest(BaseModel):
     Add purchased credits in USD (converted to lifetime tokens).
 
     Balance depletes on use, does NOT reset.
-    Completely separate from tier quotas.
+    Completely separate from plan quotas.
     """
     user_id: str = Field(..., description="User ID")
     usd_amount: float = Field(..., gt=0, description="Amount in USD")
@@ -347,22 +370,22 @@ def _get_control_plane_manager(ctx):
 
 
 # ============================================================================
-# TIER BALANCE (Tier Overrides + Lifetime Budget)
+# PLAN BALANCE (Plan Overrides + Lifetime Budget)
 # ============================================================================
 
-@router.post("/tier-balance/grant-trial", status_code=201)
+@router.post("/plan-override/grant-trial", status_code=201)
 async def grant_trial_bonus(
         payload: GrantTrialRequest,
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
-    Grant 7-day trial with temporary tier OVERRIDE.
+    Grant 7-day trial with temporary plan override.
 
     **How it works:**
-    1. User's base tier: Free (10 req/day)
+    1. User's base plan: Free (10 req/day)
     2. You grant trial: 100 req/day for 7 days
-    3. During days 1-7: User gets exactly 100 req/day (tier is OVERRIDDEN)
-    4. Day 8+: User reverts to base tier (10 req/day)
+    3. During days 1-7: User gets exactly 100 req/day (plan is OVERRIDDEN)
+    4. Day 8+: User reverts to base plan (10 req/day)
 
     **Use Cases:**
     - New user registration bonus
@@ -379,7 +402,7 @@ async def grant_trial_bonus(
         tokens_per_day = _tokens_from_usd(payload.usd_per_day) if payload.usd_per_day is not None else payload.tokens_per_day
         tokens_per_month = _tokens_from_usd(payload.usd_per_month) if payload.usd_per_month is not None else payload.tokens_per_month
 
-        tier_balance = await mgr.update_user_tier_budget(
+        plan_override_balance = await mgr.update_user_plan_override(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=payload.user_id,
@@ -401,16 +424,16 @@ async def grant_trial_bonus(
         return {
             "status": "ok",
             "message": f"Trial granted to {payload.user_id}",
-            "tier_balance": {
-                "user_id": tier_balance.user_id,
-                "requests_per_day": tier_balance.requests_per_day,
-                "tokens_per_hour": tier_balance.tokens_per_hour,
-                "tokens_per_day": tier_balance.tokens_per_day,
-                "tokens_per_hour_usd": _usd_from_tokens(tier_balance.tokens_per_hour),
-                "tokens_per_day_usd": _usd_from_tokens(tier_balance.tokens_per_day),
-                "tokens_per_month_usd": _usd_from_tokens(tier_balance.tokens_per_month),
+            "plan_override_balance": {
+                "user_id": plan_override_balance.user_id,
+                "requests_per_day": plan_override_balance.requests_per_day,
+                "tokens_per_hour": plan_override_balance.tokens_per_hour,
+                "tokens_per_day": plan_override_balance.tokens_per_day,
+                "tokens_per_hour_usd": _usd_from_tokens(plan_override_balance.tokens_per_hour),
+                "tokens_per_day_usd": _usd_from_tokens(plan_override_balance.tokens_per_day),
+                "tokens_per_month_usd": _usd_from_tokens(plan_override_balance.tokens_per_month),
                 "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
-                "expires_at": tier_balance.expires_at.isoformat() if tier_balance.expires_at else None,
+                "expires_at": plan_override_balance.expires_at.isoformat() if plan_override_balance.expires_at else None,
             }
         }
     except Exception as e:
@@ -418,18 +441,18 @@ async def grant_trial_bonus(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/tier-balance/update", status_code=201)
-async def update_tier_budget(
-        payload: UpdateTierBudgetRequest,
+@router.post("/plan-override/update", status_code=201)
+async def update_plan_override(
+        payload: UpdatePlanOverrideRequest,
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
-    Update user's tier budget (supports PARTIAL updates).
+    Update user's plan override (supports PARTIAL updates).
 
     **How it works:**
     - Sets specific limits for a period
-    - OVERRIDES base tier (does not add)
-    - Resets daily/monthly like tier quotas
+    - OVERRIDES base plan (does not add)
+    - Resets daily/monthly like plan quotas
     - Expires after X days
 
     **Partial Updates:**
@@ -454,7 +477,7 @@ async def update_tier_budget(
         tokens_per_day = _tokens_from_usd(payload.usd_per_day) if payload.usd_per_day is not None else payload.tokens_per_day
         tokens_per_month = _tokens_from_usd(payload.usd_per_month) if payload.usd_per_month is not None else payload.tokens_per_month
 
-        tier_balance = await mgr.update_user_tier_budget(
+        plan_override_balance = await mgr.update_user_plan_override(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=payload.user_id,
@@ -465,41 +488,41 @@ async def update_tier_budget(
             tokens_per_month=tokens_per_month,
             max_concurrent=payload.max_concurrent,
             expires_at=expires_at,
-            purchase_notes=payload.notes or "Admin tier budget update",
+            purchase_notes=payload.notes or "Admin plan override update",
         )
 
-        logger.info(f"[update_tier_budget] {payload.user_id} by {session.username}")
+        logger.info(f"[update_plan_override] {payload.user_id} by {session.username}")
 
         return {
             "status": "ok",
-            "message": f"Tier budget updated for {payload.user_id}",
-            "tier_balance": {
-                "user_id": tier_balance.user_id,
-                "requests_per_day": tier_balance.requests_per_day,
-                "tokens_per_hour": tier_balance.tokens_per_hour,
-                "tokens_per_day": tier_balance.tokens_per_day,
-                "tokens_per_hour_usd": _usd_from_tokens(tier_balance.tokens_per_hour),
-                "tokens_per_day_usd": _usd_from_tokens(tier_balance.tokens_per_day),
-                "tokens_per_month_usd": _usd_from_tokens(tier_balance.tokens_per_month),
+            "message": f"Plan override updated for {payload.user_id}",
+            "plan_override_balance": {
+                "user_id": plan_override_balance.user_id,
+                "requests_per_day": plan_override_balance.requests_per_day,
+                "tokens_per_hour": plan_override_balance.tokens_per_hour,
+                "tokens_per_day": plan_override_balance.tokens_per_day,
+                "tokens_per_hour_usd": _usd_from_tokens(plan_override_balance.tokens_per_hour),
+                "tokens_per_day_usd": _usd_from_tokens(plan_override_balance.tokens_per_day),
+                "tokens_per_month_usd": _usd_from_tokens(plan_override_balance.tokens_per_month),
                 "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
-                "expires_at": tier_balance.expires_at.isoformat() if tier_balance.expires_at else None,
+                "expires_at": plan_override_balance.expires_at.isoformat() if plan_override_balance.expires_at else None,
             }
         }
     except Exception as e:
-        logger.exception(f"[update_tier_budget] Failed for {payload.user_id}")
+        logger.exception(f"[update_plan_override] Failed for {payload.user_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/tier-balance/user/{user_id}")
-async def get_user_tier_balance(
+@router.get("/plan-override/user/{user_id}")
+async def get_user_plan_override_balance(
         user_id: str,
         include_expired: bool = Query(False),
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
-    Get user's tier balance (tier override + lifetime budget).
+    Get user's plan balance (plan override + lifetime budget).
 
-    Shows currently active tier override with expiration date.
+    Shows currently active plan override with expiration date.
     Also shows lifetime budget if user has purchased credits.
     """
     try:
@@ -507,33 +530,33 @@ async def get_user_tier_balance(
         settings = get_settings()
 
         # Load snapshot with expired data available, so we can decide what to show.
-        tier_balance = await mgr.get_user_tier_balance(
+        plan_override_balance = await mgr.get_user_plan_balance(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=user_id,
             include_expired=True,
         )
 
-        if not tier_balance:
+        if not plan_override_balance:
             return {
                 "status": "ok",
                 "user_id": user_id,
-                "has_tier_override": False,
+                "has_plan_override": False,
                 "has_lifetime_budget": False,
-                "message": "User has no tier balance"
+                "message": "User has no plan balance"
             }
 
-        override_expired = tier_balance.is_tier_override_expired()
-        override_active = tier_balance.tier_override_is_active()
+        override_expired = plan_override_balance.is_plan_override_expired()
+        override_active = plan_override_balance.plan_override_is_active()
 
         # If caller does NOT want expired overrides, hide them
         if not include_expired and override_expired:
             override_active = False
 
         lifetime_payload = None
-        if tier_balance.has_lifetime_budget():
-            purchased = int(tier_balance.lifetime_tokens_purchased or 0)
-            consumed = int(tier_balance.lifetime_tokens_consumed or 0)
+        if plan_override_balance.has_lifetime_budget():
+            purchased = int(plan_override_balance.lifetime_tokens_purchased or 0)
+            consumed = int(plan_override_balance.lifetime_tokens_consumed or 0)
             gross_remaining = max(purchased - consumed, 0)
 
             available = await mgr.user_credits_mgr.get_lifetime_balance(
@@ -554,29 +577,29 @@ async def get_user_tier_balance(
                 "tokens_available": available,               # spendable now
                 "available_usd": available_usd,
                 # last purchase snapshot (credits purchase)
-                "purchase_amount_usd": float(tier_balance.last_purchase_amount_usd)
-                if tier_balance.last_purchase_amount_usd else None,
+                "purchase_amount_usd": float(plan_override_balance.last_purchase_amount_usd)
+                if plan_override_balance.last_purchase_amount_usd else None,
                 "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
             }
 
         return {
             "status": "ok",
             "user_id": user_id,
-            "has_tier_override": override_active,
-            "has_lifetime_budget": tier_balance.has_lifetime_budget(),
-            "tier_override": {
-                "requests_per_day": tier_balance.requests_per_day,
-                "requests_per_month": tier_balance.requests_per_month,
-                "tokens_per_hour": tier_balance.tokens_per_hour,
-                "tokens_per_day": tier_balance.tokens_per_day,
-                "tokens_per_month": tier_balance.tokens_per_month,
-                "usd_per_hour": _usd_from_tokens(tier_balance.tokens_per_hour),
-                "usd_per_day": _usd_from_tokens(tier_balance.tokens_per_day),
-                "usd_per_month": _usd_from_tokens(tier_balance.tokens_per_month),
-                "max_concurrent": tier_balance.max_concurrent,
-                "expires_at": tier_balance.expires_at.isoformat() if tier_balance.expires_at else None,
+            "has_plan_override": override_active,
+            "has_lifetime_budget": plan_override_balance.has_lifetime_budget(),
+            "plan_override": {
+                "requests_per_day": plan_override_balance.requests_per_day,
+                "requests_per_month": plan_override_balance.requests_per_month,
+                "tokens_per_hour": plan_override_balance.tokens_per_hour,
+                "tokens_per_day": plan_override_balance.tokens_per_day,
+                "tokens_per_month": plan_override_balance.tokens_per_month,
+                "usd_per_hour": _usd_from_tokens(plan_override_balance.tokens_per_hour),
+                "usd_per_day": _usd_from_tokens(plan_override_balance.tokens_per_day),
+                "usd_per_month": _usd_from_tokens(plan_override_balance.tokens_per_month),
+                "max_concurrent": plan_override_balance.max_concurrent,
+                "expires_at": plan_override_balance.expires_at.isoformat() if plan_override_balance.expires_at else None,
                 # override notes are grant_notes now
-                "notes": tier_balance.grant_notes,
+                "notes": plan_override_balance.grant_notes,
                 "is_expired": override_expired,
                 "reference_model": f"{REF_PROVIDER}/{REF_MODEL}",
             } if (override_active or include_expired) else None,
@@ -584,19 +607,19 @@ async def get_user_tier_balance(
         }
 
     except Exception as e:
-        logger.exception(f"[get_user_tier_balance] Failed for {user_id}")
+        logger.exception(f"[get_user_plan_override_balance] Failed for {user_id}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.delete("/tier-balance/user/{user_id}")
-async def deactivate_tier_override(
+@router.delete("/plan-override/user/{user_id}")
+async def deactivate_plan_override(
         user_id: str,
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
-    Deactivate (soft delete) user's tier balance.
+    Deactivate (soft delete) user's plan balance.
 
-    **WARNING:** This clears BOTH tier override AND lifetime budget!
+    **WARNING:** This clears BOTH plan override AND lifetime budget!
 
     **Use Cases:**
     1. **Refund Processing**: Remove all credits after issuing refund
@@ -607,27 +630,27 @@ async def deactivate_tier_override(
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
 
-        await mgr.deactivate_tier_override(
+        await mgr.deactivate_plan_override(
             tenant=settings.TENANT,
             project=settings.PROJECT,
             user_id=user_id,
         )
 
         logger.info(
-            f"[deactivate_tier_override] {settings.TENANT}/{settings.PROJECT}/{user_id}: "
+            f"[deactivate_plan_override] {settings.TENANT}/{settings.PROJECT}/{user_id}: "
             f"deactivated by {session.username or session.user_id}"
         )
 
         return {
             "status": "ok",
-            "message": f"Tier override deactivated for user {user_id}",
+            "message": f"Plan override deactivated for user {user_id}",
         }
     except Exception as e:
-        logger.exception(f"[deactivate_tier_override] Failed for {user_id}")
+        logger.exception(f"[deactivate_plan_override] Failed for {user_id}")
         raise HTTPException(status_code=500, detail=f"Failed to deactivate: {str(e)}")
 
 
-@router.post("/tier-balance/add-lifetime-credits", status_code=201)
+@router.post("/plan-override/add-lifetime-credits", status_code=201)
 async def add_lifetime_credits(
         payload: AddLifetimeCreditsRequest,
         session: UserSession = Depends(auth_without_pressure())
@@ -635,7 +658,7 @@ async def add_lifetime_credits(
     """
     Add purchased credits in USD (converted to lifetime tokens).
 
-    User's purchased credits - separate from tier budget.
+    User's purchased credits - separate from plan override.
     Balance depletes on use, does NOT reset.
     """
     try:
@@ -726,7 +749,7 @@ async def refund_wallet(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/tier-balance/lifetime-balance/{user_id}")
+@router.get("/plan-override/lifetime-balance/{user_id}")
 async def get_lifetime_balance(
         user_id: str,
         session: UserSession = Depends(auth_without_pressure())
@@ -738,7 +761,7 @@ async def get_lifetime_balance(
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
 
-        # Get lifetime balance from TierBalanceManager
+        # Get lifetime balance from UserCreditsManager
         balance_tokens = await mgr.user_credits_mgr.get_lifetime_balance(
             tenant=settings.TENANT,
             project=settings.PROJECT,
@@ -1284,50 +1307,6 @@ async def topup_subscription_budget(
         allow_multiple_topups=bool(payload.force_topup),
     )
     return {"status": "ok", "force_topup": bool(payload.force_topup), **res}
-
-@router.post("/subscriptions/budget/overdraft")
-async def set_subscription_overdraft(
-        payload: SetSubscriptionOverdraftRequest,
-        session: UserSession = Depends(auth_without_pressure()),
-):
-    settings = get_settings()
-    pg_pool = getattr(router.state, "pg_pool", None)
-    if not pg_pool:
-        raise HTTPException(status_code=503, detail="PostgreSQL not available")
-
-    mgr = _get_control_plane_manager(router)
-    sub = await mgr.subscription_mgr.get_subscription(
-        tenant=settings.TENANT,
-        project=settings.PROJECT,
-        user_id=payload.user_id,
-    )
-    if not sub:
-        raise HTTPException(status_code=404, detail="subscription not found")
-    from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import build_subscription_period_descriptor
-    period_desc = build_subscription_period_descriptor(
-        tenant=settings.TENANT,
-        project=settings.PROJECT,
-        user_id=payload.user_id,
-        provider=getattr(sub, "provider", "internal") or "internal",
-        stripe_subscription_id=getattr(sub, "stripe_subscription_id", None),
-        period_end=getattr(sub, "next_charge_at", None),
-        period_start=getattr(sub, "last_charged_at", None),
-    )
-
-    limiter = SubscriptionBudgetLimiter(
-        pg_pool=pg_pool,
-        tenant=settings.TENANT,
-        project=settings.PROJECT,
-        user_id=payload.user_id,
-        period_key=period_desc["period_key"],
-        period_start=period_desc["period_start"],
-        period_end=period_desc["period_end"],
-    )
-    snap = await limiter.set_overdraft_limit(
-        overdraft_limit_usd=payload.overdraft_limit_usd,
-        notes=payload.notes or f"admin overdraft by {session.username or session.user_id}",
-    )
-    return {"status": "ok", "snapshot": snap.__dict__}
 
 @router.post("/subscriptions/rollover/sweep")
 async def sweep_subscription_rollovers(
@@ -1910,11 +1889,12 @@ async def get_user_quota_breakdown(
     """
     Get the detailed quota breakdown for a user.
 
-    Shows base tier, tier override, effective policy, and current usage.
+    Shows base plan, plan override, effective policy, and current usage.
     """
     try:
         mgr = _get_control_plane_manager(router)
         settings = get_settings()
+        redis = getattr(router.state.middleware, "redis", None)
 
         tenant = settings.TENANT
         project = settings.PROJECT
@@ -1922,6 +1902,7 @@ async def get_user_quota_breakdown(
         role_hint = role or user_type
         resolved_plan_id, plan_source = await _resolve_plan_id_for_user(
             mgr=mgr,
+            redis=redis,
             tenant=tenant,
             project=project,
             user_id=user_id,
@@ -1942,15 +1923,14 @@ async def get_user_quota_breakdown(
                 detail=f"No policy found for plan_id={resolved_plan_id}"
             )
 
-        # Get tier balance
-        tier_balance = await mgr.get_user_tier_balance(
+        # Get plan balance
+        plan_override_balance = await mgr.get_user_plan_balance(
             tenant=tenant,
             project=project,
             user_id=user_id,
         )
 
         # Build rate limiter to read counters
-        redis = getattr(router.state.middleware, "redis", None)
         if not redis:
             raise HTTPException(status_code=503, detail="Redis not available")
 
@@ -1973,11 +1953,11 @@ async def get_user_quota_breakdown(
         tok_month = totals["tokens_this_month"]
 
         # Merge policies (OVERRIDE semantics)
-        from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import _merge_policy_with_tier_balance
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import _merge_policy_with_plan_override
 
-        # Convert tier_balance to QuotaReplenishment-like object for compatibility
-        if tier_balance:
-            effective_policy = _merge_policy_with_tier_balance(base_policy, tier_balance)
+        # Convert plan_override_balance to QuotaPolicy with override semantics
+        if plan_override_balance:
+            effective_policy = _merge_policy_with_plan_override(base_policy, plan_override_balance)
         else:
             effective_policy = base_policy
 
@@ -2011,16 +1991,16 @@ async def get_user_quota_breakdown(
                 "tokens_per_day": base_policy.tokens_per_day,
                 "tokens_per_month": base_policy.tokens_per_month,
             },
-            "tier_override": {
-                "has_override": tier_balance is not None and tier_balance.has_tier_override(),
-                "max_concurrent": tier_balance.max_concurrent if tier_balance else None,
-                "requests_per_day": tier_balance.requests_per_day if tier_balance else None,
-                "requests_per_month": tier_balance.requests_per_month if tier_balance else None,
-                "tokens_per_day": tier_balance.tokens_per_day if tier_balance else None,
-                "tokens_per_month": tier_balance.tokens_per_month if tier_balance else None,
-                "expires_at": tier_balance.expires_at.isoformat() if tier_balance and tier_balance.expires_at else None,
-                "purchase_notes": tier_balance.grant_notes if tier_balance else None,
-            } if tier_balance else None,
+            "plan_override": {
+                "has_override": plan_override_balance is not None and plan_override_balance.has_plan_override(),
+                "max_concurrent": plan_override_balance.max_concurrent if plan_override_balance else None,
+                "requests_per_day": plan_override_balance.requests_per_day if plan_override_balance else None,
+                "requests_per_month": plan_override_balance.requests_per_month if plan_override_balance else None,
+                "tokens_per_day": plan_override_balance.tokens_per_day if plan_override_balance else None,
+                "tokens_per_month": plan_override_balance.tokens_per_month if plan_override_balance else None,
+                "expires_at": plan_override_balance.expires_at.isoformat() if plan_override_balance and plan_override_balance.expires_at else None,
+                "purchase_notes": plan_override_balance.grant_notes if plan_override_balance else None,
+            } if plan_override_balance else None,
             "effective_policy": {
                 "max_concurrent": effective_policy.max_concurrent,
                 "requests_per_day": effective_policy.requests_per_day,
@@ -2062,7 +2042,7 @@ async def get_user_budget_breakdown(
         session: UserSession = Depends(auth_without_pressure())
 ):
     """
-    Full user budget breakdown (quota + tier override + usage + lifetime credits + reservations).
+    Full user budget breakdown (quota + plan override + usage + lifetime credits + reservations).
     REST layer is SQL-free: all orchestration lives in sdk/infra/economics/user_budget.py
     """
     mgr = _get_control_plane_manager(router)
@@ -2125,7 +2105,7 @@ async def topup_app_budget(
     """
     Top up application budget (company money).
 
-    This is the TENANT/PROJECT budget used to pay for tier-funded requests.
+    This is the TENANT/PROJECT budget used to pay for plan-funded requests.
     """
     try:
         settings = get_settings()
@@ -2176,6 +2156,208 @@ async def get_app_budget_balance(
     except Exception as e:
         logger.exception("[get_app_budget_balance] Failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/app-budget/absorption-report")
+async def get_app_budget_absorption_report(
+        period: str = Query("month", description="day|month"),
+        group_by: str = Query("none", description="none|user|bundle"),
+        days: int = Query(90, ge=1, le=730),
+        format: str = Query("json", description="json|csv"),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    """
+    Report when project budget absorbed wallet/plan shortfalls.
+    Aggregated by period (day or month).
+    """
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    period = (period or "month").lower()
+    if period not in ("day", "month"):
+        raise HTTPException(status_code=400, detail="period must be day|month")
+    group_by = (group_by or "none").lower()
+    if group_by not in ("none", "user", "bundle"):
+        raise HTTPException(status_code=400, detail="group_by must be none|user|bundle")
+    format = (format or "json").lower()
+    if format not in ("json", "csv"):
+        raise HTTPException(status_code=400, detail="format must be json|csv")
+
+    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    start = now - timedelta(days=int(days))
+
+    period_sql = "date_trunc('day', created_at)" if period == "day" else "date_trunc('month', created_at)"
+    group_sql = ""
+    group_select = ""
+    if group_by == "user":
+        group_sql = ", user_id"
+        group_select = ", user_id AS group_key"
+    elif group_by == "bundle":
+        group_sql = ", bundle_id"
+        group_select = ", bundle_id AS group_key"
+    sql = f"""
+        SELECT
+            {period_sql} AS period_start
+            {group_select},
+            SUM(CASE WHEN note LIKE 'shortfall:wallet_subscription%' THEN -amount_cents ELSE 0 END) AS wallet_subscription_shortfall_cents,
+            SUM(CASE WHEN note LIKE 'shortfall:wallet_paid%' THEN -amount_cents ELSE 0 END) AS wallet_paid_shortfall_cents,
+            SUM(CASE WHEN note LIKE 'shortfall:wallet_plan%' THEN -amount_cents ELSE 0 END) AS wallet_plan_shortfall_cents,
+            SUM(CASE WHEN note LIKE 'shortfall:subscription_overage%' THEN -amount_cents ELSE 0 END) AS subscription_overage_shortfall_cents,
+            SUM(CASE WHEN note LIKE 'shortfall:free_plan%' THEN -amount_cents ELSE 0 END) AS free_plan_shortfall_cents,
+            SUM(-amount_cents) AS total_shortfall_cents,
+            COUNT(*) AS events
+        FROM kdcube_control_plane.tenant_project_budget_ledger
+        WHERE tenant=$1 AND project=$2
+          AND kind='spend'
+          AND note LIKE 'shortfall:%'
+          AND created_at >= $3 AND created_at <= $4
+        GROUP BY period_start{group_sql}
+        ORDER BY period_start DESC
+    """
+
+    async with pg_pool.acquire() as conn:
+        rows = await conn.fetch(sql, settings.TENANT, settings.PROJECT, start, now)
+
+    items = []
+    for r in rows:
+        items.append({
+            "period_start": r["period_start"],
+            "group_key": r["group_key"] if group_by != "none" else None,
+            "total_shortfall_usd": _usd_from_cents(int(r["total_shortfall_cents"] or 0)),
+            "wallet_subscription_shortfall_usd": _usd_from_cents(int(r["wallet_subscription_shortfall_cents"] or 0)),
+            "wallet_paid_shortfall_usd": _usd_from_cents(int(r["wallet_paid_shortfall_cents"] or 0)),
+            "wallet_plan_shortfall_usd": _usd_from_cents(int(r["wallet_plan_shortfall_cents"] or 0)),
+            "subscription_overage_shortfall_usd": _usd_from_cents(int(r["subscription_overage_shortfall_cents"] or 0)),
+            "free_plan_shortfall_usd": _usd_from_cents(int(r["free_plan_shortfall_cents"] or 0)),
+            "events": int(r["events"] or 0),
+        })
+
+    if format == "csv":
+        header = [
+            "period_start",
+            "group_key" if group_by != "none" else None,
+            "total_shortfall_usd",
+            "wallet_subscription_shortfall_usd",
+            "wallet_paid_shortfall_usd",
+            "wallet_plan_shortfall_usd",
+            "subscription_overage_shortfall_usd",
+            "free_plan_shortfall_usd",
+            "events",
+        ]
+        header = [h for h in header if h]
+        lines = [",".join(header)]
+        for row in items:
+            cols = [
+                str(row["period_start"]),
+                str(row.get("group_key") or "") if group_by != "none" else None,
+                f'{row["total_shortfall_usd"]:.2f}',
+                f'{row["wallet_subscription_shortfall_usd"]:.2f}',
+                f'{row["wallet_paid_shortfall_usd"]:.2f}',
+                f'{row["wallet_plan_shortfall_usd"]:.2f}',
+                f'{row["subscription_overage_shortfall_usd"]:.2f}',
+                f'{row["free_plan_shortfall_usd"]:.2f}',
+                str(row["events"]),
+            ]
+            cols = [c for c in cols if c is not None]
+            lines.append(",".join(cols))
+        csv_body = "\n".join(lines)
+        return Response(content=csv_body, media_type="text/csv")
+
+    return {"status": "ok", "period": period, "days": int(days), "group_by": group_by, "items": items}
+
+
+@router.get("/economics/request-lineage")
+async def get_request_lineage(
+        request_id: str = Query(..., description="Turn ID / request_id"),
+        session: UserSession = Depends(auth_without_pressure()),
+):
+    """
+    Show money lineage for a single request_id (turn_id).
+    Pulls budget reservations/ledgers and wallet reservation rows.
+    """
+    settings = get_settings()
+    pg_pool = getattr(router.state, "pg_pool", None)
+    if not pg_pool:
+        raise HTTPException(status_code=503, detail="PostgreSQL not available")
+
+    schema = "kdcube_control_plane"
+    async with pg_pool.acquire() as conn:
+        proj_resv = await conn.fetch(f"""
+            SELECT reservation_id, amount_cents, actual_spent_cents, status,
+                   created_at, expires_at, committed_at, released_at,
+                   notes, bundle_id, provider, user_id, request_id
+            FROM {schema}.tenant_project_budget_reservations
+            WHERE tenant=$1 AND project=$2 AND request_id=$3
+            ORDER BY created_at ASC
+        """, settings.TENANT, settings.PROJECT, request_id)
+
+        proj_ledger = await conn.fetch(f"""
+            SELECT id, amount_cents, kind, note, bundle_id, provider, user_id, request_id, created_at
+            FROM {schema}.tenant_project_budget_ledger
+            WHERE tenant=$1 AND project=$2 AND request_id=$3
+            ORDER BY created_at ASC
+        """, settings.TENANT, settings.PROJECT, request_id)
+
+        sub_resv = await conn.fetch(f"""
+            SELECT reservation_id, user_id, period_key, amount_cents, actual_spent_cents, status,
+                   created_at, expires_at, committed_at, released_at,
+                   notes, bundle_id, provider, request_id
+            FROM {schema}.user_subscription_period_reservations
+            WHERE tenant=$1 AND project=$2 AND request_id=$3
+            ORDER BY created_at ASC
+        """, settings.TENANT, settings.PROJECT, request_id)
+
+        sub_ledger = await conn.fetch(f"""
+            SELECT id, user_id, period_key, amount_cents, kind, note,
+                   bundle_id, provider, request_id, created_at
+            FROM {schema}.user_subscription_period_ledger
+            WHERE tenant=$1 AND project=$2 AND request_id=$3
+            ORDER BY created_at ASC
+        """, settings.TENANT, settings.PROJECT, request_id)
+
+        wallet_resv = await conn.fetch(f"""
+            SELECT reservation_id, user_id, bundle_id, notes,
+                   tokens_reserved, tokens_used, status,
+                   created_at, expires_at, committed_at, released_at
+            FROM {schema}.user_token_reservations
+            WHERE tenant=$1 AND project=$2 AND reservation_id=$3
+            ORDER BY created_at ASC
+        """, settings.TENANT, settings.PROJECT, request_id)
+
+    def _row_to_dict(r):
+        return dict(r)
+
+    return {
+        "status": "ok",
+        "request_id": request_id,
+        "project_budget": {
+            "reservations": [_row_to_dict(r) for r in proj_resv],
+            "ledger": [
+                {
+                    **_row_to_dict(r),
+                    "amount_usd": _usd_from_cents(int(r["amount_cents"] or 0)),
+                } for r in proj_ledger
+            ],
+        },
+        "subscription_budget": {
+            "reservations": [_row_to_dict(r) for r in sub_resv],
+            "ledger": [
+                {
+                    **_row_to_dict(r),
+                    "amount_usd": _usd_from_cents(int(r["amount_cents"] or 0)),
+                } for r in sub_ledger
+            ],
+        },
+        "wallet": {
+            "reservations": [_row_to_dict(r) for r in wallet_resv],
+        },
+        "notes": [
+            "request_id is the turn_id used across ledger and reservation tables.",
+            "Accounting cost breakdown is not stored in control-plane tables; use logs or accounting storage.",
+        ],
+    }
 
 
 # ============================================================================

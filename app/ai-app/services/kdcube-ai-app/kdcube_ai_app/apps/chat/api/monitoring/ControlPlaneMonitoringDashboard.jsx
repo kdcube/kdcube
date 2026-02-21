@@ -601,6 +601,8 @@ var MonitoringDashboard = function () {
     }, [system, tenant, project]);
     var queue = system === null || system === void 0 ? void 0 : system.queue_stats;
     var capacityCtx = ((_a = system === null || system === void 0 ? void 0 : system.queue_stats) === null || _a === void 0 ? void 0 : _a.capacity_context) || {};
+    var queueAnalytics = system === null || system === void 0 ? void 0 : system.queue_analytics;
+    var queueUtilization = system === null || system === void 0 ? void 0 : system.queue_utilization;
     var throttling = system === null || system === void 0 ? void 0 : system.throttling_stats;
     var events = (system === null || system === void 0 ? void 0 : system.recent_throttling_events) || [];
     var gateway = system === null || system === void 0 ? void 0 : system.gateway_configuration;
@@ -797,6 +799,34 @@ var MonitoringDashboard = function () {
                                 <div className="text-xs text-gray-600">Hard Limit</div>
                                 <div className="text-sm font-semibold">{(_l = (_k = capacityCtx.thresholds) === null || _k === void 0 ? void 0 : _k.hard_limit_threshold) !== null && _l !== void 0 ? _l : 0}</div>
                                 <div className="text-xs text-gray-500">items</div>
+                            </div>
+                        </div>
+                    </CardBody>
+                </Card>
+
+                <Card>
+                    <CardHeader title="Queue Analytics" subtitle="Average wait time and throughput (last hour)."/>
+                    <CardBody>
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            {["anonymous", "registered", "privileged"].map(function (key) {
+            var _a, _b, _c, _d;
+            var q = ((_a = queueAnalytics === null || queueAnalytics === void 0 ? void 0 : queueAnalytics.individual_queues) === null || _a === void 0 ? void 0 : _a[key]) || {};
+            var wait = (_b = q.avg_wait) !== null && _b !== void 0 ? _b : 0;
+            var throughput = (_c = q.throughput) !== null && _c !== void 0 ? _c : 0;
+            return (<div key={key} className="p-4 rounded-xl bg-gray-100">
+                                        <div className="text-xs text-gray-600">{key}</div>
+                                        <div className="text-sm font-semibold">{(_d = q.size) !== null && _d !== void 0 ? _d : 0} queued</div>
+                                        <div className="text-xs text-gray-500">avg wait {wait.toFixed(2)}s</div>
+                                        <div className="text-xs text-gray-500">throughput {throughput}/hr</div>
+                                        <div className="text-xs text-gray-500">{q.blocked ? 'blocked' : 'accepting'}</div>
+                                    </div>);
+        })}
+                            <div className="p-4 rounded-xl bg-gray-100">
+                                <div className="text-xs text-gray-600">Utilization</div>
+                                <div className="text-sm font-semibold">
+                                    {typeof queueUtilization === 'number' ? "".concat(queueUtilization.toFixed(1), "%") : '—'}
+                                </div>
+                                <div className="text-xs text-gray-500">queue / weighted capacity</div>
                             </div>
                         </div>
                     </CardBody>

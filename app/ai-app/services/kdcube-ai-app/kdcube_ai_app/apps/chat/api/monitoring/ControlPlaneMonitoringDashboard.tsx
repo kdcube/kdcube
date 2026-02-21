@@ -97,6 +97,23 @@ interface CircuitBreakerSummary {
     closed_circuits: number;
 }
 
+interface BurstUser {
+    token: string;
+    user_id?: string;
+    username?: string;
+    roles?: string[];
+}
+
+interface BurstUsersResponse {
+    enabled: boolean;
+    counts: Record<string, number>;
+    users: {
+        admin: BurstUser[];
+        registered: BurstUser[];
+        paid: BurstUser[];
+    };
+}
+
 // =============================================================================
 // Settings Manager (same pattern as other widgets)
 // =============================================================================
@@ -348,6 +365,24 @@ class MonitoringAPI {
         if (!res.ok) throw new Error(`Reset failed (${res.status})`);
         return res.json();
     }
+
+    async getBurstUsers(): Promise<BurstUsersResponse | null> {
+        const res = await fetch(this.url('/admin/burst/users'), {
+            method: 'GET',
+            headers: makeAuthHeaders(),
+        });
+        let data: any = null;
+        try {
+            data = await res.json();
+        } catch (_) {
+            data = null;
+        }
+        if (!res.ok) {
+            const detail = data?.detail || data?.message;
+            throw new Error(detail ? `Burst users: ${detail}` : `Failed to load burst users (${res.status})`);
+        }
+        return data;
+    }
 }
 
 // =============================================================================
@@ -574,6 +609,13 @@ const Pill: React.FC<{ tone?: 'neutral' | 'success' | 'warning' | 'danger'; chil
 // App
 // =============================================================================
 
+type BurstSession = {
+    token: string;
+    streamId: string;
+    role: 'admin' | 'registered' | 'paid';
+    es: EventSource;
+};
+
 const MonitoringDashboard: React.FC = () => {
     const api = useMemo(() => new MonitoringAPI(), []);
     const [system, setSystem] = useState<SystemMonitoringResponse | null>(null);
@@ -590,6 +632,19 @@ const MonitoringDashboard: React.FC = () => {
     const [configJson, setConfigJson] = useState<string>('');
     const [validationResult, setValidationResult] = useState<any>(null);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
+
+    const [burstUsers, setBurstUsers] = useState<BurstUsersResponse | null>(null);
+    const [burstError, setBurstError] = useState<string | null>(null);
+    const [burstStatus, setBurstStatus] = useState<string | null>(null);
+    const [burstAdminCount, setBurstAdminCount] = useState('10');
+    const [burstRegisteredCount, setBurstRegisteredCount] = useState('10');
+    const [burstMessagesPerUser, setBurstMessagesPerUser] = useState('1');
+    const [burstConcurrency, setBurstConcurrency] = useState('10');
+    const [burstMessage, setBurstMessage] = useState('ping');
+    const [burstBundleId, setBurstBundleId] = useState('');
+    const [burstOpenCount, setBurstOpenCount] = useState(0);
+    const [burstRunning, setBurstRunning] = useState(false);
+    const burstSessionsRef = useRef<BurstSession[]>([]);
 
     const refreshAll = useCallback(async () => {
         setLoading(true);
@@ -610,13 +665,27 @@ const MonitoringDashboard: React.FC = () => {
         }
     }, [api]);
 
+    const loadBurstUsers = useCallback(async () => {
+        try {
+            const res = await api.getBurstUsers();
+            setBurstUsers(res);
+            setBurstError(null);
+        } catch (e: any) {
+            setBurstUsers(null);
+            setBurstError(e?.message || 'Failed to load burst users');
+        }
+    }, [api]);
+
     useEffect(() => {
         let mounted = true;
         settings.setupParentListener().then(() => {
-            if (mounted) refreshAll();
+            if (mounted) {
+                refreshAll();
+                loadBurstUsers();
+            }
         });
         return () => { mounted = false; };
-    }, [refreshAll]);
+    }, [refreshAll, loadBurstUsers]);
 
     useEffect(() => {
         if (!autoRefresh) return;
@@ -655,6 +724,7 @@ const MonitoringDashboard: React.FC = () => {
     const queueUtilization = system?.queue_utilization;
     const throttling = system?.throttling_stats;
     const events = system?.recent_throttling_events || [];
+    const lastThrottle = events.length ? events[0] : null;
     const gateway = system?.gateway_configuration;
     const throttlingByPeriod = system?.throttling_by_period || {};
 
@@ -699,6 +769,125 @@ const MonitoringDashboard: React.FC = () => {
             setActionMessage(e?.message || 'Failed to reset circuit breaker');
         }
     };
+
+    const closeBurstStreams = useCallback(() => {
+        const sessions = burstSessionsRef.current || [];
+        sessions.forEach((s) => {
+            try { s.es.close(); } catch (_) { /* noop */ }
+        });
+        burstSessionsRef.current = [];
+        setBurstOpenCount(0);
+    }, []);
+
+    const openBurstStreams = useCallback(async () => {
+        if (!burstUsers?.users) {
+            setBurstStatus('Burst users not loaded');
+            return;
+        }
+        closeBurstStreams();
+
+        const adminCount = Math.max(0, parseInt(burstAdminCount, 10) || 0);
+        const regCount = Math.max(0, parseInt(burstRegisteredCount, 10) || 0);
+        const admins = burstUsers.users.admin.slice(0, adminCount);
+        const regs = burstUsers.users.registered.slice(0, regCount);
+
+        const selected: Array<{ user: BurstUser; role: BurstSession['role'] }> = [
+            ...admins.map((u) => ({ user: u, role: 'admin' as const })),
+            ...regs.map((u) => ({ user: u, role: 'registered' as const })),
+        ];
+
+        if (!selected.length) {
+            setBurstStatus('No users selected for SSE streams');
+            return;
+        }
+
+        const baseUrl = settings.getBaseUrl().replace(/\/$/, '');
+        const sessions: BurstSession[] = [];
+        selected.forEach((entry, idx) => {
+            const streamId = `burst-${entry.role}-${idx}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+            const url = new URL(`${baseUrl}/sse/stream`);
+            url.searchParams.set('stream_id', streamId);
+            url.searchParams.set('bearer_token', entry.user.token);
+            if (tenant) url.searchParams.set('tenant', tenant);
+            if (project) url.searchParams.set('project', project);
+            const es = new EventSource(url.toString());
+            es.addEventListener('error', () => {
+                // keep simple: errors are visible in devtools
+            });
+            sessions.push({ token: entry.user.token, streamId, role: entry.role, es });
+        });
+
+        burstSessionsRef.current = sessions;
+        setBurstOpenCount(sessions.length);
+        setBurstStatus(`Opened ${sessions.length} SSE streams`);
+    }, [burstUsers, burstAdminCount, burstRegisteredCount, closeBurstStreams, tenant, project]);
+
+    const runWithConcurrency = async (tasks: Array<() => Promise<void>>, limit: number) => {
+        let idx = 0;
+        const safeLimit = Math.max(1, Math.min(limit, tasks.length || 1));
+        const workers = new Array(safeLimit).fill(null).map(async () => {
+            while (idx < tasks.length) {
+                const current = idx++;
+                await tasks[current]();
+            }
+        });
+        await Promise.all(workers);
+    };
+
+    const sendBurstMessages = useCallback(async () => {
+        const sessions = burstSessionsRef.current || [];
+        if (!sessions.length) {
+            setBurstStatus('No active SSE streams. Open streams first.');
+            return;
+        }
+        const perUser = Math.max(1, parseInt(burstMessagesPerUser, 10) || 1);
+        const concurrency = Math.max(1, parseInt(burstConcurrency, 10) || 10);
+        const baseUrl = settings.getBaseUrl().replace(/\/$/, '');
+        const payloadBase: any = { message: { text: burstMessage || 'ping' } };
+        if (burstBundleId) payloadBase.message.bundle_id = burstBundleId;
+
+        const tasks: Array<() => Promise<void>> = [];
+        sessions.forEach((s) => {
+            for (let i = 0; i < perUser; i++) {
+                tasks.push(async () => {
+                    const convId = `burst-${s.streamId}-${i}`;
+                    const turnId = `turn_${Date.now()}_${Math.random().toString(16).slice(2, 8)}`;
+                    const payload = {
+                        ...payloadBase,
+                        message: {
+                            ...(payloadBase.message || {}),
+                            conversation_id: convId,
+                            turn_id: turnId,
+                        },
+                    };
+                    const res = await fetch(`${baseUrl}/sse/chat?stream_id=${encodeURIComponent(s.streamId)}`, {
+                        method: 'POST',
+                        headers: new Headers({
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${s.token}`,
+                        }),
+                        body: JSON.stringify(payload),
+                    });
+                    if (!res.ok) {
+                        throw new Error(`chat ${res.status}`);
+                    }
+                });
+            }
+        });
+
+        const startedAt = performance.now();
+        setBurstRunning(true);
+        setBurstStatus(`Sending ${tasks.length} messages…`);
+        try {
+            await runWithConcurrency(tasks, concurrency);
+            const elapsed = Math.round(performance.now() - startedAt);
+            setBurstStatus(`Burst complete: ${tasks.length} messages in ${elapsed}ms`);
+        } catch (e: any) {
+            setBurstStatus(`Burst error: ${e?.message || 'unknown error'}`);
+        } finally {
+            setBurstRunning(false);
+        }
+    }, [burstMessagesPerUser, burstConcurrency, burstMessage, burstBundleId]);
 
     return (
         <div className="min-h-screen bg-gray-50 text-gray-900">
@@ -846,6 +1035,46 @@ const MonitoringDashboard: React.FC = () => {
                     </CardBody>
                 </Card>
 
+                <Card>
+                    <CardHeader title="Burst Simulator" subtitle="Dev-only load generator using SimpleIDP tokens." />
+                    <CardBody className="space-y-4">
+                        {burstError && (
+                            <div className="text-xs text-rose-700">{burstError}</div>
+                        )}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <Input label="Admin streams" value={burstAdminCount} onChange={(e) => setBurstAdminCount(e.target.value)} />
+                            <Input label="Registered streams" value={burstRegisteredCount} onChange={(e) => setBurstRegisteredCount(e.target.value)} />
+                            <Input label="Messages / user" value={burstMessagesPerUser} onChange={(e) => setBurstMessagesPerUser(e.target.value)} />
+                            <Input label="Concurrency" value={burstConcurrency} onChange={(e) => setBurstConcurrency(e.target.value)} />
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <Input label="Message text" value={burstMessage} onChange={(e) => setBurstMessage(e.target.value)} />
+                            <Input label="Bundle ID (optional)" value={burstBundleId} onChange={(e) => setBurstBundleId(e.target.value)} />
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <Button variant="secondary" onClick={loadBurstUsers}>Load tokens</Button>
+                            <Button variant="secondary" onClick={openBurstStreams}>Open SSE</Button>
+                            <Button variant="secondary" onClick={closeBurstStreams}>Close SSE</Button>
+                            <Button onClick={sendBurstMessages} disabled={burstRunning}>Send chat burst</Button>
+                            <span className="text-xs text-gray-600">
+                                Open streams: {burstOpenCount}
+                            </span>
+                        </div>
+                        {burstUsers ? (
+                            <div className="text-xs text-gray-500">
+                                Available tokens: admin {burstUsers.counts?.admin ?? 0}, registered {burstUsers.counts?.registered ?? 0}, paid {burstUsers.counts?.paid ?? 0}
+                            </div>
+                        ) : (
+                            <div className="text-xs text-gray-500">
+                                Enable with `MONITORING_BURST_ENABLE=1` and `AUTH_PROVIDER=simple`.
+                            </div>
+                        )}
+                        {burstStatus && (
+                            <div className="text-xs text-gray-600">{burstStatus}</div>
+                        )}
+                    </CardBody>
+                </Card>
+
                 <CapacityPanel capacity={system?.capacity_transparency} />
 
                 <Card>
@@ -910,6 +1139,17 @@ const MonitoringDashboard: React.FC = () => {
                 <Card>
                     <CardHeader title="Throttling (Recent)" subtitle="Last hour summary and recent events." />
                     <CardBody>
+                        {lastThrottle && (
+                            <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+                                <div className="font-semibold">Latest throttle</div>
+                                <div>reason: {lastThrottle.reason}</div>
+                                <div>endpoint: {lastThrottle.endpoint || '—'}</div>
+                                <div>user_type: {lastThrottle.user_type || '—'} · status: {lastThrottle.http_status || '—'}</div>
+                                {lastThrottle.retry_after ? (
+                                    <div>retry_after: {lastThrottle.retry_after}s</div>
+                                ) : null}
+                            </div>
+                        )}
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                             <div className="p-3 rounded-xl bg-gray-100">
                                 <div className="text-xs text-gray-600">Total</div>
@@ -933,6 +1173,7 @@ const MonitoringDashboard: React.FC = () => {
                             {events.slice(0, 10).map((e, idx) => (
                                 <div key={e.event_id || idx} className="text-xs flex items-center justify-between bg-white border border-gray-200/70 rounded-xl px-3 py-2">
                                     <div className="text-gray-700">{e.reason}</div>
+                                    <div className="text-gray-500">{e.endpoint || '—'}</div>
                                     <div className="text-gray-500">{e.user_type}</div>
                                     <div className="text-gray-500">{e.http_status}</div>
                                 </div>

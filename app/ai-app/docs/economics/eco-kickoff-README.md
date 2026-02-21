@@ -17,6 +17,7 @@ It is written for a director‑led setup session using the admin UI.
 - Plan decides quota limits (`free`, `payasyougo`, `admin`, or custom plan IDs).
 - Paid role is derived automatically if a user has an active subscription or wallet credits.
 - Plan is resolved at runtime from subscription or wallet.
+- If a user has both subscription and wallet, subscription covers up to available and wallet covers overflow for the turn.
 - Quotas are enforced **per tenant/project** (global across bundles): hourly is rolling 60‑minute, monthly is rolling 30‑day (anchored to first usage per tenant/project), daily is calendar day (UTC).
 
 ## Visual Overview
@@ -82,6 +83,10 @@ Suggested examples:
 
 This is the only place that enforces quota limits in production after seeding.
 
+Optional (recommended):
+- Set the per‑bundle reservation floor via bundle props:
+  `economics.reservation_amount_dollars` (e.g., `2.0`).
+
 ### 3) Top up project budget
 
 Admin UI: **App Budget → Top up**
@@ -114,7 +119,8 @@ Admin UI: **Lifetime Credits**
 
 - Add credits to the user’s wallet (USD amount)
 - This automatically makes the user `paid`
-- Plan will resolve to `payasyougo`
+- Plan stays `free`, but service limits come from `payasyougo`
+  (token limits still come from `free`)
 
 ### 7) Keep registered (free) users
 
@@ -133,7 +139,7 @@ Check:
 
 - `role` (registered or paid)
 - `plan_id` (free, beta‑30, payasyougo)
-- `plan_source` (subscription or wallet)
+- `plan_source` (subscription or role)
 - Subscription balance or wallet balance
 - If you want to verify rolling reset timestamps, provide the **Bundle ID** in the breakdown form.
 
@@ -178,5 +184,6 @@ This will later move into a dedicated reporting view.
 
 - If a user is marked as `paid` but has no subscription or wallet, ensure their session role is correct.
 - If limits are wrong, update the plan policy in admin UI.
+- Use **Min reservation (USD)** in plan policies to enforce a per‑request reservation floor.
 - If subscription balance is stuck, run Reap Expired Reservation and re‑check.
 - If a subscription period is closed, remaining balance is moved to project budget by the sweep job.

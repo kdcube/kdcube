@@ -1,9 +1,9 @@
 # Economics subsystem
 
 This subsystem controls:
-1) **Economic rate limiting** (requests/tokens/concurrency; per-user; tier-aware)
+1) **Economic rate limiting** (requests/tokens/concurrency; per-user; plan-aware)
 2) **Charging** (who pays for each request: user credits first, then project budget)
-3) **Budgets** (tier quotas, tier overrides, user lifetime credits, project money)
+3) **Budgets** (plan quotas, plan overrides, user lifetime credits, project money)
 4) **Top-ups** (admin top-ups, subscription top-ups, Stripe credit purchases)
 
 It is designed so:
@@ -13,6 +13,12 @@ It is designed so:
 
 ---
 
+## Terminology
+
+- **Plan** = quota policy identity (limits for requests/tokens/concurrency).
+- **Plan override** = temporary per‑user override of plan limits.
+- **Lane** = `plan` lane or `paid` lane.
+
 ## Namespaces (Redis)
 
 All Redis keys must use `kdcube_ai_app.infra.namespaces.REDIS`.
@@ -20,7 +26,7 @@ All Redis keys must use `kdcube_ai_app.infra.namespaces.REDIS`.
 Economics:
 - `REDIS.ECONOMICS.RATE_LIMIT = "kdcube:economics:rl"`
 - `REDIS.ECONOMICS.PROJ_BUDGET = "kdcube:economics:proj.budget"`
-- `REDIS.ECONOMICS.TIER_BALANCE_CACHE = "kdcube:economics:tier.balance"`
+- `REDIS.ECONOMICS.PLAN_BALANCE_CACHE = "kdcube:economics:plan.balance"`
 
 Important: changing namespaces changes the Redis key-space (effectively resets usage counters unless you dual-read/migrate).
 
@@ -28,9 +34,9 @@ Important: changing namespaces changes the Redis key-space (effectively resets u
 
 ## Data model overview
 
-### A) User tier overrides + credits (PostgreSQL)
+### A) User plan overrides + credits (PostgreSQL)
 **Tables:**
-- `kdcube_control_plane.user_tier_overrides` — temporary quota overrides (expires).
+- `kdcube_control_plane.user_plan_overrides` — temporary plan overrides (expires).
 - `kdcube_control_plane.user_lifetime_credits` — wallet credits (lifetime tokens).
 
 ### B) User credit reservations (PostgreSQL)
@@ -46,6 +52,27 @@ Reservations are short-lived (TTL) and are either:
 
 - Base quota envelopes keyed by `plan_id`.
 - Runtime resolves `plan_id` per request and applies these limits.
+ - Reservation floor is configured per bundle via props `economics.reservation_amount_dollars`.
+
+Wallet + no subscription behavior:
+- Plan remains `free`.
+- Service limits (requests/concurrency) come from `payasyougo`.
+- Token limits come from `free`.
+
+Subscription + wallet behavior:
+- Plan remains the subscription plan.
+- Subscription balance is reserved up to available.
+- Wallet covers overflow for the remainder of the turn.
+- If actual spend exceeds both, project budget absorbs the remainder (ledger note indicates shortfall). Tags: `shortfall:wallet_subscription`, `shortfall:wallet_paid`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, `shortfall:free_plan`.
+- If subscription funds **zero** for a turn, the request switches to **paid lane** and **payasyougo** quotas apply.
+
+Subscription only (no wallet):
+- Subscription covers the full reservation.
+- If actual spend exceeds reservation, **project budget absorbs the overage** (`shortfall:subscription_overage`).
+
+Request lineage:
+- `request_id` is the **turn_id**.
+- `GET /economics/request-lineage?request_id=turn_id` returns the ledger + reservation rows.
 
 ### D) Economic RL (Redis)
 **Module:** `UserEconomicsRateLimiter`
@@ -59,7 +86,7 @@ Tracks (quota counters are global per tenant/project; accounting still uses bund
 
 Policy source:
 - Base policy comes from **plan_id** (not role).
-- Optional tier override is pulled from `user_tier_overrides` and merged as **OVERRIDE** (not additive).
+- Optional plan override is pulled from `user_plan_overrides` and merged as **OVERRIDE** (not additive).
 
 Window semantics:
 - Hourly tokens: **rolling 60‑minute** window (minute buckets).
@@ -90,10 +117,10 @@ Inputs:
 - `subject_id = "{tenant}:{project}:{user_id}"` (or session-scoped variant)
 - `bundle_id` (product id for accounting/analytics)
 - `base_policy` (derived from `plan_id`)
-- optional `tier_override` (from `user_tier_overrides`)
+- optional plan override (from `user_plan_overrides`)
 
 Process:
-1) Load tier override (if enabled) and compute **effective policy**:
+1) Load plan override (if enabled) and compute **effective policy**:
     - If override exists and is not expired → override any configured limits.
     - Otherwise use base policy.
 
@@ -112,7 +139,8 @@ Process:
     - else ZADD(lock_id, expire_ts)
 
 Output:
-- `AdmitResult(allowed, reason, lock_id, snapshot, used_tier_override, effective_policy)`
+- `AdmitResult(allowed, reason, lock_id, snapshot, used_plan_override, effective_policy)`  
+  (field means “plan override used”)
 
 Important semantics:
 - Token limits are **post‑paid**: checks are based on committed counters from previous turns.
@@ -149,9 +177,9 @@ Module: `ProjectBudgetLimiter`
 - Legacy flow:
     - `commit(spent_usd)` (no reservation)
 
-If actual spend > reserved estimate, the delta is also charged and overdraft-checked.
+If actual spend > reserved estimate, the delta is also charged and overdraft‑checked. This applies **only** to the project budget. **Subscriptions and wallets never go negative.**
 
-Overdraft:
+Project budget overdraft:
 - overdraft_limit == NULL → unlimited negative allowed
 - overdraft_limit == 0 → no overdraft allowed
 - otherwise can go negative up to the limit
@@ -167,8 +195,8 @@ Stored as policies (control plane):
 - `plan_quota_policies` keyed by `plan_id`
 - Enforced by Economic RL (Redis counters, global per tenant/project)
 
-### 3.2 Tier override (temporary replacement)
-Stored in `user_tier_overrides`, with optional expiry.
+### 3.2 Plan override (temporary replacement)
+Stored in `user_plan_overrides`, with optional expiry.
 Semantics: **OVERRIDE**, not additive.
 
 Use cases:
@@ -196,7 +224,7 @@ Used when:
 
 Common management operations:
 - top up
-- set overdraft limit
+- set overdraft limit (project budget only)
 - reconcile via ledger
 
 ---
@@ -208,13 +236,13 @@ Common management operations:
 - Subscription scheduler can do this monthly
 - Stripe “invoice.paid” can also do this for subscriptions
 
-### 4.2 Override tier (temporary)
+### 4.2 Override plan (temporary)
 - Admin endpoints:
-    - `/tier-balance/grant-trial`
-    - `/tier-balance/update` (partial updates)
+    - `/plan-override/grant-trial`
+    - `/plan-override/update` (partial updates)
 
 ### 4.3 Add user lifetime credits (token budget)
-- Admin endpoint: `/tier-balance/add-lifetime-credits`
+- Admin endpoint: `/plan-override/add-lifetime-credits`
 - Stripe `payment_intent.succeeded` (credits purchase)
 
 ---

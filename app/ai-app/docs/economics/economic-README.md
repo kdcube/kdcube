@@ -18,6 +18,21 @@ The economics subsystem covers:
 
 ## Core Concepts
 
+### Terminology
+
+- **Plan** = quota policy identity (limits for requests/tokens/concurrency).
+- **Plan override** = temporary per‑user override of plan limits.
+- **Lane** = `plan` lane or `paid` lane.
+
+Lane vs funding (important):
+- **Lane** is only `plan` (plan lane) or `paid` (wallet‑only lane).
+- **Funding source** is `subscription` or `project` (for plan lane), or `wallet` (for paid lane).
+- A **subscription plan** runs in the **plan lane**; it just uses **subscription funding**.
+
+Tracing a single request:
+- `request_id` is the **turn_id**.
+- Use `GET /economics/request-lineage?request_id=turn_id` to fetch ledger + reservation rows.
+
 ### Role (economics role)
 
 Role is the funding access decision, not the quota policy. The gateway can override the authenticated role based on economics state.
@@ -56,9 +71,13 @@ Plan resolution is performed in the entrypoint using the following priority:
 1. `privileged/admin` → `admin`
 2. `anonymous` → `anonymous`
 3. active subscription → `subscription.plan_id`
-4. wallet only → `payasyougo`
-5. paid role without subscription → `payasyougo`
-6. default → `free`
+4. default → `free`
+
+Special handling for wallet users with no subscription:
+
+- The **plan stays `free`**, but **service limits** (requests/concurrency) are taken from the `payasyougo` plan.
+- **Token limits** still come from the `free` plan.
+- When the free token quota is insufficient and a wallet exists, the request switches to **paid lane**.
 
 Visual summary:
 
@@ -69,11 +88,8 @@ flowchart TD
   B -- anonymous --> N[plan_id = anonymous]
   B -- other --> C{Active subscription?}
   C -- yes --> S[plan_id = subscription.plan_id]
-  C -- no --> D{Wallet credits?}
-  D -- yes --> W[plan_id = payasyougo]
-  D -- no --> E{Role is paid?}
-  E -- yes --> W
-  E -- no --> F[plan_id = free]
+  C -- no --> F[plan_id = free]
+  F --> W[If wallet exists: payasyougo service limits + free token limits]
 ```
 
 ## Where Limits Come From (Plan Quotas)
@@ -86,6 +102,10 @@ Plan quotas are stored in the control plane table `plan_quota_policies`.
 - Monthly limits use a **rolling 30‑day** window anchored to the user’s first usage **per tenant/project**.
 - Daily limits use **calendar day (UTC)**.
 - Total requests do not reset.
+Reservation amount configuration:
+- Per‑bundle fixed reservation can be set via bundle props: `economics.reservation_amount_dollars`.
+- If set, the reservation estimate uses that fixed USD amount (lane‑independent).
+  Configure via Integrations bundle props API (see `eco-admin-README.md`).
 
 Accounting and spend are still recorded **per bundle** for reporting, but quota enforcement is global per tenant/project.
 Global quota counters use bundle id `__project__` in Redis keys (subject_id already encodes tenant/project).
@@ -110,28 +130,35 @@ flowchart TD
 
 ## Funding Lanes and Reservation Semantics
 
-### Tier lane
+### Plan lane
 
-Tier lane is the normal path when rate‑limit admit succeeds.
+Plan lane is the normal path when rate‑limit admit succeeds.
 
-Funding for tier lane:
+Funding for plan lane:
 
 - Active subscription → reserve from subscription period budget.
+  - If a wallet exists and the subscription cannot cover the full reservation, reserve **subscription up to available** and reserve **wallet overflow** for the remainder.
+  - If subscription funds **zero** for the turn, the request switches to **paid lane** and **payasyougo** quotas apply.
+  - If no wallet exists and actual spend exceeds reservation, **project budget absorbs the overage** (`shortfall:subscription_overage`).
 - Registered role (no subscription) → reserve from project budget.
 - Privileged bypass → no pre‑check; project budget is charged after run.
+- If project‑funded (free plan) actual spend exceeds reservation, **project budget absorbs the overage** (`shortfall:free_plan`).
+- Wallet‑backed free users keep `plan_id=free` but use **payasyougo service limits** (requests/concurrency) while **token limits** remain from `free`.
+
+If the **actual** spend exceeds both plan funding and wallet (e.g., underestimated cost), the **project budget absorbs the remainder** and a ledger entry is written with a shortfall note. **Subscriptions and wallets never go negative.**
+Shortfall notes are tagged as `shortfall:wallet_subscription`, `shortfall:wallet_paid`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, or `shortfall:free_plan` for reporting.
 
 ### Paid lane
 
-Paid lane is used when tier admit is denied or when tier funding cannot be reserved.
+Paid lane is used when plan admit is denied **and** a wallet is available, when plan funding cannot be reserved, **or** when subscription funding for the turn is zero and the wallet must cover the full request.
 
 Funding for paid lane:
 
-- Active subscription → reserve subscription budget for the full estimated cost.
-- Otherwise → reserve wallet credits (lifetime tokens).
+- Reserve wallet credits (lifetime tokens).
 
 ### Reservation types
 
-- Rate limiter token reservation (Redis) for tier lane
+- Rate limiter token reservation (Redis) for plan lane
 - Subscription reservations in `user_subscription_period_reservations`
 - Project budget reservations in `tenant_project_budget_reservations`
 - Wallet reservations in `user_token_reservations`
@@ -145,26 +172,25 @@ flowchart TD
   A[Request] --> B[Resolve role]
   B --> C[Resolve plan_id]
   C --> D[Load plan quota policy]
-  D --> E{Rate‑limit admit?}
+  D --> E{"Rate‑limit admit?"}
   E -- No --> F{Personal funding available?}
   F -- No --> X[Deny: rate limit]
   F -- Yes --> P1[Paid lane]
 
-  E -- Yes --> T1[Tier lane]
+  E -- Yes --> T1["Plan lane"]
 
   T1 --> S{Active subscription?}
   S -- Yes --> SB[Reserve subscription budget]
+  SB --> W1{Wallet exists and subscription short?}
+  W1 -- Yes --> PW[Reserve wallet overflow]
+  W1 -- No --> RUN
   S -- No --> R{Role allows project budget?}
   R -- Yes --> PB[Reserve project budget]
   R -- No --> P1
 
-  P1 --> PF{Active subscription?}
-  PF -- Yes --> PS[Reserve subscription budget]
-  PF -- No --> PW[Reserve wallet credits]
+  P1 --> PW[Reserve wallet credits]
 
-  SB --> RUN[Execute]
   PB --> RUN
-  PS --> RUN
   PW --> RUN
 
   RUN --> ACC[Accounting]
@@ -195,15 +221,16 @@ Authoritative schema:
 Key tables:
 
 - `plan_quota_policies` — base policy per plan_id
-- `user_tier_overrides` — temporary overrides
+- `user_plan_overrides` — temporary plan overrides
 - `user_lifetime_credits` — wallet credits
 - `user_token_reservations` — wallet reservations
 - `tenant_project_budget` — project money balance
 - `tenant_project_budget_reservations` — project budget holds
 - `tenant_project_budget_ledger` — project budget ledger
+- `tenant_project_budget_absorption` — view for shortfall absorption reporting
+- `tenant_project_budget_absorption_detail` — view for shortfall reporting by user/bundle
 - `subscription_plans` — plan catalog and Stripe price mapping
 - `user_subscriptions` — subscription metadata
-- `user_subscription_budget_settings` — per user subscription config (overdraft)
 - `user_subscription_period_budget` — per period subscription balance
 - `user_subscription_period_reservations` — subscription holds
 - `user_subscription_period_ledger` — subscription ledger

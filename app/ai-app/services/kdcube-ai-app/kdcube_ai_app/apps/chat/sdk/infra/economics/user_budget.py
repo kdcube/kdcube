@@ -24,17 +24,17 @@ logger = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 # Compatibility snapshot (flattened) used widely by RL / run() today.
 # Backed by TWO tables:
-#   - user_tier_overrides
+#   - user_plan_overrides
 #   - user_lifetime_credits
 # -----------------------------------------------------------------------------
 @dataclass
-class UserTierBalance:
+class UserPlanBalance:
     # Identification
     tenant: str
     project: str
     user_id: str
 
-    # Tier Override Limits (NULL = use base tier)
+    # Plan Override Limits (NULL = use base plan)
     max_concurrent: Optional[int] = None
     requests_per_day: Optional[int] = None
     requests_per_month: Optional[int] = None
@@ -43,10 +43,10 @@ class UserTierBalance:
     tokens_per_day: Optional[int] = None
     tokens_per_month: Optional[int] = None
 
-    # Tier override expiry
+    # Plan override expiry
     expires_at: Optional[datetime] = None
 
-    # Tier override grant tracking (NOT personal credits purchase)
+    # Plan override grant tracking (NOT personal credits purchase)
     grant_id: Optional[str] = None
     grant_amount_usd: Optional[float] = None
     grant_notes: Optional[str] = None
@@ -65,13 +65,13 @@ class UserTierBalance:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    # ---------- tier override semantics ----------
-    def is_tier_override_expired(self) -> bool:
+    # ---------- plan override semantics ----------
+    def is_plan_override_expired(self) -> bool:
         if not self.expires_at:
             return False
         return datetime.now(timezone.utc) >= self.expires_at
 
-    def has_tier_override(self) -> bool:
+    def has_plan_override(self) -> bool:
         return any([
             self.max_concurrent is not None,
             self.requests_per_day is not None,
@@ -82,8 +82,8 @@ class UserTierBalance:
             self.tokens_per_month is not None,
             ])
 
-    def tier_override_is_active(self) -> bool:
-        return self.active and self.has_tier_override() and (not self.is_tier_override_expired())
+    def plan_override_is_active(self) -> bool:
+        return self.active and self.has_plan_override() and (not self.is_plan_override_expired())
 
     # ---------- personal credits semantics ----------
     def has_lifetime_budget(self) -> bool:
@@ -95,11 +95,11 @@ class UserTierBalance:
         )
 
     # Note: do NOT mix the two lifecycles anymore.
-    # This is *not* "tier override is valid". It's "any user-budget info exists and active".
+    # This is *not* "plan override is valid". It's "any user-budget info exists and active".
     def is_valid(self) -> bool:
         if not self.active:
             return False
-        return self.tier_override_is_active() or self.has_lifetime_budget()
+        return self.plan_override_is_active() or self.has_lifetime_budget()
 
 
 @dataclass
@@ -120,15 +120,15 @@ class TokenReservation:
     notes: Optional[str] = None
 
 
-class UserTierBalanceSnapshotManager:
+class UserPlanBalanceSnapshotManager:
     """
     Read-only snapshot: single SQL that joins
-      - user_tier_overrides
+      - user_plan_overrides
       - user_lifetime_credits
-    and returns the flattened UserTierBalance dataclass.
+    and returns the flattened UserPlanBalance dataclass.
     """
     CP = "kdcube_control_plane"
-    OVERRIDE_TABLE = "user_tier_overrides"
+    OVERRIDE_TABLE = "user_plan_overrides"
     CREDITS_TABLE = "user_lifetime_credits"
 
     def __init__(self, pg_pool: Optional[asyncpg.Pool] = None):
@@ -146,14 +146,14 @@ class UserTierBalanceSnapshotManager:
             return float(x)
         return float(x)
 
-    async def get_user_tier_balance(
+    async def get_user_plan_balance(
             self,
             *,
             tenant: str,
             project: str,
             user_id: str,
             include_expired: bool = False,
-    ) -> Optional[UserTierBalance]:
+    ) -> Optional[UserPlanBalance]:
         if not self._pg_pool:
             return None
 
@@ -232,14 +232,14 @@ class UserTierBalanceSnapshotManager:
         d["lifetime_usd_purchased"] = self._f(d.get("lifetime_usd_purchased"))
         d["last_purchase_amount_usd"] = self._f(d.get("last_purchase_amount_usd"))
 
-        return UserTierBalance(**d)
+        return UserPlanBalance(**d)
 
 # -----------------------------------------------------------------------------
-# TierOverrideManager  (table: user_tier_overrides)
+# PlanOverrideManager  (table: user_plan_overrides)
 # -----------------------------------------------------------------------------
-class TierOverrideManager:
+class PlanOverrideManager:
     CP = "kdcube_control_plane"
-    TABLE = "user_tier_overrides"
+    TABLE = "user_plan_overrides"
 
     def __init__(
             self,
@@ -247,12 +247,12 @@ class TierOverrideManager:
             redis: Optional[Redis] = None,
             *,
             cache_ttl: int = 10,
-            cache_namespace: str = REDIS.ECONOMICS.TIER_BALANCE_CACHE,  # reuse existing namespace
+            cache_namespace: str = REDIS.ECONOMICS.PLAN_BALANCE_CACHE,
     ):
         self._pg_pool = pg_pool
         self._redis = redis
         self.cache_ttl = cache_ttl
-        self.cache_ns = cache_namespace + ":tier_override"
+        self.cache_ns = cache_namespace + ":plan_override"
 
         from kdcube_ai_app.apps.chat.sdk.config import get_settings
         self._settings = get_settings()
@@ -292,11 +292,11 @@ class TierOverrideManager:
             except Exception:
                 pass
 
-    async def get_user_tier_override(
+    async def get_user_plan_override(
             self, *, tenant: str, project: str, user_id: str, include_expired: bool = False
     ) -> Optional[dict]:
         """
-        Returns raw dict row from user_tier_overrides or None.
+        Returns raw dict row from user_plan_overrides or None.
         """
         # Redis
         if self._redis:
@@ -312,7 +312,7 @@ class TierOverrideManager:
                         return None
                     return data
             except Exception as e:
-                logger.warning("Redis tier_override read error: %s", e)
+                logger.warning("Redis plan_override read error: %s", e)
 
         if not self._pg_pool:
             return None
@@ -346,7 +346,7 @@ class TierOverrideManager:
 
         return data
 
-    async def update_user_tier_budget(
+    async def update_user_plan_override(
             self,
             *,
             tenant: str,
@@ -408,7 +408,7 @@ class TierOverrideManager:
         await self._invalidate(tenant, project, user_id)
         return dict(row)
 
-    async def deactivate_tier_override(self, *, tenant: str, project: str, user_id: str) -> None:
+    async def deactivate_plan_override(self, *, tenant: str, project: str, user_id: str) -> None:
         if not self._pg_pool:
             raise RuntimeError("PostgreSQL pool not initialized")
 
@@ -436,7 +436,7 @@ class UserCreditsManager:
             redis: Optional[Redis] = None,
             *,
             cache_ttl: int = 10,
-            cache_namespace: str = REDIS.ECONOMICS.TIER_BALANCE_CACHE,  # reuse existing namespace
+            cache_namespace: str = REDIS.ECONOMICS.PLAN_BALANCE_CACHE,
     ):
         self._pg_pool = pg_pool
         self._redis = redis
@@ -808,6 +808,13 @@ class UserCreditsManager:
 
         async with self._pg_pool.acquire() as conn:
             async with conn.transaction():
+                res = await conn.fetchrow(f"""
+                    SELECT tokens_reserved, status
+                    FROM {self.CP}.{self.RESERVATIONS_TABLE}
+                    WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
+                    FOR UPDATE
+                """, tenant, project, user_id, reservation_id)
+
                 bal = await conn.fetchrow(f"""
                     SELECT lifetime_tokens_purchased AS purchased,
                            lifetime_tokens_consumed AS consumed
@@ -912,6 +919,12 @@ class UserCreditsManager:
                     """, tenant, project, user_id, reservation_id)
                     return tokens
 
+                if not res or res.get("status") != "reserved":
+                    # Missing or already finalized reservation; do not consume
+                    return tokens
+
+                reserved = int(res.get("tokens_reserved") or 0)
+
                 purchased = int(bal["purchased"] or 0)
                 consumed = int(bal["consumed"] or 0)
 
@@ -920,7 +933,7 @@ class UserCreditsManager:
                     exclude_reservation_id=reservation_id,
                 )
                 available = max(purchased - consumed - other_reserved, 0)
-                consume = min(int(tokens), int(available))
+                consume = min(int(tokens), int(available), int(reserved))
 
                 if consume > 0:
                     await conn.execute(f"""
@@ -1059,7 +1072,7 @@ class UserBudgetBreakdownService:
     """
     Builds a full per-user budget snapshot for admin/debug UI:
       - base policy
-      - tier override snapshot (+ expired status)
+      - plan override snapshot (+ expired status)
       - effective policy (merge)
       - RL usage counters (requests/tokens)
       - remaining headroom vs effective policy
@@ -1073,13 +1086,13 @@ class UserBudgetBreakdownService:
             *,
             pg_pool: asyncpg.Pool,
             redis: Redis,
-            tier_balance_snapshot_mgr: Optional[UserTierBalanceSnapshotManager] = None,
+            plan_balance_snapshot_mgr: Optional[UserPlanBalanceSnapshotManager] = None,
             credits_mgr: Optional[UserCreditsManager] = None,
             subscription_mgr: Optional[SubscriptionManager] = None,
     ):
         self._pg_pool = pg_pool
         self._redis = redis
-        self._tier_snapshot = tier_balance_snapshot_mgr or UserTierBalanceSnapshotManager(pg_pool=pg_pool)
+        self._plan_snapshot = plan_balance_snapshot_mgr or UserPlanBalanceSnapshotManager(pg_pool=pg_pool)
         self._credits_mgr = credits_mgr or UserCreditsManager(pg_pool=pg_pool, redis=redis)
         self._subscription_mgr = subscription_mgr or SubscriptionManager(pg_pool=pg_pool)
 
@@ -1126,7 +1139,7 @@ class UserBudgetBreakdownService:
     ) -> dict:
         from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import (
             UserEconomicsRateLimiter,
-            _merge_policy_with_tier_balance,
+            _merge_policy_with_plan_override,
             _k,
             subject_id_of,
         )
@@ -1135,11 +1148,11 @@ class UserBudgetBreakdownService:
         bundle_ids = bundle_ids or ["*"]
         now = datetime.utcnow().replace(tzinfo=timezone.utc)
 
-        # -------- tier balance snapshots (for display + for effective merge) --------
-        tier_full = await self._tier_snapshot.get_user_tier_balance(
+        # -------- plan override snapshots (for display + for effective merge) --------
+        plan_full = await self._plan_snapshot.get_user_plan_balance(
             tenant=tenant, project=project, user_id=user_id, include_expired=True
         )
-        tier_effective = await self._tier_snapshot.get_user_tier_balance(
+        plan_effective = await self._plan_snapshot.get_user_plan_balance(
             tenant=tenant, project=project, user_id=user_id, include_expired=False
         )
 
@@ -1164,7 +1177,7 @@ class UserBudgetBreakdownService:
         tok_month = int(totals.get("tokens_this_month") or 0)
 
         # -------- effective policy (override semantics) --------
-        effective_policy = _merge_policy_with_tier_balance(base_policy, tier_effective) if tier_effective else base_policy
+        effective_policy = _merge_policy_with_plan_override(base_policy, plan_effective) if plan_effective else base_policy
 
         # -------- rolling window reset info (per bundle, optional) --------
         reset_windows = None
@@ -1217,33 +1230,33 @@ class UserBudgetBreakdownService:
             if lim > 0:
                 percentage_used = round((req_day / lim) * 100, 1)
 
-        # -------- tier override payload (from tier_full) --------
-        tier_override_payload = None
-        if tier_full and tier_full.has_tier_override():
-            expired = tier_full.is_tier_override_expired()
-            active = tier_full.tier_override_is_active()
+        # -------- plan override payload (from plan_full) --------
+        plan_override_payload = None
+        if plan_full and plan_full.has_plan_override():
+            expired = plan_full.is_plan_override_expired()
+            active = plan_full.plan_override_is_active()
 
             if include_expired_override or active:
-                tier_override_payload = {
+                plan_override_payload = {
                     "active": bool(active),
                     "expired": bool(expired),
-                    "expires_at": self._dt(tier_full.expires_at),
+                    "expires_at": self._dt(plan_full.expires_at),
                     "limits": {
-                        "max_concurrent": tier_full.max_concurrent,
-                        "requests_per_day": tier_full.requests_per_day,
-                        "requests_per_month": tier_full.requests_per_month,
-                        "total_requests": tier_full.total_requests,
-                        "tokens_per_hour": tier_full.tokens_per_hour,
-                        "tokens_per_day": tier_full.tokens_per_day,
-                        "tokens_per_month": tier_full.tokens_per_month,
-                        "usd_per_hour": _usd(tier_full.tokens_per_hour),
-                        "usd_per_day": _usd(tier_full.tokens_per_day),
-                        "usd_per_month": _usd(tier_full.tokens_per_month),
+                        "max_concurrent": plan_full.max_concurrent,
+                        "requests_per_day": plan_full.requests_per_day,
+                        "requests_per_month": plan_full.requests_per_month,
+                        "total_requests": plan_full.total_requests,
+                        "tokens_per_hour": plan_full.tokens_per_hour,
+                        "tokens_per_day": plan_full.tokens_per_day,
+                        "tokens_per_month": plan_full.tokens_per_month,
+                        "usd_per_hour": _usd(plan_full.tokens_per_hour),
+                        "usd_per_day": _usd(plan_full.tokens_per_day),
+                        "usd_per_month": _usd(plan_full.tokens_per_month),
                     },
                     "grant": {
-                        "id": tier_full.grant_id,
-                        "amount_usd": tier_full.grant_amount_usd,
-                        "notes": tier_full.grant_notes,
+                        "id": plan_full.grant_id,
+                        "amount_usd": plan_full.grant_amount_usd,
+                        "notes": plan_full.grant_notes,
                     },
                 }
 
@@ -1251,9 +1264,9 @@ class UserBudgetBreakdownService:
         credits_payload = None
         reservations_payload: list[dict] = []
 
-        if tier_full and tier_full.has_lifetime_budget():
-            purchased = int(tier_full.lifetime_tokens_purchased or 0)
-            consumed = int(tier_full.lifetime_tokens_consumed or 0)
+        if plan_full and plan_full.has_lifetime_budget():
+            purchased = int(plan_full.lifetime_tokens_purchased or 0)
+            consumed = int(plan_full.lifetime_tokens_consumed or 0)
 
             # Do NOT clamp: if later you allow negative credits, UI/API stays truthful.
             gross_remaining = purchased - consumed
@@ -1291,13 +1304,13 @@ class UserBudgetBreakdownService:
                 "tokens_reserved": int(reserved_sum),
                 "tokens_available": int(available),
                 "available_usd": float(available_usd),
-                "lifetime_usd_purchased": float(tier_full.lifetime_usd_purchased)
-                if tier_full.lifetime_usd_purchased is not None else None,
+                "lifetime_usd_purchased": float(plan_full.lifetime_usd_purchased)
+                if plan_full.lifetime_usd_purchased is not None else None,
                 "last_purchase": {
-                    "id": tier_full.last_purchase_id,
-                    "amount_usd": float(tier_full.last_purchase_amount_usd)
-                    if tier_full.last_purchase_amount_usd is not None else None,
-                    "notes": tier_full.last_purchase_notes,
+                    "id": plan_full.last_purchase_id,
+                    "amount_usd": float(plan_full.last_purchase_amount_usd)
+                    if plan_full.last_purchase_amount_usd is not None else None,
+                    "notes": plan_full.last_purchase_notes,
                 },
                 "reference_model": f"{reference_provider}/{reference_model}",
             }
@@ -1380,7 +1393,7 @@ class UserBudgetBreakdownService:
             "plan_source": plan_source,
             "bundle_breakdown": usage_breakdown.get("bundles"),
             "base_policy": base_policy_payload,
-            "tier_override": tier_override_payload,
+            "plan_override": plan_override_payload,
             "effective_policy": effective_policy_payload,
             "current_usage": {
                 "requests_today": req_day,

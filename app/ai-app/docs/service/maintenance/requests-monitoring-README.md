@@ -112,3 +112,60 @@ What to expect:
 1. Restart server, immediately send a message and watch `queue_wait_ms`.
 2. Send a second message right after “idle” status is emitted.
 3. Compare SSE stream logs vs processor acquire logs.
+
+## Server-side load testing (recommended)
+Use the server-side load generator to avoid browser SSE limits and simulate many users.
+
+Location:
+- `kdcube_ai_app/infra/load/test/burst_sse_load.py`
+
+Prerequisites:
+- `AUTH_PROVIDER=simple`
+- `IDP_DB_PATH=/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/idp_users.json`
+- Ensure admin + registered tokens exist in that file.
+
+### Case 1: 15 registered, 1 message each (no SSE streams)
+```
+python -m kdcube_ai_app.infra.load.test.burst_sse_load \
+  --base-url http://localhost:8010 \
+  --registered 15 --admin 0 \
+  --messages-per-user 1 \
+  --concurrency 10 \
+  --monitor
+```
+
+### Case 2: 15 registered + 5 admin, 2 messages each (SSE streams open)
+```
+python -m kdcube_ai_app.infra.load.test.burst_sse_load \
+  --base-url http://localhost:8010 \
+  --registered 15 --admin 5 \
+  --messages-per-user 2 \
+  --concurrency 10 \
+  --open-sse \
+  --monitor
+```
+
+### Case 3: Stress queue (burst)
+```
+python -m kdcube_ai_app.infra.load.test.burst_sse_load \
+  --base-url http://localhost:8010 \
+  --registered 15 --admin 0 \
+  --messages-per-user 4 \
+  --concurrency 30 \
+  --monitor
+```
+
+### How to profile during the test
+1. Open Control Plane Monitoring Dashboard:
+   - Watch `Queue Analytics`, `Queue Utilization`, `Throttling (Recent)`.
+2. Watch log lines:
+   - `enqueue_chat_task_atomic result`
+   - `acquired task`
+   - `Starting task`
+3. Redis Browser:
+   - Queue size: `<tenant>:<project>:kdcube:chat:prompt:queue:*`
+   - Heartbeats: `<tenant>:<project>:kdcube:heartbeat:process:*`
+
+Notes:
+- `--open-sse` opens an SSE stream per user (closer to real usage).
+- Without `--open-sse`, messages still enqueue and run (events are just not delivered).

@@ -103,12 +103,13 @@ if __name__ == "__main__":
     # inspect_stream("celery")
     # inspect_pubsub()
     QUEUE_NAME = "kdcube_orch_low_priority"
-    inspect_queue(QUEUE_NAME)
+    # inspect_queue(QUEUE_NAME)
     # keys = [f"dramatiq.*", "dramatiq:default:kdcube_orch_low_priority","dramatiq.kdcube_orch_low_priority"]
     # keys = "kdcube:system:ratelimit:*"
     keys = "kdcube:session:anonymous:*"
 
     keys = "kdcube:throttling:*"
     # keys = "_kombu.binding.*"
-    # delete_keys_by_pattern(keys)
+    keys = "kdcube:economics:rl:*"
+    delete_keys_by_pattern(keys)
     inspect_keys()

@@ -557,7 +557,7 @@ class StripeEconomicsWebhookHandler:
                     )
 
                 try:
-                    # APPLY via TierBalanceManager inside SAME transaction
+                    # APPLY via UserCreditsManager inside SAME transaction
                     await self.user_credits_mgr.add_lifetime_tokens(
                         tenant=tenant,
                         project=project,

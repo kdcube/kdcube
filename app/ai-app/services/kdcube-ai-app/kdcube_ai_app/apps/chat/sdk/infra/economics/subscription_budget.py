@@ -60,7 +60,6 @@ class SubscriptionBudgetLimiter:
     """
 
     CONTROL_PLANE_SCHEMA = "kdcube_control_plane"
-    SETTINGS_TABLE = "user_subscription_budget_settings"
     BUDGET_TABLE = "user_subscription_period_budget"
     RESERVATIONS_TABLE = "user_subscription_period_reservations"
     LEDGER_TABLE = "user_subscription_period_ledger"
@@ -85,13 +84,6 @@ class SubscriptionBudgetLimiter:
         self.period_end = period_end
 
     # ---------------- DB helpers ----------------
-    async def _ensure_settings_row(self, conn: asyncpg.Connection) -> None:
-        await conn.execute(f"""
-            INSERT INTO {self.CONTROL_PLANE_SCHEMA}.{self.SETTINGS_TABLE} (tenant, project, user_id)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (tenant, project, user_id) DO NOTHING
-        """, self.tenant, self.project, self.user_id)
-
     async def _ensure_budget_row(self, conn: asyncpg.Connection) -> None:
         await conn.execute(f"""
             INSERT INTO {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE} (
@@ -102,16 +94,8 @@ class SubscriptionBudgetLimiter:
         """, self.tenant, self.project, self.user_id, self.period_key, self.period_start, self.period_end)
 
     async def _get_overdraft_limit_cents(self, conn: asyncpg.Connection) -> Optional[int]:
-        await self._ensure_settings_row(conn)
-        row = await conn.fetchrow(f"""
-            SELECT overdraft_limit_cents
-            FROM {self.CONTROL_PLANE_SCHEMA}.{self.SETTINGS_TABLE}
-            WHERE tenant=$1 AND project=$2 AND user_id=$3
-        """, self.tenant, self.project, self.user_id)
-        if not row:
-            return 0
-        lim = row["overdraft_limit_cents"]
-        return None if lim is None else int(lim)
+        # Subscription overdraft is disabled.
+        return 0
 
     async def _insert_ledger(
         self,
@@ -136,9 +120,9 @@ class SubscriptionBudgetLimiter:
         int(amount_cents), str(kind), note,
         reservation_id, bundle_id, provider, request_id)
 
-    def _snapshot_from_row(self, row: asyncpg.Record, overdraft_limit_cents: Optional[int]) -> SubscriptionBudgetSnapshot:
+    def _snapshot_from_row(self, row: asyncpg.Record, overdraft_limit_cents: Optional[int], reserved_override: Optional[int] = None) -> SubscriptionBudgetSnapshot:
         bal = int(row["balance_cents"] or 0)
-        res = int(row["reserved_cents"] or 0)
+        res = int(reserved_override if reserved_override is not None else (row["reserved_cents"] or 0))
         available = bal - res
 
         od_lim_c = overdraft_limit_cents
@@ -163,6 +147,15 @@ class SubscriptionBudgetLimiter:
             spent_usd=_cents_to_usd(spent_cents),
         )
 
+    async def _active_reserved_cents(self, conn: asyncpg.Connection, now: datetime) -> int:
+        row = await conn.fetchrow(f"""
+            SELECT COALESCE(SUM(amount_cents), 0) AS reserved
+            FROM {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+            WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
+              AND status='active' AND expires_at > $5
+        """, self.tenant, self.project, self.user_id, self.period_key, now)
+        return int(row["reserved"] or 0)
+
     def _check_overdraft(self, *, available_after_cents: int, overdraft_limit_cents: Optional[int]) -> None:
         if overdraft_limit_cents is None:
             return
@@ -174,41 +167,11 @@ class SubscriptionBudgetLimiter:
     # ---------------- Public API ----------------
 
     async def set_overdraft_limit(self, *, overdraft_limit_usd: Optional[float], notes: Optional[str] = None) -> SubscriptionBudgetSnapshot:
-        async with self.pg_pool.acquire() as conn:
-            async with conn.transaction():
-                await self._ensure_settings_row(conn)
-                lim_c = None if overdraft_limit_usd is None else _usd_to_cents(overdraft_limit_usd)
-
-                await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.SETTINGS_TABLE}
-                    SET overdraft_limit_cents = $4,
-                        notes = COALESCE($5, notes),
-                        updated_at = NOW()
-                    WHERE tenant=$1 AND project=$2 AND user_id=$3
-                """, self.tenant, self.project, self.user_id, lim_c, notes)
-
-                row = await conn.fetchrow(f"""
-                    SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
-                    WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
-                """, self.tenant, self.project, self.user_id, self.period_key)
-
-                if not row:
-                    return SubscriptionBudgetSnapshot(
-                        period_key=self.period_key,
-                        period_start=self.period_start,
-                        period_end=self.period_end,
-                        status="open",
-                        balance_usd=0.0, reserved_usd=0.0, available_usd=0.0,
-                        overdraft_limit_usd=None if lim_c is None else _cents_to_usd(lim_c),
-                        overdraft_used_usd=0.0,
-                        topup_usd=0.0, rolled_over_usd=0.0, spent_usd=0.0,
-                    )
-
-                return self._snapshot_from_row(row, lim_c)
+        raise ValueError("Subscription overdraft is disabled.")
 
     async def get_subscription_budget_balance(self) -> Dict[str, Any]:
         async with self.pg_pool.acquire() as conn:
+            now = datetime.utcnow().replace(tzinfo=timezone.utc)
             row = await conn.fetchrow(f"""
                 SELECT *
                 FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
@@ -229,7 +192,10 @@ class SubscriptionBudgetLimiter:
                 topup_usd=0.0, rolled_over_usd=0.0, spent_usd=0.0,
             )
         else:
-            snap = self._snapshot_from_row(row, od_lim_c)
+            async with self.pg_pool.acquire() as conn:
+                now = datetime.utcnow().replace(tzinfo=timezone.utc)
+                active_reserved = await self._active_reserved_cents(conn, now)
+            snap = self._snapshot_from_row(row, od_lim_c, reserved_override=active_reserved)
 
         return {
             "period_key": snap.period_key,
@@ -352,7 +318,7 @@ class SubscriptionBudgetLimiter:
                     raise ValueError("subscription period is closed; cannot reserve")
 
                 bal = int(b["balance_cents"] or 0)
-                res = int(b["reserved_cents"] or 0)
+                res = await self._active_reserved_cents(conn, now)
 
                 new_reserved = res + amount_cents
                 available_after = bal - new_reserved
@@ -372,11 +338,11 @@ class SubscriptionBudgetLimiter:
 
                 row = await conn.fetchrow(f"""
                     UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
-                    SET reserved_cents = reserved_cents + $5,
+                    SET reserved_cents = $5,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     RETURNING *
-                """, self.tenant, self.project, self.user_id, self.period_key, amount_cents)
+                """, self.tenant, self.project, self.user_id, self.period_key, new_reserved)
 
                 snap = self._snapshot_from_row(row, od_lim_c)
                 return SubscriptionReservationResult(
@@ -416,7 +382,8 @@ class SubscriptionBudgetLimiter:
                         FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     """, self.tenant, self.project, self.user_id, self.period_key)
-                    return self._snapshot_from_row(b, od_lim_c) if b else SubscriptionBudgetSnapshot(
+                    if not b:
+                        return SubscriptionBudgetSnapshot(
                         period_key=self.period_key,
                         period_start=self.period_start,
                         period_end=self.period_end,
@@ -425,7 +392,9 @@ class SubscriptionBudgetLimiter:
                         overdraft_limit_usd=None if od_lim_c is None else _cents_to_usd(od_lim_c),
                         overdraft_used_usd=0.0,
                         topup_usd=0.0, rolled_over_usd=0.0, spent_usd=0.0,
-                    )
+                        )
+                    active_reserved = await self._active_reserved_cents(conn, now)
+                    return self._snapshot_from_row(b, od_lim_c, reserved_override=active_reserved)
 
                 amount_cents = int(r["amount_cents"])
                 await conn.execute(f"""
@@ -441,13 +410,14 @@ class SubscriptionBudgetLimiter:
                     FOR UPDATE
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
+                active_reserved = await self._active_reserved_cents(conn, now)
                 row = await conn.fetchrow(f"""
                     UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
-                    SET reserved_cents = GREATEST(0, reserved_cents - $5),
+                    SET reserved_cents = $5,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     RETURNING *
-                """, self.tenant, self.project, self.user_id, self.period_key, amount_cents)
+                """, self.tenant, self.project, self.user_id, self.period_key, active_reserved)
 
                 if note:
                     await self._insert_ledger(
@@ -491,7 +461,7 @@ class SubscriptionBudgetLimiter:
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
-                return self._snapshot_from_row(row, od_lim_c)
+                return self._snapshot_from_row(row, od_lim_c, reserved_override=active_reserved)
 
     async def commit_reserved_spend(
         self,
@@ -526,7 +496,8 @@ class SubscriptionBudgetLimiter:
                         FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     """, self.tenant, self.project, self.user_id, self.period_key)
-                    return self._snapshot_from_row(b, od_lim_c) if b else SubscriptionBudgetSnapshot(
+                    if not b:
+                        return SubscriptionBudgetSnapshot(
                         period_key=self.period_key,
                         period_start=self.period_start,
                         period_end=self.period_end,
@@ -535,7 +506,9 @@ class SubscriptionBudgetLimiter:
                         overdraft_limit_usd=None if od_lim_c is None else _cents_to_usd(od_lim_c),
                         overdraft_used_usd=0.0,
                         topup_usd=0.0, rolled_over_usd=0.0, spent_usd=0.0,
-                    )
+                        )
+                    active_reserved = await self._active_reserved_cents(conn, now)
+                    return self._snapshot_from_row(b, od_lim_c, reserved_override=active_reserved)
 
                 reserved_cents = int(r["amount_cents"])
 
@@ -547,15 +520,8 @@ class SubscriptionBudgetLimiter:
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
                 bal = int(b["balance_cents"] or 0)
-                res_total = int(b["reserved_cents"] or 0)
-
-                new_res_total = max(0, res_total - reserved_cents)
                 new_bal = bal - spent_cents
-                available_after = new_bal - new_res_total
-
                 overdraft_excess_cents: int | None = None
-                if od_lim_c is not None and available_after < -int(od_lim_c):
-                    overdraft_excess_cents = (-int(available_after)) - int(od_lim_c)
 
                 await conn.execute(f"""
                     UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
@@ -564,6 +530,12 @@ class SubscriptionBudgetLimiter:
                         actual_spent_cents=$7
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3 AND user_id=$4 AND period_key=$5
                 """, reservation_id, self.tenant, self.project, self.user_id, self.period_key, now, spent_cents)
+
+                active_reserved = await self._active_reserved_cents(conn, now)
+                new_res_total = int(active_reserved)
+                available_after = new_bal - new_res_total
+                if od_lim_c is not None and available_after < -int(od_lim_c):
+                    overdraft_excess_cents = (-int(available_after)) - int(od_lim_c)
 
                 row = await conn.fetchrow(f"""
                     UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
@@ -635,7 +607,7 @@ class SubscriptionBudgetLimiter:
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
-        return self._snapshot_from_row(row, od_lim_c)
+        return self._snapshot_from_row(row, od_lim_c, reserved_override=new_res_total)
 
     async def reap_expired_reservations(
         self,
@@ -685,6 +657,15 @@ class SubscriptionBudgetLimiter:
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                 RETURNING *
             """, self.tenant, self.project, self.user_id, self.period_key, int(total_release))
+
+            active_reserved = await self._active_reserved_cents(c, now)
+            row = await c.fetchrow(f"""
+                UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                SET reserved_cents = $5,
+                    updated_at = NOW()
+                WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
+                RETURNING *
+            """, self.tenant, self.project, self.user_id, self.period_key, int(active_reserved))
 
             if row and row["status"] == "closed" and total_release > 0:
                 if project_budget is None:

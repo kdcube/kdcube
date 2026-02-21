@@ -17,7 +17,6 @@ From the Economics dashboard you can:
 - Look up subscription status and balances
 - Manually top up subscription balances
 - Manually renew internal subscriptions (top up + advance next charge)
-- Set subscription overdraft limits
 - Reap expired subscription reservations (single user or all users in project)
 - Sweep expired subscription periods (rollover to project budget)
 - Top up the project budget
@@ -28,6 +27,12 @@ From the Economics dashboard you can:
 - View pending Stripe requests and pending economics events
 - Manage plan quota policies and provider budget policies
 
+## Terminology
+
+- **Plan** = quota policy (limits for requests/tokens/concurrency).
+- **Plan override** = temporary per‑user override of plan limits.
+- **Lane** = `plan` lane or `paid` lane.
+
 ## Plan Quotas and Limits
 
 ### Plan quota policies
@@ -36,9 +41,33 @@ UI card: **Quota Policies**
 
 - Policies are stored in `plan_quota_policies` and keyed by `plan_id`.
 - These are the base limits used by the rate limiter.
-- Tier overrides can temporarily replace these values per user.
+- Plan overrides (`user_plan_overrides`) can temporarily replace these values per user.
 - Quotas are enforced **per tenant/project** (global across bundles).
 - Hourly limits use a **rolling 60‑minute** window; monthly limits use a **rolling 30‑day** window anchored to first usage per tenant/project; daily is **calendar day (UTC)**.
+- Reservation floor is **per bundle**, configured via bundle props `economics.reservation_amount_dollars` (not in this UI).
+
+### Bundle reservation floor (per bundle)
+
+This is configured via bundle props (not the economics UI):
+
+- Key: `economics.reservation_amount_dollars`
+- Scope: tenant/project + bundle_id
+
+Admin API (Integrations):
+- `GET /admin/integrations/bundles/{bundle_id}/props`
+- `POST /admin/integrations/bundles/{bundle_id}/props`
+
+Special case (wallet + no subscription):
+- Plan stays `free`, but **service limits** (requests/concurrency) are taken from `payasyougo`.
+- **Token limits** still come from `free`.
+
+Special case (subscription + wallet):
+- Plan remains the subscription plan.
+- **Subscription balance** is reserved up to what is available.
+- **Wallet** covers any overflow for that turn.
+- If actual spend exceeds both, project budget absorbs the remainder (shortfall note in ledger).
+- If subscription funds **zero** for the turn, the request switches to **paid lane** and **payasyougo** quotas apply.
+- Subscriptions and wallets never go negative; only project budget can absorb shortfalls.
 
 ### How plan limits are initialized
 
@@ -89,6 +118,22 @@ UI card: **Lookup Subscription (by user)**
 
 Backend: `GET /subscriptions/user/{user_id}`
 
+## App Budget & Absorption Report
+
+UI card: **Application Budget**
+
+- Shows current balance, lifetime totals, and spending by bundle.
+- Includes **Budget absorption report** (when project budget absorbs wallet/plan shortfalls).
+- Includes subscription overage shortfalls (`shortfall:subscription_overage`) and free plan overages (`shortfall:free_plan`).
+
+Backend:
+- `GET /app-budget/balance`
+- `POST /app-budget/topup`
+- `GET /app-budget/absorption-report?period=day|month&days=90&group_by=none|user|bundle&format=json|csv`
+- `GET /economics/request-lineage?request_id=turn_id`
+
+Note: `request_id` is the **turn_id** from runtime logs.
+
 ### Renew internal subscription
 
 UI button: **Renew now** (visible only for internal active subscriptions)
@@ -109,14 +154,7 @@ Backend: `POST /subscriptions/budget/topup`
 
 Note: Manual top‑ups do not advance billing dates. Use Renew now for internal billing cycles.
 
-### Set subscription overdraft
-
-UI card: **Subscription Balance Admin** (second form)
-
-- Sets overdraft limit for a user’s subscription budget.
-- Blank limit = unlimited negative.
-
-Backend: `POST /subscriptions/budget/overdraft`
+Subscriptions do not support overdraft. Any shortfall beyond subscription + wallet is absorbed by the project budget (shortfall note in the ledger).
 
 ### Sweep expired subscription periods
 
@@ -160,13 +198,13 @@ UI card: **Lifetime Credits**
 
 - Adds token credits based on USD amount and reference model pricing.
 
-Backend: `POST /tier-balance/add-lifetime-credits`
+Backend: `POST /plan-override/add-lifetime-credits`
 
 ### Check lifetime balance
 
 UI action: **Check balance**
 
-Backend: `GET /tier-balance/lifetime-balance/{user_id}`
+Backend: `GET /plan-override/lifetime-balance/{user_id}`
 
 ### Wallet refund (Stripe)
 

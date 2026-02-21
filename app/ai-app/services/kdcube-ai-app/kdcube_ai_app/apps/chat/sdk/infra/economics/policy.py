@@ -110,11 +110,11 @@ def estimate_turn_token_upper_bound(policy: QuotaPolicy) -> int:
     # keep within a sane ceiling
     return max(50_000, min(max(candidates), 1_500_000))
 
-def paid_policy(base_policy: QuotaPolicy, tier_balance) -> QuotaPolicy:
+def paid_policy(base_policy: QuotaPolicy, plan_balance) -> QuotaPolicy:
     # Concurrency still enforced (shared across both lanes)
     maxc = int(base_policy.max_concurrent or 1)
-    if tier_balance and tier_balance.max_concurrent is not None:
-        maxc = max(maxc, int(tier_balance.max_concurrent))
+    if plan_balance and plan_balance.max_concurrent is not None:
+        maxc = max(maxc, int(plan_balance.max_concurrent))
 
     return QuotaPolicy(
         max_concurrent=maxc,

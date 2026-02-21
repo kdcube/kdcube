@@ -45,7 +45,7 @@ interface BudgetPolicy {
     notes: string | null;
 }
 
-interface TierOverride {
+interface PlanOverride {
     requests_per_day: number | null;
     requests_per_month: number | null;
     tokens_per_hour: number | null;
@@ -72,11 +72,11 @@ interface LifetimeBudget {
     reference_model?: string;
 }
 
-interface TierBalance {
+interface PlanBalance {
     user_id: string;
-    has_tier_override: boolean;
+    has_plan_override: boolean;
     has_lifetime_budget: boolean;
-    tier_override: TierOverride | null;
+    plan_override: PlanOverride | null;
     lifetime_budget: LifetimeBudget | null;
     message?: string;
 }
@@ -111,6 +111,18 @@ interface AppBudget {
     balance: AppBudgetBalance;
     current_month_spending: AppBudgetSpending;
     by_bundle: Record<string, AppBudgetSpending>;
+}
+
+interface BudgetAbsorptionRow {
+    period_start: string;
+    group_key?: string | null;
+    total_shortfall_usd: number;
+    wallet_subscription_shortfall_usd: number;
+    wallet_paid_shortfall_usd: number;
+    wallet_plan_shortfall_usd: number;
+    subscription_overage_shortfall_usd: number;
+    free_plan_shortfall_usd: number;
+    events: number;
 }
 
 interface TokenReservationView {
@@ -163,7 +175,7 @@ interface QuotaBreakdown {
         usd_per_month?: number | null;
     };
 
-    tier_override: {
+    plan_override: {
         active: boolean;
         expired: boolean;
         expires_at: string | null;
@@ -598,7 +610,7 @@ class ControlPlaneAPI {
         notes?: string;
     }): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/tier-balance/grant-trial'),
+            this.getFullUrl('/plan-override/grant-trial'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -619,7 +631,7 @@ class ControlPlaneAPI {
         return response.json();
     }
 
-    async updateTierBudget(payload: {
+    async updatePlanOverride(payload: {
         userId: string;
         requestsPerDay?: number;
         requestsPerMonth?: number;
@@ -634,7 +646,7 @@ class ControlPlaneAPI {
         notes?: string;
     }): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/tier-balance/update'),
+            this.getFullUrl('/plan-override/update'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -657,19 +669,19 @@ class ControlPlaneAPI {
         return response.json();
     }
 
-    async getTierBalance(userId: string, includeExpired: boolean = false): Promise<{ status: string; } & TierBalance> {
+    async getPlanBalance(userId: string, includeExpired: boolean = false): Promise<{ status: string; } & PlanBalance> {
         const queryParams = new URLSearchParams({
             include_expired: includeExpired.toString()
         });
         const response = await this.fetchWithAuth(
-            `${this.getFullUrl(`/tier-balance/user/${userId}`)}?${queryParams}`
+            `${this.getFullUrl(`/plan-override/user/${userId}`)}?${queryParams}`
         );
         return response.json();
     }
 
-    async deactivateTierBalance(userId: string): Promise<any> {
+    async deactivatePlanBalance(userId: string): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl(`/tier-balance/user/${userId}`),
+            this.getFullUrl(`/plan-override/user/${userId}`),
             { method: 'DELETE' }
         );
         return response.json();
@@ -677,7 +689,7 @@ class ControlPlaneAPI {
 
     async addLifetimeCredits(userId: string, usdAmount: number, notes?: string): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/tier-balance/add-lifetime-credits'),
+            this.getFullUrl('/plan-override/add-lifetime-credits'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -695,7 +707,7 @@ class ControlPlaneAPI {
 
     async getLifetimeBalance(userId: string): Promise<LifetimeBalance> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl(`/tier-balance/lifetime-balance/${userId}`)
+            this.getFullUrl(`/plan-override/lifetime-balance/${userId}`)
         );
         return response.json();
     }
@@ -807,6 +819,41 @@ class ControlPlaneAPI {
     async getAppBudgetBalance(): Promise<{ status: string; } & AppBudget> {
         const response = await this.fetchWithAuth(
             this.getFullUrl('/app-budget/balance')
+        );
+        return response.json();
+    }
+
+    async getAppBudgetAbsorptionReport(period: string, days: number, groupBy: string): Promise<{ status: string; period: string; days: number; group_by: string; items: BudgetAbsorptionRow[] }> {
+        const queryParams = new URLSearchParams({
+            period,
+            days: days.toString(),
+            group_by: groupBy,
+        });
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl('/app-budget/absorption-report')}?${queryParams}`
+        );
+        return response.json();
+    }
+
+    async getAppBudgetAbsorptionReportCsv(period: string, days: number, groupBy: string): Promise<string> {
+        const queryParams = new URLSearchParams({
+            period,
+            days: days.toString(),
+            group_by: groupBy,
+            format: 'csv',
+        });
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl('/app-budget/absorption-report')}?${queryParams}`
+        );
+        return response.text();
+    }
+
+    async getRequestLineage(requestId: string): Promise<any> {
+        const queryParams = new URLSearchParams({
+            request_id: requestId,
+        });
+        const response = await this.fetchWithAuth(
+            `${this.getFullUrl('/economics/request-lineage')}?${queryParams}`
         );
         return response.json();
     }
@@ -1001,21 +1048,6 @@ class ControlPlaneAPI {
         return response.json();
     }
 
-    async setSubscriptionOverdraft(userId: string, overdraftLimitUsd: number | null, notes?: string): Promise<any> {
-        const response = await this.fetchWithAuth(
-            this.getFullUrl('/subscriptions/budget/overdraft'),
-            {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    user_id: userId,
-                    overdraft_limit_usd: overdraftLimitUsd,
-                    notes
-                })
-            }
-        );
-        return response.json();
-    }
 
     async sweepSubscriptionRollovers(userId?: string): Promise<any> {
         const response = await this.fetchWithAuth(
@@ -1246,9 +1278,10 @@ const Select: React.FC<{
     label?: string;
     value: string;
     onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
-    options: { value: string; label: string }[];
+    options?: { value: string; label: string }[];
+    children?: React.ReactNode;
     className?: string;
-}> = ({ label, value, onChange, options, className = '' }) => (
+}> = ({ label, value, onChange, options, children, className = '' }) => (
     <div className={className}>
         {label && <label className="block text-sm font-medium text-gray-800 mb-2">{label}</label>}
         <select
@@ -1257,7 +1290,7 @@ const Select: React.FC<{
             className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white
                  focus:ring-2 focus:ring-gray-900/10 focus:border-gray-300 transition-colors"
         >
-            {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            {options ? options.map(o => <option key={o.value} value={o.value}>{o.label}</option>) : children}
         </select>
     </div>
 );
@@ -1470,13 +1503,13 @@ const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo 
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <div className="text-sm font-semibold text-gray-900">Lane A — Tier lane ✅ (company-funded)</div>
+                    <div className="text-sm font-semibold text-gray-900">Lane A — Plan lane ✅ (company-funded)</div>
                     <div className="mt-2 text-sm text-gray-700 space-y-1 leading-relaxed">
-                        <div><strong>Used when:</strong> user is within effective tier limits <em>and</em> project (app) budget has funds.</div>
+                        <div><strong>Used when:</strong> user is within effective plan limits <em>and</em> project (app) budget has funds.</div>
                         <div><strong>Who pays:</strong> <strong>App Budget</strong> (tenant/project wallet).</div>
-                        <div><strong>What moves:</strong> tier counters (requests/tokens) are committed.</div>
+                        <div><strong>What moves:</strong> plan counters (requests/tokens) are committed.</div>
                         <div className="text-gray-600">
-                            Effective tier = base policy (<code>plan_id</code>) possibly replaced by a user’s tier override.
+                            Effective plan = base policy (<code>plan_id</code>) possibly replaced by a user’s plan override.
                         </div>
                     </div>
                 </div>
@@ -1484,9 +1517,9 @@ const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo 
                 <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                     <div className="text-sm font-semibold text-gray-900">Lane B — Paid lane 💳 (user-funded)</div>
                     <div className="mt-2 text-sm text-gray-700 space-y-1 leading-relaxed">
-                        <div><strong>Used when:</strong> tier admit is denied (tier quota exceeded) <em>or</em> app budget is empty, but the user has lifetime credits.</div>
+                        <div><strong>Used when:</strong> plan admit is denied (plan quota exceeded) <em>or</em> app budget is empty, but the user has lifetime credits.</div>
                         <div><strong>Who pays:</strong> <strong>User Lifetime Credits</strong> (purchased tokens).</div>
-                        <div><strong>What moves:</strong> tier counters are <strong>not</strong> committed (so “quota usage” can look flat).</div>
+                        <div><strong>What moves:</strong> plan counters are <strong>not</strong> committed (so “quota usage” can look flat).</div>
                     </div>
                 </div>
             </div>
@@ -1497,7 +1530,7 @@ const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo 
                 </summary>
                 <div className="mt-3 text-sm text-gray-700 leading-relaxed space-y-2">
                     <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
-                        <div className="font-semibold text-gray-900">1) Base tier (by plan_id)</div>
+                        <div className="font-semibold text-gray-900">1) Base plan (by plan_id)</div>
                         <div className="text-gray-700">
                             Configure default limits for <code>registered</code>, <code>paid</code>, <code>privileged</code>, <code>admin</code>.
                         </div>
@@ -1536,7 +1569,7 @@ const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo 
                     <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
                         <div className="font-semibold text-gray-900">4) App Budget (tenant/project wallet)</div>
                         <div className="text-gray-700">
-                            Company funds used for tier lane. If it hits zero, tier-funded usage stops.
+                            Company funds used for plan lane. If it hits zero, plan-funded usage stops.
                         </div>
                         {goTo && (
                             <div className="mt-2">
@@ -1565,7 +1598,7 @@ const EconomicsOverview: React.FC<{ goTo?: (tabId: string) => void }> = ({ goTo 
                 </summary>
                 <div className="mt-3 text-sm text-gray-700 leading-relaxed space-y-2">
                     <div>
-                        In the <strong>paid lane</strong> the system intentionally does not commit tier counters.
+                        In the <strong>paid lane</strong> the system intentionally does not commit plan counters.
                         So you can see lifetime credits decreasing while “Requests today / Tokens today” remain flat.
                     </div>
                     {goTo && (
@@ -1630,7 +1663,7 @@ const ControlPlaneAdmin: React.FC = () => {
 
     // Forms - Tier Balance Lookup
     const [lookupUserId, setLookupUserId] = useState<string>('');
-    const [tierBalance, setTierBalance] = useState<TierBalance | null>(null);
+    const [planBalance, setPlanBalance] = useState<PlanBalance | null>(null);
 
     // Forms - Quota Policy
     const [policyPlanId, setPolicyPlanId] = useState<string>('free');
@@ -1668,6 +1701,14 @@ const ControlPlaneAdmin: React.FC = () => {
     // App Budget
     const [appBudgetTopup, setAppBudgetTopup] = useState<string>('');
     const [appBudgetNotes, setAppBudgetNotes] = useState<string>('');
+    const [absorptionPeriod, setAbsorptionPeriod] = useState<'day' | 'month'>('month');
+    const [absorptionGroupBy, setAbsorptionGroupBy] = useState<'none' | 'user' | 'bundle'>('none');
+    const [absorptionDays, setAbsorptionDays] = useState<string>('90');
+    const [absorptionItems, setAbsorptionItems] = useState<BudgetAbsorptionRow[]>([]);
+    const [loadingAbsorption, setLoadingAbsorption] = useState<boolean>(false);
+    const [lineageRequestId, setLineageRequestId] = useState<string>('');
+    const [lineageResult, setLineageResult] = useState<any | null>(null);
+    const [loadingLineage, setLoadingLineage] = useState<boolean>(false);
 
     // Subscriptions
     const [subProvider, setSubProvider] = useState<'internal' | 'stripe'>('internal');
@@ -1693,7 +1734,6 @@ const ControlPlaneAdmin: React.FC = () => {
     const [subBudgetUsdAmount, setSubBudgetUsdAmount] = useState<string>('');
     const [subBudgetNotes, setSubBudgetNotes] = useState<string>('');
     const [subBudgetForceTopup, setSubBudgetForceTopup] = useState<boolean>(false);
-    const [subOverdraftUsd, setSubOverdraftUsd] = useState<string>('');
     const [subSweepUserId, setSubSweepUserId] = useState<string>('');
     const [subscriptionBalance, setSubscriptionBalance] = useState<SubscriptionBalance | null>(null);
     const [subReapUserId, setSubReapUserId] = useState<string>('');
@@ -1875,7 +1915,7 @@ const ControlPlaneAdmin: React.FC = () => {
         setLoadingAction(true);
 
         try {
-            await api.updateTierBudget({
+            await api.updatePlanOverride({
                 userId: updateUserId,
                 requestsPerDay: updateRequestsDay ? parseInt(updateRequestsDay) : undefined,
                 requestsPerMonth: updateRequestsMonth ? parseInt(updateRequestsMonth) : undefined,
@@ -1909,15 +1949,15 @@ const ControlPlaneAdmin: React.FC = () => {
         }
     };
 
-    const handleLookupTierBalance = async (e: React.FormEvent) => {
+    const handleLookupPlanBalance = async (e: React.FormEvent) => {
         e.preventDefault();
         clearMessages();
-        setTierBalance(null);
+        setPlanBalance(null);
         setLoadingAction(true);
 
         try {
-            const result = await api.getTierBalance(lookupUserId);
-            setTierBalance(result);
+            const result = await api.getPlanBalance(lookupUserId);
+            setPlanBalance(result);
         } catch (err) {
             setError((err as Error).message);
         } finally {
@@ -2079,6 +2119,94 @@ const ControlPlaneAdmin: React.FC = () => {
         }
     };
 
+    const handleLoadAbsorptionReport = async () => {
+        clearMessages();
+        setLoadingAbsorption(true);
+        try {
+            const parsed = parseInt(absorptionDays || '90', 10);
+            const days = Number.isFinite(parsed) ? Math.max(1, parsed) : 90;
+            const res = await api.getAppBudgetAbsorptionReport(absorptionPeriod, days, absorptionGroupBy);
+            setAbsorptionItems(res.items || []);
+            if (!res.items || res.items.length === 0) {
+                setSuccess('No absorption events found for the selected period.');
+            }
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAbsorption(false);
+        }
+    };
+
+    const handleExportAbsorptionCsv = async () => {
+        clearMessages();
+        setLoadingAbsorption(true);
+        try {
+            const parsed = parseInt(absorptionDays || '90', 10);
+            const days = Number.isFinite(parsed) ? Math.max(1, parsed) : 90;
+            const csv = await api.getAppBudgetAbsorptionReportCsv(absorptionPeriod, days, absorptionGroupBy);
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `budget-absorption-${absorptionPeriod}-${absorptionGroupBy}-${days}d.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingAbsorption(false);
+        }
+    };
+
+    const handleLoadRequestLineage = async () => {
+        clearMessages();
+        setLoadingLineage(true);
+        setLineageResult(null);
+        try {
+            const reqId = lineageRequestId.trim();
+            if (!reqId) {
+                throw new Error('request_id is required');
+            }
+            const res = await api.getRequestLineage(reqId);
+            setLineageResult(res);
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setLoadingLineage(false);
+        }
+    };
+
+    const handleCopyRequestId = async () => {
+        const reqId = lineageRequestId.trim();
+        if (!reqId) {
+            setError('request_id is empty');
+            return;
+        }
+        try {
+            await navigator.clipboard.writeText(reqId);
+            setSuccess('request_id copied');
+        } catch {
+            setError('Copy failed (clipboard not available)');
+        }
+    };
+
+    const formatUsdFromCents = (cents?: number | null) => {
+        if (cents === null || cents === undefined) return '-';
+        return `$${(Number(cents) / 100).toFixed(2)}`;
+    };
+    const formatUsd = (usd?: number | null) => {
+        if (usd === null || usd === undefined) return '-';
+        return `$${Number(usd).toFixed(2)}`;
+    };
+    const formatDate = (value?: string | null) => {
+        if (!value) return '-';
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return String(value);
+        return d.toLocaleString();
+    };
+
     const handleCreateSubscription = async (e: React.FormEvent) => {
         e.preventDefault();
         clearMessages();
@@ -2188,22 +2316,6 @@ const ControlPlaneAdmin: React.FC = () => {
             setSubBudgetUsdAmount('');
             setSubBudgetNotes('');
             setSubBudgetForceTopup(false);
-        } catch (err) {
-            setError((err as Error).message);
-        } finally {
-            setLoadingAction(false);
-        }
-    };
-
-    const handleSetSubscriptionOverdraft = async (e: React.FormEvent) => {
-        e.preventDefault();
-        clearMessages();
-        setLoadingAction(true);
-
-        const limitVal = subOverdraftUsd.trim() === '' ? null : parseFloat(subOverdraftUsd);
-        try {
-            await api.setSubscriptionOverdraft(subBudgetUserId.trim(), limitVal, subBudgetNotes || undefined);
-            setSuccess(`Subscription overdraft updated for ${subBudgetUserId}`);
         } catch (err) {
             setError((err as Error).message);
         } finally {
@@ -2431,7 +2543,7 @@ const ControlPlaneAdmin: React.FC = () => {
                 <div className="space-y-6">
                     <DividerTitle
                         title="Control Plane"
-                        subtitle="Admin dashboard for user quota policies, tier overrides, purchased credits, and application budget."
+                        subtitle="Admin dashboard for user quota policies, plan overrides, purchased credits, and application budget."
                     />
 
                     <div className="max-w-4xl mx-auto">
@@ -2456,8 +2568,8 @@ const ControlPlaneAdmin: React.FC = () => {
                     {viewMode === 'grantTrial' && (
                         <Card>
                             <CardHeader
-                                title="Grant Trial (temporary tier override)"
-                                subtitle="Gives the user a higher tier envelope for a limited time. This OVERRIDES base tier limits — it does not add."
+                                title="Grant Trial (temporary plan override)"
+                                subtitle="Gives the user a higher plan envelope for a limited time. This OVERRIDES base plan limits — it does not add."
                             />
                             <CardBody className="space-y-6">
                                 <Callout tone="info" title="What this does">
@@ -2613,7 +2725,7 @@ const ControlPlaneAdmin: React.FC = () => {
                             />
                             <CardBody className="space-y-6">
                                 <Callout tone="warning" title="Override semantics">
-                                    This does <strong>not</strong> top-up the base tier. It replaces it for as long as the override is active.
+                                    This does <strong>not</strong> top-up the base plan. It replaces it for as long as the override is active.
                                 </Callout>
 
                                 <form onSubmit={handleUpdateTierBudget} className="space-y-5">
@@ -2766,10 +2878,10 @@ const ControlPlaneAdmin: React.FC = () => {
                         <Card>
                             <CardHeader
                                 title="Lookup User Balance"
-                                subtitle="Shows active tier override (if any) and purchased lifetime credits (if any)."
+                                subtitle="Shows active plan override (if any) and purchased lifetime credits (if any)."
                             />
                             <CardBody className="space-y-6">
-                                <form onSubmit={handleLookupTierBalance} className="space-y-4">
+                                <form onSubmit={handleLookupPlanBalance} className="space-y-4">
                                     <div className="flex gap-3">
                                         <Input
                                             value={lookupUserId}
@@ -2784,16 +2896,16 @@ const ControlPlaneAdmin: React.FC = () => {
                                     </div>
                                 </form>
 
-                                {tierBalance && (
+                                {planBalance && (
                                     <div className="space-y-5">
                                         <Callout tone="info" title="How requests are funded (lane selection)">
                                             <div className="space-y-2">
                                                 <div>
-                                                    <strong>If Tier Admit passes:</strong> tier allowance is available and tier counters move (tier lane).
+                                                    <strong>If Plan Admit passes:</strong> plan allowance is available and plan counters move (plan lane).
                                                 </div>
                                                 <div>
-                                                    <strong>If Tier Admit is denied:</strong> tier allowance is NOT available. Only lifetime credits can fund the request (paid lane),
-                                                    and tier counters are not committed.
+                                                    <strong>If Plan Admit is denied:</strong> plan allowance is NOT available. Only lifetime credits can fund the request (paid lane),
+                                                    and plan counters are not committed.
                                                 </div>
                                                 <div className="text-gray-600">
                                                     Note: paid lane can still be blocked by <em>concurrency</em> (max_concurrent).
@@ -2803,24 +2915,24 @@ const ControlPlaneAdmin: React.FC = () => {
                                         <div className="border-t border-gray-200/70 pt-6">
                                             <div className="flex items-baseline justify-between flex-wrap gap-2">
                                                 <h3 className="text-2xl font-semibold text-gray-900">
-                                                    {tierBalance.user_id}
+                                                    {planBalance.user_id}
                                                 </h3>
                                                 <div className="text-sm text-gray-500">
-                                                    {tierBalance.message || ''}
+                                                    {planBalance.message || ''}
                                                 </div>
                                             </div>
 
-                                            {!tierBalance.has_tier_override && !tierBalance.has_lifetime_budget ? (
-                                                <EmptyState message="No tier override and no purchased credits (base tier only)." icon="📋" />
+                                            {!planBalance.has_plan_override && !planBalance.has_lifetime_budget ? (
+                                                <EmptyState message="No plan override and no purchased credits (base plan only)." icon="📋" />
                                             ) : (
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
-                                                    {tierBalance.has_tier_override && tierBalance.tier_override && (
+                                                    {planBalance.has_plan_override && planBalance.plan_override && (
                                                         <div className="rounded-2xl border border-gray-200/70 bg-gray-50 p-5">
                                                             <div className="flex items-center justify-between">
                                                                 <div>
                                                                     <div className="text-sm font-semibold text-gray-900">Tier Override</div>
                                                                     <div className="text-xs text-gray-600 mt-1">
-                                                                        Replaces base tier while active
+                                                                        Replaces base plan while active
                                                                     </div>
                                                                 </div>
                                                                 <div className="text-2xl">🎯</div>
@@ -2829,52 +2941,52 @@ const ControlPlaneAdmin: React.FC = () => {
                                                             <div className="mt-4 space-y-2 text-sm">
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Requests / day</span>
-                                                                    <span className="font-semibold text-gray-900">{tierBalance.tier_override.requests_per_day ?? '—'}</span>
+                                                                    <span className="font-semibold text-gray-900">{planBalance.plan_override.requests_per_day ?? '—'}</span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Tokens / hour</span>
                                                                     <span className="font-semibold text-gray-900">
-                                                                        {tierBalance.tier_override.tokens_per_hour?.toLocaleString() ?? '—'}
-                                                                        {tierBalance.tier_override.usd_per_hour != null ? ` ($${Number(tierBalance.tier_override.usd_per_hour).toFixed(2)})` : ''}
+                                                                        {planBalance.plan_override.tokens_per_hour?.toLocaleString() ?? '—'}
+                                                                        {planBalance.plan_override.usd_per_hour != null ? ` ($${Number(planBalance.plan_override.usd_per_hour).toFixed(2)})` : ''}
                                                                     </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Tokens / day</span>
                                                                     <span className="font-semibold text-gray-900">
-                                                                        {tierBalance.tier_override.tokens_per_day?.toLocaleString() ?? '—'}
-                                                                        {tierBalance.tier_override.usd_per_day != null ? ` ($${Number(tierBalance.tier_override.usd_per_day).toFixed(2)})` : ''}
+                                                                        {planBalance.plan_override.tokens_per_day?.toLocaleString() ?? '—'}
+                                                                        {planBalance.plan_override.usd_per_day != null ? ` ($${Number(planBalance.plan_override.usd_per_day).toFixed(2)})` : ''}
                                                                     </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Tokens / month</span>
                                                                     <span className="font-semibold text-gray-900">
-                                                                        {tierBalance.tier_override.tokens_per_month?.toLocaleString() ?? '—'}
-                                                                        {tierBalance.tier_override.usd_per_month != null ? ` ($${Number(tierBalance.tier_override.usd_per_month).toFixed(2)})` : ''}
+                                                                        {planBalance.plan_override.tokens_per_month?.toLocaleString() ?? '—'}
+                                                                        {planBalance.plan_override.usd_per_month != null ? ` ($${Number(planBalance.plan_override.usd_per_month).toFixed(2)})` : ''}
                                                                     </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Expires</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {tierBalance.tier_override.expires_at
-                                        ? new Date(tierBalance.tier_override.expires_at).toLocaleString()
+                                    {planBalance.plan_override.expires_at
+                                        ? new Date(planBalance.plan_override.expires_at).toLocaleString()
                                         : 'Never'}
                                   </span>
                                                                 </div>
-                                                                {tierBalance.tier_override.notes && (
+                                                                {planBalance.plan_override.notes && (
                                                                     <div className="pt-3 border-t border-gray-200/70 text-xs text-gray-600 italic">
-                                                                        {tierBalance.tier_override.notes}
+                                                                        {planBalance.plan_override.notes}
                                                                     </div>
                                                                 )}
-                                                                {tierBalance.tier_override.reference_model && (
+                                                                {planBalance.plan_override.reference_model && (
                                                                     <div className="pt-2 text-xs text-gray-500">
-                                                                        Reference: {tierBalance.tier_override.reference_model}
+                                                                        Reference: {planBalance.plan_override.reference_model}
                                                                     </div>
                                                                 )}
                                                             </div>
                                                         </div>
                                                     )}
 
-                                                    {tierBalance.has_lifetime_budget && tierBalance.lifetime_budget && (
+                                                    {planBalance.has_lifetime_budget && planBalance.lifetime_budget && (
                                                         <div className="rounded-2xl border border-gray-200/70 bg-gray-50 p-5">
                                                             <div className="flex items-center justify-between">
                                                                 <div>
@@ -2890,30 +3002,30 @@ const ControlPlaneAdmin: React.FC = () => {
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Gross remaining</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {tierBalance.lifetime_budget.tokens_gross_remaining.toLocaleString()}
+                                    {planBalance.lifetime_budget.tokens_gross_remaining.toLocaleString()}
                                   </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Reserved (in-flight)</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {tierBalance.lifetime_budget.tokens_reserved.toLocaleString()}
+                                    {planBalance.lifetime_budget.tokens_reserved.toLocaleString()}
                                   </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Available now</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    {tierBalance.lifetime_budget.tokens_available.toLocaleString()}
+                                    {planBalance.lifetime_budget.tokens_available.toLocaleString()}
                                   </span>
                                                                 </div>
                                                                 <div className="flex justify-between gap-3">
                                                                     <span className="text-gray-600">Available USD (quoted)</span>
                                                                     <span className="font-semibold text-gray-900">
-                                    ${Number(tierBalance.lifetime_budget.available_usd || 0).toFixed(2)}
+                                    ${Number(planBalance.lifetime_budget.available_usd || 0).toFixed(2)}
                                   </span>
                                                                 </div>
 
                                                                 <div className="pt-3 border-t border-gray-200/70 text-xs text-gray-600">
-                                                                    Reference: {tierBalance.lifetime_budget.reference_model || 'anthropic/claude-sonnet-4-5-20250929'}
+                                                                    Reference: {planBalance.lifetime_budget.reference_model || 'anthropic/claude-sonnet-4-5-20250929'}
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -2936,7 +3048,7 @@ const ControlPlaneAdmin: React.FC = () => {
                             />
                             <CardBody className="space-y-6">
                                 <Callout tone="neutral" title="How to read this view">
-                                    <strong>Effective policy</strong> is what the limiter enforces right now (base tier possibly overridden).
+                                    <strong>Effective policy</strong> is what the limiter enforces right now (base plan possibly overridden).
                                     “Remaining” is computed from the effective limits minus current counters.
                                     <div className="mt-2 text-xs text-gray-600">
                                         Quotas are enforced at the project scope. Use Bundle ID <code>__project__</code> to see rolling reset timestamps.
@@ -2944,7 +3056,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                 </Callout>
                                 <Callout tone="warning" title="Paid lane does NOT show up in these counters">
                                     If the user is being served from <strong>lifetime credits</strong> or a <strong>subscription balance</strong>
-                                    because tier admit is denied, tier counters are not committed.
+                                    because plan admit is denied, plan counters are not committed.
                                     That means <strong>requests/tokens here can stay flat</strong> while paid balances go down.
                                     Use <em>Lifetime Balance</em> or <em>Subscription balance</em> to confirm paid-lane spend.
                                 </Callout>
@@ -3055,22 +3167,22 @@ const ControlPlaneAdmin: React.FC = () => {
                                                     <div className="rounded-xl bg-white border border-gray-200/70 p-4">
                                                         <div className="font-semibold text-gray-900 mb-1">Override</div>
                                                         <div className="text-gray-600">
-                                                            {quotaBreakdown.tier_override ? (
+                                                            {quotaBreakdown.plan_override ? (
                                                                 <>
-                                                                    {quotaBreakdown.tier_override.active ? (
+                                                                    {quotaBreakdown.plan_override.active ? (
                                                                         <Pill tone="success">Active</Pill>
-                                                                    ) : quotaBreakdown.tier_override.expired ? (
+                                                                    ) : quotaBreakdown.plan_override.expired ? (
                                                                         <Pill tone="warning">Expired</Pill>
                                                                     ) : (
                                                                         <Pill tone="neutral">Inactive</Pill>
                                                                     )}
                                                                     <div className="mt-2">
-                                                                        req/day: {quotaBreakdown.tier_override.limits.requests_per_day ?? '—'}<br />
-                                                                        tok/month: {quotaBreakdown.tier_override.limits.tokens_per_month?.toLocaleString?.() ?? quotaBreakdown.tier_override.limits.tokens_per_month ?? '—'}
-                                                                        {quotaBreakdown.tier_override.limits.usd_per_month != null
-                                                                            ? ` ($${Number(quotaBreakdown.tier_override.limits.usd_per_month).toFixed(2)})`
+                                                                        req/day: {quotaBreakdown.plan_override.limits.requests_per_day ?? '—'}<br />
+                                                                        tok/month: {quotaBreakdown.plan_override.limits.tokens_per_month?.toLocaleString?.() ?? quotaBreakdown.plan_override.limits.tokens_per_month ?? '—'}
+                                                                        {quotaBreakdown.plan_override.limits.usd_per_month != null
+                                                                            ? ` ($${Number(quotaBreakdown.plan_override.limits.usd_per_month).toFixed(2)})`
                                                                             : ''}<br />
-                                                                        expires: {quotaBreakdown.tier_override.expires_at ? new Date(quotaBreakdown.tier_override.expires_at).toLocaleString() : '—'}
+                                                                        expires: {quotaBreakdown.plan_override.expires_at ? new Date(quotaBreakdown.plan_override.expires_at).toLocaleString() : '—'}
                                                                     </div>
                                                                 </>
                                                             ) : (
@@ -3321,6 +3433,11 @@ const ControlPlaneAdmin: React.FC = () => {
                                     <Callout tone="neutral" title="Meaning">
                                         This is the default quota envelope for a plan (free/payasyougo/admin). Daily is calendar day, hourly is a rolling 60‑minute window, and monthly is a rolling 30‑day window (anchored to first usage per bundle).
                                     </Callout>
+                                    <Callout tone="neutral" title="Reservation Floor (Per Bundle)">
+                                        The minimum reservation amount is configured per bundle via bundle props:
+                                        <span className="font-mono"> economics.reservation_amount_dollars</span>.
+                                        This is not set in the economics UI.
+                                    </Callout>
                                     {economicsRef && (
                                         <div className="text-xs text-gray-500">
                                             Reference: {economicsRef.reference_provider}/{economicsRef.reference_model}
@@ -3465,7 +3582,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                             label="Notes"
                                             value={policyNotes}
                                             onChange={(e) => setPolicyNotes(e.target.value)}
-                                            placeholder="Free tier limits (global per tenant/project)"
+                                            placeholder="Free plan limits (global per tenant/project)"
                                         />
 
                                         <Button type="submit" disabled={loadingAction}>
@@ -3728,7 +3845,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                                 )}
                                             </>
                                         ) : (
-                                            <EmptyState message="No purchased credits found. This user operates on tier quotas only." icon="💳" />
+                                            <EmptyState message="No purchased credits found. This user operates on plan quotas only." icon="💳" />
                                         )}
                                     </CardBody>
                                 </Card>
@@ -3768,11 +3885,11 @@ const ControlPlaneAdmin: React.FC = () => {
                             <Card>
                                 <CardHeader
                                     title="Application Budget"
-                                    subtitle="Tenant/project wallet used for company-funded spending (typical: tier-funded usage)."
+                                    subtitle="Tenant/project wallet used for company-funded spending (typical: plan-funded usage)."
                                 />
                                 <CardBody className="space-y-6">
                                     <Callout tone="neutral" title="Meaning">
-                                        This is the master budget for the tenant/project. If your policy charges tier-funded usage to the company,
+                                        This is the master budget for the tenant/project. If your policy charges plan-funded usage to the company,
                                         spending will appear here.
                                     </Callout>
 
@@ -3833,6 +3950,326 @@ const ControlPlaneAdmin: React.FC = () => {
                                                     </div>
                                                 </div>
                                             )}
+
+                                            <div className="rounded-2xl border border-gray-200/70 bg-gray-50 p-5">
+                                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                                                    <div>
+                                                        <div className="text-sm font-semibold text-gray-900">Budget absorption report</div>
+                                                        <div className="text-xs text-gray-600">
+                                                            Project budget absorbs shortfalls when plan + wallet can’t cover actual spend.
+                                                        </div>
+                                                    </div>
+                                                    <Button
+                                                        variant="secondary"
+                                                        onClick={handleLoadAbsorptionReport}
+                                                        disabled={loadingAbsorption}
+                                                    >
+                                                        {loadingAbsorption ? 'Loading…' : 'Run report'}
+                                                    </Button>
+                                                    <Button
+                                                        variant="secondary"
+                                                        onClick={handleExportAbsorptionCsv}
+                                                        disabled={loadingAbsorption}
+                                                    >
+                                                        {loadingAbsorption ? 'Exporting…' : 'Export CSV'}
+                                                    </Button>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                                    <Select
+                                                        label="Period"
+                                                        value={absorptionPeriod}
+                                                        onChange={(e) => setAbsorptionPeriod(e.target.value as 'day' | 'month')}
+                                                    >
+                                                        <option value="day">Daily</option>
+                                                        <option value="month">Monthly</option>
+                                                    </Select>
+                                                    <Select
+                                                        label="Group by"
+                                                        value={absorptionGroupBy}
+                                                        onChange={(e) => setAbsorptionGroupBy(e.target.value as 'none' | 'user' | 'bundle')}
+                                                    >
+                                                        <option value="none">None</option>
+                                                        <option value="user">User</option>
+                                                        <option value="bundle">Bundle</option>
+                                                    </Select>
+                                                    <Input
+                                                        label="Lookback (days)"
+                                                        type="number"
+                                                        min={1}
+                                                        max={730}
+                                                        value={absorptionDays}
+                                                        onChange={(e) => setAbsorptionDays(e.target.value)}
+                                                    />
+                                                </div>
+
+                                                {loadingAbsorption ? (
+                                                    <LoadingSpinner />
+                                                ) : absorptionItems.length === 0 ? (
+                                                    <EmptyState message="No absorption events found." icon="🧾" />
+                                                ) : (
+                                                    <div className="overflow-x-auto">
+                                                        <table className="min-w-full text-sm text-left">
+                                                            <thead className="text-xs uppercase text-gray-500">
+                                                                <tr>
+                                                                    <th className="py-2 pr-4">Period</th>
+                                                                    {absorptionGroupBy !== 'none' && (
+                                                                        <th className="py-2 pr-4">{absorptionGroupBy === 'user' ? 'User' : 'Bundle'}</th>
+                                                                    )}
+                                                                    <th className="py-2 pr-4">Total absorbed</th>
+                                                                    <th className="py-2 pr-4">Subscription shortfall</th>
+                                                                    <th className="py-2 pr-4">Wallet paid shortfall</th>
+                                                                    <th className="py-2 pr-4">Wallet plan shortfall</th>
+                                                                    <th className="py-2 pr-4">Subscription overage</th>
+                                                                    <th className="py-2 pr-4">Free plan overage</th>
+                                                                    <th className="py-2 pr-4">Events</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="text-gray-700">
+                                                                {absorptionItems.map((row, idx) => (
+                                                                    <tr key={`${row.period_start}-${idx}`} className="border-t border-gray-200/70">
+                                                                        <td className="py-2 pr-4">{new Date(row.period_start).toLocaleString()}</td>
+                                                                        {absorptionGroupBy !== 'none' && (
+                                                                            <td className="py-2 pr-4">{row.group_key || '-'}</td>
+                                                                        )}
+                                                                        <td className="py-2 pr-4">${row.total_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="py-2 pr-4">${row.wallet_subscription_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="py-2 pr-4">${row.wallet_paid_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="py-2 pr-4">${row.wallet_plan_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="py-2 pr-4">${row.subscription_overage_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="py-2 pr-4">${row.free_plan_shortfall_usd.toFixed(2)}</td>
+                                                                        <td className="py-2 pr-4">{row.events}</td>
+                                                                    </tr>
+                                                                ))}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <Card>
+                                                <CardHeader
+                                                    title="Money Journey (who pays, in order)"
+                                                    subtitle="This helps explain why project budget goes negative."
+                                                />
+                                                <CardBody>
+                                                    <pre className="text-xs leading-relaxed text-gray-700 bg-gray-50 border border-gray-200/70 rounded-xl p-4 whitespace-pre-wrap">
+{`PLAN LANE (subscription plan)
+subscription budget -> wallet overflow -> project shortfall
+if estimate too low: project shortfall (shortfall:subscription_overage)
+
+PLAN LANE (no subscription)
+project budget -> wallet overflow -> project shortfall
+
+PAID LANE
+wallet -> project shortfall
+
+Shortfall ledger notes:
+- shortfall:wallet_subscription
+- shortfall:wallet_plan
+- shortfall:wallet_paid
+- shortfall:subscription_overage`}
+                                                    </pre>
+                                                </CardBody>
+                                            </Card>
+
+                                            <Card>
+                                                <CardHeader
+                                                    title="Request lineage (per request_id)"
+                                                    subtitle="Trace the full money journey for a single turn. request_id == turn_id."
+                                                />
+                                                <CardBody className="space-y-4">
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                        <Input
+                                                            label="request_id (turn_id) *"
+                                                            value={lineageRequestId}
+                                                            onChange={(e) => setLineageRequestId(e.target.value)}
+                                                            placeholder="turn_..."
+                                                        />
+                                                        <div className="flex items-end">
+                                                            <Button
+                                                                variant="secondary"
+                                                                onClick={handleLoadRequestLineage}
+                                                                disabled={loadingLineage}
+                                                            >
+                                                                {loadingLineage ? 'Loading…' : 'Lookup'}
+                                                            </Button>
+                                                        </div>
+                                                        <div className="flex items-end">
+                                                            <Button
+                                                                variant="secondary"
+                                                                onClick={handleCopyRequestId}
+                                                            >
+                                                                Copy request_id
+                                                            </Button>
+                                                        </div>
+                                                    </div>
+
+                                                    {loadingLineage ? (
+                                                        <LoadingSpinner />
+                                                    ) : lineageResult ? (
+                                                        <div className="space-y-6">
+                                                            <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                                                <div className="text-xs text-gray-500 font-semibold uppercase mb-2">Project budget reservations</div>
+                                                                {lineageResult.project_budget?.reservations?.length ? (
+                                                                    <table className="min-w-full text-xs text-left">
+                                                                        <thead className="text-gray-500 uppercase">
+                                                                            <tr>
+                                                                                <th className="py-1 pr-3">Reservation</th>
+                                                                                <th className="py-1 pr-3">Amount</th>
+                                                                                <th className="py-1 pr-3">Actual</th>
+                                                                                <th className="py-1 pr-3">Status</th>
+                                                                                <th className="py-1 pr-3">Created</th>
+                                                                                <th className="py-1 pr-3">Expires</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="text-gray-700">
+                                                                            {lineageResult.project_budget.reservations.map((r: any, i: number) => (
+                                                                                <tr key={`pr-${i}`} className="border-t border-gray-200/70">
+                                                                                    <td className="py-1 pr-3">{r.reservation_id}</td>
+                                                                                    <td className="py-1 pr-3">{formatUsdFromCents(r.amount_cents)}</td>
+                                                                                    <td className="py-1 pr-3">{formatUsdFromCents(r.actual_spent_cents)}</td>
+                                                                                    <td className="py-1 pr-3">{r.status}</td>
+                                                                                    <td className="py-1 pr-3">{formatDate(r.created_at)}</td>
+                                                                                    <td className="py-1 pr-3">{formatDate(r.expires_at)}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                ) : (
+                                                                    <EmptyState message="No project budget reservations found." icon="🧾" />
+                                                                )}
+                                                            </div>
+
+                                                            <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                                                <div className="text-xs text-gray-500 font-semibold uppercase mb-2">Project budget ledger</div>
+                                                                {lineageResult.project_budget?.ledger?.length ? (
+                                                                    <table className="min-w-full text-xs text-left">
+                                                                        <thead className="text-gray-500 uppercase">
+                                                                            <tr>
+                                                                                <th className="py-1 pr-3">ID</th>
+                                                                                <th className="py-1 pr-3">Amount</th>
+                                                                                <th className="py-1 pr-3">Kind</th>
+                                                                                <th className="py-1 pr-3">Note</th>
+                                                                                <th className="py-1 pr-3">Created</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="text-gray-700">
+                                                                            {lineageResult.project_budget.ledger.map((r: any, i: number) => (
+                                                                                <tr key={`pl-${i}`} className="border-t border-gray-200/70">
+                                                                                    <td className="py-1 pr-3">{r.id}</td>
+                                                                                    <td className="py-1 pr-3">{formatUsd(r.amount_usd)}</td>
+                                                                                    <td className="py-1 pr-3">{r.kind}</td>
+                                                                                    <td className="py-1 pr-3">{r.note || '-'}</td>
+                                                                                    <td className="py-1 pr-3">{formatDate(r.created_at)}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                ) : (
+                                                                    <EmptyState message="No project ledger rows found." icon="🧾" />
+                                                                )}
+                                                            </div>
+
+                                                            <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                                                <div className="text-xs text-gray-500 font-semibold uppercase mb-2">Subscription reservations</div>
+                                                                {lineageResult.subscription_budget?.reservations?.length ? (
+                                                                    <table className="min-w-full text-xs text-left">
+                                                                        <thead className="text-gray-500 uppercase">
+                                                                            <tr>
+                                                                                <th className="py-1 pr-3">Reservation</th>
+                                                                                <th className="py-1 pr-3">Period</th>
+                                                                                <th className="py-1 pr-3">Amount</th>
+                                                                                <th className="py-1 pr-3">Actual</th>
+                                                                                <th className="py-1 pr-3">Status</th>
+                                                                                <th className="py-1 pr-3">Created</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="text-gray-700">
+                                                                            {lineageResult.subscription_budget.reservations.map((r: any, i: number) => (
+                                                                                <tr key={`sr-${i}`} className="border-t border-gray-200/70">
+                                                                                    <td className="py-1 pr-3">{r.reservation_id}</td>
+                                                                                    <td className="py-1 pr-3">{r.period_key}</td>
+                                                                                    <td className="py-1 pr-3">{formatUsdFromCents(r.amount_cents)}</td>
+                                                                                    <td className="py-1 pr-3">{formatUsdFromCents(r.actual_spent_cents)}</td>
+                                                                                    <td className="py-1 pr-3">{r.status}</td>
+                                                                                    <td className="py-1 pr-3">{formatDate(r.created_at)}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                ) : (
+                                                                    <EmptyState message="No subscription reservations found." icon="🧾" />
+                                                                )}
+                                                            </div>
+
+                                                            <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                                                <div className="text-xs text-gray-500 font-semibold uppercase mb-2">Subscription ledger</div>
+                                                                {lineageResult.subscription_budget?.ledger?.length ? (
+                                                                    <table className="min-w-full text-xs text-left">
+                                                                        <thead className="text-gray-500 uppercase">
+                                                                            <tr>
+                                                                                <th className="py-1 pr-3">ID</th>
+                                                                                <th className="py-1 pr-3">Period</th>
+                                                                                <th className="py-1 pr-3">Amount</th>
+                                                                                <th className="py-1 pr-3">Kind</th>
+                                                                                <th className="py-1 pr-3">Note</th>
+                                                                                <th className="py-1 pr-3">Created</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="text-gray-700">
+                                                                            {lineageResult.subscription_budget.ledger.map((r: any, i: number) => (
+                                                                                <tr key={`sl-${i}`} className="border-t border-gray-200/70">
+                                                                                    <td className="py-1 pr-3">{r.id}</td>
+                                                                                    <td className="py-1 pr-3">{r.period_key}</td>
+                                                                                    <td className="py-1 pr-3">{formatUsd(r.amount_usd)}</td>
+                                                                                    <td className="py-1 pr-3">{r.kind}</td>
+                                                                                    <td className="py-1 pr-3">{r.note || '-'}</td>
+                                                                                    <td className="py-1 pr-3">{formatDate(r.created_at)}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                ) : (
+                                                                    <EmptyState message="No subscription ledger rows found." icon="🧾" />
+                                                                )}
+                                                            </div>
+
+                                                            <div className="rounded-xl border border-gray-200/70 bg-gray-50 p-4">
+                                                                <div className="text-xs text-gray-500 font-semibold uppercase mb-2">Wallet reservations</div>
+                                                                {lineageResult.wallet?.reservations?.length ? (
+                                                                    <table className="min-w-full text-xs text-left">
+                                                                        <thead className="text-gray-500 uppercase">
+                                                                            <tr>
+                                                                                <th className="py-1 pr-3">Reservation</th>
+                                                                                <th className="py-1 pr-3">Tokens reserved</th>
+                                                                                <th className="py-1 pr-3">Tokens used</th>
+                                                                                <th className="py-1 pr-3">Status</th>
+                                                                                <th className="py-1 pr-3">Created</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="text-gray-700">
+                                                                            {lineageResult.wallet.reservations.map((r: any, i: number) => (
+                                                                                <tr key={`wr-${i}`} className="border-t border-gray-200/70">
+                                                                                    <td className="py-1 pr-3">{r.reservation_id}</td>
+                                                                                    <td className="py-1 pr-3">{Number(r.tokens_reserved || 0).toLocaleString()}</td>
+                                                                                    <td className="py-1 pr-3">{Number(r.tokens_used || 0).toLocaleString()}</td>
+                                                                                    <td className="py-1 pr-3">{r.status}</td>
+                                                                                    <td className="py-1 pr-3">{formatDate(r.created_at)}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                ) : (
+                                                                    <EmptyState message="No wallet reservations found." icon="🧾" />
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ) : (
+                                                        <EmptyState message="No request lineage loaded." icon="🔎" />
+                                                    )}
+                                                </CardBody>
+                                            </Card>
                                         </>
                                     )}
                                 </CardBody>
@@ -3842,7 +4279,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                 <CardHeader title="Top up application budget" subtitle="Adds funds to the tenant/project wallet." />
                                 <CardBody className="space-y-6">
                                     <Callout tone="warning" title="When you need this">
-                                        If you’re company-funding tier usage (or any fallback path), you want enough budget to prevent service disruption.
+                                        If you’re company-funding plan usage (or any fallback path), you want enough budget to prevent service disruption.
                                     </Callout>
 
                                     <form onSubmit={handleTopupAppBudget} className="space-y-5">
@@ -3871,11 +4308,11 @@ const ControlPlaneAdmin: React.FC = () => {
                             <Card>
                                 <CardHeader title="Budget flow examples" subtitle="Quick mental model for support & ops." />
                                 <CardBody className="space-y-4">
-                                    <Callout tone="info" title="Scenario: tier-funded usage">
-                                        User operates within effective tier limits → request allowed → company budget is charged (typical policy).
+                                    <Callout tone="info" title="Scenario: plan-funded usage">
+                                        User operates within effective plan limits → request allowed → company budget is charged (typical policy).
                                     </Callout>
                                     <Callout tone="success" title="Scenario: user-funded fallback">
-                                        User exceeds tier → purchased credits present → user credits are charged → app budget not used.
+                                        User exceeds plan → purchased credits present → user credits are charged → app budget not used.
                                     </Callout>
                                     <Callout tone="warning" title="Scenario: mixed / policy-dependent">
                                         Some flows may split charges depending on limiter policy and reservations (in-flight holds).
@@ -3957,7 +4394,7 @@ const ControlPlaneAdmin: React.FC = () => {
                                             label="Notes"
                                             value={planNotes}
                                             onChange={(e) => setPlanNotes(e.target.value)}
-                                            placeholder="Plan description, intended tier, or internal notes"
+                                            placeholder="Plan description, intended plan, or internal notes"
                                         />
 
                                         <Button type="submit" disabled={loadingAction}>
@@ -4267,7 +4704,7 @@ const ControlPlaneAdmin: React.FC = () => {
                             <Card>
                                 <CardHeader
                                     title="Subscription Balance Admin"
-                                    subtitle="Manual top-ups and overdraft configuration for a user's subscription balance."
+                                    subtitle="Manual top-ups for a user's subscription balance."
                                 />
                                 <CardBody className="space-y-6">
                                     <div className="text-xs text-gray-600">
@@ -4309,34 +4746,6 @@ const ControlPlaneAdmin: React.FC = () => {
                                         </label>
                                         <Button type="submit" disabled={loadingAction}>
                                             {loadingAction ? 'Processing…' : 'Top-up Subscription Balance'}
-                                        </Button>
-                                    </form>
-
-                                    <form onSubmit={handleSetSubscriptionOverdraft} className="space-y-4">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                            <Input
-                                                label="User ID *"
-                                                value={subBudgetUserId}
-                                                onChange={(e) => setSubBudgetUserId(e.target.value)}
-                                                placeholder="user123"
-                                                required
-                                            />
-                                            <Input
-                                                label="Overdraft Limit USD (blank = unlimited)"
-                                                type="number"
-                                                value={subOverdraftUsd}
-                                                onChange={(e) => setSubOverdraftUsd(e.target.value)}
-                                                placeholder="0"
-                                            />
-                                            <Input
-                                                label="Notes"
-                                                value={subBudgetNotes}
-                                                onChange={(e) => setSubBudgetNotes(e.target.value)}
-                                                placeholder="Optional notes"
-                                            />
-                                        </div>
-                                        <Button type="submit" variant="secondary" disabled={loadingAction}>
-                                            {loadingAction ? 'Updating…' : 'Set Overdraft'}
                                         </Button>
                                     </form>
                                 </CardBody>

@@ -1,6 +1,6 @@
 -- =========================================
 -- deploy-kdcube-control-plane.sql
--- Control Plane Schema (Approach A: split tier + personal credits)
+-- Control Plane Schema (Approach A: split plan + personal credits)
 -- =========================================
 
 CREATE SCHEMA IF NOT EXISTS kdcube_control_plane;
@@ -18,16 +18,16 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- =========================================
--- USER TIER OVERRIDES (temporary tier upgrades)
+-- USER PLAN OVERRIDES (temporary plan quota overrides)
 --  - expires
 --  - does NOT store lifetime credits
 -- =========================================
-CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_tier_overrides (
+CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_plan_overrides (
     tenant  VARCHAR(255) NOT NULL,
     project VARCHAR(255) NOT NULL,
     user_id VARCHAR(255) NOT NULL,
 
-    -- Tier Override Limits (NULL = use base tier)
+    -- Tier Override Limits (NULL = use base plan)
     max_concurrent     INTEGER DEFAULT NULL,
     requests_per_day   INTEGER DEFAULT NULL,
     requests_per_month INTEGER DEFAULT NULL,
@@ -52,20 +52,20 @@ CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_tier_overrides (
     PRIMARY KEY (tenant, project, user_id)
 );
 
-COMMENT ON TABLE kdcube_control_plane.user_tier_overrides IS
-  'Temporary tier overrides (admin grants or paid tier upgrades). Expires via expires_at.';
+COMMENT ON TABLE kdcube_control_plane.user_plan_overrides IS
+  'Temporary plan overrides (admin grants). Expires via expires_at.';
 
-CREATE INDEX IF NOT EXISTS idx_cp_uto_lookup
-  ON kdcube_control_plane.user_tier_overrides(tenant, project, user_id)
+CREATE INDEX IF NOT EXISTS idx_cp_upo_lookup
+  ON kdcube_control_plane.user_plan_overrides(tenant, project, user_id)
   WHERE active = TRUE;
 
-CREATE INDEX IF NOT EXISTS idx_cp_uto_expires
-  ON kdcube_control_plane.user_tier_overrides(expires_at)
+CREATE INDEX IF NOT EXISTS idx_cp_upo_expires
+  ON kdcube_control_plane.user_plan_overrides(expires_at)
   WHERE active = TRUE AND expires_at IS NOT NULL;
 
-DROP TRIGGER IF EXISTS trg_cp_uto_updated_at ON kdcube_control_plane.user_tier_overrides;
-CREATE TRIGGER trg_cp_uto_updated_at
-  BEFORE UPDATE ON kdcube_control_plane.user_tier_overrides
+DROP TRIGGER IF EXISTS trg_cp_upo_updated_at ON kdcube_control_plane.user_plan_overrides;
+CREATE TRIGGER trg_cp_upo_updated_at
+  BEFORE UPDATE ON kdcube_control_plane.user_plan_overrides
   FOR EACH ROW EXECUTE FUNCTION kdcube_control_plane.update_updated_at();
 
 -- =========================================
@@ -166,6 +166,9 @@ CREATE INDEX IF NOT EXISTS idx_cp_utr_active
   ON kdcube_control_plane.user_token_reservations(tenant, project, user_id, expires_at)
   WHERE status = 'reserved';
 
+CREATE INDEX IF NOT EXISTS idx_cp_utr_reservation_id
+  ON kdcube_control_plane.user_token_reservations(tenant, project, reservation_id);
+
 CREATE INDEX IF NOT EXISTS idx_cp_utr_expires
   ON kdcube_control_plane.user_token_reservations(expires_at)
   WHERE status = 'reserved';
@@ -199,6 +202,7 @@ CREATE TABLE IF NOT EXISTS kdcube_control_plane.plan_quota_policies (
 
     PRIMARY KEY (tenant, project, plan_id)
 );
+
 
 CREATE INDEX IF NOT EXISTS idx_cp_pqp_lookup
   ON kdcube_control_plane.plan_quota_policies(tenant, project, plan_id)
@@ -384,6 +388,66 @@ CREATE INDEX IF NOT EXISTS idx_cp_budget_ledger_tenant_project_time
 CREATE INDEX IF NOT EXISTS idx_cp_budget_ledger_reservation
   ON kdcube_control_plane.tenant_project_budget_ledger (reservation_id);
 
+CREATE INDEX IF NOT EXISTS idx_cp_budget_ledger_request
+  ON kdcube_control_plane.tenant_project_budget_ledger (tenant, project, request_id);
+
+CREATE INDEX IF NOT EXISTS idx_cp_budget_resv_request
+  ON kdcube_control_plane.tenant_project_budget_reservations (tenant, project, request_id);
+
+CREATE INDEX IF NOT EXISTS idx_cp_budget_ledger_shortfall
+  ON kdcube_control_plane.tenant_project_budget_ledger (tenant, project, created_at DESC)
+  WHERE note LIKE 'shortfall:%';
+
+CREATE INDEX IF NOT EXISTS idx_cp_budget_ledger_shortfall_user
+  ON kdcube_control_plane.tenant_project_budget_ledger (tenant, project, user_id, created_at DESC)
+  WHERE note LIKE 'shortfall:%';
+
+CREATE INDEX IF NOT EXISTS idx_cp_budget_ledger_shortfall_bundle
+  ON kdcube_control_plane.tenant_project_budget_ledger (tenant, project, bundle_id, created_at DESC)
+  WHERE note LIKE 'shortfall:%';
+
+CREATE OR REPLACE VIEW kdcube_control_plane.tenant_project_budget_absorption AS
+SELECT
+    tenant,
+    project,
+    date_trunc('day', created_at) AS day,
+    date_trunc('month', created_at) AS month,
+    CASE
+        WHEN note LIKE 'shortfall:wallet_subscription%' THEN 'wallet_subscription'
+        WHEN note LIKE 'shortfall:wallet_paid%' THEN 'wallet_paid'
+        WHEN note LIKE 'shortfall:wallet_plan%' THEN 'wallet_plan'
+        WHEN note LIKE 'shortfall:subscription_overage%' THEN 'subscription_overage'
+        WHEN note LIKE 'shortfall:free_plan%' THEN 'free_plan'
+        ELSE 'shortfall'
+    END AS reason,
+    SUM(-amount_cents) AS absorbed_cents,
+    COUNT(*) AS events
+FROM kdcube_control_plane.tenant_project_budget_ledger
+WHERE kind='spend' AND note LIKE 'shortfall:%'
+GROUP BY tenant, project, day, month, reason;
+
+CREATE OR REPLACE VIEW kdcube_control_plane.tenant_project_budget_absorption_detail AS
+SELECT
+    tenant,
+    project,
+    user_id,
+    bundle_id,
+    date_trunc('day', created_at) AS day,
+    date_trunc('month', created_at) AS month,
+    CASE
+        WHEN note LIKE 'shortfall:wallet_subscription%' THEN 'wallet_subscription'
+        WHEN note LIKE 'shortfall:wallet_paid%' THEN 'wallet_paid'
+        WHEN note LIKE 'shortfall:wallet_plan%' THEN 'wallet_plan'
+        WHEN note LIKE 'shortfall:subscription_overage%' THEN 'subscription_overage'
+        WHEN note LIKE 'shortfall:free_plan%' THEN 'free_plan'
+        ELSE 'shortfall'
+    END AS reason,
+    SUM(-amount_cents) AS absorbed_cents,
+    COUNT(*) AS events
+FROM kdcube_control_plane.tenant_project_budget_ledger
+WHERE kind='spend' AND note LIKE 'shortfall:%'
+GROUP BY tenant, project, user_id, bundle_id, day, month, reason;
+
 CREATE OR REPLACE VIEW kdcube_control_plane.tenant_project_budget_status AS
 SELECT
     tenant,
@@ -399,31 +463,6 @@ SELECT
     updated_at,
     notes
 FROM kdcube_control_plane.tenant_project_budget;
-
--- =========================================
--- USER SUBSCRIPTION BUDGET SETTINGS (per-user)
--- =========================================
-CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscription_budget_settings (
-    tenant VARCHAR(255) NOT NULL,
-    project VARCHAR(255) NOT NULL,
-    user_id VARCHAR(255) NOT NULL,
-
-    overdraft_limit_cents BIGINT DEFAULT 0,
-    notes TEXT DEFAULT NULL,
-
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    PRIMARY KEY (tenant, project, user_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_cp_sub_budget_settings_lookup
-  ON kdcube_control_plane.user_subscription_budget_settings(tenant, project, user_id);
-
-DROP TRIGGER IF EXISTS trg_cp_sub_budget_settings_updated_at ON kdcube_control_plane.user_subscription_budget_settings;
-CREATE TRIGGER trg_cp_sub_budget_settings_updated_at
-  BEFORE UPDATE ON kdcube_control_plane.user_subscription_budget_settings
-  FOR EACH ROW EXECUTE FUNCTION kdcube_control_plane.update_updated_at();
 
 -- =========================================
 -- USER SUBSCRIPTION PERIOD BUDGET (per-billing-cycle)
@@ -503,6 +542,9 @@ CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_active
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_lookup
   ON kdcube_control_plane.user_subscription_period_reservations (tenant, project, user_id, period_key, reservation_id);
 
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_resv_request
+  ON kdcube_control_plane.user_subscription_period_reservations (tenant, project, request_id);
+
 CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscription_period_ledger (
     id BIGSERIAL PRIMARY KEY,
 
@@ -533,6 +575,9 @@ CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_tp_user_time
 
 CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_reservation
   ON kdcube_control_plane.user_subscription_period_ledger (reservation_id);
+
+CREATE INDEX IF NOT EXISTS idx_cp_sub_period_ledger_request
+  ON kdcube_control_plane.user_subscription_period_ledger (tenant, project, request_id);
 
 -- =========================================
 -- SUBSCRIPTION PLANS (TIER + PRICE MAPPING)
@@ -578,7 +623,7 @@ CREATE TRIGGER trg_cp_pl_updated_at
 -- =========================================
 -- SUBSCRIPTIONS (PLAN RESOLUTION SNAPSHOT)
 --  - plan_id points to subscription_plans
---  - tier/monthly_price_cents are denormalized from plan
+--  - plan/monthly_price_cents are denormalized from plan
 -- =========================================
 CREATE TABLE IF NOT EXISTS kdcube_control_plane.user_subscriptions (
     tenant text NOT NULL,

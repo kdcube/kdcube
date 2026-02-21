@@ -53,7 +53,7 @@ def _strs(*items) -> list[str]:
     return [str(x) for x in items]
 
 # --------- Lua scripts ---------
-# --------- Tier token reservation (atomic) ---------
+# --------- Plan token reservation (atomic) ---------
 # Reservation metadata format in HSET:
 #   "<amt>|<k_tok_h_resv>|<k_tok_d_resv>|<k_tok_m_resv>"
 #
@@ -674,63 +674,64 @@ end
 return 1
 """
 
-# --------- Tier Balance Helpers ---------
-def _merge_policy_with_tier_balance(
+# --------- Plan Override Helpers ---------
+def _merge_policy_with_plan_override(
         base_policy: QuotaPolicy,
-        tier_balance: Optional['UserTierBalance']
+        plan_balance: Optional['UserPlanBalance']
 ) -> QuotaPolicy:
     """
-    Apply tier balance OVERRIDE (not additive).
+    Apply plan override from the plan override table (OVERRIDE, not additive).
 
-    If tier_balance exists and has tier override: Use override limits where set, else fall back to base tier.
+    If plan_balance exists and has a plan override: use override limits where set,
+    else fall back to base plan.
 
     Args:
-        base_policy: Base tier policy
-        tier_balance: User's tier balance (contains tier override + lifetime budget)
+        base_policy: Base plan policy
+        plan_balance: User's plan override snapshot (contains plan override + lifetime budget)
 
     Returns:
         Merged QuotaPolicy with overrides applied
     """
 
     # Only apply when the override is ACTIVE (active flag + has override + not expired)
-    if not tier_balance or not tier_balance.tier_override_is_active():
+    if not plan_balance or not plan_balance.plan_override_is_active():
         return base_policy
 
-    # Apply OVERRIDE semantics (tier_balance fields override base_policy)
+    # Apply OVERRIDE semantics (plan_balance fields override base_policy)
     return QuotaPolicy(
         max_concurrent=(
-            tier_balance.max_concurrent
-            if tier_balance.max_concurrent is not None
+            plan_balance.max_concurrent
+            if plan_balance.max_concurrent is not None
             else base_policy.max_concurrent
         ),
         requests_per_day=(
-            tier_balance.requests_per_day
-            if tier_balance.requests_per_day is not None
+            plan_balance.requests_per_day
+            if plan_balance.requests_per_day is not None
             else base_policy.requests_per_day
         ),
         requests_per_month=(
-            tier_balance.requests_per_month
-            if tier_balance.requests_per_month is not None
+            plan_balance.requests_per_month
+            if plan_balance.requests_per_month is not None
             else base_policy.requests_per_month
         ),
         total_requests=(
-            tier_balance.total_requests
-            if tier_balance.total_requests is not None
+            plan_balance.total_requests
+            if plan_balance.total_requests is not None
             else base_policy.total_requests
         ),
         tokens_per_hour=(
-            tier_balance.tokens_per_hour
-            if tier_balance.tokens_per_hour is not None
+            plan_balance.tokens_per_hour
+            if plan_balance.tokens_per_hour is not None
             else base_policy.tokens_per_hour
         ),
         tokens_per_day=(
-            tier_balance.tokens_per_day
-            if tier_balance.tokens_per_day is not None
+            plan_balance.tokens_per_day
+            if plan_balance.tokens_per_day is not None
             else base_policy.tokens_per_day
         ),
         tokens_per_month=(
-            tier_balance.tokens_per_month
-            if tier_balance.tokens_per_month is not None
+            plan_balance.tokens_per_month
+            if plan_balance.tokens_per_month is not None
             else base_policy.tokens_per_month
         ),
     )
@@ -743,8 +744,8 @@ class AdmitResult:
     lock_id: Optional[str]
     # snapshot after admission (remaining or current readings)
     snapshot: Dict[str, int]     # {req_day, req_month, req_total, tok_hour, tok_day, tok_month, in_flight, tok_hour_reset_at?}
-    # tier balance info (for transparency)
-    used_tier_override: bool = False
+    # plan override info (plan overrides + lifetime credits)
+    used_plan_override: bool = False
     effective_policy: Optional[Dict[str, Any]] = None  # Merged policy used for admission
 
     reserved_tokens: int = 0
@@ -755,8 +756,8 @@ class UserEconomicsRateLimiter:
     """
     Redis-backed, atomic admission & accounting for user-level rate limiting.
 
-    Supports tier balance - tier overrides and lifetime token budgets purchased or granted to users
-    above their base policy limits.
+    Supports plan overrides and lifetime token budgets purchased or granted to users
+    above their base plan limits.
 
     Tracks:
       - Concurrency via ZSET (+ per-holder expiry)
@@ -789,7 +790,7 @@ class UserEconomicsRateLimiter:
         redis: Redis,
         *,
         namespace: str = REDIS.ECONOMICS.RATE_LIMIT,
-        user_balance_snapshot_mgr: Optional['UserTierBalanceSnapshotManager'] = None
+        user_balance_snapshot_mgr: Optional['UserPlanBalanceSnapshotManager'] = None
     ):
         """
         Initialize RateLimiter.
@@ -812,7 +813,7 @@ class UserEconomicsRateLimiter:
         lock_id: str,
         lock_ttl_sec: int = 120,
         now: Optional[datetime] = None,
-        apply_tier_override: bool = True,
+        apply_plan_override: bool = True,
 
         reserve_tokens: int = 0,
         reservation_id: Optional[str] = None,
@@ -822,7 +823,7 @@ class UserEconomicsRateLimiter:
         Check request & token quotas (based on *already committed* usage),
         then (if allowed) acquire a concurrency slot.
 
-        If user_balance_snapshot_mgr is configured, fetches and applies tier overrides
+        If user_balance_snapshot_mgr is configured, fetches and applies plan overrides
         purchased or granted to the user.
 
         Args:
@@ -834,7 +835,7 @@ class UserEconomicsRateLimiter:
             now: Current time (for testing)
 
         Returns:
-            AdmitResult with allowed status, snapshot, and tier balance info
+            AdmitResult with allowed status, snapshot, and plan override info
         """
         now = (now or datetime.utcnow()).replace(tzinfo=timezone.utc)
         ymd, ymdh = _ymd(now), _ymdh(now)
@@ -850,26 +851,26 @@ class UserEconomicsRateLimiter:
         project = subject_parts[1] if len(subject_parts) > 1 else None
         user_id = subject_parts[2] if len(subject_parts) > 2 else None
 
-        # Fetch tier balance and merge with base policy
-        tier_balance = None
-        used_tier_override = False
+        # Fetch plan override snapshot and merge with base policy
+        plan_balance = None
+        used_plan_override = False
         effective_policy = policy
 
-        if apply_tier_override and self.user_balance_snapshot_mgr and tenant and project and user_id:
+        if apply_plan_override and self.user_balance_snapshot_mgr and tenant and project and user_id:
             try:
-                tier_balance = await self.user_balance_snapshot_mgr.get_user_tier_balance(
+                plan_balance = await self.user_balance_snapshot_mgr.get_user_plan_balance(
                     tenant=tenant,
                     project=project,
                     user_id=user_id,
                 )
 
-                if tier_balance and tier_balance.tier_override_is_active():
-                    effective_policy = _merge_policy_with_tier_balance(policy, tier_balance)
-                    used_tier_override = True
+                if plan_balance and plan_balance.plan_override_is_active():
+                    effective_policy = _merge_policy_with_plan_override(policy, plan_balance)
+                    used_plan_override = True
             except Exception as e:
-                # Log but don't fail admission on tier balance errors
+                # Log but don't fail admission on plan override snapshot errors
                 import logging
-                logging.warning(f"Failed to fetch tier balance for {subject_id}: {e}")
+                logging.warning(f"Failed to fetch plan override snapshot for {subject_id}: {e}")
 
         # ---- Build keys using namespace prefix
         k_locks = _k(self.ns, bundle_id, subject_id, "locks")
@@ -948,8 +949,8 @@ class UserEconomicsRateLimiter:
                     "tok_hour_reset_at": tok_h_reset_at,
                     "month_reset_at": month_reset_at,
                 },
-                used_tier_override=used_tier_override,
-                effective_policy=asdict(effective_policy) if used_tier_override else None,
+                used_plan_override=used_plan_override,
+                effective_policy=asdict(effective_policy) if used_plan_override else None,
                 reserved_tokens=reserved,
                 reservation_id=(resv_id if reserved > 0 else None),
             )
@@ -965,7 +966,7 @@ class UserEconomicsRateLimiter:
             reserved=0,
         )
 
-        # ---- policy checks using EFFECTIVE policy (base + tier override)
+        # ---- policy checks using EFFECTIVE policy (base + plan override)
         violations = []
         if effective_policy.requests_per_day   is not None and req_d >= effective_policy.requests_per_day:   violations.append("requests_per_day")
         if effective_policy.requests_per_month is not None and req_m >= effective_policy.requests_per_month: violations.append("requests_per_month")
@@ -986,8 +987,8 @@ class UserEconomicsRateLimiter:
                     "tok_hour_reset_at": tok_h_reset_at,
                     "month_reset_at": int(period_end.timestamp()),
                 },
-                used_tier_override=used_tier_override,
-                effective_policy=asdict(effective_policy) if used_tier_override else None,
+                used_plan_override=used_plan_override,
+                effective_policy=asdict(effective_policy) if used_plan_override else None,
             )
 
         # ---- concurrency lock (if configured)
@@ -1017,8 +1018,8 @@ class UserEconomicsRateLimiter:
                         "tok_hour": tok_h, "tok_day": tok_d, "tok_month": tok_m,
                         "in_flight": in_flight,
                     },
-                    used_tier_override=used_tier_override,
-                    effective_policy=asdict(effective_policy) if used_tier_override else None,
+                    used_plan_override=used_plan_override,
+                    effective_policy=asdict(effective_policy) if used_plan_override else None,
                 )
 
         return AdmitResult(
@@ -1030,8 +1031,8 @@ class UserEconomicsRateLimiter:
                 "tok_hour": tok_h, "tok_day": tok_d, "tok_month": tok_m,
                 "in_flight": in_flight,
             },
-            used_tier_override=used_tier_override,
-            effective_policy=asdict(effective_policy) if used_tier_override else None,
+            used_plan_override=used_plan_override,
+            effective_policy=asdict(effective_policy) if used_plan_override else None,
         )
 
     async def commit(
@@ -1490,7 +1491,7 @@ class QuotaInsight:
     messages_remaining: Optional[int]
     retry_after_sec: Optional[int]
     retry_scope: Optional[str]   # "hour" | "day" | "month" | None
-    used_tier_override: bool = False  # Whether tier override was applied
+    used_plan_override: bool = False  # Whether plan override was applied
     total_token_remaining: Optional[int] = None
     usage_percentage: Optional[float] = 0.0
     approaching_limit_type: Optional[str] = None
@@ -1647,7 +1648,7 @@ def _first_token_scope(policy: QuotaPolicy) -> Optional[str]:
     return None
 
 
-def _tier_token_remaining_first_rule(policy: QuotaPolicy, remaining: Dict[str, Optional[int]]) -> Optional[int]:
+def _plan_token_remaining_first_rule(policy: QuotaPolicy, remaining: Dict[str, Optional[int]]) -> Optional[int]:
     scope = _first_token_scope(policy)
     if not scope:
         return None
@@ -1660,23 +1661,23 @@ def compute_quota_insight(
         snapshot: Dict[str, int],
         reason: Optional[str],
         user_budget_tokens: Optional[int] = None,  # User's purchased token balance
-        used_tier_override: bool = False,
+        used_plan_override: bool = False,
         now: Optional[datetime] = None,
         est_tokens_per_turn = 133_333
 ) -> QuotaInsight:
     """
-    Compute quota insight considering BOTH tier limits AND user token budget.
+    Compute quota insight considering BOTH plan limits AND user token budget.
 
     Early warning should trigger when user is close to running out of EITHER:
-    - Request quotas (tier)
-    - Token budget (tier + purchased)
+    - Request quotas (plan)
+    - Token budget (plan + purchased)
 
     Args:
-        policy: Effective QuotaPolicy (already merged with tier override if applicable)
+        policy: Effective QuotaPolicy (already merged with plan override if applicable)
         snapshot: Current usage snapshot
         reason: Violation reason if denied
         user_budget_tokens: User's purchased lifetime token balance
-        used_tier_override: Whether tier override was applied
+        used_plan_override: Whether plan override was applied
         now: Current time (for testing)
 
     Returns:
@@ -1691,13 +1692,13 @@ def compute_quota_insight(
     # Calculate messages_remaining from REQUEST quotas
     request_remaining = _messages_remaining_from_remaining(remaining)
 
-    # Tier tokens remaining: "first set rule" (same semantics as the limiter/reservation plan)
-    tier_token_remaining = _tier_token_remaining_first_rule(policy, remaining)
+    # Plan tokens remaining: "first set rule" (same semantics as the limiter/reservation plan)
+    plan_token_remaining = _plan_token_remaining_first_rule(policy, remaining)
 
     ub = int(user_budget_tokens or 0)
     total_token_remaining = None
-    if tier_token_remaining is not None:
-        total_token_remaining = int(tier_token_remaining) + ub
+    if plan_token_remaining is not None:
+        total_token_remaining = int(plan_token_remaining) + ub
 
 
     # Estimate messages from token budget (assuming ~100K tokens per request)
@@ -1718,7 +1719,7 @@ def compute_quota_insight(
         messages_remaining=messages_remaining,
         retry_after_sec=retry_after_sec,
         retry_scope=retry_scope,
-        used_tier_override=used_tier_override,
+        used_plan_override=used_plan_override,
         total_token_remaining=total_token_remaining,
         usage_percentage=usage_percentage,
         approaching_limit_type=approaching_limit_type

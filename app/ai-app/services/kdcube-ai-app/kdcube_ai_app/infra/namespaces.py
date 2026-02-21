@@ -56,7 +56,7 @@ class REDIS:
     class ECONOMICS:
         RATE_LIMIT = "kdcube:economics:rl"
         PROJ_BUDGET = "kdcube:economics:proj.budget"
-        TIER_BALANCE_CACHE = "kdcube:economics:tier.balance"
+        PLAN_BALANCE_CACHE = "kdcube:economics:plan.balance"
 
     class SYSTEM:
         CAPACITY = "kdcube:system:capacity"

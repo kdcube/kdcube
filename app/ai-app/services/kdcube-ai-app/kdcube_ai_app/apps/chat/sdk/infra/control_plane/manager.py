@@ -7,7 +7,7 @@
 Control Plane Manager
 
 Unified manager for:
-1. User tier balance (via TierBalanceManager)
+1. User plan override balance (via PlanOverrideManager)
 2. Plan quota policies (base limits by plan id)
 3. Application budget policies (spending limits per provider - NO bundle_id!)
 
@@ -26,10 +26,10 @@ import asyncpg
 from redis.asyncio import Redis
 
 from kdcube_ai_app.apps.chat.sdk.infra.economics.user_budget import (
-    TierOverrideManager,
+    PlanOverrideManager,
     UserCreditsManager,
-    UserTierBalance,
-    UserTierBalanceSnapshotManager
+    UserPlanBalance,
+    UserPlanBalanceSnapshotManager
 )
 from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import QuotaPolicy, ProviderBudgetPolicy
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import SubscriptionManager
@@ -111,7 +111,7 @@ class ControlPlaneManager:
 
     Manages:
     1. Plan Quota Policies (base limits by plan id)
-    2. User Tier Balance (tier overrides + lifetime budget) - delegates to TierBalanceManager
+    2. User Plan Balance (plan overrides + lifetime budget) - delegates to PlanOverrideManager
     3. Application Budget POLICIES (spending limits)
     # Stores SPENDING LIMITS per provider
     # Table: application_budget_policies
@@ -135,7 +135,7 @@ class ControlPlaneManager:
             redis: Optional[Redis] = None,
             *,
             cache_ttl: int = 60,  # 60 seconds for policies
-            tier_balance_cache_ttl: int = 10,  # 10 seconds for tier balance
+            plan_balance_cache_ttl: int = 10,  # 10 seconds for plan override balance
     ):
         """
         Initialize Control Plane Manager.
@@ -144,24 +144,24 @@ class ControlPlaneManager:
             pg_pool: asyncpg connection pool
             redis: Redis client for caching
             cache_ttl: Cache TTL for policies in seconds (default: 60)
-            tier_balance_cache_ttl: Cache TTL for tier balance (default: 10)
+            plan_balance_cache_ttl: Cache TTL for plan override balance (default: 10)
         """
         self._pg_pool = pg_pool
         self._redis = redis
         self.cache_ttl = cache_ttl
 
-        # Initialize TierBalanceManager (delegates to it)
-        self.tier_override_mgr = TierOverrideManager(
+        # Initialize PlanOverrideManager (delegates to it)
+        self.plan_override_mgr = PlanOverrideManager(
             pg_pool=pg_pool,
             redis=redis,
-            cache_ttl=tier_balance_cache_ttl,
+            cache_ttl=plan_balance_cache_ttl,
         )
         self.user_credits_mgr = UserCreditsManager(
             pg_pool=pg_pool,
             redis=redis,
-            cache_ttl=tier_balance_cache_ttl,
+            cache_ttl=plan_balance_cache_ttl,
         )
-        self.tier_balance_snapshot_mgr = UserTierBalanceSnapshotManager(pg_pool=pg_pool)
+        self.plan_balance_snapshot_mgr = UserPlanBalanceSnapshotManager(pg_pool=pg_pool)
         self.subscription_mgr = SubscriptionManager(pg_pool=pg_pool)
 
         # Track if we own the pool/redis
@@ -170,33 +170,33 @@ class ControlPlaneManager:
 
     async def init(self, *, redis_url: Optional[str] = None):
         """Initialize connections if not provided."""
-        # Initialize via tier balance manager
-        await self.tier_override_mgr.init(redis_url=redis_url)
+        # Initialize via plan override balance manager
+        await self.plan_override_mgr.init(redis_url=redis_url)
         await self.user_credits_mgr.init(redis_url=redis_url)
 
         # Share connections
-        self._pg_pool = self.tier_override_mgr._pg_pool
-        self._redis = self.tier_override_mgr._redis
-        self.tier_balance_snapshot_mgr.set_pg_pool(self._pg_pool)
+        self._pg_pool = self.plan_override_mgr._pg_pool
+        self._redis = self.plan_override_mgr._redis
+        self.plan_balance_snapshot_mgr.set_pg_pool(self._pg_pool)
 
     async def close(self):
         """Close connections."""
-        await self.tier_override_mgr.close()
+        await self.plan_override_mgr.close()
         await self.user_credits_mgr.close()
 
     # =========================================================================
-    # Tier Balance Operations
+    # Plan Balance Operations
     # =========================================================================
 
-    async def get_user_tier_balance(
+    async def get_user_plan_balance(
             self,
             *,
             tenant: str,
             project: str,
             user_id: str,
             include_expired: bool = False,
-    ) -> Optional[UserTierBalance]:
-        return await self.tier_balance_snapshot_mgr.get_user_tier_balance(
+    ) -> Optional[UserPlanBalance]:
+        return await self.plan_balance_snapshot_mgr.get_user_plan_balance(
             tenant=tenant,
             project=project,
             user_id=user_id,
@@ -204,13 +204,13 @@ class ControlPlaneManager:
         )
 
 
-    async def update_user_tier_budget(
+    async def update_user_plan_override(
             self,
             *,
             tenant: str,
             project: str,
             user_id: str,
-            # Tier override fields (PARTIAL UPDATES SUPPORTED!)
+            # Plan override fields (PARTIAL UPDATES SUPPORTED!)
             max_concurrent: Optional[int] = None,
             requests_per_day: Optional[int] = None,
             requests_per_month: Optional[int] = None,
@@ -223,9 +223,9 @@ class ControlPlaneManager:
             purchase_id: Optional[str] = None,
             purchase_amount_usd: Optional[float] = None,
             purchase_notes: Optional[str] = None,
-    ) -> UserTierBalance:
-        """Update user's tier budget (supports partial updates via COALESCE)."""
-        await self.tier_override_mgr.update_user_tier_budget(
+    ) -> UserPlanBalance:
+        """Update user's plan override (supports partial updates via COALESCE)."""
+        await self.plan_override_mgr.update_user_plan_override(
             tenant=tenant, project=project, user_id=user_id,
             max_concurrent=max_concurrent,
             requests_per_day=requests_per_day,
@@ -239,13 +239,13 @@ class ControlPlaneManager:
             grant_amount_usd=purchase_amount_usd,
             grant_notes=purchase_notes,
         )
-        return await self.get_user_tier_balance(tenant=tenant, project=project, user_id=user_id)
+        return await self.get_user_plan_balance(tenant=tenant, project=project, user_id=user_id)
 
-    async def deactivate_tier_balance(
+    async def deactivate_plan_override(
             self, *, tenant: str, project: str, user_id: str
     ):
-        """Deactivate tier balance."""
-        await self.tier_override_mgr.deactivate_tier_override(
+        """Deactivate plan override balance."""
+        await self.plan_override_mgr.deactivate_plan_override(
             tenant=tenant, project=project, user_id=user_id
         )
 
@@ -260,10 +260,10 @@ class ControlPlaneManager:
             ref_model: str = "claude-sonnet-4-5-20250929",
             purchase_id: Optional[str] = None,
             notes: Optional[str] = None,
-    ) -> UserTierBalance:
+    ) -> UserPlanBalance:
         """
         Add purchased credits in USD (converted to lifetime tokens).
-        Uses tier balance manager's add_lifetime_tokens method.
+        Uses plan override balance manager's add_lifetime_tokens method.
         """
 
 
@@ -280,7 +280,7 @@ class ControlPlaneManager:
             ref_model=ref_model,
         )
 
-        # Delegate to tier balance manager
+        # Delegate to plan override balance manager
         await self.user_credits_mgr.add_lifetime_tokens(
             tenant=tenant,
             project=project,
@@ -292,10 +292,10 @@ class ControlPlaneManager:
         )
 
         # Return the canonical flattened snapshot (single SQL)
-        bal = await self.get_user_tier_balance(tenant=tenant, project=project, user_id=user_id, include_expired=True)
+        bal = await self.get_user_plan_balance(tenant=tenant, project=project, user_id=user_id, include_expired=True)
         if not bal:
             # extremely unlikely after add_lifetime_tokens succeeds
-            raise RuntimeError("Failed to load tier balance after adding credits")
+            raise RuntimeError("Failed to load plan override balance after adding credits")
         return bal
 
     # =========================================================================

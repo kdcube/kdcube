@@ -11,13 +11,12 @@ The authoritative schema is defined here:
 Key table groups:
 
 - Quota policies: `plan_quota_policies`
-- Tier overrides: `user_tier_overrides`
+- Plan overrides: `user_plan_overrides`
 - Lifetime credits: `user_lifetime_credits`
 - Credit reservations: `user_token_reservations`
 - Project budget: `tenant_project_budget`, `tenant_project_budget_reservations`, `tenant_project_budget_ledger`
 - Subscription plans: `subscription_plans`
 - Subscriptions: `user_subscriptions`
-- Subscription settings: `user_subscription_budget_settings`
 - Subscription period budgets: `user_subscription_period_budget`, `user_subscription_period_reservations`, `user_subscription_period_ledger`
 - Idempotency and audit: `external_economics_events`
 
@@ -33,6 +32,22 @@ Window semantics (global per tenant/project):
 - Hourly tokens: rolling 60‑minute window (minute buckets).
 - Monthly requests/tokens: rolling 30‑day window anchored to first usage per tenant/project.
 - Daily: calendar day (UTC).
+- Reservation floor is configured per bundle via props `economics.reservation_amount_dollars`.
+
+Funding split (runtime):
+- If a user has a subscription **and** a wallet, subscription balance is reserved up to available and wallet covers overflow for that turn.
+- If actual spend exceeds both plan funding and wallet, project budget absorbs the remainder (shortfall note in ledger).
+- If subscription funds **zero** for a turn, the request switches to **paid lane** and **payasyougo** quotas apply.
+- Subscriptions and wallets never go negative; only project budget can absorb shortfalls.
+
+Absorption reporting:
+- Project budget absorption events are written to `tenant_project_budget_ledger` with notes `shortfall:wallet_subscription`, `shortfall:wallet_paid`, `shortfall:wallet_plan`, `shortfall:subscription_overage`, `shortfall:free_plan`.
+- View: `kdcube_control_plane.tenant_project_budget_absorption`
+- Detail view: `kdcube_control_plane.tenant_project_budget_absorption_detail`
+- API: `GET /app-budget/absorption-report?period=day|month&days=90&group_by=none|user|bundle&format=json|csv`
+
+Request lineage:
+- `GET /economics/request-lineage?request_id=turn_id`
 
 ## Maintenance Jobs
 
@@ -61,6 +76,7 @@ Purpose:
 - Clear stale reservation holds whose `expires_at` is in the past.
 - Release held balance back to the subscription period.
 - Prevents ghost reservations from blocking new requests.
+ - Balances ignore expired reservations, but reaping keeps tables clean.
 
 Entry points:
 
@@ -127,6 +143,7 @@ Recommended routine checks:
 Redis note:
 - Hourly token counters are stored as minute buckets under `toks:hour:bucket:{epoch_minute}` (rolling 60‑minute window).
 - Global quota scope uses bundle id `__project__` (subject_id already includes tenant/project).
+- Bundle index set is stored at `kdcube:economics:rl:bundles:{subject_id}` and refreshed on every commit (90‑day TTL).
 
 ## Deployment Notes
 
