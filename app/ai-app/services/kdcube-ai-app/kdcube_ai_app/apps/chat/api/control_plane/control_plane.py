@@ -2051,6 +2051,7 @@ async def get_user_budget_breakdown(
     role_hint = role or user_type
     resolved_plan_id, plan_source = await _resolve_plan_id_for_user(
         mgr=mgr,
+        redis=redis,
         tenant=settings.TENANT,
         project=settings.PROJECT,
         user_id=user_id,
