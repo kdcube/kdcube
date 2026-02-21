@@ -2048,6 +2048,7 @@ async def get_user_budget_breakdown(
     mgr = _get_control_plane_manager(router)
     settings = get_settings()
 
+    redis = getattr(router.state.middleware, "redis", None)
     role_hint = role or user_type
     resolved_plan_id, plan_source = await _resolve_plan_id_for_user(
         mgr=mgr,

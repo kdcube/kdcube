@@ -1354,11 +1354,6 @@ const PLAN_OPTIONS = [
     { value: 'custom', label: 'custom…' },
 ];
 
-const PLAN_OPTIONS_WITH_AUTO = [
-    { value: 'auto', label: 'auto (resolve from subscription/wallet)' },
-    ...PLAN_OPTIONS,
-];
-
 const PROVIDER_LABEL: Record<string, string> = {
     internal: 'Manual',
     stripe: 'Stripe',
@@ -1688,7 +1683,6 @@ const ControlPlaneAdmin: React.FC = () => {
 
     // Forms - Quota Breakdown
     const [breakdownUserId, setBreakdownUserId] = useState<string>('');
-    const [breakdownPlanId, setBreakdownPlanId] = useState<string>('auto');
     const [quotaBreakdown, setQuotaBreakdown] = useState<QuotaBreakdown | null>(null);
     const [breakdownBundleId, setBreakdownBundleId] = useState<string>('');
 
@@ -1768,8 +1762,6 @@ const ControlPlaneAdmin: React.FC = () => {
 
     const [subsProviderFilter, setSubsProviderFilter] = useState<string>('');
     const [subsList, setSubsList] = useState<Subscription[]>([]);
-
-    const [breakdownPlanIdCustom, setBreakdownPlanIdCustom] = useState<string>('');
 
     const [economicsRef, setEconomicsRef] = useState<EconomicsReference | null>(null);
 
@@ -1972,8 +1964,7 @@ const ControlPlaneAdmin: React.FC = () => {
         setLoadingAction(true);
 
         try {
-            const planIdRaw = breakdownPlanId === 'custom' ? breakdownPlanIdCustom : breakdownPlanId;
-            const planId = planIdRaw && planIdRaw !== 'auto' ? planIdRaw : undefined;
+            const planId = undefined;
             const bundleId = breakdownBundleId.trim() || undefined;
             const result = await api.getUserBudgetBreakdown(breakdownUserId, planId, bundleId);
             setQuotaBreakdown(result);
@@ -3070,29 +3061,12 @@ const ControlPlaneAdmin: React.FC = () => {
                                             placeholder="user123"
                                             required
                                         />
-                                        <Select
-                                            label="Plan ID (optional)"
-                                            value={breakdownPlanId}
-                                            onChange={(e) => setBreakdownPlanId(e.target.value)}
-                                            options={PLAN_OPTIONS_WITH_AUTO}
-                                        />
-
                                         <Input
                                             label="Bundle ID (optional)"
                                             value={breakdownBundleId}
                                             onChange={(e) => setBreakdownBundleId(e.target.value)}
                                             placeholder="e.g. __project__ (global)"
                                         />
-
-                                        {breakdownPlanId === 'custom' && (
-                                            <Input
-                                                label="Custom plan_id *"
-                                                value={breakdownPlanIdCustom}
-                                                onChange={(e) => setBreakdownPlanIdCustom(e.target.value)}
-                                                placeholder="e.g. enterprise-plan"
-                                                required
-                                            />
-                                        )}
                                     </div>
                                     <Button type="submit" disabled={loadingAction}>
                                         {loadingAction ? 'Analyzing…' : 'Get Breakdown'}
