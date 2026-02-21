@@ -291,7 +291,7 @@ def create_sse_router(
             except Exception as e:
                 logger.error("SSE load session failed for id=%s: %s", user_session_id, e)
                 raise HTTPException(status_code=401, detail="Invalid session")
-        logger.info(f"[sse_stream]. user_session_id={user_session_id}; session.session_id={session.session_id}; stream_id={stream_id}")
+        logger.info(f"[sse_stream]. user_session_id={user_session_id}; session.session_id={session.session_id}; stream_id={stream_id}; user_id={session.user_id}; user_type={session.user_type}")
 
         # Gateway protections for opening a stream
         ctx = build_sse_request_context(request, bearer_token=bearer_token, id_token=id_token, session=session)
@@ -307,7 +307,7 @@ def create_sse_router(
             )
         except AuthenticationError as e:
             raise HTTPException(status_code=401, detail="Invalid token") from e
-        logger.info(f"[sse_stream]. After upgrade: user_session_id={user_session_id}; session.session_id={session.session_id}; stream_id={stream_id};")
+        logger.info(f"[sse_stream]. After upgrade: user_session_id={user_session_id}; session.session_id={session.session_id}; stream_id={stream_id}; user_id={session.user_id}; user_type={session.user_type}")
         if os.environ.get("CHAT_SSE_REJECT_ANONYMOUS", "1") == "1":
             await _reject_anonymous(
                 endpoint="/sse/stream",
