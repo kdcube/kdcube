@@ -49,7 +49,7 @@ from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.config import (
     get_gateway_config,
     apply_gateway_config_from_cache,
-    subscribe_gateway_config_updates,
+    subscribe_gateway_config_updates, get_chat_processes_per_instance_env,
 )
 from kdcube_ai_app.infra.namespaces import CONFIG
 
@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI):
         "Lifespan startup begin: port=%s pid=%s workers_env=%s reload_env=%s",
         CHAT_APP_PORT,
         os.getpid(),
-        get_chat_processes_per_instance_env(),
+        os.getenv("CHAT_APP_PARALLELISM", "1"),
         os.getenv("UVICORN_RELOAD", "0"),
     )
 

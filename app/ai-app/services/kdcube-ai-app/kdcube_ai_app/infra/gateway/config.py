@@ -40,7 +40,7 @@ def _read_int_env(names, default: int) -> int:
 
 
 def _get_chat_processes_per_instance() -> int:
-    return _read_int_env(["CHAT_PROC_PARALLELISM", "CHAT_APP_PARALLELISM"], 1)
+    return _read_int_env(["CHAT_APP_PARALLELISM"], 1)
 
 
 def _get_max_concurrent_per_process() -> int:
@@ -138,7 +138,7 @@ class ServiceCapacitySettings:
     """Service capacity configuration - now process-aware"""
     concurrent_requests_per_process: int = 5  # MAX_CONCURRENT_CHAT(S)
     avg_processing_time_seconds: float = 25.0
-    processes_per_instance: int = None  # Auto-detected from CHAT_PROC_PARALLELISM/CHAT_APP_PARALLELISM
+    processes_per_instance: int = None  # Auto-detected from CHAT_APP_PARALLELISM
 
     # Computed properties (will be calculated)
     concurrent_requests_per_instance: int = None
@@ -690,7 +690,7 @@ def validate_gateway_config(config: GatewayConfiguration) -> list[str]:
             if config.service_capacity.processes_per_instance != env_parallelism:
                 issues.append(
                     f"Config processes_per_instance ({config.service_capacity.processes_per_instance}) "
-                    f"doesn't match CHAT_PROC_PARALLELISM/CHAT_APP_PARALLELISM env var ({env_parallelism})"
+                    f"doesn't match CHAT_APP_PARALLELISM env var ({env_parallelism})"
                 )
 
         except (ValueError, TypeError) as e:
