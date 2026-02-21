@@ -189,8 +189,13 @@ def create_request_gateway():
     logger.info("Gateway Configuration Summary:")
     logger.info(f"  Profile: {gateway_config.profile.value}")
     logger.info(f"  Instance: {gateway_config.instance_id}")
-    logger.info(f"  Service Capacity: {gateway_config.service_capacity.concurrent_requests_per_instance} concurrent, "
-                f"{gateway_config.service_capacity.avg_processing_time_seconds}s avg")
+    logger.info(
+        "  Service Capacity: %s concurrent (%s per process × %s processes), %ss avg",
+        gateway_config.service_capacity.concurrent_requests_per_instance,
+        gateway_config.service_capacity.concurrent_requests_per_process,
+        gateway_config.service_capacity.processes_per_instance,
+        gateway_config.service_capacity.avg_processing_time_seconds,
+    )
     anon = gateway_config.rate_limits.roles.get("anonymous")
     reg = gateway_config.rate_limits.roles.get("registered")
     logger.info(f"  Rate Limits: Anon={anon.hourly if anon else 'n/a'}/hr, "

@@ -46,6 +46,37 @@ def _get_chat_processes_per_instance() -> int:
 def _get_max_concurrent_per_process() -> int:
     return _read_int_env(["MAX_CONCURRENT_CHATS", "MAX_CONCURRENT_CHAT"], 5)
 
+
+def get_chat_processes_per_instance_env() -> int:
+    """Public helper for chat process parallelism (env-derived)."""
+    return _get_chat_processes_per_instance()
+
+
+def get_max_concurrent_per_process_env() -> int:
+    """Public helper for per-process concurrency (env-derived)."""
+    return _get_max_concurrent_per_process()
+
+
+def apply_service_capacity_env_overrides(config: "GatewayConfiguration") -> bool:
+    """
+    Force service_capacity concurrency + process counts to match env values.
+    Returns True if any override was applied.
+    """
+    changed = False
+    env_concurrent = _get_max_concurrent_per_process()
+    env_processes = _get_chat_processes_per_instance()
+    if config.service_capacity.concurrent_requests_per_process != env_concurrent:
+        config.service_capacity.concurrent_requests_per_process = env_concurrent
+        changed = True
+    if config.service_capacity.processes_per_instance != env_processes:
+        config.service_capacity.processes_per_instance = env_processes
+        changed = True
+    if changed:
+        config.service_capacity.concurrent_requests_per_instance = (
+            config.service_capacity.concurrent_requests_per_process * config.service_capacity.processes_per_instance
+        )
+    return changed
+
 DEFAULT_GUARDED_REST_PATTERNS = [
     r"^/resources/link-preview$",
     r"^/resources/by-rn$",
@@ -335,6 +366,7 @@ class GatewayConfigFactory:
                     cfg.project_id = os.getenv("DEFAULT_PROJECT_NAME", "default-tenant")
                 if not cfg.instance_id:
                     cfg.instance_id = os.getenv("INSTANCE_ID", "default-instance")
+                apply_service_capacity_env_overrides(cfg)
                 return cfg
             except Exception as e:
                 logger.warning(f"Failed to parse GATEWAY_CONFIG_JSON: {e}. Falling back to env defaults.")
@@ -367,7 +399,7 @@ class GatewayConfigFactory:
             profile, rate_limits, service_capacity
         )
 
-        return GatewayConfiguration(
+        cfg = GatewayConfiguration(
             profile=profile,
             rate_limits=rate_limits,
             service_capacity=service_capacity,
@@ -381,6 +413,8 @@ class GatewayConfigFactory:
             project_id=project_id,
             guarded_rest_patterns=list(DEFAULT_GUARDED_REST_PATTERNS),
         )
+        apply_service_capacity_env_overrides(cfg)
+        return cfg
 
     @staticmethod
     def _apply_profile_overrides(profile: GatewayProfile,
@@ -894,7 +928,7 @@ def _config_from_dict(data: Dict[str, Any]) -> GatewayConfiguration:
         if not guarded_rest_patterns:
             guarded_rest_patterns = list(DEFAULT_GUARDED_REST_PATTERNS)
 
-    return GatewayConfiguration(
+    cfg = GatewayConfiguration(
         profile=profile,
         instance_id=str(data.get("instance_id") or os.getenv("INSTANCE_ID", "default-instance")),
         tenant_id=str(data.get("tenant_id") or os.getenv("TENANT_ID", "default-tenant")),
@@ -908,6 +942,8 @@ def _config_from_dict(data: Dict[str, Any]) -> GatewayConfiguration:
         redis_url=str(data.get("redis_url") or get_settings().REDIS_URL),
         guarded_rest_patterns=guarded_rest_patterns,
     )
+    apply_service_capacity_env_overrides(cfg)
+    return cfg
 
 
 def _build_gateway_config_cache(*, tenant: str, project: str, redis_url: Optional[str]) -> Optional[Any]:
@@ -1175,6 +1211,9 @@ class GatewayConfigurationManager:
             config.guarded_rest_patterns = [str(p) for p in guarded_rest_patterns if p]
             if not config.guarded_rest_patterns:
                 config.guarded_rest_patterns = list(DEFAULT_GUARDED_REST_PATTERNS)
+
+        # Enforce env-derived service capacity for this instance
+        apply_service_capacity_env_overrides(config)
 
         is_local_target = (
             (config.tenant_id == base_config.tenant_id) and

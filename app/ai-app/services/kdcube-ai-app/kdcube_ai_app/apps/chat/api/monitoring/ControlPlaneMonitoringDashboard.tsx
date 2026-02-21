@@ -678,7 +678,7 @@ const MonitoringDashboard: React.FC = () => {
     const [plannerPageLoad, setPlannerPageLoad] = useState('12');
     const [plannerTabs, setPlannerTabs] = useState('10');
     const [plannerPageWindow, setPlannerPageWindow] = useState('10');
-    const [plannerSafety, setPlannerSafety] = useState('1.2');
+    const [plannerSafety, setPlannerSafety] = useState('1.5');
     const [plannerConcurrentPerProcess, setPlannerConcurrentPerProcess] = useState('5');
     const [plannerProcessesPerInstance, setPlannerProcessesPerInstance] = useState('1');
     const [plannerAvgProcessing, setPlannerAvgProcessing] = useState('25');
@@ -814,6 +814,11 @@ const MonitoringDashboard: React.FC = () => {
             maxRps,
             peakUtilization,
             totalConcurrent,
+            windowSeconds,
+            concurrentPerProcess,
+            processesPerInstance,
+            avgSeconds,
+            safety,
         };
     }, [
         plannerAdmins,
@@ -828,6 +833,55 @@ const MonitoringDashboard: React.FC = () => {
         plannerAvgProcessing,
         plannerInstances,
     ]);
+
+    const recommendedConfigJson = useMemo(() => {
+        const roleLimits = gateway?.rate_limits || {};
+        const recommendedBurst = Math.max(1, planner.suggestedBurst || 1);
+        const windowSeconds = Math.max(1, Math.round(planner.windowSeconds || 60));
+        const baseBackpressure = gateway?.backpressure_settings || {};
+        const suggested = {
+            tenant,
+            project,
+            service_capacity: {
+                concurrent_per_process: Math.max(1, Math.round(planner.concurrentPerProcess || 1)),
+                processes_per_instance: Math.max(1, Math.round(planner.processesPerInstance || 1)),
+                avg_processing_time_seconds: Math.max(1, Math.round(planner.avgSeconds || 25)),
+            },
+            backpressure: {
+                capacity_buffer: baseBackpressure.capacity_buffer ?? 0.2,
+                queue_depth_multiplier: baseBackpressure.queue_depth_multiplier ?? 2.0,
+                anonymous_pressure_threshold: baseBackpressure.anonymous_pressure_threshold ?? 0.6,
+                registered_pressure_threshold: baseBackpressure.registered_pressure_threshold ?? 0.8,
+                paid_pressure_threshold: baseBackpressure.paid_pressure_threshold ?? 0.8,
+                hard_limit_threshold: baseBackpressure.hard_limit_threshold ?? 0.95,
+            },
+            rate_limits: {
+                roles: {
+                    anonymous: {
+                        hourly: roleLimits?.anonymous?.hourly ?? 120,
+                        burst: roleLimits?.anonymous?.burst ?? 10,
+                        burst_window: roleLimits?.anonymous?.burst_window ?? windowSeconds,
+                    },
+                    registered: {
+                        hourly: roleLimits?.registered?.hourly ?? 600,
+                        burst: recommendedBurst,
+                        burst_window: windowSeconds,
+                    },
+                    paid: {
+                        hourly: roleLimits?.paid?.hourly ?? 2000,
+                        burst: recommendedBurst,
+                        burst_window: windowSeconds,
+                    },
+                    privileged: {
+                        hourly: roleLimits?.privileged?.hourly ?? -1,
+                        burst: Math.max(recommendedBurst, roleLimits?.privileged?.burst ?? 200),
+                        burst_window: windowSeconds,
+                    },
+                }
+            }
+        };
+        return JSON.stringify(suggested, null, 2);
+    }, [gateway, planner, tenant, project]);
 
     const handleValidate = async () => {
         try {
@@ -1274,6 +1328,19 @@ const MonitoringDashboard: React.FC = () => {
                         </div>
                         <div className="text-[11px] text-gray-500">
                             Suggested burst is a per-session value. Set it per role in the config JSON under `rate_limits`.
+                        </div>
+                    </CardBody>
+                </Card>
+
+                <Card>
+                    <CardHeader
+                        title="Recommended Config Draft"
+                        subtitle="Computed from the planner inputs. Copy into Gateway Configuration if desired."
+                    />
+                    <CardBody className="space-y-3">
+                        <TextArea value={recommendedConfigJson} onChange={() => { /* read-only */ }} />
+                        <div className="text-[11px] text-gray-500">
+                            This draft keeps current hourly limits, updates burst/burst_window, and mirrors the planner’s service capacity values.
                         </div>
                     </CardBody>
                 </Card>
