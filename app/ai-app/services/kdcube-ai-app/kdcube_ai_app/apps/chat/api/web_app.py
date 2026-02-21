@@ -12,6 +12,8 @@ import time
 import logging
 import os
 import asyncio
+import signal
+import sys
 
 from contextlib import asynccontextmanager
 
@@ -70,6 +72,25 @@ from kdcube_ai_app.apps.chat.api.socketio.chat import create_socketio_chat_handl
 from kdcube_ai_app.apps.chat.api.sse.chat import create_sse_router, SSEHub
 
 logger = logging.getLogger(__name__)
+
+def _install_crash_logging() -> None:
+    """Ensure crashes in worker processes emit useful logs."""
+    try:
+        faulthandler.enable(all_threads=True)
+    except Exception:
+        logger.warning("Failed to enable faulthandler", exc_info=True)
+    for sig in (signal.SIGTERM, signal.SIGABRT, signal.SIGSEGV):
+        try:
+            faulthandler.register(sig, all_threads=True)
+        except Exception:
+            # Some signals may not be supported on all platforms.
+            pass
+
+    def _excepthook(exc_type, exc, tb):
+        logger.critical("Unhandled exception", exc_info=(exc_type, exc, tb))
+    sys.excepthook = _excepthook
+
+_install_crash_logging()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
