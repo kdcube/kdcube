@@ -15,6 +15,7 @@ HTTP_403_FORBIDDEN = 403
 
 PRIVILEGED_ROLES = {"kdcube:role:super-admin", "kdcube:role:admin"}
 PAID_ROLES = {"kdcube:role:paid"}
+REGISTERED_ROLE = "kdcube:role:chat-user"
 
 class User(BaseModel):
     username: str = None

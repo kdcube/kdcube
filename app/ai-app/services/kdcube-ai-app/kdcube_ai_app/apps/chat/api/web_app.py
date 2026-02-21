@@ -559,12 +559,23 @@ mount_control_plane_router(app)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=CHAT_APP_PORT,
-        log_config=None,   # ← don't let Uvicorn install its own handlers
-        log_level=None,
-        timeout_keep_alive=60*60, # TODO : DO NOT FORGET TO REMOVE THIS
-        # timeout_keep_alive=45
-    )
+    workers = max(1, int(os.getenv("CHAT_APP_PARALLELISM", "1")))
+    reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes", "on"}
+    # Uvicorn requires an import string when using workers or reload.
+    use_import_string = workers > 1 or reload_enabled
+    app_target = "kdcube_ai_app.apps.chat.api.web_app:app" if use_import_string else app
+
+    run_kwargs = {
+        "host": "0.0.0.0",
+        "port": CHAT_APP_PORT,
+        "log_config": None,  # don't let Uvicorn install its own handlers
+        "log_level": None,
+        "timeout_keep_alive": 60 * 60,  # TODO : DO NOT FORGET TO REMOVE THIS
+        # "timeout_keep_alive": 45,
+    }
+    if use_import_string:
+        run_kwargs["workers"] = workers
+        if reload_enabled:
+            run_kwargs["reload"] = True
+
+    uvicorn.run(app_target, **run_kwargs)

@@ -39,7 +39,8 @@
 | `MAX_CONCURRENT_CHAT` | Max concurrent tasks per processor | `deployment/docker/all_in_one/sample_env/.env.backend` | chat |
 | `CHAT_TASK_TIMEOUT_SEC` | Per-task timeout (seconds) | `deployment/docker/all_in_one/sample_env/.env.backend` | chat |
 | `KB_PARALLELISM` | KB service parallelism | `deployment/docker/all_in_one/sample_env/.env.backend` | kb |
-| `CHAT_APP_PARALLELISM` | Chat app parallelism | `deployment/docker/all_in_one/sample_env/.env.backend` | chat |
+| `CHAT_APP_PARALLELISM` | Chat app process count. When `web_app.py` runs directly, it spawns this many Uvicorn workers. Total concurrency ≈ `MAX_CONCURRENT_CHAT` × `CHAT_APP_PARALLELISM`. | `deployment/docker/all_in_one/sample_env/.env.backend` | chat |
+| `UVICORN_RELOAD` | Enable Uvicorn auto-reload for `web_app.py` (dev only). Avoid with multi-worker in production. | `deployment/docker/all_in_one/sample_env/.env.backend` | chat |
 | `HEARTBEAT_INTERVAL` | Heartbeat interval (seconds) | `deployment/docker/all_in_one/sample_env/.env.backend` | chat/kb |
 | `OPENAI_API_KEY` | OpenAI API key | `deployment/docker/all_in_one/sample_env/.env.backend` | chat/kb |
 | `HUGGING_FACE_API_TOKEN` | Hugging Face token | `deployment/docker/all_in_one/sample_env/.env.backend` | chat/kb |
@@ -158,3 +159,4 @@
 
 **Notes**
 Use `deployment/docker/all_in_one/sample_env` as the source of truth for compose env variable names and intended scopes.
+`CHAT_APP_PARALLELISM` controls Uvicorn worker count when the container runs `web_app.py` directly (as in current Dockerfiles).

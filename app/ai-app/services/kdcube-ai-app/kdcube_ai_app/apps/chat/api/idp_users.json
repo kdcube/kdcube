@@ -24,5 +24,185 @@
     "permissions": [
       "kdcube:*:chat:*;read"
     ]
+  },
+  "test-chat-token-001": {
+    "sub": "chat-user-001",
+    "username": "chatuser001",
+    "email": "chat001@test.com",
+    "name": "Chat User 001",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-002": {
+    "sub": "chat-user-002",
+    "username": "chatuser002",
+    "email": "chat002@test.com",
+    "name": "Chat User 002",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-003": {
+    "sub": "chat-user-003",
+    "username": "chatuser003",
+    "email": "chat003@test.com",
+    "name": "Chat User 003",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-004": {
+    "sub": "chat-user-004",
+    "username": "chatuser004",
+    "email": "chat004@test.com",
+    "name": "Chat User 004",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-005": {
+    "sub": "chat-user-005",
+    "username": "chatuser005",
+    "email": "chat005@test.com",
+    "name": "Chat User 005",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-006": {
+    "sub": "chat-user-006",
+    "username": "chatuser006",
+    "email": "chat006@test.com",
+    "name": "Chat User 006",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-007": {
+    "sub": "chat-user-007",
+    "username": "chatuser007",
+    "email": "chat007@test.com",
+    "name": "Chat User 007",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-008": {
+    "sub": "chat-user-008",
+    "username": "chatuser008",
+    "email": "chat008@test.com",
+    "name": "Chat User 008",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-009": {
+    "sub": "chat-user-009",
+    "username": "chatuser009",
+    "email": "chat009@test.com",
+    "name": "Chat User 009",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-010": {
+    "sub": "chat-user-010",
+    "username": "chatuser010",
+    "email": "chat010@test.com",
+    "name": "Chat User 010",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-011": {
+    "sub": "chat-user-011",
+    "username": "chatuser011",
+    "email": "chat011@test.com",
+    "name": "Chat User 011",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-012": {
+    "sub": "chat-user-012",
+    "username": "chatuser012",
+    "email": "chat012@test.com",
+    "name": "Chat User 012",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-013": {
+    "sub": "chat-user-013",
+    "username": "chatuser013",
+    "email": "chat013@test.com",
+    "name": "Chat User 013",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-014": {
+    "sub": "chat-user-014",
+    "username": "chatuser014",
+    "email": "chat014@test.com",
+    "name": "Chat User 014",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
+  },
+  "test-chat-token-015": {
+    "sub": "chat-user-015",
+    "username": "chatuser015",
+    "email": "chat015@test.com",
+    "name": "Chat User 015",
+    "roles": [
+      "kdcube:role:chat-user"
+    ],
+    "permissions": [
+      "kdcube:*:chat:*;read"
+    ]
   }
 }
