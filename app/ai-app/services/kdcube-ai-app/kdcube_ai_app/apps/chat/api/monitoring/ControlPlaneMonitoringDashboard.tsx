@@ -1272,7 +1272,7 @@ const MonitoringDashboard: React.FC = () => {
                 <Card>
                     <CardHeader
                         title="Capacity Planner (Rough)"
-                        subtitle="Estimate burst limits and compare expected peak traffic to capacity. This does not apply changes."
+                        subtitle="Estimate burst limits and compare expected peak traffic to capacity. Uses CHAT_APP_PARALLELISM and MAX_CONCURRENT_CHATS. Assumes all instances share the same config."
                     />
                     <CardBody className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -1285,8 +1285,8 @@ const MonitoringDashboard: React.FC = () => {
                         <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
                             <Input label="Page-load window (s)" value={plannerPageWindow} onChange={(e) => setPlannerPageWindow(e.target.value)} />
                             <Input label="Safety factor" value={plannerSafety} onChange={(e) => setPlannerSafety(e.target.value)} />
-                            <Input label="Concurrent / process" value={plannerConcurrentPerProcess} onChange={(e) => setPlannerConcurrentPerProcess(e.target.value)} />
-                            <Input label="Processes / instance" value={plannerProcessesPerInstance} onChange={(e) => setPlannerProcessesPerInstance(e.target.value)} />
+                            <Input label="Concurrent / processor (MAX_CONCURRENT_CHATS)" value={plannerConcurrentPerProcess} onChange={(e) => setPlannerConcurrentPerProcess(e.target.value)} />
+                            <Input label="Workers / instance (CHAT_APP_PARALLELISM)" value={plannerProcessesPerInstance} onChange={(e) => setPlannerProcessesPerInstance(e.target.value)} />
                             <Input label="Instances" value={plannerInstances} onChange={(e) => setPlannerInstances(e.target.value)} />
                             <Input label="Avg processing (s)" value={plannerAvgProcessing} onChange={(e) => setPlannerAvgProcessing(e.target.value)} />
                         </div>
