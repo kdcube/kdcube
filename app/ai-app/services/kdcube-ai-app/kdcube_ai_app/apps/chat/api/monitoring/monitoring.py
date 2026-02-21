@@ -19,6 +19,8 @@ from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.availability.health_and_heartbeat import get_expected_services
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitState
 from kdcube_ai_app.infra.gateway.config import GatewayConfigurationManager
+from kdcube_ai_app.infra.namespaces import REDIS, ns_key
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 """
 Monitoring API
@@ -93,6 +95,99 @@ async def reset_circuit_breaker_endpoint(
     except Exception as e:
         logger.error(f"Error resetting circuit breaker {circuit_name}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _scan_delete(redis, pattern: str, batch_size: int = 1000) -> int:
+    """Delete keys by pattern using SCAN to avoid blocking Redis."""
+    deleted = 0
+    batch: List[Any] = []
+    async for key in redis.scan_iter(match=pattern, count=batch_size):
+        batch.append(key)
+        if len(batch) >= batch_size:
+            deleted += await redis.delete(*batch)
+            batch = []
+    if batch:
+        deleted += await redis.delete(*batch)
+    return deleted
+
+
+@router.post("/admin/throttling/reset")
+async def reset_throttling_state(
+        payload: Dict[str, Any],
+        session: UserSession = Depends(require_auth(
+            RequireUser(),
+            RequireRoles("kdcube:role:super-admin")
+        ))
+):
+    """
+    Reset throttling/backpressure state.
+    Payload:
+      - reset_rate_limits: bool (default True)
+      - reset_backpressure: bool (default True)
+      - reset_throttling_stats: bool (default False)
+      - session_id: str (optional, defaults to current session)
+      - all_sessions: bool (default False, deletes all rate-limit keys)
+      - tenant, project: optional override for namespaced keys
+    """
+    payload = payload or {}
+    reset_rate_limits = bool(payload.get("reset_rate_limits", True))
+    reset_backpressure = bool(payload.get("reset_backpressure", True))
+    reset_stats = bool(payload.get("reset_throttling_stats", False))
+    all_sessions = bool(payload.get("all_sessions", False))
+    session_id = (payload.get("session_id") or "").strip() or (session.session_id if not all_sessions else None)
+
+    settings = get_settings()
+    tenant = payload.get("tenant") or settings.TENANT
+    project = payload.get("project") or settings.PROJECT
+
+    middleware = router.state.middleware
+    await middleware.init_redis()
+    redis = middleware.redis
+
+    results: Dict[str, Any] = {"deleted": {}, "tenant": tenant, "project": project}
+
+    # Rate limit keys (global, not namespaced)
+    if reset_rate_limits:
+        if all_sessions:
+            deleted_burst = await _scan_delete(redis, f"{REDIS.SYSTEM.RATE_LIMIT}:*:burst")
+            deleted_hour = await _scan_delete(redis, f"{REDIS.SYSTEM.RATE_LIMIT}:*:hour:*")
+            results["deleted"]["rate_limits_all_sessions"] = deleted_burst + deleted_hour
+        else:
+            if not session_id:
+                raise HTTPException(status_code=400, detail="session_id is required unless all_sessions=true")
+            deleted = 0
+            deleted += await redis.delete(f"{REDIS.SYSTEM.RATE_LIMIT}:{session_id}:burst")
+            deleted += await _scan_delete(redis, f"{REDIS.SYSTEM.RATE_LIMIT}:{session_id}:hour:*")
+            results["deleted"]["rate_limits_session"] = deleted
+
+    # Backpressure counters (namespaced)
+    if reset_backpressure:
+        capacity_base = ns_key(f"{REDIS.SYSTEM.CAPACITY}:counter", tenant=tenant, project=project)
+        deleted = await redis.delete(capacity_base, f"{capacity_base}:total")
+        results["deleted"]["backpressure_capacity_counters"] = deleted
+
+    # Throttling stats (namespaced, dashboard-only)
+    if reset_stats:
+        keys = [
+            ns_key(REDIS.THROTTLING.EVENTS_KEY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.STATS_KEY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.SESSION_COUNTERS_KEY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.TOTAL_REQUESTS_KEY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.TOTAL_REQUESTS_HOURLY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.TOTAL_THROTTLED_REQUESTS_KEY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.RATE_LIMIT_429, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.BACKPRESSURE_503, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.HOURLY, tenant=tenant, project=project),
+            ns_key(REDIS.THROTTLING.BY_REASON, tenant=tenant, project=project),
+        ]
+        deleted = await redis.delete(*keys)
+        results["deleted"]["throttling_stats"] = deleted
+
+    return {
+        "success": True,
+        "message": "Throttling/backpressure state reset",
+        "details": results,
+    }
 
 
 def _burst_sim_enabled() -> bool:

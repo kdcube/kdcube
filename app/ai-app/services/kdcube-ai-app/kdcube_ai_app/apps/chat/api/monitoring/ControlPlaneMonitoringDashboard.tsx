@@ -366,6 +366,16 @@ class MonitoringAPI {
         return res.json();
     }
 
+    async resetThrottling(payload: any): Promise<any> {
+        const res = await fetch(this.url('/admin/throttling/reset'), {
+            method: 'POST',
+            headers: makeAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(`Reset throttling failed (${res.status})`);
+        return res.json();
+    }
+
     async getBurstUsers(): Promise<BurstUsersResponse | null> {
         const res = await fetch(this.url('/admin/burst/users'), {
             method: 'GET',
@@ -633,6 +643,14 @@ const MonitoringDashboard: React.FC = () => {
     const [validationResult, setValidationResult] = useState<any>(null);
     const [actionMessage, setActionMessage] = useState<string | null>(null);
 
+    const [resetSessionId, setResetSessionId] = useState('');
+    const [resetAllSessions, setResetAllSessions] = useState(false);
+    const [resetRateLimits, setResetRateLimits] = useState(true);
+    const [resetBackpressure, setResetBackpressure] = useState(true);
+    const [resetThrottlingStats, setResetThrottlingStats] = useState(false);
+    const [resettingThrottling, setResettingThrottling] = useState(false);
+    const [resetThrottlingMessage, setResetThrottlingMessage] = useState<string | null>(null);
+
     const [burstUsers, setBurstUsers] = useState<BurstUsersResponse | null>(null);
     const [burstError, setBurstError] = useState<string | null>(null);
     const [burstStatus, setBurstStatus] = useState<string | null>(null);
@@ -767,6 +785,35 @@ const MonitoringDashboard: React.FC = () => {
             await refreshAll();
         } catch (e: any) {
             setActionMessage(e?.message || 'Failed to reset circuit breaker');
+        }
+    };
+
+    const handleResetThrottling = async () => {
+        if (!resetRateLimits && !resetBackpressure && !resetThrottlingStats) {
+            setResetThrottlingMessage('Select at least one reset option');
+            return;
+        }
+        setResettingThrottling(true);
+        setResetThrottlingMessage(null);
+        try {
+            const payload: any = {
+                tenant,
+                project,
+                reset_rate_limits: resetRateLimits,
+                reset_backpressure: resetBackpressure,
+                reset_throttling_stats: resetThrottlingStats,
+                all_sessions: resetAllSessions,
+            };
+            if (resetSessionId.trim()) {
+                payload.session_id = resetSessionId.trim();
+            }
+            const res = await api.resetThrottling(payload);
+            setResetThrottlingMessage(res?.message || 'Throttling reset');
+            await refreshAll();
+        } catch (e: any) {
+            setResetThrottlingMessage(e?.message || 'Failed to reset throttling');
+        } finally {
+            setResettingThrottling(false);
         }
     };
 
@@ -1101,6 +1148,73 @@ const MonitoringDashboard: React.FC = () => {
                                     </Button>
                                 </div>
                             ))}
+                        </div>
+                    </CardBody>
+                </Card>
+
+                <Card>
+                    <CardHeader title="Reset Throttling / Backpressure" subtitle="Clear rate-limit counters and backpressure slots." />
+                    <CardBody className="space-y-3">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <Input
+                                label="Session ID (optional)"
+                                value={resetSessionId}
+                                onChange={(e) => setResetSessionId(e.target.value)}
+                                placeholder="defaults to current session"
+                            />
+                            <div className="flex items-end">
+                                <label className="text-xs text-gray-600 flex items-center gap-2">
+                                    <input
+                                        type="checkbox"
+                                        checked={resetAllSessions}
+                                        onChange={(e) => setResetAllSessions(e.target.checked)}
+                                    />
+                                    All sessions (danger)
+                                </label>
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-4">
+                            <label className="text-xs text-gray-600 flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    checked={resetRateLimits}
+                                    onChange={(e) => setResetRateLimits(e.target.checked)}
+                                />
+                                Reset rate limits
+                            </label>
+                            <label className="text-xs text-gray-600 flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    checked={resetBackpressure}
+                                    onChange={(e) => setResetBackpressure(e.target.checked)}
+                                />
+                                Reset backpressure counters
+                            </label>
+                            <label className="text-xs text-gray-600 flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    checked={resetThrottlingStats}
+                                    onChange={(e) => setResetThrottlingStats(e.target.checked)}
+                                />
+                                Clear throttling stats
+                            </label>
+                        </div>
+                        {resetAllSessions && (
+                            <div className="text-xs text-rose-700">
+                                Warning: clears rate limits for all sessions on this Redis.
+                            </div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-3">
+                            <Button
+                                variant="danger"
+                                onClick={handleResetThrottling}
+                                disabled={resettingThrottling}
+                            >
+                                Reset
+                            </Button>
+                            {resetThrottlingMessage && (
+                                <span className="text-xs text-gray-600">{resetThrottlingMessage}</span>
+                            )}
                         </div>
                     </CardBody>
                 </Card>
