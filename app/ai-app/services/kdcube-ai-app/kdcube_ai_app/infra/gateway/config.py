@@ -26,60 +26,12 @@ from kdcube_ai_app.infra.service_hub.cache import (
 
 logger = logging.getLogger(__name__)
 
-def _read_int_env(names, default: int) -> int:
-    for name in names:
-        value = os.getenv(name)
-        if value is None or value == "":
-            continue
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            logger.warning("Invalid int for %s=%r; using default %s", name, value, default)
-            return default
-    return default
+def get_default_chat_processes_per_instance() -> int:
+    return 1
 
 
-def _get_chat_processes_per_instance() -> int:
-    return _read_int_env(["CHAT_APP_PARALLELISM"], 1)
-
-
-def _get_max_concurrent_per_process() -> int:
-    return _read_int_env(["MAX_CONCURRENT_CHATS", "MAX_CONCURRENT_CHAT"], 5)
-
-def _force_service_capacity_from_env() -> bool:
-    return os.getenv("GATEWAY_FORCE_SERVICE_CAPACITY_FROM_ENV", "1").lower() in {"1", "true", "yes", "on"}
-
-def get_chat_processes_per_instance_env() -> int:
-    """Public helper for chat process parallelism (env-derived)."""
-    return _get_chat_processes_per_instance()
-
-
-def get_max_concurrent_per_process_env() -> int:
-    """Public helper for per-process concurrency (env-derived)."""
-    return _get_max_concurrent_per_process()
-
-
-def apply_service_capacity_env_overrides(config: "GatewayConfiguration") -> bool:
-    """
-    Force service_capacity concurrency + process counts to match env values.
-    Returns True if any override was applied.
-    """
-    if not _force_service_capacity_from_env():
-        return False
-    changed = False
-    env_concurrent = _get_max_concurrent_per_process()
-    env_processes = _get_chat_processes_per_instance()
-    if config.service_capacity.concurrent_requests_per_process != env_concurrent:
-        config.service_capacity.concurrent_requests_per_process = env_concurrent
-        changed = True
-    if config.service_capacity.processes_per_instance != env_processes:
-        config.service_capacity.processes_per_instance = env_processes
-        changed = True
-    if changed:
-        config.service_capacity.concurrent_requests_per_instance = (
-            config.service_capacity.concurrent_requests_per_process * config.service_capacity.processes_per_instance
-        )
-    return changed
+def get_default_max_concurrent_per_process() -> int:
+    return 5
 
 DEFAULT_GUARDED_REST_PATTERNS = [
     r"^/resources/link-preview$",
@@ -136,9 +88,9 @@ class RateLimitSettings:
 @dataclass
 class ServiceCapacitySettings:
     """Service capacity configuration - now process-aware"""
-    concurrent_requests_per_process: int = 5  # MAX_CONCURRENT_CHAT(S)
+    concurrent_requests_per_process: int = 5  # from gateway config
     avg_processing_time_seconds: float = 25.0
-    processes_per_instance: int = None  # Auto-detected from CHAT_APP_PARALLELISM
+    processes_per_instance: int = None  # from gateway config
 
     # Computed properties (will be calculated)
     concurrent_requests_per_instance: int = None
@@ -146,9 +98,9 @@ class ServiceCapacitySettings:
 
     def __post_init__(self):
         if self.processes_per_instance is None:
-            self.processes_per_instance = _get_chat_processes_per_instance()
+            self.processes_per_instance = get_default_chat_processes_per_instance()
         if self.concurrent_requests_per_process is None:
-            self.concurrent_requests_per_process = _get_max_concurrent_per_process()
+            self.concurrent_requests_per_process = get_default_max_concurrent_per_process()
 
         if self.concurrent_requests_per_instance is None:
             self.concurrent_requests_per_instance = (
@@ -370,7 +322,6 @@ class GatewayConfigFactory:
                     cfg.project_id = os.getenv("DEFAULT_PROJECT_NAME", "default-tenant")
                 if not cfg.instance_id:
                     cfg.instance_id = os.getenv("INSTANCE_ID", "default-instance")
-                apply_service_capacity_env_overrides(cfg)
                 return cfg
             except Exception as e:
                 logger.warning(f"Failed to parse GATEWAY_CONFIG_JSON: {e}. Falling back to env defaults.")
@@ -391,11 +342,11 @@ class GatewayConfigFactory:
         # Rate limiting from environment
         rate_limits = RateLimitSettings.from_env()
 
-        # Service capacity from environment
+        # Service capacity defaults (can be overridden via GATEWAY_CONFIG_JSON or admin)
         service_capacity = ServiceCapacitySettings(
-            concurrent_requests_per_process=_get_max_concurrent_per_process(), # CONCURRENT_REQUESTS_PER_PROCESS
+            concurrent_requests_per_process=get_default_max_concurrent_per_process(),
             avg_processing_time_seconds=float(os.getenv("AVG_PROCESSING_TIME_SECONDS", "25.0")),
-            processes_per_instance=_get_chat_processes_per_instance()
+            processes_per_instance=get_default_chat_processes_per_instance(),
         )
 
         # Apply profile-specific overrides
@@ -417,7 +368,6 @@ class GatewayConfigFactory:
             project_id=project_id,
             guarded_rest_patterns=list(DEFAULT_GUARDED_REST_PATTERNS),
         )
-        apply_service_capacity_env_overrides(cfg)
         return cfg
 
     @staticmethod
@@ -482,11 +432,8 @@ class GatewayConfigFactory:
         config = GatewayConfigFactory.create_from_env()
 
         # Chat-specific optimizations with process awareness
-        max_concurrent_per_process = _get_max_concurrent_per_process()
-        processes = _get_chat_processes_per_instance()
-
-        config.service_capacity.concurrent_requests_per_process = max_concurrent_per_process
-        config.service_capacity.processes_per_instance = processes
+        max_concurrent_per_process = config.service_capacity.concurrent_requests_per_process
+        processes = config.service_capacity.processes_per_instance
         config.service_capacity.concurrent_requests_per_instance = max_concurrent_per_process * processes
         config.service_capacity.avg_processing_time_seconds = 25.0
         config.backpressure.queue_depth_multiplier = 2.0
@@ -675,27 +622,6 @@ def validate_gateway_config(config: GatewayConfiguration) -> list[str]:
     if config.circuit_breakers.backpressure_failure_threshold <= 0:
         issues.append("Backpressure circuit breaker failure threshold must be positive")
 
-    # Environment consistency validation (skip when JSON config is supplied)
-    if not os.getenv("GATEWAY_CONFIG_JSON"):
-        try:
-            env_max_concurrent = _get_max_concurrent_per_process()
-            env_parallelism = _get_chat_processes_per_instance()
-
-            if config.service_capacity.concurrent_requests_per_process != env_max_concurrent:
-                issues.append(
-                    f"Config concurrent_requests_per_process ({config.service_capacity.concurrent_requests_per_process}) "
-                    f"doesn't match MAX_CONCURRENT_CHAT env var ({env_max_concurrent})"
-                )
-
-            if config.service_capacity.processes_per_instance != env_parallelism:
-                issues.append(
-                    f"Config processes_per_instance ({config.service_capacity.processes_per_instance}) "
-                    f"doesn't match CHAT_APP_PARALLELISM env var ({env_parallelism})"
-                )
-
-        except (ValueError, TypeError) as e:
-            issues.append(f"Error validating environment variables: {str(e)}")
-
     # Realistic capacity warnings
     total_instance_capacity = base_queue_size if 'base_queue_size' in locals() else 0
     if total_instance_capacity > 1000:
@@ -880,7 +806,14 @@ def _config_from_dict(data: Dict[str, Any]) -> GatewayConfiguration:
                 burst_window=int(cfg.get("burst_window", 60)),
             )
     rate_limits = RateLimitSettings(roles=roles)
-    service_capacity = ServiceCapacitySettings(**_pick(data.get("service_capacity", {}), [
+    service_capacity_payload = data.get("service_capacity", {}) or {}
+    if "concurrent_per_process" in service_capacity_payload or "avg_processing_time" in service_capacity_payload:
+        logger.warning(
+            "Legacy service_capacity keys detected (concurrent_per_process/avg_processing_time). "
+            "Please use concurrent_requests_per_process/avg_processing_time_seconds instead."
+        )
+
+    service_capacity = ServiceCapacitySettings(**_pick(service_capacity_payload, [
         "concurrent_requests_per_process",
         "avg_processing_time_seconds",
         "processes_per_instance",
@@ -946,7 +879,6 @@ def _config_from_dict(data: Dict[str, Any]) -> GatewayConfiguration:
         redis_url=str(data.get("redis_url") or get_settings().REDIS_URL),
         guarded_rest_patterns=guarded_rest_patterns,
     )
-    apply_service_capacity_env_overrides(cfg)
     return cfg
 
 
@@ -963,6 +895,10 @@ def _build_gateway_config_cache(*, tenant: str, project: str, redis_url: Optiona
         use_tp_prefix=True,
     )
     return create_namespaced_kv_cache_from_config(cfg)
+
+
+def gateway_config_cache_key(*, tenant: str, project: str) -> str:
+    return f"{ns_key(CONFIG.GATEWAY.NAMESPACE, tenant=tenant, project=project)}:{CONFIG.GATEWAY.CURRENT_KEY}"
 
 
 async def load_gateway_config_from_cache(
@@ -990,6 +926,25 @@ async def save_gateway_config_to_cache(config: GatewayConfiguration) -> bool:
         return False
     payload = _serialize_gateway_config(config)
     return await cache.set_json(CONFIG.GATEWAY.CURRENT_KEY, payload, ttl_seconds=0)
+
+
+async def clear_gateway_config_cache(
+        *,
+        tenant: str,
+        project: str,
+        redis_url: Optional[str] = None,
+) -> int:
+    if not redis_url:
+        return 0
+    try:
+        from redis import asyncio as aioredis
+        redis = aioredis.from_url(redis_url, decode_responses=True)
+        key = gateway_config_cache_key(tenant=tenant, project=project)
+        deleted = await redis.delete(key)
+        await redis.close()
+        return int(deleted or 0)
+    except Exception:
+        return 0
 
 
 async def publish_gateway_config_update(config: GatewayConfiguration, *, actor: Optional[str] = None) -> None:
@@ -1168,12 +1123,10 @@ class GatewayConfigurationManager:
 
         # Update capacity settings
         merged_service_capacity = {**service_capacity_payload, **kwargs}
-        if 'concurrent_per_process' in merged_service_capacity:
-            config.service_capacity.concurrent_requests_per_process = merged_service_capacity['concurrent_per_process']
         if 'processes_per_instance' in merged_service_capacity:
             config.service_capacity.processes_per_instance = merged_service_capacity['processes_per_instance']
-        if 'avg_processing_time' in merged_service_capacity:
-            config.service_capacity.avg_processing_time_seconds = merged_service_capacity['avg_processing_time']
+        if 'concurrent_requests_per_process' in merged_service_capacity:
+            config.service_capacity.concurrent_requests_per_process = merged_service_capacity['concurrent_requests_per_process']
         if 'avg_processing_time_seconds' in merged_service_capacity:
             config.service_capacity.avg_processing_time_seconds = merged_service_capacity['avg_processing_time_seconds']
 
@@ -1215,9 +1168,6 @@ class GatewayConfigurationManager:
             config.guarded_rest_patterns = [str(p) for p in guarded_rest_patterns if p]
             if not config.guarded_rest_patterns:
                 config.guarded_rest_patterns = list(DEFAULT_GUARDED_REST_PATTERNS)
-
-        # Enforce env-derived service capacity for this instance
-        apply_service_capacity_env_overrides(config)
 
         is_local_target = (
             (config.tenant_id == base_config.tenant_id) and
@@ -1283,6 +1233,24 @@ class GatewayConfigurationManager:
                 pass
 
         return applied
+
+    async def clear_cached_config(self, **kwargs) -> dict[str, Any]:
+        """
+        Clear cached gateway config for a tenant/project. Does not mutate the running config.
+        """
+        target_tenant = kwargs.pop("tenant", None) or kwargs.pop("tenant_id", None) or self.gateway.gateway_config.tenant_id
+        target_project = kwargs.pop("project", None) or kwargs.pop("project_id", None) or self.gateway.gateway_config.project_id
+        deleted = await clear_gateway_config_cache(
+            tenant=target_tenant,
+            project=target_project,
+            redis_url=self.gateway.gateway_config.redis_url,
+        )
+        return {
+            "tenant": target_tenant,
+            "project": target_project,
+            "key": gateway_config_cache_key(tenant=target_tenant, project=target_project),
+            "deleted": deleted,
+        }
 
     async def validate_proposed_changes(self, **kwargs):
         """Validate proposed configuration changes before applying"""

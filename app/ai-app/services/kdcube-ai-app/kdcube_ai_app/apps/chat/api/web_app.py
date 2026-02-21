@@ -51,7 +51,9 @@ from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitBreakerError
 from kdcube_ai_app.infra.gateway.config import (
     get_gateway_config,
     apply_gateway_config_from_cache,
-    subscribe_gateway_config_updates, get_chat_processes_per_instance_env,
+    subscribe_gateway_config_updates,
+    GatewayConfigFactory,
+    gateway_config_cache_key,
 )
 from kdcube_ai_app.infra.namespaces import CONFIG
 
@@ -92,6 +94,14 @@ def _install_crash_logging() -> None:
 
 _install_crash_logging()
 
+def _get_uvicorn_workers_from_config() -> int:
+    try:
+        cfg = GatewayConfigFactory.create_from_env()
+        return max(1, int(cfg.service_capacity.processes_per_instance))
+    except Exception:
+        logger.exception("Failed to resolve Uvicorn workers from gateway config; using 1")
+        return 1
+
 async def _safe_shutdown_step(name: str, coro, timeout: float = 5.0) -> None:
     try:
         await asyncio.wait_for(coro, timeout=timeout)
@@ -105,10 +115,10 @@ async def lifespan(app: FastAPI):
     """Simplified lifespan management"""
     # Startup
     logger.info(
-        "Lifespan startup begin: port=%s pid=%s workers_env=%s reload_env=%s",
+        "Lifespan startup begin: port=%s pid=%s workers_cfg=%s reload_env=%s",
         CHAT_APP_PORT,
         os.getpid(),
-        os.getenv("CHAT_APP_PARALLELISM", "1"),
+        _get_uvicorn_workers_from_config(),
         os.getenv("UVICORN_RELOAD", "0"),
     )
 
@@ -119,12 +129,29 @@ async def lifespan(app: FastAPI):
         # Initialize gateway adapter and store in app state
         app.state.gateway_adapter = get_fastapi_adapter()
         settings = get_settings()
-        await apply_gateway_config_from_cache(
+        cache_applied = await apply_gateway_config_from_cache(
             gateway_adapter=app.state.gateway_adapter,
             tenant=settings.TENANT,
             project=settings.PROJECT,
             redis_url=REDIS_URL,
         )
+        if cache_applied:
+            logger.info(
+                "Gateway config source: redis-cache tenant=%s project=%s key=%s",
+                settings.TENANT,
+                settings.PROJECT,
+                gateway_config_cache_key(tenant=settings.TENANT, project=settings.PROJECT),
+            )
+        else:
+            source = "env"
+            if os.getenv("GATEWAY_CONFIG_JSON"):
+                source = "env (GATEWAY_CONFIG_JSON)"
+            logger.info(
+                "Gateway config source: %s tenant=%s project=%s",
+                source,
+                settings.TENANT,
+                settings.PROJECT,
+            )
         app.state.gateway_config_stop = asyncio.Event()
         app.state.gateway_config_task = asyncio.create_task(
             subscribe_gateway_config_updates(
@@ -389,7 +416,7 @@ async def lifespan(app: FastAPI):
         await app.state.health_checker.stop_monitoring()
 
     if hasattr(app.state, 'pg_pool'):
-        await app.state.pg_pool.close()
+        await _safe_shutdown_step("pg_pool.close", app.state.pg_pool.close(), timeout=10.0)
 
     await close_shared_link_preview()
     await close_shared_browser()
@@ -609,7 +636,7 @@ if __name__ == "__main__":
     # Enable faulthandler to capture native crashes and dump tracebacks.
     faulthandler.enable()
 
-    workers = max(1, int(os.getenv("CHAT_APP_PARALLELISM", "1")))
+    workers = _get_uvicorn_workers_from_config()
     reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes", "on"}
     # Uvicorn requires an import string when using workers or reload.
     use_import_string = workers > 1 or reload_enabled
@@ -621,6 +648,7 @@ if __name__ == "__main__":
         "log_config": None,  # don't let Uvicorn install its own handlers
         "log_level": None,
         "timeout_keep_alive": 60 * 60,  # TODO : DO NOT FORGET TO REMOVE THIS
+        "timeout_graceful_shutdown": 15,
         # "timeout_keep_alive": 45,
     }
     if use_import_string:

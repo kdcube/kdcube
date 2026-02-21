@@ -75,6 +75,17 @@ interface SystemMonitoringResponse {
     recent_throttling_events?: Array<any>;
     gateway_configuration?: GatewayConfigurationView;
     capacity_transparency?: Record<string, any>;
+    db_connections?: {
+        max_connections?: number;
+        source?: string;
+        pool_max_per_worker?: number;
+        processes_per_instance?: number;
+        estimated_per_instance?: number;
+        instance_count?: number;
+        estimated_total?: number;
+        warning?: boolean;
+        warning_reason?: string | null;
+    };
     timestamp?: number;
 }
 
@@ -368,6 +379,16 @@ class MonitoringAPI {
         return res.json();
     }
 
+    async clearGatewayConfigCache(payload: any): Promise<any> {
+        const res = await fetch(this.url('/admin/gateway/clear-cache'), {
+            method: 'POST',
+            headers: makeAuthHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) throw new Error(`Clear cache failed (${res.status})`);
+        return res.json();
+    }
+
     async resetThrottling(payload: any): Promise<any> {
         const res = await fetch(this.url('/admin/throttling/reset'), {
             method: 'POST',
@@ -407,7 +428,7 @@ const Card: React.FC<{ children: React.ReactNode; className?: string }> = ({ chi
     </div>
 );
 
-const CapacityPanel: React.FC<{ capacity?: Record<string, any> }> = ({ capacity }) => {
+const CapacityPanel: React.FC<{ capacity?: Record<string, any>; dbConnections?: SystemMonitoringResponse["db_connections"] }> = ({ capacity, dbConnections }) => {
     if (!capacity) return null;
     const metrics = capacity.capacity_metrics || {};
     const scaling = capacity.instance_scaling || {};
@@ -420,6 +441,16 @@ const CapacityPanel: React.FC<{ capacity?: Record<string, any> }> = ({ capacity 
         <Card>
             <CardHeader title="Capacity Transparency" subtitle="Actual runtime vs configured capacity." />
             <CardBody className="space-y-4">
+                {dbConnections?.warning ? (
+                    <div className="p-3 rounded-xl border border-rose-200 bg-rose-50 text-rose-800 text-sm">
+                        <div className="font-semibold">DB connection capacity warning</div>
+                        <div>{dbConnections.warning_reason || 'Estimated DB connections are close to max_connections.'}</div>
+                        <div className="text-[11px] text-rose-700 mt-1">
+                            estimated_total={dbConnections.estimated_total ?? '—'} · max_connections={dbConnections.max_connections ?? '—'} ·
+                            pool_per_worker={dbConnections.pool_max_per_worker ?? '—'} · processes_per_instance={dbConnections.processes_per_instance ?? '—'}
+                        </div>
+                    </div>
+                ) : null}
                 {warnings.length > 0 && (
                     <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-sm">
                         {warnings.map((w, i) => (
@@ -658,6 +689,7 @@ const MonitoringDashboard: React.FC = () => {
     const [purgeChatQueues, setPurgeChatQueues] = useState(false);
     const [resettingThrottling, setResettingThrottling] = useState(false);
     const [resetThrottlingMessage, setResetThrottlingMessage] = useState<string | null>(null);
+    const [clearCacheMessage, setClearCacheMessage] = useState<string | null>(null);
 
     const [burstUsers, setBurstUsers] = useState<BurstUsersResponse | null>(null);
     const [burstError, setBurstError] = useState<string | null>(null);
@@ -684,6 +716,7 @@ const MonitoringDashboard: React.FC = () => {
     const [plannerAvgProcessing, setPlannerAvgProcessing] = useState('25');
     const [plannerInstances, setPlannerInstances] = useState('1');
     const plannerInitializedRef = useRef(false);
+    const gatewayCacheKeyPattern = `${tenant || '<tenant>'}:${project || '<project>'}:kdcube:config:gateway:current`;
 
     const refreshAll = useCallback(async () => {
         setLoading(true);
@@ -741,7 +774,7 @@ const MonitoringDashboard: React.FC = () => {
             project,
             guarded_rest_patterns: cfg.guarded_rest_patterns || [],
             service_capacity: {
-                concurrent_per_process: capacityCfg.configured_concurrent_per_process ?? 5,
+                concurrent_requests_per_process: capacityCfg.configured_concurrent_per_process ?? 5,
                 processes_per_instance: capacityCfg.configured_processes_per_instance ?? 1,
                 avg_processing_time_seconds: capacityCfg.configured_avg_processing_time_seconds ?? (cfg.service_capacity?.avg_processing_time_seconds ?? 25),
             },
@@ -843,7 +876,7 @@ const MonitoringDashboard: React.FC = () => {
             tenant,
             project,
             service_capacity: {
-                concurrent_per_process: Math.max(1, Math.round(planner.concurrentPerProcess || 1)),
+                concurrent_requests_per_process: Math.max(1, Math.round(planner.concurrentPerProcess || 1)),
                 processes_per_instance: Math.max(1, Math.round(planner.processesPerInstance || 1)),
                 avg_processing_time_seconds: Math.max(1, Math.round(planner.avgSeconds || 25)),
             },
@@ -913,6 +946,18 @@ const MonitoringDashboard: React.FC = () => {
             await refreshAll();
         } catch (e: any) {
             setActionMessage(e?.message || 'Reset failed');
+        }
+    };
+
+    const handleClearCache = async () => {
+        try {
+            const payload = { tenant, project };
+            const res = await api.clearGatewayConfigCache(payload);
+            const key = res?.result?.key;
+            const deleted = res?.result?.deleted ?? 0;
+            setClearCacheMessage(`Cleared cache key ${key || '(unknown)'} (deleted=${deleted}). Restart to re-apply env/GATEWAY_CONFIG_JSON.`);
+        } catch (e: any) {
+            setClearCacheMessage(e?.message || 'Clear cache failed');
         }
     };
 
@@ -1267,14 +1312,17 @@ const MonitoringDashboard: React.FC = () => {
                     </CardBody>
                 </Card>
 
-                <CapacityPanel capacity={system?.capacity_transparency} />
+                <CapacityPanel capacity={system?.capacity_transparency} dbConnections={system?.db_connections} />
 
                 <Card>
                     <CardHeader
                         title="Capacity Planner (Rough)"
-                        subtitle="Estimate burst limits and compare expected peak traffic to capacity. Uses CHAT_APP_PARALLELISM and MAX_CONCURRENT_CHATS. Assumes all instances share the same config."
+                        subtitle="Estimate burst limits and compare expected peak traffic to capacity. Uses gateway config service_capacity fields."
                     />
                     <CardBody className="space-y-4">
+                        <div className="text-xs text-gray-500">
+                            Source: `GATEWAY_CONFIG_JSON.service_capacity.*` (or admin update). Assumes all instances in the selected tenant/project share the same config.
+                        </div>
                         <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
                             <Input label="Admins" value={plannerAdmins} onChange={(e) => setPlannerAdmins(e.target.value)} />
                             <Input label="Registered" value={plannerRegistered} onChange={(e) => setPlannerRegistered(e.target.value)} />
@@ -1285,8 +1333,8 @@ const MonitoringDashboard: React.FC = () => {
                         <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
                             <Input label="Page-load window (s)" value={plannerPageWindow} onChange={(e) => setPlannerPageWindow(e.target.value)} />
                             <Input label="Safety factor" value={plannerSafety} onChange={(e) => setPlannerSafety(e.target.value)} />
-                            <Input label="Concurrent / processor (MAX_CONCURRENT_CHATS)" value={plannerConcurrentPerProcess} onChange={(e) => setPlannerConcurrentPerProcess(e.target.value)} />
-                            <Input label="Workers / instance (CHAT_APP_PARALLELISM)" value={plannerProcessesPerInstance} onChange={(e) => setPlannerProcessesPerInstance(e.target.value)} />
+                            <Input label="Concurrent / processor (service_capacity.concurrent_requests_per_process)" value={plannerConcurrentPerProcess} onChange={(e) => setPlannerConcurrentPerProcess(e.target.value)} />
+                            <Input label="Workers / instance (service_capacity.processes_per_instance)" value={plannerProcessesPerInstance} onChange={(e) => setPlannerProcessesPerInstance(e.target.value)} />
                             <Input label="Instances" value={plannerInstances} onChange={(e) => setPlannerInstances(e.target.value)} />
                             <Input label="Avg processing (s)" value={plannerAvgProcessing} onChange={(e) => setPlannerAvgProcessing(e.target.value)} />
                         </div>
@@ -1489,6 +1537,16 @@ const MonitoringDashboard: React.FC = () => {
                             <Button onClick={handleUpdate}>Update</Button>
                             <Button variant="danger" onClick={handleReset}>Reset to Env</Button>
                             {actionMessage && <span className="text-sm text-gray-600">{actionMessage}</span>}
+                        </div>
+
+                        <div className="text-xs text-amber-700">
+                            Note: changing `service_capacity.processes_per_instance` requires a service restart to affect worker count.
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-3">
+                            <Button variant="secondary" onClick={handleClearCache}>Clear Cached Config</Button>
+                            <span className="text-xs text-gray-500">Cache key: {gatewayCacheKeyPattern}</span>
+                            {clearCacheMessage && <span className="text-xs text-gray-600">{clearCacheMessage}</span>}
                         </div>
 
                         {validationResult && (

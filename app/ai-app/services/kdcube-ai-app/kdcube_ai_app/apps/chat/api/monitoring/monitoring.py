@@ -11,14 +11,14 @@ from fastapi import Depends
 from fastapi.responses import JSONResponse
 
 from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure, INSTANCE_ID, get_fastapi_adapter, require_auth, \
-    reset_circuit_breaker, get_circuit_breaker_stats
+    reset_circuit_breaker, get_circuit_breaker_stats, get_pg_pool
 from kdcube_ai_app.apps.middleware.gateway import CircuitBreakersResponse, CircuitBreakerSummaryResponse, \
     CircuitBreakerStatusResponse
 from kdcube_ai_app.auth.AuthManager import RequireUser, RequireRoles
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.infra.availability.health_and_heartbeat import get_expected_services
 from kdcube_ai_app.infra.gateway.circuit_breaker import CircuitState
-from kdcube_ai_app.infra.gateway.config import GatewayConfigurationManager
+from kdcube_ai_app.infra.gateway.config import GatewayConfigurationManager, get_gateway_config
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
@@ -32,6 +32,32 @@ from typing import Optional, Callable, List, Dict, Any, Union
 import logging
 
 logger = logging.getLogger("Monitoring.API")
+
+_DB_MAX_CONNECTIONS_CACHE: dict[str, Any] = {"value": None, "ts": 0.0, "source": None}
+_DB_MAX_CONNECTIONS_TTL_SEC = 60
+
+
+async def _resolve_db_max_connections() -> tuple[Optional[int], Optional[str]]:
+    env_val = os.getenv("PG_MAX_CONNECTIONS") or os.getenv("POSTGRES_MAX_CONNECTIONS") or os.getenv("DB_MAX_CONNECTIONS")
+    if env_val:
+        try:
+            return int(env_val), "env"
+        except Exception:
+            pass
+    now = time.time()
+    if _DB_MAX_CONNECTIONS_CACHE["value"] is not None and now - _DB_MAX_CONNECTIONS_CACHE["ts"] < _DB_MAX_CONNECTIONS_TTL_SEC:
+        return _DB_MAX_CONNECTIONS_CACHE["value"], _DB_MAX_CONNECTIONS_CACHE["source"]
+    try:
+        pool = await get_pg_pool()
+        async with pool.acquire() as conn:
+            val = await conn.fetchval("SHOW max_connections;")
+            if val is not None:
+                value = int(val)
+                _DB_MAX_CONNECTIONS_CACHE.update({"value": value, "ts": now, "source": "query"})
+                return value, "query"
+    except Exception as e:
+        logger.warning("Failed to fetch DB max_connections: %s", e)
+    return None, None
 
 # Create router
 router = APIRouter()
@@ -529,6 +555,28 @@ async def get_system_monitoring(
         circuit_breakers = await get_circuit_breaker_status()
 
         # Enhanced response with detailed capacity breakdown
+        # DB connection capacity warnings (optional)
+        db_max_connections, db_max_source = await _resolve_db_max_connections()
+        cfg_capacity = gateway_status["gateway_configuration"]["service_capacity"]
+        pool_max_per_worker = int(os.getenv("PGPOOL_MAX_SIZE") or cfg_capacity.get("concurrent_requests_per_process") or 0)
+        processes_per_instance = int(cfg_capacity.get("processes_per_instance") or 1)
+        estimated_per_instance = pool_max_per_worker * processes_per_instance
+        instance_count = queue_data["capacity_context"]["instance_count"] or 1
+        estimated_total = estimated_per_instance * instance_count
+        db_warning = False
+        db_warning_reason = None
+        if db_max_connections:
+            if estimated_total > db_max_connections:
+                db_warning = True
+                db_warning_reason = (
+                    f"Estimated DB connections ({estimated_total}) exceed max_connections ({db_max_connections})."
+                )
+            elif estimated_total > int(db_max_connections * 0.8):
+                db_warning = True
+                db_warning_reason = (
+                    f"Estimated DB connections ({estimated_total}) are >80% of max_connections ({db_max_connections})."
+                )
+
         response_data = {
             "instances": instances_data,
             "global_stats": {
@@ -655,6 +703,18 @@ async def get_system_monitoring(
 
             # Configuration details
             "configuration": _extract_detailed_config_for_frontend(capacity_transparency, gateway_status),
+
+            "db_connections": {
+                "max_connections": db_max_connections,
+                "source": db_max_source,
+                "pool_max_per_worker": pool_max_per_worker,
+                "processes_per_instance": processes_per_instance,
+                "estimated_per_instance": estimated_per_instance,
+                "instance_count": instance_count,
+                "estimated_total": estimated_total,
+                "warning": db_warning,
+                "warning_reason": db_warning_reason,
+            },
 
             "timestamp": current_time,
             "redis_info": {
@@ -835,6 +895,29 @@ async def reset_gateway_config(
         "updated_metrics": new_metrics
     }
 
+
+@router.post("/admin/gateway/clear-cache")
+async def clear_gateway_config_cache_endpoint(
+        payload: Dict[str, Any],
+        session: UserSession = Depends(require_auth(
+            RequireUser(),
+            RequireRoles("kdcube:role:super-admin")
+        ))
+):
+    """
+    Clear cached gateway config for a tenant/project.
+    Optional payload: {"tenant": "...", "project": "..."}.
+    """
+    gateway_adapter = get_fastapi_adapter()
+    config_manager = GatewayConfigurationManager(gateway_adapter)
+    payload = payload or {}
+    result = await config_manager.clear_cached_config(**payload)
+    return {
+        "success": True,
+        "message": "Gateway config cache cleared (next restart falls back to env/GATEWAY_CONFIG_JSON)",
+        "result": result,
+    }
+
 @router.get("/debug/capacity-calculation")
 async def debug_capacity_calculation(
         session: UserSession = Depends(auth_without_pressure())
@@ -960,13 +1043,17 @@ async def debug_capacity_calculation(
 @router.get("/debug/environment")
 async def debug_environment(session: UserSession = Depends(auth_without_pressure())):
     """Debug environment variables affecting capacity"""
+    config = get_gateway_config()
     return {
-        "MAX_CONCURRENT_CHAT": os.getenv("MAX_CONCURRENT_CHAT", "5"),
-        "MAX_CONCURRENT_CHATS": os.getenv("MAX_CONCURRENT_CHATS", ""),
-        "CHAT_APP_PARALLELISM": os.getenv("CHAT_APP_PARALLELISM", "1"),
-        "GATEWAY_FORCE_SERVICE_CAPACITY_FROM_ENV": os.getenv("GATEWAY_FORCE_SERVICE_CAPACITY_FROM_ENV", "1"),
+        "service_capacity": {
+            "concurrent_requests_per_process": config.service_capacity.concurrent_requests_per_process,
+            "processes_per_instance": config.service_capacity.processes_per_instance,
+            "concurrent_requests_per_instance": config.service_capacity.concurrent_requests_per_instance,
+            "avg_processing_time_seconds": config.service_capacity.avg_processing_time_seconds,
+        },
         "AVG_PROCESSING_TIME_SECONDS": os.getenv("AVG_PROCESSING_TIME_SECONDS", "25.0"),
         "GATEWAY_PROFILE": os.getenv("GATEWAY_PROFILE", "development"),
         "INSTANCE_ID": os.getenv("INSTANCE_ID", "default-instance"),
+        "GATEWAY_CONFIG_JSON_SET": bool(os.getenv("GATEWAY_CONFIG_JSON")),
         "all_env_vars": {k: v for k, v in os.environ.items() if any(keyword in k.upper() for keyword in ["CHAT", "CONCURRENT", "PARALLEL", "GATEWAY", "CAPACITY"])}
     }

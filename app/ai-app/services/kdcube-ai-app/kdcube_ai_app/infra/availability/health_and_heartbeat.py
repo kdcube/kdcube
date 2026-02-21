@@ -447,10 +447,14 @@ class ServiceConfig:
 
 def get_expected_services(INSTANCE_ID) -> Dict[str, List[ServiceConfig]]:
     """
-    Define expected services per instance based on environment variables
+    Define expected services per instance based on gateway config and environment variables
     """
-    # Get configuration from environment
-    chat_workers = int(os.getenv("CHAT_APP_PARALLELISM", "1"))
+    # Get configuration from gateway config (fallback to 1 if unavailable)
+    try:
+        from kdcube_ai_app.infra.gateway.config import get_gateway_config
+        chat_workers = max(1, int(get_gateway_config().service_capacity.processes_per_instance or 1))
+    except Exception:
+        chat_workers = 1
     kb_workers = int(os.getenv("KB_PARALLELISM", "1"))
     orchestrator_workers = int(os.getenv("DRAMATIQ_WORKERS", "4"))
 

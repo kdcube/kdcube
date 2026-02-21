@@ -68,8 +68,8 @@ product‑level chatbot capabilities.
 
 | Setting                 | Default | Purpose | Used by                                                       |
 |-------------------------|---------| --- |---------------------------------------------------------------|
-| `CHAT_APP_PARALLELISM`  | `1`     | Number of worker processes per instance | `infra/gateway/config.py`, monitoring/heartbeat expectations  |
-| `MAX_CONCURRENT_CHAT`   | `5`     | Max concurrent chat tasks per processor | `apps/chat/processor.py`                                      |
+| `GATEWAY_CONFIG_JSON.service_capacity.processes_per_instance`  | `1`     | Number of worker processes per instance | `infra/gateway/config.py`, monitoring/heartbeat expectations  |
+| `GATEWAY_CONFIG_JSON.service_capacity.concurrent_requests_per_process`   | `5`     | Max concurrent chat tasks per processor | `apps/chat/processor.py`                                      |
 | `CHAT_TASK_TIMEOUT_SEC` | `600`   | Per‑task timeout (seconds) | `apps/chat/processor.py`                                      |
 | `MAX_QUEUE_SIZE`        | `0`     | Hard queue size limit (0 = disabled) | `infra/gateway/backpressure.py`                               |
 

@@ -382,12 +382,13 @@ def get_heartbeats_mgr_and_middleware(service_type: str = "chat",
 
 def get_external_request_processor(middleware, chat_handler, app):
     from kdcube_ai_app.apps.chat.processor import EnhancedChatRequestProcessor
+    gateway_config = get_gateway_config()
     return EnhancedChatRequestProcessor(
         middleware,
         chat_handler,                     # agentic workflow entrypoint
         relay=app.state.chat_comm,      # use the Redis relay communicator
         conversation_ctx=app.state.conversation_browser,
-        max_concurrent=5,
+        max_concurrent=gateway_config.service_capacity.concurrent_requests_per_process,
         task_timeout_sec=900,
     )
 
@@ -509,6 +510,28 @@ async def get_pg_pool():
         return _pg_pool
 
     import asyncpg, json
+    pool_kwargs = {}
+    min_size_env = os.getenv("PGPOOL_MIN_SIZE")
+    max_size_env = os.getenv("PGPOOL_MAX_SIZE")
+    if min_size_env is not None:
+        pool_kwargs["min_size"] = int(min_size_env)
+    if max_size_env is not None:
+        pool_kwargs["max_size"] = int(max_size_env)
+
+    if "max_size" not in pool_kwargs:
+        try:
+            from kdcube_ai_app.infra.gateway.config import get_gateway_config
+            cap = int(get_gateway_config().service_capacity.concurrent_requests_per_process or 5)
+            pool_kwargs["max_size"] = max(1, cap)
+        except Exception:
+            pool_kwargs["max_size"] = 5
+    if "min_size" not in pool_kwargs:
+        pool_kwargs["min_size"] = 0
+    if pool_kwargs["max_size"] < pool_kwargs["min_size"]:
+        pool_kwargs["max_size"] = pool_kwargs["min_size"]
+
+    logger.info("PG pool sizing: %s (set PGPOOL_MIN_SIZE/PGPOOL_MAX_SIZE to override)", pool_kwargs)
+
     async def _init_conn(conn: asyncpg.Connection):
         # Encode/decode json & jsonb as Python dicts automatically
         await conn.set_type_codec('json',  encoder=json.dumps, decoder=json.loads, schema='pg_catalog')
@@ -522,6 +545,7 @@ async def get_pg_pool():
         database=_settings.PGDATABASE,
         ssl=_settings.PGSSL,
         init=_init_conn,
+        **pool_kwargs,
     )
     return _pg_pool
 

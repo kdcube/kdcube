@@ -53,7 +53,7 @@ class EnhancedChatRequestProcessor:
         self.middleware = middleware
         self.chat_handler = chat_handler
         self.process_id = process_id or os.getpid()
-        self.max_concurrent = int(os.getenv("MAX_CONCURRENT_CHAT", str(max_concurrent or 5)))
+        self.max_concurrent = int(max_concurrent or 5)
         self.task_timeout_sec = int(os.getenv("CHAT_TASK_TIMEOUT_SEC", str(task_timeout_sec or 600)))
         self.lock_ttl_sec = lock_ttl_sec
         self.lock_renew_sec = lock_renew_sec

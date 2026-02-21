@@ -136,8 +136,11 @@ Key environment variables:
 - `GATEWAY_CONFIG_JSON` (full config override; recommended)
 - `REDIS_URL`
 - `INSTANCE_ID`, `TENANT_ID`, `DEFAULT_PROJECT_NAME`
-- `MAX_CONCURRENT_CHAT`, `CHAT_APP_PARALLELISM`
-- `AVG_PROCESSING_TIME_SECONDS`
+- `AVG_PROCESSING_TIME_SECONDS` (default if omitted from `GATEWAY_CONFIG_JSON.service_capacity`)
+
+Capacity is configured via `GATEWAY_CONFIG_JSON.service_capacity`:
+- `concurrent_requests_per_process`
+- `processes_per_instance`
 
 Note:
 

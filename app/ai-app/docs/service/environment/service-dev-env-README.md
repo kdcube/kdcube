@@ -21,10 +21,9 @@
 | `CB_RELAY_IDENTITY` | Redis pubsub identity | — | `deployment/docker/devenv/sample_env/.env.backend` | chat/worker |
 | `DRAMATIQ_PROCESSES` | Dramatiq worker process count | — | `deployment/docker/devenv/sample_env/.env.backend` | worker |
 | `MAX_QUEUE_SIZE` | Hard cap for enqueue | — | `deployment/docker/devenv/sample_env/.env.backend` | chat |
-| `MAX_CONCURRENT_CHAT` | Max concurrent tasks per processor | — | `deployment/docker/devenv/sample_env/.env.backend` | chat |
+| `GATEWAY_CONFIG_JSON` | Full gateway config override. Set `service_capacity.processes_per_instance` and `service_capacity.concurrent_requests_per_process` here. | — | `deployment/docker/devenv/sample_env/.env.backend` | chat |
 | `CHAT_TASK_TIMEOUT_SEC` | Per-task timeout (seconds) | — | `deployment/docker/devenv/sample_env/.env.backend` | chat |
 | `KB_PARALLELISM` | KB service parallelism | — | `deployment/docker/devenv/sample_env/.env.backend` | kb |
-| `CHAT_APP_PARALLELISM` | Chat app process count. When `web_app.py` runs directly, it spawns this many Uvicorn workers. Total concurrency ≈ `MAX_CONCURRENT_CHAT` × `CHAT_APP_PARALLELISM`. | `4` | `deployment/docker/devenv/sample_env/.env.backend` | chat |
 | `UVICORN_RELOAD` | Enable Uvicorn auto-reload for `web_app.py` (dev only). Avoid with multi-worker in production. | `0` | `deployment/docker/devenv/sample_env/.env.backend` | chat |
 | `HEARTBEAT_INTERVAL` | Heartbeat interval (seconds) | — | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
 | `OPENAI_API_KEY` | OpenAI API key | — | `deployment/docker/devenv/sample_env/.env.backend` | chat/kb |
@@ -112,4 +111,4 @@
 
 **Notes**
 These variables must be present in the local process environment (shell or IDE run config) for dev runs. Docker-only `.env` files are not automatically loaded by PyCharm.
-`CHAT_APP_PARALLELISM` now controls Uvicorn worker count when you run `web_app.py` directly (IDE/CLI). For CLI `uvicorn ...`, set `--workers` explicitly or keep this env and use the Python entrypoint.
+Uvicorn worker count is derived from `GATEWAY_CONFIG_JSON.service_capacity.processes_per_instance` when you run `web_app.py` directly (IDE/CLI). For CLI `uvicorn ...`, set `--workers` explicitly or keep using the Python entrypoint so the config is applied consistently.

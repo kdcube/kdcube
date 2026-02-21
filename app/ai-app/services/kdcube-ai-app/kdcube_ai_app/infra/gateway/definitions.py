@@ -4,7 +4,6 @@
 # infra/gateway/definitions.py
 import time
 from dataclasses import dataclass
-import os
 import logging
 import json
 
@@ -499,7 +498,7 @@ class ServiceCapacity:
 
     def __post_init__(self):
         if self.processes_per_instance is None:
-            self.processes_per_instance = int(os.getenv("CHAT_APP_PARALLELISM", "1"))
+            self.processes_per_instance = 1
 
     @property
     def concurrent_requests_per_instance(self) -> int:
@@ -560,9 +559,9 @@ class CapacityBasedBackpressureConfig:
 def get_config_for_chat_service():
     """Configuration for AI chat service with proper multi-process calculation"""
     return ServiceCapacity(
-        concurrent_requests_per_process=int(os.getenv("MAX_CONCURRENT_CHAT", "5")),
-        avg_processing_time_seconds=float(os.getenv("AVG_PROCESSING_TIME_SECONDS", "25.0")),
-        processes_per_instance=int(os.getenv("CHAT_APP_PARALLELISM", "1"))
+        concurrent_requests_per_process=5,
+        avg_processing_time_seconds=25.0,
+        processes_per_instance=1
     )
 
 def get_config_for_api_service():

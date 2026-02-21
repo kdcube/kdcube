@@ -58,6 +58,19 @@ Notes:
 - “All sessions” clears rate limits for all sessions in the selected tenant/project.
 - “Purge chat queues” drops pending tasks and should be used only for recovery.
 
+## Gateway config source (ops critical)
+On startup, the service loads gateway config in this order:
+1. Redis cache for the selected tenant/project (if present)
+2. Env defaults / `GATEWAY_CONFIG_JSON`
+
+In the **Gateway Configuration** card:
+- **Reset to Env**: writes the env‑derived config into Redis (overrides cache on all instances).
+- **Clear Cached Config**: deletes the Redis key so the next restart falls back to env/`GATEWAY_CONFIG_JSON`.
+
+Important:
+- Changing `service_capacity.processes_per_instance` **requires a service restart** to affect worker count.
+- Logs will show which source was applied at startup (env vs cache).
+
 ## Redis Browser (Control Plane)
 Use the quick prefix buttons to inspect keys fast:
 1. Queues: `<tenant>:<project>:kdcube:chat:prompt:queue` (list, includes `:paid`)
@@ -105,6 +118,17 @@ Examples:
 2. Check `queue_wait_ms` logs and Redis queue size.
 3. Confirm SSE stream uses the same `stream_id` as `/sse/chat`.
 4. Check for rejected enqueues (queue pressure, no healthy processes).
+
+## DB connection warning (admin UI)
+The Capacity panel shows a red warning when estimated DB connections exceed (or near) `max_connections`.
+
+How it is calculated:
+- `pool_max_per_worker` = `PGPOOL_MAX_SIZE` if set, otherwise `service_capacity.concurrent_requests_per_process`
+- `estimated_per_instance` = `pool_max_per_worker × processes_per_instance`
+- `estimated_total` = `estimated_per_instance × instance_count`
+
+Set one of these envs if you want to pin the DB limit without querying:
+- `PG_MAX_CONNECTIONS` or `POSTGRES_MAX_CONNECTIONS` or `DB_MAX_CONNECTIONS`
 
 ## Useful endpoints
 Use these for fast diagnostics:
