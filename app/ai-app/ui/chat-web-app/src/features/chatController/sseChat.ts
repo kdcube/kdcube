@@ -136,7 +136,7 @@ class SSEChat extends ChatBase {
         url.searchParams.set("stream_id", this._streamId);
 
         const makeHeaders = (base?: HeadersInit): Headers => {
-            return this.addTZHeader(this.addIdHeader(this.addAuthHeader(base)));
+            return this.addTZHeader(this.addCredentialsHeader(base));
         };
 
         if (attachments && attachments.length) {
@@ -170,7 +170,7 @@ class SSEChat extends ChatBase {
 
         const res = await fetch(url, {
             method: "POST",
-            headers: this.addAuthHeader([["Content-Type", "application/json"]]),
+            headers: this.addCredentialsHeader([["Content-Type", "application/json"]]),
             credentials: "include",
             body: JSON.stringify({conversation_id: conversationId, stream_id: this._streamId }),
         });

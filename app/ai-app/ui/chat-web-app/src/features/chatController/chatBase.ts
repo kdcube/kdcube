@@ -269,6 +269,14 @@ export abstract class ChatBase {
         this._idToken = idToken;
     }
 
+    public get idHeaderName(): string | null | undefined {
+        return this._idHeaderName;
+    }
+
+    public set idHeaderName(value: string | null) {
+        this._idHeaderName = value;
+    }
+
     public set tenant(tenant: string | undefined) {
         this._tenant = tenant;
     }
@@ -315,9 +323,13 @@ export abstract class ChatBase {
 
     protected addIdHeader(base?: HeadersInit): Headers {
         const h = new Headers(base);
-        if (this._idToken && this._idHeaderName) h.set("id_token", this._idHeaderName);
+        if (this._idToken && this._idHeaderName) h.set(this._idHeaderName, this._idToken);
         return h;
     };
+
+    protected addCredentialsHeader(base?: HeadersInit): Headers {
+        return this.addIdHeader(this.addAuthHeader(base));
+    }
 
     protected addTZHeader(base?: HeadersInit): Headers {
         const h = new Headers(base);

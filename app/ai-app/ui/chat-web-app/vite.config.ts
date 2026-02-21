@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from "@tailwindcss/vite";
 import basicSsl from '@vitejs/plugin-basic-ssl'
 
+// @ts-expect-error because reasons
 export default defineConfig(({mode}) => {
     const env = loadEnv(mode, process.cwd(), '')
     const apiBase = env.VITE_APP_API_BASE ?? 'http://localhost:8010/'

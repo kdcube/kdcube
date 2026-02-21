@@ -1,6 +1,5 @@
 import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
-import {RootState} from "../../app/store.ts";
-import {selectAuthToken} from "../auth/authSlice.ts";
+import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 
 export interface Question {
     type: "question";
@@ -20,12 +19,8 @@ export type QuestionsPanelItem = Question | QuestionCategory;
 export const suggestedQuestionsApiSlice = createApi({
     reducerPath: 'suggestedQuestions',
     baseQuery: fetchBaseQuery({
-        prepareHeaders(headers, {getState}) {
-            const token = selectAuthToken(getState() as RootState)
-            if (token) {
-                headers.set('authorization', `Bearer ${token}`)
-            }
-            return headers
+        prepareHeaders(headers) {
+            return appendDefaultCredentialsHeader(headers) as Headers;
         }
     }),
     tagTypes: ['suggestedQuestions'],

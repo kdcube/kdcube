@@ -1,4 +1,4 @@
-import {appendCredentials} from "../../app/api/utils.ts";
+import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 import {createSlice} from "@reduxjs/toolkit";
 import {createAppAsyncThunk} from "../../app/withTypes.ts";
 import {RootState} from "../../app/store.ts";
@@ -67,13 +67,11 @@ const initialState: PostsState = {
     error: null
 }
 
-export const fetchUserProfile = createAppAsyncThunk('userProfile/fetch', async (_unused, {getState}) => {
+export const fetchUserProfile = createAppAsyncThunk('userProfile/fetch', async () => {
 
     const response = await fetch(`${chatAPIBasePath}/profile`, {
         method: "GET",
-        headers: appendCredentials(getState().auth.authToken, [
-            ["Content-Type", "application/json"]
-        ]),
+        headers: appendDefaultCredentialsHeader({"Content-Type":"application/json"}),
     })
 
     return response.json()

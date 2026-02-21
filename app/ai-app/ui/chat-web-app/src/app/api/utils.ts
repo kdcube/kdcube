@@ -1,25 +1,37 @@
 import {handleContentDownload} from "../../components/shared.ts";
-import {getDefaultAuthToken} from "../../features/auth/helpers.ts";
+import {getDefaultAuthToken, getDefaultIdToken, getIdTokenHeaderName} from "../../features/auth/helpers.ts";
 import {chatAPIBasePath} from "../../BuildConfig.ts";
 
-export function appendCredentials(accessToken: string | null | undefined, headers?: HeadersInit) {
+export function appendHeader(name: string, value: string, headers?: HeadersInit) {
     if (!headers) {
         headers = {};
     }
-    if (accessToken) {
-        if (headers instanceof Headers) {
-            headers.set("Authorization", `Bearer ${accessToken}`);
-        } else if (headers instanceof Array) {
-            headers.push(["Authorization", `Bearer ${accessToken}`]);
-        } else {
-            headers["Authorization"] = `Bearer ${accessToken}`
-        }
+    if (headers instanceof Headers) {
+        headers.set(name, value);
+    } else if (headers instanceof Array) {
+        headers.push([name, value]);
+    } else {
+        headers[name] = value
     }
     return headers;
 }
 
-export function appendDefaultCredentialsHeader(headers?: HeadersInit) {
-    return appendCredentials(getDefaultAuthToken(), headers);
+export function appendCredentials(headers?: HeadersInit, accessToken?: string | null | undefined, idToken?: string | null) {
+    if (!headers) {
+        headers = {};
+    }
+    if (accessToken) {
+        headers = appendHeader("Authorization", `Bearer ${accessToken}`, headers)
+    }
+    const headerName = getIdTokenHeaderName();
+    if (idToken && headerName) {
+        headers = appendHeader(headerName, idToken, headers)
+    }
+    return headers;
+}
+
+export function appendDefaultCredentialsHeader(headers?: HeadersInit, overrideAccessToken?: string | null, overrideIddToken?: string | null) {
+    return appendCredentials(headers, overrideAccessToken ?? getDefaultAuthToken(), overrideIddToken ?? getDefaultIdToken());
 }
 
 export const getResourceByRN = async (rn: string) => {
@@ -34,8 +46,8 @@ export const getResourceByRN = async (rn: string) => {
     return await res.json();
 };
 
-export const downloadBlob = async (path: string, accessToken?: string | null) => {
-    const headers = appendCredentials(accessToken === undefined ? getDefaultAuthToken() : accessToken);
+export const downloadBlob = async (path: string, accessToken?: string | null, idToken?: string | null) => {
+    const headers = appendDefaultCredentialsHeader({}, accessToken, idToken);
     const res = await fetch(
         `${chatAPIBasePath}${path}`,
         {headers}

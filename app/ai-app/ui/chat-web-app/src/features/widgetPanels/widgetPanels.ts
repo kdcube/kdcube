@@ -1,5 +1,4 @@
 import {createApi, fetchBaseQuery} from "@reduxjs/toolkit/query/react";
-import {RootState} from "../../app/store.ts";
 import {
     AIBundlesResponse,
     ConversationsBrowserResponse,
@@ -7,8 +6,7 @@ import {
     GatewayResponse,
     RedisBrowserResponse
 } from "./types.ts";
-import {selectAuthToken, selectIdToken} from "../auth/authSlice.ts";
-import {selectIdTokenHeaderName} from "../chat/chatSettingsSlice.ts";
+import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 
 const EconomicsTag = "economics"
 const AIBundlesTag = "ai_bundles"
@@ -24,18 +22,8 @@ export interface GetWidgetParams {
 export const widgetPanelsApiSlice = createApi({
     reducerPath: 'widgetPanels',
     baseQuery: fetchBaseQuery({
-        prepareHeaders(headers, {getState}) {
-            const state = getState() as RootState
-            const token = selectAuthToken(state)
-            if (token) {
-                headers.set('Authorization', `Bearer ${token}`)
-            }
-            const idToken = selectIdToken(state)
-            const idTokenHeaderName = selectIdTokenHeaderName(state)
-            if (idToken && idTokenHeaderName) {
-                headers.set(idTokenHeaderName, idToken)
-            }
-            return headers
+        prepareHeaders(headers) {
+            return appendDefaultCredentialsHeader(headers) as Headers;
         }
     }),
     tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag],

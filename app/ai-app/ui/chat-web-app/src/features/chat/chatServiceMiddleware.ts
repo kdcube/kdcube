@@ -24,7 +24,7 @@ import {fetchUserProfile, selectUserProfile} from "../profile/profile.ts";
 import SSEChat from "../chatController/sseChat.ts";
 import {UserAttachmentDescription, UserMessageRequest} from "./chatTypes.ts";
 import {selectAuthToken, selectIdToken, setCredentials} from "../auth/authSlice.ts";
-import {selectProject, selectTenant} from "./chatSettingsSlice.ts";
+import {selectIdTokenHeaderName, selectProject, selectTenant} from "./chatSettingsSlice.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -191,6 +191,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             transport.eventHandlers = eventHandlers;
             transport.authToken = selectAuthToken(state);
             transport.idToken = selectIdToken(state);
+            transport.idHeaderName = selectIdTokenHeaderName(state);
             transport.connect(sessionId);
         }
 
