@@ -31,7 +31,7 @@ export const suggestedQuestionsApiSlice = createApi({
         }>({
             query: ({tenant, project}) => {
                 return {
-                    url: `/integrations/bundles/${tenant}/${project}/operations/suggestions`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/suggestions`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]

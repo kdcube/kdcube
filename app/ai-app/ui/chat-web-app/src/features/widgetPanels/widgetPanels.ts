@@ -34,7 +34,7 @@ export const widgetPanelsApiSlice = createApi({
         }>({
             query: ({tenant, project}: GetWidgetParams) => {
                 return {
-                    url: `/integrations/bundles/${tenant}/${project}/operations/control_plane`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/control_plane`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]
@@ -53,7 +53,7 @@ export const widgetPanelsApiSlice = createApi({
         }>({
             query: ({tenant, project}: GetWidgetParams) => {
                 return {
-                    url: `/integrations/bundles/${tenant}/${project}/operations/ai_bundles`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/ai_bundles`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]
@@ -72,7 +72,7 @@ export const widgetPanelsApiSlice = createApi({
         }>({
             query: ({tenant, project}: GetWidgetParams) => {
                 return {
-                    url: `/integrations/bundles/${tenant}/${project}/operations/svc_gateway`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/svc_gateway`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]
@@ -91,7 +91,7 @@ export const widgetPanelsApiSlice = createApi({
         }>({
             query: ({tenant, project}: GetWidgetParams) => {
                 return {
-                    url: `/integrations/bundles/${tenant}/${project}/operations/conversation_browser`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/conversation_browser`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]
@@ -110,7 +110,7 @@ export const widgetPanelsApiSlice = createApi({
         }>({
             query: ({tenant, project}: GetWidgetParams) => {
                 return {
-                    url: `/integrations/bundles/${tenant}/${project}/operations/redis_browser`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/redis_browser`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]
