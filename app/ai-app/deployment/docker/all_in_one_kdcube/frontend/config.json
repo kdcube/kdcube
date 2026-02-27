@@ -1,0 +1,8 @@
+{
+  "auth": {
+    "authType": "none"
+  },
+  "tenant": "TENANT_ID",
+  "project": "PROJECT_ID",
+  "routesPrefix": "/chatbot"
+}

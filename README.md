@@ -1,171 +1,204 @@
-# KDCube Agentic Prototyping Platform (KDCube APP)
+# KDCube — Agentic AI Platform & SDK
 
-KDCube APP is a **self‑hosted platform + SDK** for building and operating **agentic chat applications and copilots**.
-It ships the full stack: streaming runtime, tool execution, memory/context, economics, and a hosting platform
-for multi‑tenant production deployment.
+KDCube is a **self‑hosted multi‑tenant, multi‑user platform + SDK** for building **custom AI assistants, copilots, and agentic apps**.
+**Run a copilot for your customers, not just for yourself** — use the built‑in ReAct workflow or bring your own.
+It provides the **runtime, streaming protocol, tools, memory, and operations stack** so you can ship AI products with production‑grade reliability.
 
----
-
-## Out of the box
-
-A versatile assistant stack that already supports:
-
-- **Streaming chat** (REST / SSE / Socket.IO) with steps/deltas/status (and many more) events and role-based streaming filtering
-- **Tool execution** (local tools + MCP tools) and skills (built in and custom)
-- **Code generation + code execution** with isolated runtime
-- **ReAct strategic solver agent** operating skills acquisition and exploitation, tools and code execution. Adaptive agents selection, planning, and tool-first/code-first flows.
-- **Web Search** multi-backend agent
-- **Citations subsystem** (structured citations with sources tracking and in-stream rendering). We do not force the llm to repeat the links or embedded files paths. All produced data is connected to sources used, if any.
-- **Memory & context** (retrieval, turn memories, conversation memories, user level memories, signals, reconciliation)
-- **Storage and cache**
-- **Attachments & artifacts** (upload + generated files + secutirty checks + quality assessment + index + storage)
-- **Economics & accounting** (budgets, rate limits, usage reporting)
-- **Dynamic UI widgets** (control plane: gate configuration and monitoring, economics configuration, conversations browser, full control over servicing and economics rate limits, spendings reporting, etc.)
-- **Knowledge Base** (ingestion + hybrid search + citations)
-
-You can plug your own technologies and existing workflows.  
----
-
-## Platform components
-
-### SDK (build the agent app)
-- **Agent runtime**: ReAct, planning, tool‑first, and code‑first flows
-- **Streaming channels**: REST + SSE + Socket.IO with token/step events
-- **Tools & skills**: local tools + MCP tools, easy custom wiring
-- **Memory & context**: turn memories, signals, retrieval, reconciliation
-- **Code execution**: isolated Docker runtime for untrusted code
-- **Attachments & artifacts**: upload + generated files + storage integration
-- **Economics & accounting**: usage tracking, budgets, rate limits, reporting
-- **Bundle API**: build workflows in LangGraph, LangChain, or custom Python, let them become reachable and speak via the Bundle API
-
-### Platform (host and scale)
-- **Multi‑tenant / multi‑project isolation** (storage + schema + namespaces separation)
-- **Gateway**: auth, rate limiting, backpressure, circuit breakers
-- **Knowledge Base**: ingestion + embeddings + hybrid search + citations
-- **Dynamic UI widgets** rendered from bundles (monitoring, control plane, browsers)
-- **Horizontal scaling** with stateless web service + queue/processor
-
-> Bundles are deployable agent apps. Multiple bundles can be registered and selected **per message**.
-> One bundle executes per request; different requests can target different bundles.
+**Highlights**
+- **Full stack**: from streaming protocols to tool execution, memory, economics, and ops.
+- **Agent‑first**: a ready‑made, versatile ReAct‑style agent that can be extended or replaced.
+- **No tool‑calling lock‑in**: the agent runs on plain prompt/completion while fully emulating tool‑calling (and more).
+- **Built for real apps**: multi‑tenant isolation, backpressure, rate limits, and observability.
+- **Channeled streaming + live widgets**: animate UX with streaming channels and custom widgets.
+- **Provenance by default**: source pools and citations to prove how answers were built.
+- **Feedback‑aware**: user feedback is captured and can be fed back into workflows.
 
 ---
 
-## System at a glance
+## Out of the Box
+
+**Runtime & streaming**
+- Streaming chat over **SSE / REST / Socket.IO** with step/delta/status events
+- Fine‑grained streaming channels (answer, reasoning, artifacts, subsystem payloads)
+- Session‑aware relay + fan‑out for multiple tabs/clients
+
+**Agent capabilities**
+- Versatile **ReAct‑style solver** (planning, tool‑first/code‑first flows)
+- Skills + tools (local + MCP) with easy custom wiring
+- Built‑in **web search** and citations pipeline
+
+**Execution & artifacts**  
+- **Isolated code execution** (Docker + Fargate)  
+- Attachments + generated artifacts with storage + indexing  
+- **Antivirus scanning** for uploads  
+- Dynamic widgets (interactive timeline banners + live content: web search/fetch, exec panels, bundle‑driven panels)  
+
+**Memory & context**  
+- Turn/context memories, conversation memories, retrieval  
+- **Source pools** per conversation (Perplexity‑style traceability)  
+- Structured sources + citations (with in‑stream rendering)
+
+**Operations & safety**  
+- Multi‑tenant / multi‑project isolation  
+- Gateway: auth, rate limits, backpressure, circuit breakers  
+- **Economics & accounting** (usage, budgets, rate limits)  
+- Monitoring + metrics service for autoscaling
+- **Feedback system** (user feedback signals integrated into workflow)
+- **Role‑based event filtering** (stream only what each role is allowed to see)
+- **Dynamic bundle UIs** (React interfaces exposed by bundles, authorization‑guarded)
+
+---
+
+## Platform Components
+
+### SDK (build your AI app)
+- **Agent runtime**: ReAct v2 + planning and tool/code orchestration
+- **Streaming protocol**: step/delta/status + widget channels
+- **Tools & skills**: MCP + custom tools
+- **Context & memory**: turn memories, signals, retrieval
+- **Execution runtime**: isolated code execution
+- **Bundle API**: wrap workflows into deployable bundles
+
+### Platform (host & scale)
+- **Ingress service**: SSE/REST/Socket.IO + gateway checks
+- **Processor service**: queue‑driven execution of bundles
+- **Metrics service**: aggregated stats for autoscaling & ops
+- **Storage**: Postgres + Redis + object store integration
+
+---
+
+## ReAct v2 — Timeline‑First Agent (KDCube Signature)
+
+KDCube’s ReAct v2 agent is **timeline‑first**: every turn event is captured as structured blocks onto turn timeline
+that become the **source of truth** for memory, artifacts, and future reasoning.  
+Turn timeline evolves into a running conversation timeline.
+This is not a thin wrapper around tool calls — it’s a full **stateful operating layer**.
+
+**Highlights**
+- **Timeline as ground truth**: user prompts, tool calls/results, artifacts, and decisions are stored as blocks.
+- **Rendering**: timeline can be rendered differently to an agent based on filters / cache TTL / compaction state.
+- **Compaction + cache checkpoints**: stable prefixes + safe tail edits at scale.
+- **Source pools + citations**: Perplexity‑style traceability with stable source IDs.
+- **Artifact paths & rehydration**: `fi:/ar:/so:/tc:` logical paths + rehosting on demand.
+- **Tool‑aware UX**: widgets stream into timeline banners (web search, fetch, exec, panels).
+- **Memory tools**: `react.read`, `react.hide`, `react.memsearch`, `react.patch` to recover or reshape context.
+- **Turn snapshots & versioning**: each turn persists a timeline snapshot + data snapshot; edits produce a new version in the *current turn namespace*, making state **recoverable** and **replayable**.
+
+The timeline is **temporal** and **single‑source‑of‑truth**:
+- It powers **UI reconstruction** (user messages, attachments, artifacts created, sources used, canvas streams, thinking blocks).
+- It powers **agent context rendering** (the model sees the same ordered timeline, filtered by policy).
+- The agent can **reshape the tail** (e.g., hide large blocks) to keep context clean and efficient.
+- **Cache‑aware visibility**: cache TTL is tracked so older context can be *briefly surfaced* (not compacted away) with re‑read paths for recovery.
+- **Announce system**: ephemeral signals to the agent (recent pruning, active plans, important memories, current sources pool).
+
+Timeline sketch (schematic):
+
+```mermaid
+graph LR
+  H[History blocks] --> CP1[CP prev]
+  CP1 --> C[Current turn blocks]
+  C --> CP2["CP pre‑tail"]
+  CP2 --> CP3[CP tail]
+  CP3 --> SP[Sources pool]
+  SP --> A[Announce]
+
+  R["react.read(fi:/ar:/so:/tc:)"] -.-> H
+  HIDE["react.hide(path)"] -.-> CP3
+```
+
+At a glance (timeline‑first loop):
+
+```mermaid
+graph LR
+  U[User + Attachments] --> TL[Timeline Blocks]
+  T[Tools / Exec] --> TL
+  TL --> SP[Sources Pool]
+  TL --> R[Render + Cache/Compaction]
+  R --> D[ReAct Decision]
+  D --> T
+  TL --> UI[Timeline UI / Widgets]
+```
+
+---
+
+## System at a Glance
 
 ```mermaid
 graph TD
-  %% Entry / Auth
-  UI[Web UI / Client] -->|HTTPS + masked cookie| NGINX[Web Proxy / Nginx]
-  AUTH["ProxyLogin (Delegated Auth + 2FA)"] -->|token exchange| NGINX
-  NGINX -->|real auth/id cookies| GATE[Chat API + Gateway]
-  KB[Knowledge Base Service] --> GATE
-  CP[Control Plane / Project Mgmt] --> GATE
+  UI[Web UI / Client] -->|HTTPS| NGINX[Web Proxy]
+  AUTH[Delegated Auth / SSO] -->|token exchange| NGINX
 
-  %% Transport + Gateway
-  NGINX -->|SSE / Socket.IO| GATE
-  NGINX -->|REST| GATE
-  GATE -->|session mgmt| SESS[Session Manager]
-  GATE -->|rate limit/backpressure| GW[Gateway + Throttling]
+  NGINX -->|SSE/REST| INGRESS[Chat Ingress]
+  INGRESS -->|enqueue| Q[Redis Queues]
+  Q --> PROC[Chat Processor]
 
-  %% Queue + Processing
-  GATE -->|enqueue| Q[Redis Queues]
-  Q --> PROC[Chat Processor Workers]
+  PROC --> BUNDLES[Bundles / Workflows]
+  BUNDLES -->|events| RELAY[ChatRelay + Redis PubSub]
+  RELAY -->|fan-out| INGRESS
 
-  %% Orchestration
-  PROC --> BUNDLES[Dynamic Bundles / Workflows]
-  BUNDLES -->|events| RELAY[ChatRelay + Redis Pub/Sub]
-  RELAY -->|fan-out| GATE
+  BUNDLES --> CTX[Context & Memory]
+  CTX --> PG[(Postgres)]
+  CTX --> S3[(Object Storage)]
 
-  %% Context management
-  BUNDLES --> CTX[Context Management]
-  CTX -->|storage| PG["(Postgres RDS)"]
-  CTX -->|artifacts| S3[(S3)]
-  KB -->|storage| PG
-  KB -->|artifacts| S3
-  CP -->|policies + quotas| PG
+  PROC --> EXEC[Isolated Exec]
+  PROC --> TOOLS[External Tools/APIs]
 
-  %% Runtime + providers
-  BUNDLES --> RT["Runtime (LLM + Tools)"]
-  RT --> DOCKER[Ephemeral Docker Exec]
-  RT --> TOOLS[External Tools / APIs]
+  INGRESS --> METRICS[Metrics Service]
+  PROC --> METRICS
 
-  subgraph EXTPROV[External Providers]
-    OAI[OpenAI]
-    ANTH[Anthropic]
-    GEM[Gemini]
-    BRAVE[Brave Search]
-    DDG[DuckDuckGo]
-  end
-
-  RT --> OAI
-  RT --> ANTH
-  RT --> GEM
-  RT --> BRAVE
-  RT --> DDG
-
-  %% Cache/Queues/PubSub
-  BUNDLES -->|cache/queues/pubsub| REDIS["(Redis / ElastiCache)"]
-
-  classDef aws fill:#e8f4ff,stroke:#7aa7d6,color:#0b2b4f;
-  classDef ext fill:#f2f7ee,stroke:#8fbf7a,color:#1f3b1c;
   classDef infra fill:#f7f2ff,stroke:#b69ad6,color:#2b1b4f;
+  classDef aws fill:#e8f4ff,stroke:#7aa7d6,color:#0b2b4f;
 
-  class PG,REDIS,S3 aws;
-  class OAI,ANTH,GEM,BRAVE,DDG,TOOLS ext;
-  class AUTH infra;
+  class INGRESS,PROC,RELAY,METRICS infra;
+  class PG,S3 aws;
 ```
+
+---
+
+## Status & Roadmap (near‑term)
+
+- **Bundles from Git** (dynamic bundle loading, no baked images)
+- **ECS deployment** with proper autoscaling (in progress)
+- **Copilot‑style workspace UX** (new timeline/announce events/workspace organization)
+
+Planned deployment options (next steps):
+- **AWS ECS/Fargate** (first‑class)
+- **Kubernetes** (EKS / GKE / AKS)
+Docker Compose is already supported for local and small‑scale (with EC2) setups.
 
 ---
 
 ## Quickstart
 
-- CLI installer: [KDCube Apps CLI](app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/README.md)
-- All‑in‑one Docker Compose: [Docker Compose Guide](app/ai-app/deployment/docker/all_in_one/README.md)
+- CLI installer: `app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/README.md`
+- Docker Compose (all‑in‑one): `app/ai-app/deployment/docker/all_in_one/README.md`
 
 ---
 
-## Documentation (direct links)
+## Documentation
 
-### Architecture
-- System architecture (short): [Architecture — Short](app/ai-app/docs/arch/architecture-short.md)
-- System architecture (long): [Architecture — Long](app/ai-app/docs/arch/architecture-long.md)
+### Highlights (what’s uniquely strong here)
+- **ReAct v2 + Timeline UX**: `app/ai-app/docs/sdk/agents/react/turn-data-README.md`
+- **Streaming protocol & SSE events**: `app/ai-app/docs/clients/sse-events-README.md`
+- **Bundles (multi‑workflow hosting on shared capacity)**: `app/ai-app/docs/sdk/bundle/bundle-README.md`
+- **Economics & accounting**: `app/ai-app/docs/sdk/infra/economics`
+- **Monitoring & autoscaling metrics**: `app/ai-app/docs/service/README-monitoring-observability.md`
 
-### Platform & Operations
-- Gateway: [Gateway Architecture & Config](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/gateway/gateway-README.md)
-- Auth: [Auth Overview](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/auth/auth-README.md)
-- Monitoring & observability: [Monitoring & Observability](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/monitoring/README-monitoring-observability.md)
-- Chat comms (REST/SSE/Socket.IO): [Comm System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/comm-system.md)
+### Core Docs
+- Architecture (short): `app/ai-app/docs/arch/architecture-short.md`
+- Gateway config & ops: `app/ai-app/docs/service/gateway-README.md`
+- SDK index: `app/ai-app/docs/sdk`
 
-### SDK & Runtime
-- SDK index: [SDK Index](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/SDK-index.md)
-- AI bundle SDK overview: [AI Bundle SDK](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/README-ai-bundle-sdk.md)
-- Tool subsystem: [Tool Subsystem](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool-subsystem-README.md)
-- Execution runtime (ops): [Execution Runtime Ops](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/execution/operations.md)
-- Isolated runtime: [Isolated Runtime](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-iso-runtime.md)
-- Runtime modes & built‑in tools: [Runtime Modes & Built‑in Tools](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/README-runtime-modes-builtin-tools.md)
-- Economics & usage: [Economics & Usage](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/economics-usage.md)
-- Control plane management: [Control Plane Management](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/control_plane/control-plane-management.md)
+### Deep Dives (platform‑defining)
+- **Smart timeline + compaction**: `app/ai-app/docs/sdk/agents/react/turn-data-README.md`
+- **Tooling + isolated runtime (tools inside code)**: `app/ai-app/docs/sdk/runtime`
+- **Attachments, artifacts, and traceability**: `app/ai-app/docs/sdk`
 
-### Bundles & Plugin System
-- Agentic bundles: [Bundle System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/plugin/README.md)
-- First AI bundle (minimal streaming): [First AI Bundle](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/first-ai-bundle-README.md)
-- Example bundles index: [Bundle Examples](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/README.md)
+---
 
-### Chat Subsystems
-- Comm integrations (REST/SSE/Socket.IO): [Comm Integrations](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/comm/README-comm.md)
-- Relay + session fan‑out: [Chat Relay (SSE/Socket.IO)](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
-- Channeled streamer: [Channeled Streamer](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/streaming/channeled-streamer-README.md)
-- Attachments: [Attachments System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/attachments-system.md)
-- Feedback: [Feedback System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/feedback-system.md)
-- Citations: [Citations System](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/doc/citations-system.md)
-- ReAct context (decision view): [ReAct Context](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/solution/react/react-context-README.md)
-- Memories (overview): [Memory Subsystem](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/memories-README.md)
-- Conversation memories: [Conversation Memories](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/memories-README.md)
-- Conversation artifacts: [Conversation Artifacts](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/solution/context/conversation-artifacts-README.md)
-- OPEX aggregations: [OPEX Aggregations](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/opex/README-AGGREGATIONS.md)
-- Code exec widget: [Code Exec Widget](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/widgets/code-exec-widget-README.md)
+## Community
 
-### Knowledge Base
-- KB clients (REST & Socket.IO):
-  - [KB REST Client](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/rest_client.py)
-  - [KB Socket.IO Client](app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/integrations/kb/socket_client.py)
+We’re actively looking for collaborators and early adopters.
+If you’re building AI assistants or copilots and want to ship fast with control over runtime, tooling, and costs—KDCube is for you.
+
+Project site: https://kdcube.tech/

@@ -9,7 +9,7 @@ POSTGRES_DATABASE=kdcube
 DEBUG=
 ```
 
-2. Run the [docker-compose.yaml](../../../../../deployment/docker/localstorage/docker-compose.yaml)
+2. Run the [docker-compose.yaml](../../../../../deployment/docker/local-infra-stack/docker-compose.yaml)
 
 3. Follow instructions from [DB-OPS-README.md](DB-OPS-README.md) to connect to the database and setup your account.
 

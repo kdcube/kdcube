@@ -111,6 +111,83 @@ When component‑scoped, each service reads its own subsection based on `GATEWAY
 }
 ```
 
+## Core Connectivity (All Services)
+
+### Postgres
+
+| Setting              | Required | Purpose |
+|----------------------|----------|---------|
+| `POSTGRES_HOST`      | ✅        | Hostname of Postgres (managed or local) |
+| `POSTGRES_PORT`      | ✅        | Port (default 5432) |
+| `POSTGRES_DATABASE`  | ✅        | DB name |
+| `POSTGRES_USER`      | ✅        | DB user |
+| `POSTGRES_PASSWORD`  | ✅        | DB password |
+| `POSTGRES_SSL`       | ➖        | `True` if managed DB requires SSL |
+
+### Redis
+
+| Setting            | Required | Purpose |
+|--------------------|----------|---------|
+| `REDIS_URL`        | ✅        | Full Redis connection URL |
+| `REDIS_HOST`       | ➖        | Host, used to build `REDIS_URL` if not provided |
+| `REDIS_PORT`       | ➖        | Port (default 6379) |
+| `REDIS_PASSWORD`   | ➖        | Password (if required) |
+| `REDIS_DB`         | ➖        | DB index (default 0) |
+
+### Storage
+
+| Setting                 | Required | Purpose |
+|-------------------------|----------|---------|
+| `KDCUBE_STORAGE_PATH`   | ✅        | Storage root (local FS `file:///...` or `s3://bucket/path`) |
+| `CB_BUNDLE_STORAGE_URL` | ➖        | Bundle storage URL (proc only; defaults to storage path) |
+
+### ClamAV (Ingress only)
+
+| Setting             | Required | Purpose |
+|---------------------|----------|---------|
+| `APP_AV_SCAN`       | ➖        | Enable AV scanning (1/0) |
+| `APP_AV_TIMEOUT_S`  | ➖        | Scan timeout per file |
+| `CLAMAV_HOST`       | ➖        | ClamAV host |
+| `CLAMAV_PORT`       | ➖        | ClamAV port |
+
+### Auth
+
+| Setting                     | Required | Purpose |
+|-----------------------------|----------|---------|
+| `AUTH_PROVIDER`             | ✅        | `simple` or `cognito` |
+| `ID_TOKEN_HEADER_NAME`      | ➖        | Header for id token |
+| `AUTH_TOKEN_COOKIE_NAME`    | ➖        | Access token cookie name |
+| `ID_TOKEN_COOKIE_NAME`      | ➖        | ID token cookie name |
+| `COGNITO_REGION`            | ➖        | Cognito region |
+| `COGNITO_USER_POOL_ID`      | ➖        | Cognito user pool |
+| `COGNITO_APP_CLIENT_ID`     | ➖        | Cognito client id |
+| `COGNITO_SERVICE_CLIENT_ID` | ➖        | Service client id |
+
+### CORS
+
+| Setting        | Required | Purpose |
+|----------------|----------|---------|
+| `CORS_CONFIG`  | ➖        | JSON config for allowed origins/headers/methods |
+
+### Model Provider Keys (optional)
+
+| Setting                 | Purpose |
+|-------------------------|---------|
+| `OPENAI_API_KEY`        | OpenAI access |
+| `ANTHROPIC_API_KEY`     | Anthropic access |
+| `GEMINI_API_KEY`        | Google Gemini access |
+| `HUGGING_FACE_API_TOKEN`| Hugging Face access |
+| `BRAVE_API_KEY`         | Brave search |
+
+### Exec (Processor only)
+
+| Setting                | Purpose |
+|------------------------|---------|
+| `PY_CODE_EXEC_IMAGE`   | Exec runtime image |
+| `PY_CODE_EXEC_TIMEOUT` | Exec timeout (seconds) |
+| `PY_CODE_EXEC_NETWORK_MODE` | Docker network mode |
+| `EXEC_WORKSPACE_ROOT`  | Local workspace path |
+
 ## Bundles
 
 These values scope **bundle registries** and **control‑plane events**.
@@ -251,7 +328,7 @@ Admin email notifications
 | `EMAIL_USER`     | _(unset)_            | SMTP username                     |
 | `EMAIL_PASSWORD` | _(unset)_            | SMTP password                     |
 | `EMAIL_FROM`     | _(EMAIL_USER)_       | From address                      |
-| `EMAIL_TO`       | `lena@nestlogic.com` | Default recipient                 |
+| `EMAIL_TO`       | `ops@example.com`    | Default recipient                 |
 | `EMAIL_USE_TLS`  | `true`               | Enable TLS                        |
 
 Admin emails are sent for wallet refunds and subscription cancels/reconciles.

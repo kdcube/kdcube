@@ -180,7 +180,7 @@ cython_debug/
 
 app/ai-app/deployment/docker/all_in_one/kb-storage/
 app/ai-app/deployment/docker/all_in_one/kdcube-storage/
-app/ai-app/deployment/docker/localstorage/data/
+app/ai-app/deployment/docker/local-infra-stack/data/
 app/ai-app/deployment/cicd/
 app/ai-app/deployment/artifactory/
 app/ai-app/deployment/scripts/

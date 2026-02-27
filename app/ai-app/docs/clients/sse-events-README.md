@@ -54,10 +54,10 @@ The stream also emits a comment keepalive every few seconds:
 
 These events are **not** part of the chat envelope. They are transport signals from ingress.
 
-| SSE event | Purpose | Payload (shape) |
-|---|---|---|
-| `ready` | Stream is open and authenticated. | `{ timestamp, session_id, user_type, stream_id?, tenant?, project? }` |
-| `server_shutdown` | Server is draining. Clients should reconnect. | `{ timestamp, reason: "draining", session_id, stream_id? }` |
+| SSE event         | Purpose                                       | Payload (shape)                                                        |
+|-------------------|-----------------------------------------------|------------------------------------------------------------------------|
+| `ready`           | Stream is open and authenticated.             | `{ timestamp, session_id, user_type, stream_id?, tenant?, project? }`  |
+| `server_shutdown` | Server is draining. Clients should reconnect. | `{ timestamp, reason: "draining", session_id, stream_id? }`            |
 
 ---
 
@@ -110,15 +110,15 @@ Notes:
 
 The server emits these **SSE event names**:
 
-| SSE event | Payload `type` | Purpose |
-|---|---|---|
-| `chat_start` | `chat.start` | Turn started. |
-| `chat_step` | `chat.step` **or any custom type** | Structured step update. |
-| `chat_delta` | `chat.delta` | Streaming chunks (answer/thinking/artifacts). |
-| `chat_complete` | `chat.complete` | Turn completed. |
-| `chat_error` | `chat.error` | Turn failed. |
-| `chat_service` | `chat.service` or `gateway.*` or `rate_limit.*` | Service‑level events. |
-| `conv_status` | `conv.status` | Conversation status snapshot. |
+| SSE event       | Payload `type`                                  | Purpose                                       |
+|-----------------|-------------------------------------------------|-----------------------------------------------|
+| `chat_start`    | `chat.start`                                    | Turn started.                                 |
+| `chat_step`     | `chat.step` **or any custom type**              | Structured step update.                       |
+| `chat_delta`    | `chat.delta`                                    | Streaming chunks (answer/thinking/artifacts). |
+| `chat_complete` | `chat.complete`                                 | Turn completed.                               |
+| `chat_error`    | `chat.error`                                    | Turn failed.                                  |
+| `chat_service`  | `chat.service` or `gateway.*` or `rate_limit.*` | Service‑level events.                         |
+| `conv_status`   | `conv.status`                                   | Conversation status snapshot.                 |
 
 Important:
 - Many semantic event types ride on the `chat_step` route. Always inspect `env.type`.
@@ -129,15 +129,15 @@ Important:
 
 These are emitted by the default workflow and are stable across bundles.
 
-| `env.type` | Route | Meaning | Key fields |
-|---|---|---|---|
-| `chat.start` | `chat_start` | Turn accepted. | `data.message`, `data.queue_stats` |
-| `chat.step` | `chat_step` | Generic step status. | `event.step`, `event.status`, `event.title`, `data` |
-| `chat.delta` | `chat_delta` | Stream chunk. | `delta.text`, `delta.index`, `delta.marker`, `delta.completed?` |
-| `chat.complete` | `chat_complete` | Final answer. | `data.final_answer`, `data.followups?`, `data.selected_model?` |
-| `chat.error` | `chat_error` | Turn error. | `data.error` |
-| `chat.service` | `chat_service` | Service‑level event. | `event.step`, `data` |
-| `conv.status` | `conv_status` | Conversation state snapshot. | `data.state`, `data.updated_at`, `data.current_turn_id?` |
+| `env.type`      | Route           | Meaning                      | Key fields                                                      |
+|-----------------|-----------------|------------------------------|-----------------------------------------------------------------|
+| `chat.start`    | `chat_start`    | Turn accepted.               | `data.message`, `data.queue_stats`                              |
+| `chat.step`     | `chat_step`     | Generic step status.         | `event.step`, `event.status`, `event.title`, `data`             |
+| `chat.delta`    | `chat_delta`    | Stream chunk.                | `delta.text`, `delta.index`, `delta.marker`, `delta.completed?` |
+| `chat.complete` | `chat_complete` | Final answer.                | `data.final_answer`, `data.followups?`, `data.selected_model?`  |
+| `chat.error`    | `chat_error`    | Turn error.                  | `data.error`                                                    |
+| `chat.service`  | `chat_service`  | Service‑level event.         | `event.step`, `data`                                            |
+| `conv.status`   | `conv_status`   | Conversation state snapshot. | `data.state`, `data.updated_at`, `data.current_turn_id?`        |
 
 ---
 
@@ -145,16 +145,16 @@ These are emitted by the default workflow and are stable across bundles.
 
 These are produced by the base workflow. Clients should treat them as `chat_step` events and interpret `env.type` + `env.event`:
 
-| `env.type` | Typical `event.step` | Meaning | Notes |
-|---|---|---|---|
-| `chat.conversation.title` | `conversation_title` | Conversation title update. | `data.title` |
-| `chat.conversation.accepted` | `chat.user.message` | User message accepted. | `data.text`, `data.chars` |
-| `chat.conversation.turn.completed` | `plan.done` | Turn finished. | `data.elapsed_ms`, `event.status` |
-| `chat.turn.summary` | `turn.summary` | Timing summary. | `event.markdown`, `data.elapsed_ms` |
-| `chat.followups` | `followups` | Suggested follow‑ups. | `data.items[]` |
-| `accounting.usage` | `accounting` | Cost breakdown. | `data.breakdown`, `data.cost_total_usd`, `event.markdown` |
-| `solver.react.decision` | `react(<n>).decision` | ReAct decision node. | `data` is full decision JSON |
-| `chat.step` | varies | Internal steps (persist, graph, etc.). | `event.step` values include `conversation.persist.user_message`, `conversation.persist.assistant_message`, `context.graph`, etc. |
+| `env.type`                         | Typical `event.step`  | Meaning                                | Notes                                                                                                                            |
+|------------------------------------|-----------------------|----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------|
+| `chat.conversation.title`          | `conversation_title`  | Conversation title update.             | `data.title`                                                                                                                     |
+| `chat.conversation.accepted`       | `chat.user.message`   | User message accepted.                 | `data.text`, `data.chars`                                                                                                        |
+| `chat.conversation.turn.completed` | `plan.done`           | Turn finished.                         | `data.elapsed_ms`, `event.status`                                                                                                |
+| `chat.turn.summary`                | `turn.summary`        | Timing summary.                        | `event.markdown`, `data.elapsed_ms`                                                                                              |
+| `chat.followups`                   | `followups`           | Suggested follow‑ups.                  | `data.items[]`                                                                                                                   |
+| `accounting.usage`                 | `accounting`          | Cost breakdown.                        | `data.breakdown`, `data.cost_total_usd`, `event.markdown`                                                                        |
+| `solver.react.decision`            | `react(<n>).decision` | ReAct decision node.                   | `data` is full decision JSON                                                                                                     |
+| `chat.step`                        | varies                | Internal steps (persist, graph, etc.). | `event.step` values include `conversation.persist.user_message`, `conversation.persist.assistant_message`, `context.graph`, etc. |
 
 ---
 
@@ -246,14 +246,14 @@ Additional metadata is in `extra`:
 
 ### Delta markers
 
-| Marker | Meaning | Typical usage |
-|---|---|---|
-| `answer` | Assistant response stream | main answer text |
-| `thinking` | Reasoning stream | internal analysis or plans |
-| `canvas` | Artifact stream | documents, rendered content |
-| `timeline_text` | Timeline stream | timeline panel / activity log |
-| `subsystem` | Structured JSON payloads | widgets + tools |
-| `tool` | legacy alias | historical web‑search UI |
+| Marker          | Meaning                    | Typical usage                 |
+|-----------------|----------------------------|-------------------------------|
+| `answer`        | Assistant response stream  | main answer text              |
+| `thinking`      | Reasoning stream           | internal analysis or plans    |
+| `canvas`        | Artifact stream            | documents, rendered content   |
+| `timeline_text` | Timeline stream            | timeline panel / activity log |
+| `subsystem`     | Structured JSON payloads   | widgets + tools               |
+| `tool`          | legacy alias               | historical web‑search UI      |
 
 ### Canvas / artifact streaming
 Canvas chunks are usually emitted with:
@@ -266,17 +266,17 @@ Subsystem streams emit **JSON payloads** inside `delta.text` and are distinguish
 
 Known subsystem sub‑types:
 
-| `extra.sub_type` | Description | Payload (in `delta.text`) |
-|---|---|---|
-| `conversation.turn.status` | Turn work status updates | `{ status, timestamp }` |
-| `web_search.filtered_results` | Web search results | `{ results, objective, queries }` |
-| `web_search.html_view` | Web search report | HTML string |
-| `web_fetch.results` | URL fetch output | JSON payload |
-| `code_exec.objective` | Code execution objective | text |
-| `code_exec.program.name` | Executable name | text |
-| `code_exec.code` | Code stream | code text |
-| `code_exec.contract` | Execution contract | JSON array of files/outputs |
-| `code_exec.status` | Execution status | `{ status, timings, error? }` |
+| `extra.sub_type`              | Description               | Payload (in `delta.text`)         |
+|-------------------------------|---------------------------|-----------------------------------|
+| `conversation.turn.status`    |  Turn work status updates | `{ status, timestamp }`           |
+| `web_search.filtered_results` | Web search results        | `{ results, objective, queries }` |
+| `web_search.html_view`        | Web search report         | HTML string                       |
+| `web_fetch.results`           | URL fetch output          | JSON payload                      |
+| `code_exec.objective`         | Code execution objective  | text                              |
+| `code_exec.program.name`      | Executable name           | text                              |
+| `code_exec.code`              | Code stream               | code text                         |
+| `code_exec.contract`          | Execution contract        | JSON array of files/outputs       |
+| `code_exec.status`            | Execution status          | `{ status, timings, error? }`     |
 
 ---
 

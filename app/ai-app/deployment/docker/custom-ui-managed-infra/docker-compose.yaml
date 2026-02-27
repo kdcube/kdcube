@@ -1,0 +1,189 @@
+services:
+
+  postgres-setup:
+    image: kdcube-postgres-setup:latest
+    container_name: kdcube-postgres-setup
+    build:
+      context: ../../..
+      dockerfile: deployment/docker/custom-ui-managed-infra/Dockerfile_PostgresSetup
+    env_file:
+      - path: ./.env.postgres.setup
+        required: false
+    networks:
+      - kdcube-internal
+    restart: "no"
+
+  clamav:
+    image: clamav/clamav:stable
+    container_name: kdcube-clamav
+    platform: linux/amd64
+    restart: unless-stopped
+    networks:
+      - kdcube-internal
+    environment:
+      - CLAMD_START=1
+      - FRESHCLAM_CHECKS=24
+    healthcheck:
+      test: [ "CMD-SHELL", "clamdscan --version || exit 1" ]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+    volumes:
+      - ./data/clamav:/var/lib/clamav
+    ports:
+      - "127.0.0.1:3310:3310"
+
+  chat-ingress:
+    image: kdcube-chat-ingress:latest
+    container_name: kdcube-chat-ingress
+    build:
+      context: ../../..
+      dockerfile: deployment/docker/custom-ui-managed-infra/Dockerfile_Ingress
+    env_file:
+      - path: ./.env.ingress
+        required: false
+    environment:
+      - CLAMAV_HOST=clamav
+      - CLAMAV_PORT=3310
+      - LOG_FILE_PREFIX=chat-ingress
+      - GATEWAY_COMPONENT=ingress
+      - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
+    volumes:
+      - ./data/kdcube-storage:/kdcube-storage
+      - ./logs/chat-ingress:/logs
+      - type: bind
+        source: ${HOME}/.aws
+        target: /home/appuser/.aws
+        read_only: true
+    depends_on:
+      postgres-setup:
+        condition: service_completed_successfully
+      clamav:
+        condition: service_healthy
+    networks:
+      - kdcube-internal
+    ports:
+      - "127.0.0.1:${CHAT_APP_PORT:-8010}:8010"
+
+  chat-proc:
+    image: kdcube-chat-proc:latest
+    container_name: kdcube-chat-proc
+    build:
+      context: ../../..
+      dockerfile: deployment/docker/custom-ui-managed-infra/Dockerfile_Chatproc
+    env_file:
+      - path: ./.env.proc
+        required: false
+    environment:
+      - LOG_FILE_PREFIX=chat-proc
+      - GATEWAY_COMPONENT=proc
+      - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
+      - HOST_BUNDLES_PATH=${HOST_BUNDLES_PATH}
+      - HOST_EXEC_WORKSPACE_PATH=${HOST_EXEC_WORKSPACE_PATH}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/kdcube-storage:/kdcube-storage
+      - ./data/exec-workspace:/exec-workspace
+      - ./logs/chat-proc:/logs
+      - type: bind
+        source: ${HOST_BUNDLES_PATH?}           # host root with all bundles
+        target: ${AGENTIC_BUNDLES_ROOT?}       # e.g. /bundles inside the container
+      - type: bind
+        source: ${HOME}/.aws
+        target: /home/appuser/.aws
+        read_only: true
+    depends_on:
+      postgres-setup:
+        condition: service_completed_successfully
+    networks:
+      - kdcube-internal
+    ports:
+      - "127.0.0.1:${CHAT_PROCESSOR_PORT:-8020}:8020"
+
+  metrics:
+    image: kdcube-metrics:latest
+    container_name: kdcube-metrics
+    build:
+      context: ../../..
+      dockerfile: deployment/docker/custom-ui-managed-infra/Dockerfile_Metricservice
+    env_file:
+      - path: ./.env.metrics
+        required: false
+    environment:
+      - LOG_FILE_PREFIX=metrics
+    networks:
+      - kdcube-internal
+    ports:
+      - "127.0.0.1:${METRICS_PORT:-8090}:8090"
+
+  web-ui:
+    image: kdcube-web-ui:latest
+    container_name: kdcube-web-ui
+    build:
+      context: ${UI_BUILD_CONTEXT}
+      dockerfile: ${UI_DOCKERFILE_PATH}
+      args:
+        - UI_SOURCE_PATH=${UI_SOURCE_PATH}
+        - UI_ENV_BUILD_RELATIVE=${UI_ENV_BUILD_RELATIVE}
+        - NGINX_UI_CONFIG_FILE_PATH=${NGINX_UI_CONFIG_FILE_PATH}
+        - PATH_TO_FRONTEND_CONFIG_JSON=${PATH_TO_FRONTEND_CONFIG_JSON}
+    env_file:
+      - path: ${UI_ENV_FILE_PATH}
+        required: false
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      chat-ingress:
+        condition: service_started
+    networks:
+      - kdcube-internal
+
+  proxylogin:
+    image: proxylogin:latest
+    build:
+      no_cache: true
+      context: ../../..
+      dockerfile: deployment/docker/custom-ui-managed-infra/Dockerfile_ProxyLogin
+    env_file:
+      - path: ./.env.proxylogin
+        required: false
+    networks:
+      - kdcube-internal
+    volumes:
+      - type: bind
+        source: ${HOME}/.aws
+        target: /home/proxylogin/.aws
+        read_only: true
+
+  web-proxy:
+    image: kdcube-web-proxy:latest
+    container_name: kdcube-web-proxy
+    build:
+      context: ${PROXY_BUILD_CONTEXT}
+      dockerfile: ${PROXY_DOCKERFILE_PATH}
+      args:
+        - NGINX_CONFIG_FILE_PATH=${NGINX_PROXY_CONFIG_FILE_PATH}
+    restart: unless-stopped
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - ./nginx/webroot:/var/www/letsencrypt
+    depends_on:
+      chat-ingress:
+        condition: service_started
+      web-ui:
+        condition: service_started
+      proxylogin:
+        condition: service_started
+    networks:
+      - kdcube-external
+      - kdcube-internal
+    ports:
+      - "80:80"
+      - "443:443"
+
+networks:
+  kdcube-external:
+    driver: bridge
+  kdcube-internal:
+    driver: bridge
