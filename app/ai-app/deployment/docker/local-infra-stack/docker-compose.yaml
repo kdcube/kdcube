@@ -132,7 +132,6 @@ services:
   proxylogin:
     image: proxylogin:latest
     build:
-      context: ../all_in_one
       dockerfile: ./Dockerfile_ProxyLogin
     env_file:
       - path: ./.env.proxylogin
