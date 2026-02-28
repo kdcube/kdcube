@@ -52,6 +52,10 @@ docker compose up -d --build
 mkdir -p ./data/{clamav,kdcube-storage,exec-workspace} ./logs/{chat-ingress,chat-proc}
 ```
 
+```shell
+chmod -R 0777 ./logs
+```
+
 ## UI integration notes
 
 Your frontend should route API traffic through OpenResty and use a stable `routesPrefix`.
