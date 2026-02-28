@@ -126,7 +126,6 @@ services:
         - UI_SOURCE_PATH=${UI_SOURCE_PATH}
         - UI_ENV_BUILD_RELATIVE=${UI_ENV_BUILD_RELATIVE}
         - NGINX_UI_CONFIG_FILE_PATH=${NGINX_UI_CONFIG_FILE_PATH}
-        - PATH_TO_FRONTEND_CONFIG_JSON=${PATH_TO_FRONTEND_CONFIG_JSON}
     env_file:
       - path: ${UI_ENV_FILE_PATH}
         required: false
@@ -138,6 +137,8 @@ services:
         condition: service_started
     networks:
       - kdcube-internal
+    volumes:
+      - ${PATH_TO_FRONTEND_CONFIG_JSON}:/usr/share/nginx/html/config.json:ro
 
   proxylogin:
     image: proxylogin:latest

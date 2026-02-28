@@ -26,6 +26,9 @@ RUN npm run build_no_lint
 # Stage 2: Production stage with nginx
 FROM nginx:alpine
 
+# Runtime config injection + S3 download support
+RUN apk add --no-cache curl aws-cli
+
 # Remove default nginx static assets
 RUN rm -rf /usr/share/nginx/html/*
 
@@ -39,5 +42,7 @@ COPY ${NGINX_UI_CONFIG_FILE_PATH} /etc/nginx/nginx.conf
 # Expose port 80
 EXPOSE 80
 
-# Start nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Runtime config entrypoint
+COPY app/ai-app/deployment/docker/all_in_one_kdcube/ui-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
