@@ -55,9 +55,5 @@ RUN groupadd --gid 1000 appuser && \
 COPY --chown=appuser:appuser services/kdcube-ai-app/ .
 RUN chown -R appuser:appuser /app
 
-COPY deployment/docker/all_in_one/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
-    && chmod +x /usr/local/bin/docker-entrypoint.sh
-
-ENTRYPOINT ["/bin/sh", "/usr/local/bin/docker-entrypoint.sh"]
+USER appuser
 CMD ["python", "kdcube_ai_app/apps/chat/api/web_app.py"]

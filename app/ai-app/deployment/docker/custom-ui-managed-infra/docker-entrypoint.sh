@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+# • Purpose of docker-entrypoint.sh:
+#
+#   1. Docker socket permissions
+#      It reads the GID of /var/run/docker.sock, creates a matching group, and adds appuser to it. That’s needed because the processor spawns code‑exec containers via Docker.
+#   2. Ensure write access to /exec-workspace
+#      It chowns /exec-workspace so the processor can write.
+#   3. Drops privileges
+#      It uses gosu to run the service as appuser.
+
 # This script handles Docker socket permissions across platforms
 # Works on both macOS (no docker group) and Linux (varying docker GIDs)
 

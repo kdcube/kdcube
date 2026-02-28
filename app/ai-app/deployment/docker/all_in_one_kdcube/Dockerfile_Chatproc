@@ -70,7 +70,7 @@ COPY --chown=appuser:appuser services/kdcube-ai-app/ .
 
 RUN chown -R appuser:appuser /app
 
-COPY deployment/docker/all_in_one/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY deployment/docker/all_in_one_kdcube/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
     && chmod +x /usr/local/bin/docker-entrypoint.sh
 
