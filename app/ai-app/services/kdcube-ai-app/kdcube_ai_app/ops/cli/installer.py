@@ -15,20 +15,27 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 
-ENV_FILES = [".env", ".env.backend", ".env.ui.build"]
+ENV_FILES = [
+    ".env",
+    ".env.ingress",
+    ".env.proc",
+    ".env.metrics",
+    ".env.postgres.setup",
+    ".env.proxylogin",
+]
 
 
 DEFAULT_BUNDLES_JSON = [
     "AGENTIC_BUNDLES_JSON='{",
-    "  \"default_bundle_id\": \"with.codegen\",",
+    "  \"default_bundle_id\": \"demo.bundle@1.0.0\",",
     "  \"bundles\": {",
-    "        \"with.codegen.demo\": {",
-    "          \"id\": \"with.codegen\",",
-    "          \"name\": \"Security Leader Marketing Chatbot\",",
+    "        \"demo.bundle@1.0.0\": {",
+    "          \"id\": \"demo.bundle@1.0.0\",",
+    "          \"name\": \"Demo Bundle\",",
     "          \"path\": \"/bundles\",",
-    "          \"module\": \"codegen.entrypoint\",",
+    "          \"module\": \"demo.entrypoint\",",
     "          \"singleton\": false,",
-    "          \"description\": \"Security Leader Marketing Chatbott\"",
+    "          \"description\": \"Example bundle used for quickstart.\"",
     "        }",
     "  }",
     "}'",
@@ -143,13 +150,13 @@ def discover_lib_root() -> Optional[Path]:
 def find_ai_app_root(lib_root: Optional[Path]) -> Optional[Path]:
     if lib_root is not None:
         candidate = lib_root.parent.parent
-        compose = candidate / "deployment/docker/all_in_one/docker-compose.yaml"
+        compose = candidate / "deployment/docker/all_in_one_kdcube/docker-compose.yaml"
         if compose.exists():
             return candidate
 
     cwd = Path.cwd().resolve()
     for parent in [cwd, *cwd.parents]:
-        compose = parent / "deployment/docker/all_in_one/docker-compose.yaml"
+        compose = parent / "deployment/docker/all_in_one_kdcube/docker-compose.yaml"
         if compose.exists():
             return compose.parents[3]
     return None
@@ -157,9 +164,9 @@ def find_ai_app_root(lib_root: Optional[Path]) -> Optional[Path]:
 
 def prompt_for_ai_app_root(console: Console) -> Path:
     while True:
-        raw = Prompt.ask("Path to ai-app root (contains deployment/docker/all_in_one)")
+        raw = Prompt.ask("Path to ai-app root (contains deployment/docker/all_in_one_kdcube)")
         candidate = Path(raw).expanduser().resolve()
-        compose = candidate / "deployment/docker/all_in_one/docker-compose.yaml"
+        compose = candidate / "deployment/docker/all_in_one_kdcube/docker-compose.yaml"
         if compose.exists():
             return candidate
         console.print("[red]Could not find docker-compose.yaml under that path.[/red]")
@@ -184,106 +191,81 @@ def ensure_absolute(console: Console, label: str, current: Optional[str], defaul
 
 
 def compute_paths(ai_app_root: Path, lib_root: Path) -> Dict[str, str]:
-    docker_dir = ai_app_root / "deployment/docker/all_in_one"
-    repo_root = ai_app_root.parents[1]
-    customer_repo = repo_root.parent / "ai-customers-solutions"
-    if not customer_repo.exists():
-        customer_repo = None
-
+    docker_dir = ai_app_root / "deployment/docker/all_in_one_kdcube"
+    repo_root = ai_app_root
     defaults: Dict[str, str] = {
         "docker_dir": str(docker_dir),
         "host_kb_storage": str(docker_dir / "data/kdcube-storage"),
         "host_exec_workspace": str(docker_dir / "data/exec-workspace"),
         "host_bundles": str(lib_root / "kdcube_ai_app/apps/chat/sdk/examples/bundles"),
-        "ui_dockerfile_path": "ops/cicd/customer-c/local/Dockerfile_UI",
-        "ui_source_path": "customer-c/ui",
-        "ui_env_build_relative": "ops/cicd/customer-c/local/.env.ui.build",
-        "nginx_ui_config": "ops/cicd/customer-c/local/nginx_ui.conf",
+        "ui_dockerfile_path": "app/ai-app/deployment/docker/all_in_one_kdcube/Dockerfile_UI",
+        "ui_source_path": "app/ai-app/ui/chat-web-app",
+        "ui_env_build_relative": "app/ai-app/ui/chat-web-app/.env.sample",
+        "nginx_ui_config": "app/ai-app/deployment/docker/all_in_one_kdcube/nginx_ui.conf",
+        "frontend_config_json": "app/ai-app/ui/chat-web-app/public/config.hardcoded.json",
     }
 
-    common_parent = repo_root.parent
+    common_parent = repo_root
     defaults["proxy_build_context"] = str(common_parent)
     defaults["proxy_dockerfile_path"] = str(
-        (ai_app_root / "deployment/docker/all_in_one/Dockerfile_Proxy").relative_to(common_parent)
+        (ai_app_root / "deployment/docker/all_in_one_kdcube/Dockerfile_Proxy").relative_to(common_parent)
     )
-
-    if customer_repo:
-        defaults["ui_build_context"] = str(customer_repo)
-        defaults["ui_env_file_path"] = str(customer_repo / "ops/cicd/customer-c/local/.env.ui.build")
-
-        common_parent = Path(os.path.commonpath([repo_root, customer_repo]))
-        defaults["proxy_build_context"] = str(common_parent)
-        defaults["proxy_dockerfile_path"] = str(
-            (ai_app_root / "deployment/docker/all_in_one/Dockerfile_Proxy").relative_to(common_parent)
-        )
-        defaults["nginx_proxy_config"] = str(
-            (customer_repo / "ops/cicd/customer-c/local/nginx_proxy.conf").relative_to(common_parent)
-        )
-
+    defaults["ui_build_context"] = str(repo_root)
+    defaults["ui_env_file_path"] = str(repo_root / "app/ai-app/ui/chat-web-app/.env")
+    defaults["nginx_proxy_config"] = "app/ai-app/deployment/docker/all_in_one_kdcube/nginx/conf/nginx_proxy_ssl.conf"
     return defaults
 
 
 def should_replace_bundles_config(value: Optional[str]) -> bool:
     if is_placeholder(value):
         return True
-    if value and ("kdcube.demo.1" in value or "<customer>" in value):
+    if value and ("kdcube.demo.1" in value or "<project>" in value):
         return True
     return False
 
 
 def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
     env_main = load_env_file(ctx.docker_dir / ".env")
-    env_backend = load_env_file(ctx.docker_dir / ".env.backend")
-    env_ui = load_env_file(ctx.docker_dir / ".env.ui.build")
+    env_ingress = load_env_file(ctx.docker_dir / ".env.ingress")
+    env_proc = load_env_file(ctx.docker_dir / ".env.proc")
+    env_metrics = load_env_file(ctx.docker_dir / ".env.metrics")
+    env_pg = load_env_file(ctx.docker_dir / ".env.postgres.setup")
 
     defaults = compute_paths(ctx.ai_app_root, ctx.lib_root)
 
-    project = env_backend.entries.get("DEFAULT_PROJECT_NAME", (None, None))[1]
-    tenant = env_backend.entries.get("DEFAULT_TENANT", (None, None))[1]
+    tenant = Prompt.ask("Tenant ID", default="demo-tenant")
+    project = Prompt.ask("Project name", default="demo-project")
+    minimal_gateway_json = (
+        f'{{"tenant":"{tenant}","project":"{project}","profile":"development"}}'
+    )
+    for env in (env_ingress, env_proc, env_metrics):
+        if is_placeholder(env.entries.get("GATEWAY_CONFIG_JSON", (None, None))[1]):
+            update_env_value(env, "GATEWAY_CONFIG_JSON", f"'{minimal_gateway_json}'")
 
-    if is_placeholder(project):
-        project = Prompt.ask("Project name", default="demo-project")
-    if is_placeholder(tenant):
-        tenant = Prompt.ask("Tenant ID", default="demo-tenant")
-
-    update_env_value(env_backend, "DEFAULT_PROJECT_NAME", project)
-    update_env_value(env_backend, "DEFAULT_TENANT", tenant)
-    update_env_value(env_backend, "TENANT_ID", tenant)
-
-    update_env_value(env_ui, "CHAT_WEB_APP_DEFAULT_TENANT", tenant)
-    update_env_value(env_ui, "CHAT_WEB_APP_DEFAULT_PROJECT", project)
-    update_env_value(env_ui, "CHAT_WEB_APP_PROJECT", project)
-
-    if is_placeholder(env_backend.entries.get("POSTGRES_USER", (None, None))[1]):
-        pg_user = Prompt.ask("Postgres user", default="kdcube")
-        update_env_value(env_backend, "POSTGRES_USER", pg_user)
-    if is_placeholder(env_backend.entries.get("POSTGRES_PASSWORD", (None, None))[1]):
+    if is_placeholder(env_pg.entries.get("POSTGRES_USER", (None, None))[1]):
+        pg_user = Prompt.ask("Postgres user", default="postgres")
+        update_env_value(env_pg, "POSTGRES_USER", pg_user)
+        update_env_value(env_ingress, "POSTGRES_USER", pg_user)
+        update_env_value(env_proc, "POSTGRES_USER", pg_user)
+    if is_placeholder(env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1]):
         pg_pass = Prompt.ask("Postgres password", password=True)
-        update_env_value(env_backend, "POSTGRES_PASSWORD", pg_pass)
-    if is_placeholder(env_backend.entries.get("REDIS_PASSWORD", (None, None))[1]):
+        update_env_value(env_pg, "POSTGRES_PASSWORD", pg_pass)
+        update_env_value(env_ingress, "POSTGRES_PASSWORD", pg_pass)
+        update_env_value(env_proc, "POSTGRES_PASSWORD", pg_pass)
+    if is_placeholder(env_main.entries.get("REDIS_PASSWORD", (None, None))[1]):
         redis_pass = Prompt.ask("Redis password", password=True)
-        update_env_value(env_backend, "REDIS_PASSWORD", redis_pass)
+        update_env_value(env_main, "REDIS_PASSWORD", redis_pass)
+        update_env_value(env_ingress, "REDIS_PASSWORD", redis_pass)
+        update_env_value(env_proc, "REDIS_PASSWORD", redis_pass)
+        update_env_value(env_metrics, "REDIS_PASSWORD", redis_pass)
+        update_env_value(env_ingress, "REDIS_URL", f"redis://:{redis_pass}@redis:6379/0")
+        update_env_value(env_proc, "REDIS_URL", f"redis://:{redis_pass}@redis:6379/0")
+        update_env_value(env_metrics, "REDIS_URL", f"redis://:{redis_pass}@redis:6379/0")
 
-    storage_value = env_backend.entries.get("KDCUBE_STORAGE_PATH", (None, None))[1]
-    storage_backend = "s3" if storage_value and storage_value.startswith("s3://") else "local"
-    if is_placeholder(storage_value):
-        storage_backend = Prompt.ask(
-            "Storage backend", choices=["local", "s3"], default="local"
-        )
-
-    if storage_backend == "local":
-        update_env_value(env_backend, "KDCUBE_STORAGE_PATH", "file:///kdcube-storage")
-    else:
-        if is_placeholder(storage_value):
-            s3_path = Prompt.ask("S3 storage path (s3://bucket/path)")
-            update_env_value(env_backend, "KDCUBE_STORAGE_PATH", s3_path)
-        aws_region_value = env_backend.entries.get("AWS_REGION", (None, None))[1]
-        if is_placeholder(aws_region_value):
-            aws_region = Prompt.ask("AWS region")
-            update_env_value(env_backend, "AWS_REGION", aws_region)
-            update_env_value(env_backend, "AWS_DEFAULT_REGION", aws_region)
-        elif is_placeholder(env_backend.entries.get("AWS_DEFAULT_REGION", (None, None))[1]):
-            update_env_value(env_backend, "AWS_DEFAULT_REGION", aws_region_value)
+    if is_placeholder(env_ingress.entries.get("POSTGRES_HOST", (None, None))[1]):
+        update_env_value(env_ingress, "POSTGRES_HOST", "postgres-db")
+    if is_placeholder(env_proc.entries.get("POSTGRES_HOST", (None, None))[1]):
+        update_env_value(env_proc, "POSTGRES_HOST", "postgres-db")
 
     host_storage = ensure_absolute(
         console,
@@ -307,68 +289,39 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
     update_env_value(env_main, "HOST_EXEC_WORKSPACE_PATH", host_exec)
-    update_env_value(env_backend, "HOST_KDCUBE_STORAGE_PATH", host_storage)
-    update_env_value(env_backend, "HOST_BUNDLES_PATH", host_bundles)
-    update_env_value(env_backend, "HOST_EXEC_WORKSPACE_PATH", host_exec)
-
     if is_placeholder(env_main.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1]):
         update_env_value(env_main, "AGENTIC_BUNDLES_ROOT", "/bundles")
-    if is_placeholder(env_backend.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1]):
-        update_env_value(env_backend, "AGENTIC_BUNDLES_ROOT", "/bundles")
 
-    openai_key = env_backend.entries.get("OPENAI_API_KEY", (None, None))[1]
-    anthropic_key = env_backend.entries.get("ANTHROPIC_API_KEY", (None, None))[1]
-    if is_placeholder(openai_key) and is_placeholder(anthropic_key):
-        openai_key = prompt_optional(console, "OpenAI API key", secret=True)
-        if openai_key:
-            update_env_value(env_backend, "OPENAI_API_KEY", openai_key)
-        else:
-            anthropic_key = Prompt.ask("Anthropic API key", password=True)
-            update_env_value(env_backend, "ANTHROPIC_API_KEY", anthropic_key)
-
-    if is_placeholder(env_backend.entries.get("BRAVE_API_KEY", (None, None))[1]):
-        brave_key = prompt_optional(console, "Brave API key", secret=True)
-        if brave_key:
-            update_env_value(env_backend, "BRAVE_API_KEY", brave_key)
-
-    if should_replace_bundles_config(env_backend.entries.get("AGENTIC_BUNDLES_JSON", (None, None))[1]):
-        replace_multiline_block(env_backend, "AGENTIC_BUNDLES_JSON", DEFAULT_BUNDLES_JSON)
+    if should_replace_bundles_config(env_proc.entries.get("AGENTIC_BUNDLES_JSON", (None, None))[1]):
+        replace_multiline_block(env_proc, "AGENTIC_BUNDLES_JSON", DEFAULT_BUNDLES_JSON)
 
     ui_build_context = env_main.entries.get("UI_BUILD_CONTEXT", (None, None))[1]
     if is_placeholder(ui_build_context):
         ui_build_context = ensure_absolute(
             console,
-            "UI build context (customer repo root)",
+            "UI build context (platform repo root)",
             ui_build_context,
             defaults.get("ui_build_context"),
         )
         update_env_value(env_main, "UI_BUILD_CONTEXT", ui_build_context)
 
-    ui_env_file_path = env_main.entries.get("UI_ENV_FILE_PATH", (None, None))[1]
-    if is_placeholder(ui_env_file_path):
-        ui_env_file_path = ensure_absolute(
-            console,
-            "UI env file path",
-            ui_env_file_path,
-            defaults.get("ui_env_file_path"),
-        )
-        update_env_value(env_main, "UI_ENV_FILE_PATH", ui_env_file_path)
-
     for key, default_key in [
         ("UI_DOCKERFILE_PATH", "ui_dockerfile_path"),
         ("UI_SOURCE_PATH", "ui_source_path"),
-        ("UI_ENV_BUILD_RELATIVE", "ui_env_build_relative"),
         ("NGINX_UI_CONFIG_FILE_PATH", "nginx_ui_config"),
     ]:
         value = env_main.entries.get(key, (None, None))[1]
         if is_placeholder(value):
             update_env_value(env_main, key, defaults.get(default_key, ""))
 
+    if is_placeholder(env_main.entries.get("PATH_TO_FRONTEND_CONFIG_JSON", (None, None))[1]):
+        update_env_value(env_main, "PATH_TO_FRONTEND_CONFIG_JSON", defaults.get("frontend_config_json", ""))
+
     proxy_build_context = env_main.entries.get("PROXY_BUILD_CONTEXT", (None, None))[1]
     if is_placeholder(proxy_build_context):
         proxy_build_context = ensure_absolute(
             console,
-            "Proxy build context (common parent for platform + customer repos)",
+            "Proxy build context (platform repo root)",
             proxy_build_context,
             defaults.get("proxy_build_context"),
         )
@@ -387,13 +340,17 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
                 update_env_value(env_main, key, Prompt.ask(f"{key} (relative to PROXY_BUILD_CONTEXT)"))
 
     save_env_file(env_main)
-    save_env_file(env_backend)
-    save_env_file(env_ui)
+    save_env_file(env_ingress)
+    save_env_file(env_proc)
+    save_env_file(env_metrics)
+    save_env_file(env_pg)
 
     return {
         ".env": str(env_main.path),
-        ".env.backend": str(env_backend.path),
-        ".env.ui.build": str(env_ui.path),
+        ".env.ingress": str(env_ingress.path),
+        ".env.proc": str(env_proc.path),
+        ".env.metrics": str(env_metrics.path),
+        ".env.postgres.setup": str(env_pg.path),
     }
 
 
@@ -401,7 +358,7 @@ def main() -> None:
     console = Console()
     console.print(
         Panel.fit(
-            "KDCube Chatbot Setup\nQuick-start Docker Compose wizard",
+            "KDCube Platform Setup\nQuick-start Docker Compose wizard",
             title="kdcube-cli",
         )
     )
@@ -415,7 +372,7 @@ def main() -> None:
         console.print("[yellow]Could not infer lib root; using ai-app root instead.[/yellow]")
         lib_root = ai_app_root
 
-    docker_dir = ai_app_root / "deployment/docker/all_in_one"
+    docker_dir = ai_app_root / "deployment/docker/all_in_one_kdcube"
     sample_env_dir = docker_dir / "sample_env"
     if not sample_env_dir.exists():
         raise FileNotFoundError(f"Missing sample_env at {sample_env_dir}")
@@ -436,6 +393,28 @@ def main() -> None:
     for name, path in env_paths.items():
         table.add_row(name, path)
     console.print(table)
+
+    if Confirm.ask("Build core platform images (ingress/proc/metrics/ui/proxy/postgres-setup)?", default=True):
+        try:
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "build",
+                    "chat-ingress",
+                    "chat-proc",
+                    "metrics",
+                    "web-ui",
+                    "web-proxy",
+                    "postgres-setup",
+                ],
+                cwd=ctx.docker_dir,
+                check=True,
+            )
+        except FileNotFoundError:
+            console.print("[red]Docker not found. Please install Docker and rerun the build step.[/red]")
+        except subprocess.CalledProcessError:
+            console.print("[red]Docker compose build failed. Check the output and retry.[/red]")
 
     if Confirm.ask("Build the code execution image (py-code-exec:latest)?", default=True):
         try:

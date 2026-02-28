@@ -2,7 +2,11 @@
 fastapi==0.116.1
 uvicorn==0.35.0
 httpx
+aiohttp==3.12.15
+requests==2.32.5
 python-dotenv==1.1.1
+pydantic==2.11.7
+pydantic-settings==2.10.1
 redis==6.2.0
 asyncpg
 
@@ -11,3 +15,11 @@ boto3
 
 # Prometheus pushgateway export
 prometheus-client
+
+orjson
+bs4
+
+# Remove this dep in code
+langchain-core==1.2.6
+langchain-openai==1.1.6
+PyJWT[crypto]==2.10.1

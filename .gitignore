@@ -200,3 +200,5 @@ articles/
 /app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/data/
 /app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/debug/rendering/
 /app/ai-app/deployment/docker/local-infra-stack/data_/
+/app/ai-app/deployment/docker/all_in_one_kdcube/config.hardcoded.json
+/app/ai-app/deployment/docker/all_in_one_kdcube/data/

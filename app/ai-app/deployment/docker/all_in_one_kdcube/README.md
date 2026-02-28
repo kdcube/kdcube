@@ -46,6 +46,9 @@ cp sample_env/.env.frontend ./.env.frontend
 - `frontend/config.cognito.json`
 - `frontend/config.hardcoded.json`
 
+These are mounted at runtime as `/usr/share/nginx/html/config.json` via
+`PATH_TO_FRONTEND_CONFIG_JSON` in `.env`.
+
 4. Start the stack:
 
 ```bash

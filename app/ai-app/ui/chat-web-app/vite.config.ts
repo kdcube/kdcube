@@ -28,6 +28,9 @@ export default defineConfig(({mode}) => {
                 '^/api/integrations/.*': {
                     target: integrationsApiBase,
                 },
+                '^/admin/integrations/.*': {
+                    target: integrationsApiBase,
+                },
                 '^/api/.*': {
                     target: apiBase,
                 },

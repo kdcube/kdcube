@@ -434,7 +434,7 @@ class BaseEntrypoint:
         default_html = f"<div style='margin: 0; position: absolute'>{default_content}</div>"
 
         try:
-            integrations_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.integrations")
+            integrations_mod = importlib.import_module("kdcube_ai_app.apps.chat.proc.rest.integrations")
             fallback_path = Path(integrations_mod.__file__).parent / "AIBundleDashboard.tsx"
             content = fallback_path.read_text(encoding="utf-8")
 

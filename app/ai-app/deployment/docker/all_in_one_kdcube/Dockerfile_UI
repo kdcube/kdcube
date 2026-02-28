@@ -32,9 +32,6 @@ RUN rm -rf /usr/share/nginx/html/*
 # Copy built assets from builder stage
 COPY --from=builder /app/dist /usr/share/nginx/html
 
-ARG PATH_TO_FRONTEND_CONFIG_JSON
-COPY ${PATH_TO_FRONTEND_CONFIG_JSON} /usr/share/nginx/html/config.json
-
 # Build argument for nginx config - NO DEFAULT
 ARG NGINX_UI_CONFIG_FILE_PATH
 COPY ${NGINX_UI_CONFIG_FILE_PATH} /etc/nginx/nginx.conf
