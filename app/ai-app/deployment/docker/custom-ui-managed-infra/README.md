@@ -93,3 +93,27 @@ falls back to inline `AGENTIC_BUNDLES_JSON` or the Redis registry.
 - `postgres-setup` runs once to bootstrap schemas in the managed Postgres.
 - This stack assumes Redis/Postgres are reachable from containers (VPC/SG/localhost).
 - If you don’t use delegated auth, you can leave `proxylogin` unused or comment it out in compose.
+
+## 3) Common operations
+
+```bash
+# Rebuild ingress (no deps)
+ dc-infra build chat-ingress && dc-infra up -d --no-deps chat-ingress
+
+# Rebuild processor (no deps)
+ dc-infra build chat-proc && dc-infra up -d --no-deps chat-proc
+
+# Rebuild UI (no deps)
+ dc-infra build web-ui && dc-infra up -d --no-deps web-ui
+
+# Rebuild proxylogin (no deps)
+ dc-infra build proxylogin --no-cache && dc-infra up -d --no-deps proxylogin
+
+# Rebuild proxy (no deps)
+ dc-infra build web-proxy && dc-infra up -d --no-deps web-proxy
+
+# Logs
+ dc-infra logs -f chat-ingress
+```
+
+---

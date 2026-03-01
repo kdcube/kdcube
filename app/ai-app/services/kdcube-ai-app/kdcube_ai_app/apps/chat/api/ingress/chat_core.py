@@ -38,6 +38,36 @@ from kdcube_ai_app.auth.AuthManager import AuthenticationError, PRIVILEGED_ROLES
 
 logger = logging.getLogger(__name__)
 
+async def _sync_bundles_from_redis(app, tenant: str, project: str) -> bool:
+    """
+    Ingress should always source bundle defaults from Redis.
+    This syncs the in-memory registry from Redis before resolving.
+    Returns True when a registry was loaded and applied.
+    """
+    redis_client = getattr(app.state, "redis_async", None)
+    if not redis_client:
+        logger.error("Ingress has no redis_async; cannot sync bundles (tenant=%s project=%s)", tenant, project)
+        return False
+    try:
+        from kdcube_ai_app.infra.plugin.bundle_store import load_registry as _load_store_registry
+        from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
+        reg = await _load_store_registry(redis_client, tenant, project)
+        if reg and reg.bundles:
+            await set_registry_async(
+                {bid: be.model_dump() for bid, be in reg.bundles.items()},
+                reg.default_bundle_id,
+            )
+            return True
+        logger.error(
+            "Bundle registry missing/empty in Redis (tenant=%s project=%s)",
+            tenant,
+            project,
+        )
+        return False
+    except Exception as e:
+        logger.warning("Failed to sync bundles from Redis. %s", e)
+        return False
+
 
 TransportKind = Literal["sse", "socket"]
 
@@ -212,6 +242,9 @@ async def process_chat_message(
     request_id = str(uuid.uuid4())
     provided_bundle_id = message_data.get("bundle_id")
 
+    # Always sync bundle defaults from Redis before resolving
+    bundles_synced = await _sync_bundles_from_redis(app, tenant_id, project_id)
+
     svc = ServiceCtx(request_id=request_id, user=session.user_id, project=project_id, tenant=tenant_id)
     conv = ConversationCtx(
         session_id=session.session_id,
@@ -229,6 +262,23 @@ async def process_chat_message(
         room=session.session_id,
         target_sid=ingress.stream_id,
     )
+
+    # If registry is not available from Redis, fail early to avoid stale defaults.
+    if not bundles_synced:
+        err = "Bundle registry unavailable (Redis not ready)"
+        await chat_comm.emit_error(
+            svc,
+            conv,
+            error=err,
+            target_sid=ingress.stream_id,
+            session_id=session.session_id,
+        )
+        return IngressResult(
+            ok=False,
+            error_type="bundle_registry_unavailable",
+            error=err,
+            http_status=503,
+        )
 
     # Empty message → emit error via relay + let transport map to HTTP/WS
     if not text:
@@ -834,6 +884,8 @@ async def get_conversation_status(
     """
     Shared implementation for conv_status.get for SSE + WS.
     """
+    # Always sync bundle defaults from Redis before resolving
+    bundles_synced = await _sync_bundles_from_redis(app, tenant, project)
     conv_id = conversation_id or session.session_id
     row = None
     try:
@@ -861,8 +913,20 @@ async def get_conversation_status(
         payload_row = row.get("payload") or {}
         current_turn_id = payload_row.get("last_turn_id")
     if publish:
-        spec_resolved = await resolve_bundle_async(bundle_id, override=None)
-        bundle_id_val = spec_resolved.id if spec_resolved else (bundle_id or get_default_id())
+        if not bundles_synced:
+            logger.warning(
+                "conv_status.get: bundle registry unavailable; falling back to provided bundle_id/default placeholder "
+                "(tenant=%s project=%s session=%s)",
+                tenant,
+                project,
+                session.session_id,
+            )
+        spec_resolved = None
+        if bundles_synced:
+            spec_resolved = await resolve_bundle_async(bundle_id, override=None)
+            bundle_id_val = spec_resolved.id if spec_resolved else (bundle_id or get_default_id())
+        else:
+            bundle_id_val = bundle_id or "unknown"
         if not bundle_id_val:
             bundle_id_val = "unknown"
             logger.warning(

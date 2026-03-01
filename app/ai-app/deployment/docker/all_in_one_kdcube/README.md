@@ -97,3 +97,22 @@ falls back to inline `AGENTIC_BUNDLES_JSON` or the Redis registry.
 - `postgres-setup` runs once after Postgres is healthy and creates schemas.
 - Data persists under `./data/*`.
 - Proxylogin is disabled by default in compose; enable it if you use delegated auth.
+
+
+```shell
+
+
+docker compose stop postgres-setup && docker compose rm postgres-setup -f && docker compose build postgres-setup --no-cache && docker compose up postgres-setup -d
+```
+
+```shell
+docker compose stop proxylogin && docker compose rm proxylogin -f && docker compose build proxylogin --no-cache && docker compose up proxylogin -d
+```
+
+```shell
+docker compose stop redis && docker compose rm redis -f && docker compose up redis -d --build
+```
+
+```shell
+docker compose stop proxylogin && docker compose rm proxylogin -f && docker compose build --no-cache && docker compose up proxylogin -d
+```

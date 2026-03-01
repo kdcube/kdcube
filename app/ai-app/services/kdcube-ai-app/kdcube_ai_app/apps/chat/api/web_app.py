@@ -15,6 +15,7 @@ import asyncio
 import signal
 import sys
 import uuid
+import json
 
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -355,20 +356,7 @@ async def lifespan(app: FastAPI):
             app.state.link_preview_instance = None
             logger.error(f"Failed to start chat relay listener: {e}")
 
-        try:
-            from kdcube_ai_app.infra.plugin.bundle_store import load_registry as _load_store_registry
-            from kdcube_ai_app.infra.plugin.bundle_registry import set_registry as _set_mem_registry
-            reg = await _load_store_registry(app.state.redis_async)
-            if reg and reg.bundles:
-                bundles_dict = {bid: entry.model_dump() for bid, entry in reg.bundles.items()}
-                _set_mem_registry(bundles_dict, reg.default_bundle_id)
-                logger.info(
-                    "Bundles registry loaded from Redis: %s items (default=%s)",
-                    len(bundles_dict),
-                    reg.default_bundle_id,
-                )
-        except Exception as e:
-            logger.warning("Failed to load bundles registry from Redis; using env-only registry. %s", e)
+        # Bundles registry is always sourced from Redis by request-time sync in ingress.
         #
         # await processor.start_processing()
         # await health_checker.start_monitoring()
