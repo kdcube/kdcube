@@ -1,8 +1,34 @@
 # KDCube — Agentic AI Platform & SDK
 
-KDCube is a **self‑hosted multi‑tenant, multi‑user platform + SDK** for building **custom AI assistants, copilots, and agentic apps**.
-**Run a copilot for your customers, not just for yourself** — use the built‑in ReAct workflow or bring your own.
-It provides the **runtime, streaming protocol, tools, memory, and operations stack** so you can ship AI products with production‑grade reliability.
+> **Ship AI copilots to your customers, not just to yourself.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
+[![Docker Ready](https://img.shields.io/badge/docker-ready-blue.svg)]()
+
+KDCube is a **self‑hosted, multi‑tenant platform + SDK** for building
+**production‑grade AI assistants, copilots, and agentic apps**.
+It gives you the full stack — agent runtime, streaming protocol, tool execution,
+memory, economics, and operations — so you go from prototype to production
+without stitching together a dozen services.
+
+### Why teams choose KDCube
+
+| Pain point | KDCube answer |
+|---|---|
+| "We glued 8 services together and it's fragile" | Full stack from streaming to ops in one platform |
+| "Our agent works in demos but not in production" | Backpressure, rate limits, circuit breakers, multi‑tenant isolation |
+| "We're locked into one LLM provider's tool‑calling" | Runs on plain prompt/completion — no tool‑calling lock‑in |
+| "We can't prove where answers came from" | Source pools + citations by default (Perplexity‑style) |
+| "We need this for multiple customers, not just us" | Multi‑tenant at the schema level with per‑tenant economics |
+
+### Get running in minutes
+
+```bash
+git clone https://github.com/kdcube/kdcube-ai-app && cd kdcube-ai-app
+cp .env.example .env        # add your LLM API key
+docker compose up            # platform + UI + infra
+```
 
 **Highlights**
 - **Full stack**: from streaming protocols to tool execution, memory, economics, and ops.
