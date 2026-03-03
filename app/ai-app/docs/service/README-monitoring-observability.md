@@ -73,7 +73,7 @@ Returns gateway status + queue pressure + capacity transparency, plus:
 
 ### Gateway config
 - `POST /admin/gateway/validate-config`
-- `POST /admin/gateway/update-config`
+- `POST /admin/gateway/update-config` (can update `guarded_rest_patterns` and `bypass_throttling_patterns`)
 
 ### Debug
 - `GET /debug/capacity-calculation`
@@ -122,6 +122,7 @@ sequenceDiagram
   Use `{"dry_run": true}` to preview the env defaults without writing.
 - Each service instance applies **only its own tenant/project config** (from env),
   but can publish updates for other tenants/projects via the admin API.
-- Update payload uses **role‑based rate limits** (see gateway README for schema).
+- Update payload uses **role‑based rate limits** and supports endpoint policy lists
+  (`guarded_rest_patterns`, `bypass_throttling_patterns`). See gateway README for schema.
 - Component‑aware configs (`ingress`/`proc`) are supported; each service selects its slice
   based on `GATEWAY_COMPONENT`.

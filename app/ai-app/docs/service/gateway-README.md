@@ -122,6 +122,8 @@ graph LR
 ```
 
 **Note:** Non‑ingress REST endpoints still pass through **rate limiting**, but **bypass backpressure**.
+You can explicitly **skip rate limiting** for public endpoints (e.g., Stripe webhooks) via
+`bypass_throttling_patterns` in `GATEWAY_CONFIG_JSON`.
 
 ---
 
@@ -143,7 +145,10 @@ internal endpoints without being dropped.
 ### Activation note (current code)
 - The policy includes an **explicit guarded REST pattern list** in
   [gateway_policy.py](../../apps/middleware/gateway_policy.py).
-- To activate or tune it, set `guarded_rest_patterns` in `GATEWAY_CONFIG_JSON` (or update via `/admin/gateway/update-config`).
+- To activate or tune it, set `guarded_rest_patterns` in `GATEWAY_CONFIG_JSON`
+  (or update via `/admin/gateway/update-config`).
+- To allow **public endpoints** that should skip rate limiting, set
+  `bypass_throttling_patterns` in `GATEWAY_CONFIG_JSON`.
 
 Current guarded endpoints (exact patterns):
 - `/resources/link-preview`
@@ -152,6 +157,9 @@ Current guarded endpoints (exact patterns):
 - `/conversations/{tenant}/{project}/turns-with-feedbacks`
 - `/conversations/{tenant}/{project}/feedback/conversations-in-period`
 - `/integrations/bundles/{tenant}/{project}/operations/{operation}`
+
+Example public webhook bypass:
+- `bypass_throttling_patterns = ["^/webhooks/stripe$"]`
 
 ---
 
@@ -185,6 +193,7 @@ Backpressure capacity source:
 
 Component-aware config:
 - `service_capacity`, `backpressure`, `rate_limits`, `pools`, `limits`
+  , `guarded_rest_patterns`, `bypass_throttling_patterns`
   can be **flat** (single dict) or **component-aware**:
   - `{"ingress": {...}, "proc": {...}}`
 - When component keys exist, the running service selects its slice based on

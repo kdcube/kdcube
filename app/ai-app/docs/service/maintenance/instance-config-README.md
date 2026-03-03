@@ -32,6 +32,10 @@ On startup the gateway config is loaded in this order:
 
 If you want env to apply, clear the cached config first (Control Plane → Gateway Configuration → “Clear Cached Config”), then restart.
 
+Endpoint policy lists are part of the gateway config:
+- `guarded_rest_patterns` (REST endpoints that should be gated)
+- `bypass_throttling_patterns` (public endpoints that skip rate limiting)
+
 ## Worker Count
 
 Worker count comes from `GATEWAY_CONFIG_JSON.service_capacity.<component>.processes_per_instance`

@@ -225,6 +225,10 @@ def create_fastapi_gateway_adapter():
     """Create FastAPI adapter for the gateway"""
     gateway = create_request_gateway()
     gateway_policy = GatewayPolicyResolver(gateway.gateway_config.guarded_rest_patterns)
+    if hasattr(gateway_policy, "set_bypass_throttling_patterns"):
+        gateway_policy.set_bypass_throttling_patterns(
+            gateway.gateway_config.bypass_throttling_patterns
+        )
     return FastAPIGatewayAdapter(gateway=gateway,
                                  policy_resolver=gateway_policy)
 

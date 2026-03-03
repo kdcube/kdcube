@@ -51,11 +51,7 @@ class GatewayPolicyResolver:
             if isinstance(p, str) and p
         )
         self._component = (os.getenv("GATEWAY_COMPONENT") or "ingress").strip().lower()
-        bypass_raw = os.getenv("GATEWAY_BYPASS_THROTTLING_PATTERNS", "")
-        self._bypass_throttling_patterns = tuple(
-            re.compile(p.strip()) for p in bypass_raw.split(",")
-            if isinstance(p, str) and p.strip()
-        )
+        self._bypass_throttling_patterns: tuple[re.Pattern, ...] = tuple()
 
     def set_guarded_patterns(self, patterns: Iterable[str]) -> None:
         compiled = tuple(
@@ -63,6 +59,13 @@ class GatewayPolicyResolver:
             if isinstance(p, str) and p
         )
         self._guarded_rest_patterns = compiled
+
+    def set_bypass_throttling_patterns(self, patterns: Iterable[str]) -> None:
+        compiled = tuple(
+            re.compile(p) for p in (patterns or [])
+            if isinstance(p, str) and p
+        )
+        self._bypass_throttling_patterns = compiled
 
     def classify(self, path: str) -> EndpointClass:
         if self._component == "proc":
@@ -114,7 +117,7 @@ class GatewayPolicyResolver:
                 bypass_backpressure=True,
                 requirements=[],
             )
-            if any(p.match(path) for p in self._bypass_throttling_patterns):
+            if self._bypass_throttling_patterns and any(p.match(path) for p in self._bypass_throttling_patterns):
                 return GatewayPolicy(
                     cls=pol.cls,
                     bypass_throttling=True,

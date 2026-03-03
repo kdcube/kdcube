@@ -240,6 +240,7 @@ class GatewayConfiguration:
     # Environment-specific
     redis_url: str
     guarded_rest_patterns: list[str] = field(default_factory=list)
+    bypass_throttling_patterns: list[str] = field(default_factory=list)
 
     # Computed properties
     @property
@@ -284,6 +285,7 @@ class GatewayConfiguration:
             "pools": asdict(self.pools),
             "limits": asdict(self.limits),
             "guarded_rest_patterns": list(self.guarded_rest_patterns or []),
+            "bypass_throttling_patterns": list(self.bypass_throttling_patterns or []),
             "computed_metrics": {
                 "base_queue_size_per_instance": self.backpressure_config_obj.get_base_queue_size_per_instance(),
                 "theoretical_throughput_per_instance": self.service_capacity_obj.requests_per_hour_per_instance,
@@ -866,6 +868,7 @@ def _serialize_gateway_config(config: GatewayConfiguration) -> Dict[str, Any]:
         "pools": asdict(config.pools),
         "limits": asdict(config.limits),
         "guarded_rest_patterns": list(config.guarded_rest_patterns or []),
+        "bypass_throttling_patterns": list(config.bypass_throttling_patterns or []),
     }
 
 
@@ -1015,13 +1018,19 @@ def _config_from_dict(data: Dict[str, Any], *, component_override: Optional[str]
     profile_raw = str(data.get("profile") or GatewayProfile.DEVELOPMENT.value)
     profile = GatewayProfile(profile_raw) if profile_raw in GatewayProfile._value2member_map_ else GatewayProfile.DEVELOPMENT
 
-    guarded_rest_patterns = data.get("guarded_rest_patterns")
-    if not isinstance(guarded_rest_patterns, list):
+    guarded_payload = _select_component_payload(data.get("guarded_rest_patterns"))
+    if not isinstance(guarded_payload, list):
         guarded_rest_patterns = list(DEFAULT_GUARDED_REST_PATTERNS)
     else:
-        guarded_rest_patterns = [str(p) for p in guarded_rest_patterns if p]
+        guarded_rest_patterns = [str(p) for p in guarded_payload if p]
         if not guarded_rest_patterns:
             guarded_rest_patterns = list(DEFAULT_GUARDED_REST_PATTERNS)
+
+    bypass_payload = _select_component_payload(data.get("bypass_throttling_patterns", []))
+    if not isinstance(bypass_payload, list):
+        bypass_throttling_patterns: list[str] = []
+    else:
+        bypass_throttling_patterns = [str(p) for p in bypass_payload if p]
 
     tenant_value = data.get("tenant_id") or data.get("tenant")
     project_value = data.get("project_id") or data.get("project")
@@ -1042,6 +1051,7 @@ def _config_from_dict(data: Dict[str, Any], *, component_override: Optional[str]
         limits=limits,
         redis_url=str(data.get("redis_url") or get_settings().REDIS_URL),
         guarded_rest_patterns=guarded_rest_patterns,
+        bypass_throttling_patterns=bypass_throttling_patterns,
     )
     return cfg
 
@@ -1283,6 +1293,10 @@ async def apply_gateway_config_from_cache(
     set_gateway_config(gateway_adapter.gateway.gateway_config)
     if hasattr(gateway_adapter, "policy") and getattr(gateway_adapter.policy, "set_guarded_patterns", None):
         gateway_adapter.policy.set_guarded_patterns(gateway_adapter.gateway.gateway_config.guarded_rest_patterns)
+    if hasattr(gateway_adapter, "policy") and getattr(gateway_adapter.policy, "set_bypass_throttling_patterns", None):
+        gateway_adapter.policy.set_bypass_throttling_patterns(
+            gateway_adapter.gateway.gateway_config.bypass_throttling_patterns
+        )
     return True
 
 
@@ -1329,6 +1343,10 @@ async def subscribe_gateway_config_updates(
                     set_gateway_config(gateway_adapter.gateway.gateway_config)
                     if hasattr(gateway_adapter, "policy") and getattr(gateway_adapter.policy, "set_guarded_patterns", None):
                         gateway_adapter.policy.set_guarded_patterns(gateway_adapter.gateway.gateway_config.guarded_rest_patterns)
+                    if hasattr(gateway_adapter, "policy") and getattr(gateway_adapter.policy, "set_bypass_throttling_patterns", None):
+                        gateway_adapter.policy.set_bypass_throttling_patterns(
+                            gateway_adapter.gateway.gateway_config.bypass_throttling_patterns
+                        )
                 except Exception:
                     continue
             if stop_event and stop_event.is_set():
@@ -1403,6 +1421,7 @@ class GatewayConfigurationManager:
         pools_payload = kwargs.pop("pools", None) or {}
         limits_payload = kwargs.pop("limits", None) or {}
         guarded_rest_patterns = kwargs.pop("guarded_rest_patterns", None)
+        bypass_throttling_patterns = kwargs.pop("bypass_throttling_patterns", None)
         base_config = get_gateway_config()
         target_tenant = target_tenant or base_config.tenant_id
         target_project = target_project or base_config.project_id
@@ -1441,6 +1460,10 @@ class GatewayConfigurationManager:
             patterns = [str(p) for p in guarded_rest_patterns if p]
             raw_config["guarded_rest_patterns"] = patterns or list(DEFAULT_GUARDED_REST_PATTERNS)
 
+        if isinstance(bypass_throttling_patterns, list):
+            patterns = [str(p) for p in bypass_throttling_patterns if p]
+            raw_config["bypass_throttling_patterns"] = patterns
+
         is_local_target = (
             (target_tenant == base_config.tenant_id) and
             (target_project == base_config.project_id)
@@ -1450,6 +1473,12 @@ class GatewayConfigurationManager:
             applied_cfg = parse_gateway_config_for_component(raw_config, local_component)
             apply_gateway_config_snapshot(self.gateway, applied_cfg)
             set_gateway_config(self.gateway.gateway_config)
+            if hasattr(self.gateway_adapter, "policy"):
+                policy = self.gateway_adapter.policy
+                if getattr(policy, "set_guarded_patterns", None):
+                    policy.set_guarded_patterns(self.gateway.gateway_config.guarded_rest_patterns)
+                if getattr(policy, "set_bypass_throttling_patterns", None):
+                    policy.set_bypass_throttling_patterns(self.gateway.gateway_config.bypass_throttling_patterns)
             applied = self.gateway.gateway_config
         else:
             applied = parse_gateway_config_for_component(raw_config, local_component)
@@ -1515,6 +1544,12 @@ class GatewayConfigurationManager:
             applied_cfg = parse_gateway_config_for_component(raw_config, comp_key)
             apply_gateway_config_snapshot(self.gateway, applied_cfg)
             set_gateway_config(self.gateway.gateway_config)
+            if hasattr(self.gateway_adapter, "policy"):
+                policy = self.gateway_adapter.policy
+                if getattr(policy, "set_guarded_patterns", None):
+                    policy.set_guarded_patterns(self.gateway.gateway_config.guarded_rest_patterns)
+                if getattr(policy, "set_bypass_throttling_patterns", None):
+                    policy.set_bypass_throttling_patterns(self.gateway.gateway_config.bypass_throttling_patterns)
             applied = self.gateway.gateway_config
         else:
             applied = parse_gateway_config_for_component(raw_config, self._component_key())

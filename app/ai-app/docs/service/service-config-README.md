@@ -40,7 +40,8 @@ There are no supported env fallbacks for tenant/project anymore.
 | `tenant`                | ✅        | Tenant scope for Redis keys, bundles, and control‑plane events    |
 | `project`               | ✅        | Project scope for Redis keys, bundles, and control‑plane events   |
 | `profile`               | ➖        | `development` / `production` (defaults to development)            |
-| `guarded_rest_patterns` | ➖        | Regexes for protected REST routes                                 |
+| `guarded_rest_patterns` | ➖        | Regexes for protected REST routes (rate limit + backpressure)      |
+| `bypass_throttling_patterns` | ➖   | Regexes for public endpoints that should **skip rate limiting** (e.g., Stripe webhooks) |
 
 ### Component-aware sections
 
@@ -54,6 +55,8 @@ When component‑scoped, each service reads its own subsection based on `GATEWAY
 | `rate_limits`        | role limits (`hourly`, `burst`, `burst_window`)                                            | Per‑role rate limiting (per session).                       |
 | `pools`              | `pg_pool_min_size`, `pg_pool_max_size`, `redis_max_connections`, `pg_max_connections`      | Pool sizing per component; optional DB max for warnings.    |
 | `limits`             | `max_sse_connections_per_instance`, `max_integrations_ops_concurrency`, `max_queue_size`   | Soft limits for ingress/proc.                               |
+| `guarded_rest_patterns` | regex list                                                                           | REST endpoints gated by gateway (rate limit + backpressure). |
+| `bypass_throttling_patterns` | regex list                                                                    | REST endpoints that skip rate limiting (still routed + logged). |
 | `redis`              | `sse_stats_ttl_seconds`, `sse_stats_max_age_seconds`                                       | Redis‑based SSE stats retention.                            |
 
 ### Example (readable, component‑scoped)
@@ -63,6 +66,12 @@ When component‑scoped, each service reads its own subsection based on `GATEWAY
   "tenant": "tenant-id",
   "project": "project-id",
   "profile": "development",
+  "guarded_rest_patterns": [
+    "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$"
+  ],
+  "bypass_throttling_patterns": [
+    "^/webhooks/stripe$"
+  ],
   "service_capacity": {
     "ingress": {
       "processes_per_instance": 2
@@ -229,7 +238,6 @@ These values scope **bundle registries** and **control‑plane events**.
 | `GIT_SSH_KNOWN_HOSTS`    | _(unset)_ | Path to `known_hosts` file (SSH)                                                                | `infra/plugin/git_bundle.py`      |
 | `GIT_SSH_STRICT_HOST_KEY_CHECKING` | _(unset)_ | `yes` / `no`                                                                              | `infra/plugin/git_bundle.py`      |
 | `BUNDLE_REF_TTL_SECONDS` | `3600`    | TTL for active bundle refs                                                                      | `infra/plugin/bundle_refs.py`     |
-| `GATEWAY_BYPASS_THROTTLING_PATTERNS` | _(unset)_ | Comma‑separated regex patterns for endpoints that should skip gateway rate limiting (e.g., Stripe webhooks). | `apps/middleware/gateway_policy.py` |
 
 **Tenant/project scoped channels**
 

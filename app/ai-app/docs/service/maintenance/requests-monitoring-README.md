@@ -82,6 +82,9 @@ Important:
 - Changing `service_capacity.<component>.processes_per_instance` **requires a service restart**
   to affect worker count (component is selected by `GATEWAY_COMPONENT`).
 - Logs will show which source was applied at startup (env vs cache).
+- Endpoint policy lists live in gateway config:
+  - `guarded_rest_patterns` (rate limit + backpressure for REST)
+  - `bypass_throttling_patterns` (skip rate limiting for public endpoints like Stripe)
 
 ## Redis Browser (Control Plane)
 Use the quick prefix buttons to inspect keys fast:
