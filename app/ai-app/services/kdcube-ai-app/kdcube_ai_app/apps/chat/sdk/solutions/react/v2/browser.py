@@ -299,8 +299,19 @@ class ContextBrowser:
             os.environ["WORKDIR"] = str(workdir)
             return workdir, outdir
 
-        root = get_exec_workspace_root()
-        tmp = pathlib.Path(tempfile.mkdtemp(prefix="ctx_v2_", dir=str(root)))
+        try:
+            root = get_exec_workspace_root()
+        except Exception:
+            # Let caller decide whether to abort the request; do not hide workspace errors.
+            raise
+        try:
+            tmp = pathlib.Path(tempfile.mkdtemp(prefix="ctx_v2_", dir=str(root)))
+        except Exception as e:
+            try:
+                self.log.log(f"[workspace] Failed to create exec workspace under {root}: {type(e).__name__}: {e}", level="ERROR")
+            except Exception:
+                pass
+            raise
         workdir = tmp / "work"
         outdir = tmp / "out"
         workdir.mkdir(parents=True, exist_ok=True)

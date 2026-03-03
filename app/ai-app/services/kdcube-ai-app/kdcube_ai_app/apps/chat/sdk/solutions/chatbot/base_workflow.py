@@ -1021,8 +1021,15 @@ class BaseWorkflow():
             except Exception:
                 pass
 
-        except Exception:
+        except Exception as e:
             self.logger.log(traceback.format_exc(), "ERROR")
+            try:
+                from kdcube_ai_app.apps.chat.sdk.solutions.infra import ExecWorkspaceError
+                if isinstance(e, ExecWorkspaceError):
+                    # Fail fast: workspace is required for turn-level execution.
+                    raise
+            except Exception:
+                pass
 
             timing_ctx = _tend(t1, ms1)
             scratchpad.timings.append({"title": "context.load", "elapsed_ms": timing_ctx["elapsed_ms"]})
@@ -1205,6 +1212,21 @@ class BaseWorkflow():
                     contrib_log = list(self.ctx_browser.current_turn_blocks() or [])
             except Exception:
                 contrib_log = []
+            if not contrib_log and self.ctx_browser and getattr(self.ctx_browser, "timeline", None):
+                # Fallback: if current_turn_offset is missing or incorrect, filter by turn_id.
+                try:
+                    blocks = [
+                        b for b in (self.ctx_browser.timeline.blocks or [])
+                        if isinstance(b, dict) and b.get("turn_id") == turn_id
+                    ]
+                    if blocks:
+                        contrib_log = blocks
+                        self.logger.log(
+                            f"[workflow] turn_log fallback: collected blocks by turn_id={turn_id} count={len(blocks)}",
+                            level="WARNING",
+                        )
+                except Exception:
+                    pass
             end_ts = datetime.datetime.utcnow().isoformat() + "Z"
             used_sids = []
             total_tokens = 0

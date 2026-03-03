@@ -147,10 +147,10 @@ When component‑scoped, each service reads its own subsection based on `GATEWAY
 
 ### Storage
 
-| Setting                 | Required | Purpose |
-|-------------------------|----------|---------|
-| `KDCUBE_STORAGE_PATH`   | ✅        | Storage root (local FS `file:///...` or `s3://bucket/path`) |
-| `CB_BUNDLE_STORAGE_URL` | ➖        | Bundle storage URL (proc only; defaults to storage path) |
+| Setting                 | Required | Purpose                                                       |
+|-------------------------|---------|---------------------------------------------------------------|
+| `KDCUBE_STORAGE_PATH`   | ✅       | Storage root (local FS `file:///...` or `s3://bucket/path`)   |
+| `CB_BUNDLE_STORAGE_URL` | ➖       | Bundle storage URL (proc only; defaults to storage path)      |
 
 ### ClamAV (Ingress only)
 
@@ -192,12 +192,12 @@ When component‑scoped, each service reads its own subsection based on `GATEWAY
 
 ### Exec (Processor only)
 
-| Setting                | Purpose |
-|------------------------|---------|
-| `PY_CODE_EXEC_IMAGE`   | Exec runtime image |
-| `PY_CODE_EXEC_TIMEOUT` | Exec timeout (seconds) |
-| `PY_CODE_EXEC_NETWORK_MODE` | Docker network mode |
-| `EXEC_WORKSPACE_ROOT`  | Local workspace path |
+| Setting                     | Default    | Purpose                                                                                                                                                                                     |
+|-----------------------------|------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `PY_CODE_EXEC_IMAGE`        | _(unset)_  | Exec runtime image                                                                                                                                                                          |
+| `PY_CODE_EXEC_TIMEOUT`      | _(unset)_  | Exec timeout (seconds)                                                                                                                                                                      |
+| `PY_CODE_EXEC_NETWORK_MODE` | _(unset)_  | Docker network mode                                                                                                                                                                         |
+| `EXEC_WORKSPACE_ROOT`       | _(auto)_   | Local workspace root for per‑turn workdir/outdir. Defaults to `/exec-workspace` inside Docker or `/tmp` on host. Path is created if missing and **must be writable** or the request fails.  |
 
 ## Bundles
 

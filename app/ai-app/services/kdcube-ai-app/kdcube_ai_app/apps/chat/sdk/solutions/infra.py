@@ -9,6 +9,43 @@ import pathlib, json, os
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 
 
+class ExecWorkspaceError(RuntimeError):
+    """Raised when the exec workspace root is missing or not writable."""
+
+
+def _ensure_writable_dir(path: pathlib.Path, *, source: str) -> pathlib.Path:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        msg = f"EXEC_WORKSPACE_ROOT ({source}) not creatable: {path} ({type(e).__name__}: {e})"
+        _log_exec_workspace_error(msg)
+        raise ExecWorkspaceError(msg)
+    if not path.is_dir():
+        msg = f"EXEC_WORKSPACE_ROOT ({source}) is not a directory: {path}"
+        _log_exec_workspace_error(msg)
+        raise ExecWorkspaceError(msg)
+    try:
+        if not os.access(str(path), os.W_OK | os.X_OK):
+            msg = f"EXEC_WORKSPACE_ROOT ({source}) not writable: {path}"
+            _log_exec_workspace_error(msg)
+            raise ExecWorkspaceError(msg)
+    except ExecWorkspaceError:
+        raise
+    except Exception as e:
+        msg = f"EXEC_WORKSPACE_ROOT ({source}) access check failed: {path} ({type(e).__name__}: {e})"
+        _log_exec_workspace_error(msg)
+        raise ExecWorkspaceError(msg)
+    return path
+
+
+def _log_exec_workspace_error(msg: str) -> None:
+    try:
+        from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+        AgentLogger("exec.workspace").log(msg, level="ERROR")
+    except Exception:
+        pass
+
+
 def mk_thinking_streamer(author: str,
                         comm: ChatCommunicator) -> Callable[[str], Awaitable[None]]:
     counter = {"n": 0}
@@ -81,14 +118,14 @@ def get_exec_workspace_root() -> pathlib.Path:
             AgentLogger("exec.workspace").log(f"EXEC_WORKSPACE_ROOT override: {env_root}", level="INFO")
         except Exception:
             pass
-        return pathlib.Path(env_root)
+        return _ensure_writable_dir(pathlib.Path(env_root), source="EXEC_WORKSPACE_ROOT")
     if _is_running_in_docker():
         try:
             from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
             AgentLogger("exec.workspace").log("EXEC_WORKSPACE_ROOT default: /exec-workspace (docker)", level="INFO")
         except Exception:
             pass
-        return pathlib.Path("/exec-workspace")
+        return _ensure_writable_dir(pathlib.Path("/exec-workspace"), source="docker-default")
     # Host-only fallback to HOST_EXEC_WORKSPACE_PATH
     host_root = os.environ.get("HOST_EXEC_WORKSPACE_PATH")
     if host_root:
@@ -97,13 +134,13 @@ def get_exec_workspace_root() -> pathlib.Path:
             AgentLogger("exec.workspace").log(f"HOST_EXEC_WORKSPACE_PATH fallback: {host_root}", level="INFO")
         except Exception:
             pass
-        return pathlib.Path(host_root)
+        return _ensure_writable_dir(pathlib.Path(host_root), source="HOST_EXEC_WORKSPACE_PATH")
     try:
         from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
         AgentLogger("exec.workspace").log("EXEC_WORKSPACE_ROOT default: /tmp (host)", level="INFO")
     except Exception:
         pass
-    return pathlib.Path("/tmp")
+    return _ensure_writable_dir(pathlib.Path("/tmp"), source="host-default")
 
 
 def _is_running_in_docker() -> bool:
