@@ -1,34 +1,55 @@
 # KDCube — Agentic AI Platform & SDK
 
-> **Ship AI copilots to your customers, not just to yourself.**
+> **The enforcement layer between AI agents and production systems.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)]()
 [![Docker Ready](https://img.shields.io/badge/docker-ready-blue.svg)]()
+[![CI — Publish CLI](https://github.com/kdcube/kdcube-ai-app/actions/workflows/publish-kdcube-apps-cli.yml/badge.svg)](https://github.com/kdcube/kdcube-ai-app/actions/workflows/publish-kdcube-apps-cli.yml)
+[![Website](https://img.shields.io/website?url=https%3A%2F%2Fkdcube.tech&label=kdcube.tech)](https://kdcube.tech)
 
-KDCube is a **self‑hosted, multi‑tenant platform + SDK** for building
-**production‑grade AI assistants, copilots, and agentic apps**.
-It gives you the full stack — agent runtime, streaming protocol, tool execution,
-memory, economics, and operations — so you go from prototype to production
-without stitching together a dozen services.
+KDCube is a **self‑hosted agent enforcement runtime** that blocks unsafe actions
+before execution — with hard budget caps, tenant isolation, and subprocess
+sandboxing at the infrastructure layer.
+Ship AI copilots **to your customers, not just to yourself**, with the full
+stack: agent runtime, streaming protocol, tool execution, memory, economics,
+and operations.
+
+*For engineering teams shipping AI agents to production.*
 
 ### Why teams choose KDCube
 
 | Pain point | KDCube answer |
 |---|---|
+| "Our agent can call anything — we can't control it" | Executor runs isolated; all tool calls proxied through a privileged supervisor |
 | "We glued 8 services together and it's fragile" | Full stack from streaming to ops in one platform |
-| "Our agent works in demos but not in production" | Backpressure, rate limits, circuit breakers, multi‑tenant isolation |
+| "A runaway agent blew our budget" | Hard spending caps enforced per user, project, and org — outside agent reasoning |
 | "We're locked into one LLM provider's tool‑calling" | Runs on plain prompt/completion — no tool‑calling lock‑in |
+| "We need this for multiple customers, not just us" | Tenant namespacing enforced across gateway, storage, database, and accounting |
 | "We can't prove where answers came from" | Source pools + citations by default (Perplexity‑style) |
-| "We need this for multiple customers, not just us" | Multi‑tenant at the schema level with per‑tenant economics |
 
-### Get running in minutes
+### Get running
 
 ```bash
 git clone https://github.com/kdcube/kdcube-ai-app && cd kdcube-ai-app
-cp .env.example .env        # add your LLM API key
-docker compose up            # platform + UI + infra
+
+# copy sample env files and add your API keys
+cd app/ai-app/deployment/docker/all_in_one_kdcube
+cp sample_env/.env.postgres.setup .env.postgres.setup
+cp sample_env/.env.ingress       .env.ingress
+cp sample_env/.env.proc          .env.proc
+cp sample_env/.env.metrics       .env.metrics
+cp sample_env/.env.frontend      .env.frontend
+
+# prepare data directories
+mkdir -p ./data/{postgres,redis,clamav-db}
+chmod -R 0777 data logs
+
+# start the full stack (Postgres, Redis, ClamAV, chat services, web UI, proxy)
+docker compose up -d --build
 ```
+
+Or install the CLI wizard: `pipx install kdcube-apps-cli && kdcube-apps-cli`
 
 **Highlights**
 - **Full stack**: from streaming protocols to tool execution, memory, economics, and ops.
@@ -196,8 +217,8 @@ Docker Compose is already supported for local and small‑scale (with EC2) setup
 
 ## Quickstart
 
-- CLI installer: `app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/README.md`
-- Docker Compose (all‑in‑one): `app/ai-app/deployment/docker/all_in_one/README.md`
+- **Docker Compose (all‑in‑one)**: [`app/ai-app/deployment/docker/all_in_one_kdcube/README.md`](app/ai-app/deployment/docker/all_in_one_kdcube/README.md)
+- **CLI installer**: `pipx install kdcube-apps-cli` — guided setup wizard ([docs](app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/README.md))
 
 ---
 
