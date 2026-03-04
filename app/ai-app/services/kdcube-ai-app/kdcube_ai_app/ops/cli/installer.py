@@ -517,10 +517,14 @@ def main() -> None:
     ensure_env_files(config_dir, sample_env_dir)
     ensure_local_dirs(data_dir, logs_dir)
     env_paths = gather_configuration(console, ctx)
+    env_main = load_env_file(config_dir / ".env")
 
     console.print("\n[bold]Env files:[/bold]")
     for name, path in env_paths.items():
         console.print(f"  {name}: {path}")
+    console.print("\n[dim]Review/edit these files before building images if needed.[/dim]")
+
+    console.print("\n[dim]Small coffee break:[/dim] [#C6F3F1]( ( ) )[/] [#01BEB2].-.-.[/] [#4372C3]`-.-'[/]\n")
 
     if Confirm.ask("Build core platform images (ingress/proc/metrics/ui/proxy/postgres-setup)?", default=False):
         missing = missing_build_keys(env_main)
