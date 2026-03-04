@@ -133,6 +133,36 @@ def _format_json_multiline(key: str, data: Dict[str, object]) -> List[str]:
     return lines
 
 
+def _extract_tenant_project(env: EnvFile) -> Tuple[Optional[str], Optional[str]]:
+    raw, _, _ = _extract_multiline_value(env, "GATEWAY_CONFIG_JSON")
+    if raw is None:
+        return None, None
+    stripped = raw.strip()
+    if stripped.startswith("'") and stripped.endswith("'"):
+        json_text = stripped[1:-1]
+    else:
+        json_text = stripped
+    try:
+        data = json.loads(json_text)
+        tenant = data.get("tenant")
+        project = data.get("project")
+        if tenant == "<TENANT_ID>":
+            tenant = None
+        if project == "<PROJECT_ID>":
+            project = None
+        return tenant, project
+    except json.JSONDecodeError:
+        tenant_match = re.search(r'"tenant"\s*:\s*"([^"]+)"', json_text)
+        project_match = re.search(r'"project"\s*:\s*"([^"]+)"', json_text)
+        tenant = tenant_match.group(1) if tenant_match else None
+        project = project_match.group(1) if project_match else None
+        if tenant == "<TENANT_ID>":
+            tenant = None
+        if project == "<PROJECT_ID>":
+            project = None
+        return tenant, project
+
+
 def patch_gateway_config_json(env: EnvFile, tenant: str, project: str) -> None:
     raw, start_idx, end_idx = _extract_multiline_value(env, "GATEWAY_CONFIG_JSON")
     if raw is None:
@@ -379,8 +409,18 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
 
     defaults = compute_paths(ctx.ai_app_root, ctx.lib_root, ctx.workdir)
 
-    tenant = Prompt.ask("Tenant ID", default="demo-tenant")
-    project = Prompt.ask("Project name", default="demo-project")
+    existing_tenant, existing_project = _extract_tenant_project(env_ingress)
+    if not existing_tenant or not existing_project:
+        alt_tenant, alt_project = _extract_tenant_project(env_proc)
+        existing_tenant = existing_tenant or alt_tenant
+        existing_project = existing_project or alt_project
+    if not existing_tenant or not existing_project:
+        alt_tenant, alt_project = _extract_tenant_project(env_metrics)
+        existing_tenant = existing_tenant or alt_tenant
+        existing_project = existing_project or alt_project
+
+    tenant = Prompt.ask("Tenant ID", default=existing_tenant or "demo-tenant")
+    project = Prompt.ask("Project name", default=existing_project or "demo-project")
     for env in (env_ingress, env_proc, env_metrics):
         patch_gateway_config_json(env, tenant, project)
 
