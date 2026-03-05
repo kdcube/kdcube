@@ -362,14 +362,11 @@ async def lifespan(app: FastAPI):
         # Start heartbeats for ingress processes
         await heartbeat_manager.start_heartbeat(interval=10)
 
+        # Link-preview is lazy-initialized on first use; no pre-warm at ingress startup.
+        app.state.link_preview_instance = None
         try:
-            from kdcube_ai_app.infra.rendering.link_preview import get_shared_link_preview
-            app.state.link_preview_instance = await get_shared_link_preview()
-
-            await socketio_handler.start() # communicator subscribes internally
+            await socketio_handler.start()  # communicator subscribes internally
         except Exception as e:
-            app.state.shared_browser_instance = None
-            app.state.link_preview_instance = None
             logger.error(f"Failed to start chat relay listener: {e}")
 
         # Bundles registry is always sourced from Redis by request-time sync in ingress.
