@@ -8,6 +8,7 @@ from __future__ import annotations
 import traceback
 import pathlib
 import os
+import shutil
 from typing import Any, Dict
 
 from langgraph.graph import StateGraph, START, END
@@ -183,7 +184,7 @@ class ReactWorkflow(BaseEntrypoint):
         repo_root = None
         if repo:
             try:
-                from kdcube_ai_app.infra.plugin.git_bundle import ensure_git_bundle
+                from kdcube_ai_app.infra.plugin.git_bundle import ensure_git_bundle, bundle_dir_for_git
                 repos_root = (storage_root / "repos").resolve()
                 paths = ensure_git_bundle(
                     bundle_id=f"{BUNDLE_ID}.knowledge",
@@ -194,6 +195,22 @@ class ReactWorkflow(BaseEntrypoint):
                     logger=self.logger,
                 )
                 repo_root = paths.repo_root
+                # Cleanup older clones for this knowledge repo (keep current).
+                try:
+                    base_prefix = bundle_dir_for_git(
+                        bundle_id=f"{BUNDLE_ID}.knowledge",
+                        git_url=repo,
+                        git_ref=None,
+                    )
+                    for child in repos_root.iterdir():
+                        if not child.is_dir():
+                            continue
+                        if child.resolve() == repo_root.resolve():
+                            continue
+                        if child.name == base_prefix or child.name.startswith(f\"{base_prefix}__\"):
+                            shutil.rmtree(child, ignore_errors=True)
+                except Exception:
+                    self.logger.log(traceback.format_exc(), "WARNING")
             except Exception:
                 self.logger.log(traceback.format_exc(), "WARNING")
 
