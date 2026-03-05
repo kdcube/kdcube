@@ -10,7 +10,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
 
-from kdcube_apps_cli.kd_banner import print_cli_banner
+from kdcube_apps_cli.banner import print_cli_banner
 
 
 DEFAULT_REPO = "https://github.com/kdcube/kdcube-ai-app.git"
