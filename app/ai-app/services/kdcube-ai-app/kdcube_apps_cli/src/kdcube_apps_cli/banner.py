@@ -6,15 +6,63 @@ import os
 if os.name == 'nt':
     os.system('color')
 
+# --- Terminal color capability detection -----------------------------------
+#
+# macOS Terminal.app supports 256 colors but NOT 24-bit truecolor.
+# Modern terminals (VS Code, JetBrains, iTerm2, Windows Terminal, Linux)
+# advertise truecolor support via COLORTERM=truecolor or COLORTERM=24bit.
+#
+# Detection priority:
+#   1. COLORTERM=truecolor / 24bit  → truecolor confirmed
+#   2. TERM_PROGRAM=Apple_Terminal  → 256-color fallback
+#   3. Anything else                → assume truecolor (safe for modern terminals)
+
+def _detect_truecolor() -> bool:
+    """Return True if the terminal supports 24-bit truecolor ANSI escape codes."""
+    colorterm = os.environ.get("COLORTERM", "").lower()
+    if colorterm in ("truecolor", "24bit"):
+        return True
+    if os.environ.get("TERM_PROGRAM") == "Apple_Terminal":
+        return False
+    return True  # VS Code, JetBrains, iTerm2, Windows Terminal, etc.
+
+_TRUECOLOR = _detect_truecolor()
+
+# --- 256-color fallback helper ----------------------------------------------
+_CUBE_VALS = [0, 95, 135, 175, 215, 255]
+
+def _rgb_to_256(r: int, g: int, b: int) -> int:
+    """Convert an RGB triple to the nearest ANSI 256-color palette index."""
+    def _nearest(v):
+        return min(range(6), key=lambda i: abs(_CUBE_VALS[i] - v))
+
+    ri, gi, bi = _nearest(r), _nearest(g), _nearest(b)
+    cube_idx = 16 + 36 * ri + 6 * gi + bi
+    cr, cg, cb = _CUBE_VALS[ri], _CUBE_VALS[gi], _CUBE_VALS[bi]
+    cube_dist = (cr - r) ** 2 + (cg - g) ** 2 + (cb - b) ** 2
+
+    # Also compare against the 24-step grayscale ramp (indices 232–255)
+    luma = int(0.299 * r + 0.587 * g + 0.114 * b)
+    gray_n = max(0, min(23, round((luma - 8) / 10)))
+    gray_idx = 232 + gray_n
+    gv = 8 + 10 * gray_n
+    gray_dist = (gv - r) ** 2 + (gv - g) ** 2 + (gv - b) ** 2
+
+    return cube_idx if cube_dist <= gray_dist else gray_idx
+
 # --- ANSI Truecolor Definitions ---
 RESET    = "\033[0m"
 RESET_BG = "\033[49m"   # reset background only (keep foreground)
 
 def rgb_fg(r, g, b):
-    return f"\033[38;2;{r};{g};{b}m"
+    if _TRUECOLOR:
+        return f"\033[38;2;{r};{g};{b}m"
+    return f"\033[38;5;{_rgb_to_256(r, g, b)}m"
 
 def rgb_bg(r, g, b):
-    return f"\033[48;2;{r};{g};{b}m"
+    if _TRUECOLOR:
+        return f"\033[48;2;{r};{g};{b}m"
+    return f"\033[48;5;{_rgb_to_256(r, g, b)}m"
 
 # Background-color palette (main robot + label)
 COLORS = {
