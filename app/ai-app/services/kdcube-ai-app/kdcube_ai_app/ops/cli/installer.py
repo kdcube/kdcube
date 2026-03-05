@@ -248,6 +248,19 @@ def ensure_env_files(target_dir: Path, sample_env_dir: Path) -> None:
         shutil.copyfile(sample, target)
 
 
+def ensure_nginx_configs(target_dir: Path, ai_app_root: Path) -> None:
+    src_dir = ai_app_root / "deployment/docker/all_in_one_kdcube/nginx/conf"
+    for name in ("nginx_ui.conf", "nginx_proxy.conf"):
+        target = target_dir / name
+        if target.exists():
+            continue
+        src = src_dir / name
+        if not src.exists():
+            raise FileNotFoundError(f"Missing nginx config template: {src}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, target)
+
+
 def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
     for path in [
         data_dir / "kdcube-storage",
@@ -460,17 +473,30 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
     for env in (env_ingress, env_proc, env_metrics):
         patch_gateway_config_json(env, tenant, project)
 
-    if is_placeholder(env_pg.entries.get("POSTGRES_USER", (None, None))[1]):
+    pg_user = env_pg.entries.get("POSTGRES_USER", (None, None))[1]
+    if is_placeholder(pg_user):
         pg_user = ask(console, "Postgres user", default="postgres")
         update_env_value(env_pg, "POSTGRES_USER", pg_user)
-        update_env_value(env_ingress, "POSTGRES_USER", pg_user)
-        update_env_value(env_proc, "POSTGRES_USER", pg_user)
-    if is_placeholder(env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1]):
+    update_if_placeholder(env_ingress, "POSTGRES_USER", pg_user or "postgres")
+    update_if_placeholder(env_proc, "POSTGRES_USER", pg_user or "postgres")
+
+    pg_pass = env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1]
+    if is_placeholder(pg_pass):
         pg_pass = ask(console, "Postgres password", secret=True)
         console.print(f"{_label('Postgres password')}: [dim]{_mask(pg_pass)}[/]")
         update_env_value(env_pg, "POSTGRES_PASSWORD", pg_pass)
-        update_env_value(env_ingress, "POSTGRES_PASSWORD", pg_pass)
-        update_env_value(env_proc, "POSTGRES_PASSWORD", pg_pass)
+    update_if_placeholder(env_ingress, "POSTGRES_PASSWORD", pg_pass or "postgres")
+    update_if_placeholder(env_proc, "POSTGRES_PASSWORD", pg_pass or "postgres")
+
+    pg_db = env_pg.entries.get("POSTGRES_DATABASE", (None, None))[1]
+    if is_placeholder(pg_db):
+        pg_db = "kdcube"
+        update_env_value(env_pg, "POSTGRES_DATABASE", pg_db)
+    update_if_placeholder(env_ingress, "POSTGRES_DATABASE", pg_db or "kdcube")
+    update_if_placeholder(env_proc, "POSTGRES_DATABASE", pg_db or "kdcube")
+    update_if_placeholder(env_main, "PGUSER", pg_user or "postgres")
+    update_if_placeholder(env_main, "PGPASSWORD", pg_pass or "postgres")
+    update_if_placeholder(env_main, "PGDATABASE", pg_db or "kdcube")
     if is_placeholder(env_main.entries.get("REDIS_PASSWORD", (None, None))[1]):
         redis_pass = ask(console, "Redis password", secret=True)
         console.print(f"{_label('Redis password')}: [dim]{_mask(redis_pass)}[/]")
@@ -658,6 +684,7 @@ def main() -> None:
         )
 
         ensure_env_files(config_dir, sample_env_dir)
+        ensure_nginx_configs(config_dir, ai_app_root)
         ensure_local_dirs(data_dir, logs_dir)
         env_paths = gather_configuration(console, ctx)
         env_main = load_env_file(config_dir / ".env")

@@ -319,6 +319,7 @@ services:
       - kdcube-internal
     volumes:
       - ${PATH_TO_FRONTEND_CONFIG_JSON}:/usr/share/nginx/html/config.json:ro
+      - ${KDCUBE_CONFIG_DIR:-./config}/nginx_ui.conf:/etc/nginx/nginx.conf:ro
     ports:
       - "5173:80"
 
@@ -350,6 +351,7 @@ services:
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./nginx/webroot:/var/www/letsencrypt
+      - ${KDCUBE_CONFIG_DIR:-./config}/nginx_proxy.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
     depends_on:
       chat-ingress:
         condition: service_started
