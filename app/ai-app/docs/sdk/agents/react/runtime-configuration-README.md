@@ -79,6 +79,16 @@ gate `react.hide` (paths before the pre‑tail cache point cannot be hidden).
 Rounds are counted across the **visible timeline slice** (post‑compaction), which
 may include blocks from previous turns.
 
+## Workspace persistence (env)
+
+Turn workspaces can be persisted as execution snapshots. This is **diagnostic only** and
+not required for conversation correctness.
+
+- `REACT_PERSIST_WORKSPACE=1` (default): persist snapshot
+- `REACT_PERSIST_WORKSPACE=0`: skip snapshot
+
+See `react-turn-workspace-README.md` for details.
+
 ## Legacy Cache Fields
 
 For backward compatibility, `RuntimeCtx` still exposes top-level cache fields (for now). If set, they override the session defaults.

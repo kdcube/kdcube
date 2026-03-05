@@ -34,6 +34,9 @@ AGENTIC_BUNDLES_ROOT=/bundles
 
 # Optional (branch refs)
 # BUNDLE_GIT_ALWAYS_PULL=1
+
+# Optional (turn workspace snapshot; diagnostics only)
+# REACT_PERSIST_WORKSPACE=0
 ```
 
 After the first successful startup, set:

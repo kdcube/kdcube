@@ -4,6 +4,7 @@
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/react/v2/runtime.py
 
 import asyncio
+import os
 import json
 import pathlib
 import random
@@ -710,6 +711,9 @@ class ReactSolverV2:
         Persist execution snapshot (out/work trees) into ConversationStore.
         Uses runtime_ctx for all required fields.
         """
+        flag = os.getenv("REACT_PERSIST_WORKSPACE", "1").strip().lower()
+        if flag in {"0", "false", "no", "off"}:
+            return None
         if not self.hosting_service or not self.ctx_browser:
             return None
         runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)

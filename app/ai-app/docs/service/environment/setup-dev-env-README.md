@@ -44,6 +44,9 @@ BUNDLE_GIT_ATOMIC=1
 
 # Where bundles are stored on disk
 AGENTIC_BUNDLES_ROOT=/absolute/path/to/bundles
+
+# Optional (turn workspace snapshot; diagnostics only)
+# REACT_PERSIST_WORKSPACE=0
 ```
 
 Optional (if using branch refs):

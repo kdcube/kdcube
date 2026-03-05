@@ -64,6 +64,9 @@ AGENTIC_BUNDLES_ROOT=/bundles
 # Optional (branch refs)
 # BUNDLE_GIT_ALWAYS_PULL=1
 
+# Optional (turn workspace snapshot; diagnostics only)
+# REACT_PERSIST_WORKSPACE=0
+
 # SSH inside container (matches the mounted paths)
 GIT_SSH_KEY_PATH=/run/secrets/git_ssh_key
 GIT_SSH_KNOWN_HOSTS=/run/secrets/git_known_hosts
