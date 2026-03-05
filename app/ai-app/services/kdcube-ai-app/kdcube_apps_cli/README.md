@@ -1,6 +1,6 @@
 # KDCube CLI
 
-![KDCube CLI](https://raw.githubusercontent.com/kdcube/kdcube-ai-app/master/app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/pixel-cubes.png)
+![KDCube CLI](https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/pixel-cubes.png)
 
 Bootstrap installer for the KDCube platform stack. This package clones the
 repository (if needed) and launches the guided setup wizard.
