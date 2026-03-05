@@ -1,11 +1,31 @@
 # KDCube CLI
 
-![pixel-cubes.svg](pixel-cubes.svg)
+![KDCube CLI](https://raw.githubusercontent.com/kdcube/kdcube-ai-app/master/app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/pixel-cubes.png)
 
 Bootstrap installer for the KDCube platform stack. This package clones the
 repository (if needed) and launches the guided setup wizard.
 
 CLI source: `services/kdcube-ai-app/kdcube_ai_app/ops/cli`
+Packaged assets:
+- `kdcube_apps_cli/assets/pixel-cubes.svg`
+- `kdcube_apps_cli/assets/pixel-cubes.png`
+
+## Prerequisites
+
+### macOS
+- Python 3.9+ (Homebrew recommended)
+- Git (Xcode Command Line Tools or Homebrew)
+- Docker Desktop (includes Docker Compose)
+
+### Windows
+- Python 3.9+
+- Git for Windows
+- Docker Desktop (enable WSL2 backend)
+
+### Linux
+- Python 3.9+
+- Git
+- Docker Engine + Docker Compose plugin
 
 ## Install
 
@@ -13,10 +33,22 @@ CLI source: `services/kdcube-ai-app/kdcube_ai_app/ops/cli`
 pipx install kdcube-apps-cli
 ```
 
+Alternative (pip):
+
+```bash
+python -m pip install --user kdcube-apps-cli
+```
+
 ## Run
 
 ```bash
 kdcube-apps-cli
+```
+
+Tip: if `kdcube-apps-cli` is not on your PATH, run:
+
+```bash
+python -m kdcube_apps_cli.cli
 ```
 
 ## What the wizard does

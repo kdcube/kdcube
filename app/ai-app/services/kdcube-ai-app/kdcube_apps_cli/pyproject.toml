@@ -13,3 +13,9 @@ license = {file = "LICENSE"}
 
 [project.scripts]
 kdcube-apps-cli = "kdcube_apps_cli.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.package-data]
+kdcube_apps_cli = ["assets/*.svg", "assets/*.png"]
