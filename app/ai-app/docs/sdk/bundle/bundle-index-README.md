@@ -16,6 +16,7 @@ Use this index to find the right doc by persona.
 ## Bundle developers
 
 - Authoring + SDK usage: `docs/sdk/bundle/bundle-dev-README.md`
+- Bundle outbound firewall: `docs/sdk/bundle/bundle-firewall-README.md`
 - Storage + cache: `docs/sdk/bundle/bundle-storage-cache-README.md`
 - Interfaces (widgets + ops): `docs/sdk/bundle/bundle-interfaces-README.md`
 - Custom tools (bundle‑local): `docs/sdk/tools/custom-tools-README.md`

@@ -8,7 +8,7 @@ see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/README-comm.md
   - ks:docs/clients/sse-events-README.md
-  - ks:docs/sdk/bundle/firewall-README.md
+  - ks:docs/sdk/bundle/bundle-firewall-README.md
 ---
 # Communication Subsystem Architecture
 
@@ -143,7 +143,7 @@ Bundles can attach an **event filter** that acts as an outbound firewall.
 It receives the event metadata and user/session details and decides whether
 the package should be **emitted or suppressed**.
 
-See: `docs/sdk/bundle/firewall-README.md`
+See: `docs/sdk/bundle/bundle-firewall-README.md`
 
 ---
 

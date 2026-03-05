@@ -1,5 +1,5 @@
 ---
-id: ks:docs/sdk/bundle/firewall-README.md
+id: ks:docs/sdk/bundle/bundle-firewall-README.md
 title: "Bundle Outbound Firewall"
 summary: "Bundle‑level event filter that decides which comm events are allowed to leave the bundle."
 tags: ["sdk", "bundle", "comm", "security", "firewall"]
@@ -77,4 +77,3 @@ workflow = WithReactWorkflow(
 - Filters are **fail‑open**: if the filter crashes, the event is allowed.
 - This is a **bundle‑level** control. It can be different for each bundle.
 - If you need org‑wide restrictions, implement them at the gateway or relay layer.
-

@@ -261,7 +261,7 @@ Example:
 
 Docs:
 - `docs/service/comm/comm-system.md` (event types + filtering)
-- `docs/sdk/bundle/firewall-README.md` (bundle outbound firewall)
+- `docs/sdk/bundle/bundle-firewall-README.md` (bundle outbound firewall)
 
 ---
 

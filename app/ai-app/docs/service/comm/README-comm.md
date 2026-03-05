@@ -8,7 +8,7 @@ see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/auth/auth-README.md
-  - ks:docs/sdk/bundle/firewall-README.md
+  - ks:docs/sdk/bundle/bundle-firewall-README.md
 ---
 # Communication Integrations (External + Internal)
 
@@ -196,7 +196,7 @@ Bundles can define an **event filter** (`IEventFilter`) that acts as an outbound
 It sees the event metadata + user/session details and can **suppress** events before
 they reach Redis/SSE/Socket.IO.
 
-See: `docs/sdk/bundle/firewall-README.md`
+See: `docs/sdk/bundle/bundle-firewall-README.md`
 
 ### Examples (per marker)
 
