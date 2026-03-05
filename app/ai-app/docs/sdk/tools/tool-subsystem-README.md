@@ -1,116 +1,89 @@
 ---
 id: ks:docs/sdk/tools/tool-subsystem-README.md
 title: "Tool Subsystem"
-summary: "Tool subsystem internals: tool definitions, IDs, loaders, and runtime selection."
-tags: ["sdk", "tools", "subsystem", "runtime", "execution"]
-keywords: ["ToolSubsystem", "tool id", "tool descriptor", "runtime mode", "isolation", "bundle tools"]
+summary: "Canonical runtime flow for tool descriptors: resolution, dynamic loading, and execution in in-memory and isolated modes."
+tags: ["sdk", "tools", "subsystem", "runtime", "descriptor", "isolation", "mcp"]
+keywords: ["tools_descriptor.py", "TOOLS_SPECS", "MCP_TOOL_SPECS", "TOOL_RUNTIME", "ToolSubsystem", "resolve_codegen_tools_specs", "io_tools.tool_call", "ToolStub", "py_code_exec_entry.py", "rewrite_runtime_globals_for_bundle"]
 see_also:
   - ks:docs/sdk/tools/custom-tools-README.md
   - ks:docs/sdk/tools/mcp-README.md
   - ks:docs/exec/README-runtime-modes-builtin-tools.md
+  - ks:docs/exec/README-iso-runtime.md
 ---
 # Tool Subsystem
 
-This document explains how tools are defined, loaded, and executed by the SDK. It covers custom tool modules, tool IDs, and runtime selection (in‑process vs isolation).
+This is the canonical reference for how tool descriptors are consumed and how tool calls execute.
 
-## What the ToolSubsystem does
+## Descriptor wiring
 
-ToolSubsystem is the single place that:
-- Resolves tool module specs (`module` or `ref`) into importable modules.
-- Loads tool modules and introspects tool metadata (SK/non‑SK).
-- Builds tool catalogs for the coordinator/decision prompts.
-- Provides callables for `<alias>.<tool_name>` at runtime.
-- Exports runtime globals for isolated execution.
-- Provides optional per‑tool runtime overrides.
-- Wires MCP tools (via MCPToolsSubsystem) into the tool catalog.
-
-Implementation: `kdcube_ai_app/apps/chat/sdk/runtime/tool_subsystem.py`
-
-## Defining tools (bundle descriptor)
-
-Bundles provide tool modules via a portable descriptor, e.g.:
-
-`bundle_root/tools_descriptor.py`
+`tools_descriptor.py` is imported by the bundle workflow and passed to `create_tool_subsystem_with_mcp(...)` as data:
 
 ```python
-CODEGEN_TOOLS_SPECS = [
-    {"module": "kdcube_ai_app.apps.chat.sdk.tools.io_tools", "alias": "io_tools", "use_sk": True},
-    {"ref": "orchestrator/tools/generic_agent_tools.py", "alias": "generic_tools", "use_sk": True},
-]
+tool_subsystem, _ = create_tool_subsystem_with_mcp(
+    service=self.model_service,
+    comm=self.comm,
+    logger=self.logger,
+    bundle_spec=self.config.ai_bundle_spec,
+    context_rag_client=self.ctx_client,
+    registry={"kb_client": self.kb},
+    raw_tool_specs=tools_descriptor.TOOLS_SPECS,
+    tool_runtime=getattr(tools_descriptor, "TOOL_RUNTIME", None),
+    mcp_tool_specs=getattr(tools_descriptor, "MCP_TOOL_SPECS", []),
+    mcp_env_json=os.environ.get("MCP_SERVICES") or "",
+)
 ```
 
-### Tool IDs
+The subsystem does not auto-scan `tools_descriptor.py` on disk. The workflow decides what is loaded.
 
-Tool IDs are resolved as:
+## `module` vs `ref` resolution
 
-```
-<alias>.<tool_name>
-```
+`TOOLS_SPECS` entries are portable:
+- `module`: importable Python module path.
+- `ref`: file path relative to the bundle root.
 
-Example: alias `generic_tools` + function `web_search` → `generic_tools.web_search`.
+Resolution flow:
+1. `resolve_codegen_tools_specs(...)` rewrites relative `ref` paths using the bundle root.
+2. `ToolSubsystem._resolve_tools(...)` turns `module` and `ref` entries into concrete file paths.
+3. `ToolSubsystem._load_tools_module(...)` loads each file with `importlib.util.spec_from_file_location(...)`.
 
-For non‑module tools (e.g., MCP), tool IDs include a provider origin prefix:
+Implication: `ref` is not host-only. It is bundle-relative and portable across runtimes.
 
-```
-<origin>.<provider>.<tool_name...>
-```
+## Why `ref` works in iso-runtime and Docker
 
-Example: `mcp.web_search.web_search`
+`ToolSubsystem.export_runtime_globals()` exports:
+- `TOOL_ALIAS_MAP`
+- `TOOL_MODULE_FILES`
+- `RAW_TOOL_SPECS`
+- `BUNDLE_ROOT_HOST`
 
-## Runtime selection per tool
+Before remote/isolated execution:
+- `rewrite_runtime_globals_for_bundle(...)` rewrites bundle-root paths to the restored bundle path.
+- `py_code_exec_entry.py` (`_bootstrap_supervisor_runtime`) loads dynamic modules from `TOOL_MODULE_FILES`.
+- If a module file path is unavailable, the supervisor can still resolve `module` entries using `RAW_TOOL_SPECS`.
 
-By default, built‑in tools use SDK policy (`tools_insights`). For custom tools, you can override runtime by defining a mapping in your bundle:
+This is why bundle-local `ref` tools continue to work in isolated runtime execution.
 
-```python
-TOOL_RUNTIME = {
-    "generic_tools.web_search": "local",
-    "generic_tools.web_fetch": "local",
-}
-```
+## Tool IDs and catalog entries
 
-Valid values: `none | local | docker`.
+Tool IDs:
+- Module tools: `<alias>.<tool_name>`
+- MCP tools: `mcp.<alias>.<tool_name>`
 
-If a tool is **not** present in the mapping, it runs in‑memory (unless the SDK default policy isolates it).
+`ToolSubsystem` introspects loaded modules and builds the catalog used by planner/generator prompts.
 
-## How runtime selection flows
+## Execution path (runtime enforcement)
 
-1) The bundle passes `TOOL_RUNTIME` into `SolverSystem` (see workflow wiring).
-2) `ToolSubsystem` stores the runtime map and exposes `get_tool_runtime(tool_id)`.
-3) `react/execution.py` checks for a runtime override before falling back to SDK defaults.
+1. `execution.execute_tool(...)` picks in-memory vs isolated execution (`TOOL_RUNTIME` + default isolation policy).
+2. In-memory path (`_execute_tool_in_memory`) resolves callable by alias and executes via `agent_io_tools.tool_call(...)`.
+3. Isolated path (`execute_tool_in_isolation`) passes runtime globals to iso runtime.
+4. In the limited executor, `agent_io_tools.tool_call(...)` delegates to supervisor via `ToolStub`.
+5. Supervisor resolves callable from `TOOL_ALIAS_MAP` and executes through `agent_io_tools.tool_call(...)`.
+6. For `mcp.*` IDs, `agent_io_tools.tool_call(...)` routes to `MCPToolsSubsystem.execute_tool(...)`.
 
-This keeps built‑in tools behavior stable while allowing bundles to opt into isolation.
+## Related docs
 
-## Tool loading path
-
-- `ToolSubsystem` resolves specs via `resolve_codegen_tools_specs(...)`.
-- Modules are imported and bound with:
-  - `bind_service(...)` (ModelService)
-  - `bind_registry(...)` (bundle registry)
-  - `bind_integrations(...)` (ctx client, kv cache)
-- Tool metadata is introspected and a flattened catalog is built.
-
-## Integrations available to tools
-
-Tools can access shared integrations injected by the subsystem:
-- `ctx_client`: ContextRAGClient / ContextBrowser helper to query or persist artifacts.
-- `kv_cache`: Redis-backed KV cache for lightweight state (see `infra/service_hub/cache-README.md`).
-
-Prefer cache access over direct Redis calls inside tools.
-
-## MCP tools
-
-If MCP tools are configured, `ToolSubsystem` delegates MCP discovery/execution
-to `MCPToolsSubsystem` and injects MCP tool entries into the catalog.
-
-See: `sdk/runtime/mcp/mcp-README.md`
-
-## Connection to runtime
-
-- In‑memory tools are executed directly via `ToolSubsystem.resolve_callable`.
-- Isolated tools are executed via ISO runtime, using:
-  - `export_runtime_globals()` (alias maps + tool module files)
-  - `tool_modules_tuple_list()` (module objects for in‑proc runtime)
-
-See:
-- `sdk/runtime/isolated/README-iso-runtime.md`
-- `sdk/runtime/isolated/README-runtime-modes-builtin-tools.md`
+- [Custom Tools](./custom-tools-README.md)
+- [MCP Integration](./mcp-README.md)
+- [Runtime Modes for Built-in Tools](../../exec/README-runtime-modes-builtin-tools.md)
+- [ISO Runtime](../../exec/README-iso-runtime.md)
+- [ReAct Tooling](../agents/react/react-tools-README.md)

@@ -1,157 +1,62 @@
 ---
 id: ks:docs/sdk/tools/mcp-README.md
 title: "MCP"
-summary: "MCP tool integration: transports, server config, and runtime wiring."
-tags: ["sdk", "tools", "mcp", "integration", "transport"]
-keywords: ["MCP_SERVICES", "stdio", "http", "SSE", "tool gateway", "runtime config"]
+summary: "MCP tool integration: descriptor allow-lists, MCP_SERVICES transport/auth config, and runtime execution flow (host + isolated)."
+tags: ["sdk", "tools", "mcp", "runtime", "descriptor", "transport", "auth"]
+keywords: ["MCP_TOOL_SPECS", "MCP_SERVICES", "MCPToolsSubsystem", "mcp.<alias>.<tool>", "stdio", "http", "streamable-http", "sse", "oauth_gui", "tool_call"]
 see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/tools/custom-tools-README.md
   - ks:docs/sdk/agents/react/react-tools-README.md
+  - ks:docs/exec/README-iso-runtime.md
 ---
-# MCP Integration (Runtime)
+# MCP Integration
 
-This document describes how MCP (Model Context Protocol) tools are wired into the SDK runtime, how to configure servers, and what is supported.
+This document covers MCP (Model Context Protocol) as a tool provider in the SDK.
 
-## Architecture overview
+For shared tool-subsystem behavior (`TOOLS_SPECS`, alias resolution, isolated supervisor flow), see [Tool Subsystem](./tool-subsystem-README.md).
 
-MCP is integrated as a first‑class tool provider alongside module tools.
+## What you configure
 
-Flow:
-1. **Tool descriptor** lists which MCP servers/tools are exposed to planners.
-2. **MCP_SERVICES env** provides server connection details + secrets.
-3. **MCPToolsSubsystem** loads tool schemas (cached) and exposes them as tool entries:
-   - tool id format: `mcp.<alias>.<tool_id>`
-4. **Execution** routes MCP tool calls through `io_tools.tool_call(...)` and
-   delegates to MCPToolsSubsystem.
+You configure MCP in two places:
+1. `MCP_TOOL_SPECS` in bundle `tools_descriptor.py` (what is visible/exposed).
+2. `MCP_SERVICES` env JSON (how to connect and authenticate).
 
-## Configuration
+### 1) Descriptor: `MCP_TOOL_SPECS`
 
-### 1) Tool descriptor (which MCP servers/tools are exposed)
-
-In your bundle tool descriptor, declare MCP servers and optional allow‑lists.
-
-Example:
-```
+```python
 MCP_TOOL_SPECS = [
     {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},
     {"server_id": "stack", "alias": "stack", "tools": ["*"]},
     {"server_id": "docs", "alias": "docs", "tools": ["*"]},
-    {"server_id": "local", "alias": "local", "tools": ["*"]},
 ]
 ```
 
-Notes:
-- `server_id` must match a server entry in `MCP_SERVICES`.
-- `alias` controls the tool id namespace: `mcp.<alias>.<tool_id>`.
-- `tools` can be omitted to expose all tools. Use a list to allow‑list specific tool ids.
+Rules:
+- `server_id` must match an entry in `MCP_SERVICES`.
+- `alias` is used in tool IDs: `mcp.<alias>.<tool_id>`.
+- `tools` omitted or `["*"]` exposes all server tools.
+- A concrete list is an allow-list.
 
-### 2) Environment config (how to connect + secrets)
+### 2) Environment: `MCP_SERVICES`
 
-All connection details live in **one env var**: `MCP_SERVICES`.
-
-Supported top‑level keys:
-- `mcpServers` (preferred, matches common MCP config)
+Supported top-level keys:
+- `mcpServers` (preferred)
 - `servers` (also supported)
 
-Example (stdio + http + sse):
-```
-export MCP_SERVICES='{
-  "mcpServers": {
-    "stack": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["mcp-remote", "mcp.stackoverflow.com"],
-      "auth": { "type": "oauth_gui" }
-    },
-    "docs": {
-      "transport": "http",
-      "url": "https://mcp.example.com",
-      "auth": { "type": "bearer", "env": "MCP_DOCS_TOKEN" }
-    },
-    "local": {
-      "transport": "sse",
-      "url": "http://127.0.0.1:8787/sse",
-      "auth": { "type": "none" }
-    }
-  }
-}'
-```
-
-Auth handling:
-- `oauth_gui` / interactive auth → **server is hidden** (tools are not listed)
-- `bearer` / `api_key` / `header` → token is read from env and injected into headers
- - secrets never go to Redis cache; they stay in env
-
-## Supported transports
-
-Default transport is **stdio**.
-
-| transport        | Required fields              | Notes |
-|------------------|------------------------------|------|
-| `stdio`          | `command` (and optional args) | Used for local process or `npx mcp-remote …` |
-| `http`           | `url`                         | Uses Streamable HTTP (JSON‑RPC) |
-| `streamable-http`| `url`                         | Same as `http` |
-| `sse`            | `url`                         | Server‑sent events transport |
-
-## Execution model
-
-1. ReAct/Decision selects tool id: `mcp.<alias>.<tool_id>`.
-2. `io_tools.tool_call` routes to MCPToolsSubsystem for MCP origin.
-3. MCPToolsSubsystem invokes the MCP client adapter (Python SDK).
-
-## What is NOT supported
-
-- Interactive OAuth flows (GUI/consent). These servers are **hidden**.
-- Storing secrets in Redis cache (secrets stay in env).
-- Dotted aliases (provider alias is a single segment).
-
-## Examples by transport
-
-**stdio (local binary)**
-```
-export MCP_SERVICES='{
-  "mcpServers": {
-    "local_bin": {
-      "transport": "stdio",
-      "command": "/usr/local/bin/my-mcp",
-      "args": ["--verbose"]
-    }
-  }
-}'
-```
-
-**stdio (remote via mcp-remote)**
-```
+```bash
 export MCP_SERVICES='{
   "mcpServers": {
     "stack": {
       "transport": "stdio",
       "command": "npx",
       "args": ["mcp-remote", "mcp.stackoverflow.com"]
-    }
-  }
-}'
-```
-
-**HTTP (bearer token)**
-```
-export MCP_DOCS_TOKEN="..."
-export MCP_SERVICES='{
-  "mcpServers": {
+    },
     "docs": {
       "transport": "http",
       "url": "https://mcp.example.com",
       "auth": { "type": "bearer", "env": "MCP_DOCS_TOKEN" }
-    }
-  }
-}'
-```
-
-**SSE (no auth)**
-```
-export MCP_SERVICES='{
-  "mcpServers": {
+    },
     "local": {
       "transport": "sse",
       "url": "http://127.0.0.1:8787/sse"
@@ -160,74 +65,82 @@ export MCP_SERVICES='{
 }'
 ```
 
-## Local MCP server: web_search
+## Supported transports
 
-This repo provides a built‑in MCP server wrapper for web search:
-`kdcube_ai_app/apps/chat/sdk/tools/mcp/web_search/web_search_server.py`
+| transport         | Required fields                | Notes |
+|------------------|--------------------------------|------|
+| `stdio`          | `command` (+ optional `args`)  | Local process or `npx mcp-remote ...` |
+| `http`           | `url`                          | Streamable HTTP JSON-RPC |
+| `streamable-http`| `url`                          | Alias of `http` |
+| `sse`            | `url`                          | Server-sent events |
 
-It can run:
-- **stdio** (on‑demand)
-- **sse** (HTTP streaming)
-- **http** (streamable HTTP)
+## Auth behavior
 
-### Run locally (stdio)
-```
+- `oauth_gui` / interactive auth servers are hidden (not listed in tool catalog).
+- `bearer` / `api_key` / `header` auth reads secrets from env and injects headers.
+- Secrets are not written to Redis cache.
+
+## Runtime execution flow
+
+1. `MCPToolsSubsystem.build_tool_entries()` contributes MCP entries to the tool catalog.
+2. Planner selects an MCP tool ID: `mcp.<alias>.<tool_id>`.
+3. `io_tools.tool_call(...)` parses `mcp` origin and routes to `MCPToolsSubsystem.execute_tool(...)`.
+4. In isolated runtime, executor still calls `io_tools.tool_call(...)`; tool calls are delegated to supervisor, and MCP routing still happens there.
+
+## Tool ID format
+
+- Format: `mcp.<alias>.<tool_id>`
+- Alias must be a single segment (no dots).
+
+## Local MCP server example: `web_search`
+
+Server module:
+- [`kdcube_ai_app/apps/chat/sdk/tools/mcp/web_search/web_search_server.py`](../../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tools/mcp/web_search/web_search_server.py)
+
+Run server (stdio):
+
+```bash
 python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server --transport stdio
 ```
 
-### Run as SSE server
-```
-python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search_server --transport sse --host 0.0.0.0 --port 8787
+Run server (sse):
+
+```bash
+python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server --transport sse --host 0.0.0.0 --port 8787
 ```
 
-### Run as HTTP server
-```
-python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search_server --transport http --host 0.0.0.0 --port 8787
+Run server (http):
+
+```bash
+python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server --transport http --host 0.0.0.0 --port 8787
 ```
 
-### Client config for stdio
-```
+Client config example:
+
+```bash
 export MCP_SERVICES='{
   "mcpServers": {
     "web_search": {
       "transport": "stdio",
       "command": "python",
-      "args": ["-m", "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search_server", "--transport", "stdio"]
+      "args": [
+        "-m",
+        "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server",
+        "--transport",
+        "stdio"
+      ]
     }
   }
 }'
 ```
 
-### Client config for SSE
-```
-export MCP_SERVICES='{
-  "mcpServers": {
-    "web_search": {
-      "transport": "sse",
-      "url": "http://127.0.0.1:8787/sse"
-    }
-  }
-}'
-```
+## Troubleshooting
 
-### Env vars used by the server
-```
-# model service
-OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY
-DEFAULT_LLM_MODEL_ID (optional)
-ROLE_MODELS_JSON (optional)
-
-# cache (optional)
-REDIS_URL
-TENANT_ID
-DEFAULT_PROJECT_NAME
-WEB_SEARCH_CACHE_TTL_SECONDS (optional)
-```
-
-## Quick troubleshooting
-
-- If no MCP tools show up, check:
-  - `MCP_TOOL_SPECS` includes your server id
-  - `MCP_SERVICES` has a matching server entry
-  - transport config is valid (stdio needs `command`, http/sse needs `url`)
-  - auth is not `oauth_gui`
+- No MCP tools in catalog:
+  - check `MCP_TOOL_SPECS` has the server alias entry.
+  - check `MCP_SERVICES` has a matching `server_id`.
+  - validate transport fields (`command` for stdio, `url` for http/sse).
+  - verify auth is not interactive (`oauth_gui`).
+- MCP call fails at runtime:
+  - confirm final tool ID is `mcp.<alias>.<tool_id>`.
+  - confirm server exposes that `tool_id` and allow-list includes it.

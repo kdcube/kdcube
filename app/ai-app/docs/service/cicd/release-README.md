@@ -22,7 +22,7 @@ We use **one unified version** for the monorepo (platform + SDK) until the SDK i
 
 ```
 platform:
-  ref: "kdcube-2026-03-04T17.16"
+  ref: "2026-03-04T17.16"
 ```
 
 Notes:
@@ -39,7 +39,7 @@ Release tags use **exactly** the value of `platform.ref`.
 Example:
 
 ```
-kdcube-2026-03-04T17.16
+2026-03-04T17.16
 ```
 
 ---
@@ -58,21 +58,23 @@ kdcube-chat-ingress:2026.3.4.1716
 
 Suggested flow (platform team):
 
-1. Create a release branch (e.g. `release/kdcube-2026-03-04T17.16`)
+1. Create a release branch (e.g. `release/2026-03-04T17.16`)
 2. Update `release.yaml` and set `platform.ref`
    - Bundles can be empty; the CLI can seed sample bundles on install
 3. Open PR and merge to `main`
 4. GitHub Actions does the rest:
    - Reads `platform.ref`
    - Creates git tag `platform.ref`
-   - Builds & pushes images with that tag
+   - Builds & pushes images to dockerhub with that tag
    - Builds & publishes the CLI with that version
+   - Pushes git tag `platform.ref`
 
 ---
 
 ## 4.1) Bundle registry during release
 
-The processor consumes a **runtime bundle descriptor** (`AGENTIC_BUNDLES_JSON`).  
+The processor consumes a **runtime bundle descriptor** (`AGENTIC_BUNDLES_JSON`).
+That descriptor has the shape which resembles the release.yaml descriptor (its `bundles` vertical).
 During release, ensure one of these:
 
 - **Baked bundles:** CI generates `AGENTIC_BUNDLES_JSON` (path `/bundles/...`) and injects it into proc.

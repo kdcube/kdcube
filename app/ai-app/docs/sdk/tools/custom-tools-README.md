@@ -1,100 +1,101 @@
 ---
 id: ks:docs/sdk/tools/custom-tools-README.md
 title: "Custom Tools"
-summary: "Define and register bundle‑local tools, including runtime selection and descriptors."
-tags: ["sdk", "tools", "custom", "bundle", "runtime", "python"]
-keywords: ["tools_descriptor", "tool id", "local_tools.py", "runtime mode", "in‑proc", "docker", "fargate"]
+summary: "How to author bundle-local tools and register them in tools_descriptor.py with module/ref entries and consumer runtime wiring."
+tags: ["sdk", "tools", "custom", "bundle", "descriptor", "semantic-kernel", "authoring"]
+keywords: ["tools_descriptor.py", "TOOLS_SPECS", "module", "ref", "alias", "kernel_function", "create_tool_subsystem_with_mcp", "tool_call", "TOOL_RUNTIME", "MCP_TOOL_SPECS"]
 see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/tools/mcp-README.md
+  - ks:docs/sdk/bundle/bundle-index-README.md
+  - ks:docs/exec/README-runtime-modes-builtin-tools.md
 ---
-# Custom Tools (Bundle‑Local)
+# Custom Tools (Bundle-Local)
 
-This guide explains how to define **bundle‑local tools**, register them, and control
-their runtime (in‑proc/local/docker/fargate).
+This guide covers authoring and registration of bundle-local tools.
 
-For full subsystem details, see:
-- `docs/sdk/tools/tool-subsystem-README.md`
-- `docs/sdk/tools/mcp-README.md`
-
----
+For runtime internals (descriptor resolution, supervisor flow, isolated execution), see [Tool Subsystem](./tool-subsystem-README.md).
 
 ## 1) Write a tool module
 
-Tools are just async Python functions. Use `@kernel_function` so the runtime can
-introspect names/descriptions/params.
+Tools are regular Python callables (usually async) with Semantic Kernel metadata:
 
-Example (bundle‑local):
 ```python
-# tools/local_tools.py
-from typing import Annotated, Optional
+from typing import Annotated
 import semantic_kernel as sk
+
 try:
     from semantic_kernel.functions import kernel_function
 except Exception:
     from semantic_kernel.utils.function_decorator import kernel_function
 
-@kernel_function(
-    name="search",
-    description="Search the KDCube site (kdcube.tech) for product info."
-)
-async def search(
-    query: Annotated[str, "Search query"],
-    n: Annotated[int, "Max results"] = 5,
-):
+@kernel_function(name="search", description="Search bundle knowledge")
+async def search(query: Annotated[str, "Search query"], n: Annotated[int, "Max results"] = 5):
     ...
 ```
 
-Tool IDs are formed as:
-```
-<alias>.<function_name>
-```
-
----
-
 ## 2) Register tools in `tools_descriptor.py`
-
-Use `TOOLS_SPECS` to declare tool modules (SDK or bundle‑local):
 
 ```python
 TOOLS_SPECS = [
-    # SDK module
     {"module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools", "alias": "web_tools", "use_sk": True},
-
-    # bundle‑local module (relative to bundle root)
     {"ref": "tools/local_tools.py", "alias": "doc", "use_sk": True},
 ]
 ```
 
 Notes:
-- `module` = importable Python module path.
-- `ref` = file path relative to bundle root.
-- `alias` defines the tool id prefix.
-- `use_sk=True` tells the runtime to use semantic‑kernel metadata.
+- `module` points to installed Python modules.
+- `ref` is relative to bundle root (portable across host and isolated runtimes).
+- `alias` becomes the tool ID prefix.
 
----
+## 3) Wire descriptor in workflow
 
-## 3) Set runtime per tool (optional)
+Your workflow must pass descriptor values into subsystem creation:
 
-Use `TOOL_RUNTIME` to route specific tools to isolated runtimes:
+```python
+tool_subsystem, _ = create_tool_subsystem_with_mcp(
+    service=self.model_service,
+    comm=self.comm,
+    logger=self.logger,
+    bundle_spec=self.config.ai_bundle_spec,
+    context_rag_client=self.ctx_client,
+    registry={"kb_client": self.kb},
+    raw_tool_specs=tools_descriptor.TOOLS_SPECS,
+    tool_runtime=getattr(tools_descriptor, "TOOL_RUNTIME", None),
+    mcp_tool_specs=getattr(tools_descriptor, "MCP_TOOL_SPECS", []),
+    mcp_env_json=os.environ.get("MCP_SERVICES") or "",
+)
+```
+
+## 4) Tool IDs and generated-code calls
+
+Tool IDs are `<alias>.<function_name>`.
+
+Generated code should execute tools through `agent_io_tools.tool_call(...)`:
+
+```python
+resp = await agent_io_tools.tool_call(
+    fn=doc.search,
+    params={"query": "KDCube architecture", "n": 5},
+    call_reason="Find product architecture details",
+    tool_id="doc.search",
+)
+```
+
+## 5) Optional per-tool runtime overrides
 
 ```python
 TOOL_RUNTIME = {
-    "doc.search": "local",        # subprocess
+    "doc.search": "local",
     "web_tools.web_search": "local",
     "rendering_tools.write_pdf": "docker",
     "exec_tools.python_exec": "fargate",
 }
 ```
 
-Valid values: `none`, `local`, `docker`, `fargate`
+If a tool is not listed, default runtime policy applies.
 
----
-
-## 4) MCP tools (optional)
-
-Use `MCP_TOOL_SPECS` to expose tools from MCP servers:
+## 6) Optional MCP tool sources
 
 ```python
 MCP_TOOL_SPECS = [
@@ -103,50 +104,11 @@ MCP_TOOL_SPECS = [
 ]
 ```
 
----
+For MCP transport/auth/runtime details, see [MCP Integration](./mcp-README.md).
 
-## 5) Using tools in generated code (ISO runtime)
+## Example references
 
-Generated code must **not** import built‑in tool modules directly.  
-It should call tools via `agent_io_tools.tool_call(...)`.
-
-Example:
-```python
-resp = await agent_io_tools.tool_call(
-    fn=rendering_tools.write_pdf,
-    params={"path": "report.pdf", "content": html},
-    call_reason="Render PDF",
-    tool_id="rendering_tools.write_pdf",
-)
-```
-
-See:
-- `apps/chat/sdk/skills/instructions/shared_instructions.py` (`ISO_TOOL_EXECUTION_INSTRUCTION`)
-
----
-
-## 6) Skills → tools mapping (optional hint system)
-
-This is **optional**. Use it to give the agent **contextual hints**:
-- When a skill is loaded via `react.read`, the skill payload includes the tool hints from `tools.yaml`.
-- The agent can then treat those tools as **recommended** for the current task.
-- You can also mention **recommended skills** in the tool description or docstring so the tool catalog itself suggests which skills to load.
-
-Example `tools.yaml` inside a skill:
-```yaml
-tools:
-  - id: doc.search
-    role: product discovery
-    why: Search the product site for authoritative details
-```
-
-This is **not required** for tools to work; it only improves tool selection.
-
----
-
-## References (code)
-
-- Example bundle: `services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
-- Descriptor: `services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools_descriptor.py`
-- Local tools: `services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools/local_tools.py`
-- Product search tool: `services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/tools/local_tools.py`
+- [with-isoruntime bundle](../../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00)
+- [with-isoruntime `tools_descriptor.py`](../../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools_descriptor.py)
+- [with-isoruntime `tools/local_tools.py`](../../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools/local_tools.py)
+- [react.doc `tools_descriptor.py`](../../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10/tools_descriptor.py)
