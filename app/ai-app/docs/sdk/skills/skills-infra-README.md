@@ -14,6 +14,11 @@ see_also:
 This document explains how skills are configured, loaded, and made available in
 both the ReAct runtime and isolated execution environments.
 
+Scope:
+- This document focuses on wiring and runtime transport.
+- For skill format and runtime behavior, see `docs/sdk/skills/skills-README.md`.
+- For bundle-local authoring and AGENTS_CONFIG examples, see `docs/sdk/skills/custom-skills-README.md`.
+
 ## Core components
 
 - `SkillsSubsystem` (`kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`)

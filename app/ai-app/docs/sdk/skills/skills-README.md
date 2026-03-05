@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/skills/skills-README.md
 title: "Skills"
-summary: "Skills subsystem overview: definitions, discovery, and how skills are injected into prompts."
-tags: ["sdk", "skills", "subsystem", "sources", "instructions"]
-keywords: ["skills.md", "sources.yaml", "skills loader", "skill catalog", "react integration", "tools mapping"]
+summary: "Skills subsystem reference: format, discovery, per-consumer visibility filtering, and exact runtime enforcement paths."
+tags: ["sdk", "skills", "subsystem", "runtime", "descriptor", "agents_config", "react", "codegen", "citations"]
+keywords: ["skills_registry.py", "skills_descriptor.py", "AGENTS_CONFIG", "consumer id", "skills_for_consumer", "build_skill_short_id_map", "import_skillset", "build_skills_instruction_block", "react.read", "llm_generator.py", "codegen_tools.py"]
 see_also:
   - ks:docs/sdk/skills/custom-skills-README.md
   - ks:docs/sdk/skills/skills-infra-README.md
@@ -196,9 +196,42 @@ Filtering logic:
 - You can use wildcard patterns like `public.*` or `public.*-press`.
 - If a consumer is not present in AGENTS_CONFIG:
   - all skills are visible (no include_for enforcement).
+- Matching is by exact consumer id.
+- `"default"` key is not interpreted specially by the current runtime.
+- To disable all skills for one consumer, set `disabled: ["*"]`.
+- `enabled: []` does not disable all; it behaves like no enabled filter.
+- Filtering is applied only when skill APIs are called with `consumer=<agent id>` and that id matches exactly.
 
-For infrastructure details and how descriptors are wired into runtime, see:
-  skills-infra-README.md
+Resolution example:
+
+agents_config = {
+  "solver.react.decision.v2": {"disabled": ["public.*"]},
+  "answer.generator.strong": {"enabled": ["product.kdcube", "public.docx-press"]}
+}
+
+If registry contains:
+- product.kdcube
+- public.docx-press
+- public.pdf-press
+- custom.ops-runbook
+
+Then:
+- consumer=solver.react.decision.v2 -> product.kdcube, custom.ops-runbook
+- consumer=answer.generator.strong -> product.kdcube, public.docx-press
+- consumer=answer.generator.regular -> all skills (no matching entry)
+
+What this configuration achieves:
+- Per-agent planning control: decide which skills appear in each agent catalog.
+- Per-agent resolution control: SK short ids are built from each consumer's visible set.
+- Per-agent instruction injection control: hidden skills for a consumer are not injected into that consumer's generator prompt.
+
+SDK mechanisms using this:
+- ReAct decision catalog: `consumer="solver.react.decision.v2"` (planning catalog visibility).
+- `react.read` short-id resolution: `consumer="solver.react.decision.v2"` (which SKx ids can be loaded).
+- Generator role-based resolution/injection: `consumer=<role>` such as `answer.generator.strong`.
+
+For authoring examples, see `docs/sdk/skills/custom-skills-README.md`.
+For runtime wiring, see `docs/sdk/skills/skills-infra-README.md`.
 
 
 ## Skill discovery and selection
@@ -207,7 +240,7 @@ For infrastructure details and how descriptors are wired into runtime, see:
    - built-in skills directory
    - optional CUSTOM_SKILLS_ROOT (for custom namespace)
 
-2) Skill catalogs are shown to decision/coordinator in system instruction.
+2) Skill catalogs are shown to decision and generator flows in system instruction.
 
 3) The decision agent selects skills by short id (SK1, SK2, ...).
 
@@ -223,6 +256,81 @@ For infrastructure details and how descriptors are wired into runtime, see:
 Important: skills are applied only to generators (decision, codegen, llm).
 They are not passed to tools unless the tool itself is a generator.
 The final answer generator is a generator and can receive skills (e.g., formatting or marketing guidance).
+
+## Runtime usage and enforcement (exact code paths)
+
+Consumer filtering core (`kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`):
+
+```python
+cfg = agents_config.get(consumer) or {}
+enabled = cfg.get("enabled")
+disabled = cfg.get("disabled")
+
+...
+if enabled_set is not None:
+    # keep only enabled matches
+    ...
+if disabled_set is not None:
+    # remove disabled matches
+    ...
+```
+
+ReAct decision catalog usage:
+
+```python
+# kdcube_ai_app/apps/chat/sdk/solutions/react/v2/agents/decision.py
+tool_block = build_instruction_catalog_block(
+    consumer="solver.react.decision.v2",
+    tool_catalog=tool_catalog,
+    react_tools=get_react_tools_catalog(),
+    include_skill_gallery=True,
+)
+
+# kdcube_ai_app/apps/chat/sdk/solutions/react/v2/layout.py
+skill_block = skills_gallery_text(
+    consumer=consumer,
+    tool_catalog=tools_list,
+)
+```
+
+`react.read` resolution usage:
+
+```python
+# kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/read.py
+short_map = build_skill_short_id_map(consumer="solver.react.decision.v2")
+skill_ids = import_skillset(normalized_skills, short_id_map=short_map)
+```
+
+Tool-level resolution/injection pattern (example):
+
+```python
+# kdcube_ai_app/apps/chat/sdk/tools/codegen_tools.py
+short_map = build_skill_short_id_map(consumer="solver.react.decision")
+normalized_skills = import_skillset(skills_list, short_id_map=short_map)
+```
+
+LLM generator role selection:
+
+```python
+# kdcube_ai_app/apps/chat/sdk/tools/llm_generator.py
+results, meta = await stream_with_channels(
+    ...,
+    role=("answer.generator.strong" if model_strength == "strong" else "answer.generator.regular"),
+    ...
+)
+```
+
+Active-skills block construction:
+
+```python
+# kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py
+normalized = import_skillset(skill_ids)
+skills_block = build_skills_instruction_block(
+    normalized,
+    variant="full",
+    header="ACTIVE SKILLS",
+)
+```
 
 
 ## When skills are applied
@@ -260,7 +368,7 @@ Callers should use:
                       \                        /
                        v                      v
                  +-------------------------------+
-                 |  Decision / Coordinator       |
+                 |  Decision / Generators        |
                  |  choose SK ids (SK1, SK2)     |
                  +---------------+---------------+
                                  |

@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/skills/custom-skills-README.md
 title: "Custom Skills"
-summary: "Define bundle‑local skills: structure, sources/tools descriptors, and React integration."
-tags: ["sdk", "skills", "custom", "bundle", "sources", "tools"]
-keywords: ["skills_descriptor.py", "sources.yaml", "tools.yaml", "skill gallery", "react.read", "source pool"]
+summary: "Bundle-local skills guide: descriptor setup, AGENTS_CONFIG visibility filters, and where consumer-scoped filtering is enforced."
+tags: ["sdk", "skills", "custom", "descriptor", "agents_config", "react", "llm-generator", "visibility", "control"]
+keywords: ["skills_descriptor.py", "CUSTOM_SKILLS_ROOT", "AGENTS_CONFIG", "consumer id", "solver.react.decision.v2", "react.read", "SKx", "llm_generator.py", "skill catalog", "skill visibility", "skill visibility control", "concerns separation"]
 see_also:
   - ks:docs/sdk/skills/skills-README.md
   - ks:docs/sdk/skills/skills-infra-README.md
@@ -50,9 +50,16 @@ Both `SKILL.md` and `skill.yml` are supported.
 
 ```python
 # skills_descriptor.py
+import pathlib
+
+BUNDLE_ROOT = pathlib.Path(__file__).resolve().parent
+
+# Bundle-local skills root (expected layout: <root>/<namespace>/<skill_id>/SKILL.md)
+CUSTOM_SKILLS_ROOT = BUNDLE_ROOT / "skills"
+
 AGENTS_CONFIG = {
-    # Apply to all agents if no agent-specific entry exists
-    "default": {
+    # Exact consumer id match
+    "solver.react.decision.v2": {
         # Explicit allow-list (fully qualified skill ids)
         "enabled": [
             "product.kdcube",
@@ -60,12 +67,23 @@ AGENTS_CONFIG = {
     },
 
     # Agent-specific overrides (use the agent id)
-    "solver.react.decision.v2": {
+    "answer.generator.strong": {
         # Example: disable a namespace for this agent only
         "disabled": ["public.*"],
     },
 }
 ```
+
+### Important: `CUSTOM_SKILLS_ROOT = None` does not currently disable bundle-local skills
+
+Today, the runtime auto-detects `<bundle_root>/skills` when `custom_skills_root` is
+missing/falsy. That means setting `CUSTOM_SKILLS_ROOT = None` in
+`skills_descriptor.py` does **not** reliably switch off bundle-local skills.
+
+Practical options today:
+- Remove or rename the bundle `skills/` folder.
+- Set `CUSTOM_SKILLS_ROOT` to a truthy non-existent path (prevents auto-discovery fallback).
+- Use `AGENTS_CONFIG` to hide skills from specific agents (visibility filter, not registry disable).
 
 ---
 
@@ -81,57 +99,54 @@ skill text are rewritten to match the merged source IDs.
 
 ---
 
-## Notes
+## AGENTS_CONFIG visibility filtering (per-agent)
 
-- Skills are prompt‑time modifiers, not tools.
-- Use skills to specialize domain knowledge and response style.
-- Skills can be scoped per agent role.
+`AGENTS_CONFIG` controls skill visibility by consumer id (agent role). This is
+not a global disable of the skills registry.
 
----
+Rules:
+- Match is exact by consumer id (example: `solver.react.decision.v2`).
+- Missing consumer entry means no filter for that consumer.
+- `enabled` means allow-list.
+- `disabled` means deny-list.
+- Wildcards are supported (`public.*`, `public.docx-*`, `*`).
+- `"default"` key is not special in current runtime.
+- `enabled: []` does not disable all.
 
-## AGENTS_CONFIG semantics (how filtering works)
+Quick disable patterns:
+- One skill: `disabled: ["product.kdcube"]`
+- Namespace: `disabled: ["public.*"]`
+- All for one consumer: `disabled: ["*"]`
 
-`AGENTS_CONFIG` controls **which skills are visible** to a given agent.
-Skill IDs are **fully qualified** as:
+Resolution example:
 
+```python
+AGENTS_CONFIG = {
+    "solver.react.decision.v2": {"disabled": ["public.*"]},
+    "answer.generator.strong": {"enabled": ["product.kdcube", "public.docx-press"]},
+}
 ```
-<namespace>.<skill_id>
-```
 
-Examples:
+With registry:
 - `product.kdcube`
 - `public.docx-press`
+- `public.pdf-press`
+- `custom.ops-runbook`
 
-### Resolution rules
+Result:
+- `consumer="solver.react.decision.v2"` -> `product.kdcube`, `custom.ops-runbook`
+- `consumer="answer.generator.strong"` -> `product.kdcube`, `public.docx-press`
+- `consumer="answer.generator.regular"` -> all skills
 
-1. If an agent has a specific entry (e.g. `solver.react.decision.v2`), it is used.
-2. Otherwise, the `default` entry applies.
-3. You can define either:
-   - `enabled`: allow‑list (only these skills are visible)
-   - `disabled`: deny‑list (hide these skills)
-4. Patterns are supported:
-   - `namespace.*` hides or enables an entire namespace
-   - glob patterns like `product.*` or `public.docx-*`
+Where this is applied:
+- ReAct decision catalog (`consumer="solver.react.decision.v2"`).
+- `react.read` skill resolution (`SKx` / `sk:<id>`) via short-id map.
+- Generator role consumers (example `answer.generator.strong`) when tools
+  resolve/inject skills.
 
-### Example: allow only product skills for ReAct
-
-```python
-AGENTS_CONFIG = {
-    "solver.react.decision.v2": {
-        "enabled": ["product.*"]
-    }
-}
-```
-
-### Example: hide built‑in public skills, keep custom
-
-```python
-AGENTS_CONFIG = {
-    "default": {
-        "disabled": ["public.*"]
-    }
-}
-```
+For exact code paths and full runtime flow, see:
+- `docs/sdk/skills/skills-README.md` (section: runtime usage and enforcement)
+- `docs/sdk/skills/skills-infra-README.md` (runtime wiring)
 
 ---
 
