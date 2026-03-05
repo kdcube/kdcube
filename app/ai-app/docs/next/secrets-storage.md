@@ -6,6 +6,24 @@ This document proposes a single, consistent secrets model that works for:
 - Shared dev on EC2.
 - Production (Kubernetes / managed secrets).
 
+## Preferred Long-Term Direction (Config + Secrets Files)
+We want to converge on **two files** as the canonical deployment interface:
+
+- `config.yaml` (non-secrets, component-scoped, ConfigMap-friendly)
+- `secrets.yaml` (secrets only, Secret-friendly)
+
+Services would load both on startup and merge them into the same runtime config.
+This aligns directly with Kubernetes:
+- ConfigMap → `config.yaml`
+- Secret → `secrets.yaml`
+
+This also works for docker-compose and local runs by mounting or pointing to files:
+- `KDCUBE_CONFIG_PATH=/path/to/config.yaml`
+- `KDCUBE_SECRETS_PATH=/path/to/secrets.yaml`
+
+The `*_FILE` model below remains a **short-term bridge** and a compatibility layer,
+but the end-state should be **config + secrets files** everywhere.
+
 ## Goals
 - Avoid plain-text secrets in `.env` by default.
 - Keep one configuration shape across environments.
