@@ -1,81 +1,92 @@
-# tool_descriptor.py
+# ── tools_descriptor.py ──
+# Declares which tools this bundle makes available to the LLM agent.
+#
+# The tool subsystem reads this file at runtime to discover, load, and
+# register tools. There are three types of tool sources:
+#
+#   1. TOOLS_SPECS — Python modules containing Semantic Kernel (SK) tool classes
+#      - "module": installed package path (works in host + Docker)
+#      - "ref":    relative path from bundle root (bundle-local tools)
+#      - "alias":  namespace prefix for tool IDs (e.g. "io_tools.read_file")
+#      - "use_sk": True means tools are SK @kernel_function decorated
+#
+#   2. MCP_TOOL_SPECS — MCP (Model Context Protocol) server connections
+#      - "server_id": matches server config in MCP_SERVICES env
+#      - "tools": ["*"] = all tools, or explicit allowlist
+#      - Tool IDs namespaced as "mcp.<alias>.<tool_id>"
+#
+#   3. TOOL_RUNTIME — per-tool runtime override
+#      - "local": run in a subprocess (for network/IO tools)
+#      - default (omitted): run in-memory in the same process
 
 from __future__ import annotations
 
 from typing import List, Dict, Any
 import pathlib
 
-# Bundle root = directory containing this file (i.e., the bundle root)
+# Bundle root = directory containing this file
 BUNDLE_ROOT = pathlib.Path(__file__).resolve().parent
 
-# Pure data: this is the *portable* descriptor.
-# - "module" entries refer to installed packages (same name in host & container)
-# - "ref" entries are *relative paths from bundle root*
-# - Tool IDs are resolved as: "<alias>.<tool_name>" (alias comes from this file).
-#   Example: alias "generic_tools" + function "web_search" => "generic_tools.web_search".
-# - Optional runtime mapping can be provided per-tool; if missing, tool runs in-memory.
-#   Example:
-#     TOOL_RUNTIME = {
-#         "generic_tools.web_search": "local",
-#         "generic_tools.fetch_url_contents": "local",
-#     }
+# ──────────────────────────────────────────────────────────────
+# 1. Tool specs — SDK-provided and bundle-local tool modules
+# ──────────────────────────────────────────────────────────────
 TOOLS_SPECS: List[Dict[str, Any]] = [
-    # package tools (same in host+docker)
+    # SDK tools (installed packages, same in host + Docker)
     {
-        "module": "kdcube_ai_app.apps.chat.sdk.tools.io_tools",
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.io_tools",    # File read/write tools
         "alias": "io_tools",
         "use_sk": True,
     },
     {
-        "module": "kdcube_ai_app.apps.chat.sdk.tools.ctx_tools",
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.ctx_tools",   # Context/memory tools
         "alias": "ctx_tools",
         "use_sk": True,
     },
     {
-        "module": "kdcube_ai_app.apps.chat.sdk.tools.exec_tools",
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.exec_tools",  # Code execution tools
         "alias": "exec_tools",
         "use_sk": True,
     },
 
     {
-        "module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools",
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools",   # Web search / fetch
         "alias": "web_tools",
         "use_sk": True,
     },
     {
-        "module": "kdcube_ai_app.apps.chat.sdk.tools.rendering_tools",
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.rendering_tools",  # Chart/render tools
         "alias": "rendering_tools",
         "use_sk": True,
     },
 
-    # bundle-local tools (relative to bundle root)
+    # Bundle-local tools (relative path from bundle root)
     # {
-    #     "ref": "tools/local_tools.py",
+    #     "ref": "tools/local_tools.py",       # site-scoped web search (disabled)
     #     "alias": "doc",
     #     "use_sk": True,
     # },
     {
-        "ref": "tools/react_tools.py",
+        "ref": "tools/react_tools.py",          # Knowledge space search (react.search_knowledge)
         "alias": "react",
         "use_sk": True,
     },
 ]
 
-# MCP tool sources (server_id + optional alias + optional tool allowlist).
-# Tool ids will be namespaced as: "mcp.<alias>.<tool_id>"
+# ──────────────────────────────────────────────────────────────
+# 2. MCP tool sources — external tool servers via MCP protocol
+# ──────────────────────────────────────────────────────────────
 MCP_TOOL_SPECS: List[Dict[str, Any]] = [
-    # Built-in MCP web_search server (stdio or http/sse)
-    {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},
-    # Stdio (local or npx mcp-remote)
-    {"server_id": "stack", "alias": "stack", "tools": ["*"]},
-    # HTTP / Streamable HTTP
-    {"server_id": "docs", "alias": "docs", "tools": ["*"]},
-    # SSE (server-sent events)
-    {"server_id": "local", "alias": "local", "tools": ["*"]},
+    {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},  # Built-in web search
+    {"server_id": "stack", "alias": "stack", "tools": ["*"]},   # Stdio transport
+    {"server_id": "docs", "alias": "docs", "tools": ["*"]},     # HTTP / Streamable HTTP
+    {"server_id": "local", "alias": "local", "tools": ["*"]},   # SSE transport
 ]
 
-# Optional per-tool runtime overrides.
-# Valid values: "none" | "local" - subprocess | "docker" | "fargate"
+# ──────────────────────────────────────────────────────────────
+# 3. Per-tool runtime overrides
+#    "local" = run in a separate subprocess (sandboxed)
+#    omitted = run in-memory in the same process (default, fastest)
+# ──────────────────────────────────────────────────────────────
 TOOL_RUNTIME: Dict[str, str] = {
     "web_tools.web_search": "local",
     "web_tools.fetch_url_contents": "local",

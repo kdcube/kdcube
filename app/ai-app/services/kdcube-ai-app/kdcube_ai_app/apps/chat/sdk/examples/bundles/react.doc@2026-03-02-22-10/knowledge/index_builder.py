@@ -1,9 +1,26 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
+#
+# ── knowledge/index_builder.py ──
+# Builds the knowledge space index from docs front matter.
+#
+# Runs at bundle startup (via pre_run_hook → _ensure_knowledge_space).
+# The pipeline:
+#   1. prepare_knowledge_space() — create knowledge root, mount docs/src/deploy
+#      via symlinks (preferred) or copy, then build the index
+#   2. build_knowledge_index() — scan all .md files, parse YAML front-matter,
+#      generate index.json (structured) + index.md (human-readable)
+#   3. validate_doc_refs() — check that backticked code references in docs
+#      (e.g. `kdcube_ai_app/apps/...`) point to existing source files
+#
+# Front-matter fields parsed:
+#   title, summary, tags, keywords, see_also, id
+#
+# Output files:
+#   index.json — {"items": [{path, title, summary, tags, keywords, ...}]}
+#   index.md   — Markdown listing with usage instructions for the agent
 
 from __future__ import annotations
-
-"""Build knowledge index (index.json + index.md) from docs front matter."""
 
 import json
 import pathlib
@@ -14,6 +31,7 @@ import re
 
 
 def _safe_symlink(src: pathlib.Path, dst: pathlib.Path) -> bool:
+    """Create a symlink dst → src. Returns True if link exists (or was created)."""
     try:
         if dst.exists() or dst.is_symlink():
             return True
@@ -25,6 +43,7 @@ def _safe_symlink(src: pathlib.Path, dst: pathlib.Path) -> bool:
 
 
 def _copy_tree(src: pathlib.Path, dst: pathlib.Path) -> bool:
+    """Fallback: copy entire directory tree when symlink is not possible."""
     try:
         if dst.exists():
             return True
@@ -35,6 +54,11 @@ def _copy_tree(src: pathlib.Path, dst: pathlib.Path) -> bool:
 
 
 def _parse_front_matter(text: str) -> Dict[str, Any]:
+    """
+    Parse YAML-like front matter (--- delimited) from a markdown file.
+    Handles scalar fields and list fields (tags, keywords, see_also).
+    List fields support both inline JSON ([...]) and YAML-style (- item) syntax.
+    """
     stripped = text.lstrip()
     if not stripped.startswith("---"):
         return {}
@@ -58,7 +82,7 @@ def _parse_front_matter(text: str) -> Dict[str, Any]:
         value = value.strip()
         if key in {"see_also", "tags", "keywords"}:
             items: List[str] = []
-            # Support inline JSON-style lists.
+            # Support inline JSON-style lists (e.g. tags: ["a", "b"])
             if value:
                 try:
                     parsed = json.loads(value)
@@ -155,10 +179,15 @@ def build_knowledge_index(
     deploy_root: Optional[pathlib.Path] = None,
     logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
+    """
+    Scan all .md files, extract front-matter metadata, and write:
+      - index.json — structured index for search_knowledge()
+      - index.md   — human-readable doc listing for the agent
+    """
     index_path = knowledge_root / "index.json"
     index_md_path = knowledge_root / "index.md"
 
-    # Index docs (+ deploy docs) using front matter metadata.
+    # Index docs (+ deploy docs) using front matter metadata
     entries = _build_index_entries(knowledge_root, docs_root, deploy_root=deploy_root)
     payload = {
         "docs_root": "ks:docs",
@@ -226,9 +255,14 @@ def prepare_knowledge_space(
     validate_refs: bool = True,
     logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
+    """
+    Main entry point for knowledge space setup.
+    Creates the knowledge directory, mounts docs/src/deploy via symlinks,
+    builds the index, and optionally validates code references.
+    """
     knowledge_root.mkdir(parents=True, exist_ok=True)
 
-    # Find ai-app root (contains docs/ and services/).
+    # Auto-discover ai-app root (contains docs/ and services/) if roots not provided
     ai_app_root: Optional[pathlib.Path] = None
     if docs_root is None or src_root is None or deploy_root is None:
         for parent in bundle_root.resolve().parents:
@@ -243,23 +277,22 @@ def prepare_knowledge_space(
     if deploy_root is None and ai_app_root:
         deploy_root = ai_app_root / "deployment"
 
-    # Mount docs into knowledge space.
+    # Mount docs into knowledge space (symlink preferred, fallback to copy)
     if docs_root and docs_root.exists():
         target = knowledge_root / "docs"
         if not _safe_symlink(docs_root, target):
             _copy_tree(docs_root, target)
     else:
-        # Ensure the directory exists even if docs root is missing.
+        # Ensure the directory exists even if docs root is missing
         target = knowledge_root / "docs"
         target.mkdir(parents=True, exist_ok=True)
 
-    # Mount sources (read-only).
+    # Mount sources (read-only, symlink only — too large to copy)
     if src_root and src_root.exists():
         target = knowledge_root / "src"
-        # Prefer symlink to avoid huge copies.
         _safe_symlink(src_root, target)
 
-    # Mount deployment assets (docs + compose + env + dockerfiles).
+    # Mount deployment assets (compose files, env samples, dockerfiles)
     if deploy_root and deploy_root.exists():
         target = knowledge_root / "deploy"
         if not _safe_symlink(deploy_root, target):
@@ -287,10 +320,12 @@ def prepare_knowledge_space(
     return payload
 
 
+# Regex to find backticked code references like `kdcube_ai_app/apps/chat/...`
 _CODE_REF_RE = re.compile(r'`(kdcube_ai_app/[^`\s\)\]]+)`')
 
 
 def _normalize_ref_path(raw: str) -> str:
+    """Strip line anchors, trailing punctuation, and kdcube_ai_app/ prefix from a code ref."""
     ref = raw.strip().rstrip(').,;')
     # strip line/anchor hints
     if '#L' in ref:
@@ -314,6 +349,10 @@ def validate_doc_refs(
     logger: Optional[Any] = None,
     max_log: int = 20,
 ) -> Tuple[int, int]:
+    """
+    Scan docs for backticked code references and verify they exist under src_root.
+    Returns (total_refs, missing_count). Logs warnings for missing references.
+    """
     if not src_root or not src_root.exists():
         if logger:
             logger.log("[knowledge.validate] src root missing; skipping ref validation.", level="WARNING")

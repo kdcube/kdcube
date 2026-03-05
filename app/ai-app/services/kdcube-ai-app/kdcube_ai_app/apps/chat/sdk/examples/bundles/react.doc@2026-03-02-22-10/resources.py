@@ -1,9 +1,21 @@
+# ── resources.py ──
+# User-facing error messages for the bundle.
+#
+# Instead of showing raw error codes to the user, this module maps
+# error categories (usage_limit, rate_limit, server_error, timeout) to
+# pools of friendly messages. A random message is selected each time
+# to avoid repetitive UX.
+#
+# Usage:
+#   msg = get_friendly_error_message("usage_limit")
+#   msg = handle_service_error(some_service_error)
+
 import random
 from typing import Dict, List
 
 from kdcube_ai_app.infra.service_hub.errors import ServiceError
 
-# Friendly error messages for different scenarios
+# Pool of friendly messages keyed by error category
 FRIENDLY_ERROR_MESSAGES: Dict[str, List[str]] = {
     "usage_limit": [
         """I apologize, but I'm temporarily unable to process requests due to high usage. 

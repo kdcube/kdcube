@@ -1,9 +1,19 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
+#
+# ── tools/react_tools.py ──
+# Bundle-local tool: react.search_knowledge
+#
+# Provides the LLM agent with the ability to search the knowledge space
+# index (index.json) for relevant docs by keyword matching. Registered
+# as a Semantic Kernel plugin with alias "react" in tools_descriptor.py,
+# so the tool ID becomes "react.search_knowledge".
+#
+# The knowledge resolver is loaded via importlib with a shared module name
+# (_kdcube_react_doc_knowledge_resolver) so that this file and entrypoint.py
+# both access the same KNOWLEDGE_ROOT global state.
 
 from __future__ import annotations
-
-"""Bundle-local React tools (knowledge search) for the react.doc bundle."""
 
 from typing import Annotated, Optional, Any
 from pathlib import Path
@@ -21,7 +31,8 @@ def _load_knowledge_resolver():
     """
     Load bundle-local knowledge resolver by file path.
     Tool modules are loaded via spec_from_file_location, so relative imports
-    won't work unless we resolve them manually.
+    won't work unless we resolve them manually. Uses a shared module name
+    to ensure a single KNOWLEDGE_ROOT across entrypoint + tools.
     """
     module_name = "_kdcube_react_doc_knowledge_resolver"
     if module_name in sys.modules:
@@ -42,6 +53,7 @@ def _load_knowledge_resolver():
 
 
 class ReactDocTools:
+    """SK plugin exposing knowledge-space search to the ReAct agent."""
     @kernel_function(
         name="search_knowledge",
         description=(
@@ -78,7 +90,8 @@ class ReactDocTools:
             return []
 
 
-# module-level exports for SK + tool subsystem
+# Module-level exports for SK + tool subsystem.
+# The tool loader expects a `kernel` with registered plugins at module scope.
 kernel = sk.Kernel()
 tools = ReactDocTools()
 kernel.add_plugin(tools, "react_doc_tools")

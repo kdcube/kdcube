@@ -1,9 +1,24 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
+#
+# ── knowledge/resolver.py ──
+# Runtime search and read interface for the knowledge space.
+#
+# This module provides two main functions used by the ReAct agent:
+#   - search_knowledge() — weighted lexical search over index.json metadata
+#   - read_knowledge()   — resolve a ks:<path> to a physical file and return contents
+#
+# How search scoring works (metadata-level, NOT semantic/embedding-based):
+#   Full phrase in title:   +3.0    Per-term in title:       +1.0
+#   Full phrase in summary: +1.5    Per-term in tags/keywords: +0.8
+#   Full phrase in path:    +0.7    Per-term in summary:     +0.4
+#                                   Per-term in path:        +0.2
+#
+# KNOWLEDGE_ROOT is a module-level global set by prepare_knowledge_space().
+# This module is loaded via importlib with a shared name so that entrypoint.py
+# and tools/react_tools.py both access the same state.
 
 from __future__ import annotations
-
-"""Knowledge-space resolver for the react.doc bundle (ks: read + search)."""
 
 import json
 import pathlib
@@ -29,6 +44,7 @@ except Exception:
         _spec.loader.exec_module(_mod)  # type: ignore
     _prepare = getattr(_mod, "prepare_knowledge_space")
 
+# Set by prepare_knowledge_space(); shared across entrypoint + tools
 KNOWLEDGE_ROOT: Optional[pathlib.Path] = None
 
 
@@ -82,7 +98,10 @@ def search_knowledge(
     keywords: Optional[List[str]] = None,
     **kwargs: Any,
 ) -> List[Dict[str, Any]]:
-    """Metadata search over index.json (title/summary/tags/keywords/path)."""
+    """
+    Weighted lexical search over index.json metadata.
+    Returns a list of hits sorted by score (highest first), up to max_hits.
+    """
     if not query:
         return []
     if not KNOWLEDGE_ROOT:
@@ -92,7 +111,7 @@ def search_knowledge(
     if not items:
         return []
 
-    # Compute root filter (ks:docs, ks:src, ks:deploy, or custom).
+    # Compute root filter — restricts search to a subtree (ks:docs, ks:src, ks:deploy)
     root_rel = ""
     if root:
         root = root.strip()
@@ -133,7 +152,7 @@ def search_knowledge(
         path_l = path.lower()
         tag_set = set(tags + keywords)
 
-        # Phrase-level scoring
+        # ── Phrase-level scoring (full query as substring) ──
         score = 0.0
         matched = False
         if q and q in title_l:
@@ -146,7 +165,7 @@ def search_knowledge(
             score += 0.7
             matched = True
 
-        # Term-level scoring
+        # ── Term-level scoring (individual words) ──
         for t in terms + extra_terms:
             if t in title_l:
                 score += 1.0
