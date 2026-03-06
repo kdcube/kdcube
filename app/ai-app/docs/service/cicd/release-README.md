@@ -85,7 +85,7 @@ Suggested flow (platform team):
 
 **PyPI Trusted Publisher (recommended):**
 - PyPI project → Publishing → Add Trusted Publisher
-- Select GitHub, repo, workflow
+- Select GitHub, repo, workflow (`.github/workflows/publish-kdcube-cli.yml`)
 - This removes the need for `PYPI_API_TOKEN` (uses `id-token: write`)
 
 ---

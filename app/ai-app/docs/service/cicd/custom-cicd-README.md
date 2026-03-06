@@ -34,7 +34,8 @@ Before GitHub Actions can build and publish releases, ensure these are set:
 2. **PyPI publishing**
    - Create a PyPI project: `kdcube-cli`
    - Configure **Trusted Publisher** (recommended) for this repo/workflow  
-     OR set a `PYPI_API_TOKEN` secret if using API token auth
+     (workflow file: `.github/workflows/publish-kdcube-cli.yml`)
+   OR set a `PYPI_API_TOKEN` secret if using API token auth
 
 3. **GitHub Actions permissions**
    - `contents: write` (to create tags)

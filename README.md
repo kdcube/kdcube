@@ -2,9 +2,12 @@
 
 
 KDCube is a **self‑hosted multi‑tenant, multi‑user platform + SDK** for building **custom AI assistants, copilots, and agentic apps**.
+
 **Run a copilot for your customers, not just for yourself** — use the built‑in ReAct workflow or bring your own.
-It provides the **runtime, streaming protocol, tools, memory, and operations stack** so you can ship AI products with production‑grade reliability.
+
+KDCube provides the **runtime, streaming protocol, tools, memory, and operations stack** so you can ship AI products with production‑grade reliability.
 ![cubes.png](assets/cubes.png)
+
 **Highlights**
 - **Full stack**: from streaming protocols to tool execution, memory, economics, and ops.
 - **Agent‑first**: a ready‑made, versatile ReAct‑style agent that can be extended or replaced.
@@ -13,6 +16,29 @@ It provides the **runtime, streaming protocol, tools, memory, and operations sta
 - **Channeled streaming + live widgets**: animate UX with streaming channels and custom widgets.
 - **Provenance by default**: source pools and citations to prove how answers were built.
 - **Feedback‑aware**: user feedback is captured and can be fed back into workflows.
+
+---
+## Quickstart
+
+Install the bootstrap CLI and launch the setup wizard:
+
+```bash
+pipx install kdcube-cli
+kdcube-setup
+```
+
+Alternative (pip):
+
+```bash
+python -m pip install --user kdcube-cli
+kdcube-setup
+```
+
+Prerequisites: Python 3.9+, Git, and Docker (Docker Desktop on macOS/Windows).
+
+#### Docs:
+- [CLI installer](app/ai-app/services/kdcube-ai-app/kdcube_cli/README.md)
+- [Docker Compose (all‑in‑one)](app/ai-app/deployment/docker/custom-ui-managed-infra/README.md)
 
 ---
 
@@ -166,13 +192,6 @@ Planned deployment options (next steps):
 - **AWS ECS/Fargate** (first‑class)
 - **Kubernetes** (EKS / GKE / AKS)
 Docker Compose is already supported for local and small‑scale (with EC2) setups.
-
----
-
-## Quickstart
-
-- CLI installer: `app/ai-app/services/kdcube-ai-app/kdcube_cli/README.md`
-- Docker Compose (all‑in‑one): `app/ai-app/deployment/docker/all_in_one_kdcube/README.md`
 
 ---
 

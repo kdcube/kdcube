@@ -99,13 +99,13 @@ jobs:
           - image: kdcube-web-proxy
             dockerfile: deployment/docker/all_in_one_kdcube/Dockerfile_ProxyOpenResty
             build_args: |
-              NGINX_CONFIG_FILE_PATH=deployment/docker/all_in_one_kdcube/nginx/conf/nginx_proxy_ssl.conf
+              NGINX_CONFIG_FILE_PATH=deployment/docker/all_in_one_kdcube/nginx/conf/nginx_proxy.conf
           - image: kdcube-web-ui
             dockerfile: deployment/docker/all_in_one_kdcube/Dockerfile_UI
             build_args: |
               UI_SOURCE_PATH=ui/chat-web-app
               UI_ENV_BUILD_RELATIVE=ui/chat-web-app/.env.sample
-              NGINX_UI_CONFIG_FILE_PATH=deployment/docker/all_in_one_kdcube/nginx_ui.conf
+              NGINX_UI_CONFIG_FILE_PATH=deployment/docker/all_in_one_kdcube/nginx/conf/nginx_ui.conf
 
     steps:
       - uses: actions/checkout@v4
@@ -163,17 +163,17 @@ jobs:
           import re
           from pathlib import Path
           version = "${VERSION}"
-          path = Path("app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/pyproject.toml")
+          path = Path("app/ai-app/services/kdcube-ai-app/kdcube_cli/pyproject.toml")
           text = path.read_text()
           text = re.sub(r'version = ".*"', f'version = "{version}"', text, count=1)
           path.write_text(text)
           PY
       - name: Build CLI package
-        working-directory: app/ai-app/services/kdcube-ai-app/kdcube_apps_cli
+        working-directory: app/ai-app/services/kdcube-ai-app/kdcube_cli
         run: |
           python -m pip install --upgrade pip build
           python -m build
       - name: Publish CLI to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir: app/ai-app/services/kdcube-ai-app/kdcube_apps_cli/dist
+          packages-dir: app/ai-app/services/kdcube-ai-app/kdcube_cli/dist
