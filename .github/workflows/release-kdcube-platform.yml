@@ -30,7 +30,7 @@ jobs:
         id: version
         run: |
           python -m pip install --upgrade pip pyyaml packaging
-          python - <<'PY'
+          python - "$GITHUB_OUTPUT" <<'PY'
           import sys
           from pathlib import Path
           import yaml
@@ -52,7 +52,7 @@ jobs:
           with open(sys.argv[1], "a") as fh:
               fh.write(f"version={ref}\n")
               fh.write(f"tag={ref}\n")
-          PY "$GITHUB_OUTPUT"
+          PY
 
   tag-release:
     runs-on: ubuntu-latest
