@@ -186,6 +186,7 @@ class ReactWorkflow(BaseEntrypoint):
             try:
                 from kdcube_ai_app.infra.plugin.git_bundle import ensure_git_bundle, bundle_dir_for_git
                 repos_root = (storage_root / "repos").resolve()
+                # Git auth is handled by git_bundle (SSH or HTTPS token via GIT_HTTP_TOKEN).
                 paths = ensure_git_bundle(
                     bundle_id=f"{BUNDLE_ID}.knowledge",
                     git_url=repo,

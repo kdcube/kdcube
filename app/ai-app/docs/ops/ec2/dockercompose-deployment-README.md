@@ -121,6 +121,7 @@ Provide `repo/ref/subdir` in `AGENTIC_BUNDLES_JSON`.
 Set `BUNDLE_GIT_RESOLUTION_ENABLED=1`.  
 Set `BUNDLE_GIT_REDIS_LOCK=1` (each instance pulls once).  
 Provide `GIT_SSH_KEY_PATH` / `GIT_SSH_KNOWN_HOSTS` for private repos.
+Alternatively, use `GIT_HTTP_TOKEN` for HTTPS auth.
 
 **Rule:** set `subdir` to the **parent bundles directory** and use `module: "<bundle_folder>.entrypoint"`.
 
@@ -135,6 +136,11 @@ Provide `GIT_SSH_KEY_PATH` / `GIT_SSH_KNOWN_HOSTS` for private repos.
   ```
   GIT_SSH_KEY_PATH=/run/secrets/git_ssh_key
   GIT_SSH_KNOWN_HOSTS=/run/secrets/git_known_hosts
+  ```
+  or use HTTPS token auth:
+  ```
+  GIT_HTTP_TOKEN=ghp_xxx
+  GIT_HTTP_USER=x-access-token
   ```
 
 ---

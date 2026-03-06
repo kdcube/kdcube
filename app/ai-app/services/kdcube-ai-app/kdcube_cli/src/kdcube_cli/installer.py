@@ -426,6 +426,12 @@ def prompt_secret(
     return None
 
 
+def prompt_choice(console: Console, label: str, choices: List[str], default: str) -> str:
+    value = Prompt.ask(_label(label), choices=choices, default=default)
+    _abort_if_quit(value)
+    return value
+
+
 def compute_paths(ai_app_root: Path, lib_root: Path, workdir: Path) -> Dict[str, str]:
     docker_dir = ai_app_root / "deployment/docker/all_in_one_kdcube"
     repo_root = ai_app_root.parent.parent
@@ -585,12 +591,54 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
         descriptor = prompt_optional(console, "Host bundle descriptor path (release.yaml)")
         update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", descriptor or "/dev/null")
 
-    if is_placeholder(env_main.entries.get("HOST_GIT_SSH_KEY_PATH", (None, None))[1]):
-        ssh_key = prompt_optional(console, "Host SSH key path for git bundles")
-        update_env_value(env_main, "HOST_GIT_SSH_KEY_PATH", ssh_key or "/dev/null")
-    if is_placeholder(env_main.entries.get("HOST_GIT_KNOWN_HOSTS_PATH", (None, None))[1]):
-        known_hosts = prompt_optional(console, "Host known_hosts path for git bundles")
-        update_env_value(env_main, "HOST_GIT_KNOWN_HOSTS_PATH", known_hosts or "/dev/null")
+    existing_http = env_proc.entries.get("GIT_HTTP_TOKEN", (None, None))[1]
+    existing_ssh = env_proc.entries.get("GIT_SSH_KEY_PATH", (None, None))[1]
+    if not is_placeholder(existing_http):
+        default_auth = "https-token"
+    elif not is_placeholder(existing_ssh):
+        default_auth = "ssh"
+    else:
+        default_auth = "skip"
+
+    auth_choice = prompt_choice(
+        console,
+        "Git auth method for private bundles",
+        choices=["ssh", "https-token", "skip"],
+        default=default_auth,
+    )
+    if auth_choice == "ssh":
+        if is_placeholder(env_main.entries.get("HOST_GIT_SSH_KEY_PATH", (None, None))[1]):
+            ssh_key = prompt_optional(console, "Host SSH key path for git bundles")
+            update_env_value(env_main, "HOST_GIT_SSH_KEY_PATH", ssh_key or "/dev/null")
+        if is_placeholder(env_main.entries.get("HOST_GIT_KNOWN_HOSTS_PATH", (None, None))[1]):
+            known_hosts = prompt_optional(console, "Host known_hosts path for git bundles")
+            update_env_value(env_main, "HOST_GIT_KNOWN_HOSTS_PATH", known_hosts or "/dev/null")
+
+        update_if_placeholder(env_proc, "GIT_SSH_KEY_PATH", "/run/secrets/git_ssh_key")
+        update_if_placeholder(env_proc, "GIT_SSH_KNOWN_HOSTS", "/run/secrets/git_known_hosts")
+        update_if_placeholder(env_proc, "GIT_SSH_STRICT_HOST_KEY_CHECKING", "yes")
+        # Clear HTTPS token if placeholder
+        if is_placeholder(env_proc.entries.get("GIT_HTTP_TOKEN", (None, None))[1]):
+            update_env_value(env_proc, "GIT_HTTP_TOKEN", "")
+        if is_placeholder(env_proc.entries.get("GIT_HTTP_USER", (None, None))[1]):
+            update_env_value(env_proc, "GIT_HTTP_USER", "")
+    elif auth_choice == "https-token":
+        console.print("[dim]Create a GitHub token at https://github.com/settings/tokens[/dim]")
+        token = prompt_secret(console, env_proc, "GIT_HTTP_TOKEN", "Git HTTPS token", required=True)
+        if token:
+            update_if_placeholder(env_proc, "GIT_HTTP_USER", "x-access-token")
+        # Avoid dangling SSH placeholders if user chose token
+        if is_placeholder(env_proc.entries.get("GIT_SSH_KEY_PATH", (None, None))[1]):
+            update_env_value(env_proc, "GIT_SSH_KEY_PATH", "")
+        if is_placeholder(env_proc.entries.get("GIT_SSH_KNOWN_HOSTS", (None, None))[1]):
+            update_env_value(env_proc, "GIT_SSH_KNOWN_HOSTS", "")
+        if is_placeholder(env_proc.entries.get("GIT_SSH_STRICT_HOST_KEY_CHECKING", (None, None))[1]):
+            update_env_value(env_proc, "GIT_SSH_STRICT_HOST_KEY_CHECKING", "")
+        # If host SSH paths are placeholders, disable mounts to avoid missing-path binds.
+        if is_placeholder(env_main.entries.get("HOST_GIT_SSH_KEY_PATH", (None, None))[1]):
+            update_env_value(env_main, "HOST_GIT_SSH_KEY_PATH", "/dev/null")
+        if is_placeholder(env_main.entries.get("HOST_GIT_KNOWN_HOSTS_PATH", (None, None))[1]):
+            update_env_value(env_main, "HOST_GIT_KNOWN_HOSTS_PATH", "/dev/null")
 
     bundles_json = env_proc.entries.get("AGENTIC_BUNDLES_JSON", (None, None))[1]
     if should_replace_bundles_config(bundles_json):
@@ -604,8 +652,6 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Dict[str, str]:
         update_env_value(env_proc, "BUNDLE_STORAGE_ROOT", "/bundle-storage")
     if is_placeholder(env_proc.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1]):
         update_env_value(env_proc, "AGENTIC_BUNDLES_ROOT", "/bundles")
-    if is_placeholder(env_proc.entries.get("HOST_BUNDLES_PATH", (None, None))[1]):
-        update_env_value(env_proc, "HOST_BUNDLES_PATH", host_bundles)
     if is_placeholder(env_proc.entries.get("HOST_BUNDLE_STORAGE_PATH", (None, None))[1]):
         update_env_value(env_proc, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
 

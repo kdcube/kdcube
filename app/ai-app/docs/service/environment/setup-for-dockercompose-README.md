@@ -71,6 +71,10 @@ AGENTIC_BUNDLES_ROOT=/bundles
 GIT_SSH_KEY_PATH=/run/secrets/git_ssh_key
 GIT_SSH_KNOWN_HOSTS=/run/secrets/git_known_hosts
 GIT_SSH_STRICT_HOST_KEY_CHECKING=yes
+
+# OR use HTTPS token auth (SSH settings ignored if token is set)
+# GIT_HTTP_TOKEN=ghp_xxx
+# GIT_HTTP_USER=x-access-token
 ```
 
 After the first successful startup, set:

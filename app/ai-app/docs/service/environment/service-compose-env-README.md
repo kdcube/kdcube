@@ -71,7 +71,7 @@ Each service has its own `.env.*` file. See the samples for the complete set:
 - `sample_env/.env.proc`
 - `sample_env/.env.metrics`
 
-**Note (proc only):** Git‑defined bundles require `BUNDLE_GIT_*` and optional `GIT_SSH_*`
+**Note (proc only):** Git‑defined bundles require `BUNDLE_GIT_*` and optional `GIT_SSH_*` or `GIT_HTTP_TOKEN`.
 env vars in `.env.proc`. See `docs/sdk/bundle/bundle-ops-README.md`.
 
 ## Shared Requirements

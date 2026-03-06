@@ -28,6 +28,7 @@ class GitBundleCooldown(Exception):
 
 
 _FAIL_STATE: Dict[str, Dict[str, Any]] = {}
+_WARNED_HTTP_SSH: bool = False
 
 
 def _fail_key(*, git_url: str, bundle_id: str, git_ref: Optional[str]) -> str:
@@ -296,8 +297,43 @@ def _build_git_env() -> Dict[str, str]:
       - GIT_SSH_KEY_PATH (path to private key)
       - GIT_SSH_KNOWN_HOSTS (path to known_hosts file)
       - GIT_SSH_STRICT_HOST_KEY_CHECKING (yes|no)
+      - GIT_HTTP_TOKEN (HTTPS token)
+      - GIT_HTTP_USER (HTTPS username, defaults to x-access-token)
     """
     env = os.environ.copy()
+    # HTTPS token auth (via GIT_ASKPASS)
+    if env.get("GIT_HTTP_TOKEN"):
+        global _WARNED_HTTP_SSH
+        if not _WARNED_HTTP_SSH and (env.get("GIT_SSH_KEY_PATH") or env.get("GIT_SSH_COMMAND")):
+            AgentLogger("git.bundle").log(
+                "Both GIT_HTTP_TOKEN and SSH settings are set. "
+                "HTTPS token auth will be used for git bundles.",
+                level="WARNING",
+            )
+            _WARNED_HTTP_SSH = True
+        user = env.get("GIT_HTTP_USER") or "x-access-token"
+        env["GIT_HTTP_USER"] = user
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        askpass_path = pathlib.Path("/tmp/kdcube_git_askpass.sh")
+        askpass_contents = (
+            "#!/bin/sh\n"
+            "prompt=\"$1\"\n"
+            "if echo \"$prompt\" | grep -qi \"username\"; then\n"
+            "  echo \"${GIT_HTTP_USER:-x-access-token}\"\n"
+            "else\n"
+            "  echo \"${GIT_HTTP_TOKEN}\"\n"
+            "fi\n"
+        )
+        try:
+            if not askpass_path.exists() or askpass_path.read_text() != askpass_contents:
+                askpass_path.write_text(askpass_contents)
+                askpass_path.chmod(0o700)
+        except Exception:
+            pass
+        if askpass_path.exists():
+            env["GIT_ASKPASS"] = str(askpass_path)
+        return env
+
     if env.get("GIT_SSH_COMMAND"):
         return env
     key_path = env.get("GIT_SSH_KEY_PATH")
@@ -312,6 +348,18 @@ def _build_git_env() -> Dict[str, str]:
         cmd += ["-o", f"UserKnownHostsFile={known_hosts}"]
     env["GIT_SSH_COMMAND"] = " ".join(cmd)
     return env
+
+
+def _https_url_for_ssh(git_url: str) -> str:
+    if git_url.startswith("git@") and ":" in git_url:
+        host_and_path = git_url.split("git@", 1)[1]
+        host, path = host_and_path.split(":", 1)
+        return f"https://{host}/{path}"
+    if git_url.startswith("ssh://git@"):
+        rest = git_url.split("ssh://git@", 1)[1]
+        host, path = rest.split("/", 1)
+        return f"https://{host}/{path}"
+    return git_url
 
 
 def _run_git(args: list[str], *, logger: Optional[AgentLogger] = None, env: Optional[Dict[str, str]] = None) -> None:
@@ -344,6 +392,12 @@ def ensure_git_bundle(
     """
     log = logger or AgentLogger("git.bundle")
     bundle_id = (bundle_id or "").strip() or _repo_name_from_url(git_url)
+    http_token = os.environ.get("GIT_HTTP_TOKEN")
+    if http_token:
+        https_url = _https_url_for_ssh(git_url)
+        if https_url != git_url:
+            log.log(f"[git.bundle] using HTTPS for {git_url}", level="INFO")
+            git_url = https_url
     root = bundles_root or resolve_bundles_root()
     fail_key = _fail_key(git_url=git_url, bundle_id=bundle_id, git_ref=git_ref)
     _check_fail_cooldown(fail_key)
@@ -401,7 +455,7 @@ def ensure_git_bundle(
                     _run_git(clone_args, logger=log, env=env)
             else:
                 try:
-                    # Verify remote URL matches
+                    # Verify remote URL matches (and fix if needed)
                     proc = subprocess.run(
                         ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
                         check=True, capture_output=True, text=True,
@@ -412,6 +466,12 @@ def ensure_git_bundle(
                             f"[git.bundle] remote mismatch for {repo_root}: {remote_url} != {git_url}",
                             level="WARNING",
                         )
+                        if http_token:
+                            _run_git(
+                                ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
+                                logger=log,
+                                env=env,
+                            )
                 except Exception:
                     pass
                 log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")

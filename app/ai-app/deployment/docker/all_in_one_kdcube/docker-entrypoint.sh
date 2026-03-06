@@ -57,5 +57,40 @@ echo "[entrypoint] Switching to user $APPUSER (UID $APPUSER_UID)"
 # Ensure appuser owns the exec workspace (volume overrides image ownership)
 chown -R appuser:appuser /exec-workspace || true
 
+# Ensure appuser can access git SSH materials (used for git bundles)
+GIT_KEY_SRC="/run/secrets/git_ssh_key"
+GIT_KNOWN_HOSTS_SRC="/run/secrets/git_known_hosts"
+APP_SSH_DIR="/home/${APPUSER}/.ssh"
+
+if [ -f "$GIT_KEY_SRC" ]; then
+    mkdir -p "$APP_SSH_DIR"
+    chmod 700 "$APP_SSH_DIR"
+    if chown "$APPUSER:$APPUSER" "$GIT_KEY_SRC" 2>/dev/null; then
+        chmod 600 "$GIT_KEY_SRC" || true
+        export GIT_SSH_KEY_PATH="$GIT_KEY_SRC"
+    else
+        APP_KEY_PATH="${APP_SSH_DIR}/kdcube_git_key"
+        cp "$GIT_KEY_SRC" "$APP_KEY_PATH"
+        chown "$APPUSER:$APPUSER" "$APP_KEY_PATH" || true
+        chmod 600 "$APP_KEY_PATH" || true
+        export GIT_SSH_KEY_PATH="$APP_KEY_PATH"
+    fi
+fi
+
+if [ -f "$GIT_KNOWN_HOSTS_SRC" ]; then
+    mkdir -p "$APP_SSH_DIR"
+    chmod 700 "$APP_SSH_DIR"
+    if chown "$APPUSER:$APPUSER" "$GIT_KNOWN_HOSTS_SRC" 2>/dev/null; then
+        chmod 600 "$GIT_KNOWN_HOSTS_SRC" || true
+        export GIT_SSH_KNOWN_HOSTS="$GIT_KNOWN_HOSTS_SRC"
+    else
+        APP_KNOWN_HOSTS="${APP_SSH_DIR}/known_hosts"
+        cp "$GIT_KNOWN_HOSTS_SRC" "$APP_KNOWN_HOSTS"
+        chown "$APPUSER:$APPUSER" "$APP_KNOWN_HOSTS" || true
+        chmod 600 "$APP_KNOWN_HOSTS" || true
+        export GIT_SSH_KNOWN_HOSTS="$APP_KNOWN_HOSTS"
+    fi
+fi
+
 # Execute the main application as appuser
 exec gosu "$APPUSER" "$@"

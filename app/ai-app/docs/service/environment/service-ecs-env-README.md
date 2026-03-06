@@ -61,4 +61,6 @@ If you use git‑defined bundles in **chat‑proc**:
 | `GIT_SSH_KNOWN_HOSTS`              | Known hosts file (mount)                                 |
 | `GIT_SSH_STRICT_HOST_KEY_CHECKING` | `yes`/`no`                                               |
 | `GIT_SSH_COMMAND`                  | Full SSH command override (optional)                     |
+| `GIT_HTTP_TOKEN`                   | HTTPS token for private repos (uses GIT_ASKPASS)         |
+| `GIT_HTTP_USER`                    | HTTPS username (defaults to `x-access-token`)            |
 | `AGENTIC_BUNDLES_ROOT`             | Bundles root inside container (e.g. `/bundles`)          |

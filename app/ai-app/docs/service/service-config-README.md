@@ -300,7 +300,11 @@ These values scope **bundle registries** and **control‑plane events**.
 | `GIT_SSH_KEY_PATH`       | _(unset)_ | Path to private SSH key (for private repos)                                                     | `infra/plugin/git_bundle.py`      |
 | `GIT_SSH_KNOWN_HOSTS`    | _(unset)_ | Path to `known_hosts` file (SSH)                                                                | `infra/plugin/git_bundle.py`      |
 | `GIT_SSH_STRICT_HOST_KEY_CHECKING` | _(unset)_ | `yes` / `no`                                                                              | `infra/plugin/git_bundle.py`      |
+| `GIT_HTTP_TOKEN`         | _(unset)_ | HTTPS token for private git repos (uses GIT_ASKPASS)                                             | `infra/plugin/git_bundle.py`      |
+| `GIT_HTTP_USER`          | _(unset)_ | HTTPS username (defaults to `x-access-token`)                                                   | `infra/plugin/git_bundle.py`      |
 | `BUNDLE_REF_TTL_SECONDS` | `3600`    | TTL for active bundle refs                                                                      | `infra/plugin/bundle_refs.py`     |
+
+**Auth precedence:** if `GIT_HTTP_TOKEN` is set, HTTPS token auth is used and SSH settings are ignored (a warning is logged when both are set).
 
 **Tenant/project scoped channels**
 
@@ -315,8 +319,8 @@ Each processor instance only subscribes to its own tenant/project channel.
 
 **Host vs container bundles root**
 
-- `HOST_BUNDLES_PATH` is typically defined in `.env` (docker‑compose) so the host path can be mounted.
-- `AGENTIC_BUNDLES_ROOT` is typically defined in `.env.backend` so the service inside the container knows the path.
+- `HOST_BUNDLES_PATH` is typically defined in `.env` (docker‑compose) so the host path can be mounted (it does not need to be in `.env.proc`).
+- `AGENTIC_BUNDLES_ROOT` is defined in `.env.proc` so the service inside the container knows the path.
 
 **Admin bundle**
 
