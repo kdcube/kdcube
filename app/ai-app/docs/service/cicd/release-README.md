@@ -69,6 +69,11 @@ Suggested flow (platform team):
    - Builds & pushes images to dockerhub with that tag
    - Builds & publishes the CLI with that exact version
 
+Notes:
+- The release branch name is a **convention only** (e.g., `release/<version>`). CI does not require it.
+- The CI workflow that runs automatically on merge is `release-kdcube-platform.yml`.
+- The standalone CLI workflow (`publish-kdcube-cli.yml`) is **manual** and useful for re‑publishing CLI only.
+
 ---
 
 ### CI Prerequisites (Secrets + Permissions)

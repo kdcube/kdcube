@@ -1,4 +1,4 @@
-name: Release KDCube Platform
+name: Release KDCube Platform (Images + CLI)
 
 on:
   push:
