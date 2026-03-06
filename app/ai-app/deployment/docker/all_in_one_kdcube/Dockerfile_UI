@@ -43,6 +43,6 @@ COPY ${NGINX_UI_CONFIG_FILE_PATH} /etc/nginx/nginx.conf
 EXPOSE 80
 
 # Runtime config entrypoint
-COPY app/ai-app/deployment/docker/all_in_one_kdcube/ui-entrypoint.sh /entrypoint.sh
+COPY deployment/docker/all_in_one_kdcube/ui-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

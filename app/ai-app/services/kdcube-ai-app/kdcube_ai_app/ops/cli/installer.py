@@ -435,9 +435,9 @@ def compute_paths(ai_app_root: Path, lib_root: Path, workdir: Path) -> Dict[str,
         "host_bundle_storage": str(workdir / "data/bundle-storage"),
         "host_exec_workspace": str(workdir / "data/exec-workspace"),
         "host_bundles": str(lib_root / "kdcube_ai_app/apps/chat/sdk/examples/bundles"),
-        "ui_dockerfile_path": "app/ai-app/deployment/docker/all_in_one_kdcube/Dockerfile_UI",
-        "ui_source_path": "app/ai-app/ui/chat-web-app",
-        "ui_env_build_relative": "app/ai-app/ui/chat-web-app/.env.sample",
+        "ui_dockerfile_path": "deployment/docker/all_in_one_kdcube/Dockerfile_UI",
+        "ui_source_path": "ui/chat-web-app",
+        "ui_env_build_relative": "ui/chat-web-app/.env.sample",
         "nginx_ui_config": "deployment/docker/all_in_one_kdcube/nginx/conf/nginx_ui.conf",
         "frontend_config_json": str((workdir / "config/frontend.config.hardcoded.json").resolve()),
     }
@@ -447,8 +447,8 @@ def compute_paths(ai_app_root: Path, lib_root: Path, workdir: Path) -> Dict[str,
     defaults["proxy_dockerfile_path"] = str(
         (ai_app_root / "deployment/docker/all_in_one_kdcube/Dockerfile_ProxyOpenResty").relative_to(common_parent)
     )
-    defaults["ui_build_context"] = str(repo_root)
-    defaults["ui_env_file_path"] = str(repo_root / "app/ai-app/ui/chat-web-app/.env")
+    defaults["ui_build_context"] = str(ai_app_root)
+    defaults["ui_env_file_path"] = str(ai_app_root / "ui/chat-web-app/.env")
     defaults["nginx_proxy_config"] = "app/ai-app/deployment/docker/all_in_one_kdcube/nginx/conf/nginx_proxy.conf"
     return defaults
 
