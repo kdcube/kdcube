@@ -5,10 +5,7 @@
 Bootstrap installer for the KDCube platform stack. This package clones the
 repository (if needed) and launches the guided setup wizard.
 
-CLI source: `services/kdcube-ai-app/kdcube_ai_app/ops/cli`
-Packaged assets:
-- `kdcube_cli/assets/pixel-cubes.svg`
-- `kdcube_cli/assets/pixel-cubes.png`
+----
 
 ## Prerequisites
 
@@ -51,7 +48,7 @@ Tip: if `kdcube-setup` is not on your PATH, run:
 python -m kdcube_cli.cli
 ```
 
-## What the wizard does
+## What the wizard does (today)
 
 - Creates a **workdir** with `config/`, `data/`, and `logs/` folders
 - Writes the compose env files into `config/` (only if missing; it won’t overwrite existing files)
@@ -61,6 +58,36 @@ python -m kdcube_cli.cli
 - Generates frontend runtime config
 - Creates local data folders for Postgres/Redis/exec workspace/bundle storage
 - Optionally builds images and runs `docker compose up -d --build`
+
+Current scope: the wizard is **optimized for docker‑compose** (all‑in‑one).
+It creates a workdir (default: `~/.kdcube/kdcube-runtime`) and lets you:
+- generate config/data/log folders
+- build images (optional)
+- start `docker compose` (optional)
+
+Example workdir layout:
+
+```
+~/.kdcube/kdcube-runtime
+├─ config/
+│  ├─ .env
+│  ├─ .env.ingress
+│  ├─ .env.proc
+│  ├─ .env.metrics
+│  ├─ .env.postgres.setup
+│  ├─ .env.proxylogin
+│  ├─ frontend.config.hardcoded.json
+│  ├─ nginx_ui.conf
+│  └─ nginx_proxy.conf
+├─ data/
+│  ├─ postgres/
+│  ├─ redis/
+│  ├─ exec-workspace/
+│  └─ bundle-storage/
+└─ logs/
+   ├─ chat-ingress/
+   └─ chat-proc/
+```
 
 ## Compose usage (recommended)
 
@@ -84,18 +111,14 @@ docker compose --env-file /srv/kdcube-local/config/.env up -d --build
 Open the UI:
 - `http://localhost:${KDCUBE_UI_PORT}/chatbot/chat` (via proxy, omit `:${KDCUBE_UI_PORT}` if it is `80`)
 
-## Dev‑host usage (run services on host)
+## Notes
 
-You can still use the CLI to bootstrap a workdir and then run services locally:
-
-1) Run the wizard and choose a workdir.
-2) Point your IDE/run configs to the generated env files in `workdir/config`.
-3) The CLI also writes a dev UI config to:
-   - `app/ai-app/ui/chat-web-app/public/private/config.hardcoded.json`
-4) Start local infra via `deployment/docker/local-infra-stack` if needed.
+- The wizard **does not overwrite** existing config files in your workdir. It only fills
+  placeholders in newly created files.
+- Config upgrades/migrations will be added later when configs are versioned.
 
 Tip: you can edit `workdir/config/nginx_ui.conf` and `workdir/config/nginx_proxy.conf`
 without rebuilding images (they are mounted into the containers at runtime).
 
-See `app/ai-app/docs/service/environment/setup-dev-env-README.md` for the full
-dev‑host flow.
+See the dev‑host guide on GitHub:
+https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/environment/setup-dev-env-README.md
