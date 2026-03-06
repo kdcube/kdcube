@@ -1,4 +1,4 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.4.1716"          # tag or commit (PEP440)
-  description: "First release for KDCube AI Platform"
+  ref: "2026.3.6.1245"
+  description: "First release for KDCube AI Platform + SDK"
