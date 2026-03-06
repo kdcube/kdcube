@@ -1,8 +1,8 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.6.1513"
-  description: "Multi-arch kdcube images. Install from upstream, last release or a specific version"
+  ref: "2026.3.6.2011"
+  description: "CLI: add reset flag for refreshing the config"
   config:
-    version: "2026.3.6.1513"
+    version: "2026.3.6.2011"
 
 
