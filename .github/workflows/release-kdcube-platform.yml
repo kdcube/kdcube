@@ -160,9 +160,12 @@ jobs:
           VERSION: ${{ needs.resolve-version.outputs.version }}
         run: |
           python - <<'PY'
+          import os
           import re
           from pathlib import Path
-          version = "${VERSION}"
+          version = os.environ.get("VERSION", "")
+          if not version:
+              raise SystemExit("VERSION is not set")
           path = Path("app/ai-app/services/kdcube-ai-app/kdcube_cli/pyproject.toml")
           text = path.read_text()
           text = re.sub(r'version = ".*"', f'version = "{version}"', text, count=1)
