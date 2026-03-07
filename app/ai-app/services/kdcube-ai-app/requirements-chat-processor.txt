@@ -25,7 +25,6 @@ ddgs
 semantic-kernel
 reportlab
 aioboto3
-aiobotocore
 boto3
 
 bs4

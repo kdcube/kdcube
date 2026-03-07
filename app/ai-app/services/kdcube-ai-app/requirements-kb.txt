@@ -1,5 +1,4 @@
 aioboto3
-aiobotocore
 boto3
 
 anthropic==0.46.0
