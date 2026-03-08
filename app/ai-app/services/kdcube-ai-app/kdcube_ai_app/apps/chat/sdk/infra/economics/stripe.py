@@ -27,6 +27,29 @@ SubscriptionBudgetFactory = Callable[[str, str, str, str, datetime, datetime], S
 ProjectBudgetFactory = Callable[[str, str], ProjectBudgetLimiter]
 
 
+
+def _extract_stripe_data_list(obj: Dict[str, Any], key: str) -> list[Dict[str, Any]]:
+    """Safely extracts a list of data items from a Stripe list object (like lines, items, charges)."""
+    if not isinstance(obj, dict):
+        return []
+    val = obj.get(key)
+    if isinstance(val, dict):
+        return val.get("data") or []
+    # Sometimes the top-level object IS the list object, so we fall back to obj.get("data")
+    return obj.get("data") or []
+
+def _extract_stripe_timestamp(obj: Dict[str, Any], key: str) -> Optional[datetime]:
+    """Safely extracts a timestamp field and converts it to a UTC datetime."""
+    if not isinstance(obj, dict):
+        return None
+    ts = obj.get(key)
+    if ts is not None:
+        try:
+            return datetime.fromtimestamp(int(ts), tz=timezone.utc)
+        except (ValueError, TypeError):
+            pass
+    return None
+
 def map_stripe_subscription_status_to_cp(status: str) -> str:
     # CP constraint: active|canceled|suspended
     s = (status or "").lower()
@@ -284,7 +307,7 @@ class StripeEconomicsWebhookHandler:
 
     def _meta_from_invoice_lines(self, invoice: Dict[str, Any]) -> Dict[str, str]:
         try:
-            lines = (invoice.get("lines") or {}).get("data") or []
+            lines = _extract_stripe_data_list(invoice, "lines")
             if not lines:
                 return {}
             m = lines[0].get("metadata") or {}
@@ -296,7 +319,7 @@ class StripeEconomicsWebhookHandler:
 
     def _price_id_from_invoice_lines(self, invoice: Dict[str, Any]) -> Optional[str]:
         try:
-            lines = (invoice.get("lines") or {}).get("data") or invoice.get("data") or []
+            lines = _extract_stripe_data_list(invoice, "lines")
             for line in lines:
                 pricing = line.get("pricing") or {}
                 price_details = pricing.get("price_details") or {}
@@ -697,7 +720,7 @@ class StripeEconomicsWebhookHandler:
 
         if not next_charge_at:
             try:
-                lines = (invoice.get("lines") or {}).get("data") or []
+                lines = _extract_stripe_data_list(invoice, "lines")
                 if lines:
                     period_end = ((lines[0].get("period") or {}).get("end"))
                     if period_end:
@@ -710,7 +733,7 @@ class StripeEconomicsWebhookHandler:
 
         period_start = None
         try:
-            lines = (invoice.get("lines") or {}).get("data") or []
+            lines = _extract_stripe_data_list(invoice, "lines")
             if lines:
                 period_start_ts = ((lines[0].get("period") or {}).get("start"))
                 if period_start_ts:
@@ -774,13 +797,20 @@ class StripeEconomicsWebhookHandler:
                         tenant=tenant, project=project, user_id=user_id, conn=conn
                     )
                     if prev_sub and prev_sub.next_charge_at:
+                        # Ensure we rollover the EXACT old period.
+                        # If prev_sub.next_charge_at was somehow already advanced to the new period end,
+                        # we must reconstruct the old period end from the invoice's period_start.
+                        old_period_end = prev_sub.next_charge_at
+                        if period_start and next_charge_at and old_period_end >= next_charge_at:
+                            old_period_end = period_start
+
                         prev_desc = build_subscription_period_descriptor(
                             tenant=tenant,
                             project=project,
                             user_id=user_id,
                             provider=prev_sub.provider,
                             stripe_subscription_id=prev_sub.stripe_subscription_id,
-                            period_end=prev_sub.next_charge_at,
+                            period_end=old_period_end,
                             period_start=prev_sub.last_charged_at,
                         )
                         period_key = prev_desc["period_key"]
@@ -955,9 +985,9 @@ class StripeEconomicsWebhookHandler:
 
         stripe_status = str(sub.get("status") or "")
         cp_status = map_stripe_subscription_status_to_cp(stripe_status)
-        items_data = sub.get("items", {}).get("data", [])
-        cpe = items_data[0].get("current_period_end") if items_data else None
-        next_charge_at = datetime.fromtimestamp(int(cpe), tz=timezone.utc) if cpe else None
+        items_data = _extract_stripe_data_list(sub, "items")
+        cpe = items_data[0] if items_data else {}
+        next_charge_at = _extract_stripe_timestamp(cpe, "current_period_end")
 
         stripe_event_id = str(event.get("id") or "")
         async with self.pg_pool.acquire() as conn:
@@ -1036,11 +1066,14 @@ class StripeEconomicsWebhookHandler:
                     if internal and str(internal["status"]) != "applied":
                         await self._mark_internal_event_applied(conn, kind="subscription_cancel", external_id=stripe_sub_id)
                 else:
-                    # keep status updated for suspended/active; preserve next_charge_at from Stripe if provided
+                    # keep status updated for suspended/active.
+                    # DO NOT update next_charge_at here! Advancing next_charge_at before
+                    # invoice.paid tops up the new budget causes a "0 balance" gap.
+                    # invoice.paid will definitively update next_charge_at.
                     await self.subscription_mgr.update_status_by_stripe_id(
                         stripe_subscription_id=stripe_sub_id,
                         status=cp_status,
-                        next_charge_at=next_charge_at,
+                        next_charge_at=None,
                         conn=conn,
                     )
 
@@ -1194,7 +1227,7 @@ class StripeEconomicsAdminService:
             raise ValueError(f"Unsupported currency for refund: {currency}")
 
         amount_received = int(pi.get("amount_received") or pi.get("amount") or 0)
-        charges = (pi.get("charges") or {}).get("data") or []
+        charges = _extract_stripe_data_list(pi, "charges")
         amount_refunded = sum(int(c.get("amount_refunded") or 0) for c in charges)
         max_refundable = max(0, amount_received - amount_refunded)
         if max_refundable <= 0:

@@ -15,7 +15,7 @@ import stripe
 
 from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure
 from kdcube_ai_app.auth.sessions import UserSession
-from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import (
     StripeEconomicsWebhookHandler,
     StripeEconomicsAdminService,
@@ -41,7 +41,7 @@ def _usd_from_cents(cents: Optional[int]) -> Optional[float]:
     return float(cents) / 100.0
 
 def _get_stripe():
-    api_key = os.getenv("STRIPE_SECRET_KEY") or os.getenv("STRIPE_API_KEY")
+    api_key = get_secret("STRIPE_SECRET_KEY") or get_secret("STRIPE_API_KEY")
     if not api_key:
         raise HTTPException(status_code=500, detail="Stripe API key not configured")
     stripe.api_key = api_key
@@ -354,7 +354,7 @@ async def stripe_webhook(
         subscription_mgr=subscription_mgr,
         default_tenant=settings.TENANT,
         default_project=settings.PROJECT,
-        stripe_webhook_secret=os.getenv("STRIPE_WEBHOOK_SECRET"),
+        stripe_webhook_secret=get_secret("STRIPE_WEBHOOK_SECRET"),
     )
 
     body = await request.body()
