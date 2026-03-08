@@ -18,6 +18,7 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY services/kdcube-ai-app/requirements-metric-service.txt requirements.txt
+COPY services/kdcube-ai-app/requirements-aws.txt requirements-aws.txt
 RUN pip install --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
