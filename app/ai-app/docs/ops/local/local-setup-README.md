@@ -132,6 +132,7 @@ flowchart LR
 
 **Not stored in env files (sensitive app secrets):**
 - OpenAI / Anthropic / Brave keys
+- Git HTTPS token (for private bundles)
 
 ## How LLM keys are handled (sidecar)
 Local compose runs a `kdcube-secrets` sidecar that keeps secrets **in memory only**.
