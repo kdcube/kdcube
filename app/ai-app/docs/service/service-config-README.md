@@ -196,6 +196,21 @@ Pattern styles (strict vs prefix‑tolerant) are documented in
 
 ## Core Connectivity (All Services)
 
+### Storage (KDCUBE_STORAGE_PATH)
+KDCube writes **artifacts, accounting, analytics, and optional execution snapshots**
+under `KDCUBE_STORAGE_PATH`.
+
+Supported schemes:
+- Local FS: `file:///.../kdcube-storage`
+- S3: `s3://<bucket>/<prefix>`
+
+Storage layout and paths:
+https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sdk-store-README.md
+
+Conversation artifacts and turn workspace:
+- https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+- https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+
 ### Postgres
 
 | Setting              | Required | Purpose |
@@ -254,13 +269,13 @@ Pattern styles (strict vs prefix‑tolerant) are documented in
 
 ### Model Provider Keys (optional)
 
-| Setting                 | Purpose |
-|-------------------------|---------|
-| `OPENAI_API_KEY`        | OpenAI access |
-| `ANTHROPIC_API_KEY`     | Anthropic access |
+| Setting                 | Purpose              |
+|-------------------------|----------------------|
+| `OPENAI_API_KEY`        | OpenAI access        |
+| `ANTHROPIC_API_KEY`     | Anthropic access     |
 | `GEMINI_API_KEY`        | Google Gemini access |
-| `HUGGING_FACE_API_TOKEN`| Hugging Face access |
-| `BRAVE_API_KEY`         | Brave search |
+| `HUGGING_FACE_API_TOKEN`| Hugging Face access  |
+| `BRAVE_API_KEY`         | Brave search         |
 
 ### Exec (Processor only)
 

@@ -43,6 +43,87 @@ Default workdir: `~/.kdcube/kdcube-runtime`
 - `logs/`
   - `chat-ingress/`, `chat-proc/`
 
+## KDCube storage (KDCUBE_STORAGE_PATH)
+The **KDCube storage root** is where conversation artifacts, accounting,
+analytics, and execution snapshots are written.
+
+Local (filesystem):
+- `KDCUBE_STORAGE_PATH=file:///.../kdcube-storage`
+- Default compose mount: `workdir/data/kdcube-storage` → container `/kdcube-storage`
+
+S3 (object storage):
+- `KDCUBE_STORAGE_PATH=s3://<bucket>/<prefix>`
+
+Reference:
+- Storage layout: https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sdk-store-README.md
+
+### What lives under KDCube storage
+- **Accounting (raw events)** — per service / bundle / turn  
+  See accounting system and layout:
+  https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/infra/accounting/__init__.py
+- **Analytics aggregates** — daily/weekly/monthly accounting summaries  
+  See: https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sdk-store-README.md
+- **Conversation artifacts & attachments** — per turn, per user  
+  See:
+  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md
+  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md
+- **Execution snapshots** (optional) — persisted workdir for debugging  
+  Enabled by `REACT_PERSIST_WORKSPACE=1`  
+  See:
+  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md
+  - https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sdk-store-README.md
+
+Example layout (abbreviated):
+```
+<KDCUBE_STORAGE_PATH>/
+  cb/tenants/<tenant>/projects/<project>/conversation/<role>/<user>/<conversation>/<turn>/
+  cb/tenants/<tenant>/projects/<project>/executions/<role>/<user>/<conversation>/<turn>/<exec_id>/
+  accounting/<tenant>/project/<YYYY.MM.DD>/<service>/<bundle_id>/
+  analytics/<tenant>/project/accounting/{daily,weekly,monthly}/
+```
+
+### Conversation store = Postgres + storage
+Conversation data is split across:
+- **Postgres** (conversation metadata/indexing)
+- **KDCube storage** (artifacts, attachments, execution logs)
+
+The retrieval layer uses `ctx_rag.py` to fetch turn artifacts from storage:
+`kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+
+## Temporary exec workspace (per turn)
+Reactive code execution uses a **temporary workspace** per turn:
+- Host: `workdir/data/exec-workspace`
+- Container: `/exec-workspace` (from `EXEC_WORKSPACE_ROOT`)
+
+This is **scratch space** for code execution; it is distinct from the
+persisted execution snapshots stored under `KDCUBE_STORAGE_PATH`.
+
+## File hosting & retrieval
+Files produced during a turn are **hosted immediately** and served by ingress
+resources routes (RN-based lookup).
+
+See:
+- Hosting / retrieval overview: https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/hosting/files-storage-system-README.md
+- Resource routes: `kdcube_ai_app/apps/chat/api/resources/resources.py`
+
+### Storage + hosting flow (local)
+```mermaid
+flowchart LR
+  subgraph Proc["chat-proc"]
+    A[Agent produces file] --> B[Write artifact to KDCUBE_STORAGE_PATH]
+    B --> C[Register RN in turn log]
+  end
+
+  subgraph Ingress["chat-ingress"]
+    D[Resources API: /resources/by-rn] --> E[Resolve RN -> storage path]
+  end
+
+  UI[Web UI / client] -->|GET by RN| D
+  C -->|RN in turn artifacts| UI
+  E --> B
+  Ingress -->|Serve file bytes| UI
+```
+
 ## What is stored in env files
 **Stored in env files (local, non‑sensitive or infra secrets):**
 - Redis/Postgres credentials (for local containers)

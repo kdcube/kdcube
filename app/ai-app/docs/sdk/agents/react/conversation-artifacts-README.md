@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/agents/react/turn-data-README.md
   - ks:docs/sdk/agents/react/turn-log-README.md
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
+  - ks:docs/sdk/agents/react/react-turn-workspace-README.md
 ---
 # Conversation Artifacts (v2)
 
