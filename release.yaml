@@ -1,8 +1,10 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.8.440"
-  description: "Fix aws deps version"
+  ref: "2026.3.9.115"
+  description: "This release tightens local‑install security and reliability. It introduces a secrets sidecar flow that avoids storing LLM/API keys in env files, adds explicit startup logging for
+  secret availability, and fixes compose env handling so repo .env files no longer leak into containers. It also disables link‑preview by default (removing Playwright from ingress),
+  improves storage path consistency with legacy fallback, and updates local setup + service config docs with clearer guidance and full env tables."
   config:
-    version: "2026.3.8.440"
+    version: "2026.3.9.115"
 
 
