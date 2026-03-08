@@ -1,8 +1,8 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.8.427"
+  ref: "2026.3.8.440"
   description: "Fix aws deps version"
   config:
-    version: "2026.3.8.427"
+    version: "2026.3.8.440"
 
 
