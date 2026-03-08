@@ -16,7 +16,7 @@ python_pptx
 pydub
 youtube_transcript_api
 SpeechRecognition
-boto3
+-r requirements-aws.txt
 
 # requirements.txt
 pandas

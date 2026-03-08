@@ -1,0 +1,4 @@
+# AWS async stack (pin to avoid pip backtracking in docker builds)
+# aiobotocore recommends installing boto3 via its extra for compatibility.
+aiobotocore[boto3]==2.15.2
+aioboto3==13.2.0

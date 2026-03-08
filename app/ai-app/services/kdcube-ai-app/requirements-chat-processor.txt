@@ -24,8 +24,7 @@ asyncpg
 ddgs
 semantic-kernel
 reportlab
-aioboto3
-boto3
+-r requirements-aws.txt
 
 bs4
 playwright

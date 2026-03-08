@@ -1,5 +1,4 @@
-aioboto3
-boto3
+-r requirements-aws.txt
 
 anthropic==0.46.0
 beautifulsoup4==4.13.4        # import: bs4

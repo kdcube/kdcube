@@ -18,8 +18,7 @@ aiolimiter
 dramatiq==1.18.0
 
 # Auth + storage (Cognito / S3)
-boto3
-aioboto3
+-r requirements-aws.txt
 
 # Uploads / AV / MIME preflight
 python-multipart
