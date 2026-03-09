@@ -12,6 +12,7 @@ import {widgetPanelsApiSlice} from "../features/widgetPanels/widgetPanels.ts";
 import chatSettingsSlice from "../features/chat/chatSettingsSlice.ts";
 
 export const store = configureStore({
+    devTools:true,
     reducer: {
         auth: authSlice,
         chatState: chatStateSlice,
