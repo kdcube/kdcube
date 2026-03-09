@@ -208,6 +208,7 @@ services:
     volumes:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - ./nginx/webroot:/var/www/letsencrypt
+      - ${NGINX_PROXY_RUNTIME_CONFIG_PATH:-./nginx/nginx_proxy_ssl_cognito.conf}:/usr/local/openresty/nginx/conf/nginx.conf:ro
     depends_on:
       chat-ingress:
         condition: service_started

@@ -219,6 +219,42 @@ def _load_json_file(path: Path) -> Dict[str, object]:
         return {}
 
 
+def normalize_routes_prefix(value: Optional[str]) -> str:
+    prefix = (value or "").strip()
+    if not prefix:
+        return "/chatbot"
+    if not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if prefix != "/" and prefix.endswith("/"):
+        prefix = prefix.rstrip("/")
+    return prefix
+
+
+def sync_nginx_proxy_config(target_path: Path, ai_app_root: Path, template_rel: str) -> None:
+    repo_root = ai_app_root.parent.parent
+    src = repo_root / template_rel
+    if not src.exists():
+        return
+    try:
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, target_path)
+    except Exception:
+        return
+
+
+def update_nginx_routes_prefix(path: Path, routes_prefix: str) -> None:
+    routes_prefix = normalize_routes_prefix(routes_prefix)
+    if not path.exists():
+        return
+    try:
+        current = path.read_text()
+    except Exception:
+        return
+    updated = current.replace("/chatbot", routes_prefix)
+    if updated != current:
+        path.write_text(updated)
+
+
 def write_frontend_config(
     path: Path,
     tenant: str,
@@ -226,6 +262,9 @@ def write_frontend_config(
     token: str = "test-admin-token-123",
     *,
     template_path: Optional[Path] = None,
+    cognito_region: Optional[str] = None,
+    cognito_user_pool_id: Optional[str] = None,
+    cognito_app_client_id: Optional[str] = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     template_data: Dict[str, object] = {}
@@ -249,9 +288,20 @@ def write_frontend_config(
     merged.setdefault("routesPrefix", "/chatbot")
 
     auth = merged.get("auth") if isinstance(merged.get("auth"), dict) else {}
-    auth.setdefault("authType", "hardcoded")
-    if auth.get("token") in (None, "", "test-admin-token-123"):
-        auth["token"] = token
+    auth_type = auth.get("authType") or "hardcoded"
+    auth["authType"] = auth_type
+    if auth_type == "hardcoded":
+        if auth.get("token") in (None, "", "test-admin-token-123"):
+            auth["token"] = token
+    elif auth_type == "cognito":
+        if "token" in auth:
+            auth.pop("token", None)
+        oidc_cfg = auth.get("oidcConfig") if isinstance(auth.get("oidcConfig"), dict) else {}
+        if cognito_region and cognito_user_pool_id:
+            oidc_cfg["authority"] = f"https://cognito-idp.{cognito_region}.amazonaws.com/{cognito_user_pool_id}"
+        if cognito_app_client_id:
+            oidc_cfg["client_id"] = cognito_app_client_id
+        auth["oidcConfig"] = oidc_cfg
     merged["auth"] = auth
 
     path.write_text(json.dumps(merged, indent=2) + "\n")
@@ -294,7 +344,7 @@ def ensure_env_files(target_dir: Path, sample_env_dir: Path) -> None:
 
 def ensure_nginx_configs(target_dir: Path, ai_app_root: Path) -> None:
     src_dir = ai_app_root / "deployment/docker/all_in_one_kdcube/nginx/conf"
-    for name in ("nginx_ui.conf", "nginx_proxy.conf"):
+    for name in ("nginx_ui.conf", "nginx_proxy.conf", "nginx_proxy_delegated.conf"):
         target = target_dir / name
         if target.exists():
             continue
@@ -768,6 +818,42 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Tuple[Dict[str,
     update_if_placeholder(env_proc, "SECRETS_URL", "http://kdcube-secrets:7777")
     update_if_placeholder(env_ingress, "LINK_PREVIEW_ENABLED", "0")
 
+    # Auth provider selection
+    existing_auth = env_ingress.entries.get("AUTH_PROVIDER", (None, None))[1] or env_proc.entries.get("AUTH_PROVIDER", (None, None))[1]
+    auth_options = ["simple", "cognito", "delegated (disabled)"]
+    default_auth = "cognito" if (existing_auth or "").strip().lower() == "cognito" else "simple"
+    default_idx = auth_options.index(default_auth)
+    console.print("[bold]Authentication[/bold]")
+    while True:
+        auth_choice = select_option(
+            console,
+            "Auth type",
+            options=auth_options,
+            default_index=default_idx,
+        )
+        if auth_choice.startswith("delegated"):
+            console.print("[yellow]Delegated auth is not available yet. Please choose simple or cognito.[/yellow]")
+            continue
+        break
+    auth_provider = "simple" if auth_choice == "simple" else "cognito"
+    update_env_value(env_ingress, "AUTH_PROVIDER", auth_provider)
+    update_env_value(env_proc, "AUTH_PROVIDER", auth_provider)
+
+    if auth_provider == "cognito":
+        console.print("[dim]Cognito auth is used for both cognito and delegated modes (delegated is disabled for now).[/dim]")
+        cognito_region = env_ingress.entries.get("COGNITO_REGION", (None, None))[1]
+        if force_prompt or is_placeholder(cognito_region):
+            cognito_region = ask(console, "COGNITO_REGION", default="eu-west-1")
+        update_env_value(env_ingress, "COGNITO_REGION", cognito_region or "eu-west-1")
+        update_env_value(env_proc, "COGNITO_REGION", cognito_region or "eu-west-1")
+
+        for key in ("COGNITO_USER_POOL_ID", "COGNITO_APP_CLIENT_ID", "COGNITO_SERVICE_CLIENT_ID"):
+            current_val = env_ingress.entries.get(key, (None, None))[1]
+            if force_prompt or is_placeholder(current_val):
+                current_val = ask(console, key, default=current_val or "")
+            update_env_value(env_ingress, key, current_val or "")
+            update_env_value(env_proc, key, current_val or "")
+
 
     pg_user = env_pg.entries.get("POSTGRES_USER", (None, None))[1]
     if force_prompt or is_placeholder(pg_user):
@@ -1082,27 +1168,80 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Tuple[Dict[str,
         if is_placeholder(value):
             update_env_value(env_main, key, defaults.get(default_key, ""))
 
-    frontend_template = ctx.ai_app_root / "deployment/docker/all_in_one_kdcube/frontend/config.hardcoded.json"
-    compose_ui_config = ctx.config_dir / "frontend.config.hardcoded.json"
-    write_frontend_config(compose_ui_config, tenant, project, template_path=frontend_template)
+    if auth_provider == "simple":
+        frontend_template = ctx.ai_app_root / "deployment/docker/all_in_one_kdcube/frontend/config.hardcoded.json"
+        compose_ui_config = ctx.config_dir / "frontend.config.hardcoded.json"
+        defaults["nginx_proxy_config"] = "app/ai-app/deployment/docker/all_in_one_kdcube/nginx/conf/nginx_proxy.conf"
+    else:
+        frontend_template = ctx.ai_app_root / "deployment/docker/all_in_one_kdcube/frontend/config.cognito.json"
+        compose_ui_config = ctx.config_dir / "frontend.config.cognito.json"
+        defaults["nginx_proxy_config"] = "app/ai-app/deployment/docker/all_in_one_kdcube/nginx/conf/nginx_proxy.conf"
+    cognito_region_val = env_ingress.entries.get("COGNITO_REGION", (None, None))[1]
+    cognito_user_pool_id_val = env_ingress.entries.get("COGNITO_USER_POOL_ID", (None, None))[1]
+    cognito_app_client_id_val = env_ingress.entries.get("COGNITO_APP_CLIENT_ID", (None, None))[1]
+    write_frontend_config(
+        compose_ui_config,
+        tenant,
+        project,
+        template_path=frontend_template,
+        cognito_region=cognito_region_val,
+        cognito_user_pool_id=cognito_user_pool_id_val,
+        cognito_app_client_id=cognito_app_client_id_val,
+    )
+    routes_prefix = normalize_routes_prefix(_load_json_file(compose_ui_config).get("routesPrefix"))
+    runtime_proxy_path = env_main.entries.get("NGINX_PROXY_RUNTIME_CONFIG_PATH", (None, None))[1]
+    desired_runtime_path = str((ctx.config_dir / Path(defaults["nginx_proxy_config"]).name).resolve())
+    if is_placeholder(runtime_proxy_path) or not runtime_proxy_path:
+        runtime_proxy_path = desired_runtime_path
+        update_env_value(env_main, "NGINX_PROXY_RUNTIME_CONFIG_PATH", runtime_proxy_path)
+    else:
+        normalized_current = _normalize_path(runtime_proxy_path)
+        normalized_desired = _normalize_path(desired_runtime_path)
+        if normalized_current and normalized_desired and normalized_current != normalized_desired:
+            runtime_proxy_path = desired_runtime_path
+            update_env_value(env_main, "NGINX_PROXY_RUNTIME_CONFIG_PATH", runtime_proxy_path)
+    runtime_proxy = Path(runtime_proxy_path).expanduser()
+    sync_nginx_proxy_config(runtime_proxy, ctx.ai_app_root, defaults["nginx_proxy_config"])
+    update_nginx_routes_prefix(runtime_proxy, routes_prefix)
+    desired_frontend_path = str(compose_ui_config)
     current_frontend_path = env_main.entries.get("PATH_TO_FRONTEND_CONFIG_JSON", (None, None))[1]
-    if is_placeholder(current_frontend_path):
-        current_frontend_path = str(compose_ui_config)
+    if is_placeholder(current_frontend_path) or not current_frontend_path:
+        current_frontend_path = desired_frontend_path
         update_env_value(env_main, "PATH_TO_FRONTEND_CONFIG_JSON", current_frontend_path)
-    # Keep the configured frontend config in sync, even if user pointed elsewhere.
+    else:
+        normalized_current = _normalize_path(current_frontend_path)
+        normalized_desired = _normalize_path(desired_frontend_path)
+        if normalized_current and normalized_desired and normalized_current != normalized_desired:
+            current_frontend_path = desired_frontend_path
+            update_env_value(env_main, "PATH_TO_FRONTEND_CONFIG_JSON", current_frontend_path)
+
+    # Keep the configured frontend config in sync.
     try:
-        if current_frontend_path:
-            write_frontend_config(
-                Path(current_frontend_path).expanduser(),
-                tenant,
-                project,
-                template_path=frontend_template,
-            )
+        write_frontend_config(
+            Path(current_frontend_path).expanduser(),
+            tenant,
+            project,
+            template_path=frontend_template,
+            cognito_region=cognito_region_val,
+            cognito_user_pool_id=cognito_user_pool_id_val,
+            cognito_app_client_id=cognito_app_client_id_val,
+        )
     except Exception:
         pass
 
-    dev_ui_config = ctx.ai_app_root / "ui/chat-web-app/public/private/config.hardcoded.json"
-    write_frontend_config(dev_ui_config, tenant, project, template_path=frontend_template)
+    if auth_provider == "simple":
+        dev_ui_config = ctx.ai_app_root / "ui/chat-web-app/public/private/config.hardcoded.json"
+    else:
+        dev_ui_config = ctx.ai_app_root / "ui/chat-web-app/public/private/config.cognito.demo.json"
+    write_frontend_config(
+        dev_ui_config,
+        tenant,
+        project,
+        template_path=frontend_template,
+        cognito_region=cognito_region_val,
+        cognito_user_pool_id=cognito_user_pool_id_val,
+        cognito_app_client_id=cognito_app_client_id_val,
+    )
 
     proxy_build_context = env_main.entries.get("PROXY_BUILD_CONTEXT", (None, None))[1]
     default_proxy_context = defaults.get("proxy_build_context", "")

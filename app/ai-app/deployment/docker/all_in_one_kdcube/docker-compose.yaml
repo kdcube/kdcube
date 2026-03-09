@@ -373,7 +373,7 @@ services:
         - NGINX_CONFIG_FILE_PATH=${NGINX_PROXY_CONFIG_FILE_PATH}
     restart: unless-stopped
     volumes:
-      - ${KDCUBE_CONFIG_DIR:-./config}/nginx_proxy.conf:/usr/local/openresty/nginx/conf/nginx.conf:ro
+      - ${NGINX_PROXY_RUNTIME_CONFIG_PATH:-./config/nginx_proxy.conf}:/usr/local/openresty/nginx/conf/nginx.conf:ro
     depends_on:
       chat-ingress:
         condition: service_started
