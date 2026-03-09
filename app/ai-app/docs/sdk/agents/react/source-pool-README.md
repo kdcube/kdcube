@@ -17,8 +17,8 @@ This document describes how the **sources pool** is populated, stored, and acces
 
 The sources pool is a per‑conversation registry of canonical source rows collected from:
 - `web_tools.web_search` and `web_tools.web_fetch`
-- user attachments (eligible MIME types only)
-- files produced by tools (eligible MIME types only)
+- user attachments **(images only)** for rendering/embedding
+- files produced by tools **(images only)** for rendering/embedding
 - skill sources (`sources.yaml`) when a skill is loaded via `react.read`
 
 ## Where it lives
@@ -46,12 +46,9 @@ SIDs are stable within a conversation once assigned.
 
 ## Eligibility (what is included)
 
-Attachments and produced files are included only if MIME is one of:
-- `text/*`
-- `image/*`
-- `application/pdf`
+Attachments and produced files are included only if MIME is `image/*`.
 
-Other binary types (e.g., `.xlsx`, `.pptx`, `.docx`, archives) are not added to the pool.
+Other file types (e.g., `.xlsx`, `.pptx`, `.docx`, archives, PDFs) are not added to the pool.
 
 ## Canonical source row fields
 
@@ -102,6 +99,10 @@ Use citation tokens in generated text:
 ```
 
 Do not place citations inside fenced code blocks.
+
+Only **web sources** (http/https URLs) should be cited.  
+Image sources in the pool are for rendering/embedding. They may appear as SIDs
+inside HTML/Markdown passed to rendering tools, but they are **not** evidence citations.
 
 ## Rendering behavior
 

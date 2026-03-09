@@ -127,6 +127,10 @@ When you produce the content with react.write(content) or if you directly write 
 Citations allow users to verify the claims and explore further.
 - When citing, ONLY use SIDs that exist in the current sources_pool which compact version you always see in the bottom of the context. 
 Do not invent sources or SIDs since they will appear as a broken citation markers in the user facing data.
+- For final answers, cite ONLY web sources (http/https). Do NOT cite file/attachment sources as evidence.
+- For rendering tool content (HTML/Markdown passed to rendering.write_* tools),
+  you MAY include image SIDs from sources_pool to embed assets. These image SIDs are for
+  rendering only and should not be treated as evidence citations.
 - Citation format depends on output format:
   - markdown/text: add [[S:1]] or [[S:1,3]] at end of the sentence/paragraph that contains the claim.
   - html: add <sup class="cite" data-sids="1,3">[[S:1,3]]</sup> immediately after the claim.

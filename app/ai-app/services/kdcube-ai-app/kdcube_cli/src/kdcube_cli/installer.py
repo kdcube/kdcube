@@ -951,14 +951,27 @@ def gather_configuration(console: Console, ctx: PathsContext) -> Tuple[Dict[str,
     current_descriptor = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
     descriptor_value = (current_descriptor or "").strip().strip("'\"")
     if force_prompt or is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
-        if force_prompt:
-            descriptor = prompt_optional_keep(console, "Host bundle descriptor path (release.yaml)", current_descriptor)
-        else:
-            descriptor = prompt_optional(console, "Host bundle descriptor path (release.yaml)")
-        if descriptor:
-            update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", descriptor)
+        use_descriptor = ask_confirm(console, "Use a custom bundle descriptor (release.yaml)?", default=False)
+        if use_descriptor:
+            if force_prompt:
+                descriptor = prompt_optional_keep(console, "Host bundle descriptor path (release.yaml)", current_descriptor)
+            else:
+                descriptor = prompt_optional(console, "Host bundle descriptor path (release.yaml)")
+            if descriptor:
+                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", descriptor)
+            else:
+                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
         else:
             update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
+
+    # If a descriptor is set, force a one-time registry sync on startup.
+    current_descriptor = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
+    descriptor_value = (current_descriptor or "").strip().strip("'\"")
+    if descriptor_value and descriptor_value != "/dev/null" and not is_placeholder(current_descriptor):
+        update_env_value(env_proc, "BUNDLES_FORCE_ENV_ON_STARTUP", "1")
+        update_env_value(env_proc, "BUNDLE_GIT_RESOLUTION_ENABLED", "1")
+    else:
+        update_env_value(env_proc, "BUNDLES_FORCE_ENV_ON_STARTUP", "0")
 
     existing_http = env_proc.entries.get("GIT_HTTP_TOKEN", (None, None))[1]
     existing_ssh = env_proc.entries.get("GIT_SSH_KEY_PATH", (None, None))[1]

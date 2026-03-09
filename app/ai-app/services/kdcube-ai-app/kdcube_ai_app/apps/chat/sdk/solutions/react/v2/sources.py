@@ -98,15 +98,9 @@ def merge_sources_pool_with_map(
 
 def _is_sources_pool_allowed_mime(mime: str) -> bool:
     if not mime:
-        return True
+        return False
     mime = mime.strip().lower()
-    if mime.startswith("text/"):
-        return True
-    if mime.startswith("image/"):
-        return True
-    if mime == "application/pdf":
-        return True
-    return False
+    return mime.startswith("image/")
 
 
 def merge_sources_pool_for_attachment_rows(

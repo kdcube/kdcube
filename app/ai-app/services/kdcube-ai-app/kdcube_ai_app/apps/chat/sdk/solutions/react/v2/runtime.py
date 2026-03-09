@@ -1477,10 +1477,21 @@ class ReactSolverV2:
                     citations = []
                     pool = list(self.ctx_browser.timeline.sources_pool or [])
                     pool_updated = False
+                    non_citable = []
+
+                    def _is_citable_source(row: dict) -> bool:
+                        st = (row.get("source_type") or "").strip().lower()
+                        if st in {"file", "attachment"}:
+                            return False
+                        url = (row.get("url") or "").strip().lower()
+                        return url.startswith("http://") or url.startswith("https://")
                     for row in pool:
                         if not isinstance(row, dict):
                             continue
                         if row.get("sid") in sid_set:
+                            if not _is_citable_source(row):
+                                non_citable.append(row.get("sid"))
+                                continue
                             if row.get("used") is not True:
                                 row["used"] = True
                                 pool_updated = True
@@ -1492,12 +1503,18 @@ class ReactSolverV2:
                             self.ctx_browser.set_sources_pool(sources_pool=pool)
                         except Exception:
                             self.log.log(traceback.format_exc())
+                    if non_citable:
+                        self.log.log(
+                            f"[react.v2] emit_citations: skipped non-citable sids={sorted(set(non_citable))}",
+                            level="INFO",
+                        )
                     self.log.log(
                         f"[react.v2] emit_citations: used_sids={sorted(sid_set)} "
                         f"pool={len(pool)} citations={len(citations)}",
                         level="INFO",
                     )
-                    await self.hosting_service.emit_solver_artifacts(files=[], citations=citations)
+                    if citations:
+                        await self.hosting_service.emit_solver_artifacts(files=[], citations=citations)
                 else:
                     self.log.log("[react.v2] emit_citations: no used_sids detected", level="INFO")
         except Exception:

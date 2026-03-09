@@ -651,7 +651,7 @@ async def handle_external_tool(*,
             artifact_path=artifact_path if artifact_path.startswith("fi:") else "",
             tool_call_id=tool_call_id,
         )
-        # Add produced files to sources_pool (so file/attachment paths can be cited).
+        # Add produced images to sources_pool (for rendering/embedding only).
         if visibility == "external" and physical_path:
             try:
                 merge_sources_pool_for_file_rows(
