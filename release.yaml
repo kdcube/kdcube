@@ -1,10 +1,13 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.9.115"
-  description: "This release tightens local‑install security and reliability. It introduces a secrets sidecar flow that avoids storing LLM/API keys in env files, adds explicit startup logging for
-  secret availability, and fixes compose env handling so repo .env files no longer leak into containers. It also disables link‑preview by default (removing Playwright from ingress),
-  improves storage path consistency with legacy fallback, and updates local setup + service config docs with clearer guidance and full env tables."
+  ref: "2026.3.10.209"
+  description: |
+    This release improves local setup and auth configuration:
+    - Added auth mode selection (simple vs Cognito) in the CLI wizard.
+    - Cognito configs are now generated correctly (authority + client ID), and hardcoded tokens are removed when Cognito is used.
+    - Frontend config selection is now auth‑aware (hardcoded or cognito).
+    - The nginx proxy runtime config is now patched to match the UI routesPrefix, ensuring consistent routing for custom prefixes.
+    - Added support for delegated proxy template (disabled for now) and runtime proxy config selection in compose.
+    - Workdir proxy config is now aligned with the selected auth mode and compose runtime file.
   config:
-    version: "2026.3.9.115"
-
-
+    version: "2026.3.10.209"

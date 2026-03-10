@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kdcube-cli"
-version = "2026.3.9.115"
+version = "2026.3.10.209"
 description = "KDCube Apps bootstrap CLI"
 readme = "README.md"
 requires-python = ">=3.9"
