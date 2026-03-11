@@ -2725,8 +2725,17 @@ def run_setup(
                 apply_runtime_secrets(console, ctx, runtime_secrets, runtime_env)
 
             services = list_compose_services(ctx, runtime_env)
+            if services:
+                console.print(f"[dim]Compose services:[/dim] {', '.join(sorted(services))}")
             if runtime_secrets and services:
-                services = [svc for svc in services if svc != "kdcube-secrets"]
+                filtered = [svc for svc in services if "secret" not in svc.lower()]
+                excluded = [svc for svc in services if svc not in filtered]
+                services = filtered
+                if excluded:
+                    console.print(f"[yellow]Excluding services:[/yellow] {', '.join(sorted(excluded))}")
+                if services:
+                    console.print(f"[dim]Compose services (filtered):[/dim] {', '.join(sorted(services))}")
+            no_deps_flag: List[str] = ["--no-deps"] if (runtime_secrets and services) else []
             no_recreate_flag: List[str] = []
             if runtime_secrets and not services:
                 console.print(
@@ -2736,7 +2745,7 @@ def run_setup(
                 no_recreate_flag = ["--no-recreate"]
             up_cmd = [*base_cmd, "up", "-d", *force_recreate_flag, *build_flag]
             if services:
-                up_cmd.extend(services)
+                up_cmd = [*base_cmd, "up", "-d", *no_deps_flag, *force_recreate_flag, *build_flag, *services]
             elif no_recreate_flag:
                 # Avoid rebuilding/recreating secrets when service list is unknown.
                 up_cmd = [*base_cmd, "up", "-d", *no_recreate_flag]
