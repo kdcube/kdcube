@@ -739,7 +739,10 @@ def main() -> None:
             os.environ["KDCUBE_RESET_CONFIG"] = "1"
         run_installer(console, repo_path, workdir, mode, release_ref, docker_namespace, args.dry_run)
     except FileNotFoundError as exc:
-        raise SystemExit("Missing dependency. Please install Git and Python.") from exc
+        detail = str(exc).strip()
+        if detail:
+            raise SystemExit(f"Missing dependency or file: {detail}") from exc
+        raise SystemExit("Missing dependency or file (FileNotFoundError).") from exc
     except KeyboardInterrupt:
         console.print("\n[yellow]Setup cancelled.[/yellow]")
         raise SystemExit(130)

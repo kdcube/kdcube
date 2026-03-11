@@ -69,6 +69,8 @@ installed admin assistant and bundled tools.
 | `--clean` | Clean local Docker cache and unused KDCube images. |
 | `--secrets-prompt` | Prompt for LLM keys and inject them at runtime (sidecar). |
 | `--secrets-set KEY=VALUE` | Inject a secret value without prompting (repeatable). |
+| `--dry-run` | Generate env files and print their paths without running Docker. |
+| `--dry-run-print-env` | With `--dry-run`, also print the full env file contents. |
 
 ### Use a local checkout (dev)
 
