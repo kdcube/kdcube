@@ -2472,7 +2472,6 @@ def run_setup(
     env_secrets_descriptor = os.getenv("KDCUBE_SECRETS_DESCRIPTOR_PATH", "").strip()
     env_gateway_descriptor = os.getenv("KDCUBE_GATEWAY_DESCRIPTOR_PATH", "").strip()
     skip_assembly_prompt = parse_bool(os.getenv("KDCUBE_ASSEMBLY_SKIP", "")) is True
-    env_use_frontend = _env_flag("KDCUBE_ASSEMBLY_USE_FRONTEND")
     def _env_flag(name: str) -> Optional[bool]:
         raw = os.getenv(name, "").strip().lower()
         if not raw:
@@ -2482,6 +2481,7 @@ def run_setup(
         if raw in {"0", "false", "no", "n", "off"}:
             return False
         return None
+    env_use_frontend = _env_flag("KDCUBE_ASSEMBLY_USE_FRONTEND")
     use_descriptor_bundles = _env_flag("KDCUBE_ASSEMBLY_USE_BUNDLES")
     use_descriptor_frontend = _env_flag("KDCUBE_ASSEMBLY_USE_FRONTEND")
     use_descriptor_platform = _env_flag("KDCUBE_ASSEMBLY_USE_PLATFORM")
@@ -2550,6 +2550,8 @@ def run_setup(
             elif isinstance(release_descriptor, dict) and release_descriptor.get("frontend"):
                 compose_mode = "custom-ui-managed-infra"
             elif not compose_mode_env:
+                compose_mode = "all-in-one"
+            if isinstance(release_descriptor, dict) and not release_descriptor.get("frontend") and use_descriptor_frontend is not True:
                 compose_mode = "all-in-one"
     if env_use_frontend is False and not compose_mode_env:
         compose_mode = "all-in-one"
