@@ -1971,7 +1971,16 @@ def gather_configuration(
     _set_port("CHAT_APP_PORT", "ingress", "8010")
     _set_port("CHAT_PROCESSOR_PORT", "proc", "8020")
     _set_port("METRICS_PORT", "metrics", "8090")
-    _set_port("KDCUBE_UI_PORT", "ui", "80")
+    ui_port_current = env_main.entries.get("KDCUBE_UI_PORT", (None, None))[1]
+    ui_port_from_assembly = ports_block.get("ui")
+    if assembly_user_supplied and ui_port_from_assembly is not None and not is_placeholder(str(ui_port_from_assembly)):
+        update_env_value(env_main, "KDCUBE_UI_PORT", str(ui_port_from_assembly))
+        ui_port_current = str(ui_port_from_assembly)
+    else:
+        ui_default = str(ui_port_current or ui_port_from_assembly or "80")
+        ui_port_current = ask(console, "UI port", default=ui_default)
+        update_env_value(env_main, "KDCUBE_UI_PORT", str(ui_port_current))
+    ports_block["ui"] = str(ui_port_current)
     _set_port("KDCUBE_UI_SSL_PORT", "ui_ssl", "443")
     _set_nested(assembly_data, ["ports"], ports_block)
 
