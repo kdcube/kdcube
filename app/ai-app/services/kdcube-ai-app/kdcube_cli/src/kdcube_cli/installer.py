@@ -2727,14 +2727,19 @@ def run_setup(
             services = list_compose_services(ctx, runtime_env)
             if runtime_secrets and services:
                 services = [svc for svc in services if svc != "kdcube-secrets"]
+            no_recreate_flag: List[str] = []
             if runtime_secrets and not services:
                 console.print(
                     "[yellow]Could not resolve compose services; running without --force-recreate to avoid restarting kdcube-secrets.[/yellow]"
                 )
                 force_recreate_flag = []
+                no_recreate_flag = ["--no-recreate"]
             up_cmd = [*base_cmd, "up", "-d", *force_recreate_flag, *build_flag]
             if services:
                 up_cmd.extend(services)
+            elif no_recreate_flag:
+                # Avoid rebuilding/recreating secrets when service list is unknown.
+                up_cmd = [*base_cmd, "up", "-d", *no_recreate_flag]
             subprocess.run(
                 up_cmd,
                 cwd=ctx.docker_dir,
