@@ -1,10 +1,12 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.11.453"
+  ref: "2026.3.12.039"
   description: |
     Assembly, Secrets, and Gateway Descriptors + Delegated Auth + Proxy Alignment
     This release introduces the new assembly / secrets / gateway descriptor flow for CLI installs. It adds delegated auth with proxylogin wiring and standardizes nginx proxy templates
     across modes (custom UI and all‑in‑one). Local and EC2 setup is now descriptor‑driven for auth, domain, routesPrefix, ports, frontend selection, and gateway config, while secrets
     are centralized via the secrets sidecar to keep sensitive values out of env files where possible.
+    CLI fixes. 
+    react.patch tool fixes.
   config:
-    version: "2026.3.11.453"
+    version: "2026.3.12.039"
