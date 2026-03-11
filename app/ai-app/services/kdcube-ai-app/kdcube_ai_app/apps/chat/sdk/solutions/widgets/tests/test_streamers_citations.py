@@ -5,6 +5,7 @@ import json
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.canvas import (
+    ReactPatchContentStreamer,
     ReactWriteContentStreamer,
     RenderingWriteContentStreamer,
     TimelineStreamer,
@@ -70,6 +71,39 @@ async def test_react_write_streamer_replaces_citations_in_fenced_json():
     assert "[[S:" not in rendered
     assert "https://example.com/a" in rendered
     assert "https://example.com/b" in rendered
+
+
+@pytest.mark.asyncio
+async def test_react_patch_streamer_streams_patch_to_canvas():
+    payload = {
+        "action": "call_tool",
+        "tool_call": {
+            "tool_id": "react.patch",
+            "params": {
+                "path": "turn_1/files/note.md",
+                "channel": "canvas",
+                "patch": "--- a/note.md\n+++ b/note.md\n@@ -1 +1,2 @@\n hello\n+world\n",
+            },
+        },
+    }
+
+    collector = _Collector()
+    streamer = ReactPatchContentStreamer(
+        emit_delta=collector.emit,
+        agent="test.agent",
+        artifact_name="react.record.test",
+        sources_list=[],
+        turn_id="turn_1",
+        stream_tool_id="react.patch",
+    )
+
+    for chunk in _chunk_text(_json_stream_payload(payload), size=11):
+        await streamer.feed(chunk)
+    await streamer.finish()
+
+    rendered = collector.text_for_marker("canvas")
+    assert "@@ -1 +1,2 @@" in rendered
+    assert "+world" in rendered
 
 
 @pytest.mark.asyncio

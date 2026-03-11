@@ -28,6 +28,7 @@ class ToolContentStreamerBase:
         turn_id: Optional[str] = None,
         stream_tool_id: str = "react.write",
         write_tool_prefix: str = "rendering_tools.write_",
+        stream_xpath: str = "tool_call.params.content",
     ) -> None:
         self.emit_delta = emit_delta
         self.agent = agent
@@ -38,7 +39,7 @@ class ToolContentStreamerBase:
         self.stream_tool_id = stream_tool_id
         self.write_tool_prefix = write_tool_prefix
 
-        self.stream_xpath = "tool_call.params.content"
+        self.stream_xpath = stream_xpath
         self.path_xpath = "tool_call.params.path"
         self.channel_xpath = "tool_call.params.channel"
         self.kind_xpath = "tool_call.params.kind"
@@ -237,6 +238,9 @@ class ToolContentStreamerBase:
         ch = (self.current_channel or "").strip().lower()
         return ch in {"timeline", "timeline_text"}
 
+    def _format_from_path(self, norm_path: str) -> str:
+        return infer_format_from_path(norm_path)
+
     async def _emit_chunk(self, text: str) -> None:
         if not text:
             return
@@ -388,7 +392,7 @@ class ToolContentStreamerBase:
                                 norm_path = normalize_relpath(path_val, turn_id=self.turn_id)
                                 self.current_path = norm_path
                                 self.record_artifact_name = norm_path
-                                self.current_format = infer_format_from_path(norm_path)
+                                self.current_format = self._format_from_path(norm_path)
                                 print(f"ContentStreamer: Inferred format {self.current_format} from path {norm_path}")
                         if self._matches_channel_path():
                             channel_val = self.active_value_buf.strip().lower()
@@ -560,6 +564,21 @@ class ReactWriteContentStreamer(ToolContentStreamerBase):
 
     def _requires_channel(self) -> bool:
         return True
+
+
+class ReactPatchContentStreamer(ToolContentStreamerBase):
+    def __init__(self, **kwargs) -> None:
+        kwargs.setdefault("stream_xpath", "tool_call.params.patch")
+        super().__init__(**kwargs)
+
+    def _tool_allows_stream(self) -> bool:
+        return self.current_tool_id == self.stream_tool_id
+
+    def _requires_channel(self) -> bool:
+        return True
+
+    def _format_from_path(self, norm_path: str) -> str:
+        return "markdown"
 
 
 class RenderingWriteContentStreamer(ToolContentStreamerBase):

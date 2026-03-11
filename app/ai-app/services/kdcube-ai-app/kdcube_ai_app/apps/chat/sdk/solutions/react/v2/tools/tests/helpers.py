@@ -36,7 +36,9 @@ class FakeBrowser:
 
 
 class FakeReact:
-    hosting_service = None
-    comm = None
     tool_manager = type("T", (), {"tools": {}})()
     log = None
+
+    def __init__(self, hosting_service=None, comm=None):
+        self.hosting_service = hosting_service
+        self.comm = comm

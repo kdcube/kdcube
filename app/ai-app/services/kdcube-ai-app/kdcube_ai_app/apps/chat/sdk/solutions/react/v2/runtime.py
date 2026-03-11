@@ -27,6 +27,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import ReactResult
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import ApplicationHostingService
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.exec import DecisionExecCodeStreamer
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.canvas import (
+    ReactPatchContentStreamer,
     ReactWriteContentStreamer,
     RenderingWriteContentStreamer,
     TimelineStreamer,
@@ -271,15 +272,20 @@ class ReactSolverV2:
             **base_args,
             stream_tool_id="react.write",
         )
+        patch_streamer = ReactPatchContentStreamer(
+            **base_args,
+            stream_tool_id="react.patch",
+        )
         rendering_streamer = RenderingWriteContentStreamer(
             **base_args,
             write_tool_prefix="rendering_tools.write_",
         )
         fns = [
             self._wrap_json_streamer(react_streamer, sources_list=sources_list),
+            self._wrap_json_streamer(patch_streamer, sources_list=sources_list),
             self._wrap_json_streamer(rendering_streamer, sources_list=sources_list),
         ]
-        return fns, [react_streamer, rendering_streamer]
+        return fns, [react_streamer, patch_streamer, rendering_streamer]
 
     def _wrap_json_streamer(
         self,

@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import time
+import shutil
+import subprocess
+import tempfile
 from typing import Any, Dict, Optional, List
 
 import json
@@ -134,6 +137,104 @@ def apply_unified_diff(text: str, patch_text: str) -> tuple[Optional[str], Optio
         return "".join(out), None
     except Exception as exc:
         return None, f"apply_failed:{exc}"
+
+
+def rewrite_unified_diff_paths(
+    *,
+    patch_text: str,
+    source_path: pathlib.Path,
+    target_path: pathlib.Path,
+) -> str:
+    stripped = patch_text.lstrip()
+    if not stripped:
+        return patch_text
+
+    prefix = patch_text[:len(patch_text) - len(stripped)]
+    source_text = str(source_path)
+    target_text = str(target_path)
+    lines = stripped.splitlines(keepends=True)
+
+    if stripped.startswith("@@"):
+        header = f"--- {source_text}\n+++ {target_text}\n"
+        body = stripped if stripped.endswith("\n") else f"{stripped}\n"
+        return prefix + header + body
+
+    out: List[str] = []
+    saw_old = False
+    saw_new = False
+    for line in lines:
+        if line.startswith("--- ") and not saw_old:
+            ending = "\n" if line.endswith("\n") else ""
+            out.append(f"--- {source_text}{ending}")
+            saw_old = True
+            continue
+        if line.startswith("+++ ") and saw_old and not saw_new:
+            ending = "\n" if line.endswith("\n") else ""
+            out.append(f"+++ {target_text}{ending}")
+            saw_new = True
+            continue
+        out.append(line)
+
+    if not saw_old:
+        out.insert(0, f"--- {source_text}\n")
+    if not saw_new:
+        insert_at = 1 if out and out[0].startswith("--- ") else 0
+        out.insert(insert_at, f"+++ {target_text}\n")
+
+    rewritten = prefix + "".join(out)
+    if rewritten and not rewritten.endswith("\n"):
+        rewritten += "\n"
+    return rewritten
+
+
+def apply_unified_diff_to_file(
+    *,
+    target_path: pathlib.Path,
+    patch_text: str,
+    source_path: Optional[pathlib.Path] = None,
+) -> tuple[Optional[str], str, Optional[str]]:
+    rewritten_patch = rewrite_unified_diff_paths(
+        patch_text=patch_text,
+        source_path=source_path or target_path,
+        target_path=target_path,
+    )
+
+    patch_bin = shutil.which("patch")
+    if patch_bin:
+        try:
+            with tempfile.TemporaryDirectory(prefix="react_patch_") as tmpdir:
+                tmpdir_path = pathlib.Path(tmpdir)
+                candidate_path = tmpdir_path / target_path.name
+                patch_path = tmpdir_path / "patch.diff"
+                candidate_path.write_text(target_path.read_text(encoding="utf-8"), encoding="utf-8")
+                patch_path.write_text(rewritten_patch, encoding="utf-8")
+                proc = subprocess.run(
+                    [
+                        patch_bin,
+                        "--quiet",
+                        "--forward",
+                        "--reject-file=-",
+                        "--fuzz=3",
+                        "-l",
+                        str(candidate_path),
+                        str(patch_path),
+                    ],
+                    capture_output=True,
+                    text=True,
+                )
+                if proc.returncode == 0:
+                    return candidate_path.read_text(encoding="utf-8"), rewritten_patch, None
+                msg = (proc.stderr or proc.stdout or "").strip()
+                return None, rewritten_patch, msg or f"patch_failed:{proc.returncode}"
+        except Exception as exc:
+            return None, rewritten_patch, f"patch_exec_failed:{exc}"
+
+    try:
+        original = target_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return None, rewritten_patch, f"patch_target_unreadable:{exc}"
+    patched, err = apply_unified_diff(original, rewritten_patch)
+    return patched, rewritten_patch, err
 
 
 def run_post_patch_check(file_path: pathlib.Path) -> tuple[bool, str]:

@@ -10,7 +10,6 @@ import pathlib
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import (
     build_artifact_meta_block,
-    materialize_inline_artifact_to_file,
     build_artifact_view,
     normalize_physical_path,
     detect_edit,
@@ -18,13 +17,14 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     tool_call_block,
     notice_block,
-    apply_unified_diff,
+    apply_unified_diff_to_file,
     run_post_patch_check,
     is_safe_relpath,
     add_block,
     host_artifact_file,
     emit_hosted_files,
     tc_result_path,
+    infer_format_from_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import rehost_files_from_timeline
 
@@ -49,6 +49,23 @@ TOOL_SPEC = {
         "`kind` must appear fourth in the params JSON object.",
     ],
 }
+
+
+def _mime_for_format(fmt: str) -> str:
+    fmt_norm = (fmt or "").strip().lower()
+    if fmt_norm == "json":
+        return "application/json"
+    if fmt_norm == "html":
+        return "text/html"
+    if fmt_norm == "xml":
+        return "application/xml"
+    if fmt_norm == "yaml":
+        return "application/yaml"
+    if fmt_norm == "text":
+        return "text/plain"
+    if fmt_norm == "mermaid":
+        return "text/plain"
+    return "text/markdown"
 
 
 async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, Any], tool_call_id: str) -> Dict[str, Any]:
@@ -102,6 +119,8 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
 
     outdir = pathlib.Path(state["outdir"])
     abs_path = outdir / artifact_name
+    source_abs = abs_path
+    target_preexisting = abs_path.exists()
     # If patch referenced an older turn file, copy it into current turn namespace
     if original_path.startswith("turn_") and "/files/" in original_path:
         try:
@@ -123,22 +142,24 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
                 abs_path.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     abs_path.write_text(old_abs.read_text(encoding="utf-8"), encoding="utf-8")
+                    source_abs = old_abs
                 except Exception:
                     pass
+            elif old_abs.exists() and not target_preexisting:
+                source_abs = old_abs
     if not abs_path.exists():
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "patch_target_missing", "managed": True}
         return state
-    try:
-        original = abs_path.read_text(encoding="utf-8")
-    except Exception:
-        state["exit_reason"] = "error"
-        state["error"] = {"where": "tool_execution", "error": "patch_target_unreadable", "managed": True}
-        return state
 
     is_unified = any(patch_text.lstrip().startswith(x) for x in ("---", "+++", "@@"))
+    display_patch_text = patch_text
     if is_unified:
-        patched, err = apply_unified_diff(original, patch_text)
+        patched, display_patch_text, err = apply_unified_diff_to_file(
+            target_path=abs_path,
+            patch_text=patch_text,
+            source_path=source_abs,
+        )
         if patched is None:
             state["exit_reason"] = "error"
             state["error"] = {"where": "tool_execution", "error": err or "patch_failed", "managed": True}
@@ -158,12 +179,13 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
             rel="result",
         )
 
+    fmt = infer_format_from_path(rel_path or artifact_name)
     artifact_view = build_artifact_view(
         turn_id=turn_id,
         is_current=True,
         artifact_id=rel_path or artifact_name,
         tool_id=tool_id,
-        value={"format": "patch", "content": patch_text, "path": (rel_path or artifact_name), "text": patch_text},
+        value={"format": "patch", "content": display_patch_text, "path": (rel_path or artifact_name), "text": display_patch_text},
         summary="",
         artifact_kind="display" if kind == "display" else "file",
         visibility="external",
@@ -178,16 +200,15 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         tool_call_id=tool_call_id,
         artifact_stats=None,
     )
-    materialize_inline_artifact_to_file(
-        artifact=artifact_view,
-        outdir=outdir,
-        turn_id=turn_id,
-        filename_hint=rel_path or artifact_name,
-        mime_hint=None,
-        visibility="external",
-        scratchpad=None,
-    )
     artifact = artifact_view.raw
+    if isinstance(artifact.get("value"), dict):
+        artifact["value"]["path"] = artifact_name
+        if kind == "file":
+            artifact["value"]["type"] = "file"
+            artifact["value"]["text"] = patched
+            artifact["value"]["content"] = patched
+            artifact["value"]["mime"] = _mime_for_format(fmt)
+            artifact["path"] = artifact_name
     hosted = []
     if kind == "file":
         hosted = await host_artifact_file(
@@ -197,11 +218,40 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
             artifact=artifact,
             outdir=outdir,
         )
+        if (not hosted) and rel_path and rel_path != artifact_name:
+            try:
+                if isinstance(artifact.get("value"), dict):
+                    artifact["value"]["path"] = rel_path
+                hosted = await host_artifact_file(
+                    hosting_service=react.hosting_service,
+                    comm=react.comm,
+                    runtime_ctx=ctx_browser.runtime_ctx,
+                    artifact=artifact,
+                    outdir=outdir,
+                )
+            except Exception:
+                pass
         await emit_hosted_files(
             hosting_service=react.hosting_service,
             hosted=hosted,
             should_emit=True,
         )
+        if not abs_path.exists():
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="react.patch.hosting_failed",
+                message="Hosting failed (file missing). User will not receive a downloadable file.",
+                rel="result",
+            )
+        elif (react.hosting_service and react.comm) and not hosted:
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="react.patch.hosting_failed",
+                message="Hosting failed (no hosted result). User will not receive a downloadable file.",
+                rel="result",
+            )
     artifact_rel = (rel_path or "").strip()
     artifact_path = f"fi:{turn_id}.files/{artifact_rel}" if (turn_id and artifact_rel) else ""
     physical_path = artifact_name
@@ -218,7 +268,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         physical_path=physical_path,
         edited=edited,
     )
-    add_block(react, meta_block)
+    add_block(ctx_browser, meta_block)
     meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id, "tool_id": tool_id}
     try:
         meta_text = meta_block.get("text") if isinstance(meta_block, dict) else None
@@ -237,18 +287,18 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         legacy = (artifact.get("value") or {}).get("local_path") or artifact.get("local_path")
         if legacy:
             meta_extra["physical_path"] = legacy
-    add_block(react, {
+    add_block(ctx_browser, {
         "turn": turn_id,
         "type": "react.tool.result",
         "call_id": tool_call_id,
         "mime": "text/markdown",
         "path": artifact_path,
-        "text": patch_text,
+        "text": display_patch_text,
         "meta": {
             **meta_extra,
         },
     })
-    add_block(react, {
+    add_block(ctx_browser, {
         "turn": turn_id,
         "type": "react.tool.result",
         "call_id": tool_call_id,
