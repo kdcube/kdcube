@@ -1,0 +1,23 @@
+bundles:
+  version: "1"
+  default_bundle_id: "app@2-0"
+  items:
+    - id: "app@2-0"
+      name: "Customer App"
+      repo: "git@github.com:org/customer-repo.git"
+      ref: "bundle-v2026.02.22"
+      subdir: "service/bundles"
+      module: "app@2-0.entrypoint"
+      config:
+        model_id: "gpt-4o-mini"
+        features: '{"web_search": true, "web_fetch": true}'
+        embedding:
+          provider: "openai"
+          model: "text-embedding-3-small"
+        role_models:
+          solver.react.v2.decision.v2.strong:
+            provider: "anthropic"
+            model: "claude-sonnet-4-6"
+          custom.agent.example:
+            provider: "anthropic"
+            model: "claude-3-5-haiku-20241022"

@@ -16,6 +16,9 @@ This guide is for **bundle developers** who build workflows, tools, and UI exper
 If you need **ops/runtime config** (registry, env vars, git bundles, assembly descriptors), see:
 [docs/sdk/bundle/bundle-ops-README.md](bundle-ops-README.md).
 
+If you need **bundle config/secrets** (properties and secret keys), see:
+[docs/service/configuration/bundle-configuration-README.md](../../service/configuration/bundle-configuration-README.md).
+
 ---
 
 ## Reference bundle (start here)
@@ -92,7 +95,81 @@ class MyWorkflow(BaseEntrypoint):
         return await self.graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
 ```
 
-Model configuration lives in `entrypoint.configuration` (`role_models` etc).
+Model defaults live in `entrypoint.configuration` (`role_models`, `embedding`, etc).
+Runtime overrides are applied via `bundle_props` (bundles.yaml + admin UI).
+If you override `configuration`, call `super().configuration()` and use
+`setdefault` for defaults so external overrides still win.
+
+---
+
+## Bundle configuration & secrets
+
+Bundles consume **non‑secret configuration** via `bundle_props` and **secrets**
+via `get_secret()` using dot‑path keys.
+
+Non‑secret config:
+- Defined in `bundles.yaml` under `items[].config`.
+- Base defaults are defined in `entrypoint.configuration`.
+- Effective props are available via `bundle_props` (defaults + overrides).
+- If you override `configuration`, call `super().configuration()` and use `setdefault`
+  for defaults so external overrides still win.
+- Nested YAML is preserved as a nested dict.
+- Dot‑paths are not expanded at ingest time; resolve them at read time if needed.
+- If `config.role_models` or `config.embedding` are present, they override the
+  bundle’s `Config` at runtime (same path as `entrypoint.configuration` defaults).
+
+Example overrides:
+```yaml
+bundles:
+  items:
+    - id: "react@2026-02-10-02-44"
+      config:
+        role_models:
+          solver.react.v2.decision.v2.strong:
+            provider: "anthropic"
+            model: "claude-sonnet-4-6"
+          custom.agent.example:
+            provider: "anthropic"
+            model: "claude-3-5-haiku-20241022"
+        embedding:
+          provider: "openai"
+          model: "text-embedding-3-small"
+```
+
+### Best practice: defining bundle defaults
+When defining bundle defaults in code, prefer `configuration` and preserve
+external overrides:
+
+```python
+def configuration(self) -> Dict[str, Any]:
+    config = dict(super().configuration)  # property, not a method
+    role_models = dict(config.get("role_models") or {})
+    role_models.setdefault("solver.react.v2.decision.v2.strong", {
+        "provider": "anthropic",
+        "model": "claude-sonnet-4-5-20250929",
+    })
+    config["role_models"] = role_models
+    return config
+```
+
+This ensures the effective order remains:
+`code defaults → bundles.yaml → runtime overrides`.
+
+Secrets:
+- Defined in `bundles.secrets.yaml` under `items[].secrets`.
+- Injected into the secrets manager using dot‑path keys like:
+    - `services.anthropic.api_key`
+    - `services.git.http_token`
+    - `bundles.<bundle_id>.secrets.<key>`
+See:
+[docs/service/configuration/bundle-configuration-README.md](../../service/configuration/bundle-configuration-README.md).
+
+Note: bundle secrets can be read at any time. If you use `bundles.secrets.yaml`
+with the local secrets sidecar, keep read tokens non‑expiring:
+`SECRETS_TOKEN_TTL_SECONDS=0` and `SECRETS_TOKEN_MAX_USES=0` in the workdir `.env`.
+Bundle secrets are **write‑only**; admin UI shows keys only, not values.
+If secrets come from `bundles.secrets.yaml`, the CLI stores the key list in the
+sidecar as `bundles.<bundle_id>.secrets.__keys` so keys are visible in the UI.
 
 ---
 

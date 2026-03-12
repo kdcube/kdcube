@@ -8,9 +8,10 @@ import json
 import logging
 import os
 import uuid
+import httpx
 from dataclasses import asdict
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Set
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from pydantic import BaseModel
@@ -18,7 +19,7 @@ from pydantic import BaseModel
 from kdcube_ai_app.apps.chat.api.resolvers import require_auth, auth_without_pressure
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
-from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskPayload,
@@ -114,6 +115,13 @@ class BundlePropsResetRequest(BaseModel):
     project: Optional[str] = None
 
 
+class BundleSecretsUpdateRequest(BaseModel):
+    tenant: Optional[str] = None
+    project: Optional[str] = None
+    mode: str = "set"  # set | clear
+    secrets: Dict[str, Any] = {}
+
+
 class BundleCleanupRequest(BaseModel):
     drop_sys_modules: bool = True
     tenant: Optional[str] = None
@@ -135,6 +143,60 @@ def _bundle_props_key(*, tenant: str, project: str, bundle_id: str) -> str:
         project=project,
         bundle_id=bundle_id,
     )
+
+
+def _bundle_secrets_key(*, tenant: str, project: str, bundle_id: str) -> str:
+    return namespaces.CONFIG.BUNDLES.SECRETS_KEYS_FMT.format(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+    )
+
+
+def _flatten_secrets(prefix: str, node: Any, out: Dict[str, str]) -> None:
+    if node is None:
+        return
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key is None:
+                continue
+            _flatten_secrets(f"{prefix}.{key}", value, out)
+        return
+    if isinstance(node, list):
+        for idx, value in enumerate(node):
+            _flatten_secrets(f"{prefix}.{idx}", value, out)
+        return
+    value = str(node).strip()
+    if not value:
+        return
+    out[prefix] = value
+
+
+def _flatten_secret_keys(prefix: str, node: Any, out: Set[str]) -> None:
+    if node is None:
+        return
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key is None:
+                continue
+            _flatten_secret_keys(f"{prefix}.{key}", value, out)
+        return
+    if isinstance(node, list):
+        for idx, value in enumerate(node):
+            _flatten_secret_keys(f"{prefix}.{idx}", value, out)
+        return
+    out.add(prefix)
+
+
+def _deep_merge_props(base: Dict[str, Any], patch: Dict[str, Any]) -> Dict[str, Any]:
+    merged: Dict[str, Any] = dict(base or {})
+    for key, value in (patch or {}).items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_props(base_value, value)
+        else:
+            merged[key] = value
+    return merged
 
 
 async def _load_bundle_props_defaults(
@@ -161,6 +223,12 @@ async def _load_bundle_props_defaults(
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
     )
+    # Always reload bundle code for "code defaults" so UI reflects latest code.
+    try:
+        from kdcube_ai_app.infra.plugin.agentic_loader import evict_spec
+        evict_spec(spec)
+    except Exception:
+        pass
     routing = ChatTaskRouting(
         session_id=session.session_id,
         bundle_id=spec_resolved.id,
@@ -311,7 +379,6 @@ async def set_bundle_props(
     request: Request,
     session: UserSession = Depends(auth_without_pressure()),
 ):
-    settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
     redis = _get_app_redis(request)
@@ -328,8 +395,7 @@ async def set_bundle_props(
                 current = json.loads(raw)
             except Exception:
                 current = {}
-        current.update(props)
-        props = current
+        props = _deep_merge_props(current, props)
     elif payload.op != "replace":
         raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
 
@@ -394,6 +460,123 @@ async def reset_bundle_props_from_code(
         logger.error("Failed to publish props reset: %s", e)
 
     return {"status": "ok", "bundle_id": bundle_id, "tenant": tenant_id, "project": project_id, "source": "code"}
+
+
+@admin_router.post("/admin/integrations/bundles/{bundle_id}/secrets", status_code=200)
+async def set_bundle_secrets(
+    bundle_id: str,
+    payload: BundleSecretsUpdateRequest,
+    request: Request,
+    session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    secrets_url = getattr(settings, "SECRETS_URL", None) or os.getenv("SECRETS_URL")
+    admin_token = os.getenv("SECRETS_ADMIN_TOKEN") or getattr(settings, "SECRETS_ADMIN_TOKEN", None)
+    if not secrets_url or not admin_token:
+        raise HTTPException(status_code=503, detail="Secrets admin token not configured")
+
+    settings = get_settings()
+    tenant_id = payload.tenant or settings.TENANT
+    project_id = payload.project or settings.PROJECT
+    redis = _get_app_redis(request)
+
+    mode = (payload.mode or "set").strip().lower()
+    if mode not in {"set", "clear"}:
+        raise HTTPException(status_code=400, detail="Invalid mode; use set or clear")
+
+    flat: Dict[str, str] = {}
+    keys: Set[str] = set()
+    if mode == "set":
+        _flatten_secrets(f"bundles.{bundle_id}.secrets", payload.secrets or {}, flat)
+        keys = set(flat.keys())
+    else:
+        _flatten_secret_keys(f"bundles.{bundle_id}.secrets", payload.secrets or {}, keys)
+        for key in keys:
+            flat[key] = ""
+    if not flat:
+        return {"status": "ok", "bundle_id": bundle_id, "count": 0, "mode": mode}
+
+    errors = []
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        for key, value in flat.items():
+            try:
+                resp = await client.post(
+                    f"{secrets_url}/set",
+                    json={"key": key, "value": value},
+                    headers={"X-KDCUBE-ADMIN-TOKEN": admin_token},
+                )
+                if resp.status_code != 200:
+                    errors.append(f"{key}: {resp.status_code}")
+            except Exception as exc:
+                errors.append(f"{key}: {exc}")
+
+    if errors:
+        raise HTTPException(status_code=502, detail="Failed to store secrets: " + "; ".join(errors))
+
+    secrets_key = _bundle_secrets_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
+    stored_keys: Set[str] = set()
+    try:
+        raw_keys = await redis.get(secrets_key)
+        if raw_keys:
+            stored_keys = set(json.loads(raw_keys))
+    except Exception:
+        stored_keys = set()
+    if mode == "set":
+        stored_keys.update(keys)
+    else:
+        stored_keys.difference_update(keys)
+    try:
+        await redis.set(secrets_key, json.dumps(sorted(stored_keys)))
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "bundle_id": bundle_id,
+        "tenant": tenant_id,
+        "project": project_id,
+        "count": len(flat),
+        "keys": sorted(keys),
+        "stored_keys": sorted(stored_keys),
+        "mode": mode,
+    }
+
+
+@admin_router.get("/admin/integrations/bundles/{bundle_id}/secrets")
+async def get_bundle_secrets(
+    bundle_id: str,
+    request: Request,
+    tenant: Optional[str] = None,
+    project: Optional[str] = None,
+    session: UserSession = Depends(auth_without_pressure()),
+):
+    settings = get_settings()
+    tenant_id = tenant or settings.TENANT
+    project_id = project or settings.PROJECT
+    redis = _get_app_redis(request)
+    secrets_key = _bundle_secrets_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
+    keys: list[str] = []
+    raw = await redis.get(secrets_key)
+    if raw:
+        try:
+            keys = json.loads(raw)
+        except Exception:
+            keys = []
+    if not keys:
+        # Fallback: keys list stored in secrets sidecar (provisioned via bundles.secrets.yaml)
+        raw_keys = get_secret(f"bundles.{bundle_id}.secrets.__keys")
+        if raw_keys:
+            try:
+                keys = json.loads(raw_keys) or []
+                await redis.set(secrets_key, json.dumps(keys))
+            except Exception:
+                keys = []
+    return {
+        "bundle_id": bundle_id,
+        "tenant": tenant_id,
+        "project": project_id,
+        "keys": keys or [],
+    }
 
 
 @admin_router.post("/admin/integrations/bundles", status_code=200)

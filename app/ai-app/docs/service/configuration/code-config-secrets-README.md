@@ -6,6 +6,7 @@ tags: ["service", "configuration", "secrets", "developer", "code", "bundle"]
 keywords: ["get_settings", "get_secret", "dot paths", "secrets sidecar", "assembly.yaml", "secrets.yaml"]
 see_also:
   - ks:docs/service/configuration/service-config-README.md
+  - ks:docs/service/configuration/bundle-configuration-README.md
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
 ---
@@ -65,9 +66,13 @@ tenant = settings.TENANT
 
 ## 4) Where config comes from
 
-- **`assembly.yaml`** holds non‑secret config (platform/frontend/bundles/infra).
+- **`assembly.yaml`** holds non‑secret config (platform/frontend/infra).
+- **`bundles.yaml`** holds bundle definitions and non‑secret bundle config.
 - **`secrets.yaml`** holds sensitive secrets (LLM keys, tokens, passwords).
-- The CLI merges them at install time and injects secrets via the sidecar.
+- **`bundles.secrets.yaml`** holds bundle‑specific secrets.
+- **`gateway.yaml`** can be used to render `GATEWAY_CONFIG_JSON`.
+- The CLI merges and stages these at install time and injects secrets via the sidecar.
+- Secrets are **always** addressed via dot‑path keys; bundle config stays nested.
 
 See:
 - [assembly-descriptor-README.md](../cicd/assembly-descriptor-README.md)

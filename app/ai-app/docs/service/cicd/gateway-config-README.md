@@ -33,23 +33,24 @@ You can also set `KDCUBE_GATEWAY_DESCRIPTOR_PATH` to skip the prompt.
 
 ## Schema
 
-The schema mirrors `GATEWAY_CONFIG_JSON`:
+The schema mirrors `GATEWAY_CONFIG_JSON` under a `gateway` root:
 
 ```yaml
-tenant: "TENANT_ID"
-project: "PROJECT_ID"
-profile: "development"
-guarded_rest_patterns:
-  ingress: []
-  proc: []
-rate_limits:
-  ingress: {}
-  proc: {}
-backpressure: {}
-service_capacity: {}
-pools: {}
-limits: {}
-redis: {}
+gateway:
+  tenant: "TENANT_ID"
+  project: "PROJECT_ID"
+  profile: "development"
+  guarded_rest_patterns:
+    ingress: []
+    proc: []
+  rate_limits:
+    ingress: {}
+    proc: {}
+  backpressure: {}
+  service_capacity: {}
+  pools: {}
+  limits: {}
+  redis: {}
 ```
 
 Use the full template file for the default values and structure.

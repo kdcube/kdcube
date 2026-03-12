@@ -97,6 +97,39 @@ flowchart TB
 - `KDCUBE_STORAGE_PATH` can point to **local FS** or **S3**.
 - For S3 usage and bucket layout, see `docs/ops/s3.md`.
 
+## Descriptor flow (ECS + local)
+
+```mermaid
+flowchart TB
+  subgraph Inputs["Descriptors"]
+    A[assembly.yaml]
+    B[bundles.yaml]
+    BS[bundles.secrets.yaml]
+    S[secrets.yaml]
+    G[gateway.yaml]
+  end
+
+  subgraph ECS["ECS / Terraform"]
+    T[Task definitions]
+    SM[Secrets Manager / SSM]
+  end
+
+  subgraph Local["Local / compose (CLI)"]
+    ENV[.env.* + mounts]
+    SC[secrets sidecar]
+  end
+
+  A --> T
+  B --> T
+  G --> T
+  S --> SM
+  A --> ENV
+  G --> ENV
+  B --> ENV
+  BS --> SC
+  S --> SC
+```
+
 ## Config entry points
 
 - Service configuration: [docs/service/service-config-README.md](../service/service-config-README.md)

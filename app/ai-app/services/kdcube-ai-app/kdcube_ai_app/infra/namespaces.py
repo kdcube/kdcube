@@ -95,6 +95,7 @@ class CONFIG:
         UPDATE_CHANNEL = "kdcube:config:bundles:update:{tenant}:{project}"
         PROPS_KEY_FMT = "kdcube:config:bundles:props:{tenant}:{project}:{bundle_id}"
         PROPS_UPDATE_CHANNEL = "kdcube:config:bundles:props:update:{tenant}:{project}"
+        SECRETS_KEYS_FMT = "kdcube:config:bundles:secrets:{tenant}:{project}:{bundle_id}"
         CLEANUP_CHANNEL = "kdcube:config:bundles:cleanup:{tenant}:{project}"
         ACTIVE_REFS_KEY_FMT = "kdcube:config:bundles:refs:{tenant}:{project}"
         ENV_SYNC_LOCK_FMT = "kdcube:config:bundles:env-sync-lock:{tenant}:{project}"

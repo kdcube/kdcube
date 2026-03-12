@@ -494,13 +494,14 @@ def main() -> None:
 
         assembly_descriptor_path: Path | None = None
         secrets_descriptor_path: Path | None = None
-        assembly_platform_ref: str | None = None
+        bundles_descriptor_path: Path | None = None
+        bundles_secrets_path: Path | None = None
         use_descriptor_bundles = False
+        use_bundles_descriptor = False
+        use_bundles_secrets = False
         use_descriptor_frontend = False
-        use_descriptor_platform = False
         bundles_default = False
         frontend_default = False
-        platform_ref = None
         if not args.secrets_set and not args.secrets_prompt:
             default_assembly = str((workdir / "config" / "assembly.yaml").resolve())
             raw_path = Prompt.ask("Assembly descriptor path (assembly.yaml)", default=default_assembly).strip()
@@ -519,10 +520,7 @@ def main() -> None:
                 descriptor = installer_mod.load_release_descriptor(target_path)
                 bundles_default = isinstance(descriptor, dict) and bool(descriptor.get("bundles"))
                 frontend_default = isinstance(descriptor, dict) and bool(descriptor.get("frontend"))
-                if isinstance(descriptor, dict):
-                    platform = descriptor.get("platform")
-                    if isinstance(platform, dict):
-                        platform_ref = platform.get("ref")
+                # platform.ref is no longer used for source selection (handled by source menu)
             else:
                 console.print("[yellow]Assembly template not found; continuing without assembly descriptor.[/yellow]")
                 os.environ["KDCUBE_ASSEMBLY_SKIP"] = "1"
@@ -539,14 +537,15 @@ def main() -> None:
                 else:
                     console.print("[yellow]Secrets descriptor not found; continuing without secrets descriptor.[/yellow]")
 
-            default_gateway = str((workdir / "config" / "gateway.yaml").resolve())
+            default_gateway_path = (workdir / "config" / "gateway.yaml").resolve()
+            default_gateway = str(default_gateway_path) if default_gateway_path.exists() else ""
             raw_gateway = Prompt.ask(
                 "Gateway config path (gateway.yaml) (leave blank to skip)",
-                default="",
+                default=default_gateway,
             ).strip()
             if raw_gateway:
                 gateway_source = Path(os.path.expanduser(raw_gateway)).expanduser().resolve()
-                target_gateway = Path(default_gateway)
+                target_gateway = Path(default_gateway_path)
                 installer_mod.stage_gateway_descriptor(
                     target_gateway,
                     source_path=gateway_source,
@@ -554,32 +553,59 @@ def main() -> None:
                 )
                 os.environ["KDCUBE_GATEWAY_DESCRIPTOR_PATH"] = str(target_gateway)
 
-            if assembly_descriptor_path:
-                use_descriptor_bundles = Confirm.ask(
-                    "Use assembly descriptor for bundles?",
-                    default=bundles_default,
+            default_bundles_path = (workdir / "config" / "bundles.yaml").resolve()
+            default_bundles = str(default_bundles_path) if default_bundles_path.exists() else ""
+            raw_bundles = Prompt.ask(
+                "Bundles descriptor path (bundles.yaml) (leave blank to skip)",
+                default=default_bundles,
+            ).strip()
+            if raw_bundles:
+                source_path = Path(os.path.expanduser(raw_bundles)).expanduser().resolve()
+                target_path = Path(default_bundles_path)
+                staged = installer_mod.stage_bundles_descriptor(
+                    target_path,
+                    source_path=source_path,
+                    ai_app_root=repo_path / "app/ai-app",
                 )
+                if staged and target_path.exists():
+                    bundles_descriptor_path = target_path
+                    os.environ["KDCUBE_BUNDLES_DESCRIPTOR_PATH"] = str(target_path)
+                else:
+                    console.print("[yellow]Bundles descriptor not found; continuing without bundles descriptor.[/yellow]")
+
+            default_bundles_secrets_path = (workdir / "config" / "bundles.secrets.yaml").resolve()
+            default_bundles_secrets = ""
+            raw_bundles_secrets = Prompt.ask(
+                "Bundle secrets descriptor path (bundles.secrets.yaml) (leave blank to skip)",
+                default=default_bundles_secrets,
+            ).strip()
+            if raw_bundles_secrets:
+                source_path = Path(os.path.expanduser(raw_bundles_secrets)).expanduser().resolve()
+                if source_path.exists():
+                    bundles_secrets_path = source_path
+                    os.environ["KDCUBE_BUNDLES_SECRETS_PATH"] = str(source_path)
+                else:
+                    console.print("[yellow]Bundles secrets descriptor not found; continuing without it.[/yellow]")
+
+            if bundles_descriptor_path:
+                use_bundles_descriptor = True
+
+            if bundles_secrets_path:
+                use_bundles_secrets = True
+
             if frontend_default:
                 use_descriptor_frontend = Confirm.ask(
                     "Use assembly descriptor for frontend?",
-                    default=frontend_default,
-                )
-            else:
-                use_descriptor_frontend = False
-                use_descriptor_platform = Confirm.ask(
-                    "Use assembly descriptor for platform (pull images)?",
-                    default=bool(platform_ref),
+                    default=True,
                 )
 
-            if platform_ref and use_descriptor_platform:
-                assembly_platform_ref = str(platform_ref)
-            elif use_descriptor_platform and not platform_ref:
-                console.print("[yellow]Assembly descriptor has no platform.ref; skipping platform pull.[/yellow]")
-                use_descriptor_platform = False
-
-            os.environ["KDCUBE_ASSEMBLY_USE_BUNDLES"] = "1" if use_descriptor_bundles else "0"
+            os.environ["KDCUBE_ASSEMBLY_USE_BUNDLES"] = "0"
             os.environ["KDCUBE_ASSEMBLY_USE_FRONTEND"] = "1" if use_descriptor_frontend else "0"
-            os.environ["KDCUBE_ASSEMBLY_USE_PLATFORM"] = "1" if use_descriptor_platform else "0"
+            os.environ["KDCUBE_ASSEMBLY_USE_PLATFORM"] = "0"
+            if bundles_descriptor_path:
+                os.environ["KDCUBE_USE_BUNDLES_DESCRIPTOR"] = "1" if use_bundles_descriptor else "0"
+            if bundles_secrets_path:
+                os.environ["KDCUBE_USE_BUNDLES_SECRETS"] = "1" if use_bundles_secrets else "0"
             if not assembly_descriptor_path:
                 os.environ["KDCUBE_ASSEMBLY_USE_BUNDLES"] = "0"
                 os.environ["KDCUBE_ASSEMBLY_USE_FRONTEND"] = "0"
@@ -590,11 +616,14 @@ def main() -> None:
             if args.secrets_prompt:
                 openai = Prompt.ask("OpenAI API key (leave blank to skip)", default="", password=True)
                 anthropic = Prompt.ask("Anthropic API key (leave blank to skip)", default="", password=True)
+                openrouter = Prompt.ask("OpenRouter API key (leave blank to skip)", default="", password=True)
                 brave = Prompt.ask("Brave Search API key (leave blank to skip)", default="", password=True)
                 if openai:
                     secrets["OPENAI_API_KEY"] = openai
                 if anthropic:
                     secrets["ANTHROPIC_API_KEY"] = anthropic
+                if openrouter:
+                    secrets["OPENROUTER_API_KEY"] = openrouter
                 if brave:
                     secrets["BRAVE_API_KEY"] = brave
             if not secrets:
@@ -710,50 +739,98 @@ def main() -> None:
         elif (workdir / "config").exists():
             console.print("[dim]Installed release (workdir):[/dim] unknown (no metadata)")
 
-        ensure_repo(console, args.repo, repo_path)
-        local_ref = _read_local_ref(repo_path)
-        remote_ref = _read_remote_ref(repo_path)
-        if remote_ref:
-            console.print(f"[dim]Latest release (remote):[/dim] {remote_ref}")
-        if local_ref:
-            console.print(f"[dim]Repo release.yaml:[/dim] {local_ref}")
-
-        _, _, status = _git_status(repo_path)
-        if status:
-            console.print(f"[dim]Repo status:[/dim] {status}")
-
-        choices = ["release-latest", "release-tag", "upstream", "skip"]
-        if install_meta and install_meta.get("platform_ref"):
-            choices.insert(1, "release-installed")
-        if assembly_platform_ref:
-            insert_at = 2 if "release-installed" in choices else 1
-            choices.insert(insert_at, "assembly-descriptor")
-        choice = _select_option(
-            console,
-            "Install source",
-            options=choices,
-            default_index=0,
-        )
         docker_namespace = None
-        if choice == "upstream":
-            mode = "upstream"
-            release_ref = None
-            run(["git", "pull"], cwd=repo_path)
-        elif choice == "skip":
+
+        def _is_git_repo(path: Path) -> bool:
+            return path.exists() and (path / ".git").is_dir()
+
+        path_arg = _arg_provided("--path")
+        if path_arg:
+            # Explicit local repo path: use as-is for templates/builds, no source menu.
+            if not _is_git_repo(repo_path):
+                raise SystemExit(f"Provided --path is not a git repo: {repo_path}")
+            local_ref = _read_local_ref(repo_path)
+            if local_ref:
+                console.print(f"[dim]Repo release.yaml:[/dim] {local_ref}")
+            _, _, status = _git_status(repo_path)
+            if status:
+                console.print(f"[dim]Repo status:[/dim] {status}")
             mode = "skip"
             release_ref = None
         else:
-            mode = "release"
-            if choice == "assembly-descriptor":
-                release_ref = assembly_platform_ref
-            elif choice == "release-installed":
-                release_ref = install_meta.get("platform_ref") if install_meta else None
-                if not release_ref:
-                    release_ref = Prompt.ask("Release version (platform.ref)")
-            elif choice == "release-tag":
+            # Source selection menu (workspace, local, upstream, releases).
+            workspace_repo = repo_path
+            workspace_has_repo = _is_git_repo(workspace_repo)
+
+            local_ref = None
+            remote_ref = None
+            if workspace_has_repo:
+                local_ref = _read_local_ref(workspace_repo)
+                remote_ref = _read_remote_ref(workspace_repo)
+                if remote_ref:
+                    console.print(f"[dim]Latest release (remote):[/dim] {remote_ref}")
+                if local_ref:
+                    console.print(f"[dim]Repo release.yaml:[/dim] {local_ref}")
+                _, _, status = _git_status(workspace_repo)
+                if status:
+                    console.print(f"[dim]Repo status:[/dim] {status}")
+
+            choices = ["upstream", "release-latest", "release-tag", "local"]
+            if workspace_has_repo:
+                choices.append("workspace")
+            default_choice = "workspace" if workspace_has_repo else "upstream"
+            default_index = choices.index(default_choice)
+            console.print("[dim]Sources define templates + images. Only release-latest/release-tag pull images; all other choices build locally.[/dim]")
+            choice = _select_option(
+                console,
+                "Install source",
+                options=choices,
+                default_index=default_index,
+            )
+
+            if choice == "local":
+                default_local = str(repo_path) if _is_git_repo(repo_path) else ""
+                while True:
+                    local_path = Prompt.ask("Local repo path", default=default_local).strip()
+                    if not local_path:
+                        console.print("[yellow]Local repo path is required for 'local' source.[/yellow]")
+                        continue
+                    repo_path = Path(os.path.expanduser(local_path)).expanduser().resolve()
+                    if not _is_git_repo(repo_path):
+                        console.print(f"[yellow]Local repo path is not a git repo: {repo_path}[/yellow]")
+                        continue
+                    break
+                mode = "skip"
+                release_ref = None
+            elif choice == "workspace":
+                repo_path = workspace_repo
+                if not workspace_has_repo:
+                    console.print("[yellow]Workspace repo not found; falling back to upstream clone.[/yellow]")
+                    mode = "upstream"
+                else:
+                    mode = "skip"
+                release_ref = None
+            elif choice == "upstream":
+                repo_path = workspace_repo
+                mode = "upstream"
+                release_ref = None
+            elif choice == "release-latest":
+                repo_path = workspace_repo
+                mode = "release"
+                if not workspace_has_repo:
+                    ensure_repo(console, args.repo, repo_path)
+                release_ref = remote_ref or _read_remote_ref(repo_path) or Prompt.ask("Release version (platform.ref)")
+            else:  # release-tag
+                repo_path = workspace_repo
+                mode = "release"
+                if not workspace_has_repo:
+                    ensure_repo(console, args.repo, repo_path)
                 release_ref = Prompt.ask("Release version (platform.ref)")
-            else:
-                release_ref = remote_ref or Prompt.ask("Release version (platform.ref)")
+
+            if mode in {"upstream", "skip"} and choice != "local":
+                ensure_repo(console, args.repo, repo_path)
+            if mode == "upstream":
+                run(["git", "pull"], cwd=repo_path)
 
         if args.reset_config or args.reset:
             os.environ["KDCUBE_RESET_CONFIG"] = "1"

@@ -1,15 +1,16 @@
 ---
 id: ks:docs/service/cicd/assembly-descriptor-README.md
 title: "Assembly Descriptor"
-summary: "Assembly descriptor schema and runtime usage: platform/frontend refs, bundle items, module/subdir rules, and props resolution."
-tags: ["service", "cicd", "assembly", "descriptor", "schema", "bundles", "props", "git"]
-keywords: ["assembly.yaml", "release.yaml", "bundles.items", "default_bundle_id", "repo", "ref", "subdir", "module", "AGENTIC_BUNDLES_JSON", "env:", "file:"]
+summary: "Assembly descriptor schema and CLI usage: platform/frontend/auth/infra/proxy/paths and deployment wiring."
+tags: ["service", "cicd", "assembly", "descriptor", "schema", "git"]
+keywords: ["assembly.yaml", "release.yaml", "platform.ref", "frontend.build", "repo", "ref", "subdir", "module", "env:", "file:"]
 see_also:
   - ks:docs/service/cicd/release-bundle-README.md
   - ks:docs/service/cicd/custom-cicd-README.md
   - ks:docs/service/cicd/release-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
+  - ks:docs/service/configuration/bundle-configuration-README.md
 ---
 # Assembly Descriptor (assembly.yaml)
 
@@ -21,23 +22,24 @@ see_also:
 If you do not provide a path, the wizard uses `config/assembly.yaml` in the workdir
 and seeds it from `deployment/assembly.yaml`. If you provide a path, the CLI copies
 it into `config/assembly.yaml` and uses that file as the source of truth.
-Older setups may still use `release.yaml`; rename it or update
-`AGENTIC_BUNDLES_JSON` to point at `/config/assembly.yaml`.
+Older setups may still use `release.yaml`; rename it if needed.
 
-The CI pipeline reads this file and uses it for bundle packaging.  
-Runtime can also read it directly: mount `assembly.yaml` and point `AGENTIC_BUNDLES_JSON` to it.  
-Runtime **only uses the `bundles` section** and ignores `platform`/`frontend`.  
+The CLI uses this file to render `.env*` and compose settings.
+Runtime services do **not** read assembly.yaml directly.
+Bundle configuration is handled via **`bundles.yaml`** (and secrets via
+`bundles.secrets.yaml`). See:
+[docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
 
-The **CLI** can additionally use the `frontend` section to build and run a
+The **CLI** can use the `frontend` section to build and run a
 custom UI in the **custom‑ui‑managed‑infra** compose mode.
 During setup, the wizard lets you choose whether the descriptor applies to
-**bundles**, **frontend**, and/or **platform**.
+**frontend** and/or **platform**.
 
 Sensitive values (LLM keys, tokens, passwords) should live in `secrets.yaml`
 instead of `assembly.yaml`. See: [docs/service/cicd/secrets-descriptor-README.md](secrets-descriptor-README.md)
 
-Bundle items may include **props** (runtime overrides).  
-Props are **resolved** when the descriptor is applied to Redis.
+Bundles are not defined in assembly.yaml. Use `bundles.yaml` for bundle items
+and `bundles.secrets.yaml` for bundle secrets.
 
 ---
 
@@ -120,49 +122,10 @@ paths:
   host_bundle_storage_path: "/srv/kdcube/data/bundle-storage"
   host_exec_workspace_path: "/srv/kdcube/data/exec-workspace"
 
-bundles:
-  default_bundle_id: "react@2026-02-10-02-44"
-  items:
-    - id: "react@2026-02-10-02-44"
-      name: "ReAct (example)"
-      repo: "git@github.com:kdcube/kdcube-ai-app.git"
-      ref: "v0.3.2"   # tag or commit
-      subdir: "app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles"
-      module: "react@2026-02-10-02-44.entrypoint"
-      props:
-        knowledge:
-          repo: "git@github.com:kdcube/kdcube-ai-app.git"
-          ref: "v0.3.2"
-          docs_root: "app/ai-app/docs"
-          src_root: "app/ai-app/services/kdcube-ai-app/kdcube_ai_app"
-          deploy_root: "app/ai-app/deployment"
-          validate_refs: true
-
-    - id: "app@2-0"
-      name: "Customer App"
-      repo: "git@github.com:org/customer-repo.git"
-      ref: "bundle-v2026.02.22"
-      subdir: "service/bundles"
-      module: "app@2-0.entrypoint"
 ```
 
-**Fields (bundle item):**
-
-- `id`: bundle id (versioned id).
-- `repo`: git repo URL.
-- `ref`: git tag or commit SHA.  
-  **Branch names are only for local/dev** and require `BUNDLE_GIT_ALWAYS_PULL=1`.
-- `subdir`: path **inside repo** to the bundles root (parent folder).
-- `module`: module **relative to `subdir`** (for example `id.entrypoint`).
-- `props` (optional): runtime props resolved at deployment time.
-
-**Ref resolution (for string values):**
-- `env:NAME` → environment variable `NAME`
-- `file:/path/to/secret` → file contents
-
-Any string **without** these prefixes is treated as a literal value.
-
-Resolved values are written into Redis as runtime props.
+Bundle definitions moved to `bundles.yaml`.
+See: [docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
 
 ### Frontend section (CLI usage)
 The `frontend` section is used by `kdcube-setup` to build a customer UI when
@@ -245,15 +208,10 @@ These sections are used by the CLI to **render .env files** for docker-compose.
 
 ---
 
-## 2) Module & subdir rules (important)
+## 2) Bundle module & subdir rules
 
-Use a **single convention** for both local and git bundles:
-
-- `subdir` points to the **parent bundles folder**
-- `module` is `<id>.entrypoint`
-
-This matches the local path convention:
-`path=/bundles` + `module=<id>.entrypoint`.
+Bundle module/subdir rules live in `bundles.yaml`. See:
+[docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
 
 ---
 
@@ -263,17 +221,16 @@ This matches the local path convention:
 - Platform team → `VERSION` + platform tag
 - Customer bundle team → bundle code + bundle tag
 - Customer frontend team → UI code + UI tag
-- Release manager → `assembly.yaml` (single source of truth)
+- Release manager → `assembly.yaml` (platform/frontend) and `bundles.yaml` (bundles)
 
 ---
 
-## 4) Runtime env
+## 4) Runtime env (bundles)
 
 **Proc requires:**
 
-- `AGENTIC_BUNDLES_JSON` (this file path or inline JSON)
+- `AGENTIC_BUNDLES_JSON` (normally `/config/bundles.yaml`)
 - `BUNDLES_FORCE_ENV_ON_STARTUP=1` (only for a single rollout if you need to overwrite Redis)
 
-**Props application:**
-- Props in `assembly.yaml` are applied when the descriptor is used to seed or reset Redis.
-- If you do **not** reset Redis, existing runtime props remain unchanged.
+Bundle props are applied when `bundles.yaml` is used to seed or reset Redis.
+If you do **not** reset Redis, existing runtime props remain unchanged.

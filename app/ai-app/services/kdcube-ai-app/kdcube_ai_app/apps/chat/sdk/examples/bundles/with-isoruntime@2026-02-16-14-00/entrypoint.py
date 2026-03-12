@@ -151,7 +151,6 @@ class Entrypoint(BaseEntrypoint):
         g.add_edge("orchestrate", END)
         return g.compile()
 
-    @property
     def configuration(self) -> Dict[str, Any]:
         """
         Override model configuration for this bundle.
@@ -164,10 +163,10 @@ class Entrypoint(BaseEntrypoint):
 
         config = dict(super().configuration)
         role_models = dict(config.get("role_models") or {})
-        role_models.update({
+        for key, value in {
             "iso": {"provider": "anthropic", "model": sonnet_45},
-
-        })
+        }.items():
+            role_models.setdefault(key, value)
         config["role_models"] = role_models
         return config
 

@@ -139,6 +139,7 @@ class Settings(BaseSettings):
     SECRETS_PROVIDER: str | None = None
     SECRETS_URL: str | None = None
     SECRETS_TOKEN: str | None = None
+    SECRETS_ADMIN_TOKEN: str | None = None
     LINK_PREVIEW_ENABLED: bool = Field(default=True)
 
     # Postgres

@@ -1,9 +1,9 @@
 ---
 id: ks:docs/service/environment/setup-for-ecs-README.md
 title: "Setup For ECS"
-summary: "How to run git‑defined bundles on ECS with assembly.yaml."
+summary: "How to run git‑defined bundles on ECS with bundles.yaml."
 tags: ["service", "environment", "ecs", "bundles"]
-keywords: ["task definition", "EFS", "secrets", "assembly.yaml"]
+keywords: ["task definition", "EFS", "secrets", "bundles.yaml"]
 see_also:
   - ks:docs/service/environment/setup-for-dockercompose-README.md
   - ks:docs/service/environment/setup-dev-env-README.md
@@ -12,7 +12,7 @@ see_also:
 # Setup for ECS (Bundles from Assembly Descriptor)
 
 This guide shows how to run **git‑defined bundles** on ECS using a
-`assembly.yaml` descriptor.
+`bundles.yaml` descriptor.
 
 ---
 
@@ -21,7 +21,7 @@ This guide shows how to run **git‑defined bundles** on ECS using a
 Set these env vars on the **chat‑proc task**:
 
 ```bash
-AGENTIC_BUNDLES_JSON=/config/assembly.yaml
+AGENTIC_BUNDLES_JSON=/config/bundles.yaml
 BUNDLES_FORCE_ENV_ON_STARTUP=1
 
 BUNDLE_GIT_RESOLUTION_ENABLED=1
@@ -39,6 +39,22 @@ AGENTIC_BUNDLES_ROOT=/bundles
 # REACT_PERSIST_WORKSPACE=0
 ```
 
+If you use the **secrets sidecar** to store bundle secrets, the proc task
+must be able to **write** (admin UI) and **read** them:
+
+```bash
+SECRETS_URL=http://kdcube-secrets:7777
+SECRETS_ADMIN_TOKEN=<admin-token>   # required for admin UI to set secrets
+SECRETS_TOKEN=<read-token>          # used by get_secret()
+```
+
+For long‑running bundles, keep sidecar tokens non‑expiring:
+
+```bash
+SECRETS_TOKEN_TTL_SECONDS=0
+SECRETS_TOKEN_MAX_USES=0
+```
+
 After the first successful startup, set:
 
 ```bash
@@ -49,10 +65,10 @@ BUNDLES_FORCE_ENV_ON_STARTUP=0
 
 ## 2) Mount assembly descriptor
 
-Mount `assembly.yaml` into the task at:
+Mount `bundles.yaml` into the task at:
 
 ```
- /config/assembly.yaml
+ /config/bundles.yaml
 ```
 
 Common options:

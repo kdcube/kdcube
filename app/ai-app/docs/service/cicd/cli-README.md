@@ -3,11 +3,12 @@ id: ks:docs/service/cicd/cli-README.md
 title: "CLI (kdcube)"
 summary: "CLI design for local env bootstrapping, compose setup, and assembly descriptor validation."
 tags: ["service", "cicd", "cli", "env", "deployment"]
-keywords: ["kdcube cli", "env init", "docker compose", "local dev", "assembly.yaml"]
+keywords: ["kdcube cli", "env init", "docker compose", "local dev", "bundles.yaml", "assembly.yaml"]
 see_also:
   - ks:docs/service/cicd/release-README.md
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
+  - ks:docs/service/configuration/bundle-configuration-README.md
   - ks:docs/service/cicd/gateway-config-README.md
   - ks:docs/service/environment/setup-dev-env-README.md
   - ks:docs/service/environment/setup-for-dockercompose-README.md
@@ -44,8 +45,8 @@ CLI root (code): `services/kdcube-ai-app/kdcube_cli`
 3) **Validate assembly descriptor**
    - Validate schema + refs
 
-4) **Render bundle registry**
-   - Convert assembly descriptor bundles → `AGENTIC_BUNDLES_JSON`
+4) **Apply bundle descriptors**
+   - Use `bundles.yaml` (+ `bundles.secrets.yaml`) to seed runtime bundles + secrets
 
 ---
 
@@ -120,7 +121,7 @@ See: [docs/service/cicd/assembly-descriptor-README.md](assembly-descriptor-READM
 If `platform.ref` is present in the descriptor, the install source selector
 adds **assembly-descriptor**, which pulls that tag from DockerHub.
 
-The wizard asks whether to apply the descriptor to **bundles**, **frontend**,
+The wizard asks whether to apply the descriptor to **frontend**
 and/or **platform** (these can be enabled independently).
 
 If no path is provided, the wizard uses `config/assembly.yaml` in the workdir
@@ -130,13 +131,28 @@ When an assembly descriptor is provided, the wizard writes non‑secret values
 back into `assembly.yaml` (tenant/project, auth, infra, paths) and then renders
 `.env*` from it. The assembly file becomes the source of truth for local config.
 
-### 2.4 Secrets descriptor (optional)
+### 2.4 Bundles descriptor (optional)
+
+You can provide a **bundles descriptor** (`bundles.yaml`) and an optional
+**bundles secrets** file (`bundles.secrets.yaml`). This is the preferred way
+to configure bundles and bundle secrets.
+
+When provided, the CLI:
+- mounts `bundles.yaml` as `/config/bundles.yaml`
+- sets `AGENTIC_BUNDLES_JSON=/config/bundles.yaml`
+- injects secrets from `bundles.secrets.yaml` into the secrets sidecar
+
+Templates:
+- [`deployment/bundles.yaml`](../../../deployment/bundles.yaml)
+- [`deployment/bundles.secrets.yaml`](../../../deployment/bundles.secrets.yaml)
+
+### 2.5 Secrets descriptor (optional)
 If you provide a `secrets.yaml`, the CLI will use it to prefill runtime secrets
 and sensitive infra passwords. The file is **not copied** into the workdir.
 
 See: [docs/service/cicd/secrets-descriptor-README.md](secrets-descriptor-README.md)
 
-### 2.5 Gateway config descriptor (optional)
+### 2.6 Gateway config descriptor (optional)
 If you provide a `gateway.yaml`, the CLI will replace `GATEWAY_CONFIG_JSON`
 in `.env.ingress`, `.env.proc`, and `.env.metrics` with the descriptor content.
 The wizard still patches `tenant` and `project` from your prompts.
@@ -150,7 +166,7 @@ KDCUBE_GATEWAY_DESCRIPTOR_PATH=/path/to/gateway.yaml
 
 See: [docs/service/cicd/gateway-config-README.md](gateway-config-README.md)
 
-### 2.5 `kdcube release validate`
+### 2.7 `kdcube release validate`
 
 ```
 kdcube release validate --file assembly.yaml
@@ -158,17 +174,34 @@ kdcube release validate --file assembly.yaml
 
 Validates assembly descriptor schema and prints errors with line numbers.
 
-### 2.6 `kdcube release render-bundles`
+### 2.8 `kdcube release render-bundles`
 
 ```
-kdcube release render-bundles --file assembly.yaml --out bundles.json
+kdcube release render-bundles --file bundles.yaml --out bundles.json
 ```
 
 Renders `bundles.items` to a runtime registry payload for `AGENTIC_BUNDLES_JSON`.
 
 ---
 
-## 3) Env merge semantics
+## 3) CLI env overrides
+
+You can also pre‑seed paths and flags via environment variables:
+
+| Variable | Description |
+| --- | --- |
+| `KDCUBE_ASSEMBLY_DESCRIPTOR_PATH` | Path to `assembly.yaml` (copied into workdir config). |
+| `KDCUBE_ASSEMBLY_USE_FRONTEND` | `1/0` to apply assembly frontend config. |
+| `KDCUBE_ASSEMBLY_USE_PLATFORM` | `1/0` to apply assembly platform config. |
+| `KDCUBE_BUNDLES_DESCRIPTOR_PATH` | Path to `bundles.yaml` (copied into workdir config). |
+| `KDCUBE_BUNDLES_SECRETS_PATH` | Path to `bundles.secrets.yaml` (used to inject secrets). |
+| `KDCUBE_USE_BUNDLES_DESCRIPTOR` | `1/0` to apply bundles descriptor. |
+| `KDCUBE_USE_BUNDLES_SECRETS` | `1/0` to apply bundles secrets. |
+| `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` (used for GATEWAY_CONFIG_JSON). |
+
+---
+
+## 4) Env merge semantics
 
 The CLI **never overwrites existing values** by default.
 
@@ -182,7 +215,7 @@ Rules (default):
 MISSING (secret)
 ```
 
-### 3.1 Update mode (explicit)
+### 4.1 Update mode (explicit)
 
 To overwrite existing values, use:
 
@@ -196,7 +229,7 @@ kdcube env init --mode dev-host --repo ... --update
 
 ---
 
-## 4) Secret handling (default)
+## 5) Secret handling (default)
 
 Keys treated as secrets by default (pattern‑based):
 - `*_SECRET`, `*_TOKEN`, `*_KEY`, `*_PASSWORD`
@@ -206,7 +239,7 @@ Secrets are written to env files if provided by templates or overrides, but **ne
 
 ---
 
-## 5) Overrides
+## 6) Overrides
 
 You can override any value:
 
@@ -220,9 +253,9 @@ Overrides apply **after** merge rules.
 
 ---
 
-## 6) Sample bundles (local only)
+## 7) Sample bundles (local only)
 
-If `assembly.yaml` does not contain bundles, the CLI can seed sample bundles:
+If `bundles.yaml` is empty, the CLI can seed sample bundles:
 
 ```
 kdcube bundles seed --preset samples
@@ -232,7 +265,7 @@ This is intended for **local development** only.
 
 ---
 
-## 7) Future commands (next phase)
+## 8) Future commands (next phase)
 
 - `kdcube doctor` (validate env + filesystem + runtime dependencies)
 - `kdcube compose up` (wrapper around docker compose)

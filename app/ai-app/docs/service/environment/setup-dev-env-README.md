@@ -1,9 +1,9 @@
 ---
 id: ks:docs/service/environment/setup-dev-env-README.md
 title: "Setup Dev Env"
-summary: "Minimal env and SSH setup to load bundles from assembly.yaml in local dev."
+summary: "Minimal env and SSH setup to load bundles from bundles.yaml in local dev."
 tags: ["service", "environment", "setup", "dev", "git"]
-keywords: ["assembly.yaml", "AGENTIC_BUNDLES_JSON", "GIT_SSH_KEY_PATH", "known_hosts"]
+keywords: ["bundles.yaml", "AGENTIC_BUNDLES_JSON", "GIT_SSH_KEY_PATH", "known_hosts"]
 see_also:
   - ks:docs/service/environment/setup-for-dockercompose-README.md
   - ks:docs/service/environment/service-dev-env-README.md
@@ -12,7 +12,7 @@ see_also:
 # Setup Dev Env (Bundles from Assembly Descriptor)
 
 This guide shows the **minimal env variables** needed to load bundles from a
-`assembly.yaml` descriptor during local development, and how to prepare SSH
+`bundles.yaml` descriptor during local development, and how to prepare SSH
 credentials for private git repos.
 
 If you already use `kdcube-setup` (PyPI package: `kdcube-cli`), you can reuse the generated env files
@@ -26,7 +26,7 @@ Add these to your `chat-proc` env (e.g. `apps/chat/proc/.env.proc`):
 
 ```bash
 # Path to assembly descriptor (YAML or JSON)
-AGENTIC_BUNDLES_JSON=/absolute/path/to/assembly.yaml
+AGENTIC_BUNDLES_JSON=/absolute/path/to/bundles.yaml
 
 # Overwrite Redis registry on startup (use once per rollout)
 BUNDLES_FORCE_ENV_ON_STARTUP=1
@@ -44,6 +44,15 @@ BUNDLE_GIT_ATOMIC=1
 
 # Where bundles are stored on disk
 AGENTIC_BUNDLES_ROOT=/absolute/path/to/bundles
+
+# Secrets sidecar (bundle secrets via admin UI)
+SECRETS_URL=http://kdcube-secrets:7777
+SECRETS_ADMIN_TOKEN=<admin-token>   # required for admin UI to set secrets
+SECRETS_TOKEN=<read-token>          # used by get_secret()
+
+# Keep tokens non-expiring if you use bundle secrets at runtime
+SECRETS_TOKEN_TTL_SECONDS=0
+SECRETS_TOKEN_MAX_USES=0
 
 # Optional (turn workspace snapshot; diagnostics only)
 # REACT_PERSIST_WORKSPACE=0
@@ -104,7 +113,7 @@ GIT_SSH_KNOWN_HOSTS=~/.ssh/known_hosts
 
 ## 3) Notes
 
-- The processor reads the `bundles` section from `assembly.yaml`.
+- The processor reads bundles from `bundles.yaml`.
 - Redis remains the runtime source of truth; the env only overwrites it when
   `BUNDLES_FORCE_ENV_ON_STARTUP=1`.
 - For gateway config enforcement in local dev, set

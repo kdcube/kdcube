@@ -518,3 +518,27 @@ def evict_inactive_specs(
         "evicted_singletons": evicted_singletons,
         "sys_modules_deleted": sys_modules_deleted,
     }
+
+def evict_spec(spec: AgenticBundleSpec, *, drop_sys_modules: bool = True) -> bool:
+    """
+    Evict a single spec from module/singleton caches.
+    Returns True if a cached module was removed.
+    """
+    key = cache_key_for_spec(spec)
+    removed = False
+    mod = _module_cache.pop(key, None)
+    if mod is not None:
+        removed = True
+        if drop_sys_modules:
+            mod_name = getattr(mod, "__name__", None)
+            mod_file = getattr(mod, "__file__", None) or ""
+            mod_path_key = key.split("::")[0]
+            if mod_name and (
+                mod_name.startswith("agentic_bundle_")
+                or (mod_file and mod_path_key and str(mod_file).find(str(Path(mod_path_key))) >= 0)
+            ):
+                sys.modules.pop(mod_name, None)
+    _singleton_cache.pop(key, None)
+    if drop_sys_modules:
+        importlib.invalidate_caches()
+    return removed

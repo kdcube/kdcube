@@ -57,6 +57,9 @@ def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
         return bundle_root
 
 def _examples_enabled() -> bool:
+    component = (os.getenv("GATEWAY_COMPONENT") or "ingress").strip().lower()
+    if component != "proc":
+        return False
     try:
         settings = get_settings()
         return bool(settings.BUNDLES_INCLUDE_EXAMPLES)
@@ -198,8 +201,12 @@ def _split_bundles_and_props(
     bundles_dict: Dict[str, Any],
 ) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
     """
-    Extract bundle-level props from descriptor entries.
+    Extract bundle-level config/props from descriptor entries.
     Returns (bundles_without_props, props_by_bundle).
+
+    Supported keys:
+      - config (preferred)
+      - props (legacy alias)
     """
     cleaned: Dict[str, Dict[str, Any]] = {}
     props_map: Dict[str, Dict[str, Any]] = {}
@@ -207,9 +214,20 @@ def _split_bundles_and_props(
         if not isinstance(raw, dict):
             continue
         entry = dict(raw)
+        config_raw = entry.pop("config", None)
         props_raw = entry.pop("props", None)
-        if props_raw is not None:
-            props_map[str(bid)] = _resolve_props_node(props_raw)
+        if config_raw is not None and props_raw is not None:
+            # Merge legacy props on top of config for backward compatibility.
+            merged = {}
+            if isinstance(config_raw, dict):
+                merged.update(config_raw)
+            if isinstance(props_raw, dict):
+                merged.update(props_raw)
+            props_raw = merged
+            config_raw = None
+        props_candidate = config_raw if config_raw is not None else props_raw
+        if props_candidate is not None:
+            props_map[str(bid)] = _resolve_props_node(props_candidate)
         cleaned[str(bid)] = entry
     return cleaned, props_map
 
@@ -524,9 +542,16 @@ def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
     )
     reserved = _reserved_bundle_entry(bid) if bid in _reserved_bundle_ids() else None
     if reserved:
+        # Allow reserved ids in bundles.yaml only to override props.
+        # Ignore any repo/ref/path/module fields and keep the built-in entry.
         if _entries_equivalent(candidate, reserved):
             return reserved
-        raise ValueError(f"Bundle id '{bid}' is reserved (built-in/admin example). Choose a different id.")
+        if repo or ref or subdir or v.get("path") or v.get("module") or v.get("name") or v.get("description"):
+            _log.warning(
+                "Bundle id '%s' is reserved; ignoring repo/ref/path/module and using built-in bundle entry.",
+                bid,
+            )
+        return reserved
     return candidate
 
 def _load_env_json(strict: bool) -> Optional[Dict[str, Any]]:
@@ -572,6 +597,20 @@ def _load_env_json(strict: bool) -> Optional[Dict[str, Any]]:
                 "default_bundle_id": bundles_block.get("default_bundle_id"),
                 "bundles": bundles,
             }
+    if isinstance(data, dict) and "items" in data:
+        items = data.get("items") or []
+        bundles = {}
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            bid = item.get("id")
+            if not bid:
+                raise ValueError("Bundle item missing 'id' in bundles descriptor.")
+            bundles[bid] = dict(item)
+        return {
+            "default_bundle_id": data.get("default_bundle_id"),
+            "bundles": bundles,
+        }
     return data
 
 def apply_update(

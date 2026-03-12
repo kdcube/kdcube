@@ -3,7 +3,7 @@ id: ks:docs/ops/ec2/dockercompose-deployment-README.md
 title: "Dockercompose Deployment"
 summary: "EC2 docker‑compose deployment for platform + custom UI + bundles (customer‑repo driven)."
 tags: ["ops", "ec2", "docker-compose", "deployment", "custom-ui", "bundles"]
-keywords: ["docker compose", "dc-infra", "assembly.yaml", "frontend config", "nginx", "bundles mount", "env files", "host folders"]
+keywords: ["docker compose", "dc-infra", "bundles.yaml", "frontend config", "nginx", "bundles mount", "env files", "host folders"]
 see_also:
   - ks:docs/ops/ecs/ecs-deployment-README.md
   - ks:docs/ops/deployment-options-index-README.md
@@ -105,13 +105,13 @@ In `.env.proc`, define `AGENTIC_BUNDLES_JSON` with `path=/bundles` and `module=<
 You can set `AGENTIC_BUNDLES_JSON` to a JSON/YAML file path mounted into the container.  
 Recommended mount:
 ```
-HOST_BUNDLE_DESCRIPTOR_PATH=/path/to/assembly.yaml
+HOST_BUNDLES_DESCRIPTOR_PATH=/path/to/bundles.yaml
 ```
 Then inside the container:
 ```
-AGENTIC_BUNDLES_JSON=/config/assembly.yaml
+AGENTIC_BUNDLES_JSON=/config/bundles.yaml
 ```
-If `HOST_BUNDLE_DESCRIPTOR_PATH` is unset, compose mounts `/dev/null` and the loader
+If `HOST_BUNDLES_DESCRIPTOR_PATH` is unset, compose mounts `/dev/null` and the loader
 falls back to inline `AGENTIC_BUNDLES_JSON` or Redis.
 Set `BUNDLE_GIT_RESOLUTION_ENABLED=0`.  
 Optionally set `BUNDLES_FORCE_ENV_ON_STARTUP=1` for one rollout.

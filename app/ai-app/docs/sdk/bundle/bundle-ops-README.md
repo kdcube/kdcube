@@ -3,11 +3,12 @@ id: ks:docs/sdk/bundle/bundle-ops-README.md
 title: "Bundle Ops"
 summary: "Ops guide for bundle registry, delivery modes, git resolution, env controls, and runtime props."
 tags: ["sdk", "bundle", "ops", "registry", "git", "env", "release", "props"]
-keywords: ["AGENTIC_BUNDLES_JSON", "bundles registry", "Redis", "BUNDLES_FORCE_ENV_ON_STARTUP", "git bundles", "BUNDLE_GIT_RESOLUTION_ENABLED", "BUNDLE_GIT_REDIS_LOCK", "assembly.yaml", "props"]
+keywords: ["AGENTIC_BUNDLES_JSON", "bundles registry", "Redis", "BUNDLES_FORCE_ENV_ON_STARTUP", "git bundles", "BUNDLE_GIT_RESOLUTION_ENABLED", "BUNDLE_GIT_REDIS_LOCK", "bundles.yaml", "props"]
 see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/service/configuration/bundle-configuration-README.md
 ---
 # Bundle Ops Guide (Registry, Delivery, Git)
 
@@ -110,6 +111,22 @@ Fields:
 **CI/CD friendly option (no admin tokens):**
 Set `BUNDLES_FORCE_ENV_ON_STARTUP=1` on **processor**.
 
+**Bundle secrets + sidecar tokens (important):**
+Bundle secrets can be added at any time (admin UI or bundles.secrets.yaml),
+so services must be able to read them long after startup. If you use
+`bundles.secrets.yaml`, keep the secrets sidecar **read tokens non‑expiring**:
+- `SECRETS_TOKEN_TTL_SECONDS=0`
+- `SECRETS_TOKEN_MAX_USES=0`
+These live in the workdir `.env` (compose) and ensure `get_secret()` keeps
+working for bundle secrets at runtime.
+
+**Admin UI UX:** bundle secrets are write‑only. The UI shows **keys only**
+(values are never returned). Keys are tracked in Redis per bundle.
+
+When secrets are provisioned via `bundles.secrets.yaml`, the CLI also stores
+the key list under `bundles.<bundle_id>.secrets.__keys` in the secrets sidecar
+so the UI can show keys without exposing values.
+
 ---
 
 ## Runtime env controls
@@ -203,7 +220,9 @@ BUNDLES_INCLUDE_EXAMPLES=0
 ## Bundle props (runtime overrides)
 
 Bundles can expose runtime props stored per tenant/project/bundle in Redis.
-These props can be provided in the assembly descriptor **or** updated at runtime.
+These props can be provided in `bundles.yaml` **or** updated at runtime.
+Bundle defaults come from `entrypoint.configuration` (bundle-defined). Effective
+props are computed as a deep merge: defaults → bundles.yaml → runtime overrides.
 
 Admin APIs:
 - `GET /admin/integrations/bundles/{bundle_id}/props`
@@ -231,19 +250,20 @@ POST /admin/integrations/bundles/<bundle_id>/props
 }
 ```
 
-### Props in assembly.yaml
+### Props in bundles.yaml
 
-You can also set props per bundle item in `assembly.yaml`:
+You can also set props per bundle item in `bundles.yaml`:
 
 ```yaml
 bundles:
+  version: "1"
   items:
     - id: "react@2026-02-10-02-44"
       repo: "git@github.com:kdcube/kdcube-ai-app.git"
       ref: "v0.3.2"
       subdir: "app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles"
       module: "react@2026-02-10-02-44.entrypoint"
-      props:
+      config:
         knowledge:
           repo: "git@github.com:kdcube/kdcube-ai-app.git"
           ref: "v0.3.2"
@@ -253,29 +273,33 @@ bundles:
           validate_refs: true
 ```
 
-**Ref resolution (default):**
-- `env:NAME` → environment variable `NAME`
-- `file:/path/to/secret` → file contents
-
-Any string **without** these prefixes is treated as a literal value.
-
 Resolved values are stored in Redis as runtime props.
+
+### Inspect effective props in Redis
+```
+kdcube:config:bundles:props:<tenant>:<project>:<bundle_id>
+```
+
+Example:
+```bash
+redis-cli GET "kdcube:config:bundles:props:demo-tenant:demo-project:react.doc@2026-03-02-22-10"
+```
 
 ---
 
-## Assembly descriptors
+## Bundles descriptor
 
-Assembly descriptors define bundle versions for CI/CD.
+Bundles descriptors define bundle versions for CI/CD.
 Canonical docs:
-- [docs/service/cicd/assembly-descriptor-README.md](../../service/cicd/assembly-descriptor-README.md)
+- [docs/service/configuration/bundle-configuration-README.md](../../service/configuration/bundle-configuration-README.md)
 - [docs/service/cicd/release-bundle-README.md](../../service/cicd/release-bundle-README.md)
 
-Use `repo/ref/subdir/module` in the assembly descriptor and set:
+Use `repo/ref/subdir/module` in `bundles.yaml` and set:
 ```
-AGENTIC_BUNDLES_JSON=/config/assembly.yaml
+AGENTIC_BUNDLES_JSON=/config/bundles.yaml
 ```
 
-Assembly descriptors define **bundle versions** and can include **bundle props**.
+Bundles descriptors define **bundle versions** and can include **bundle props**.
 
 ---
 

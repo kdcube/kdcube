@@ -20,6 +20,43 @@ They are intended as starting points for task definitions or parameter stores.
 - `deployment/ecs/metrics/env.template` — Metrics service (CloudWatch/Prometheus export).
 - `deployment/ecs/frontend/env.template` — UI service (runtime config injection).
 
+## Descriptor flow (ECS + local/compose)
+
+```mermaid
+flowchart TB
+  subgraph Inputs["Descriptors"]
+    A[assembly.yaml]
+    B[bundles.yaml]
+    BS[bundles.secrets.yaml<br/>(local/dev)]
+    S[secrets.yaml]
+    G[gateway.yaml]
+  end
+
+  subgraph ECS["ECS / Terraform / CD"]
+    T[Task definitions + params]
+    SM[Secrets Manager / SSM]
+    S3[Frontend config (S3) or task env]
+  end
+
+  subgraph Local["Local / one-node (CLI)"]
+    ENV[.env.* in workdir]
+    MOUNT[/config/bundles.yaml mount]
+    SC[secrets sidecar injection]
+  end
+
+  A --> T
+  B --> T
+  G --> T
+  A --> S3
+  S --> SM
+
+  A --> ENV
+  G --> ENV
+  B --> MOUNT
+  S --> SC
+  BS --> SC
+```
+
 ## Required shared settings
 All services must set:
 - `REDIS_URL` (ingress/proc/metrics)
@@ -64,9 +101,9 @@ For git‑defined bundles, ensure:
 - `BUNDLE_GIT_RESOLUTION_ENABLED=1`
 - `BUNDLE_GIT_REDIS_LOCK=1` (each replica pulls once)
 - `AGENTIC_BUNDLES_JSON` can point to a JSON/YAML file path mounted into the task (recommended for readability).
-  Mount it to `/config/assembly.yaml` and set:
+  Mount it to `/config/bundles.yaml` and set:
   ```
-  AGENTIC_BUNDLES_JSON=/config/assembly.yaml
+  AGENTIC_BUNDLES_JSON=/config/bundles.yaml
   ```
 
 **Rule:** set `subdir` to the **parent bundles directory** and use `module: "<bundle_folder>.entrypoint"`.

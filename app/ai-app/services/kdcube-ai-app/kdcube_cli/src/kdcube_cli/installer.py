@@ -33,6 +33,9 @@ ENV_FILES = [
     ".env.proxylogin",
 ]
 
+DEFAULT_PG_PASSWORD = "postgres"
+DEFAULT_REDIS_PASSWORD = "redispass"
+
 
 DEFAULT_BUNDLES_JSON = [
     "AGENTIC_BUNDLES_JSON='{",
@@ -553,6 +556,56 @@ def stage_secrets_descriptor(
     return ensure_secrets_template(target_path, ai_app_root)
 
 
+def ensure_bundles_template(target_path: Path, ai_app_root: Path) -> bool:
+    if target_path.exists():
+        return True
+    src = ai_app_root / "deployment/bundles.yaml"
+    if not src.exists():
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, target_path)
+    return True
+
+
+def stage_bundles_descriptor(
+    target_path: Path,
+    *,
+    source_path: Optional[Path],
+    ai_app_root: Path,
+) -> bool:
+    if source_path and source_path.exists():
+        if target_path.resolve() != source_path.resolve():
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, target_path)
+        return True
+    return ensure_bundles_template(target_path, ai_app_root)
+
+
+def ensure_bundles_secrets_template(target_path: Path, ai_app_root: Path) -> bool:
+    if target_path.exists():
+        return True
+    src = ai_app_root / "deployment/bundles.secrets.yaml"
+    if not src.exists():
+        return False
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, target_path)
+    return True
+
+
+def stage_bundles_secrets_descriptor(
+    target_path: Path,
+    *,
+    source_path: Optional[Path],
+    ai_app_root: Path,
+) -> bool:
+    if source_path and source_path.exists():
+        if target_path.resolve() != source_path.resolve():
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source_path, target_path)
+        return True
+    return ensure_bundles_secrets_template(target_path, ai_app_root)
+
+
 def ensure_gateway_template(target_path: Path, ai_app_root: Path) -> None:
     if target_path.exists():
         return
@@ -640,6 +693,12 @@ def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
 def compose_env(env_file: Path) -> Dict[str, str]:
     env = os.environ.copy()
     env["COMPOSE_ENV_FILES"] = str(env_file)
+    try:
+        entries = parse_env(env_file.read_text().splitlines())
+        for key, (_idx, value) in entries.items():
+            env[key] = value.strip().strip("'\"")
+    except Exception:
+        pass
     return env
 
 
@@ -935,6 +994,7 @@ def prompt_secret_value(
     required: bool = False,
     current: Optional[str] = None,
     force_prompt: bool = False,
+    echo: bool = True,
 ) -> Optional[str]:
     current_value = None if is_placeholder(current) else current
     if not force_prompt and current_value:
@@ -951,7 +1011,8 @@ def prompt_secret_value(
         else:
             value = prompt_optional(console, label, secret=True)
         if value:
-            console.print(f"{_label(label)}: [dim]{_mask(value)}[/]")
+            if echo:
+                console.print(f"{_label(label)}: [dim]{_mask(value)}[/]")
             return value
         if required:
             console.print("[red]This value is required. Please enter a value.[/red]")
@@ -1153,6 +1214,8 @@ def should_replace_bundles_config(value: Optional[str]) -> bool:
         return True
     if value and "/config/assembly.yaml" in value:
         return False
+    if value and "/config/bundles.yaml" in value:
+        return False
     if value and "/config/release.yaml" in value:
         return True
     if value and ("kdcube.demo.1" in value or "<project>" in value):
@@ -1166,11 +1229,16 @@ def gather_configuration(
     *,
     release_descriptor_path: Optional[str] = None,
     release_descriptor: Optional[Dict[str, object]] = None,
+    bundles_descriptor_path: Optional[str] = None,
+    bundles_descriptor: Optional[Dict[str, object]] = None,
+    bundles_secrets_descriptor: Optional[Dict[str, object]] = None,
     gateway_descriptor: Optional[Dict[str, object]] = None,
     secrets_descriptor: Optional[Dict[str, object]] = None,
     compose_mode: str = "all-in-one",
     use_descriptor_bundles: Optional[bool] = None,
     use_descriptor_frontend: Optional[bool] = None,
+    use_bundles_descriptor: Optional[bool] = None,
+    use_bundles_secrets: Optional[bool] = None,
 ) -> Tuple[Dict[str, str], Dict[str, str]]:
     force_prompt = os.getenv("KDCUBE_RESET_CONFIG", "").lower() in {"1", "true", "yes", "on"}
     env_main = load_env_file(ctx.config_dir / ".env")
@@ -1182,8 +1250,15 @@ def gather_configuration(
     runtime_secrets: Dict[str, str] = {}
     assembly_path = Path(release_descriptor_path).expanduser().resolve() if release_descriptor_path else None
     assembly_data: Dict[str, object] = dict(release_descriptor or {})
+    bundles_path = Path(bundles_descriptor_path).expanduser().resolve() if bundles_descriptor_path else None
+    bundles_data: Dict[str, object] = dict(bundles_descriptor or {})
+    bundles_secrets_data: Dict[str, object] = dict(bundles_secrets_descriptor or {})
     secrets_data: Dict[str, object] = dict(secrets_descriptor or {})
     gateway_data: Dict[str, object] = dict(gateway_descriptor or {})
+    if isinstance(gateway_data, dict) and isinstance(gateway_data.get("gateway"), dict):
+        gateway_data = dict(gateway_data.get("gateway") or {})
+    if bundles_path and not bundles_path.exists():
+        bundles_path = None
     autosave_envs = (env_main, env_ingress, env_proc, env_metrics, env_pg, env_proxy)
     assembly_user_supplied = parse_bool(os.getenv("KDCUBE_ASSEMBLY_USER_SUPPLIED", "")) is True
 
@@ -1200,6 +1275,45 @@ def gather_configuration(
                 if val and not is_placeholder(val):
                     return val
         return None
+
+    def _flatten_bundle_secrets(data: Dict[str, object]) -> Dict[str, str]:
+        flattened: Dict[str, str] = {}
+
+        def _walk(prefix: str, node: object) -> None:
+            if node is None:
+                return
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key is None:
+                        continue
+                    _walk(f"{prefix}.{key}", value)
+                return
+            if isinstance(node, list):
+                for idx, value in enumerate(node):
+                    _walk(f"{prefix}.{idx}", value)
+                return
+            value_str = str(node).strip()
+            if not value_str or is_placeholder(value_str):
+                return
+            flattened[prefix] = value_str
+
+        root = data
+        if isinstance(data, dict) and isinstance(data.get("bundles"), dict):
+            root = data.get("bundles")
+        items = root.get("items") if isinstance(root, dict) else None
+        if not isinstance(items, list):
+            return flattened
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            bundle_id = item.get("id")
+            if not bundle_id:
+                continue
+            secrets_block = item.get("secrets")
+            if secrets_block is None:
+                continue
+            _walk(f"bundles.{bundle_id}.secrets", secrets_block)
+        return flattened
 
     def _autosave() -> None:
         if assembly_path:
@@ -1271,6 +1385,10 @@ def gather_configuration(
     update_if_placeholder(env_proc, "SECRETS_PROVIDER", "local")
     update_if_placeholder(env_ingress, "SECRETS_URL", "http://kdcube-secrets:7777")
     update_if_placeholder(env_proc, "SECRETS_URL", "http://kdcube-secrets:7777")
+    # Ensure proc can set secrets (bundle secrets admin flow).
+    proc_admin = env_proc.entries.get("SECRETS_ADMIN_TOKEN", (None, None))[1]
+    if is_placeholder(proc_admin) or not (proc_admin or "").strip():
+        update_env_value(env_proc, "SECRETS_ADMIN_TOKEN", "${SECRETS_ADMIN_TOKEN}")
     update_if_placeholder(env_ingress, "LINK_PREVIEW_ENABLED", "0")
 
     # Auth provider selection
@@ -1615,14 +1733,33 @@ def gather_configuration(
     if use_pg_secret and pg_pass_from_secrets:
         pg_pass = pg_pass_from_secrets
     else:
-        pg_pass = prompt_secret(
-            console,
-            env_pg,
-            "POSTGRES_PASSWORD",
-            "Postgres password",
-            required=True,
-            force_prompt=force_prompt,
-        )
+        current_pass = env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1]
+        if is_placeholder(current_pass):
+            current_pass = None
+        if current_pass and current_pass.strip().lower() == DEFAULT_PG_PASSWORD:
+            current_pass = None
+        if current_pass:
+            options = ["Use existing password", "Unset (no password)", "Enter new password"]
+            default_index = 0
+        else:
+            options = [f"Use default password ({DEFAULT_PG_PASSWORD})", "Unset (no password)", "Enter new password"]
+            default_index = 0
+        choice = select_option(console, "Postgres password", options, default_index)
+        if choice.startswith("Use existing") and current_pass:
+            pg_pass = current_pass
+        elif choice.startswith("Use default"):
+            pg_pass = DEFAULT_PG_PASSWORD
+        elif choice.startswith("Unset"):
+            pg_pass = ""
+        else:
+            pg_pass = prompt_secret_value(
+                console,
+                "Postgres password",
+                required=True,
+                current=current_pass,
+                force_prompt=True,
+            ) or ""
+        update_env_value(env_pg, "POSTGRES_PASSWORD", pg_pass)
     if not pg_pass:
         pg_pass = env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1] or ""
         if not pg_pass and pg_pass_from_assembly:
@@ -1713,14 +1850,19 @@ def gather_configuration(
         current_pass = env_main.entries.get("REDIS_PASSWORD", (None, None))[1]
         if is_placeholder(current_pass):
             current_pass = None
-        options: List[str] = []
+        if current_pass and current_pass.strip().lower() == DEFAULT_REDIS_PASSWORD:
+            current_pass = None
         if current_pass:
-            options.append("Keep current password")
-        options.extend(["Unset (no password)", "Enter new password"])
-        default_index = 0 if current_pass else 0
+            options: List[str] = ["Use existing password", "Unset (no password)", "Enter new password"]
+            default_index = 0
+        else:
+            options = [f"Use default password ({DEFAULT_REDIS_PASSWORD})", "Unset (no password)", "Enter new password"]
+            default_index = 0
         choice = select_option(console, "Redis password", options, default_index)
-        if choice.startswith("Keep") and current_pass:
+        if choice.startswith("Use existing") and current_pass:
             redis_pass = current_pass
+        elif choice.startswith("Use default"):
+            redis_pass = DEFAULT_REDIS_PASSWORD
         elif choice.startswith("Unset"):
             redis_pass = ""
         else:
@@ -1853,21 +1995,28 @@ def gather_configuration(
     )
     openai_key = prompt_secret_value(
         console,
-        "OpenAI API key (leave blank to skip)",
+        "OpenAI API key",
         required=False,
         current=openai_from_secrets or env_proc.entries.get("OPENAI_API_KEY", (None, None))[1],
         force_prompt=force_prompt,
     )
     anthropic_key = prompt_secret_value(
         console,
-        "Anthropic API key (leave blank to skip)",
+        "Anthropic API key",
         required=False,
         current=anthropic_from_secrets or env_proc.entries.get("ANTHROPIC_API_KEY", (None, None))[1],
         force_prompt=force_prompt,
     )
+    openrouter_key = prompt_secret_value(
+        console,
+        "OpenRouter API key",
+        required=False,
+        current=openrouter_from_secrets or env_proc.entries.get("OPENROUTER_API_KEY", (None, None))[1],
+        force_prompt=force_prompt,
+    )
     brave_key = prompt_secret_value(
         console,
-        "Brave Search API key (leave blank to skip)",
+        "Brave Search API key",
         required=False,
         current=brave_from_secrets or env_proc.entries.get("BRAVE_API_KEY", (None, None))[1],
         force_prompt=force_prompt,
@@ -1878,7 +2027,9 @@ def gather_configuration(
         runtime_secrets["services.anthropic.api_key"] = anthropic_key
     if brave_key:
         runtime_secrets["services.brave.api_key"] = brave_key
-    if openrouter_from_secrets:
+    if openrouter_key:
+        runtime_secrets["services.openrouter.api_key"] = openrouter_key
+    elif openrouter_from_secrets:
         runtime_secrets["services.openrouter.api_key"] = openrouter_from_secrets
     if google_from_secrets:
         runtime_secrets["services.google.api_key"] = google_from_secrets
@@ -1896,6 +2047,21 @@ def gather_configuration(
         runtime_secrets["services.stripe.webhook_secret"] = stripe_webhook_from_secrets
     if claude_code_from_secrets:
         runtime_secrets["services.anthropic.claude_code_key"] = claude_code_from_secrets
+    if use_bundles_secrets is None:
+        use_bundles_secrets = bool(bundles_secrets_data)
+    if use_bundles_secrets and bundles_secrets_data:
+        flat_bundle_secrets = _flatten_bundle_secrets(bundles_secrets_data)
+        runtime_secrets.update(flat_bundle_secrets)
+        # Store bundle secret key lists in the sidecar so admin UI can show "known keys"
+        # even when secrets were provisioned via bundles.secrets.yaml.
+        keys_by_bundle: Dict[str, List[str]] = {}
+        for key in flat_bundle_secrets.keys():
+            parts = key.split(".")
+            if len(parts) >= 4 and parts[0] == "bundles" and parts[2] == "secrets":
+                bundle_id = parts[1]
+                keys_by_bundle.setdefault(bundle_id, []).append(key)
+        for bundle_id, keys in keys_by_bundle.items():
+            runtime_secrets[f"bundles.{bundle_id}.secrets.__keys"] = json.dumps(sorted(keys))
     if force_prompt or is_placeholder(env_proc.entries.get("OPENAI_API_KEY", (None, None))[1]):
         update_env_value(env_proc, "OPENAI_API_KEY", "")
     if force_prompt or is_placeholder(env_proc.entries.get("ANTHROPIC_API_KEY", (None, None))[1]):
@@ -2000,32 +2166,64 @@ def gather_configuration(
 
     _autosave()
 
-    current_descriptor = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
-    if release_descriptor_path and use_descriptor_bundles is not False:
-        current_descriptor = release_descriptor_path
-        update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
-    descriptor_value = (current_descriptor or "").strip().strip("'\"")
-    if use_descriptor_bundles is None:
-        if release_descriptor_path:
+    bundles_descriptor_selected = False
+    assembly_descriptor_selected = False
+
+    if use_bundles_descriptor is None and bundles_path:
+        use_bundles_descriptor = True
+
+    # bundles.yaml descriptor (preferred when provided)
+    if use_bundles_descriptor and bundles_path:
+        update_env_value(env_main, "HOST_BUNDLES_DESCRIPTOR_PATH", str(bundles_path))
+        update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/bundles.yaml")
+        bundles_descriptor_selected = True
+    else:
+        current_bundles_descriptor = env_main.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1]
+        descriptor_value = (current_bundles_descriptor or "").strip().strip("'\"")
+        if use_bundles_descriptor is False or force_prompt or is_placeholder(current_bundles_descriptor) or descriptor_value in {"", "/dev/null"}:
+            update_env_value(env_main, "HOST_BUNDLES_DESCRIPTOR_PATH", "/dev/null")
+
+    # assembly.yaml bundles section (legacy / fallback)
+    if not bundles_descriptor_selected:
+        current_descriptor = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
+        if release_descriptor_path and use_descriptor_bundles is not False:
+            current_descriptor = release_descriptor_path
             update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
-        elif force_prompt or is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
-            update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
-    elif use_descriptor_bundles:
-        if release_descriptor_path:
-            update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
-        elif is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
+            update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/assembly.yaml")
+            assembly_descriptor_selected = True
+        descriptor_value = (current_descriptor or "").strip().strip("'\"")
+        if use_descriptor_bundles is None:
+            if release_descriptor_path:
+                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
+                update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/assembly.yaml")
+                assembly_descriptor_selected = True
+            elif force_prompt or is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
+                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
+        elif use_descriptor_bundles:
+            if release_descriptor_path:
+                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
+                update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/assembly.yaml")
+                assembly_descriptor_selected = True
+            elif is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
+                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
+        else:
             update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
     else:
+        # Disable assembly bundle descriptor mount when bundles.yaml is active.
         update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
 
-    # If a descriptor is set, force a one-time registry sync on startup.
-    current_descriptor = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
-    descriptor_value = (current_descriptor or "").strip().strip("'\"")
-    if descriptor_value and descriptor_value != "/dev/null" and not is_placeholder(current_descriptor):
+    # If any descriptor is set, force a one-time registry sync on startup.
+    if bundles_descriptor_selected or assembly_descriptor_selected:
         update_env_value(env_proc, "BUNDLES_FORCE_ENV_ON_STARTUP", "1")
         update_env_value(env_proc, "BUNDLE_GIT_RESOLUTION_ENABLED", "1")
     else:
         update_env_value(env_proc, "BUNDLES_FORCE_ENV_ON_STARTUP", "0")
+
+    # Bundle secrets can be requested long after startup. Disable sidecar token expiry
+    # so get_secret() keeps working during runtime/admin updates.
+    if use_bundles_secrets or use_bundles_descriptor:
+        update_env_value(env_main, "SECRETS_TOKEN_TTL_SECONDS", "0")
+        update_env_value(env_main, "SECRETS_TOKEN_MAX_USES", "0")
 
     _autosave()
 
@@ -2466,10 +2664,16 @@ def run_setup(
     release_descriptor = {}
     secrets_descriptor_path = None
     secrets_descriptor: Dict[str, object] = {}
+    bundles_descriptor_path = None
+    bundles_descriptor: Dict[str, object] = {}
+    bundles_secrets_path = None
+    bundles_secrets: Dict[str, object] = {}
     gateway_descriptor_path = None
     gateway_descriptor: Dict[str, object] = {}
     env_descriptor = os.getenv("KDCUBE_ASSEMBLY_DESCRIPTOR_PATH", "").strip()
     env_secrets_descriptor = os.getenv("KDCUBE_SECRETS_DESCRIPTOR_PATH", "").strip()
+    env_bundles_descriptor = os.getenv("KDCUBE_BUNDLES_DESCRIPTOR_PATH", "").strip()
+    env_bundles_secrets = os.getenv("KDCUBE_BUNDLES_SECRETS_PATH", "").strip()
     env_gateway_descriptor = os.getenv("KDCUBE_GATEWAY_DESCRIPTOR_PATH", "").strip()
     skip_assembly_prompt = parse_bool(os.getenv("KDCUBE_ASSEMBLY_SKIP", "")) is True
     def _env_flag(name: str) -> Optional[bool]:
@@ -2485,6 +2689,8 @@ def run_setup(
     use_descriptor_bundles = _env_flag("KDCUBE_ASSEMBLY_USE_BUNDLES")
     use_descriptor_frontend = _env_flag("KDCUBE_ASSEMBLY_USE_FRONTEND")
     use_descriptor_platform = _env_flag("KDCUBE_ASSEMBLY_USE_PLATFORM")
+    use_bundles_descriptor = _env_flag("KDCUBE_USE_BUNDLES_DESCRIPTOR")
+    use_bundles_secrets = _env_flag("KDCUBE_USE_BUNDLES_SECRETS")
     if (config_dir / ".env").exists():
         env_existing = load_env_file(config_dir / ".env")
         existing_mode = env_existing.entries.get("KDCUBE_COMPOSE_MODE", (None, None))[1]
@@ -2493,6 +2699,9 @@ def run_setup(
         existing_descriptor = env_existing.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
         if existing_descriptor and not is_placeholder(existing_descriptor):
             release_descriptor_path = existing_descriptor
+        existing_bundles = env_existing.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1]
+        if existing_bundles and not is_placeholder(existing_bundles):
+            bundles_descriptor_path = existing_bundles
     if env_descriptor and (use_descriptor_bundles or use_descriptor_frontend or use_descriptor_platform):
         release_descriptor_path = env_descriptor
 
@@ -2535,6 +2744,25 @@ def run_setup(
     if env_secrets_descriptor:
         secrets_descriptor_path = str(Path(env_secrets_descriptor).expanduser().resolve())
 
+    if env_bundles_descriptor:
+        default_bundles = str((workdir / "config" / "bundles.yaml").resolve())
+        staged = stage_bundles_descriptor(
+            Path(default_bundles),
+            source_path=Path(env_bundles_descriptor),
+            ai_app_root=ai_app_root,
+        )
+        if staged and Path(default_bundles).exists():
+            bundles_descriptor_path = default_bundles
+        else:
+            bundles_descriptor_path = None
+
+    if env_bundles_secrets:
+        source_path = Path(env_bundles_secrets).expanduser().resolve()
+        if source_path.exists():
+            bundles_secrets_path = str(source_path)
+        else:
+            bundles_secrets_path = None
+
     if env_gateway_descriptor:
         gateway_descriptor_path = str(Path(env_gateway_descriptor).expanduser().resolve())
 
@@ -2555,6 +2783,20 @@ def run_setup(
                 compose_mode = "all-in-one"
     if env_use_frontend is False and not compose_mode_env:
         compose_mode = "all-in-one"
+
+    if bundles_descriptor_path:
+        bundles_path = Path(bundles_descriptor_path).expanduser()
+        if bundles_path.exists():
+            bundles_descriptor = load_release_descriptor(bundles_path)
+        else:
+            bundles_descriptor_path = None
+
+    if bundles_secrets_path:
+        bundles_secrets_file = Path(bundles_secrets_path).expanduser()
+        if bundles_secrets_file.exists():
+            bundles_secrets = load_release_descriptor(bundles_secrets_file)
+        else:
+            bundles_secrets_path = None
 
     if secrets_descriptor_path:
         secrets_path = Path(secrets_descriptor_path).expanduser()
@@ -2604,11 +2846,16 @@ def run_setup(
         ctx,
         release_descriptor_path=release_descriptor_path,
         release_descriptor=release_descriptor,
+        bundles_descriptor_path=bundles_descriptor_path,
+        bundles_descriptor=bundles_descriptor,
+        bundles_secrets_descriptor=bundles_secrets,
         gateway_descriptor=gateway_descriptor,
         secrets_descriptor=secrets_descriptor,
         compose_mode=compose_mode,
         use_descriptor_bundles=use_descriptor_bundles,
         use_descriptor_frontend=use_descriptor_frontend,
+        use_bundles_descriptor=use_bundles_descriptor,
+        use_bundles_secrets=use_bundles_secrets,
     )
     env_main = load_env_file(config_dir / ".env")
 
@@ -2621,6 +2868,17 @@ def run_setup(
     proxy_ctx = env_main.entries.get("PROXY_BUILD_CONTEXT", (None, None))[1]
     console.print(f"  UI_BUILD_CONTEXT={ui_ctx}")
     console.print(f"  PROXY_BUILD_CONTEXT={proxy_ctx}")
+
+    bundles_host = env_main.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1]
+    assembly_host = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
+    if bundles_host or assembly_host:
+        console.print("\n[dim]Bundle descriptors (host -> container):[/dim]")
+        if bundles_host and not is_placeholder(bundles_host) and bundles_host not in {"", "/dev/null"}:
+            exists = "exists" if Path(bundles_host).exists() else "missing"
+            console.print(f"  bundles.yaml: {bundles_host} ({exists}) -> /config/bundles.yaml")
+        if assembly_host and not is_placeholder(assembly_host) and assembly_host not in {"", "/dev/null"}:
+            exists = "exists" if Path(assembly_host).exists() else "missing"
+            console.print(f"  assembly.yaml: {assembly_host} ({exists}) -> /config/assembly.yaml")
 
     console.print("\n[dim]Small coffee break:[/dim] ☕\n")
 

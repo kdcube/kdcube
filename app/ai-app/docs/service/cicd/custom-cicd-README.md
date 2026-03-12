@@ -1,9 +1,9 @@
 ---
 id: ks:docs/service/cicd/custom-cicd-README.md
 title: "Custom CICD"
-summary: "Two‑repo CI/CD plan covering build outputs, image mapping, assembly.yaml flow, and ECS/EC2 deployment steps."
+summary: "Two‑repo CI/CD plan covering build outputs, image mapping, assembly.yaml + bundles.yaml flow, and ECS/EC2 deployment steps."
 tags: ["service", "cicd", "deployment", "ecs", "ec2", "docker-compose", "images", "bundles", "release", "frontend"]
-keywords: ["two-repo", "platform repo", "customer repo", "assembly.yaml", "bundle packaging", "image mapping", "ecs task definitions", "compose envs", "AGENTIC_BUNDLES_JSON"]
+keywords: ["two-repo", "platform repo", "customer repo", "assembly.yaml", "bundles.yaml", "bundle packaging", "image mapping", "ecs task definitions", "compose envs", "AGENTIC_BUNDLES_JSON"]
 see_also:
   - ks:docs/service/cicd/release-bundle-README.md
   - ks:docs/service/cicd/assembly-descriptor-README.md
@@ -42,20 +42,23 @@ Before GitHub Actions can build and publish releases, ensure these are set:
    - `contents: write` (to create tags)
    - `id-token: write` (for PyPI trusted publisher)
 
-4. **Assembly file**
+4. **Assembly + Bundles files**
    - `assembly.yaml` must exist and contain:
      - `platform.ref` (PEP440‑compatible; used as tag + CLI version)
+   - `bundles.yaml` should exist in the customer repo to define bundle list.
 
 ---
 
 ## TL;DR (1‑page CI/CD Flow)
 
-**Inputs (single release file in customer repo):**
-- `assembly.yaml` (pins platform tag + frontend tag + bundles list)
+**Inputs (customer repo):**
+- `assembly.yaml` (pins platform tag + frontend tag)
+- `bundles.yaml` (bundle list + refs)
+- `bundles.secrets.yaml` (optional; bundle secrets for local/dev)
 
 **CI (build phase):**
 1. Checkout **platform repo** at `platform.ref`.
-2. Checkout **customer repo** at `bundles.items[].ref` + `frontend.ref`.
+2. Checkout **customer repo** at `bundles.yaml` refs + `frontend.ref`.
 3. For each bundle entry → copy `<subdir>/<id>` into `/bundles/<id>`.
 4. Generate **runtime descriptor** (`AGENTIC_BUNDLES_JSON`) with `path=/bundles` and `module=...entrypoint`.
 5. Build + push images:
@@ -72,7 +75,10 @@ Before GitHub Actions can build and publish releases, ensure these are set:
 
 ```mermaid
 flowchart LR
-  R[assembly.yaml<br/>private repo] --> CI[CI build]
+  R["assembly.yaml + bundles.yaml<br/>private repo"] --> CI[CI build]
+  S["secrets.yaml<br/>(deploy-time)"] --> CI
+  G["gateway.yaml<br/>(deploy-time)"] --> CI
+  BS["bundles.secrets.yaml<br/>(local/dev)"] --> CI
   CI --> I[kdcube-chat-ingress]
   CI --> P[kdcube-chat-proc-bundled]
   CI --> E[kdcube-exec-bundled]
@@ -86,6 +92,13 @@ flowchart LR
   U --> CD
   PX --> CD
 ```
+
+**Descriptor usage (CD/CLI):**
+- `assembly.yaml` → platform/frontend/auth/infra defaults (used by CLI/CI).
+- `bundles.yaml` → bundle registry for proc (`AGENTIC_BUNDLES_JSON`).
+- `bundles.secrets.yaml` → bundle secrets (local/dev; injected into secrets sidecar).
+- `secrets.yaml` → platform/infra secrets (CI/ops; injected into secrets manager).
+- `gateway.yaml` → gateway policy JSON (rendered into `GATEWAY_CONFIG_JSON`).
 
 **Runtime config (where env lives):**
 - ECS: task definitions (ingress/proc/metrics)
@@ -161,12 +174,12 @@ Use Dockerfiles from `deployment/docker/custom-ui-managed-infra`.
 
 ---
 
-## 3) Assembly Descriptor (Single Source of Truth)
+## 3) Assembly Descriptor (Platform + Frontend)
 
 See: [docs/service/cicd/assembly-descriptor-README.md](assembly-descriptor-README.md)
 
-This file (`assembly.yaml` in the private repo) pins platform + frontend + bundles
-and is the only release input CI should need.
+This file (`assembly.yaml` in the private repo) pins platform + frontend.
+Bundle list and refs live in `bundles.yaml` (same repo).
 
 For **sensitive values** (LLM keys, Git HTTPS token, proxylogin client secret,
 infra passwords), use a separate `secrets.yaml` and keep it out of the repo.
@@ -205,16 +218,14 @@ Details are documented in:
 
 ## 4) Bundle Descriptor (Derived by CI)
 
-CI derives `AGENTIC_BUNDLES_JSON` from the assembly descriptor.
-See: [docs/service/cicd/assembly-descriptor-README.md](assembly-descriptor-README.md)
+CI derives `AGENTIC_BUNDLES_JSON` from `bundles.yaml`.
+See: [docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
 
-**Optional shortcut (EC2/dev):** mount the `assembly.yaml` directly and set:
+**Optional shortcut (EC2/dev):** mount `bundles.yaml` directly and set:
 
 ```
-AGENTIC_BUNDLES_JSON=/config/assembly.yaml
+AGENTIC_BUNDLES_JSON=/config/bundles.yaml
 ```
-
-The loader will read the `bundles` section from the YAML.
 
 ---
 
@@ -300,7 +311,7 @@ If using private git repos:
   - `BUNDLE_GIT_RESOLUTION_ENABLED=1`
 
 **Ownership:** DevOps owns secret provisioning and task definition wiring. Release manager owns
-`assembly.yaml` (bundle list + refs).
+`assembly.yaml` (platform/frontend) and `bundles.yaml` (bundle list + refs).
 
 ---
 
@@ -331,8 +342,8 @@ If using private git repos:
 
 ## 8.1) Bundle Descriptor Generation
 
-CI derives `AGENTIC_BUNDLES_JSON` from the assembly descriptor.
-See: [docs/service/cicd/assembly-descriptor-README.md](assembly-descriptor-README.md)
+CI derives `AGENTIC_BUNDLES_JSON` from `bundles.yaml`.
+See: [docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
 
 ---
 

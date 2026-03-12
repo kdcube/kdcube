@@ -47,7 +47,8 @@ Descriptions are condensed from the comments in those sample files.
 | `HOST_KDCUBE_STORAGE_PATH` | Path on host to mount as a KDCUBE STORAGE (local filesystem or S3). If using S3 in KDCUBE_STORAGE_PATH, not needed |
 | `HOST_BUNDLES_PATH` | Host directory containing ALL custom agentic bundles (subfolders, wheels, zips) These extend the chat service with custom Python applications |
 | `HOST_BUNDLE_STORAGE_PATH` | Host directory for shared bundle local storage (bundle data; used by ks: resolvers). This is mounted into chat-proc at BUNDLE_STORAGE_ROOT. |
-| `HOST_BUNDLE_DESCRIPTOR_PATH` | Assembly descriptor (optional; mounted into chat-proc as /config/assembly.yaml) If unset, /dev/null is mounted and AGENTIC_BUNDLES_JSON should be inline or empty. |
+| `HOST_BUNDLE_DESCRIPTOR_PATH` | Assembly descriptor (optional; mounted into chat-proc as /config/assembly.yaml). Runtime does not read this file; it is used by the CLI for platform/frontend config. |
+| `HOST_BUNDLES_DESCRIPTOR_PATH` | Bundles descriptor (optional; mounted into chat-proc as /config/bundles.yaml). When set, AGENTIC_BUNDLES_JSON should be `/config/bundles.yaml`. |
 | `HOST_GIT_SSH_KEY_PATH` | Optional SSH key + known_hosts for git bundle pulls (private repos) These files are mounted into the chat-proc container at: /run/secrets/git_ssh_key /run/secrets/git_known_hosts |
 | `HOST_GIT_KNOWN_HOSTS_PATH` | n/a |
 | `HOST_EXEC_WORKSPACE_PATH` | Temporary workspace for code execution (Docker-in-Docker) |
@@ -58,12 +59,12 @@ Descriptions are condensed from the comments in those sample files.
 | `UI_SOURCE_PATH` | Path to UI source code (relative to UI_BUILD_CONTEXT) This directory should contain package.json and your UI application |
 | `NGINX_UI_CONFIG_FILE_PATH` | Path to nginx configuration for UI (relative to UI_BUILD_CONTEXT) This configures how nginx serves your built UI application |
 | `PATH_TO_FRONTEND_CONFIG_JSON` | Runtime config is mounted into the UI container as /usr/share/nginx/html/config.json Suggested path (workdir): <workdir>/config/frontend.config.hardcoded.json |
-| `SECRETS_ADMIN_TOKEN` | SECRETS SIDECAR (optional, local dev) Admin token required to inject secrets into the sidecar. |
+| `SECRETS_ADMIN_TOKEN` | Secrets sidecar admin token (runtime-only). Used by **proc** to write bundle secrets via admin UI. Set in `.env.proc` as `${SECRETS_ADMIN_TOKEN}` so the runtime token is injected. |
 | `SECRETS_READ_TOKENS` | Comma-separated list of read tokens accepted by the sidecar. |
 | `SECRETS_TOKEN_INGRESS` | Per-service read tokens (runtime-only; leave blank in files). |
 | `SECRETS_TOKEN_PROC` | n/a |
-| `SECRETS_TOKEN_TTL_SECONDS` | Token lifetime and max uses (per token). |
-| `SECRETS_TOKEN_MAX_USES` | n/a |
+| `SECRETS_TOKEN_TTL_SECONDS` | Token lifetime (seconds). `0` = no expiry. |
+| `SECRETS_TOKEN_MAX_USES` | Max uses per token. `0` = unlimited. |
 | `PROXY_BUILD_CONTEXT` | Common parent directory that can reach both platform and frontend repos |
 | `PROXY_DOCKERFILE_PATH` | Path to Dockerfile_ProxyOpenResty (relative to PROXY_BUILD_CONTEXT) This Dockerfile is provided by the platform (OpenResty-based) |
 | `NGINX_PROXY_CONFIG_FILE_PATH` | Path to custom nginx proxy configuration (relative to PROXY_BUILD_CONTEXT) Use nginx/conf/nginx_proxy.conf for HTTP or nginx/conf/nginx_proxy_ssl.conf for HTTPS |
@@ -81,6 +82,20 @@ Descriptions are condensed from the comments in those sample files.
 | `POSTGRES_MAX_CONNECTIONS` | n/a |
 | `REDIS_PASSWORD` | n/a |
 
+## Secrets sidecar roles (setter vs getter)
+
+The local secrets sidecar supports two roles:
+
+- **Getter (read)**: any service that calls `get_secret()` needs a read token.
+  Set `SECRETS_URL` and `SECRETS_TOKEN` in the service env.
+- **Setter (write)**: the **proc** service (bundle admin UI) writes secrets to
+  the sidecar and therefore needs `SECRETS_ADMIN_TOKEN` in `.env.proc`
+  (usually set to `${SECRETS_ADMIN_TOKEN}` so the CLI injects the runtime token).
+
+Token TTL/uses:
+- `SECRETS_TOKEN_TTL_SECONDS=0` and `SECRETS_TOKEN_MAX_USES=0` mean **no expiry**.
+- This is required if bundle secrets can be updated and read long after startup.
+
 ### `.env.ingress`
 | Key | Description |
 |---|---|
@@ -88,7 +103,11 @@ Descriptions are condensed from the comments in those sample files.
 | `GATEWAY_COMPONENT` | n/a |
 | `SECRETS_PROVIDER` | n/a |
 | `SECRETS_URL` | n/a |
-| `SECRETS_TOKEN` | n/a |
+| `SECRETS_TOKEN` | Read token for secrets sidecar (runtime-only; injected by CLI). |
+| `SECRETS_ADMIN_TOKEN` | Admin token for **writing** secrets (bundle admin UI). Set to `${SECRETS_ADMIN_TOKEN}`. |
+| `SECRETS_TOKEN_TTL_SECONDS` | Token lifetime (seconds). `0` = no expiry. |
+| `SECRETS_TOKEN_MAX_USES` | Max uses per token. `0` = unlimited. |
+| `SECRETS_ADMIN_TOKEN` | Optional admin token for writing secrets via the bundle admin UI. |
 | `LINK_PREVIEW_ENABLED` | Enable link preview endpoint (ingress disables by default). |
 | `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
 | `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
@@ -199,7 +218,7 @@ Descriptions are condensed from the comments in those sample files.
 | `WEB_SEARCH_SEGMENTER` | n/a |
 | `MCP_CACHE_TTL_SECONDS` | n/a |
 | `ACCOUNTING_SERVICES` | n/a |
-| `AGENTIC_BUNDLES_JSON` | Bundle Bundles descriptor (owner: customer repo). You can also point AGENTIC_BUNDLES_JSON to a JSON/YAML file (recommended) - path inside the container: This path is mounted from HOST_BUNDLE_DESCRIPTOR_PATH defined in .env AGENTIC_BUNDLES_JSON=/config/assembly.yaml |
+| `AGENTIC_BUNDLES_JSON` | Bundles descriptor (JSON/YAML). Common value inside container: `/config/bundles.yaml`. This path is mounted from `HOST_BUNDLES_DESCRIPTOR_PATH` in `.env`. |
 | `BUNDLES_INCLUDE_EXAMPLES` | Include built-in example bundles from sdk/examples/bundles (default: 1) |
 | `BUNDLE_CLEANUP_ENABLED` | Bundle cleanup / ref tracking Enable periodic bundle cleanup loop (uses Redis locks). |
 | `BUNDLE_CLEANUP_INTERVAL_SECONDS` | Cleanup interval (seconds). |

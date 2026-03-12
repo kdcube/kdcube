@@ -71,6 +71,13 @@ interface BundleCleanupPayload {
     project?: string;
 }
 
+interface BundleSecretsPayload {
+    tenant?: string;
+    project?: string;
+    mode?: 'set' | 'clear';
+    secrets: Record<string, unknown>;
+}
+
 // =============================================================================
 // Settings Manager
 // =============================================================================
@@ -431,6 +438,25 @@ class IntegrationsAPI {
         );
         return response.json();
     }
+
+    async setBundleSecrets(bundleId: string, payload: BundleSecretsPayload, scope?: Scope): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.buildUrl(`/bundles/${encodeURIComponent(bundleId)}/secrets`),
+            {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(withScope(payload, scope))
+            }
+        );
+        return response.json();
+    }
+
+    async getBundleSecrets(bundleId: string, scope?: Scope): Promise<any> {
+        const response = await this.fetchWithAuth(
+            this.buildUrl(`/bundles/${encodeURIComponent(bundleId)}/secrets${buildScopeParams(scope)}`)
+        );
+        return response.json();
+    }
 }
 
 const api = new IntegrationsAPI();
@@ -502,6 +528,107 @@ const InputField: React.FC<{
     </div>
 );
 
+const isRecord = (value: unknown): value is Record<string, unknown> => (
+    typeof value === 'object' && value !== null && !Array.isArray(value)
+);
+
+const normalizeDotPath = (raw: string): string[] => (
+    raw
+        .split('.')
+        .map(part => part.trim())
+        .filter(Boolean)
+);
+
+const setNestedValue = (target: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> => {
+    const next: Record<string, unknown> = { ...(isRecord(target) ? target : {}) };
+    let cursor: Record<string, unknown> = next;
+    path.forEach((part, idx) => {
+        if (idx === path.length - 1) {
+            cursor[part] = value;
+            return;
+        }
+        const existing = cursor[part];
+        if (!isRecord(existing)) {
+            cursor[part] = {};
+        } else {
+            cursor[part] = { ...existing };
+        }
+        cursor = cursor[part] as Record<string, unknown>;
+    });
+    return next;
+};
+
+const deleteNestedValue = (target: Record<string, unknown>, path: string[]): Record<string, unknown> => {
+    const next: Record<string, unknown> = { ...(isRecord(target) ? target : {}) };
+    let cursor: Record<string, unknown> = next;
+    path.forEach((part, idx) => {
+        if (idx === path.length - 1) {
+            delete cursor[part];
+            return;
+        }
+        const existing = cursor[part];
+        if (!isRecord(existing)) {
+            cursor[part] = {};
+        } else {
+            cursor[part] = { ...existing };
+        }
+        cursor = cursor[part] as Record<string, unknown>;
+    });
+    return next;
+};
+
+const buildNestedObject = (path: string[], value: unknown): Record<string, unknown> => {
+    return path.reduceRight<Record<string, unknown>>((acc, key) => ({ [key]: acc }), value as Record<string, unknown>);
+};
+
+const parseJsonValue = (raw: string): { ok: true; value: unknown } | { ok: false; error: string } => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+        return { ok: false, error: 'Value is required.' };
+    }
+    try {
+        return { ok: true, value: JSON.parse(trimmed) };
+    } catch {
+        return { ok: true, value: trimmed };
+    }
+};
+
+const extractDotKeys = (node: unknown, out: string[], prefix = ''): void => {
+    if (node === null || node === undefined) {
+        return;
+    }
+    if (Array.isArray(node)) {
+        node.forEach((value, idx) => {
+            const nextPrefix = prefix ? `${prefix}.${idx}` : `${idx}`;
+            extractDotKeys(value, out, nextPrefix);
+        });
+        return;
+    }
+    if (isRecord(node)) {
+        Object.entries(node).forEach(([key, value]) => {
+            const nextPrefix = prefix ? `${prefix}.${key}` : key;
+            extractDotKeys(value, out, nextPrefix);
+        });
+        return;
+    }
+    if (prefix) {
+        out.push(prefix);
+    }
+};
+
+const deepMergeObjects = (base: Record<string, unknown>, patch: Record<string, unknown>): Record<string, unknown> => {
+    const merged: Record<string, unknown> = { ...(base || {}) };
+    Object.entries(patch || {}).forEach(([key, value]) => {
+        const baseValue = merged[key];
+        if (isRecord(baseValue) && isRecord(value)) {
+            merged[key] = deepMergeObjects(baseValue, value);
+        } else {
+            merged[key] = value;
+        }
+    });
+    return merged;
+};
+
 // =============================================================================
 // Main Component
 // =============================================================================
@@ -525,6 +652,16 @@ const AIBundleDashboard: React.FC = () => {
     const [propsJson, setPropsJson] = useState<string>('{}');
     const [propsDefaultsJson, setPropsDefaultsJson] = useState<string>('{}');
     const [propsLoading, setPropsLoading] = useState<boolean>(false);
+    const [propsKeyPath, setPropsKeyPath] = useState<string>('');
+    const [propsValue, setPropsValue] = useState<string>('');
+    const [secretsBundleId, setSecretsBundleId] = useState<string>('');
+    const [secretsJson, setSecretsJson] = useState<string>('{}');
+    const [secretsSaving, setSecretsSaving] = useState<boolean>(false);
+    const [secretsStatus, setSecretsStatus] = useState<{ mode: 'set' | 'clear'; keys: string[] } | null>(null);
+    const [secretsKeys, setSecretsKeys] = useState<string[]>([]);
+    const [secretsLoading, setSecretsLoading] = useState<boolean>(false);
+    const [secretsKeyPath, setSecretsKeyPath] = useState<string>('');
+    const [secretsValue, setSecretsValue] = useState<string>('');
     const registryScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const propsScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const draftScope = useMemo(() => parseScopeValue(scopeInput), [scopeInput]);
@@ -624,6 +761,9 @@ const AIBundleDashboard: React.FC = () => {
             if (!propsBundleId || !(propsBundleId in (data.available_bundles || {}))) {
                 setPropsBundleId(data.default_bundle_id || '');
             }
+            if (!secretsBundleId || !(secretsBundleId in (data.available_bundles || {}))) {
+                setSecretsBundleId(data.default_bundle_id || '');
+            }
             setError(null);
         } catch (e: any) {
             setError(e.message || 'Failed to load bundles');
@@ -639,12 +779,100 @@ const AIBundleDashboard: React.FC = () => {
             const data = await api.getBundleProps(propsBundleId, propsScope);
             const props = data.props || {};
             const defaults = data.defaults || {};
-            setPropsJson(JSON.stringify(props, null, 2));
+            const merged = deepMergeObjects(defaults, props);
+            setPropsJson(JSON.stringify(merged, null, 2));
             setPropsDefaultsJson(JSON.stringify(defaults, null, 2));
         } catch (e: any) {
             setError(e.message || 'Failed to load bundle props');
         } finally {
             setPropsLoading(false);
+        }
+    };
+
+    const parseJsonObject = (raw: string, label: string): Record<string, unknown> => {
+        const trimmed = raw.trim();
+        if (!trimmed) {
+            return {};
+        }
+        try {
+            const parsed = JSON.parse(trimmed);
+            if (!isRecord(parsed)) {
+                throw new Error(`${label} must be a JSON object.`);
+            }
+            return parsed;
+        } catch (err: any) {
+            const message = err?.message ? String(err.message) : '';
+            throw new Error(message || `Invalid ${label} JSON.`);
+        }
+    };
+
+
+    const collectSecretKeys = (payload: Record<string, unknown>): string[] => {
+        const keys: string[] = [];
+        extractDotKeys(payload, keys);
+        return keys.sort();
+    };
+
+    const applyPropsDotPath = (mode: 'set' | 'delete') => {
+        const path = normalizeDotPath(propsKeyPath);
+        if (!path.length) {
+            setError('Enter a dot-path for props.');
+            return;
+        }
+        try {
+            const parsed = parseJsonObject(propsJson, 'Props');
+            let updated = parsed;
+            if (mode === 'set') {
+                const parsedValue = parseJsonValue(propsValue);
+                if (!parsedValue.ok) {
+                    setError(parsedValue.error);
+                    return;
+                }
+                updated = setNestedValue(parsed, path, parsedValue.value);
+            } else {
+                updated = deleteNestedValue(parsed, path);
+            }
+            setPropsJson(JSON.stringify(updated, null, 2));
+            setError(null);
+        } catch (e: any) {
+            setError(e.message || 'Failed to update props.');
+        }
+    };
+
+    const submitSecretDotPath = async (mode: 'set' | 'clear') => {
+        if (!secretsBundleId) {
+            setError('Select a bundle to update secrets.');
+            return;
+        }
+        const path = normalizeDotPath(secretsKeyPath);
+        if (!path.length) {
+            setError('Enter a dot-path for secrets.');
+            return;
+        }
+        let value: unknown = true;
+        if (mode === 'set') {
+            const parsedValue = parseJsonValue(secretsValue);
+            if (!parsedValue.ok) {
+                setError(parsedValue.error);
+                return;
+            }
+            value = parsedValue.value;
+        }
+        try {
+            setSecretsSaving(true);
+            const payload = buildNestedObject(path, value);
+            const response = await api.setBundleSecrets(secretsBundleId, { secrets: payload, mode }, propsScope);
+            setSecretsStatus({ mode, keys: response.keys || [] });
+            if (response.stored_keys) {
+                setSecretsKeys(response.stored_keys);
+            } else if (response.keys) {
+                setSecretsKeys(response.keys);
+            }
+            setError(null);
+        } catch (e: any) {
+            setError(e.message || 'Failed to update secrets');
+        } finally {
+            setSecretsSaving(false);
         }
     };
 
@@ -687,6 +915,24 @@ const AIBundleDashboard: React.FC = () => {
         if (!propsBundleId) return;
         loadProps();
     }, [propsBundleId, scopeTenant, scopeProject]);
+
+    const loadSecrets = async () => {
+        if (!secretsBundleId) return;
+        try {
+            setSecretsLoading(true);
+            const data = await api.getBundleSecrets(secretsBundleId, propsScope);
+            setSecretsKeys(data.keys || []);
+        } catch (e: any) {
+            setError(e.message || 'Failed to load bundle secrets');
+        } finally {
+            setSecretsLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        if (!secretsBundleId) return;
+        loadSecrets();
+    }, [secretsBundleId, scopeTenant, scopeProject]);
 
     const resetForm = () => {
         setEditingId(null);
@@ -780,12 +1026,13 @@ const AIBundleDashboard: React.FC = () => {
             return;
         }
         try {
-            const parsed = propsJson.trim() ? JSON.parse(propsJson) : {};
+            const parsed = parseJsonObject(propsJson, 'Props');
             await api.setBundleProps(propsBundleId, {
                 op,
                 props: parsed
             }, propsScope);
             await loadProps();
+            setError(null);
         } catch (e: any) {
             setError(e.message || 'Failed to update props');
         }
@@ -801,6 +1048,72 @@ const AIBundleDashboard: React.FC = () => {
             await loadProps();
         } catch (e: any) {
             setError(e.message || 'Failed to reset props from code');
+        }
+    };
+
+    const saveSecrets = async () => {
+        if (!secretsBundleId) {
+            setError('Select a bundle to update secrets.');
+            return;
+        }
+        try {
+            setSecretsSaving(true);
+            const parsed = parseJsonObject(secretsJson, 'Secrets');
+            const keys = collectSecretKeys(parsed);
+            if (!keys.length) {
+                setError('Provide at least one secret key to save.');
+                return;
+            }
+            const response = await api.setBundleSecrets(secretsBundleId, { secrets: parsed, mode: 'set' }, propsScope);
+            setSecretsStatus({ mode: 'set', keys: response.keys || [] });
+            if (response.stored_keys) {
+                setSecretsKeys(response.stored_keys);
+            } else if (response.keys) {
+                setSecretsKeys(response.keys);
+            }
+            setError(null);
+        } catch (e: any) {
+            setError(e.message || 'Failed to update secrets');
+        } finally {
+            setSecretsSaving(false);
+        }
+    };
+
+    const clearSecrets = async () => {
+        if (!secretsBundleId) {
+            setError('Select a bundle to clear secrets.');
+            return;
+        }
+        let parsed: Record<string, unknown> = {};
+        try {
+            parsed = parseJsonObject(secretsJson, 'Secrets');
+        } catch (e: any) {
+            setError(e.message || 'Invalid secrets JSON.');
+            return;
+        }
+        const keys = collectSecretKeys(parsed);
+        if (!keys.length) {
+            setError('Provide at least one secret key to clear.');
+            return;
+        }
+        const confirmed = window.confirm(
+            `Clear these secrets for this bundle?\\n- ${keys.join('\\n- ')}\\nThis cannot be undone.`
+        );
+        if (!confirmed) return;
+        try {
+            setSecretsSaving(true);
+            const response = await api.setBundleSecrets(secretsBundleId, { secrets: parsed, mode: 'clear' }, propsScope);
+            setSecretsStatus({ mode: 'clear', keys: response.keys || [] });
+            if (response.stored_keys) {
+                setSecretsKeys(response.stored_keys);
+            } else if (response.keys) {
+                setSecretsKeys(response.keys);
+            }
+            setError(null);
+        } catch (e: any) {
+            setError(e.message || 'Failed to clear secrets');
+        } finally {
+            setSecretsSaving(false);
         }
     };
 
@@ -1021,6 +1334,36 @@ const AIBundleDashboard: React.FC = () => {
                             </select>
                         </div>
 
+                        <div className="text-xs text-gray-600">
+                            Props resolution order: <strong>code defaults → bundles.yaml → runtime overrides</strong>.
+                            The editor shows the full effective props; <strong>Save props</strong> stores exactly what you see.
+                            Use dot-path updates for precise changes.
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <InputField
+                                label="Dot-path (props)"
+                                value={propsKeyPath}
+                                onChange={v => setPropsKeyPath(v)}
+                                placeholder="role_models.solver.react.v2.decision.v2.strong.model"
+                            />
+                            <InputField
+                                label="Value (JSON or string)"
+                                value={propsValue}
+                                onChange={v => setPropsValue(v)}
+                                placeholder={'"claude-sonnet-4-6"'}
+                            />
+                        </div>
+
+                        <div className="flex flex-wrap gap-3">
+                            <Button variant="secondary" onClick={() => applyPropsDotPath('set')}>
+                                Apply dot-path to editor
+                            </Button>
+                            <Button variant="secondary" onClick={() => applyPropsDotPath('delete')}>
+                                Remove key from editor
+                            </Button>
+                        </div>
+
                         {bundleSnapshotPath ? (
                             <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
                                 <span className="font-semibold">Snapshot path:</span>
@@ -1041,7 +1384,13 @@ const AIBundleDashboard: React.FC = () => {
 
                         <div className="flex flex-wrap gap-3">
                             <Button variant="primary" onClick={() => saveProps('replace')}>Save props</Button>
-                            <Button variant="secondary" onClick={() => saveProps('merge')}>Merge props</Button>
+                            <Button variant="secondary" onClick={loadProps} disabled={!propsBundleId || propsLoading}>
+                                {propsLoading ? 'Loading…' : 'Reset editor'}
+                            </Button>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                            The JSON editor shows the <strong>full effective props</strong> (defaults + overrides).<br />
+                            <strong>Save props</strong> stores exactly what you see in the editor.
                         </div>
 
                         <div>
@@ -1051,6 +1400,93 @@ const AIBundleDashboard: React.FC = () => {
                                 value={propsDefaultsJson}
                                 readOnly
                             />
+                        </div>
+                    </CardBody>
+                </Card>
+
+                <Card>
+                    <CardHeader
+                        title="Bundle secrets"
+                        subtitle="Write-only secrets for bundles. Use dot-path for single keys or JSON for bulk updates."
+                    />
+                    <CardBody className="space-y-5">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-800 mb-2">Bundle ID</label>
+                            <select
+                                className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white text-sm"
+                                value={secretsBundleId}
+                                onChange={e => setSecretsBundleId(e.target.value)}
+                            >
+                                <option value="">—</option>
+                                {bundleList.map(b => (
+                                    <option key={b.id} value={b.id}>{b.id}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="text-xs text-gray-600">
+                            {secretsLoading ? 'Loading keys…' : (
+                                <>
+                                    Known keys:{' '}
+                                    <code>{(secretsKeys || []).join(', ') || 'none'}</code>
+                                </>
+                            )}
+                        </div>
+
+                        <div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <InputField
+                                    label="Dot-path (secrets)"
+                                    value={secretsKeyPath}
+                                    onChange={v => setSecretsKeyPath(v)}
+                                    placeholder="openai.api_key"
+                                />
+                            <InputField
+                                label="Value (JSON or string)"
+                                value={secretsValue}
+                                onChange={v => setSecretsValue(v)}
+                                placeholder={'"sk-..."'}
+                            />
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-3">
+                                <Button variant="primary" onClick={() => submitSecretDotPath('set')} disabled={secretsSaving}>
+                                    {secretsSaving ? 'Saving…' : 'Set key'}
+                                </Button>
+                                <Button variant="secondary" onClick={() => submitSecretDotPath('clear')} disabled={secretsSaving}>
+                                    Clear key
+                                </Button>
+                            </div>
+                            <div className="mt-2 text-xs text-gray-500">
+                                Dot-path writes a single key. Values accept JSON (objects/arrays) or raw strings.
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-sm font-medium text-gray-800 mb-2">Bulk secrets JSON (optional)</label>
+                            <textarea
+                                className="w-full min-h-[180px] px-4 py-3 border border-gray-200/80 rounded-xl bg-white text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gray-900/10"
+                                value={secretsJson}
+                                onChange={e => setSecretsJson(e.target.value)}
+                                placeholder={`{\n  \"openai\": { \"api_key\": \"...\" },\n  \"stripe\": { \"secret_key\": \"...\" }\n}`}
+                            />
+                        </div>
+
+                        <div className="flex flex-wrap gap-3">
+                            <Button variant="primary" onClick={saveSecrets} disabled={secretsSaving}>
+                                {secretsSaving ? 'Saving…' : 'Set secrets (JSON)'}
+                            </Button>
+                            <Button variant="secondary" onClick={clearSecrets} disabled={secretsSaving}>
+                                Clear keys (JSON)
+                            </Button>
+                        </div>
+                        {secretsStatus ? (
+                            <div className="text-xs text-gray-600">
+                                {secretsStatus.mode === 'set' ? 'Saved' : 'Cleared'} keys:{' '}
+                                <code>{(secretsStatus.keys || []).join(', ') || 'none'}</code>
+                            </div>
+                        ) : null}
+                        <div className="text-xs text-gray-500">
+                            Secrets are stored under <code>bundles.&lt;bundle_id&gt;.secrets.*</code> and are write-only.
                         </div>
                     </CardBody>
                 </Card>

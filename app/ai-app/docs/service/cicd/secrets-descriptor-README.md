@@ -18,6 +18,9 @@ the wizard (or via `KDCUBE_SECRETS_DESCRIPTOR_PATH`).
 
 **Template:** [`app/ai-app/deployment/secrets.yaml`](../../../deployment/secrets.yaml)
 
+Bundle‑specific secrets live in **`bundles.secrets.yaml`** (separate file). See:
+[docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md).
+
 Secrets are keyed by **dot‑path** (e.g. `services.openai.api_key`) and are injected
 into the secrets sidecar using those names.
 
@@ -62,7 +65,7 @@ aws:
 
 ## 2) How the CLI uses it
 
-**Priority:** `secrets.yaml` → `assembly.yaml` → user input.
+**Priority:** `secrets.yaml` → user input.
 
 When `secrets.yaml` is provided:
 - LLM/search keys (OpenAI/Anthropic/Google/Gemini/Brave/OpenRouter/HuggingFace) are injected into the **secrets sidecar** at runtime.

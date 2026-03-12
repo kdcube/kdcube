@@ -109,6 +109,9 @@ services:
       - type: bind
         source: ${HOST_BUNDLE_DESCRIPTOR_PATH:-/dev/null}
         target: /config/assembly.yaml
+      - type: bind
+        source: ${HOST_BUNDLES_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/bundles.yaml
         read_only: true
       - type: bind
         source: ${HOST_BUNDLES_PATH?}           # host root with all bundles

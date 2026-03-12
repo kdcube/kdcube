@@ -3,13 +3,13 @@ id: ks:docs/service/environment/setup-for-dockercompose-README.md
 title: "Setup For Dockercompose"
 summary: "How to run git‑defined bundles with docker‑compose."
 tags: ["service", "environment", "docker-compose", "bundles"]
-keywords: ["all_in_one_kdcube", "custom-ui-managed-infra", "volume mounts", "assembly.yaml"]
+keywords: ["all_in_one_kdcube", "custom-ui-managed-infra", "volume mounts", "bundles.yaml"]
 see_also:
   - ks:docs/service/environment/setup-dev-env-README.md
   - ks:docs/service/environment/setup-for-ecs-README.md
   - ks:docs/service/environment/service-compose-env-README.md
 ---
-# Setup for Docker Compose (Bundles from Assembly Descriptor)
+# Setup for Docker Compose (Bundles from bundles.yaml)
 
 This guide shows how to run **git‑defined bundles** using docker‑compose
 (`all_in_one_kdcube` or `custom-ui-managed-infra`).
@@ -21,8 +21,8 @@ This guide shows how to run **git‑defined bundles** using docker‑compose
 Set these in the **compose `.env`** (paths on the host):
 
 ```bash
-# Assembly descriptor (mounted into /config/assembly.yaml)
-HOST_BUNDLE_DESCRIPTOR_PATH=/absolute/path/to/assembly.yaml
+# Bundles descriptor (mounted into /config/bundles.yaml)
+HOST_BUNDLES_DESCRIPTOR_PATH=/absolute/path/to/bundles.yaml
 
 # Bundles root on host (mounted into /bundles)
 HOST_BUNDLES_PATH=/absolute/path/to/bundles
@@ -50,7 +50,7 @@ cp nginx/conf/nginx_proxy.conf ./config/nginx_proxy.conf
 Set these in the **proc env file**:
 
 ```bash
-AGENTIC_BUNDLES_JSON=/config/assembly.yaml
+AGENTIC_BUNDLES_JSON=/config/bundles.yaml
 BUNDLES_FORCE_ENV_ON_STARTUP=1
 
 BUNDLE_GIT_RESOLUTION_ENABLED=1
@@ -60,6 +60,16 @@ BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS=60
 BUNDLE_GIT_ATOMIC=1
 
 AGENTIC_BUNDLES_ROOT=/bundles
+
+# Secrets sidecar (bundle secrets)
+# Needed for admin UI to write secrets; values are sent to the sidecar.
+SECRETS_URL=http://kdcube-secrets:7777
+SECRETS_ADMIN_TOKEN=${SECRETS_ADMIN_TOKEN}
+
+# Bundle secrets can be read long after startup, so keep sidecar
+# tokens non-expiring for local compose:
+SECRETS_TOKEN_TTL_SECONDS=0
+SECRETS_TOKEN_MAX_USES=0
 
 # Optional (branch refs)
 # BUNDLE_GIT_ALWAYS_PULL=1
@@ -87,7 +97,7 @@ BUNDLES_FORCE_ENV_ON_STARTUP=0
 
 ## 3) Notes
 
-- The processor reads the `bundles` section directly from `assembly.yaml`.
+- The processor reads bundles from `bundles.yaml`.
 - Redis is the runtime source of truth; `BUNDLES_FORCE_ENV_ON_STARTUP=1`
   performs a one‑time overwrite.
 - To enforce gateway config from env on every restart, set
