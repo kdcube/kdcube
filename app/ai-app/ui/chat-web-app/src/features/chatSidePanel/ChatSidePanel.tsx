@@ -4,6 +4,7 @@ import {
     Bot,
     CircleDollarSign,
     CirclePlus,
+    CreditCard,
     Database,
     LoaderCircle,
     MessageSquareMore,
@@ -31,7 +32,8 @@ import {
     useLazyGetConversationBrowserWidgetQuery,
     useLazyGetEconomicsWidgetQuery,
     useLazyGetGatewayWidgetQuery,
-    useLazyGetRedisBrowserWidgetQuery
+    useLazyGetRedisBrowserWidgetQuery,
+    useLazyGetUserBillingWidgetQuery
 } from "../widgetPanels/widgetPanels.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 import {getChatPagePath} from "../chat/configHelper.ts";
@@ -284,7 +286,15 @@ const RedisBrowserPanel = ({visible, className}: WidgetPanelProps) => {
     }, [trigger, lastArg, visible, className]);
 }
 
-type Panels = "conversations" | "economics" | "ai_bundles" | "gateway" | "conv_browser" | "redis_browser" | null
+const UserBillingPanel = ({visible, className}: WidgetPanelProps) => {
+    const [trigger, lastArg] = useLazyGetUserBillingWidgetQuery();
+
+    return useMemo(() => {
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+    }, [trigger, lastArg, visible, className]);
+}
+
+type Panels = "conversations" | "economics" | "ai_bundles" | "gateway" | "conv_browser" | "redis_browser" | "user_billing" | null
 
 const ChatSidePanel = () => {
     const dispatch = useAppDispatch();
@@ -333,6 +343,13 @@ const ChatSidePanel = () => {
                 </MenuButton>
                 <MenuButton
                     onClick={() => {
+                        onPanelButtonClick("user_billing");
+                    }}
+                >
+                    <IconContainer icon={CreditCard} size={1.5}/>
+                </MenuButton>
+                <MenuButton
+                    onClick={() => {
                         onPanelButtonClick("ai_bundles");
                     }}
                 >
@@ -376,6 +393,8 @@ const ChatSidePanel = () => {
                         <ConvBrowserPanel visible={visiblePanel === "conv_browser"}
                                           className={"w-full h-full absolute left-0 top-0"}/>
                         <RedisBrowserPanel visible={visiblePanel === "redis_browser"}
+                                           className={"w-full h-full absolute left-0 top-0"}/>
+                        <UserBillingPanel visible={visiblePanel === "user_billing"}
                                            className={"w-full h-full absolute left-0 top-0"}/>
                     </div>
                 </AnimatedExpander>

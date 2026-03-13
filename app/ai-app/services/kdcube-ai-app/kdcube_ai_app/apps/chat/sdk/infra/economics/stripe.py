@@ -386,26 +386,7 @@ class StripeEconomicsWebhookHandler:
 
     async def handle_webhook(self, *, body: bytes, stripe_signature: Optional[str]) -> Dict[str, Any]:
         event = self._verify_and_parse(body=body, stripe_signature=stripe_signature)
-        etype = event.get("type")
-        obj = (event.get("data") or {}).get("object") or {}
-
-        try:
-            if etype == "payment_intent.succeeded":
-                res = await self._handle_payment_intent_succeeded(event, obj)
-            elif etype == "invoice.paid":
-                res = await self._handle_invoice_paid(event, obj)
-            elif etype == "checkout.session.completed":
-                res = await self._handle_checkout_session_completed(event, obj)
-            elif etype in ("refund.updated", "refund.created"):
-                res = await self._handle_refund_updated(event, obj)
-            elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
-                res = await self._handle_subscription_event(event, obj)
-            else:
-                res = StripeHandleResult(status="ok", action="unsupported", message=f"Event {etype} not processed")
-        except Exception as e:
-            logger.exception("Stripe webhook failed: type=%s", etype)
-            return {"status": "error", "action": "failed", "message": str(e), "event_type": etype}
-
+        res = await self.process_event(event)
         return {
             "status": res.status,
             "action": res.action,
@@ -416,6 +397,31 @@ class StripeEconomicsWebhookHandler:
             "project": res.project,
             "user_id": res.user_id,
         }
+
+    async def process_event(self, event: Dict[str, Any]) -> StripeHandleResult:
+        """
+        Process a Stripe event (either from webhook or from API).
+        Idempotency is handled via external_economics_events table.
+        """
+        etype = event.get("type")
+        obj = (event.get("data") or {}).get("object") or {}
+
+        try:
+            if etype == "payment_intent.succeeded":
+                return await self._handle_payment_intent_succeeded(event, obj)
+            elif etype == "invoice.paid":
+                return await self._handle_invoice_paid(event, obj)
+            elif etype == "checkout.session.completed":
+                return await self._handle_checkout_session_completed(event, obj)
+            elif etype in ("refund.updated", "refund.created"):
+                return await self._handle_refund_updated(event, obj)
+            elif etype in ("customer.subscription.updated", "customer.subscription.deleted"):
+                return await self._handle_subscription_event(event, obj)
+            else:
+                return StripeHandleResult(status="ok", action="unsupported", message=f"Event {etype} not processed")
+        except Exception as e:
+            logger.exception("Stripe event processing failed: type=%s", etype)
+            return StripeHandleResult(status="error", action="failed", message=str(e))
 
     # ---------------- verification ----------------
 
@@ -1679,4 +1685,60 @@ class StripeEconomicsAdminService:
             "reconciled": reconciled,
             "applied": applied,
             "failed": failed,
+        }
+
+    async def reconcile_stripe_events(
+        self,
+        *,
+        handler: StripeEconomicsWebhookHandler,
+        since_timestamp: int,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """
+        Fetch recent events from Stripe API since since_timestamp and process them.
+        Returns result summary and the latest_event_timestamp for state tracking.
+        """
+        stripe = self._stripe()
+        import time
+        
+        # Stripe events are available for 30 days
+        max_back_seconds = 30 * 24 * 3600
+        min_allowed_timestamp = int(time.time()) - max_back_seconds
+        actual_start_time = max(since_timestamp, min_allowed_timestamp)
+
+        logger.info("[Stripe Reconcile] Fetching events created since %s", 
+                    datetime.fromtimestamp(actual_start_time, tz=timezone.utc))
+
+        events = stripe.Event.list(created={"gt": actual_start_time}, limit=limit)
+        
+        reconciled = 0
+        applied = 0
+        skipped = 0
+        errors = 0
+        latest_ts = actual_start_time
+
+        # auto_paging_iter handles pagination automatically
+        for event in events.auto_paging_iter():
+            reconciled += 1
+            if event.created > latest_ts:
+                latest_ts = event.created
+                
+            res = await handler.process_event(event)
+            if res.status == "ok":
+                if res.action == "applied":
+                    applied += 1
+                else:
+                    skipped += 1
+            else:
+                errors += 1
+                logger.error("[Stripe Reconcile] Failed to process event %s (%s): %s", 
+                             event.id, event.type, res.message)
+
+        return {
+            "status": "ok",
+            "reconciled": reconciled,
+            "applied": applied,
+            "skipped": skipped,
+            "errors": errors,
+            "latest_event_timestamp": latest_ts
         }

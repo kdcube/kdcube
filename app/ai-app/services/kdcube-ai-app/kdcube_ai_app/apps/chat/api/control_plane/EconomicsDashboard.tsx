@@ -581,6 +581,11 @@ class ControlPlaneAPI {
         return `${baseUrl}${this.basePath}${path}`;
     }
 
+    private getStripeUrl(path: string): string {
+        const baseUrl = settings.getBaseUrl();
+        return `${baseUrl}/api/economics${path}`;
+    }
+
     private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
         const headers = makeAuthHeaders(options.headers);
 
@@ -894,7 +899,7 @@ class ControlPlaneAPI {
         monthlyPriceCentsHint?: number;
     }): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/subscriptions/create'),
+            this.getStripeUrl('/admin/subscriptions/create'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1091,7 +1096,7 @@ class ControlPlaneAPI {
         notes?: string;
     }): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/wallet/refund'),
+            this.getStripeUrl('/admin/stripe/wallet/refund'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1112,7 +1117,7 @@ class ControlPlaneAPI {
         notes?: string;
     }): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/subscriptions/cancel'),
+            this.getStripeUrl('/admin/subscriptions/cancel'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1128,7 +1133,7 @@ class ControlPlaneAPI {
 
     async reconcileStripe(kind: 'all' | 'wallet_refund' | 'subscription_cancel' = 'all'): Promise<any> {
         const response = await this.fetchWithAuth(
-            this.getFullUrl('/stripe/reconcile'),
+            this.getStripeUrl('/admin/stripe/reconcile'),
             {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1148,7 +1153,7 @@ class ControlPlaneAPI {
         qp.set('limit', String(limit));
         qp.set('offset', String(offset));
         const response = await this.fetchWithAuth(
-            `${this.getFullUrl('/stripe/pending')}?${qp.toString()}`
+            `${this.getStripeUrl('/admin/stripe/pending')}?${qp.toString()}`
         );
         return response.json();
     }
@@ -1165,7 +1170,7 @@ class ControlPlaneAPI {
         qp.set('limit', String(limit));
         qp.set('offset', String(offset));
         const response = await this.fetchWithAuth(
-            `${this.getFullUrl('/economics/pending')}?${qp.toString()}`
+            `${this.getStripeUrl('/admin/stripe/pending')}?${qp.toString()}`
         );
         return response.json();
     }

@@ -4,7 +4,8 @@ import {
     ConversationsBrowserResponse,
     EconomicsResponse,
     GatewayResponse,
-    RedisBrowserResponse
+    RedisBrowserResponse,
+    UserBillingResponse
 } from "./types.ts";
 import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 
@@ -13,6 +14,7 @@ const AIBundlesTag = "ai_bundles"
 const GatewayTag = "gateway"
 const ConversationBrowserTag = "conversation_browser"
 const RedisBrowserTag = "redis_browser"
+const UserBillingTag = "user_billing"
 
 export interface GetWidgetParams {
     tenant: string
@@ -26,7 +28,7 @@ export const widgetPanelsApiSlice = createApi({
             return appendDefaultCredentialsHeader(headers) as Headers;
         }
     }),
-    tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag],
+    tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag, UserBillingTag],
     endpoints: builder => ({
         getEconomicsWidget: builder.query<string, {
             tenant: string,
@@ -123,6 +125,25 @@ export const widgetPanelsApiSlice = createApi({
             },
             providesTags: [RedisBrowserTag],
         }),
+        getUserBillingWidget: builder.query<string, {
+            tenant: string,
+            project: string,
+        }>({
+            query: ({tenant, project}: GetWidgetParams) => {
+                return {
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/user_billing`,
+                    method: 'POST',
+                    headers: [
+                        ["Content-Type", "application/json"]
+                    ],
+                    body: "{}"
+                }
+            },
+            transformResponse(res: UserBillingResponse) {
+                return res.user_billing[0]
+            },
+            providesTags: [UserBillingTag],
+        }),
     })
 })
 
@@ -132,4 +153,5 @@ export const {
     useGetGatewayWidgetQuery, useLazyGetGatewayWidgetQuery,
     useGetConversationBrowserWidgetQuery, useLazyGetConversationBrowserWidgetQuery,
     useGetRedisBrowserWidgetQuery, useLazyGetRedisBrowserWidgetQuery,
+    useGetUserBillingWidgetQuery, useLazyGetUserBillingWidgetQuery,
 } = widgetPanelsApiSlice

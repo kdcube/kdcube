@@ -566,6 +566,35 @@ class BaseEntrypoint:
             self.logger.log(f"Error loading ai_bundles by user {user_id}: {traceback.format_exc()}", "ERROR")
         return [default_html]
 
+    def user_billing(self, user_id: Optional[str] = None, **kwargs):
+        user_type = self.user_type_from_comm_ctx(self.comm)
+        if user_type == "anonymous":
+            return ["<p>No permission. Please log in.</p>"]
+
+        self.logger.log(f"[user_billing]. Generating User Billing Dashboard for user {user_id} ({user_type})")
+
+        default_content = "<p>No user billing interface available.</p>"
+        default_html = f"<div style='margin: 0; position: absolute'>{default_content}</div>"
+
+        try:
+            economics_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.economics")
+            fallback_path = Path(economics_mod.__file__).parent / "UserBillingDashboard.tsx"
+            content = fallback_path.read_text(encoding="utf-8")
+
+            output_content = patch_dashboard(
+                input_content=content,
+                base_url=f"http://localhost:{os.environ.get('CHAT_APP_PORT') or '8010'}",
+                access_token=None,
+                default_tenant=self.settings.TENANT,
+                default_project=self.settings.PROJECT,
+                default_app_bundle_id=self.config.ai_bundle_spec.id,
+            )
+            html = self._render_dashboard_html(content=output_content, title="Billing & Plans")
+            return [html]
+        except Exception:
+            self.logger.log(f"Error loading user_billing by user {user_id}: {traceback.format_exc()}", "ERROR")
+        return [default_html]
+
     def configuration_defaults(self) -> Dict[str, Any]:
         sonnet_45 = "claude-sonnet-4-5-20250929"
         haiku_3 = "claude-3-5-haiku-20241022"

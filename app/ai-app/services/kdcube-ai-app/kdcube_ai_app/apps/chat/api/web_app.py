@@ -669,6 +669,10 @@ mount_opex_router(app)
 from kdcube_ai_app.apps.chat.api.control_plane import mount_control_plane_router
 mount_control_plane_router(app)
 
+# Mount Economics router
+from kdcube_ai_app.apps.chat.api.economics import mount_economics_router
+mount_economics_router(app)
+
 # ================================
 # RUN APPLICATION
 # ================================

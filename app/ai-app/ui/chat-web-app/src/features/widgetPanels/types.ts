@@ -25,3 +25,7 @@ export interface ConversationsBrowserResponse extends PanelResponse {
 export interface RedisBrowserResponse extends PanelResponse {
     redis_browser: string[];
 }
+
+export interface UserBillingResponse extends PanelResponse {
+    user_billing: string[];
+}
