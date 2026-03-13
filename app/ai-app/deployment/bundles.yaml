@@ -10,7 +10,9 @@ bundles:
       module: "app@2-0.entrypoint"
       config:
         model_id: "gpt-4o-mini"
-        features: '{"web_search": true, "web_fetch": true}'
+        features:
+          web_search: true
+          web_fetch: true
         embedding:
           provider: "openai"
           model: "text-embedding-3-small"
