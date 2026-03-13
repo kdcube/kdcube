@@ -1,11 +1,43 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.13.210"
+  ref: "2026.3.13.245"
   description: |
-    This release introduces full bundle props/secrets support across the platform and deployment flow. Bundles now have dedicated bundles.yaml and bundles.secrets.yaml descriptors,
-    secrets are injected into the sidecar with dot‑path keys, and the admin UI supports write‑only secret updates plus clear, effective props editing. Bundle configuration defaults now
-    come from entrypoint.configuration, external overrides are deep‑merged, and the UI shows the real resolution order. Code defaults in the UI are refreshed from the latest bundle code
-    (no stale cache), example bundles were updated to the correct property pattern, and the docs now reflect the new descriptors, override semantics, and bundle developer best
-    practices.
+    Bundle config + secrets update (for bundle developers)
+    We now support dedicated bundle configuration and bundle secrets end-to-end.
+    
+    What's new:
+      - bundles.yaml             — non-secret bundle config
+      - bundles.secrets.yaml     — bundle secrets
+      - Admin UI                 — edit effective props and set secrets (write-only)
+      - In code                  — bundle_props for config, get_secret() for secrets
+    
+    How to configure (CLI / deployment):
+      - Provide bundles.yaml and bundles.secrets.yaml to the CLI or CI/CD
+      - Override order: code defaults → bundles.yaml → runtime overrides
+    
+    In code (bundle entrypoint):
+      - Define defaults via    @property configuration
+      - Use                    super().configuration + setdefault  (so external overrides win)
+      - Read config from       self.bundle_props
+      - Read secrets via       get_secret("bundles.<bundle_id>.secrets.<key>")
+    
+    Docs:
+      - Bundle config & secrets   /docs/service/configuration/bundle-configuration-README.md
+      - Bundle dev guide          /docs/sdk/bundle/bundle-dev-README.md
+      - Bundle ops / registry     /docs/sdk/bundle/bundle-ops-README.md
+    
+    Examples (in repo):
+      - react@2026-02-10-02-44        configuration defaults
+      - react.doc@2026-03-02-22-10    knowledge config
+      - eco@2026-02-18-15-06          economics defaults
+    
+    CI/CD update: 5‑descriptor flow (assembly + secrets + gateway + bundles + bundle secrets)
+    We now treat CI/CD configuration as a 5‑descriptor set:
+  
+    1. assembly.yaml — platform, auth, infra, proxy, frontend
+    2. secrets.yaml — platform secrets (OpenAI, Anthropic, Git, Redis/Postgres secrets, etc.)
+    3. gateway.yaml — gateway capacity + throttling config
+    4. bundles.yaml — bundle registry + non‑secret bundle config
+    5. bundles.secrets.yaml — bundle secrets (dot‑path keys)
   config:
-    version: "2026.3.13.210"
+    version: "2026.3.13.245"
