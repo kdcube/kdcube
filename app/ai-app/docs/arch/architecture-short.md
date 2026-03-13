@@ -83,7 +83,53 @@ graph TD
 
 ---
 
-## 2) Supported client transports
+## 2) ECS / Fargate deployment
+
+In production the services above run as independent **ECS Fargate tasks** inside a private VPC. Docker Compose host‑name aliases are replaced by **AWS Cloud Map DNS** (`*.kdcube.local`). TLS is terminated at the ALB; the proxy listens on HTTP :80 only inside the VPC.
+
+```mermaid
+graph LR
+  CLIENT[Client] -->|"HTTPS :443"| ALB["ALB\n+ ACM cert"]
+
+  subgraph VPC["VPC — private subnets"]
+    ALB -->|"HTTP :80\nX-Forwarded-For"| PROXY["web-proxy\nOpenResty"]
+
+    subgraph ECS["ECS Cluster · Fargate"]
+      PROXY --> WEBUI["web-ui\n:80"]
+      PROXY -->|"unmask_token()"| PROXYLOGIN["proxylogin\n:80"]
+      PROXY --> INGRESS["chat-ingress\n:8010"]
+      PROXY --> PROC["chat-proc\n:8020"]
+      PROXY -.->|optional| KB["kb\n:8000"]
+    end
+
+    CLOUDMAP[/"Cloud Map\nkdcube.local"/] -.->|"A records TTL 10s"| ECS
+
+    INGRESS & PROC & KB --> RDS[(RDS\nPostgreSQL)]
+    INGRESS & PROC --> REDIS[(ElastiCache\nRedis)]
+    PROC & KB --> EFS[(EFS\nbundle storage)]
+    PROXYLOGIN --> SM[Secrets Manager]
+    ECS -->|"awslogs"| CW[CloudWatch Logs]
+  end
+
+  ECR[ECR] -.->|"image pull"| ECS
+```
+
+**What changes vs Docker Compose:**
+
+| | Docker Compose | ECS / Fargate |
+|---|---|---|
+| Service discovery | Docker DNS (`web-ui`, `chat-ingress` …) | Cloud Map (`*.kdcube.local`) |
+| TLS | Proxy-level (Let's Encrypt) | ALB + ACM |
+| Real client IP | `$remote_addr` direct | Recovered from `X-Forwarded-For` (`real_ip_header` active) |
+| Secrets | `.env` / bind-mount | Secrets Manager → task env vars |
+| AWS credentials | `~/.aws` bind-mount | Task IAM role |
+| Shared storage | Host bind-mount | EFS access point |
+
+See `architecture-long.md §2` for the full breakdown, security group topology, IAM roles, and CI/CD pipeline.
+
+---
+
+## 3) Supported client transports
 
 - **SSE**: primary streaming transport (current UI default)
 - **Socket.IO**: fully supported alternative
@@ -146,3 +192,4 @@ sequenceDiagram
 - Economics: [economics-usage.md](../economics/economics-usage.md)
 - Control plane: [instance-config-README.md](../service/maintenance/instance-config-README.md)
 - Monitoring: [README-monitoring-observability.md](../service/README-monitoring-observability.md)
+- ECS deployment: [proxy-ecs-ops-README.md](../arch/proxy/proxy-ecs-ops-README.md)

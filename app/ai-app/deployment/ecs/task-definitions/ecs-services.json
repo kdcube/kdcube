@@ -1,0 +1,186 @@
+{
+  "_comment": "ECS service definitions for all kdcube services. Apply with: aws ecs create-service --cli-input-json file://service-<name>.json. Replace all <PLACEHOLDER> values.",
+
+  "web-proxy": {
+    "cluster": "kdcube",
+    "serviceName": "web-proxy",
+    "taskDefinition": "kdcube-web-proxy",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+      "awsvpcConfiguration": {
+        "subnets": ["<PRIVATE_SUBNET_1>", "<PRIVATE_SUBNET_2>"],
+        "securityGroups": ["<SG_PROXY>"],
+        "assignPublicIp": "DISABLED"
+      }
+    },
+    "loadBalancers": [
+      {
+        "targetGroupArn": "arn:aws:elasticloadbalancing:<REGION>:<ACCOUNT_ID>:targetgroup/kdcube-proxy/<TG_ID>",
+        "containerName": "web-proxy",
+        "containerPort": 80
+      }
+    ],
+    "serviceRegistries": [
+      {
+        "registryArn": "arn:aws:servicediscovery:<REGION>:<ACCOUNT_ID>:service/<SD_SERVICE_ID_PROXY>"
+      }
+    ],
+    "deploymentConfiguration": {
+      "maximumPercent": 200,
+      "minimumHealthyPercent": 100,
+      "deploymentCircuitBreaker": {
+        "enable": true,
+        "rollback": true
+      }
+    },
+    "healthCheckGracePeriodSeconds": 30,
+    "enableExecuteCommand": true
+  },
+
+  "web-ui": {
+    "cluster": "kdcube",
+    "serviceName": "web-ui",
+    "taskDefinition": "kdcube-web-ui",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+      "awsvpcConfiguration": {
+        "subnets": ["<PRIVATE_SUBNET_1>", "<PRIVATE_SUBNET_2>"],
+        "securityGroups": ["<SG_APP>"],
+        "assignPublicIp": "DISABLED"
+      }
+    },
+    "serviceRegistries": [
+      {
+        "registryArn": "arn:aws:servicediscovery:<REGION>:<ACCOUNT_ID>:service/<SD_SERVICE_ID_WEB_UI>"
+      }
+    ],
+    "deploymentConfiguration": {
+      "maximumPercent": 200,
+      "minimumHealthyPercent": 100,
+      "deploymentCircuitBreaker": {
+        "enable": true,
+        "rollback": true
+      }
+    },
+    "enableExecuteCommand": true
+  },
+
+  "chat-ingress": {
+    "cluster": "kdcube",
+    "serviceName": "chat-ingress",
+    "taskDefinition": "kdcube-chat-ingress",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+      "awsvpcConfiguration": {
+        "subnets": ["<PRIVATE_SUBNET_1>", "<PRIVATE_SUBNET_2>"],
+        "securityGroups": ["<SG_APP>"],
+        "assignPublicIp": "DISABLED"
+      }
+    },
+    "serviceRegistries": [
+      {
+        "registryArn": "arn:aws:servicediscovery:<REGION>:<ACCOUNT_ID>:service/<SD_SERVICE_ID_CHAT_INGRESS>"
+      }
+    ],
+    "deploymentConfiguration": {
+      "maximumPercent": 200,
+      "minimumHealthyPercent": 100,
+      "deploymentCircuitBreaker": {
+        "enable": true,
+        "rollback": true
+      }
+    },
+    "enableExecuteCommand": true
+  },
+
+  "chat-proc": {
+    "cluster": "kdcube",
+    "serviceName": "chat-proc",
+    "taskDefinition": "kdcube-chat-proc",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+      "awsvpcConfiguration": {
+        "subnets": ["<PRIVATE_SUBNET_1>", "<PRIVATE_SUBNET_2>"],
+        "securityGroups": ["<SG_APP>"],
+        "assignPublicIp": "DISABLED"
+      }
+    },
+    "serviceRegistries": [
+      {
+        "registryArn": "arn:aws:servicediscovery:<REGION>:<ACCOUNT_ID>:service/<SD_SERVICE_ID_CHAT_PROC>"
+      }
+    ],
+    "deploymentConfiguration": {
+      "maximumPercent": 200,
+      "minimumHealthyPercent": 100,
+      "deploymentCircuitBreaker": {
+        "enable": true,
+        "rollback": true
+      }
+    },
+    "enableExecuteCommand": true
+  },
+
+  "proxylogin": {
+    "cluster": "kdcube",
+    "serviceName": "proxylogin",
+    "taskDefinition": "kdcube-proxylogin",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+      "awsvpcConfiguration": {
+        "subnets": ["<PRIVATE_SUBNET_1>", "<PRIVATE_SUBNET_2>"],
+        "securityGroups": ["<SG_APP>"],
+        "assignPublicIp": "DISABLED"
+      }
+    },
+    "serviceRegistries": [
+      {
+        "registryArn": "arn:aws:servicediscovery:<REGION>:<ACCOUNT_ID>:service/<SD_SERVICE_ID_PROXYLOGIN>"
+      }
+    ],
+    "deploymentConfiguration": {
+      "maximumPercent": 200,
+      "minimumHealthyPercent": 100,
+      "deploymentCircuitBreaker": {
+        "enable": true,
+        "rollback": true
+      }
+    },
+    "enableExecuteCommand": true
+  },
+
+  "kb": {
+    "_comment": "Optional — mirrors commented-out /api/kb/ block in nginx config. Enable when KB service is active.",
+    "cluster": "kdcube",
+    "serviceName": "kb",
+    "taskDefinition": "kdcube-kb",
+    "desiredCount": 1,
+    "launchType": "FARGATE",
+    "networkConfiguration": {
+      "awsvpcConfiguration": {
+        "subnets": ["<PRIVATE_SUBNET_1>", "<PRIVATE_SUBNET_2>"],
+        "securityGroups": ["<SG_APP>"],
+        "assignPublicIp": "DISABLED"
+      }
+    },
+    "serviceRegistries": [
+      {
+        "registryArn": "arn:aws:servicediscovery:<REGION>:<ACCOUNT_ID>:service/<SD_SERVICE_ID_KB>"
+      }
+    ],
+    "deploymentConfiguration": {
+      "maximumPercent": 200,
+      "minimumHealthyPercent": 100,
+      "deploymentCircuitBreaker": {
+        "enable": true,
+        "rollback": true
+      }
+    },
+    "enableExecuteCommand": true
+  }
+}
