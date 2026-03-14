@@ -7,7 +7,11 @@ File: chat/proc/rest/integrations/__init__.py
 """
 from fastapi import FastAPI
 
-from .integrations import router as integrations_router, admin_router as integrations_admin_router
+from .integrations import (
+    router as integrations_router,
+    admin_router as integrations_admin_router,
+    internal_router as integrations_internal_router,
+)
 
 
 def mount_integrations_routers(app: FastAPI):
@@ -16,6 +20,7 @@ def mount_integrations_routers(app: FastAPI):
     """
     integrations_router.state = app.state
     integrations_admin_router.state = app.state
+    integrations_internal_router.state = app.state
     app.include_router(
         integrations_router,
         prefix="/api/integrations",
@@ -25,6 +30,13 @@ def mount_integrations_routers(app: FastAPI):
         integrations_admin_router,
         prefix="",
         tags=["Integrations Admin"],
+    )
+    # Internal routes — localhost only, enforced at the endpoint level.
+    # Never proxied by nginx (/internal/ has no nginx location block).
+    app.include_router(
+        integrations_internal_router,
+        prefix="",
+        tags=["Integrations Internal"],
     )
     return app
 

@@ -8,6 +8,11 @@ context:
   tenant: "demo-tenant"
   project: "demo-project"
 
+# for cloud
+storage:
+  kdcube: "s3://../data/kdcube"
+  bundles: "s3://../data/kdcube"
+
 auth:
   type: "simple"  # "simple" | "cognito" | "delegated"
   cognito:

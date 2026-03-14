@@ -81,12 +81,17 @@ def _get_app_redis(request: Request):
     if redis is None:
         redis = getattr(admin_router.state, "redis_async", None)
     if redis is None:
+        redis = getattr(internal_router.state, "redis_async", None)
+    if redis is None:
         raise RuntimeError("redis_async is not initialized on app.state")
     return redis
 
 
 router = APIRouter()
 admin_router = APIRouter()
+internal_router = APIRouter()
+
+_LOCALHOST = {"127.0.0.1", "::1"}
 
 
 class BundleSuggestionsRequest(BaseModel):
@@ -585,6 +590,39 @@ async def admin_set_bundles(
     request: Request,
     session: UserSession = Depends(auth_without_pressure()),
 ):
+    return await _do_set_bundles(payload, request, session)
+
+
+@internal_router.post("/internal/bundles/update", status_code=200)
+async def internal_set_bundles(payload: AdminBundlesUpdateRequest, request: Request):
+    """
+    Localhost-only bundle update endpoint for CI automation (ecs-bundles-update GA).
+    Reachable only via ECS Exec (curl localhost:8020/internal/bundles/update).
+    Refuses all connections that did not originate from 127.0.0.1 / ::1.
+    """
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in _LOCALHOST:
+        raise HTTPException(status_code=403, detail="Internal endpoint: localhost only")
+    # Delegate to the same logic used by the admin endpoint, synthesising
+    # a minimal session so the audit field in the Redis message is meaningful.
+    from kdcube_ai_app.auth.sessions import UserSession, UserType
+    automation_session = UserSession(
+        session_id="internal-automation",
+        user_type=UserType.PRIVILEGED,
+        user_id="ci-automation",
+        username="ci-automation",
+        roles=[],
+        permissions=[],
+    )
+    return await _do_set_bundles(payload, request, automation_session)
+
+
+async def _do_set_bundles(
+    payload: AdminBundlesUpdateRequest,
+    request: Request,
+    session: UserSession,
+):
+    """Shared implementation for admin and internal bundle update endpoints."""
     settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
