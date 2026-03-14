@@ -5,7 +5,6 @@
 
 import asyncio
 import uuid
-import os
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -48,16 +47,13 @@ async def _get_redis() -> Optional[aioredis.Redis]:
 # =============================================================================
 
 def stripe_reconcile_enabled() -> bool:
-    return get_secret("STRIPE_RECONCILE_ENABLED", "1").lower() in {"1", "true", "yes"}
+    return bool(get_settings().STRIPE_RECONCILE_ENABLED)
 
 def _get_stripe_reconcile_cron_expression() -> str:
-    return get_secret("STRIPE_RECONCILE_CRON", "45 * * * *")
+    return get_settings().STRIPE_RECONCILE_CRON
 
 def _stripe_reconcile_lock_ttl_seconds() -> int:
-    try:
-        return int(get_secret("STRIPE_RECONCILE_LOCK_TTL_SECONDS", "900"))
-    except Exception:
-        return 900
+    return int(get_settings().STRIPE_RECONCILE_LOCK_TTL_SECONDS)
 
 def _compute_next_stripe_reconcile_run(now: datetime) -> datetime:
     expr = _get_stripe_reconcile_cron_expression()
@@ -136,7 +132,7 @@ async def run_stripe_reconcile_sweep_once(*, actor: str = "scheduler") -> dict:
             subscription_mgr=subscription_mgr,
             default_tenant=tenant,
             default_project=project,
-            stripe_webhook_secret=get_secret("STRIPE_WEBHOOK_SECRET"),
+            stripe_webhook_secret=get_secret("services.stripe.webhook_secret"),
         )
 
         admin_svc = StripeEconomicsAdminService(
@@ -211,30 +207,16 @@ async def stripe_reconcile_scheduler_loop() -> None:
 # =============================================================================
 
 def subscription_rollover_enabled() -> bool:
-    try:
-        return bool(get_settings().SUBSCRIPTION_ROLLOVER_ENABLED)
-    except Exception:
-        return os.environ.get("SUBSCRIPTION_ROLLOVER_ENABLED", "1").lower() in {"1", "true", "yes"}
+    return bool(get_settings().SUBSCRIPTION_ROLLOVER_ENABLED)
 
 def _get_subscription_rollover_cron_expression() -> str:
-    expr = None
-    try:
-        expr = getattr(get_settings(), "SUBSCRIPTION_ROLLOVER_CRON", None)
-    except Exception:
-        pass
-    return expr or os.getenv("SUBSCRIPTION_ROLLOVER_CRON") or "15 * * * *"
+    return get_settings().SUBSCRIPTION_ROLLOVER_CRON
 
 def _subscription_rollover_lock_ttl_seconds() -> int:
-    try:
-        return int(get_settings().SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS)
-    except Exception:
-        return int(os.environ.get("SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS", "900") or "900")
+    return int(get_settings().SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS)
 
 def _subscription_rollover_sweep_limit() -> int:
-    try:
-        return int(get_settings().SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT)
-    except Exception:
-        return int(os.environ.get("SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT", "500") or "500")
+    return int(get_settings().SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT)
 
 def _compute_next_subscription_rollover_run(now: datetime) -> datetime:
     expr = _get_subscription_rollover_cron_expression()

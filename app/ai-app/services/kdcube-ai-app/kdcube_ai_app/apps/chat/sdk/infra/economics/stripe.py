@@ -154,6 +154,80 @@ class StripeSubscriptionService:
         if not stripe_price_id:
             raise ValueError("stripe_price_id is required (plan missing stripe_price_id)")
 
+        # Cancel existing Stripe subscription if user is switching plans.
+        # Without this, both subscriptions remain active in Stripe and the user
+        # gets double-charged at the next billing cycle.
+        # We also rollover the unused balance synchronously here, before cancelling in Stripe,
+        # to avoid the race condition where customer.subscription.deleted webhook arrives
+        # after the new subscription has already overwritten the DB record.
+        existing_sub = await self.subscription_mgr.get_subscription(
+            tenant=tenant, project=project, user_id=user_id
+        )
+        if (
+            existing_sub
+            and existing_sub.provider == "stripe"
+            and existing_sub.stripe_subscription_id
+            and existing_sub.status == "active"
+        ):
+            old_stripe_sub_id = existing_sub.stripe_subscription_id
+
+            # Rollover unused balance to project budget before cancelling.
+            if existing_sub.next_charge_at:
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
+                    period_desc = build_subscription_period_descriptor(
+                        tenant=tenant,
+                        project=project,
+                        user_id=user_id,
+                        provider=existing_sub.provider,
+                        stripe_subscription_id=old_stripe_sub_id,
+                        period_end=existing_sub.next_charge_at,
+                        period_start=existing_sub.last_charged_at,
+                    )
+                    sub_budget = SubscriptionBudgetLimiter(
+                        pg_pool=self.pg_pool,
+                        tenant=tenant,
+                        project=project,
+                        user_id=user_id,
+                        period_key=period_desc["period_key"],
+                        period_start=period_desc["period_start"],
+                        period_end=period_desc["period_end"],
+                    )
+                    proj_budget = ProjectBudgetLimiter(
+                        redis=None, pg_pool=self.pg_pool, tenant=tenant, project=project
+                    )
+                    await self.subscription_mgr.rollover_unused_balance_once(
+                        tenant=tenant,
+                        project=project,
+                        user_id=user_id,
+                        subscription_budget=sub_budget,
+                        project_budget=proj_budget,
+                        period_key=period_desc["period_key"],
+                        period_end=period_desc["period_end"],
+                        actor="plan_change",
+                    )
+                    logger.info(
+                        "Rolled over unused balance for subscription %s (user %s, plan change to %s)",
+                        old_stripe_sub_id, user_id, plan_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to rollover unused balance for subscription %s (user %s) before plan change",
+                        old_stripe_sub_id, user_id,
+                    )
+
+            try:
+                stripe.Subscription.cancel(old_stripe_sub_id)
+                logger.info(
+                    "Cancelled old Stripe subscription %s for user %s (plan change to %s)",
+                    old_stripe_sub_id, user_id, plan_id,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to cancel old Stripe subscription %s before creating new one for user %s",
+                    old_stripe_sub_id, user_id,
+                )
+
         # Ensure customer
         customer_id = stripe_customer_id
         if not customer_id:
@@ -209,8 +283,8 @@ class StripeSubscriptionService:
                     ) VALUES (
                       $1,$2,$3,
                       $4,$5,$6,
-                      NOW(), $8, NULL,
-                      'stripe', $9, $10
+                      NOW(), $7, NULL,
+                      'stripe', $8, $9
                     )
                     ON CONFLICT (tenant, project, user_id)
                     DO UPDATE SET
@@ -866,6 +940,29 @@ class StripeEconomicsWebhookHandler:
                 except Exception as e:
                     await self._mark_ext_event_failed(conn, kind="subscription_topup", external_id=topup_external_id, error=str(e))
                     raise
+
+        # Cancel the old Stripe subscription if the user switched plans via Checkout.
+        # prev_sub here holds the state before this invoice's upsert (fetched at tx open time).
+        # If the subscription IDs differ, a new subscription replaced the old one — cancel it now.
+        if (
+            prev_sub
+            and prev_sub.stripe_subscription_id
+            and stripe_subscription_id
+            and prev_sub.stripe_subscription_id != stripe_subscription_id
+        ):
+            stripe_client = self._stripe()
+            if stripe_client:
+                try:
+                    stripe_client.Subscription.cancel(prev_sub.stripe_subscription_id)
+                    logger.info(
+                        "[invoice.paid] Cancelled old Stripe subscription %s for user %s (switched to %s)",
+                        prev_sub.stripe_subscription_id, user_id, stripe_subscription_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        "[invoice.paid] Failed to cancel old Stripe subscription %s for user %s",
+                        prev_sub.stripe_subscription_id, user_id,
+                    )
 
         return StripeHandleResult(
             status="ok",

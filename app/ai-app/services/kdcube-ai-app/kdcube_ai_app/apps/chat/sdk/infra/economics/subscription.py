@@ -756,7 +756,7 @@ class SubscriptionManager:
                 SELECT *
                 FROM {tbl}
                 WHERE tenant=$1 AND project=$2
-                  AND status='active'
+                  AND status IN ('active', 'past_due', 'unpaid')
                   AND monthly_price_cents > 0
                   AND next_charge_at IS NOT NULL
                   AND next_charge_at <= $3

@@ -69,7 +69,7 @@ def _usd_from_cents(cents: Optional[int]) -> Optional[float]:
 
 
 def _get_stripe():
-    api_key = get_secret("STRIPE_SECRET_KEY") or get_secret("STRIPE_API_KEY")
+    api_key = get_secret("services.stripe.secret_key")
     if not api_key:
         raise HTTPException(status_code=500, detail="Stripe API key not configured")
     stripe.api_key = api_key

@@ -8,6 +8,7 @@ see_also:
   - ks:docs/economics/economic-README.md
   - ks:docs/economics/stripe-README.md
   - ks:docs/economics/eco-admin-README.md
+  - ks:docs/service/configuration/service-config-README.md
 ---
 # Economics Operations (Schema + Jobs + Config)
 
@@ -62,7 +63,43 @@ Request lineage:
 
 ## Maintenance Jobs
 
-### 1) Subscription rollover sweep
+### 1) Stripe reconcile (scheduled)
+
+Purpose:
+
+- Replay Stripe events that were missed due to service downtime, restarts, or webhook delivery failures.
+- Recover wallet top-ups and subscription updates that Stripe fired but the service never processed.
+
+Entry points:
+
+- Automatic: `stripe_reconcile_scheduler_loop()` — background asyncio task, started at app lifespan.
+- Manual trigger: `POST /api/economics/admin/stripe/reconcile`
+- Code: `apps/chat/api/economics/routines.py` → `run_stripe_reconcile_sweep_once()`
+
+Configuration (env vars):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `STRIPE_RECONCILE_ENABLED` | `true` | Enable/disable the scheduler |
+| `STRIPE_RECONCILE_CRON` | `45 * * * *` | Cron schedule (UTC) |
+| `STRIPE_RECONCILE_LOCK_TTL_SECONDS` | `900` | Distributed lock TTL |
+
+Redis keys:
+
+| Key | Purpose |
+|-----|---------|
+| `stripe:reconcile:{tenant}:{project}` | Distributed lock (NX + TTL) — prevents concurrent runs |
+| `stripe:reconcile:last_ts:{tenant}:{project}` | Watermark: Unix timestamp of last processed Stripe event |
+
+Notes:
+
+- Events are fetched from Stripe ordered ascending by `created` (oldest first) to guarantee
+  causal replay order (e.g. `invoice.paid` before `customer.subscription.updated`).
+- First run defaults watermark to `now - 24h`.
+- After each sweep, watermark is advanced to `max(event.created)` from the batch.
+- All event processing is idempotent via `external_economics_events` (keyed by Stripe event ID).
+
+### 2) Subscription rollover sweep (scheduled)
 
 Purpose:
 
@@ -70,49 +107,54 @@ Purpose:
 - Move unused subscription balance into project budget.
 - Record idempotent internal events.
 
-Entry point:
+Entry points:
 
-- `SubscriptionManager.sweep_due_subscription_rollovers(...)`
-- Control plane endpoint: `POST /subscriptions/rollover/sweep`
+- Automatic: `subscription_rollover_scheduler_loop()` — background asyncio task, started at app lifespan.
+- Manual trigger: `POST /api/economics/admin/subscriptions/rollover/sweep`
+- Code: `apps/chat/api/economics/routines.py` → `run_subscription_rollover_sweep_once()`
+
+Configuration (env vars):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `SUBSCRIPTION_ROLLOVER_ENABLED` | `true` | Enable/disable the scheduler |
+| `SUBSCRIPTION_ROLLOVER_CRON` | `15 * * * *` | Cron schedule (UTC) |
+| `SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS` | `900` | Distributed lock TTL |
+| `SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT` | `500` | Max subscriptions per invocation |
+
+Redis keys:
+
+| Key | Purpose |
+|-----|---------|
+| `subscription:rollover:{tenant}:{project}` | Distributed lock (NX + TTL) — prevents concurrent runs |
 
 Notes:
 
 - Rollover is idempotent per period key.
-- Rollover uses row locks and the `external_economics_events` table to prevent double processing.
+- Sweeps in batches of `SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT`; loops until batch < limit.
+- Uses row locks and `external_economics_events` to prevent double processing.
 
-### 2) Reap expired subscription reservations
+### 3) Reap expired subscription reservations
 
 Purpose:
 
 - Clear stale reservation holds whose `expires_at` is in the past.
 - Release held balance back to the subscription period.
 - Prevents ghost reservations from blocking new requests.
- - Balances ignore expired reservations, but reaping keeps tables clean.
+- Balances ignore expired reservations, but reaping keeps tables clean.
 
 Entry points:
 
 - Runtime entrypoint calls reaper before reading balances (best effort).
-- Control plane endpoint: `POST /subscriptions/reservations/reap` (single user)
-- Control plane endpoint: `POST /subscriptions/reservations/reap-all` (entire tenant/project)
-
-### 3) Stripe pending reconcile
-
-Purpose:
-
-- Resolve pending wallet refunds and subscription cancels.
-- Recover from missed webhooks.
-
-Entry point:
-
-- `StripeEconomicsAdminService.reconcile_pending_requests(...)`
-- Control plane endpoint: `POST /stripe/reconcile`
+- `POST /api/economics/admin/subscriptions/reservations/reap` (single user)
+- `POST /api/economics/admin/subscriptions/reservations/reap-all` (entire tenant/project)
 
 ### 4) Admin wallet refund and cancel flows
 
 These are not scheduled jobs but operational actions:
 
-- `POST /wallet/refund` — immediate credit removal; Stripe refund finalized via webhook or reconcile
-- `POST /subscriptions/cancel` — cancel at period end; status finalized via webhook or reconcile
+- `POST /api/economics/admin/wallet/refund` — immediate credit removal; Stripe refund finalized via webhook or reconcile
+- `POST /api/economics/admin/subscriptions/cancel` — cancel at period end; status finalized via webhook or reconcile
 
 ## Email Notifications
 
@@ -145,16 +187,32 @@ At minimum, economics requires:
 
 Recommended routine checks:
 
-- Pending Stripe events: `GET /stripe/pending`
-- Pending internal economics events: `GET /economics/pending`
-- Subscription balances for paid users: `GET /subscriptions/user/{user_id}`
-- Expired reservation cleanup: `POST /subscriptions/reservations/reap-all`
-- Project budget balance: `GET /app-budget/status`
+- Pending Stripe events: `GET /api/economics/admin/stripe/pending`
+- Subscription balances for paid users: `GET /api/economics/admin/subscriptions/user/{user_id}`
+- Expired reservation cleanup: `POST /api/economics/admin/subscriptions/reservations/reap-all`
+- Project budget balance: `GET /api/economics/admin/app-budget/status`
 
-Redis note:
-- Hourly token counters are stored as minute buckets under `toks:hour:bucket:{epoch_minute}` (rolling 60‑minute window).
-- Global quota scope uses bundle id `__project__` (subject_id already includes tenant/project).
-- Bundle index set is stored at `kdcube:economics:rl:bundles:{subject_id}` and refreshed on every commit (90‑day TTL).
+## Redis Keys Reference
+
+### Rate limiting
+
+| Key pattern | Purpose |
+|-------------|---------|
+| `toks:hour:bucket:{epoch_minute}` | Hourly token counter (rolling 60-min window, minute buckets) |
+| `kdcube:economics:rl:bundles:{subject_id}` | Bundle index set; refreshed on every commit (90-day TTL) |
+
+Global quota scope uses bundle id `__project__` (subject_id already includes tenant/project).
+
+### Scheduler distributed locks and state
+
+| Key pattern | Job | Purpose |
+|-------------|-----|---------|
+| `stripe:reconcile:{tenant}:{project}` | Stripe reconcile | Distributed lock (NX + TTL) |
+| `stripe:reconcile:last_ts:{tenant}:{project}` | Stripe reconcile | Watermark: last processed Stripe event timestamp |
+| `subscription:rollover:{tenant}:{project}` | Subscription rollover | Distributed lock (NX + TTL) |
+
+Lock TTLs are configured via `STRIPE_RECONCILE_LOCK_TTL_SECONDS` and
+`SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS` (default: 900s each).
 
 ## Deployment Notes
 

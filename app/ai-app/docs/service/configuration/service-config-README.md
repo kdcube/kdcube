@@ -148,6 +148,13 @@ Token TTL/uses:
 | `CLAMAV_HOST` | n/a |
 | `CLAMAV_PORT` | n/a |
 | `OPEX_AGG_CRON` | Analytics scheduled Analytics. Accounting events aggregation schedule |
+| `STRIPE_RECONCILE_ENABLED` | Enable/disable Stripe reconcile job (default `true`) |
+| `STRIPE_RECONCILE_CRON` | Stripe reconcile schedule (default `45 * * * *`) |
+| `STRIPE_RECONCILE_LOCK_TTL_SECONDS` | Distributed lock TTL for reconcile job (default `900`) |
+| `SUBSCRIPTION_ROLLOVER_ENABLED` | Enable/disable subscription rollover job (default `true`) |
+| `SUBSCRIPTION_ROLLOVER_CRON` | Subscription rollover schedule (default `15 * * * *`) |
+| `SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS` | Distributed lock TTL for rollover job (default `900`) |
+| `SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT` | Max subscriptions processed per rollover run (default `500`) |
 | `LOG_LEVEL` | Log |
 | `LOG_MAX_MB` | n/a |
 | `LOG_BACKUP_COUNT` | n/a |
@@ -689,12 +696,19 @@ Retention is **1 hour**. Metrics are exposed via:
 
 These settings are now **first‑class** in `Settings` (`apps/chat/sdk/config.py`).
 
-| Setting                           | Default     | Purpose                                   |
-|-----------------------------------|-------------|-------------------------------------------|
-| `OPEX_AGG_CRON`                   | `0 3 * * *` | Schedule for daily accounting aggregation |
-| `BUNDLE_CLEANUP_ENABLED`          | `true`      | Enable periodic git bundle cleanup        |
-| `BUNDLE_CLEANUP_INTERVAL_SECONDS` | `3600`      | Cleanup interval                          |
-| `BUNDLE_CLEANUP_LOCK_TTL_SECONDS` | `900`       | Redis lock TTL for cleanup loop           |
+| Setting                                  | Default        | Purpose                                   |
+|------------------------------------------|----------------|-------------------------------------------|
+| `OPEX_AGG_CRON`                          | `0 3 * * *`    | Schedule for daily accounting aggregation |
+| `BUNDLE_CLEANUP_ENABLED`                 | `true`         | Enable periodic git bundle cleanup        |
+| `BUNDLE_CLEANUP_INTERVAL_SECONDS`        | `3600`         | Cleanup interval                          |
+| `BUNDLE_CLEANUP_LOCK_TTL_SECONDS`        | `900`          | Redis lock TTL for cleanup loop           |
+| `STRIPE_RECONCILE_ENABLED`               | `true`         | Enable/disable Stripe reconcile job       |
+| `STRIPE_RECONCILE_CRON`                  | `45 * * * *`   | Stripe reconcile schedule                 |
+| `STRIPE_RECONCILE_LOCK_TTL_SECONDS`      | `900`          | Redis lock TTL for reconcile job          |
+| `SUBSCRIPTION_ROLLOVER_ENABLED`          | `true`         | Enable/disable subscription rollover job  |
+| `SUBSCRIPTION_ROLLOVER_CRON`             | `15 * * * *`   | Subscription rollover schedule            |
+| `SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS` | `900`          | Redis lock TTL for rollover job           |
+| `SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT`      | `500`          | Max subscriptions per rollover run        |
 
 The cleanup loop uses Redis locks to avoid multi‑worker collisions.
 
@@ -717,13 +731,19 @@ Plan quota seeding
 
 Stripe configuration
 
-| Setting                 | Default | Purpose                        |
-|-------------------------| --- |--------------------------------|
-| `STRIPE_SECRET_KEY`     | _(unset)_ | Stripe API key (preferred)     |
-| `STRIPE_API_KEY`        | _(unset)_ | Fallback Stripe API key        |
-| `STRIPE_WEBHOOK_SECRET` | _(unset)_ | Webhook signature verification |
+Stripe secrets are managed via the **secrets sidecar** using dot‑path keys (see
+[code-config-secrets-README.md](code-config-secrets-README.md)).
+Set them in `secrets.yaml` and inject via the CLI — do **not** put them in `.env` files.
 
-If `STRIPE_WEBHOOK_SECRET` is not set, webhook payloads are accepted without signature verification (not recommended).
+| Dot‑path key                    | Purpose                        |
+|---------------------------------|--------------------------------|
+| `services.stripe.secret_key`    | Stripe API key                 |
+| `services.stripe.webhook_secret`| Webhook signature verification |
+
+Legacy env vars (`STRIPE_SECRET_KEY`, `STRIPE_API_KEY`, `STRIPE_WEBHOOK_SECRET`) are
+still supported as fallback aliases but are deprecated — use dot‑path keys in new code.
+
+If `services.stripe.webhook_secret` is not set, webhook payloads are accepted without signature verification (not recommended).
 
 Admin email notifications
 

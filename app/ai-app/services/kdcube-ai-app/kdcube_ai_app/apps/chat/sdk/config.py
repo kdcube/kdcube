@@ -187,6 +187,11 @@ class Settings(BaseSettings):
     SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS: int = Field(default=900)
     SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT: int = Field(default=500)
 
+    # Stripe reconcile scheduler
+    STRIPE_RECONCILE_ENABLED: bool = Field(default=True)
+    STRIPE_RECONCILE_CRON: str = Field(default="45 * * * *")
+    STRIPE_RECONCILE_LOCK_TTL_SECONDS: int = Field(default=900)
+
     # Bundle cleanup + ref tracking
     BUNDLE_CLEANUP_ENABLED: bool = Field(default=True)
     BUNDLE_CLEANUP_INTERVAL_SECONDS: int = Field(default=3600)

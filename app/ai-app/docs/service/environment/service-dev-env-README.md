@@ -70,6 +70,13 @@ to overwrite cached gateway config from env on each start.
 | `OIDC_SERVICE_ADMIN_*` | Service account for auth |
 | `APP_AV_SCAN` / `APP_AV_TIMEOUT_S` / `CLAMAV_HOST` / `CLAMAV_PORT` | AV scan settings |
 | `OPEX_AGG_CRON` | Accounting aggregation schedule |
+| `STRIPE_RECONCILE_ENABLED` | Enable/disable Stripe reconcile job (default `true`) |
+| `STRIPE_RECONCILE_CRON` | Stripe reconcile schedule (default `45 * * * *`) |
+| `STRIPE_RECONCILE_LOCK_TTL_SECONDS` | Distributed lock TTL for reconcile job (default `900`) |
+| `SUBSCRIPTION_ROLLOVER_ENABLED` | Enable/disable subscription rollover job (default `true`) |
+| `SUBSCRIPTION_ROLLOVER_CRON` | Subscription rollover schedule (default `15 * * * *`) |
+| `SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS` | Distributed lock TTL for rollover job (default `900`) |
+| `SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT` | Max subscriptions processed per rollover run (default `500`) |
 
 ## Proc‑Only (`chat-proc`)
 

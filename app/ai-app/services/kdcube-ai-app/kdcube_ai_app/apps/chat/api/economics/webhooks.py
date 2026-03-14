@@ -62,7 +62,7 @@ async def stripe_webhook(
         subscription_mgr=subscription_mgr,
         default_tenant=settings.TENANT,
         default_project=settings.PROJECT,
-        stripe_webhook_secret=get_secret("STRIPE_WEBHOOK_SECRET"),
+        stripe_webhook_secret=get_secret("services.stripe.webhook_secret"),
     )
 
     body = await request.body()
