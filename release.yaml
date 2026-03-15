@@ -1,43 +1,33 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.15.435"
+  ref: "2026.3.15.2147"
   description: |
-    Bundle config + secrets update (for bundle developers)
-    We now support dedicated bundle configuration and bundle secrets end-to-end.
-    
-    What's new:
-      - bundles.yaml             — non-secret bundle config
-      - bundles.secrets.yaml     — bundle secrets
-      - Admin UI                 — edit effective props and set secrets (write-only)
-      - In code                  — bundle_props for config, get_secret() for secrets
-    
-    How to configure (CLI / deployment):
-      - Provide bundles.yaml and bundles.secrets.yaml to the CLI or CI/CD
-      - Override order: code defaults → bundles.yaml → runtime overrides
-    
-    In code (bundle entrypoint):
-      - Define defaults via    @property configuration
-      - Use                    super().configuration + setdefault  (so external overrides win)
-      - Read config from       self.bundle_props
-      - Read secrets via       get_secret("bundles.<bundle_id>.secrets.<key>")
-    
-    Docs:
-      - Bundle config & secrets   /docs/service/configuration/bundle-configuration-README.md
-      - Bundle dev guide          /docs/sdk/bundle/bundle-dev-README.md
-      - Bundle ops / registry     /docs/sdk/bundle/bundle-ops-README.md
-    
-    Examples (in repo):
-      - react@2026-02-10-02-44        configuration defaults
-      - react.doc@2026-03-02-22-10    knowledge config
-      - eco@2026-02-18-15-06          economics defaults
-    
-    CI/CD update: 5‑descriptor flow (assembly + secrets + gateway + bundles + bundle secrets)
-    We now treat CI/CD configuration as a 5‑descriptor set:
+    This release contains two main changes: a packaging/runtime update for the web proxy image, and a proc-service Redis reliability refactor focused on long-running workers in
+    production.
   
-    1. assembly.yaml — platform, auth, infra, proxy, frontend
-    2. secrets.yaml — platform secrets (OpenAI, Anthropic, Git, Redis/Postgres secrets, etc.)
-    3. gateway.yaml — gateway capacity + throttling config
-    4. bundles.yaml — bundle registry + non‑secret bundle config
-    5. bundles.secrets.yaml — bundle secrets (dot‑path keys)
+    The web proxy image is now deployment-agnostic. We removed build-time baking of a specific Nginx config into the kdcube-web-proxy image and switched the container to load
+    configuration at runtime instead. In ECS/Fargate, the container now reads /nginx-config/nginx.conf.template and renders the final config with envsubst using APP_DOMAIN and ALB_CIDR.
+    In local docker-compose setups, the existing bind-mounted nginx.conf path continues to work without regression. The release workflow was simplified accordingly and no longer passes
+    NGINX_CONFIG_FILE_PATH as a build argument. Operationally, this means the same proxy image can be reused across environments, and Nginx configuration can be supplied by mounted
+    storage instead of requiring an image rebuild.
+  
+    The proc service was refactored to use a single shared async Redis pool per worker process and to recover more safely from degraded or stale ElastiCache connections. Previously,
+    proc could initialize multiple Redis client pools in the same process and long-lived queue/pubsub operations could remain stuck until the service was restarted. With this release,
+    proc now recreates steady-state Redis access around one shared async client, aligns pool sizing with gateway-config pools.redis_max_connections, and removes the proc runtime
+    dependency on separate redis_async_decode and redis_sync clients. Gateway-config cache and pub/sub flows were also moved onto the same bytes-based async Redis path so they do not
+    silently create an extra async pool.
+  
+    Queue consumption and config-listener behavior were hardened for long-lived operation. The processor now wraps blocking Redis operations such as queue BRPOP and pub/sub get_message
+    in explicit client-side timeouts, records queue/config loop lag and the last Redis-related error, and exposes this in heartbeat metadata. When Redis operations exceed those bounds
+    or fail abnormally, proc now disconnects the current shared async pool sockets so the next Redis operation reconnects automatically through the same client once ElastiCache is
+    healthy again. This is intended to address the production failure mode where the proc service stayed alive but stopped draining the queue until restart. Heartbeat reporting was also
+    improved so processor load and runtime metadata are visible to monitoring instead of reporting a healthy-but-stalled worker.
+  
+    Operator Notes
+  
+    - Expected benefit: proc workers should self-recover from stale or broken long-lived Redis connections without requiring a full service restart.
+    - Connection budgeting is now cleaner for proc: steady-state Redis usage is based on one shared async pool per worker process, plus any separate short-lived connections created by
+      spawned execution tasks.
+    - One caveat remains: if pools.redis_max_connections changes in gateway config at runtime, existing proc workers will keep the pool size they started with until restart.
   config:
-    version: "2026.3.15.435"
+    version: "2026.3.15.2147"
