@@ -10,6 +10,8 @@ from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
+from kdcube_ai_app.infra.secrets import get_secrets_manager
+
 _SECRET_LOG = logging.getLogger("kdcube.settings.secrets")
 _SECRET_LOGGED: set[str] = set()
 
@@ -48,22 +50,6 @@ def _log_secret_status(key: str, value: str | None, source: str | None) -> None:
         _SECRET_LOG.info("Secret %s loaded (%s)", key, source or "unknown")
     else:
         _SECRET_LOG.warning("Secret %s not set", key)
-
-
-def _fetch_secret_from_sidecar(key: str, *, url: str | None, token: str | None) -> str | None:
-    if not url:
-        return None
-    try:
-        import httpx
-        headers = {}
-        if token:
-            headers["X-KDCUBE-SECRET-TOKEN"] = token
-        resp = httpx.get(f"{url}/secret/{key}", timeout=2.0, headers=headers)
-        if resp.status_code == 200:
-            return (resp.json() or {}).get("value")
-    except Exception:
-        return None
-    return None
 
 
 def get_secret(key: str, default: str | None = None) -> str | None:
@@ -200,9 +186,10 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         def _fetch_secret(key: str) -> str | None:
-            url = os.getenv("SECRETS_URL") or self.SECRETS_URL
-            token = os.getenv("SECRETS_TOKEN") or self.SECRETS_TOKEN
-            return _fetch_secret_from_sidecar(key, url=url, token=token)
+            try:
+                return get_secrets_manager(self).get_secret(key)
+            except Exception:
+                return None
 
         # Override tenant/project from GATEWAY_CONFIG_JSON if present.
         cfg_json = os.getenv("GATEWAY_CONFIG_JSON")
@@ -278,9 +265,11 @@ class Settings(BaseSettings):
         env_val = os.getenv(key)
         if env_val:
             return env_val
-        url = self.SECRETS_URL or os.getenv("SECRETS_URL")
-        token = self.SECRETS_TOKEN or os.getenv("SECRETS_TOKEN")
-        return _fetch_secret_from_sidecar(key, url=url, token=token) or default
+        try:
+            value = get_secrets_manager(self).get_secret(key)
+        except Exception:
+            value = None
+        return value or default
 
 @lru_cache()
 def get_settings() -> Settings:

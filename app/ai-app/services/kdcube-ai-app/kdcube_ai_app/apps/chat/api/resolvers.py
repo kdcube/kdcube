@@ -76,7 +76,7 @@ from kdcube_ai_app.storage.storage import create_storage_backend
 
 # Storage setup (your existing logic)
 STORAGE_KWARGS = {}
-storage_backend = create_storage_backend(STORAGE_PATH, **STORAGE_KWARGS)
+storage_backend = create_storage_backend(STORAGE_PATH, **STORAGE_KWARGS) if STORAGE_PATH else None
 logger.info(f"STORAGE_PATH={STORAGE_PATH}")
 
 def workdir(tenant: str, project: str):

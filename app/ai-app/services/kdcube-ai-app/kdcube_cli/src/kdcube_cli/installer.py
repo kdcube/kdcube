@@ -104,6 +104,19 @@ def is_default_tenant_project(value: Optional[str]) -> bool:
     return stripped in {"default", "demo-tenant", "demo-project"}
 
 
+def normalize_secrets_provider(value: Optional[object], *, default: str) -> str:
+    raw = str(value or "").strip().lower().replace("_", "-")
+    if raw in {"local", "service", "sidecar", "secrets-service"}:
+        return "secrets-service"
+    if raw in {"aws", "aws-sm", "awssm"}:
+        return "aws-sm"
+    if raw in {"memory", "in-memory", "inmemory", "none", "env", "disabled"}:
+        return "in-memory"
+    if raw:
+        return raw
+    return default
+
+
 def parse_env(lines: List[str]) -> Dict[str, Tuple[int, str]]:
     entries: Dict[str, Tuple[int, str]] = {}
     for idx, line in enumerate(lines):
@@ -1381,14 +1394,20 @@ def gather_configuration(
         update_env_value(env_pg, "PROJECT_ID", project)
     _autosave()
 
-    update_if_placeholder(env_ingress, "SECRETS_PROVIDER", "local")
-    update_if_placeholder(env_proc, "SECRETS_PROVIDER", "local")
-    update_if_placeholder(env_ingress, "SECRETS_URL", "http://kdcube-secrets:7777")
-    update_if_placeholder(env_proc, "SECRETS_URL", "http://kdcube-secrets:7777")
-    # Ensure proc can set secrets (bundle secrets admin flow).
-    proc_admin = env_proc.entries.get("SECRETS_ADMIN_TOKEN", (None, None))[1]
-    if is_placeholder(proc_admin) or not (proc_admin or "").strip():
-        update_env_value(env_proc, "SECRETS_ADMIN_TOKEN", "${SECRETS_ADMIN_TOKEN}")
+    secrets_provider = normalize_secrets_provider(
+        _get_nested(assembly_data, "secrets", "provider"),
+        default="secrets-service",
+    )
+    _set_nested(assembly_data, ["secrets", "provider"], secrets_provider)
+    update_env_value(env_ingress, "SECRETS_PROVIDER", secrets_provider)
+    update_env_value(env_proc, "SECRETS_PROVIDER", secrets_provider)
+    if secrets_provider == "secrets-service":
+        update_if_placeholder(env_ingress, "SECRETS_URL", "http://kdcube-secrets:7777")
+        update_if_placeholder(env_proc, "SECRETS_URL", "http://kdcube-secrets:7777")
+        # Ensure proc can set secrets (bundle secrets admin flow).
+        proc_admin = env_proc.entries.get("SECRETS_ADMIN_TOKEN", (None, None))[1]
+        if is_placeholder(proc_admin) or not (proc_admin or "").strip():
+            update_env_value(env_proc, "SECRETS_ADMIN_TOKEN", "${SECRETS_ADMIN_TOKEN}")
     update_if_placeholder(env_ingress, "LINK_PREVIEW_ENABLED", "0")
 
     # Auth provider selection
@@ -2992,6 +3011,11 @@ def run_setup(
             maybe_remove_legacy_containers(console)
             token_overrides = generate_runtime_tokens()
             runtime_env = write_env_overlay(config_dir / ".env", token_overrides)
+            runtime_secrets_provider = normalize_secrets_provider(
+                env_proc.entries.get("SECRETS_PROVIDER", (None, None))[1],
+                default="secrets-service",
+            )
+            use_secrets_service_runtime = runtime_secrets_provider == "secrets-service"
             base_cmd = [
                 "docker",
                 "compose",
@@ -3000,7 +3024,7 @@ def run_setup(
             ]
             build_flag = ["--build"] if install_mode != "release" else []
             force_recreate_flag = ["--force-recreate"] if install_mode != "release" else []
-            if runtime_secrets:
+            if runtime_secrets and use_secrets_service_runtime:
                 # Start secrets service first so secrets are available before ingress/proc boot.
                 subprocess.run(
                     [*base_cmd, "up", "-d", "--force-recreate", *build_flag, "kdcube-secrets"],
@@ -3009,11 +3033,16 @@ def run_setup(
                     env=compose_env(runtime_env),
                 )
                 apply_runtime_secrets(console, ctx, runtime_secrets, runtime_env)
+            elif runtime_secrets:
+                console.print(
+                    f"[yellow]Runtime secret injection is only supported for the secrets-service provider; "
+                    f"provider is '{runtime_secrets_provider}', so CLI sidecar injection is skipped.[/yellow]"
+                )
 
             services = list_compose_services(ctx, runtime_env)
             if services:
                 console.print(f"[dim]Compose services:[/dim] {', '.join(sorted(services))}")
-            if runtime_secrets and services:
+            if runtime_secrets and use_secrets_service_runtime and services:
                 filtered = [svc for svc in services if "secret" not in svc.lower()]
                 excluded = [svc for svc in services if svc not in filtered]
                 services = filtered
@@ -3021,9 +3050,9 @@ def run_setup(
                     console.print(f"[yellow]Excluding services:[/yellow] {', '.join(sorted(excluded))}")
                 if services:
                     console.print(f"[dim]Compose services (filtered):[/dim] {', '.join(sorted(services))}")
-            no_deps_flag: List[str] = ["--no-deps"] if (runtime_secrets and services) else []
+            no_deps_flag: List[str] = ["--no-deps"] if (runtime_secrets and use_secrets_service_runtime and services) else []
             no_recreate_flag: List[str] = []
-            if runtime_secrets and not services:
+            if runtime_secrets and use_secrets_service_runtime and not services:
                 console.print(
                     "[yellow]Could not resolve compose services; running without --force-recreate to avoid restarting kdcube-secrets.[/yellow]"
                 )
@@ -3059,7 +3088,7 @@ def run_setup(
     elif runtime_secrets:
         console.print(
             "[yellow]LLM secrets were provided but docker compose was not started. "
-            "Start compose and inject secrets using the secrets service.[/yellow]"
+            "If your assembly uses the secrets-service provider, start compose and inject secrets via the sidecar.[/yellow]"
         )
 
 

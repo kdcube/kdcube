@@ -38,6 +38,11 @@ During setup, the wizard lets you choose whether the descriptor applies to
 Sensitive values (LLM keys, tokens, passwords) should live in `secrets.yaml`
 instead of `assembly.yaml`. See: [docs/service/cicd/secrets-descriptor-README.md](secrets-descriptor-README.md)
 
+Non-secret secrets backend selection belongs in `assembly.yaml`:
+- `secrets.provider` chooses the runtime provider
+- secret values still live in `secrets.yaml` / `bundles.secrets.yaml`
+- gateway config must not carry secrets-provider settings
+
 Bundles are not defined in assembly.yaml. Use `bundles.yaml` for bundle items
 and `bundles.secrets.yaml` for bundle secrets.
 
@@ -97,6 +102,9 @@ ports:
 context:
   tenant: "demo-tenant"
   project: "demo-project"
+
+secrets:
+  provider: "secrets-service"   # "secrets-service" | "aws-sm" | "in-memory"
 
 infra:
   postgres:
@@ -194,6 +202,7 @@ If `domain` is set at the root of the descriptor, the CLI uses it to expand
 ### Context / infra / paths (CLI usage)
 When you run the wizard with an assembly descriptor, it will:
 - Use `context.tenant` and `context.project` as defaults for prompts.
+- Use `secrets.provider` as the source of truth for `SECRETS_PROVIDER`.
 - Use `infra.postgres` and `infra.redis` values as defaults.
 - Use `paths.*` as defaults for local host paths.
 - Write back any values you enter, keeping `assembly.yaml` as the source of truth.

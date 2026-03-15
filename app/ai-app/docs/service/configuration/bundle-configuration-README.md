@@ -159,6 +159,12 @@ siblings in nested objects (for example,
 Secrets are resolved by the secrets manager using dot‑path keys. The UI should
 never expose secret values; it only indicates whether a secret is set.
 
+Operational secret updates from the bundle admin always go through the
+configured secrets provider:
+- local compose: `secrets-service` (`kdcube-secrets`)
+- AWS/ECS: `aws-sm`
+- process-local testing: `in-memory`
+
 **Important (local sidecar):** bundle secrets can be requested long after
 startup. When using `bundles.secrets.yaml`, keep sidecar read tokens
 non‑expiring in the workdir `.env`:
@@ -170,8 +176,8 @@ values. It does show **known keys** (stored in Redis) so operators can see
 which secrets are set for a bundle.
 
 When secrets are provisioned via `bundles.secrets.yaml`, the CLI also stores
-the key list under `bundles.<bundle_id>.secrets.__keys` in the secrets sidecar,
-so the admin UI can display keys even before any UI edits.
+the key list under `bundles.<bundle_id>.secrets.__keys` in the configured
+provider, so the admin UI can display keys even before any UI edits.
 
 ---
 

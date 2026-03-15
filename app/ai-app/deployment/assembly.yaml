@@ -8,6 +8,9 @@ context:
   tenant: "demo-tenant"
   project: "demo-project"
 
+secrets:
+  provider: "secrets-service"  # "secrets-service" | "aws-sm" | "in-memory"
+
 # for cloud
 storage:
   kdcube: "s3://../data/kdcube"

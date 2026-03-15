@@ -136,6 +136,10 @@ flowchart LR
 
 ## How LLM keys are handled (sidecar)
 Local compose runs a `kdcube-secrets` sidecar that keeps secrets **in memory only**.
+Services use the `secrets-service` provider against that sidecar; legacy
+`SECRETS_PROVIDER=local` remains accepted for older workdirs.
+The provider type is sourced from `assembly.yaml` under `secrets.provider`
+and rendered into service env files by the CLI.
 
 Flow (order matters):
 1. CLI prompts for keys (optional).

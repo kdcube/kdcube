@@ -6,9 +6,7 @@ import asyncio
 import inspect
 import json
 import logging
-import os
 import uuid
-import httpx
 from dataclasses import asdict
 from datetime import datetime
 from typing import Optional, Dict, Any, Set
@@ -39,6 +37,7 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     BundleEntry,
 )
 from kdcube_ai_app.infra.plugin.agentic_loader import AgenticBundleSpec, get_workflow_instance
+from kdcube_ai_app.infra.secrets import SecretsManagerError, SecretsManagerWriteError, get_secrets_manager
 import kdcube_ai_app.infra.namespaces as namespaces
 
 logger = logging.getLogger("ChatProc.Integrations")
@@ -179,6 +178,8 @@ def _flatten_secrets(prefix: str, node: Any, out: Dict[str, str]) -> None:
 
 def _flatten_secret_keys(prefix: str, node: Any, out: Set[str]) -> None:
     if node is None:
+        if prefix:
+            out.add(prefix)
         return
     if isinstance(node, dict):
         for key, value in node.items():
@@ -384,6 +385,7 @@ async def set_bundle_props(
     request: Request,
     session: UserSession = Depends(auth_without_pressure()),
 ):
+    settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
     redis = _get_app_redis(request)
@@ -475,12 +477,13 @@ async def set_bundle_secrets(
     session: UserSession = Depends(auth_without_pressure()),
 ):
     settings = get_settings()
-    secrets_url = getattr(settings, "SECRETS_URL", None) or os.getenv("SECRETS_URL")
-    admin_token = os.getenv("SECRETS_ADMIN_TOKEN") or getattr(settings, "SECRETS_ADMIN_TOKEN", None)
-    if not secrets_url or not admin_token:
-        raise HTTPException(status_code=503, detail="Secrets admin token not configured")
+    try:
+        secrets_manager = get_secrets_manager(settings)
+    except SecretsManagerError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not secrets_manager.can_write():
+        raise HTTPException(status_code=503, detail="Secrets provider is not configured for writes")
 
-    settings = get_settings()
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
     redis = _get_app_redis(request)
@@ -501,22 +504,13 @@ async def set_bundle_secrets(
     if not flat:
         return {"status": "ok", "bundle_id": bundle_id, "count": 0, "mode": mode}
 
-    errors = []
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        for key, value in flat.items():
-            try:
-                resp = await client.post(
-                    f"{secrets_url}/set",
-                    json={"key": key, "value": value},
-                    headers={"X-KDCUBE-ADMIN-TOKEN": admin_token},
-                )
-                if resp.status_code != 200:
-                    errors.append(f"{key}: {resp.status_code}")
-            except Exception as exc:
-                errors.append(f"{key}: {exc}")
-
-    if errors:
-        raise HTTPException(status_code=502, detail="Failed to store secrets: " + "; ".join(errors))
+    try:
+        if mode == "set":
+            await asyncio.to_thread(secrets_manager.set_many, flat)
+        else:
+            await asyncio.to_thread(secrets_manager.delete_many, keys)
+    except SecretsManagerWriteError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to store secrets: {exc}") from exc
 
     secrets_key = _bundle_secrets_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
     stored_keys: Set[str] = set()
@@ -530,6 +524,20 @@ async def set_bundle_secrets(
         stored_keys.update(keys)
     else:
         stored_keys.difference_update(keys)
+
+    metadata_key = f"bundles.{bundle_id}.secrets.__keys"
+    try:
+        if stored_keys:
+            await asyncio.to_thread(
+                secrets_manager.set_secret,
+                metadata_key,
+                json.dumps(sorted(stored_keys), ensure_ascii=False),
+            )
+        else:
+            await asyncio.to_thread(secrets_manager.delete_secret, metadata_key)
+    except SecretsManagerWriteError as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to store secrets metadata: {exc}") from exc
+
     try:
         await redis.set(secrets_key, json.dumps(sorted(stored_keys)))
     except Exception:
@@ -568,7 +576,7 @@ async def get_bundle_secrets(
         except Exception:
             keys = []
     if not keys:
-        # Fallback: keys list stored in secrets sidecar (provisioned via bundles.secrets.yaml)
+        # Fallback: keys list stored in the configured secrets provider.
         raw_keys = get_secret(f"bundles.{bundle_id}.secrets.__keys")
         if raw_keys:
             try:

@@ -105,6 +105,18 @@ def set_secret(item: SecretItem, x_kdcube_admin_token: Optional[str] = Header(de
     return {"status": "ok"}
 
 
+@app.delete("/secret/{key}")
+def delete_secret(key: str, x_kdcube_admin_token: Optional[str] = Header(default=None)) -> dict[str, Any]:
+    _require_admin(x_kdcube_admin_token)
+    store = _load_store()
+    deleted = key in store
+    if deleted:
+        del store[key]
+        _save_store(store)
+    logger.info("DELETE secret %s -> %s", key, "ok" if deleted else "not found")
+    return {"status": "ok", "deleted": deleted}
+
+
 if __name__ == "__main__":
     import uvicorn
 

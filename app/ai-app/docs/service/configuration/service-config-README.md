@@ -84,13 +84,22 @@ Descriptions are condensed from the comments in those sample files.
 
 ## Secrets sidecar roles (setter vs getter)
 
-The local secrets sidecar supports two roles:
+Secrets resolution is provider-based:
+
+- `in-memory` for process-local operational values
+- `secrets-service` for the local `kdcube-secrets` sidecar
+- `aws-sm` for AWS Secrets Manager
+
+The local secrets sidecar provider supports two roles:
 
 - **Getter (read)**: any service that calls `get_secret()` needs a read token.
   Set `SECRETS_URL` and `SECRETS_TOKEN` in the service env.
 - **Setter (write)**: the **proc** service (bundle admin UI) writes secrets to
   the sidecar and therefore needs `SECRETS_ADMIN_TOKEN` in `.env.proc`
   (usually set to `${SECRETS_ADMIN_TOKEN}` so the CLI injects the runtime token).
+
+`SECRETS_PROVIDER` is rendered from `assembly.yaml` (`secrets.provider`).
+Gateway config must not carry secrets backend settings.
 
 Token TTL/uses:
 - `SECRETS_TOKEN_TTL_SECONDS=0` and `SECRETS_TOKEN_MAX_USES=0` mean **no expiry**.
@@ -101,8 +110,8 @@ Token TTL/uses:
 |---|---|
 | `CHAT_APP_PORT` | n/a |
 | `GATEWAY_COMPONENT` | n/a |
-| `SECRETS_PROVIDER` | n/a |
-| `SECRETS_URL` | n/a |
+| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
+| `SECRETS_URL` | Base URL for the local `secrets-service` provider. |
 | `SECRETS_TOKEN` | Read token for secrets sidecar (runtime-only; injected by CLI). |
 | `SECRETS_ADMIN_TOKEN` | Admin token for **writing** secrets (bundle admin UI). Set to `${SECRETS_ADMIN_TOKEN}`. |
 | `SECRETS_TOKEN_TTL_SECONDS` | Token lifetime (seconds). `0` = no expiry. |
@@ -165,9 +174,9 @@ Token TTL/uses:
 |---|---|
 | `CHAT_PROCESSOR_PORT` | n/a |
 | `GATEWAY_COMPONENT` | n/a |
-| `SECRETS_PROVIDER` | n/a |
-| `SECRETS_URL` | n/a |
-| `SECRETS_TOKEN` | n/a |
+| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
+| `SECRETS_URL` | Base URL for the local `secrets-service` provider. |
+| `SECRETS_TOKEN` | Read token for the configured `secrets-service` provider. |
 | `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
 | `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | n/a |

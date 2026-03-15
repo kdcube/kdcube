@@ -144,8 +144,9 @@ same prefix. This keeps `/chatbot` (or any custom prefix) consistent between UI 
 ### Secrets (third services tokens)
 The wizard **does not** write OpenAI/Anthropic/Brave keys to `.env` files.
 If you provide them during setup, they are injected at runtime into the
-`kdcube-secrets` sidecar (in‑memory only). If you restart the stack, you’ll
-be prompted again to re‑inject keys.
+`kdcube-secrets` sidecar (in‑memory only) when `assembly.yaml` uses
+`secrets.provider: secrets-service`. If you restart the stack, you’ll be
+prompted again to re‑inject keys.
 
 Order (automatic):
 1) Start `kdcube-secrets`
