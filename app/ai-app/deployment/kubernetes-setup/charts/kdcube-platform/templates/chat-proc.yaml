@@ -125,11 +125,12 @@ spec:
         - name: descriptors
           configMap:
             name: {{ .Values.configMaps.descriptors }}
-        # docker.sock hostPath is intentionally disabled for k3d/containerd clusters.
-        # - name: docker-sock
-        #   hostPath:
-        #     path: {{ .Values.dockerSocket.hostPath }}
-        #     type: Socket
+        {{- if .Values.dockerSocket.enabled }}
+        - name: docker-sock
+          hostPath:
+            path: {{ .Values.dockerSocket.hostPath }}
+            type: Socket
+        {{- end }}
         {{- if .Values.awsCredentials.enabled }}
         - name: aws-credentials
           hostPath:
