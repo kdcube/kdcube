@@ -203,6 +203,7 @@ Capacity is configured via `GATEWAY_CONFIG_JSON.service_capacity`:
 Ingress worker count:
 - `service_capacity.ingress.processes_per_instance` drives the **Uvicorn worker count** for the ingress service.
 - `service_capacity.proc.processes_per_instance` drives the **processor worker count** (one processor per worker).
+- Changing worker count requires a service restart.
 
 Backpressure capacity source:
 - `backpressure.capacity_source_component` selects which **process heartbeats** drive capacity.
@@ -266,6 +267,10 @@ Redis keys/channels (per tenant/project):
 
 Subscriber wiring:
 - Chat API subscribes on startup in [web_app.py](../../services/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py).
+
+Restart note:
+- Updating `pools.<component>.redis_max_connections` or `pools.<component>.pg_pool_*` in gateway config does **not** resize already-created pools in running workers.
+- New pool sizes take effect after the relevant service restarts.
 
 ### Update-config payloads
 `POST /admin/gateway/update-config`
@@ -345,11 +350,11 @@ Subscriber wiring:
 
 ### Quick key check (Redis)
 - **Rate limits (per session):**  
-  `kdcube:system:ratelimit:{tenant}:{project}:{session_id}*`
+  `{tenant}:{project}:kdcube:system:ratelimit:{session_id}*`
 - **Queues + backpressure (per tenant/project):**  
-  `kdcube:chat:prompt:queue:{tenant}:{project}:{role}`  
-  `kdcube:heartbeat:process:{tenant}:{project}:*` (capacity source)  
-  `kdcube:system:capacity:{tenant}:{project}:counter`
+  `{tenant}:{project}:kdcube:chat:prompt:queue:{role}`  
+  `{tenant}:{project}:kdcube:heartbeat:process:*` (capacity source)  
+  `{tenant}:{project}:kdcube:system:capacity:counter`
 
 Notes:
 - `tenant`/`project` are optional; if omitted, the update applies to the local service tenant/project.
@@ -359,6 +364,8 @@ Notes:
 - `limits.proc.max_queue_size` is a **hard cap** on total queued chat tasks (0 = unlimited).
 - All `pools` values are **per process**, except `pg_max_connections` which is
   a global DB capacity reference used only for monitoring warnings.
+- `pools.proc.redis_max_connections` currently caps the **single steady-state shared async Redis pool** used by each proc worker.
+- `pools.ingress.redis_max_connections` still applies to the legacy three-pool ingress layout (`async`, `async_decode`, `sync`).
 
 ### GATEWAY_CONFIG_JSON (example, component-aware)
 ```json

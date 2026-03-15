@@ -23,9 +23,10 @@ Primary places to measure latency:
 
 ## Super fast monitoring flow (60s)
 1. Open Control Plane Monitoring Dashboard and refresh.
-2. Check `Total Queue`, `Queue Analytics` avg wait, and `chat_rest` healthy count.
+2. Check `Total Queue`, `Queue Analytics` avg wait, and `chat_proc` healthy count.
 3. If avg wait is high, check Redis queues and heartbeats.
-4. If avg wait is low but UI is quiet, check SSE stream delivery logs.
+4. If queue is growing while proc still looks healthy, inspect raw proc heartbeat JSON in Redis for `processor.queue_loop_lag_sec` and `processor.last_queue_error`.
+5. If avg wait is low but UI is quiet, check SSE stream delivery logs.
 
 ## Key files and UIs
 - Monitoring UI: `kdcube_ai_app/apps/chat/api/monitoring/ControlPlaneMonitoringDashboard.tsx`
@@ -45,6 +46,29 @@ Interpreting signals:
 - High queue size + high avg wait → queue pressure or too few healthy processes.
 - Low queue size + high avg wait → delivery/stream issue or processor starvation.
 - Low healthy processes right after restart → enqueue may reject or queue wait will spike.
+
+## Proc stall indicators (new)
+Use these when requests are being enqueued but proc is not draining them.
+
+Where to look:
+1. Redis Browser process heartbeat keys
+2. Raw heartbeat JSON from Redis (`<tenant>:<project>:kdcube:heartbeat:process:*`)
+3. Processor logs
+
+Important proc heartbeat fields:
+- `processor.current_load`
+- `processor.active_tasks`
+- `processor.queue_loop_lag_sec`
+- `processor.config_loop_lag_sec`
+- `processor.last_queue_error`
+- `processor.last_config_error`
+
+How to interpret them:
+- `queue_loop_lag_sec` rising continuously while queue depth grows usually means the worker is alive but the queue loop is not making progress.
+- `last_queue_error` populated with timeout or connection errors points to Redis-side queue read problems.
+- `config_loop_lag_sec` rising continuously means the bundles/config pubsub loop is stalled.
+- `current_load=0` with a growing queue usually means proc is not acquiring work.
+- `active_tasks > 0` with flat queue depth can still be normal if workflows are slow; check `avg wait` before assuming a stall.
 
 ## Fast reset actions (admin)
 Use this when 429/503 is stuck due to stale counters or misbehaving clients.
@@ -101,6 +125,7 @@ What to look for:
 - Queue lists growing but no dequeue → processor not running or blocked.
 - Locks with old TTLs → stuck tasks or lock renew failure.
 - Missing heartbeats → unhealthy or dead process.
+- Healthy proc heartbeats with growing queue → inspect raw heartbeat `metadata.processor.*` and recent proc Redis errors.
 
 ## Logs to watch (new timing signals)
 Look for these log lines:
@@ -115,6 +140,7 @@ How to interpret:
 - If `enqueue_ms` is high: Redis or Lua script is slow (possible KEYS scan pressure).
 - If `queue_wait_ms` is high: backlog or not enough healthy processes.
 - If `queue_wait_ms` is low but UI is quiet: SSE/Socket stream delivery issue.
+- If you see queue depth growing with no new `acquired task` logs, check for proc Redis timeout/reset logs below.
 
 ## Log filters (copy/paste)
 Use these patterns with your log stream or files:
@@ -127,19 +153,25 @@ Use these patterns with your log stream or files:
 3. Bundle config listener (Redis pubsub)
    - `Subscribed to bundles channels`
    - `Config listener error`
-3. Gateway rejections and pressure
+4. Proc Redis recovery / queue stall
+   - `Queue pop timed out after`
+   - `Resetting shared async Redis pool for processor`
+   - `Queue pop failed on`
+5. Gateway rejections and pressure
    - `gateway|backpressure|queue.enqueue_rejected|circuit_breaker`
 
 Examples:
 1. `rg -n "enqueue_chat_task_atomic result|acquired task|Starting task" /path/to/logs/*.log`
 2. `rg -n "SSEHub|sse_stream|no recipients found" /path/to/logs/*.log`
-3. `rg -n "queue.enqueue_rejected|backpressure|circuit_breaker" /path/to/logs/*.log`
+3. `rg -n "Queue pop timed out after|Resetting shared async Redis pool for processor|Queue pop failed on" /path/to/logs/*.log`
+4. `rg -n "queue.enqueue_rejected|backpressure|circuit_breaker" /path/to/logs/*.log`
 
 ## Quick triage checklist
 1. Verify processor is running and heartbeats are present.
-2. Check `queue_wait_ms` logs and Redis queue size.
-3. Confirm SSE stream uses the same `stream_id` as `/sse/chat`.
-4. Check for rejected enqueues (queue pressure, no healthy processes).
+2. Check Redis queue size together with `processor.queue_loop_lag_sec` and `processor.last_queue_error`.
+3. Check `queue_wait_ms` logs and whether new `acquired task` logs are still appearing.
+4. Confirm SSE stream uses the same `stream_id` as `/sse/chat`.
+5. Check for rejected enqueues (queue pressure, no healthy processes).
 
 ## DB connection warning (admin UI)
 The Capacity panel shows a red warning when estimated DB connections exceed (or near) `max_connections`.
@@ -176,8 +208,9 @@ Defaults:
 2. A process is considered stale after ~45 seconds.
 
 What to expect:
-1. `chat_rest` healthy count should become `>= 1` within 10 to 30 seconds after restart.
-2. If `chat_rest` stays at 0 after ~45 seconds, the processor is not running or Redis is unhealthy.
+1. `chat_proc` healthy count should become `>= 1` within 10 to 30 seconds after restart.
+2. If `chat_proc` stays at 0 after ~45 seconds, the processor is not running or Redis is unhealthy.
+3. If `chat_proc` is healthy but `processor.queue_loop_lag_sec` keeps rising, the worker is up but the queue listener is likely stalled.
 
 ## Minimal reproduction hints
 1. Restart server, immediately send a message and watch `queue_wait_ms`.

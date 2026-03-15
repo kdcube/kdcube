@@ -36,10 +36,35 @@ In Redis mode it also computes **rolling windows** and **percentiles**:
 - Task latency percentiles (p50/p95/p99 for 1m/15m/1h)
 - Ingress REST latency percentiles (p50/p95/p99 for 1m/15m/1h)
 
+Important distinction:
+- The **system endpoints** (`/metrics/ingress/system`, `/metrics/proc/system`, `/metrics/combined`) expose the full monitoring payload from `compute_system_monitoring(...)`.
+- The **export path** (`/metrics`, CloudWatch export, Pushgateway export) currently publishes a smaller scalar subset derived by `_extract_metrics(...)`.
+
+Current exported scalar keys:
+- `ingress.sse.total_connections`
+- `ingress.sse.max_connections`
+- `ingress.sse.sessions`
+- `ingress.sse.saturation_percent`
+- `proc.queue.total`
+- `proc.queue.utilization_percent`
+- `proc.pressure_ratio_percent`
+- `proc.queue.avg_wait_seconds.anonymous`
+- `proc.queue.avg_wait_seconds.registered`
+- `proc.queue.avg_wait_seconds.paid`
+- `proc.queue.avg_wait_seconds.privileged`
+- `throttling.rate_limit_429`
+- `throttling.backpressure_503`
+
 ### B) **Proxy mode** (optional)
-- Calls `ingress` and `proc` `/monitoring/system` endpoints.
+- Calls configured upstream `/monitoring/system` endpoints.
 - Requires auth headers or tokens.
 - Useful in dev or when you want *exactly* what those endpoints return.
+
+Current limitation:
+- The chat ingress/control-plane service exposes `/monitoring/system`.
+- The current proc FastAPI app does **not** mount that route directly.
+- In practice, proxy mode is mainly useful for ingress monitoring unless you point
+  `METRICS_PROC_BASE_URL` at a service that already exposes the aggregated monitoring endpoint.
 
 ---
 
@@ -76,7 +101,7 @@ Same pattern: choose either **push** (CloudWatch/Pushgateway) or **pull** (`/met
 ### Core
 | Env | Default | Meaning |
 |---|---|---|
-| `METRICS_MODE` | `redis` | `redis` (direct) or `proxy` (calls ingress/proc). |
+| `METRICS_MODE` | `redis` | `redis` (direct) or `proxy` (calls configured `/monitoring/system` upstreams). |
 | `METRICS_PORT` | `8090` | Metrics server port. |
 | `METRICS_ENABLE_PG_POOL` | `0` | If `1`, create Postgres pool to query `max_connections`. |
 | `GATEWAY_CONFIG_JSON` | — | Required: provides `tenant` + `project` (used for Redis namespacing). |
@@ -107,11 +132,17 @@ Redis mode now includes SSE counts:
 - Rolling windows are computed by the Metrics server and stored under
   `kdcube:metrics:*` keys (tenant/project‑scoped).
 
+Operational note:
+- The metrics service itself still initializes the legacy shared Redis client bundle
+  (`redis_async`, `redis_async_decode`, `redis_sync`) in its own process.
+- `GATEWAY_COMPONENT=proc` selects the **proc config slice** for capacity math; it does
+  **not** change the metrics service’s own Redis client topology.
+
 ### Proxy mode
 | Env | Meaning |
 |---|---|
 | `METRICS_INGRESS_BASE_URL` | Base URL for ingress service (e.g. `http://ingress:8010`). |
-| `METRICS_PROC_BASE_URL` | Base URL for processor service (e.g. `http://proc:8020`). |
+| `METRICS_PROC_BASE_URL` | Base URL for a service exposing proc monitoring data via `/monitoring/system`. The current proc app does not expose that route directly. |
 | `METRICS_AUTH_HEADER_NAME` | Header name for auth (e.g. `Authorization`). |
 | `METRICS_AUTH_HEADER_VALUE` | Header value (e.g. `Bearer <token>`). |
 
@@ -149,9 +180,10 @@ Example:
 ```json
 {
   "ingress.sse.total_connections": { "name": "Ingress/SSEConnections", "unit": "Count" },
-  "proc.queue.pressure_ratio": { "name": "Processor/QueuePressure", "unit": "None" },
-  "proc.queue.wait.p95": { "name": "Processor/QueueWaitP95", "unit": "Milliseconds" },
-  "ingress.rest.latency.p95": { "name": "Ingress/RestLatencyP95", "unit": "Milliseconds" }
+  "ingress.sse.saturation_percent": { "name": "Ingress/SSESaturation", "unit": "Percent" },
+  "proc.queue.utilization_percent": { "name": "Processor/QueueUtilization", "unit": "Percent" },
+  "proc.pressure_ratio_percent": { "name": "Processor/QueuePressure", "unit": "Percent" },
+  "proc.queue.avg_wait_seconds.registered": { "name": "Processor/RegisteredQueueWait", "unit": "Seconds" }
 }
 ```
 
@@ -184,7 +216,8 @@ python -m kdcube_ai_app.apps.metrics.web_app
 ```bash
 METRICS_MODE=proxy \
 METRICS_INGRESS_BASE_URL=http://ingress:8010 \
-METRICS_PROC_BASE_URL=http://proc:8020 \
+# Optional only if another upstream exposes proc monitoring data:
+# METRICS_PROC_BASE_URL=http://monitoring-upstream:8010 \
 METRICS_AUTH_HEADER_NAME=Authorization \
 METRICS_AUTH_HEADER_VALUE="Bearer <admin-token>" \
 python -m kdcube_ai_app.apps.metrics.web_app
@@ -279,3 +312,17 @@ The same computation is reused from the chat monitoring endpoint:
 - `infra/metrics/system_monitoring.py`
 - Used by `/monitoring/system` in chat API.
 - Used by Metrics server directly (redis mode). No proxy needed.
+
+## 13) Endpoint behavior summary
+
+### Redis mode
+- `GET /metrics/ingress/system` → full aggregated system payload
+- `GET /metrics/proc/system` → same full aggregated system payload
+- `GET /metrics/combined` → `{ "timestamp", "mode": "redis", "system": ... }`
+- `GET /metrics` → exported scalar metrics only
+
+### Proxy mode
+- `GET /metrics/ingress/system` → proxied ingress `/monitoring/system`
+- `GET /metrics/proc/system` → proxied proc `/monitoring/system`
+- `GET /metrics/combined` → separate `ingress` + `proc` payloads
+- `GET /metrics` → exported scalar metrics derived from proxied responses

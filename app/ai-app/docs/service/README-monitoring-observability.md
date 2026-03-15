@@ -11,7 +11,8 @@ see_also:
 ---
 # Monitoring & Observability (Gateway / Chat)
 
-This document describes the **current monitoring endpoints** for the gateway and chat ingress.
+This document describes the **current monitoring endpoints** for the gateway, chat ingress,
+chat proc, and the internal Metrics service.
 It reflects the actual behavior in code (SSE/Socket.IO are gated; REST is session‑only by default).
 
 ---
@@ -29,6 +30,7 @@ It reflects the actual behavior in code (SSE/Socket.IO are gated; REST is sessio
   - Processor queue wait + execution time (p50/p95/p99, 1m/15m/1h)
   - Ingress REST latency (p50/p95/p99, 1m/15m/1h)
 - **Draining indicator**: instances that stopped heartbeating recently are marked as *draining* before becoming stale
+- **Proc runtime metadata in raw heartbeats**: queue/config loop lag and recent Redis errors are attached to proc process heartbeats
 
 ```mermaid
 graph TD
@@ -62,6 +64,16 @@ or are updated via `/admin/gateway/update-config`.
 ### System status
 `GET /monitoring/system`
 
+Auth:
+- Uses `auth_without_pressure()`
+- Requires a super-admin session
+- Bypasses throttling/backpressure for the monitoring request itself
+
+Location:
+- This route is mounted on the chat ingress/control-plane service.
+- It aggregates ingress, proc, queue, and heartbeat state from Redis.
+- The current proc FastAPI app does **not** expose its own separate `/monitoring/system` route.
+
 Returns gateway status + queue pressure + capacity transparency, plus:
 - `components.ingress.sse` (current + rolling windows)
 - `components.proc.queue` (depth + pressure windows)
@@ -70,6 +82,30 @@ Returns gateway status + queue pressure + capacity transparency, plus:
 - `components.*.pools_aggregate` (pool utilization + max in‑use windows)
 - `throttling_windows` (1m/15m/1h 429/503 counts)
 - `components.*.instances[*].draining` (true during a grace window after heartbeat stops)
+
+Pool reporting note:
+- `components.proc.pools_aggregate.redis` may only contain `async` for proc.
+- That is expected because proc now uses a single steady-state shared async Redis pool per worker.
+- Ingress and metrics services can still report `async`, `async_decode`, and `sync`.
+
+Proc stall note:
+- Detailed proc runtime metadata is attached to the raw process heartbeat JSON in Redis.
+- Use the Redis Browser or direct Redis access to inspect heartbeat `metadata.processor.*` fields such as queue loop lag and last queue error.
+
+### Metrics service
+Internal metrics endpoints are served by `kdcube_ai_app.apps.metrics.web_app`:
+- `GET /health`
+- `GET /metrics/ingress/system`
+- `GET /metrics/proc/system`
+- `GET /metrics/combined`
+- `GET /metrics/export`
+- `GET /metrics`
+
+Mode note:
+- In `redis` mode, the Metrics service computes the system payload directly from Redis.
+- In `proxy` mode, it calls ingress/proc `/monitoring/system`.
+- Because proc does not currently mount `/monitoring/system`, proxy mode usually targets ingress only unless another upstream exposes proc monitoring data.
+- `GET /metrics` exposes a smaller exported scalar subset, not the full monitoring payload.
 
 ### Circuit breakers
 - `GET /admin/circuit-breakers`
@@ -130,3 +166,4 @@ sequenceDiagram
   (`guarded_rest_patterns`, `bypass_throttling_patterns`). See gateway README for schema.
 - Component‑aware configs (`ingress`/`proc`) are supported; each service selects its slice
   based on `GATEWAY_COMPONENT`.
+- Changes to worker count or Redis pool sizing still require service restart to affect existing processes.

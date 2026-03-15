@@ -27,6 +27,11 @@ The goal is to scale these **independently** using a small, consistent set of me
 
 `GET /monitoring/system`
 
+Current location:
+- This route is mounted on the chat ingress/control-plane service.
+- It already includes proc queue/capacity/heartbeat data aggregated from Redis.
+- The current proc FastAPI app does not expose its own separate `/monitoring/system` route.
+
 **Auth**
 
 Requires a valid admin session (`auth_without_pressure`).
@@ -40,6 +45,11 @@ Requires a valid admin session (`auth_without_pressure`).
 - `capacity_transparency` (capacity source + configured vs actual)
 - `throttling_windows` (1m/15m/1h 429/503 counts)
 - `db_connections` (max_connections + estimated usage)
+
+Proc-specific note:
+- `components.proc.pools_aggregate` may report only `postgres` and `redis_async`.
+- That is expected: proc now runs on a single steady-state shared async Redis pool per worker.
+- Ingress and metrics services can still report `redis_async_decode` and `redis_sync`.
 
 **Important scopes**
 
@@ -85,6 +95,7 @@ flowchart LR
 - Process heartbeats (worker liveness)
 - Queue stats and capacity context
 - Throttling stats, circuit breaker stats
+- Rolling metric windows and latency percentiles derived from Redis-backed monitoring data
 
 **What the Autoscaler consumes**
 - Ingress: SSE saturation (`global_total_connections / global_max_connections`)
@@ -162,8 +173,8 @@ Recommended approach:
 
 ### ECS (Service Auto Scaling)
 Recommended approach:
-1. Run a small **metrics poller** (sidecar or scheduled task) that calls `/monitoring/system`.
-2. Publish metrics to **CloudWatch** (`PutMetricData`).
+1. Run the dedicated **Metrics service** in `redis` mode.
+2. Publish metrics to **CloudWatch** (`PutMetricData`) from that service, or scrape `/metrics`.
 3. Use **Target Tracking** or **Step Scaling** for:
    - Ingress: SSE saturation metric.
    - Processor: queue utilization or avg wait time metric.
@@ -190,6 +201,9 @@ When exporting to CloudWatch/Prometheus, use consistent names:
 - `chat.proc.queue.wait.p95`
 - `chat.proc.exec.p95`
 - `chat.proc.throttle.backpressure_503`
+
+These names are a suggested normalized export naming scheme.
+The current built-in Metrics service exports a smaller scalar subset by default.
 
 ---
 
@@ -229,12 +243,19 @@ push them to CloudWatch / Prometheus.
 - `GET /metrics/export` (manual export trigger)
 - `GET /metrics` (Prometheus scrape endpoint)
 
+Behavior by mode:
+- In `redis` mode, `GET /metrics/ingress/system` and `GET /metrics/proc/system` both return the same aggregated system snapshot computed from Redis.
+- In `proxy` mode, those two endpoints proxy whatever upstreams you configured.
+- The current proc app does not expose `/monitoring/system`, so `METRICS_PROC_BASE_URL` only works if you point it at another service exposing that route.
+- `GET /metrics` always returns the exported scalar subset, not the full `/monitoring/system` payload.
+
 **Scheduler**
 Set `METRICS_SCHEDULER_ENABLED=1` to run periodic export.
 
 **Env (summary)**
 - `METRICS_INGRESS_BASE_URL`, `METRICS_PROC_BASE_URL`
 - `METRICS_AUTH_HEADER_NAME`, `METRICS_AUTH_HEADER_VALUE`
+- `METRICS_MODE` (`redis` recommended, `proxy` optional)
 - `METRICS_EXPORT_INTERVAL_SEC`, `METRICS_EXPORT_ON_START`
 - `METRICS_RUN_ONCE` (run exporter once and exit)
 - `METRICS_EXPORT_CLOUDWATCH`, `METRICS_CLOUDWATCH_NAMESPACE`
@@ -262,7 +283,10 @@ You can map internal metric keys to CloudWatch/Prometheus names (and units):
 ```json
 {
   "ingress.sse.total_connections": { "name": "Ingress/SSEConnections", "unit": "Count" },
-  "proc.queue.utilization_percent": { "name": "Processor/QueueUtilization", "unit": "Percent" }
+  "ingress.sse.saturation_percent": { "name": "Ingress/SSESaturation", "unit": "Percent" },
+  "proc.queue.utilization_percent": { "name": "Processor/QueueUtilization", "unit": "Percent" },
+  "proc.pressure_ratio_percent": { "name": "Processor/QueuePressure", "unit": "Percent" },
+  "proc.queue.avg_wait_seconds.registered": { "name": "Processor/RegisteredQueueWait", "unit": "Seconds" }
 }
 ```
 

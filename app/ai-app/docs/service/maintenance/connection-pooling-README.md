@@ -11,13 +11,16 @@ see_also:
 ---
 **Connection Pooling (Chat Services)**
 
-This doc describes how **Redis** and **Postgres** pools are created, shared, and closed **per worker (process)** in the chat services (ingress + processor).
+This doc describes how **Redis** and **Postgres** pools are created, shared, and closed **per worker (process)** in the chat services.
+It also calls out an important difference in the current architecture:
+- `ingress` still starts the legacy three-client Redis bundle
+- `proc` now runs on a **single steady-state shared async Redis pool per worker**
 
 ---
 
 **Where Pools Are Created (Ingress + Processor)**
 
-All pools are created once per process in `apps/chat/api/resolvers.py` and stored in `app.state` during FastAPI lifespan.
+Pools are created once per process and stored in `app.state` during FastAPI lifespan.
 Each service sets `GATEWAY_COMPONENT` so it selects the **component slice** of the gateway config:
 - `ingress` (SSE/REST ingress)
 - `proc` (processor + integrations)
@@ -26,17 +29,25 @@ Each service sets `GATEWAY_COMPONENT` so it selects the **component slice** of t
   - `get_pg_pool()` → `app.state.pg_pool`
   - Closed on shutdown via `pg_pool.close()`
 - Redis:
-  - `get_redis_clients()` →
-    - `app.state.redis_async`
-    - `app.state.redis_async_decode`
-    - `app.state.redis_sync`
+  - Ingress / metrics:
+    - `get_redis_clients()` →
+      - `app.state.redis_async`
+      - `app.state.redis_async_decode`
+      - `app.state.redis_sync`
+  - Proc:
+    - `get_shared_async_redis_client()` →
+      - `app.state.redis_async`
+      - `app.state.redis_async_decode = None`
+      - `app.state.redis_sync = None`
   - Closed on shutdown via `close_redis_clients()`
 
 ---
 
 **Redis Pools (Per Process)**
 
-Each worker (process) creates **three shared Redis pools**:
+**Ingress / metrics**
+
+Each ingress or metrics worker currently creates **three shared Redis pools**:
 
 1. `redis_async`
    - async client
@@ -48,18 +59,42 @@ Each worker (process) creates **three shared Redis pools**:
    - sync client
    - `decode_responses=False`
 
-These are shared across all chat components (processor, monitoring, gateway, bundles, etc.).
-No additional Redis pools should be created outside these.
+These are shared across gateway, SSE, monitoring, bundles, and related service paths in that process.
+
+**Proc**
+
+Each proc worker now creates **one steady-state shared Redis pool**:
+
+1. `redis_async`
+   - async client
+   - `decode_responses=False`
+   - shared by queue pop, processor execution, gateway helpers, gateway-config pub/sub, and health monitoring
+
+Proc intentionally does **not** keep steady-state `redis_async_decode` or `redis_sync` clients in `app.state`.
+During startup, proc may touch Redis while loading gateway config from cache; those bootstrap clients are closed before the steady-state pool is created so the running worker uses the final gateway-config slice.
+
+**Important**
+- Pub/sub and blocking Redis calls consume connections **from the pool**; they are not an extra cap on top of `max_connections`.
+- Separate code-executor containers or Fargate tasks are **not** part of the proc worker pool and may open their own Redis connection(s).
 
 **Size control**
-- `GATEWAY_CONFIG_JSON.pools.<component>.redis_max_connections` caps **each pool**.
-- Approx max Redis connections per process:
+- `GATEWAY_CONFIG_JSON.pools.<component>.redis_max_connections` caps the pool size selected for that component.
+
+Approx steady-state Redis connections per process:
+
+- Ingress / metrics:
 
 ```
 max_redis_conns_per_process ≈ 3 * redis_max_connections
 ```
 
-If `redis_max_connections` is **unset**, the pool size is unbounded and will grow with load.
+- Proc:
+
+```
+max_redis_conns_per_process ≈ redis_max_connections
+```
+
+If `redis_max_connections` is **unset**, the pool size is unbounded and can grow with load.
 
 **Client names (for `CLIENT LIST`)**
 
@@ -74,12 +109,16 @@ Pool kinds:
 - `async_decode`
 - `sync`
 
+In proc, the normal steady-state client name you should expect is `...:async`.
+
 To override the prefix, set `REDIS_CLIENT_NAME`.
 
 **Where implemented**
 - `kdcube_ai_app/infra/redis/client.py`
 - `apps/chat/api/resolvers.py`
 - `apps/chat/api/web_app.py`
+- `apps/chat/proc/web_app.py`
+- `apps/chat/processor.py`
 
 ---
 
@@ -132,6 +171,9 @@ Where:
 
 - Redis and Postgres pools are **per process**. Total connections scale with worker count.
 - When you raise `service_capacity.<component>.processes_per_instance`, you also raise total Postgres and Redis connections.
+- Proc connection budgeting should assume **one shared async Redis pool per worker**.
+- Ingress and metrics connection budgeting should still assume the legacy **three-pool** Redis layout.
+- If `pools.<component>.redis_max_connections` changes at runtime, existing workers keep the pool size they started with until restart.
 - For Redis max clients, ensure:
 
 **Quick validation tool**
@@ -140,6 +182,14 @@ Run this to print the effective per-process limits from gateway config:
 ```bash
 python -m kdcube_ai_app.infra.tools.gateway_config_dump
 ```
+
+For proc:
+
+```
+total_redis_connections_proc ≈ processes * redis_max_connections
+```
+
+For ingress / metrics:
 
 ```
 total_redis_connections ≈ processes * 3 * redis_max_connections
@@ -180,6 +230,12 @@ Env:
 - `REDIS_HEALTHCHECK_INTERVAL_SEC` (default: `5`)
 - `REDIS_HEALTHCHECK_TIMEOUT_SEC` (default: `2`)
 
+Shared Redis clients also set:
+- `socket_connect_timeout=5`
+- `health_check_interval=30`
+- `socket_keepalive=True`
+- `retry_on_timeout=True`
+
 **Redis Env Quicklist**
 
 - `REDIS_URL` sets the Redis endpoint used by all shared pools and monitors.
@@ -207,11 +263,22 @@ monitor.add_listener(lambda state, err: print("redis:", state, err))
 When Redis reconnects, the chat service automatically:
 - Rebuilds SSE relay subscriptions from the active SSE hub state.
 - Reconnects gateway config pubsub listener.
+- For proc, queue/config listener failures trigger a shared-pool socket disconnect so the next Redis call reconnects through the same client.
 
 Look for logs:
 - `[RedisMonitor] Redis connection recovered`
 - `[SSEHub] resync relay reason=redis_reconnect ...`
 - `[gateway.config] Subscribed to ...`
+- `Queue pop timed out after ...; disconnecting shared pool`
+- `Resetting shared async Redis pool for processor: ...`
+
+Proc heartbeat metadata now also exposes:
+- `processor.current_load`
+- `processor.active_tasks`
+- `processor.queue_loop_lag_sec`
+- `processor.config_loop_lag_sec`
+- `processor.last_queue_error`
+- `processor.last_config_error`
 
 ---
 
