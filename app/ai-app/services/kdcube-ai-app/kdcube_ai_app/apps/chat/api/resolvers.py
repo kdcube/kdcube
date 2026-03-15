@@ -585,6 +585,28 @@ async def get_pg_pool():
     return _pg_pool
 
 
+def _resolve_redis_max_connections() -> Optional[int]:
+    try:
+        from kdcube_ai_app.infra.gateway.config import get_gateway_config
+        cfg = get_gateway_config()
+        pools_cfg = getattr(cfg, "pools", None)
+        if pools_cfg and pools_cfg.redis_max_connections is not None:
+            return int(pools_cfg.redis_max_connections)
+    except Exception:
+        return None
+    return None
+
+
+def get_shared_async_redis_client():
+    """Return the process-wide shared async Redis client."""
+    global _redis_async
+    max_connections = _resolve_redis_max_connections()
+    if _redis_async is None:
+        _redis_async = get_async_redis_client(REDIS_URL, max_connections=max_connections)
+        logger.info("Redis client name prefix: %s", get_redis_client_name_prefix())
+    return _redis_async
+
+
 async def get_redis_clients():
     """
     Return shared Redis clients for this process:
@@ -593,19 +615,11 @@ async def get_redis_clients():
       - sync
     """
     global _redis_async, _redis_async_decode, _redis_sync
-    max_connections = None
-    try:
-        from kdcube_ai_app.infra.gateway.config import get_gateway_config
-        cfg = get_gateway_config()
-        pools_cfg = getattr(cfg, "pools", None)
-        if pools_cfg and pools_cfg.redis_max_connections is not None:
-            max_connections = int(pools_cfg.redis_max_connections)
-    except Exception:
-        max_connections = None
+    max_connections = _resolve_redis_max_connections()
     created = False
     if _redis_async is None:
-        _redis_async = get_async_redis_client(REDIS_URL, max_connections=max_connections)
-        created = True
+        _redis_async = get_shared_async_redis_client()
+        created = False
     if _redis_async_decode is None:
         _redis_async_decode = get_async_redis_client(REDIS_URL, decode_responses=True, max_connections=max_connections)
         created = True

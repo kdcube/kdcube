@@ -26,6 +26,10 @@ _ASYNC_CLIENTS: Dict[Tuple[str, bool, Optional[int]], AsyncRedis] = {}
 _SYNC_CLIENTS: Dict[Tuple[str, bool, Optional[int]], redis.Redis] = {}
 _MONITORS: Dict[str, "RedisConnectionMonitor"] = {}
 
+_DEFAULT_REDIS_CONNECT_TIMEOUT_SEC = 5.0
+_DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SEC = 30
+_DEFAULT_REDIS_SOCKET_KEEPALIVE = True
+
 
 def _client_name_base() -> str:
     return (
@@ -93,6 +97,66 @@ def _resolve_max_connections(default: Optional[int] = None) -> Optional[int]:
     return None
 
 
+def _build_async_client(
+    redis_url: str,
+    *,
+    decode_responses: bool = False,
+    max_connections: Optional[int] = None,
+    shared: bool,
+    client_name_kind: Optional[str] = None,
+    **kwargs,
+) -> AsyncRedis:
+    max_connections = _resolve_max_connections(max_connections)
+    options = {"decode_responses": decode_responses, **kwargs}
+    if max_connections is not None:
+        options["max_connections"] = max_connections
+    options.setdefault("socket_connect_timeout", _DEFAULT_REDIS_CONNECT_TIMEOUT_SEC)
+    options.setdefault("health_check_interval", _DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SEC)
+    options.setdefault("socket_keepalive", _DEFAULT_REDIS_SOCKET_KEEPALIVE)
+    options.setdefault("retry_on_timeout", True)
+    options["client_name"] = options.get("client_name") or _build_client_name(
+        client_name_kind or ("async_decode" if decode_responses else "async")
+    )
+    client = aioredis.from_url(redis_url, **options)
+    try:
+        setattr(client, "_kdcube_shared", shared)
+    except Exception:
+        pass
+    logger.info(
+        "Created %s async Redis client url=%s decode_responses=%s max_connections=%s client_name=%s",
+        "shared" if shared else "dedicated",
+        _safe_redis_url(redis_url),
+        decode_responses,
+        max_connections,
+        options.get("client_name"),
+    )
+    return client
+
+
+def create_async_redis_client(
+    redis_url: str,
+    *,
+    decode_responses: bool = False,
+    max_connections: Optional[int] = None,
+    client_name_kind: Optional[str] = None,
+    **kwargs,
+) -> AsyncRedis:
+    """
+    Create a non-shared async Redis client.
+
+    Use this for long-lived blocking or pub/sub flows that should be recreated
+    independently from the process-wide shared pool.
+    """
+    return _build_async_client(
+        redis_url,
+        decode_responses=decode_responses,
+        max_connections=max_connections,
+        shared=False,
+        client_name_kind=client_name_kind,
+        **kwargs,
+    )
+
+
 def get_async_redis_client(
     redis_url: str,
     *,
@@ -104,24 +168,13 @@ def get_async_redis_client(
     client = _ASYNC_CLIENTS.get(key)
     if client is not None:
         return client
-
-    kwargs = {"decode_responses": decode_responses}
-    if max_connections is not None:
-        kwargs["max_connections"] = max_connections
-    kwargs["client_name"] = _build_client_name("async_decode" if decode_responses else "async")
-    client = aioredis.from_url(redis_url, **kwargs)
-    try:
-        setattr(client, "_kdcube_shared", True)
-    except Exception:
-        pass
-    _ASYNC_CLIENTS[key] = client
-    logger.info(
-        "Created async Redis client pool url=%s decode_responses=%s max_connections=%s client_name=%s",
-        _safe_redis_url(redis_url),
-        decode_responses,
-        max_connections,
-        kwargs.get("client_name"),
+    client = _build_async_client(
+        redis_url,
+        decode_responses=decode_responses,
+        max_connections=max_connections,
+        shared=True,
     )
+    _ASYNC_CLIENTS[key] = client
     return client
 
 
@@ -140,6 +193,10 @@ def get_sync_redis_client(
     kwargs = {"decode_responses": decode_responses}
     if max_connections is not None:
         kwargs["max_connections"] = max_connections
+    kwargs.setdefault("socket_connect_timeout", _DEFAULT_REDIS_CONNECT_TIMEOUT_SEC)
+    kwargs.setdefault("health_check_interval", _DEFAULT_REDIS_HEALTH_CHECK_INTERVAL_SEC)
+    kwargs.setdefault("socket_keepalive", _DEFAULT_REDIS_SOCKET_KEEPALIVE)
+    kwargs.setdefault("retry_on_timeout", True)
     kwargs["client_name"] = _build_client_name("sync_decode" if decode_responses else "sync")
     client = redis.Redis.from_url(redis_url, **kwargs)
     try:

@@ -27,6 +27,12 @@ from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunic
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
+
+QUEUE_BLOCK_TIMEOUT_SEC = 0.1
+QUEUE_CALL_TIMEOUT_SEC = 2.0
+CONFIG_GET_MESSAGE_TIMEOUT_SEC = 1.0
+CONFIG_CALL_TIMEOUT_SEC = 5.0
+
 class EnhancedChatRequestProcessor:
     """
     Queue worker that:
@@ -72,6 +78,14 @@ class EnhancedChatRequestProcessor:
         self._current_load = 0
         self._stop_event = asyncio.Event()
         self._queue_idx = 0
+        self.queue_block_timeout_sec = QUEUE_BLOCK_TIMEOUT_SEC
+        self.queue_call_timeout_sec = QUEUE_CALL_TIMEOUT_SEC
+        self.config_get_message_timeout_sec = CONFIG_GET_MESSAGE_TIMEOUT_SEC
+        self.config_call_timeout_sec = CONFIG_CALL_TIMEOUT_SEC
+        self._last_queue_poll_completed_at = time.monotonic()
+        self._last_config_poll_completed_at = time.monotonic()
+        self._last_queue_error: Optional[str] = None
+        self._last_config_error: Optional[str] = None
 
     # ---------------- Public API ----------------
 
@@ -101,6 +115,56 @@ class EnhancedChatRequestProcessor:
 
     def get_current_load(self) -> int:
         return self._current_load
+
+    def get_runtime_metadata(self) -> Dict[str, Any]:
+        now = time.monotonic()
+        return {
+            "current_load": self._current_load,
+            "active_tasks": len(self._active_tasks),
+            "queue_loop_lag_sec": round(max(0.0, now - self._last_queue_poll_completed_at), 3),
+            "config_loop_lag_sec": round(max(0.0, now - self._last_config_poll_completed_at), 3),
+            "last_queue_error": self._last_queue_error,
+            "last_config_error": self._last_config_error,
+        }
+
+    async def _reset_shared_async_pool(self, reason: str) -> None:
+        logger.warning("Resetting shared async Redis pool for processor: %s", reason)
+        try:
+            pool = getattr(self.redis, "connection_pool", None)
+            if pool is not None:
+                await pool.disconnect(inuse_connections=True)
+        except Exception:
+            logger.warning("Failed to disconnect shared async Redis pool", exc_info=True)
+
+    async def _queue_brpop(self, queue_key: str):
+        try:
+            result = await asyncio.wait_for(
+                self.redis.brpop(queue_key, timeout=self.queue_block_timeout_sec),
+                timeout=self.queue_call_timeout_sec,
+            )
+            self._last_queue_poll_completed_at = time.monotonic()
+            self._last_queue_error = None
+            return result
+        except asyncio.CancelledError:
+            raise
+        except asyncio.TimeoutError:
+            self._last_queue_poll_completed_at = time.monotonic()
+            self._last_queue_error = (
+                f"Queue BRPOP exceeded {self.queue_call_timeout_sec:.2f}s on {queue_key}"
+            )
+            logger.error(
+                "Queue pop timed out after %.2fs on %s; disconnecting shared pool",
+                self.queue_call_timeout_sec,
+                queue_key,
+            )
+            await self._reset_shared_async_pool("queue pop timeout")
+            return None
+        except Exception as e:
+            self._last_queue_poll_completed_at = time.monotonic()
+            self._last_queue_error = str(e)
+            logger.error("Queue pop failed on %s: %s", queue_key, e, exc_info=True)
+            await self._reset_shared_async_pool(f"queue pop error: {e}")
+            raise
 
     # ---------------- Core loop ----------------
 
@@ -138,7 +202,7 @@ class EnhancedChatRequestProcessor:
                 return None
 
             queue_key = f"{self.middleware.QUEUE_PREFIX}:{user_type}"
-            raw = await self.redis.brpop(queue_key, timeout=0.1)
+            raw = await self._queue_brpop(queue_key)
             if not raw:
                 continue
 
@@ -216,11 +280,27 @@ class EnhancedChatRequestProcessor:
                     f"{update_channel}, {cleanup_channel}"
                 )
                 backoff = 0.5
+                self._last_config_error = None
 
-                async for message in pubsub.listen():
+                while not self._stop_event.is_set():
+                    try:
+                        message = await asyncio.wait_for(
+                            pubsub.get_message(
+                                ignore_subscribe_messages=True,
+                                timeout=self.config_get_message_timeout_sec,
+                            ),
+                            timeout=self.config_call_timeout_sec,
+                        )
+                    except asyncio.TimeoutError as e:
+                        raise RuntimeError(
+                            f"Config listener get_message exceeded {self.config_call_timeout_sec:.2f}s"
+                        ) from e
+                    self._last_config_poll_completed_at = time.monotonic()
+                    self._last_config_error = None
                     if self._stop_event.is_set():
                         break
                     if not message or message.get("type") != "message":
+                        await asyncio.sleep(0.1)
                         continue
 
                     raw = message.get("data")
@@ -351,7 +431,10 @@ class EnhancedChatRequestProcessor:
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                self._last_config_poll_completed_at = time.monotonic()
+                self._last_config_error = str(e)
                 logger.error(f"Config listener error: {e}")
+                await self._reset_shared_async_pool(f"config listener error: {e}")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 10.0)
             finally:

@@ -253,6 +253,7 @@ class ProcessHeartbeatManager:
             port: Optional[int] = None,
             max_capacity: Optional[int] = None,
             metadata_provider=None,
+            load_provider=None,
     ):
         self.middleware = middleware
         self.service_type = service_type
@@ -266,6 +267,7 @@ class ProcessHeartbeatManager:
         self.health_status = ServiceHealth.HEALTHY
         self.metadata = {}
         self.metadata_provider = metadata_provider
+        self.load_provider = load_provider
         self.heartbeat_task = None
 
     def set_load(self, current_load: int):
@@ -306,6 +308,15 @@ class ProcessHeartbeatManager:
         while True:
             try:
                 metadata = dict(self.metadata)
+                if self.load_provider:
+                    try:
+                        maybe_load = self.load_provider()
+                        if inspect.isawaitable(maybe_load):
+                            maybe_load = await maybe_load
+                        if maybe_load is not None:
+                            self.set_load(int(maybe_load))
+                    except Exception as e:
+                        logger.debug("Heartbeat load provider failed: %s", e)
                 if self.metadata_provider:
                     try:
                         maybe_meta = self.metadata_provider()

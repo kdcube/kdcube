@@ -69,7 +69,7 @@ from kdcube_ai_app.apps.chat.api.resolvers import (
     REDIS_URL,
     get_pg_pool,
     get_conversation_system,
-    get_redis_clients,
+    get_shared_async_redis_client,
     close_redis_clients,
     get_redis_monitor_instance,
     get_heartbeats_mgr_and_middleware,
@@ -273,6 +273,9 @@ async def lifespan(app: FastAPI):
                     settings.TENANT,
                     settings.PROJECT,
                 )
+        # Redis clients may be touched while loading gateway config from cache.
+        # Reset them here so the steady-state pool is recreated from the final config.
+        await close_redis_clients()
         app.state.gateway_config_stop = asyncio.Event()
         app.state.gateway_config_task = asyncio.create_task(
             subscribe_gateway_config_updates(
@@ -296,10 +299,12 @@ async def lifespan(app: FastAPI):
 
     # Shared Redis pools + monitor
     try:
-        app.state.redis_async, app.state.redis_async_decode, app.state.redis_sync = await get_redis_clients()
-        logger.info("Redis pools ready (async/sync)")
+        app.state.redis_async = get_shared_async_redis_client()
+        app.state.redis_async_decode = None
+        app.state.redis_sync = None
+        logger.info("Redis pool ready (shared async only)")
     except Exception:
-        logger.exception("Failed to initialize shared Redis pools")
+        logger.exception("Failed to initialize shared async Redis pool")
         raise
     try:
         app.state.redis_monitor = await get_redis_monitor_instance()
@@ -417,14 +422,16 @@ async def lifespan(app: FastAPI):
         from kdcube_ai_app.infra.metrics.pool_stats import build_pool_metadata
 
         def _heartbeat_metadata():
-            return build_pool_metadata(
+            metadata = build_pool_metadata(
                 pg_pool=app.state.pg_pool,
                 redis_clients={
                     "async": app.state.redis_async,
-                    "async_decode": app.state.redis_async_decode,
-                    "sync": app.state.redis_sync,
                 },
             )
+            processor = getattr(app.state, "processor", None)
+            if processor is not None:
+                metadata["processor"] = processor.get_runtime_metadata()
+            return metadata
 
         middleware, heartbeat_manager = get_heartbeats_mgr_and_middleware(
             service_type="chat",
@@ -446,6 +453,7 @@ async def lifespan(app: FastAPI):
 
         processor = get_external_request_processor(middleware, agentic_app_func, app, redis=redis_async)
         app.state.processor = processor
+        heartbeat_manager.load_provider = processor.get_current_load
 
         await heartbeat_manager.start_heartbeat(interval=10)
         try:

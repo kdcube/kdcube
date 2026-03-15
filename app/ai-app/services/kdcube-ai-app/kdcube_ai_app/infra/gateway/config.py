@@ -1070,10 +1070,29 @@ def _build_gateway_config_cache(*, tenant: str, project: str, redis_url: Optiona
         tenant=tenant,
         project=project,
         default_ttl_seconds=0,
-        decode_responses=True,
+        decode_responses=False,
         use_tp_prefix=True,
     )
     return create_namespaced_kv_cache_from_config(cfg)
+
+
+def _normalize_pubsub_message_type(raw_type: Any) -> str:
+    if isinstance(raw_type, bytes):
+        return raw_type.decode("utf-8", "replace")
+    if raw_type is None:
+        return ""
+    return str(raw_type)
+
+
+def _decode_redis_json_payload(raw: Any) -> Dict[str, Any]:
+    if isinstance(raw, memoryview):
+        raw = raw.tobytes()
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8")
+    if raw is None:
+        raw = "{}"
+    payload = json.loads(raw)
+    return payload if isinstance(payload, dict) else {}
 
 
 def gateway_config_cache_key(*, tenant: str, project: str) -> str:
@@ -1181,7 +1200,7 @@ async def clear_gateway_config_cache(
     if not redis_url:
         return 0
     try:
-        redis = get_async_redis_client(redis_url, decode_responses=True)
+        redis = get_async_redis_client(redis_url)
         key = gateway_config_cache_key(tenant=tenant, project=project)
         deleted = await redis.delete(key)
         return int(deleted or 0)
@@ -1194,7 +1213,7 @@ async def publish_gateway_config_update(config: GatewayConfiguration, *, actor: 
         return
     channel = ns_key(CONFIG.GATEWAY.UPDATE_CHANNEL, tenant=config.tenant_id, project=config.project_id)
     try:
-        redis = get_async_redis_client(config.redis_url, decode_responses=True)
+        redis = get_async_redis_client(config.redis_url)
         payload = {
             "tenant": config.tenant_id,
             "project": config.project_id,
@@ -1220,7 +1239,7 @@ async def publish_gateway_config_update_raw(
         return
     channel = ns_key(CONFIG.GATEWAY.UPDATE_CHANNEL, tenant=tenant, project=project)
     try:
-        redis = get_async_redis_client(redis_url, decode_responses=True)
+        redis = get_async_redis_client(redis_url)
         payload = {
             "tenant": tenant,
             "project": project,
@@ -1386,7 +1405,7 @@ async def subscribe_gateway_config_updates(
         if stop_event and stop_event.is_set():
             break
         try:
-            redis = get_async_redis_client(redis_url, decode_responses=True)
+            redis = get_async_redis_client(redis_url)
             pubsub = redis.pubsub()
             await pubsub.subscribe(channel)
             logger.info("[gateway.config] Subscribed to %s", channel)
@@ -1399,10 +1418,10 @@ async def subscribe_gateway_config_updates(
                 if not msg:
                     await asyncio.sleep(0.1)
                     continue
-                if msg.get("type") != "message":
+                if _normalize_pubsub_message_type(msg.get("type")) != "message":
                     continue
                 try:
-                    payload = json.loads(msg.get("data") or "{}")
+                    payload = _decode_redis_json_payload(msg.get("data"))
                     cfg_data = payload.get("config")
                     if not cfg_data:
                         continue
