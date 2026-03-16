@@ -160,7 +160,9 @@ def _uvicorn_run_supports_timeout_worker_healthcheck(uvicorn_module) -> bool:
         return False
 
 
-PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC = 120
+# Keep this slightly below ECS stopTimeout (currently 120s) so Uvicorn
+# finishes its own shutdown path before the task-level hard stop window.
+PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC = 110
 
 
 def _git_prefetch_enabled() -> bool:

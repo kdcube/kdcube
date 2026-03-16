@@ -118,9 +118,8 @@ def _read_proc_filesystem() -> dict[int, _PsEntry]:
     return entries
 
 
-def _render_ps_lines(root_pid: int) -> list[str]:
-    # Try ps first; fall back to /proc filesystem (available in all Linux containers).
-    entries: dict[int, _PsEntry] = {}
+def _collect_ps_entries() -> dict[int, _PsEntry]:
+    # Try ps first; fall back to /proc filesystem (available in Linux containers).
     try:
         proc = subprocess.run(
             ["ps", "-ax", "-o", "pid=,ppid=,pgid=,stat=,etime=,command="],
@@ -132,12 +131,48 @@ def _render_ps_lines(root_pid: int) -> list[str]:
         entries = _parse_ps_output(proc.stdout)
     except Exception:
         entries = _read_proc_filesystem()
+    return entries
+
+
+def _render_ps_lines(root_pid: int, *, entries: dict[int, _PsEntry] | None = None) -> list[str]:
+    entries = entries or _collect_ps_entries()
     tree = _collect_process_tree(entries, root_pid)
     if not tree and root_pid in entries:
         tree = [entries[root_pid]]
     return [
         f"pid={item.pid} ppid={item.ppid} pgid={item.pgid} stat={item.stat} etime={item.etime} cmd={item.command}"
         for item in tree
+    ]
+
+
+def _render_parent_chain_lines(pid: int, *, entries: dict[int, _PsEntry]) -> list[str]:
+    lines: list[str] = []
+    current = pid
+    seen: set[int] = set()
+    while current > 0 and current not in seen:
+        seen.add(current)
+        item = entries.get(current)
+        if item is None:
+            break
+        lines.append(
+            f"parent_chain pid={item.pid} ppid={item.ppid} pgid={item.pgid} "
+            f"stat={item.stat} etime={item.etime} cmd={item.command}"
+        )
+        if item.ppid <= 0 or item.ppid == current:
+            break
+        current = item.ppid
+    return lines
+
+
+def _render_immediate_children_lines(pid: int, *, entries: dict[int, _PsEntry]) -> list[str]:
+    children = sorted(
+        (item for item in entries.values() if item.ppid == pid),
+        key=lambda item: item.pid,
+    )
+    return [
+        f"child_of_{pid} pid={item.pid} ppid={item.ppid} pgid={item.pgid} "
+        f"stat={item.stat} etime={item.etime} cmd={item.command}"
+        for item in children
     ]
 
 
@@ -196,7 +231,28 @@ def log_shutdown_diagnostics(
         logger.exception("[shutdown.diagnostics] Failed to enumerate threads")
 
     try:
-        lines = _render_ps_lines(pid)
+        entries = _collect_ps_entries()
+        pid1 = entries.get(1)
+        if pid1 is not None:
+            logger.warning(
+                "[shutdown.diagnostics] reason=%s pid1 pid=%s ppid=%s pgid=%s stat=%s etime=%s cmd=%s",
+                reason,
+                pid1.pid,
+                pid1.ppid,
+                pid1.pgid,
+                pid1.stat,
+                pid1.etime,
+                pid1.command,
+            )
+
+        for line in _render_parent_chain_lines(pid, entries=entries):
+            logger.warning("[shutdown.diagnostics] reason=%s %s", reason, line)
+
+        if pid != 1:
+            for line in _render_immediate_children_lines(1, entries=entries):
+                logger.warning("[shutdown.diagnostics] reason=%s %s", reason, line)
+
+        lines = _render_ps_lines(pid, entries=entries)
         if not lines:
             logger.warning("[shutdown.diagnostics] reason=%s process_tree=empty", reason)
         else:
