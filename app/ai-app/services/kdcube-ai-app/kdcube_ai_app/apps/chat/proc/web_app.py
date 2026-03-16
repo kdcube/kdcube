@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import sys
+import time
 import traceback
 import uuid
 from contextlib import asynccontextmanager
@@ -85,6 +86,10 @@ from kdcube_ai_app.infra.plugin.git_bundle import (
     ensure_git_bundle_async,
     GitBundleCooldown,
     compute_git_bundle_paths,
+)
+from kdcube_ai_app.infra.availability.shutdown_diagnostics import (
+    install_uvicorn_shutdown_diagnostics,
+    log_shutdown_diagnostics,
 )
 
 # Ensure per-replica instance id is set (do not override explicit env)
@@ -641,6 +646,7 @@ if __name__ == "__main__":
 
     # Enable faulthandler to capture native crashes and dump tracebacks.
     faulthandler.enable()
+    install_uvicorn_shutdown_diagnostics(uvicorn, logger, component="chat-proc")
 
     workers = _get_uvicorn_workers_from_config()
     reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes", "on"}
@@ -655,7 +661,7 @@ if __name__ == "__main__":
         "port": CHAT_PROCESSOR_PORT,
         "log_config": None,
         "log_level": None,
-        "timeout_keep_alive": 60 * 60,
+        "timeout_keep_alive": 45,
         "timeout_graceful_shutdown": 15,
     }
 
@@ -684,4 +690,20 @@ if __name__ == "__main__":
         worker_healthcheck_timeout,
         _uvicorn_run_supports_timeout_worker_healthcheck(uvicorn),
     )
-    uvicorn.run(app_target, **run_kwargs)
+    run_started_at = time.monotonic()
+    try:
+        uvicorn.run(app_target, **run_kwargs)
+    finally:
+        elapsed = time.monotonic() - run_started_at
+        logger.warning(
+            "uvicorn.run returned: component=%s pid=%s elapsed=%.3fs version=%s",
+            "chat-proc",
+            os.getpid(),
+            elapsed,
+            getattr(uvicorn, "__version__", "unknown"),
+        )
+        log_shutdown_diagnostics(
+            logger,
+            reason=f"chat-proc:uvicorn.run.returned:elapsed={elapsed:.3f}s",
+            include_traceback=True,
+        )

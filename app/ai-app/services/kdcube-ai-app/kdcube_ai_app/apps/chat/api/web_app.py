@@ -92,6 +92,10 @@ from kdcube_ai_app.apps.chat.api.resolvers import (
 )
 from kdcube_ai_app.infra.metrics.rolling_stats import record_metric
 from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.infra.availability.shutdown_diagnostics import (
+    install_uvicorn_shutdown_diagnostics,
+    log_shutdown_diagnostics,
+)
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserType, UserSession
 from kdcube_ai_app.apps.chat.reg import MODEL_CONFIGS, EMBEDDERS
@@ -687,6 +691,7 @@ if __name__ == "__main__":
 
     # Enable faulthandler to capture native crashes and dump tracebacks.
     faulthandler.enable()
+    install_uvicorn_shutdown_diagnostics(uvicorn, logger, component="chat-ingress")
 
     workers = _get_uvicorn_workers_from_config()
     reload_enabled = os.getenv("UVICORN_RELOAD", "").lower() in {"1", "true", "yes", "on"}
@@ -701,9 +706,8 @@ if __name__ == "__main__":
         "port": CHAT_APP_PORT,
         "log_config": None,  # don't let Uvicorn install its own handlers
         "log_level": None,
-        "timeout_keep_alive": 60 * 60,  # TODO : DO NOT FORGET TO REMOVE THIS
+        "timeout_keep_alive": 45,
         "timeout_graceful_shutdown": 15,
-        # "timeout_keep_alive": 45,
     }
 
     if _uvicorn_run_supports_timeout_worker_healthcheck(uvicorn):
@@ -731,4 +735,20 @@ if __name__ == "__main__":
         worker_healthcheck_timeout,
         _uvicorn_run_supports_timeout_worker_healthcheck(uvicorn),
     )
-    uvicorn.run(app_target, **run_kwargs)
+    run_started_at = time.monotonic()
+    try:
+        uvicorn.run(app_target, **run_kwargs)
+    finally:
+        elapsed = time.monotonic() - run_started_at
+        logger.warning(
+            "uvicorn.run returned: component=%s pid=%s elapsed=%.3fs version=%s",
+            "chat-ingress",
+            os.getpid(),
+            elapsed,
+            getattr(uvicorn, "__version__", "unknown"),
+        )
+        log_shutdown_diagnostics(
+            logger,
+            reason=f"chat-ingress:uvicorn.run.returned:elapsed={elapsed:.3f}s",
+            include_traceback=True,
+        )
