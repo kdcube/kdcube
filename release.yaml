@@ -1,18 +1,27 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.16.1240"
+  ref: "2026.3.16.1519"
   description: |
-    Contents
-    - Remove loop.add_signal_handler(SIGTERM) override in api/web_app.py and
-      proc/web_app.py — uvicorn now owns SIGTERM and triggers lifespan teardown
-      normally
-    - Set draining=True at the start of lifespan teardown so /health returns 503
-      during the graceful shutdown window, allowing the ALB to deregister the
-      target before connections are dropped
-    - Remove SIGTERM from faulthandler.register() in both services
-    - Add timeout_worker_healthcheck (default 60 s, tunable via
-      UVICORN_TIMEOUT_WORKER_HEALTHCHECK) to prevent uvicorn killing workers
-      during heavy per-worker lifespan initialisation
-    - Bump uvicorn to 0.37.0 (first version with timeout_worker_healthcheck)
+    This release expands the platform in three main areas: Stripe-based economics workflows, OpenRouter support for single-turn data-processing use cases, and shutdown diagnostics for
+    ECS task termination.
+  
+    The largest change is a substantial economics and Stripe update. The API now has a dedicated economics surface for checkout, webhooks, admin operations, and user self-service. Users
+    can start Stripe checkout flows for wallet top-ups and subscriptions, inspect their own subscription and budget breakdown, cancel subscriptions, and open a Stripe customer portal
+    session. Admin flows now support subscription creation, wallet refunds, subscription cancellation, reconciliation of pending Stripe actions, and inspection of pending Stripe
+    requests. Under the hood, Stripe handling was refactored and hardened: subscription plan changes now cancel prior Stripe subscriptions to avoid double charging, rollover and
+    reconciliation background jobs were added, webhook processing was expanded, and the control-plane/UI side gained new billing screens for both users and administrators. Documentation
+    and sample env files were updated accordingly.
+  
+    The release also adds OpenRouter integration for ad hoc, non-streaming workloads. There is now a dedicated OpenRouter service-hub client with accounting integration so usage is
+    tracked through the existing accounting system. This is intended for single-turn tasks such as extraction, classification, tagging, summarization, and schema generation rather than
+    the main streaming copilot path. The release includes example agents, accounting validation examples, and a sample OpenRouter-based bundle to demonstrate how to use the integration
+    in practice. Related UI and pricing-table support were updated so OpenRouter-backed models can be surfaced consistently.
+  
+    Finally, ingress and proc were instrumented to diagnose ECS shutdown problems where tasks appear to stop gracefully in logs but do not fully exit. Both services now emit version-
+    tolerant Uvicorn shutdown diagnostics, including parent/worker signal snapshots, process-tree logging, and explicit logging after uvicorn.run(...) returns. The Uvicorn keep-alive
+    timeout was also reduced from the previous one-hour setting to a short operational value, which is a sensible cleanup for ALB/ECS deployment. This part of the release is diagnostic
+    and operational in nature: it is intended to make the next failed stop/redeploy event actionable by showing whether the process is stuck inside Uvicorn supervision or after the app
+    has already completed shutdown.
+
   config:
-    version: "2026.3.16.1240"
+    version: "2026.3.16.1519"
