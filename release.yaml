@@ -1,8 +1,19 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.16.2245"
+  ref: "2026.3.17.110"
   description: |
-    Fix asyncpg Postgres pool configuration so POSTGRES_SSL=true maps to sslmode=require by default, add explicit POSTGRES_SSL_MODE/POSTGRES_SSL_ROOT_CERT support, and prevent ingress/
-    proc schedulers from failing on RDS certificate verification unexpectedly
+    This release is mainly a frontend and runtime-stability update. The chat web app now handles backend service/economics events more explicitly: rate-limit warnings, quota denials,
+    and project-budget exhaustion are surfaced as popup notifications instead of being buried in logs. Turn failures are now rendered as structured service-error items in the
+    conversation, so users can see that a turn failed and expand the details. The UI also improves artifact handling: canvas and web-search artifacts now have titles plus copy/save
+    actions, the canvas view has its own header and close control, and embedded srcdoc HTML artifacts are supported. There is also a new optional debug panel, enabled through
+    CHAT_WEB_APP_SHOW_DEBUG_CONTROLS, which can load an example conversation for UI testing.
+  
+    On the platform side, web-proxy startup now includes ROUTE_PREFIX in the runtime envsubst variable list, so generated OpenResty/Nginx config correctly respects route-prefix
+    deployments. In the solution runtime, completed turns now clean up their temporary workspace directories after artifacts are persisted, which reduces leftover disk usage; this
+    behavior can be disabled for debugging with SOLUTION_RETAIN_TURN_WORKSPACE=true.
+  
+    Finally, the continuation queueing work received a production fix. Atomic chat enqueue now includes the continuation mailbox counter prefix in its backpressure/queue-capacity path.
+    Without this, chat requests could fail with 503 and atomic_enqueue_error: 'AtomicChatQueueManager' object has no attribute 'QUEUE_CONTINUATION_COUNT_PREFIX'. This release closes
+    that gap and adds a regression test around the atomic enqueue path.
   config:
-    version: "2026.3.16.2245"
+    version: "2026.3.17.110"
