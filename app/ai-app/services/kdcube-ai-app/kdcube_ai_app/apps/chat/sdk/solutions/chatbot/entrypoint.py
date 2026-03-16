@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.emitters import (
     build_relay_from_env,
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.continuations import get_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.infra.service_hub.inventory import (
@@ -58,6 +59,7 @@ class BaseEntrypoint:
         comm_context: ChatTaskPayload = None,
         event_filter: Optional[Any] = None,
         ctx_client: Optional[Any] = None,
+        continuation_source: Optional[Any] = None,
     ):
         self.config = config
         self.settings = get_settings()
@@ -65,6 +67,7 @@ class BaseEntrypoint:
         self.redis = redis
         self.comm_context = comm_context
         self._event_filter = event_filter
+        self._continuation_source = continuation_source
 
         self._comm: Optional[ChatCommunicator] = None
         self._conv_idx = None
@@ -82,6 +85,28 @@ class BaseEntrypoint:
             self.ctx_client = None
 
         self._apply_configuration_overrides()
+
+    @property
+    def continuation_source(self) -> Optional[Any]:
+        return self._continuation_source or get_current_conversation_continuation_source()
+
+    async def pending_continuation_count(self) -> int:
+        source = self.continuation_source
+        if source is None:
+            return 0
+        return int(await source.pending_count())
+
+    async def peek_next_continuation(self):
+        source = self.continuation_source
+        if source is None:
+            return None
+        return await source.peek_next()
+
+    async def take_next_continuation(self):
+        source = self.continuation_source
+        if source is None:
+            return None
+        return await source.take_next()
 
     # ---------- Common helpers ----------
 

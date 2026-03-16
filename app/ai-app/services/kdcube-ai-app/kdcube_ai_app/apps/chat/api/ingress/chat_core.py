@@ -15,12 +15,13 @@ from typing import Any, Dict, List, Optional, Literal
 from fastapi import Request  # only if you put this in a place where FastAPI is available
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.continuations import RedisConversationContinuationSource
 from kdcube_ai_app.apps.chat.sdk.util import _iso
 from kdcube_ai_app.auth.sessions import RequestContext, UserType, UserSession
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskPayload, ChatTaskMeta, ChatTaskRouting, ChatTaskActor, ChatTaskUser,
-    ChatTaskRequest, ChatTaskConfig, ChatTaskAccounting, ServiceCtx, ConversationCtx
+    ChatTaskRequest, ChatTaskConfig, ChatTaskAccounting, ChatTaskContinuation, ServiceCtx, ConversationCtx
 )
 from kdcube_ai_app.infra.accounting.envelope import build_envelope_from_session
 from kdcube_ai_app.infra.gateway.rate_limiter import RateLimitError
@@ -193,6 +194,48 @@ class IngressResult:
     user_type: Optional[str] = None
     queue_stats: Optional[Dict[str, Any]] = None
     reason: Optional[str] = None
+    continuation_kind: Optional[str] = None
+
+
+def _resolve_requested_continuation_kind(
+    message_data: Dict[str, Any],
+    *,
+    conversation_busy: bool,
+) -> tuple[str, bool]:
+    payload = message_data.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+
+    raw = (
+        message_data.get("message_kind")
+        or message_data.get("continuation_kind")
+        or payload.get("message_kind")
+        or payload.get("continuation_kind")
+    )
+    raw = str(raw or "").strip().lower()
+
+    explicit_followup = bool(message_data.get("followup") or payload.get("followup"))
+    explicit_steer = bool(message_data.get("steer") or payload.get("steer"))
+
+    if explicit_steer or raw == "steer":
+        return "steer", True
+    if explicit_followup or raw == "followup":
+        return "followup", True
+    if raw == "regular":
+        return ("followup" if conversation_busy else "regular"), True
+    return ("followup" if conversation_busy else "regular"), False
+
+
+def _resolve_target_turn_id(message_data: Dict[str, Any]) -> Optional[str]:
+    payload = message_data.get("payload")
+    payload = payload if isinstance(payload, dict) else {}
+    raw = (
+        message_data.get("target_turn_id")
+        or message_data.get("active_turn_id")
+        or payload.get("target_turn_id")
+        or payload.get("active_turn_id")
+    )
+    value = str(raw or "").strip()
+    return value or None
 
 
 async def process_chat_message(
@@ -220,6 +263,11 @@ async def process_chat_message(
     RequestContext + IngressConfig.
     """
     text = (message_text or "").strip()
+    requested_kind, requested_kind_explicit = _resolve_requested_continuation_kind(
+        message_data,
+        conversation_busy=False,
+    )
+    target_turn_id = _resolve_target_turn_id(message_data)
     task_id = str(uuid.uuid4())
     turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
     conversation_id = message_data.get("conversation_id") or session.session_id
@@ -273,8 +321,9 @@ async def process_chat_message(
             http_status=503,
         )
 
-    # Empty message → emit error via relay + let transport map to HTTP/WS
-    if not text:
+    # Empty message → emit error via relay + let transport map to HTTP/WS.
+    # Explicit steer messages may intentionally carry blank text.
+    if not text and requested_kind != "steer":
         await chat_comm.emit_error(
             svc,
             conv,
@@ -425,6 +474,11 @@ async def process_chat_message(
         ),
         config=ChatTaskConfig(values=ext_config),
         accounting=ChatTaskAccounting(envelope=acct_env),
+        continuation=ChatTaskContinuation(
+            kind=requested_kind,
+            explicit=requested_kind_explicit,
+            target_turn_id=target_turn_id,
+        ),
     )
 
     # --- Conversation lock + state ---
@@ -463,6 +517,63 @@ async def process_chat_message(
         active_turn = set_res.get("current_turn_id")
         error = set_res.get("error") or "Conversation is busy (another tab/process is answering)."
         error_type = set_res.get("error_type") or "conversation_busy"
+        if error_type == "conversation_busy":
+            try:
+                continuation_kind, continuation_explicit = _resolve_requested_continuation_kind(
+                    message_data,
+                    conversation_busy=True,
+                )
+                payload.continuation = ChatTaskContinuation(
+                    kind=continuation_kind,
+                    explicit=continuation_explicit,
+                    target_turn_id=target_turn_id,
+                    active_turn_id=active_turn,
+                )
+                continuation_source = RedisConversationContinuationSource(
+                    redis=getattr(app.state, "redis_async", None),
+                    tenant=tenant_id,
+                    project=project_id,
+                    conversation_id=conversation_id,
+                )
+                env = await continuation_source.publish(
+                    payload,
+                    kind=continuation_kind,
+                    explicit=continuation_explicit,
+                    target_turn_id=target_turn_id,
+                    active_turn_id=active_turn,
+                )
+                queue_size = await continuation_source.pending_count()
+                try:
+                    await comm.service_event(
+                        type="queue.continuation.accepted",
+                        step="queue.continuation",
+                        status="completed",
+                        title="Continuation accepted",
+                        agent="ingress",
+                        data={
+                            "message_kind": continuation_kind,
+                            "active_turn_id": active_turn,
+                            "queued_turn_id": payload.routing.turn_id,
+                            "task_id": payload.meta.task_id,
+                            "continuation_queue_size": queue_size,
+                            "continuation_message_id": env.message_id,
+                        },
+                    )
+                except Exception:
+                    logger.debug("Failed to emit continuation accepted service event", exc_info=True)
+                return IngressResult(
+                    ok=True,
+                    task_id=task_id,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    session_id=session.session_id,
+                    user_type=session.user_type.value,
+                    queue_stats={"continuation_queue_size": queue_size},
+                    reason=f"{continuation_kind}_accepted",
+                    continuation_kind=continuation_kind,
+                )
+            except Exception:
+                logger.exception("Failed to store continuation message for conversation %s", conversation_id)
         try:
             await chat_comm.emit_conv_status(
                 svc,

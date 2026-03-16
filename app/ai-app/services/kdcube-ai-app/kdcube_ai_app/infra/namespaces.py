@@ -21,6 +21,9 @@ class REDIS:
     class CHAT:
         PROMPT_QUEUE_PREFIX = "kdcube:chat:prompt:queue"
         PROMPT_QUEUE_INFLIGHT_PREFIX = "kdcube:chat:prompt:queue:inflight"
+        CONVERSATION_MAILBOX_PREFIX = "kdcube:chat:conversation:mailbox"
+        CONVERSATION_MAILBOX_SEQ_PREFIX = "kdcube:chat:conversation:mailbox:seq"
+        CONVERSATION_MAILBOX_COUNT_PREFIX = "kdcube:chat:conversation:mailbox:count"
         SSE_CONNECTIONS_PREFIX = "kdcube:chat:sse:connections"
 
     class INSTANCE:

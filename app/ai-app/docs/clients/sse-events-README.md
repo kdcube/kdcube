@@ -1,9 +1,9 @@
 ---
 id: ks:docs/clients/sse-events-README.md
 title: "SSE Events"
-summary: "SSE protocol reference: envelope, lifecycle events, and full event catalog from ingress, proc, and bundles."
+summary: "SSE protocol reference: envelope, lifecycle events, continuation acknowledgements, and full event catalog from ingress, proc, and bundles."
 tags: ["clients", "sse", "protocol", "events", "streaming", "chat"]
-keywords: ["event envelope", "chat_step", "delta", "server_shutdown", "conv_status", "rate_limit", "backpressure", "bundle events"]
+keywords: ["event envelope", "chat_step", "delta", "server_shutdown", "conv_status", "rate_limit", "backpressure", "bundle events", "followup", "steer", "continuation"]
 see_also:
   - ks:docs/clients/frontend-awareness-on-service-state-README.md
   - ks:docs/service/comm/comm-system.md
@@ -39,6 +39,24 @@ All endpoints are relative to the chat base URL (or behind your proxy prefix):
 
 - `POST /sse/conv_status.get`  
   Returns the conversation status and emits a `conv_status` event (also available on the stream).
+
+**`POST /sse/chat` synchronous acknowledgement**
+
+`POST /sse/chat` returns JSON immediately, before the turn necessarily starts on proc.
+
+Known `status` values:
+
+| `status` | Meaning |
+| --- | --- |
+| `processing_started` | A regular turn was admitted to the normal proc ready queue. |
+| `followup_accepted` | The conversation was already busy; the message was accepted into the per-conversation continuation mailbox as a followup. |
+| `steer_accepted` | The conversation was already busy; the message was accepted into the per-conversation continuation mailbox as a steer/control message. |
+
+Important:
+
+- `followup_accepted` / `steer_accepted` do **not** mean that a new proc turn started immediately.
+- They mean the message is accepted into ordered shared storage for that conversation.
+- The active bundle may consume it while still running, or proc may later promote it into the normal ready queue after the current turn ends.
 
 ---
 
@@ -128,7 +146,7 @@ The server emits these **SSE event names**:
 | `chat_delta`    | `chat.delta`                                    | Streaming chunks (answer/thinking/artifacts). |
 | `chat_complete` | `chat.complete`                                 | Turn completed.                               |
 | `chat_error`    | `chat.error`                                    | Turn failed.                                  |
-| `chat_service`  | `chat.service` or `gateway.*` or `rate_limit.*` | Service‑level events.                         |
+| `chat_service`  | `chat.service` or `gateway.*` or `rate_limit.*` or `queue.*` | Service‑level events.                         |
 | `conv_status`   | `conv.status`                                   | Conversation status snapshot.                 |
 
 Important:
@@ -148,7 +166,7 @@ These are emitted by the default workflow and are stable across bundles.
 | `chat.complete` | `chat_complete` | Final answer.                | `data.final_answer`, `data.followups?`, `data.selected_model?`  |
 | `chat.error`    | `chat_error`    | Turn error.                  | `data.error`, `data.error_type?`, `data.reason?`, `data.task_id?` |
 | `chat.service`  | `chat_service`  | Service‑level event.         | `event.step`, `data`                                            |
-| `conv.status`   | `conv_status`   | Conversation state snapshot. | `data.state`, `data.updated_at`, `data.current_turn_id?`, `data.completion?` |
+| `conv.status`   | `conv_status`   | Conversation state snapshot. | `data.state`, `data.updated_at`, `data.current_turn_id?`, `data.completion?` such as `queued_next` or `interrupted` |
 
 ---
 
@@ -224,6 +242,43 @@ These are also delivered on `chat_service` with:
   "data": {"message":"...","http_status":429,"endpoint":"/sse/chat"}
 }
 ```
+
+### Continuation accepted while conversation is busy
+
+Ingress may accept a new message for a conversation that is already `in_progress` and store it in the per-conversation continuation mailbox instead of rejecting it.
+
+Known `env.type` value:
+- `queue.continuation.accepted`
+
+Typical payload:
+
+```json
+{
+  "type": "queue.continuation.accepted",
+  "event": {
+    "step": "queue.continuation",
+    "status": "completed",
+    "agent": "ingress",
+    "title": "Continuation accepted"
+  },
+  "data": {
+    "message_kind": "followup",
+    "active_turn_id": "turn_active",
+    "queued_turn_id": "turn_next",
+    "task_id": "task_123",
+    "continuation_queue_size": 2,
+    "continuation_message_id": "cont_abc123"
+  }
+}
+```
+
+Meaning:
+
+- the active turn is still running
+- this message was accepted into the ordered conversation mailbox
+- it is not yet a new `chat.start`
+- a continuation-aware bundle may consume it during the active turn
+- otherwise proc will later promote the next mailbox item into the normal ready queue
 
 ---
 
@@ -307,6 +362,36 @@ This event is emitted by `/sse/conv_status.get` and mirrors server‑side state:
 }
 ```
 
+### Queued-next contract
+
+If the active bundle does not consume mailbox items itself, proc may promote the oldest mailbox item into the normal ready queue after the current turn completes. In that case the client may see:
+
+- `conv_status` where:
+  - `data.state = "in_progress"`
+  - `data.completion = "queued_next"`
+
+Meaning:
+
+- the previous turn finished
+- the next continuation message for the same conversation has been promoted into the normal proc queue
+- the next turn may be claimed by the same proc worker or by a different one
+- `queued_next` is not a failure and not an interruption signal
+
+Example:
+
+```json
+{
+  "type": "conv.status",
+  "event": {"step": "conv.state", "status": "in_progress"},
+  "data": {
+    "state": "in_progress",
+    "updated_at": "2026-03-16T14:02:11.884Z",
+    "current_turn_id": "turn_next",
+    "completion": "queued_next"
+  }
+}
+```
+
 ### Interrupted turn contract
 
 If proc started a turn but lost the worker before the turn completed, the server does not auto-replay that request. Instead it signals interruption to the client with:
@@ -353,6 +438,12 @@ Client guidance:
 - Mark the active turn as interrupted/failed.
 - Offer manual retry/resubmit if appropriate.
 - Do not assume the backend will replay the request automatically.
+
+Client guidance for continuation acceptance:
+- Treat `followup_accepted` / `steer_accepted` as admission acknowledgements, not as turn-start confirmations.
+- Keep the UI bound to the same conversation; do not assume a second parallel turn started.
+- Use `queue.continuation.accepted` to show that the message is queued behind or alongside the active turn.
+- If a later `conv_status` arrives with `completion = "queued_next"`, interpret that as "the next continuation has been promoted for normal processing".
 
 ---
 

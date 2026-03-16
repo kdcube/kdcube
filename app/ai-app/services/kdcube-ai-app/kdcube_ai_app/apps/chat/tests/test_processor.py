@@ -41,6 +41,7 @@ class _MinimalRedis:
         self.set_calls = []
         self.lists = {}
         self.lock_ttls = {}
+        self.values = {}
 
     def seed_list(self, key, values):
         self.lists[key] = list(values)
@@ -81,6 +82,9 @@ class _MinimalRedis:
             elif key in self.lists:
                 deleted += 1
                 del self.lists[key]
+            elif key in self.values:
+                deleted += 1
+                del self.values[key]
         return deleted
 
     async def lpush(self, key, value):
@@ -115,6 +119,27 @@ class _MinimalRedis:
     async def llen(self, key):
         return len(self.lists.get(key) or [])
 
+    async def rpop(self, key):
+        items = list(self.lists.get(key) or [])
+        if not items:
+            return None
+        value = items.pop()
+        self.lists[key] = items
+        return value
+
+    async def incr(self, key):
+        value = int(self.values.get(key, 0)) + 1
+        self.values[key] = value
+        return value
+
+    async def decr(self, key):
+        value = int(self.values.get(key, 0)) - 1
+        self.values[key] = value
+        return value
+
+    async def get(self, key):
+        return self.values.get(key)
+
 
 class _NoopConversationCtx:
     def __init__(self):
@@ -122,7 +147,10 @@ class _NoopConversationCtx:
 
     async def set_conversation_state(self, **kwargs):
         self.calls.append(kwargs)
-        return {"updated_at": "2026-03-16T00:00:00Z"}
+        return {
+            "updated_at": "2026-03-16T00:00:00Z",
+            "current_turn_id": kwargs.get("last_turn_id"),
+        }
 
 
 class _NoopRelay:
@@ -404,3 +432,57 @@ async def test_process_task_cancellation_keeps_started_inflight_claim(_patch_pro
     assert lock_key not in redis.delete_calls
     assert started_key not in redis.delete_calls
     assert processor.get_current_load() == 0
+
+
+@pytest.mark.asyncio
+async def test_process_task_promotes_next_continuation_to_ready_queue(_patch_processor_dependencies):
+    redis = _MinimalRedis()
+    conversation_ctx = _NoopConversationCtx()
+    relay = _NoopRelay()
+    processor = _build_processor(redis, conversation_ctx=conversation_ctx, relay=relay)
+
+    current_payload = _build_task_payload("task-current", user_type="registered")
+    next_payload = _build_task_payload("task-next", user_type="registered")
+    next_payload["routing"]["turn_id"] = "turn-next"
+    next_payload["request"]["message"] = "follow up"
+    next_payload["continuation"] = {"kind": "followup", "explicit": False, "active_turn_id": "turn-1"}
+
+    mailbox_key = "tenant-a:project-a:kdcube:chat:conversation:mailbox:conv-1"
+    redis.seed_list(
+        mailbox_key,
+        [
+            json.dumps(
+                {
+                    "message_id": "cont-1",
+                    "kind": "followup",
+                    "created_at": 1.0,
+                    "sequence": 1,
+                    "payload": next_payload,
+                }
+            )
+        ],
+    )
+
+    raw_payload = json.dumps(current_payload).encode("utf-8")
+    inflight_key = "queue:inflight:registered"
+    lock_key = "lock:task-current"
+    redis.seed_list(inflight_key, [raw_payload])
+    redis.lock_ttls[lock_key] = 300
+    processor._current_load = 1
+
+    task_data = dict(current_payload)
+    task_data["_lock_key"] = lock_key
+    task_data["_raw_payload"] = raw_payload
+    task_data["_ready_queue_key"] = "queue:registered"
+    task_data["_inflight_queue_key"] = inflight_key
+    task_data["_queue_wait_ms"] = 10
+
+    await processor._process_task(task_data)
+
+    assert redis.lists[inflight_key] == []
+    promoted = redis.lists["queue:registered"][0]
+    promoted_payload = json.loads(promoted)
+    assert promoted_payload["meta"]["task_id"] == "task-next"
+    assert conversation_ctx.calls[-1]["new_state"] == "in_progress"
+    assert conversation_ctx.calls[-1]["last_turn_id"] == "turn-next"
+    assert relay.conv_status_calls[-1]["kwargs"]["completion"] == "queued_next"

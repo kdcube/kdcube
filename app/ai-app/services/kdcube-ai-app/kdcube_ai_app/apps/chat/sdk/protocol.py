@@ -166,6 +166,13 @@ class ChatTaskAccounting(_ProtoBase):
     envelope: Dict[str, Any] = {}   # whatever your accounting layer produces
 
 
+class ChatTaskContinuation(_ProtoBase):
+    kind: Literal["regular", "followup", "steer"] = "regular"
+    explicit: bool = False
+    active_turn_id: Optional[str] = None
+    target_turn_id: Optional[str] = None
+
+
 class ChatTaskPayload(_ProtoBase):
     meta: Optional[ChatTaskMeta] = None
     routing: Optional[ChatTaskRouting] = None
@@ -174,4 +181,4 @@ class ChatTaskPayload(_ProtoBase):
     request: Optional[ChatTaskRequest] = None
     config: Optional[ChatTaskConfig] = None
     accounting: Optional[ChatTaskAccounting] = None
-
+    continuation: Optional[ChatTaskContinuation] = None

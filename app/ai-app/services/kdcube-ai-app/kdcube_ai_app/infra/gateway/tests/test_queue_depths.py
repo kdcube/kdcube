@@ -12,6 +12,9 @@ class _FakeRedis:
     async def llen(self, key):
         return self.sizes.get(key, 0)
 
+    async def get(self, key):
+        return self.sizes.get(key, 0)
+
 
 def _gateway_config():
     return SimpleNamespace(

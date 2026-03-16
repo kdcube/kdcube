@@ -15,6 +15,8 @@ import traceback
 from typing import Optional, Dict, Any, Iterable
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.continuations import build_conversation_continuation_source
+from kdcube_ai_app.apps.chat.sdk.continuations import bind_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
 from kdcube_ai_app.infra.metrics.rolling_stats import record_metric
@@ -280,6 +282,9 @@ class EnhancedChatRequestProcessor:
         )
         return request_id, svc, conv, comm
 
+    def _continuation_source_for(self, payload: ChatTaskPayload):
+        return build_conversation_continuation_source(redis=self.redis, payload=payload)
+
     async def _mark_task_interrupted(self, task_dict: Dict[str, Any], *, reason: str) -> None:
         try:
             payload = ChatTaskPayload.model_validate(task_dict)
@@ -322,6 +327,48 @@ class EnhancedChatRequestProcessor:
             )
         except Exception:
             logger.debug("Failed to emit interrupted error for task %s", payload.meta.task_id, exc_info=True)
+
+    async def _promote_next_continuation(self, payload: ChatTaskPayload) -> Optional[Dict[str, Any]]:
+        source = self._continuation_source_for(payload)
+        envelope = await source.take_next()
+        if envelope is None:
+            return None
+
+        try:
+            next_payload = envelope.task_payload()
+        except Exception:
+            logger.exception(
+                "Dropping malformed continuation envelope for conversation=%s message_id=%s",
+                payload.routing.conversation_id,
+                envelope.message_id,
+            )
+            return None
+
+        user_type = next_payload.user.user_type
+        if hasattr(user_type, "value"):
+            user_type = user_type.value
+        ready_queue_key = self._ready_queue_key(str(user_type).lower())
+        raw_payload = json.dumps(next_payload.model_dump(), ensure_ascii=False)
+
+        try:
+            await self.redis.lpush(ready_queue_key, raw_payload)
+        except Exception:
+            await source.restore_taken(envelope)
+            raise
+
+        logger.info(
+            "Promoted continuation message_id=%s kind=%s conversation=%s turn_id=%s to %s",
+            envelope.message_id,
+            envelope.kind,
+            next_payload.routing.conversation_id,
+            next_payload.routing.turn_id,
+            ready_queue_key,
+        )
+        return {
+            "envelope": envelope,
+            "payload": next_payload,
+            "ready_queue_key": ready_queue_key,
+        }
 
     async def _queue_claim(self, ready_queue_key: str, inflight_queue_key: str):
         try:
@@ -949,6 +996,7 @@ class EnhancedChatRequestProcessor:
         success = False
         task_cancelled = False
         exec_started_at = None
+        continuation_source = self._continuation_source_for(payload)
         try:
             started_key = await self._mark_task_started(task_data, payload, request_id)
             if started_key:
@@ -977,13 +1025,14 @@ class EnhancedChatRequestProcessor:
                         "conversation_id": payload.routing.conversation_id,
                         "turn_id": payload.routing.turn_id,
                     }):
-                        result = await asyncio.wait_for(
-                            self.chat_handler(
-                                payload,
+                        with bind_current_conversation_continuation_source(continuation_source):
+                            result = await asyncio.wait_for(
+                                self.chat_handler(
+                                    payload,
 
-                            ),
-                            timeout=self.task_timeout_sec,
-                        )
+                                ),
+                                timeout=self.task_timeout_sec,
+                            )
 
             result = result or {}
             success = True
@@ -1009,6 +1058,7 @@ class EnhancedChatRequestProcessor:
             success = False
         finally:
             exec_ms = None
+            promoted_continuation = None
             if exec_started_at is not None:
                 try:
                     exec_ms = int((time.monotonic() - exec_started_at) * 1000)
@@ -1019,6 +1069,14 @@ class EnhancedChatRequestProcessor:
                     await self._ack_claimed_task(task_data)
             finally:
                 self._current_load = max(0, self._current_load - 1)
+            if not task_cancelled:
+                try:
+                    promoted_continuation = await self._promote_next_continuation(payload)
+                except Exception:
+                    logger.exception(
+                        "Failed to promote next continuation for conversation=%s",
+                        payload.routing.conversation_id,
+                    )
             if not task_cancelled:
                 if self.queue_analytics_updater:
                     try:
@@ -1051,23 +1109,50 @@ class EnhancedChatRequestProcessor:
                 except Exception:
                     logger.debug("Failed to record task latency metrics", exc_info=True)
                 try:
-                    res = await self.conversation_ctx.set_conversation_state(
-                        tenant=payload.actor.tenant_id, project=payload.actor.project_id, user_id=payload.user.user_id, conversation_id=payload.routing.conversation_id,
-                        new_state=("idle" if success else "error"),
-                        by_instance=f"{self.middleware.instance_id}:{self.process_id}",
-                        request_id=request_id,
-                        last_turn_id=payload.routing.turn_id,
-                        require_not_in_progress=False,
-                        user_type=payload.user.user_type,
-                        bundle_id=payload.routing.bundle_id,
-                    )
-                    # broadcast to session
-                    await self._relay.emit_conv_status(svc, conv,
-                                                     routing=payload.routing,
-                                                     state=("idle" if success else "error"),
-                                                     updated_at=res["updated_at"],
-                                                     current_turn_id=res.get("current_turn_id"),
-                                                     completion="success" if success else "error",
-                                                     target_sid=None)
+                    if promoted_continuation is not None:
+                        next_payload = promoted_continuation["payload"]
+                        next_request_id, next_svc, next_conv, _ = self._build_runtime_context(next_payload)
+                        res = await self.conversation_ctx.set_conversation_state(
+                            tenant=next_payload.actor.tenant_id,
+                            project=next_payload.actor.project_id,
+                            user_id=next_payload.user.user_id,
+                            conversation_id=next_payload.routing.conversation_id,
+                            new_state="in_progress",
+                            by_instance=f"{self.middleware.instance_id}:{self.process_id}",
+                            request_id=next_request_id,
+                            last_turn_id=next_payload.routing.turn_id,
+                            require_not_in_progress=False,
+                            user_type=next_payload.user.user_type,
+                            bundle_id=next_payload.routing.bundle_id,
+                        )
+                        await self._relay.emit_conv_status(
+                            next_svc,
+                            next_conv,
+                            routing=next_payload.routing,
+                            state="in_progress",
+                            updated_at=res["updated_at"],
+                            current_turn_id=res.get("current_turn_id"),
+                            completion="queued_next",
+                            target_sid=None,
+                        )
+                    else:
+                        res = await self.conversation_ctx.set_conversation_state(
+                            tenant=payload.actor.tenant_id, project=payload.actor.project_id, user_id=payload.user.user_id, conversation_id=payload.routing.conversation_id,
+                            new_state=("idle" if success else "error"),
+                            by_instance=f"{self.middleware.instance_id}:{self.process_id}",
+                            request_id=request_id,
+                            last_turn_id=payload.routing.turn_id,
+                            require_not_in_progress=False,
+                            user_type=payload.user.user_type,
+                            bundle_id=payload.routing.bundle_id,
+                        )
+                        # broadcast to session
+                        await self._relay.emit_conv_status(svc, conv,
+                                                         routing=payload.routing,
+                                                         state=("idle" if success else "error"),
+                                                         updated_at=res["updated_at"],
+                                                         current_turn_id=res.get("current_turn_id"),
+                                                         completion="success" if success else "error",
+                                                         target_sid=None)
                 except Exception as ex:
                     logger.error(traceback.format_exc())

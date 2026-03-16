@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any, List, Optional, Type, Callable, Awaitable
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+from kdcube_ai_app.apps.chat.sdk.continuations import get_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
 from kdcube_ai_app.apps.chat.sdk.context.memory.conv_memories import ConvMemoriesStore
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
@@ -80,13 +81,15 @@ class BaseWorkflow():
                  message_resources_fn: Optional[Callable[[str, bool], str]] = None,
                  gate_out_class: Optional[Type] = None,
                  answer_system_prompt: Optional[str] = None,
-                 graph: GraphCtx = None):
+                 graph: GraphCtx = None,
+                 continuation_source: Optional[Any] = None):
 
         self.graph = graph
         self.kb = kb
         self.comm = comm
         self._comm = AIBEmitters(comm)
         self.comm_context = comm_context
+        self._continuation_source = continuation_source
 
         self.model_service = model_service
         self.store = store
@@ -148,6 +151,7 @@ class BaseWorkflow():
                 bundle_id=self.config.ai_bundle_spec.id,
                 max_tokens=getattr(self.config, "max_tokens", None),
                 bundle_storage=str(bundle_ws) if bundle_ws else None,
+                continuation_source=self.continuation_source,
             )
             self.ctx_browser = ContextBrowser(
                 ctx_client=self.ctx_client,
@@ -157,12 +161,35 @@ class BaseWorkflow():
             )
         except Exception:
             self.runtime_ctx = RuntimeCtx()
+            self.runtime_ctx.continuation_source = self.continuation_source
             self.ctx_browser = ContextBrowser(
                 ctx_client=self.ctx_client,
                 logger=self.logger,
                 model_service=self.model_service,
                 runtime_ctx=self.runtime_ctx,
             )
+
+    @property
+    def continuation_source(self) -> Optional[Any]:
+        return self._continuation_source or get_current_conversation_continuation_source()
+
+    async def pending_continuation_count(self) -> int:
+        source = self.continuation_source
+        if source is None:
+            return 0
+        return int(await source.pending_count())
+
+    async def peek_next_continuation(self):
+        source = self.continuation_source
+        if source is None:
+            return None
+        return await source.peek_next()
+
+    async def take_next_continuation(self):
+        source = self.continuation_source
+        if source is None:
+            return None
+        return await source.take_next()
 
     # ---------- Comm ----------
 

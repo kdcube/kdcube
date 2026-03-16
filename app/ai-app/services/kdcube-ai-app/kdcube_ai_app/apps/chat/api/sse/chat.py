@@ -839,11 +839,16 @@ def create_sse_router(
 
         # HTTP ack – everything else goes over SSE stream
         return {
-            "status": "processing_started",
+            "status": result.reason or "processing_started",
             "task_id": result.task_id,
             "session_id": result.session_id,
             "user_type": result.user_type,
-            "message": "Queued; streaming via SSE",
+            "message_kind": result.continuation_kind,
+            "message": (
+                "Continuation accepted; available to the active conversation owner"
+                if result.reason in {"followup_accepted", "steer_accepted"}
+                else "Queued; streaming via SSE"
+            ),
         }
 
     # ---------- conv_status.get (parity, now via core) ----------
