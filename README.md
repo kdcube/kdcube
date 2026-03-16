@@ -1,29 +1,48 @@
-# KDCube — Agentic AI Platform & SDK
+# KDCube — Self-Hosted Runtime Controls for Customer-Facing AI
 
+KDCube is a **self-hosted, multi-tenant runtime and SDK** for teams shipping **AI assistants, copilots, and agentic workflows to customers**.
 
-KDCube is a **self‑hosted multi‑tenant, multi‑user platform + SDK** for building **custom AI assistants, copilots, and agentic apps**.
+Frameworks help you build agents.  
+KDCube helps you **run them in production** with stronger control over:
 
-**Run a copilot for your customers, not just for yourself** — use the built‑in ReAct workflow or bring your own.
+- **tenant isolation**
+- **guarded execution**
+- **cost and budget enforcement**
+- **provenance and citations**
+- **self-hosted deployment**
 
-KDCube provides the **runtime, streaming protocol, tools, memory, and operations stack** so you can ship AI products with production‑grade reliability.
+KDCube is built for teams that need more than a demo:
+- B2B SaaS products embedding AI for customers
+- enterprise deployments with procurement and security review
+- multi-tenant products where runtime control matters as much as model quality
+
 ![cubes.png](assets/cubes.png)
 
-**Highlights**
-- **Full stack**: from streaming protocols to tool execution, memory, economics, and ops.
-- **Agent‑first**: a ready‑made, versatile ReAct‑style agent that can be extended or replaced.
-- **No tool‑calling lock‑in**: the agent runs on plain prompt/completion while fully emulating tool‑calling (and more).
-- **Built for real apps**: multi‑tenant isolation, backpressure, rate limits, and observability.
-- **Channeled streaming + live widgets**: animate UX with streaming channels and custom widgets.
-- **Provenance by default**: source pools and citations to prove how answers were built.
-- **Feedback‑aware**: user feedback is captured and can be fed back into workflows.
+## Why KDCube
+
+**Ship customer-facing AI, not just internal demos**  
+KDCube is designed for embedded and customer-facing AI products, where multi-tenant boundaries, governance, and operational control matter.
+
+**Control runtime behavior, not just prompts**  
+Use guarded tool execution, isolated code execution, gateway controls, and role-aware event filtering to reduce operational risk.
+
+**Track costs where they happen**  
+Track usage, budgets, and economics across turns, sessions, tenants, and projects.
+
+**Keep answers explainable**  
+Use source pools, citations, and timeline-based provenance to show how outputs were built.
+
+**Deploy on your own infrastructure**  
+Run locally with Docker Compose, then move toward production deployment on your own stack.
 
 ---
-## Quickstart
 
-Install the bootstrap CLI and launch the setup wizard:
+## 10-Minute Quickstart
+
+Install the bootstrap CLI:
 
 ```bash
-pipx install kdcube-cli
+pipx install kdcube-cli kdcube-setup
 kdcube-setup
 ```
 
