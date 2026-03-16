@@ -1,27 +1,27 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.16.1519"
+  ref: "2026.3.16.2104"
   description: |
-    This release expands the platform in three main areas: Stripe-based economics workflows, OpenRouter support for single-turn data-processing use cases, and shutdown diagnostics for
-    ECS task termination.
+    This release focuses on proc reliability and operability in four areas.
   
-    The largest change is a substantial economics and Stripe update. The API now has a dedicated economics surface for checkout, webhooks, admin operations, and user self-service. Users
-    can start Stripe checkout flows for wallet top-ups and subscriptions, inspect their own subscription and budget breakdown, cancel subscriptions, and open a Stripe customer portal
-    session. Admin flows now support subscription creation, wallet refunds, subscription cancellation, reconciliation of pending Stripe actions, and inspection of pending Stripe
-    requests. Under the hood, Stripe handling was refactored and hardened: subscription plan changes now cancel prior Stripe subscriptions to avoid double charging, rollover and
-    reconciliation background jobs were added, webhook processing was expanded, and the control-plane/UI side gained new billing screens for both users and administrators. Documentation
-    and sample env files were updated accordingly.
+    First, proc shutdown and recovery were hardened. Proc now uses a drain-first shutdown flow: when termination starts, workers stop claiming new queue items and allow inflight bundle
+    execution to continue instead of cancelling it immediately. Lock renewal stays alive during drain, queue depth/backpressure now counts both ready and inflight work, and stale
+    inflight recovery was tightened so only pre-start claims are retried. If a worker is lost after bundle execution has already started, the turn is now treated as interrupted rather
+    than replayed. The client sees explicit interruption signals through conv.status with completion="interrupted" and chat.error with error_type="turn_interrupted".
   
-    The release also adds OpenRouter integration for ad hoc, non-streaming workloads. There is now a dedicated OpenRouter service-hub client with accounting integration so usage is
-    tracked through the existing accounting system. This is intended for single-turn tasks such as extraction, classification, tagging, summarization, and schema generation rather than
-    the main streaming copilot path. The release includes example agents, accounting validation examples, and a sample OpenRouter-based bundle to demonstrate how to use the integration
-    in practice. Related UI and pricing-table support were updated so OpenRouter-backed models can be surfaced consistently.
+    Second, the platform now has the first real continuation layer for busy conversations. When a conversation is already in progress, new messages can be accepted into an ordered per-
+    conversation continuation mailbox instead of being dropped or rejected outright. The mailbox supports followup and explicit steer messages, including blank steer control messages.
+    Continuation-aware workflows can inspect and consume these messages while the active turn is still running. For bundles that do not support live continuation, proc promotes the
+    oldest queued continuation back into the normal ready queue after the current turn completes, so the next turn can be processed by any proc worker in normal order. Related request
+    payloads, workflow/runtime APIs, backpressure accounting, SSE contracts, and processor architecture documentation were updated accordingly.
   
-    Finally, ingress and proc were instrumented to diagnose ECS shutdown problems where tasks appear to stop gracefully in logs but do not fully exit. Both services now emit version-
-    tolerant Uvicorn shutdown diagnostics, including parent/worker signal snapshots, process-tree logging, and explicit logging after uvicorn.run(...) returns. The Uvicorn keep-alive
-    timeout was also reduced from the previous one-hour setting to a short operational value, which is a sensible cleanup for ALB/ECS deployment. This part of the release is diagnostic
-    and operational in nature: it is intended to make the next failed stop/redeploy event actionable by showing whether the process is stuck inside Uvicorn supervision or after the app
-    has already completed shutdown.
-
+    Third, the distributed Fargate execution path was completed and corrected. The Fargate runtime now rewrites host paths to container paths before serializing runtime globals,
+    populates execution timing consistently, avoids blocking the proc event loop during ECS API calls by moving those calls off-thread, fixes error parsing issues, and cleans up merge-
+    lock handling. The distributed exec documentation was also updated to reflect the implemented architecture and remaining status more accurately.
+  
+    Finally, shutdown diagnostics for ECS were made safer and more useful. The diagnostics no longer depend on ps being present in the image and now fall back safely to /proc. Runtime
+    images for ingress and proc were updated to include procps, and the diagnostics were extended to capture process-tree information more reliably. Proc’s Uvicorn graceful-shutdown
+    timeout was also set slightly below the ECS container stopTimeout to leave margin between app-level shutdown and task-level force stop. A new ECS timeout architecture document was
+    added to explain the difference between normal proc turn runtime, graceful drain time after SIGTERM, and the outer ECS stop window.
   config:
-    version: "2026.3.16.1519"
+    version: "2026.3.16.2104"
