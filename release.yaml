@@ -1,14 +1,18 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.16.127"
+  ref: "2026.3.16.1240"
   description: |
-    This release fixes the secrets backend configuration model so it matches the intended descriptor boundaries.
-  
-    Secrets provider selection is now driven by assembly.yaml instead of gateway config. The runtime no longer reads secrets backend settings from GATEWAY_CONFIG_JSON, the local
-    installer now reads assembly.yaml.secrets.provider and renders SECRETS_PROVIDER into service env files, and ECS Terraform reads the same field and injects it into task envs. This
-    keeps gateway config limited to gateway concerns only, while actual secret values continue to come only from secrets.yaml, bundles.secrets.yaml, and AWS Secrets Manager.
-  
-    The release also keeps provider handling backward-compatible where practical: legacy local still maps to the local secrets-service sidecar, and local CLI sidecar injection now only
-    runs when the selected provider is actually secrets-service. Documentation and the default assembly template were updated so the new source of truth is explicit.
+    Contents
+    - Remove loop.add_signal_handler(SIGTERM) override in api/web_app.py and
+      proc/web_app.py — uvicorn now owns SIGTERM and triggers lifespan teardown
+      normally
+    - Set draining=True at the start of lifespan teardown so /health returns 503
+      during the graceful shutdown window, allowing the ALB to deregister the
+      target before connections are dropped
+    - Remove SIGTERM from faulthandler.register() in both services
+    - Add timeout_worker_healthcheck (default 60 s, tunable via
+      UVICORN_TIMEOUT_WORKER_HEALTHCHECK) to prevent uvicorn killing workers
+      during heavy per-worker lifespan initialisation
+    - Bump uvicorn to 0.37.0 (first version with timeout_worker_healthcheck)
   config:
-    version: "2026.3.16.127"
+    version: "2026.3.16.1240"
