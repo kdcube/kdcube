@@ -192,6 +192,9 @@ class Settings(BaseSettings):
     BUNDLES_FORCE_ENV_ON_STARTUP: bool = Field(default=False)
     BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS: int = Field(default=60)
 
+    # Solution workspace retention — set True to keep workdir/outdir after turn completes (debug).
+    SOLUTION_RETAIN_TURN_WORKSPACE: bool = Field(default=False)
+
     def model_post_init(self, __context) -> None:
         def _fetch_secret(key: str) -> str | None:
             try:

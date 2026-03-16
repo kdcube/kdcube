@@ -1366,6 +1366,22 @@ class BaseWorkflow():
         except Exception:
             self.logger.log(traceback.format_exc(), "ERROR")
 
+        try:
+            from kdcube_ai_app.apps.chat.sdk.config import get_settings
+            if not get_settings().SOLUTION_RETAIN_TURN_WORKSPACE:
+                import shutil
+                runtime_ctx = getattr(self, "runtime_ctx", None)
+                for attr in ("workdir", "outdir"):
+                    path_str = getattr(runtime_ctx, attr, None) if runtime_ctx else None
+                    if path_str:
+                        import pathlib
+                        p = pathlib.Path(path_str)
+                        if p.exists():
+                            shutil.rmtree(p, ignore_errors=True)
+                            self.logger.log(f"[workflow] cleaned up turn workspace: {p}", level="INFO")
+        except Exception:
+            self.logger.log(traceback.format_exc(), "ERROR")
+
     async def _handle_turn_exception(self,
                                      exc: Exception,
                                      scratchpad: CTurnScratchpad) -> None:
