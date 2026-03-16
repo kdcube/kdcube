@@ -17,7 +17,7 @@ EXPOSE 80
 #     envsubst substitutes ${APP_DOMAIN} and ${ALB_CIDR} at container startup.
 CMD ["/bin/sh", "-c", \
   "if [ -f /nginx-config/nginx.conf.template ]; then \
-     envsubst '${APP_DOMAIN} ${ALB_CIDR}' \
+     envsubst '${APP_DOMAIN} ${ALB_CIDR} ${ROUTE_PREFIX}' \
        < /nginx-config/nginx.conf.template \
        > /usr/local/openresty/nginx/conf/nginx.conf; \
    fi \
