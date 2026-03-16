@@ -1,27 +1,8 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.16.2104"
+  ref: "2026.3.16.2245"
   description: |
-    This release focuses on proc reliability and operability in four areas.
-  
-    First, proc shutdown and recovery were hardened. Proc now uses a drain-first shutdown flow: when termination starts, workers stop claiming new queue items and allow inflight bundle
-    execution to continue instead of cancelling it immediately. Lock renewal stays alive during drain, queue depth/backpressure now counts both ready and inflight work, and stale
-    inflight recovery was tightened so only pre-start claims are retried. If a worker is lost after bundle execution has already started, the turn is now treated as interrupted rather
-    than replayed. The client sees explicit interruption signals through conv.status with completion="interrupted" and chat.error with error_type="turn_interrupted".
-  
-    Second, the platform now has the first real continuation layer for busy conversations. When a conversation is already in progress, new messages can be accepted into an ordered per-
-    conversation continuation mailbox instead of being dropped or rejected outright. The mailbox supports followup and explicit steer messages, including blank steer control messages.
-    Continuation-aware workflows can inspect and consume these messages while the active turn is still running. For bundles that do not support live continuation, proc promotes the
-    oldest queued continuation back into the normal ready queue after the current turn completes, so the next turn can be processed by any proc worker in normal order. Related request
-    payloads, workflow/runtime APIs, backpressure accounting, SSE contracts, and processor architecture documentation were updated accordingly.
-  
-    Third, the distributed Fargate execution path was completed and corrected. The Fargate runtime now rewrites host paths to container paths before serializing runtime globals,
-    populates execution timing consistently, avoids blocking the proc event loop during ECS API calls by moving those calls off-thread, fixes error parsing issues, and cleans up merge-
-    lock handling. The distributed exec documentation was also updated to reflect the implemented architecture and remaining status more accurately.
-  
-    Finally, shutdown diagnostics for ECS were made safer and more useful. The diagnostics no longer depend on ps being present in the image and now fall back safely to /proc. Runtime
-    images for ingress and proc were updated to include procps, and the diagnostics were extended to capture process-tree information more reliably. Proc’s Uvicorn graceful-shutdown
-    timeout was also set slightly below the ECS container stopTimeout to leave margin between app-level shutdown and task-level force stop. A new ECS timeout architecture document was
-    added to explain the difference between normal proc turn runtime, graceful drain time after SIGTERM, and the outer ECS stop window.
+    Fix asyncpg Postgres pool configuration so POSTGRES_SSL=true maps to sslmode=require by default, add explicit POSTGRES_SSL_MODE/POSTGRES_SSL_ROOT_CERT support, and prevent ingress/
+    proc schedulers from failing on RDS certificate verification unexpectedly
   config:
-    version: "2026.3.16.2104"
+    version: "2026.3.16.2245"
