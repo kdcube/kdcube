@@ -490,6 +490,91 @@ const PRICE_TABLE: PriceTable = {
             output_tokens_1M: 0.60,
             cache_write_tokens_1M: 0.00,
             cache_read_tokens_1M: 0.075
+        },
+        // OpenRouter models — provider is always "openrouter" for accounting
+        {
+            model: 'anthropic/claude-sonnet-4',
+            provider: 'openrouter',
+            input_tokens_1M: 3.00,
+            output_tokens_1M: 15.00
+        },
+        {
+            model: 'anthropic/claude-3.5-sonnet',
+            provider: 'openrouter',
+            input_tokens_1M: 3.00,
+            output_tokens_1M: 15.00
+        },
+        {
+            model: 'anthropic/claude-3.5-haiku',
+            provider: 'openrouter',
+            input_tokens_1M: 0.80,
+            output_tokens_1M: 4.00
+        },
+        {
+            model: 'google/gemini-2.5-pro-preview',
+            provider: 'openrouter',
+            input_tokens_1M: 1.25,
+            output_tokens_1M: 10.00
+        },
+        {
+            model: 'google/gemini-2.5-flash-preview',
+            provider: 'openrouter',
+            input_tokens_1M: 0.15,
+            output_tokens_1M: 0.60
+        },
+        {
+            model: 'openai/gpt-4o',
+            provider: 'openrouter',
+            input_tokens_1M: 2.50,
+            output_tokens_1M: 10.00
+        },
+        {
+            model: 'openai/gpt-4o-mini',
+            provider: 'openrouter',
+            input_tokens_1M: 0.15,
+            output_tokens_1M: 0.60
+        },
+        {
+            model: 'meta-llama/llama-3.1-405b-instruct',
+            provider: 'openrouter',
+            input_tokens_1M: 2.00,
+            output_tokens_1M: 2.00
+        },
+        {
+            model: 'meta-llama/llama-3.1-70b-instruct',
+            provider: 'openrouter',
+            input_tokens_1M: 0.40,
+            output_tokens_1M: 0.40
+        },
+        {
+            model: 'meta-llama/llama-3.1-8b-instruct',
+            provider: 'openrouter',
+            input_tokens_1M: 0.05,
+            output_tokens_1M: 0.05
+        },
+        {
+            model: 'deepseek/deepseek-r1',
+            provider: 'openrouter',
+            input_tokens_1M: 0.55,
+            output_tokens_1M: 2.19
+        },
+        {
+            model: 'deepseek/deepseek-chat-v3-0324',
+            provider: 'openrouter',
+            input_tokens_1M: 0.27,
+            output_tokens_1M: 1.10
+        },
+        {
+            model: 'mistralai/mistral-large',
+            provider: 'openrouter',
+            input_tokens_1M: 2.00,
+            output_tokens_1M: 6.00
+        },
+        {
+            model: 'qwen/qwen-2.5-72b-instruct',
+            provider: 'openrouter',
+            input_tokens_1M: 0.36,
+            output_tokens_1M: 0.40
         }
     ],
     embedding: [

@@ -215,6 +215,99 @@ def price_table():
                 "cache_write_tokens_1M": 0.0,
                 "cache_read_tokens_1M": 0.0,
             },
+            # ── OpenRouter models ──
+            # OpenRouter charges a markup on top of the underlying provider pricing.
+            # Prices below reflect OpenRouter's published per-model rates (as of
+            # early 2026).  Because OpenRouter proxies many providers, we list the
+            # most commonly used models separately.  Unknown models are handled by
+            # the "missing_price" fallback in compute_llm_equivalent_tokens().
+            #
+            # Provider field is "openrouter" for all entries so accounting events
+            # match regardless of which upstream provider OpenRouter routes to.
+            {
+                "model": "anthropic/claude-sonnet-4",
+                "provider": "openrouter",
+                "input_tokens_1M": 3.00,
+                "output_tokens_1M": 15.00,
+            },
+            {
+                "model": "anthropic/claude-3.5-sonnet",
+                "provider": "openrouter",
+                "input_tokens_1M": 3.00,
+                "output_tokens_1M": 15.00,
+            },
+            {
+                "model": "anthropic/claude-3.5-haiku",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.80,
+                "output_tokens_1M": 4.00,
+            },
+            {
+                "model": "google/gemini-2.5-pro-preview",
+                "provider": "openrouter",
+                "input_tokens_1M": 1.25,
+                "output_tokens_1M": 10.00,
+            },
+            {
+                "model": "google/gemini-2.5-flash-preview",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.15,
+                "output_tokens_1M": 0.60,
+            },
+            {
+                "model": "openai/gpt-4o",
+                "provider": "openrouter",
+                "input_tokens_1M": 2.50,
+                "output_tokens_1M": 10.00,
+            },
+            {
+                "model": "openai/gpt-4o-mini",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.15,
+                "output_tokens_1M": 0.60,
+            },
+            {
+                "model": "meta-llama/llama-3.1-405b-instruct",
+                "provider": "openrouter",
+                "input_tokens_1M": 2.00,
+                "output_tokens_1M": 2.00,
+            },
+            {
+                "model": "meta-llama/llama-3.1-70b-instruct",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.40,
+                "output_tokens_1M": 0.40,
+            },
+            {
+                "model": "meta-llama/llama-3.1-8b-instruct",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.05,
+                "output_tokens_1M": 0.05,
+            },
+            {
+                "model": "deepseek/deepseek-r1",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.55,
+                "output_tokens_1M": 2.19,
+            },
+            {
+                "model": "deepseek/deepseek-chat-v3-0324",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.27,
+                "output_tokens_1M": 1.10,
+            },
+            {
+                "model": "mistralai/mistral-large",
+                "provider": "openrouter",
+                "input_tokens_1M": 2.00,
+                "output_tokens_1M": 6.00,
+            },
+            {
+                "model": "qwen/qwen-2.5-72b-instruct",
+                "provider": "openrouter",
+                "input_tokens_1M": 0.36,
+                "output_tokens_1M": 0.40,
+            },
         ],
         "embedding": [
             {
