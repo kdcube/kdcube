@@ -15,7 +15,7 @@ async function copyMarkdownToClipboard(text?: string, html?: string) {
     // Try modern API first
     if (navigator.clipboard && window.isSecureContext) {
         try {
-            const clipboardItemData:Record<string, string> = {};
+            const clipboardItemData: Record<string, string> = {};
             if (text) {
                 clipboardItemData["text/plain"] = text;
             }
@@ -37,4 +37,16 @@ async function copyMarkdownToClipboard(text?: string, html?: string) {
     }
 }
 
-export {copyMarkdownToClipboard}
+async function saveStringAsFile(content: string, filename: string) {
+    const blob = new Blob([content], {type: "text/plain"});
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+
+    URL.revokeObjectURL(url);
+}
+
+export {copyMarkdownToClipboard, saveStringAsFile}

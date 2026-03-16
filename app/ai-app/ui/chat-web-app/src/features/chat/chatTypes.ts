@@ -110,6 +110,8 @@ export interface Artifact<C> extends Timestamped {
     content: C;
     artifactType: string;
     historical?: boolean;
+    canCopy?: boolean;
+    canSave?: boolean;
 }
 
 export type UnknownArtifact = Artifact<unknown>;
@@ -147,7 +149,6 @@ export interface ChatTurn {
     events: TurnEvent<unknown>[];
     steps: Record<string, TurnStep>;
     artifacts: UnknownArtifact[];
-    error?: string | null;
     followUpQuestions: string[];
     historical?: boolean;
 }
@@ -160,7 +161,7 @@ export interface NewChatTurnRequest {
 }
 
 export interface TurnError {
-    id: string;
+    turnId: string;
     error: string | Error;
 }
 

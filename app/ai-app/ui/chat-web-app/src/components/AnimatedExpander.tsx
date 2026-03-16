@@ -51,7 +51,7 @@ const AnimatedExpander = ({
 
 
         return <motion.div
-            className={`overflow-hidden ${className}`}
+            className={`overflow-hidden ${className ?? ""}`}
             initial={expanded ? zero : content}
             animate={expanded ? content : zero}
         >

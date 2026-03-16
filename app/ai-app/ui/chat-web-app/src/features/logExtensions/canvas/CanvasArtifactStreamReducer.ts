@@ -16,7 +16,9 @@ export class CanvasArtifactStreamReducer implements ArtifactStreamParser {
                 title: artifactData.extra?.title || artifactData.title,
                 content: artifactData.text,
                 contentType: artifactData.extra?.format || artifactData.format
-            }
+            },
+            canCopy: true,
+            canSave: true
         }
         this.artifacts.push(c)
         return true

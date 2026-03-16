@@ -67,6 +67,8 @@ import {
     WebFetchSubsystemEventData,
     WebFetchSubsystemEventDataSubtype
 } from "../logExtensions/webFetch/types.ts";
+import {ServiceErrorArtifactType} from "../logExtensions/service/types.ts";
+import {exampleConversationData} from "./debug.ts";
 
 const userAttachmentMapping = new Map<string, File>();
 
@@ -159,7 +161,9 @@ const reduceCanvasEvents = (events: CanvasEvent[], name: string): CanvasArtifact
             content: cleanUpCanvasItemContent(content, contentType),
             title,
             contentType,
-        }
+        },
+        canCopy: true,
+        canSave: true
     }
 }
 
@@ -201,7 +205,9 @@ const reduceWebSearchEvents = (events: SubsystemEvent[], searchId: string): WebS
     return {
         artifactType: WebSearchArtifactType,
         timestamp,
-        content
+        content,
+        canCopy: !!reportEvent,
+        canSave: !!reportEvent,
     }
 }
 
@@ -394,9 +400,15 @@ const chatStateSlice = createSlice({
             state.turnOrder.push(turnId);
         },
         turnError: (state, action: PayloadAction<TurnError>) => {
-            const turnId = action.payload.id
-            state.turns[turnId].state = "error";
-            state.turns[turnId].error = action.payload.error instanceof Error ? action.payload.error.message : action.payload.error;
+            const turn = state.turns[action.payload.turnId];
+            turn.state = "error";
+            turn.artifacts.push({
+                timestamp: new Date().getTime(),
+                artifactType: ServiceErrorArtifactType,
+                content: {
+                    message: action.payload.error instanceof Error ? action.payload.error.message : action.payload.error
+                }
+            })
         },
         conversationStatus: (state, action: PayloadAction<ConvStatusEnvelope>) => {
             const payload = action.payload;
@@ -765,6 +777,12 @@ const chatStateSlice = createSlice({
             state.turns = action.payload.turns
             state.conversationId = action.payload.conversationId
             state.conversationTitle = action.payload.conversationTitle
+        },
+        loadExampleConversation: (state) => {
+            state.turnOrder = exampleConversationData.turnOrder
+            state.turns = exampleConversationData.turns
+            state.conversationId = exampleConversationData.conversationId
+            state.conversationTitle = exampleConversationData.conversationTitle
         }
     }
 })
@@ -787,6 +805,7 @@ export const {
     clearUserInput,
     newConversation,
     loadConversation,
+    loadExampleConversation,
     conversationStatus,
 } = chatStateSlice.actions
 export const selectChatConnected = (state: RootState) => state.chatState.connected
@@ -802,7 +821,6 @@ export const selectUserAttachments = (state: RootState) => state.chatState.userA
 export const selectConversationId = (state: RootState) => state.chatState.conversationId
 export const selectConversationTitle = (state: RootState) => state.chatState.conversationTitle
 export const selectIsNewConversation = (state: RootState) => state.chatState.turnOrder.length === 0
-
 
 
 export default chatStateSlice.reducer

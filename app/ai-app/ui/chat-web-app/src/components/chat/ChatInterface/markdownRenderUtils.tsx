@@ -53,9 +53,9 @@ export const markdownComponents: Components = {
     code({className, children, ...props}) {
         return <CodeRender className={className} children={children} {...props}/>;
     },
-    a({children}) {
+    a({children, href}) {
         return (
-            <a className="text-blue-600 underline" target="_blank" rel="noreferrer" >
+            <a className="text-blue-600 underline cursor-pointer" target="_blank" rel="noreferrer" href={href}>
                 {children}
             </a>
         );

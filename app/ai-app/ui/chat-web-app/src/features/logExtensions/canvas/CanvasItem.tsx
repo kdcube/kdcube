@@ -24,7 +24,7 @@ const getCanvasContentType = (format: string | null | undefined) => {
     return null
 }
 
-const CanvasItem = ({item}: ArtifactComponentProps) => {
+const CanvasItem = ({item, contentRef}: ArtifactComponentProps) => {
     if (item.artifactType !== CanvasArtifactType) {
         throw new Error("not a CanvasArtifactType")
     }
@@ -54,30 +54,41 @@ const CanvasItem = ({item}: ArtifactComponentProps) => {
         if (!canvasItem) return null;
         switch (contentType) {
             case "markdown":
-                return <ReactMarkdown
-                    remarkPlugins={remarkPlugins}
-                    rehypePlugins={rehypePlugins}
-                    components={markdownComponentsTight}
-                    skipHtml={false}
-                >
-                    {closeUpMarkdown(canvasItem.content.content as string)}
-                </ReactMarkdown>
+                return <div className={"h-full w-full"} ref={contentRef}>
+                    <ReactMarkdown
+                        remarkPlugins={remarkPlugins}
+                        rehypePlugins={rehypePlugins}
+                        components={markdownComponentsTight}
+                        skipHtml={false}
+                    >
+                        {closeUpMarkdown(canvasItem.content.content as string)}
+                    </ReactMarkdown>
+                </div>
             case "mermaid":
                 return <MermaidDiagram chart={canvasItem.content.content as string}/>
             case "code":
-                return <ReactMarkdown
-                    remarkPlugins={remarkPlugins}
-                    rehypePlugins={rehypePlugins}
-                    components={markdownComponentsTight}
-                    skipHtml={false}
-                >
-                    {appendCodeMarkdown(cleanupCode(canvasItem.content.content as string), canvasItem.content.contentType)}
-                </ReactMarkdown>
+                return <div className={"h-full w-full"} ref={contentRef}>
+                    <ReactMarkdown
+                        remarkPlugins={remarkPlugins}
+                        rehypePlugins={rehypePlugins}
+                        components={markdownComponentsTight}
+                        skipHtml={false}
+                    >
+                        {appendCodeMarkdown(cleanupCode(canvasItem.content.content as string), canvasItem.content.contentType)}
+                    </ReactMarkdown>
+                </div>
+            case "srcdoc":
+                return <div className={"h-full w-full"} ref={contentRef}>
+                    <iframe
+                        srcDoc={canvasItem.content.content as string}
+                        className={"w-full h-full border-0"}
+                    />
+                </div>
             default:
                 return <div>not supported</div>;
         }
 
-    }, [contentType, canvasItem])
+    }, [canvasItem, contentType, contentRef])
 
     return useMemo(() => {
         return <div className={"p-2 border-gray-200 border-l-1 bg-white h-full w-full overflow-y-auto"}>

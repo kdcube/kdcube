@@ -14,4 +14,6 @@ export const CanvasArtifactType = "canvas";
 export interface CanvasArtifact extends Artifact<CanvasItemData> {
     artifactType: typeof CanvasArtifactType;
     complete?: boolean;
+    canCopy: true;
+    canSave: true;
 }

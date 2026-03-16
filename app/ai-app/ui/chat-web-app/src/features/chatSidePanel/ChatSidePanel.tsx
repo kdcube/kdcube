@@ -2,6 +2,7 @@ import {ReactNode, useCallback, useEffect, useMemo, useRef, useState} from "reac
 import {
     ArrowLeftRight,
     Bot,
+    Bug,
     CircleDollarSign,
     CirclePlus,
     CreditCard,
@@ -37,6 +38,8 @@ import {
 } from "../widgetPanels/widgetPanels.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 import {getChatPagePath} from "../chat/configHelper.ts";
+import {showDebugControls} from "../../BuildConfig.ts";
+import DebugPanel from "../debugPanel/DebugPanel.tsx";
 
 interface MenuButtonProps {
     children: ReactNode | ReactNode[];
@@ -241,7 +244,7 @@ const GenericPanel = ({visible, className, trigger, lastArg}: GenericWidgetPanel
     }, [className, data, isError, isFetching, visible])
 }
 
-interface WidgetPanelProps {
+export interface WidgetPanelProps {
     visible: boolean;
     className?: string;
 }
@@ -294,7 +297,7 @@ const UserBillingPanel = ({visible, className}: WidgetPanelProps) => {
     }, [trigger, lastArg, visible, className]);
 }
 
-type Panels = "conversations" | "economics" | "ai_bundles" | "gateway" | "conv_browser" | "redis_browser" | "user_billing" | null
+type Panels = "conversations" | "economics" | "ai_bundles" | "gateway" | "conv_browser" | "redis_browser" | "user_billing" | "debug" | null
 
 const ChatSidePanel = () => {
     const dispatch = useAppDispatch();
@@ -376,9 +379,17 @@ const ChatSidePanel = () => {
                 >
                     <IconContainer icon={Database} size={1.5}/>
                 </MenuButton>
+                {showDebugControls && <MenuButton
+                    onClick={() => {
+                        onPanelButtonClick("debug");
+                    }}
+                >
+                    <IconContainer icon={Bug} size={1.5}/>
+                </MenuButton>}
             </div>
             {/*<div className={"absolute h-full top-0 left-12 z-20 shadow-md border-r border-gray-200 bg-white"}>*/}
-            <div className={`h-full border-r border-gray-200 bg-white relative ${visiblePanel ? "pointer-events-auto" : "pointer-events-none"}`}>
+            <div
+                className={`h-full border-r border-gray-200 bg-white relative ${visiblePanel ? "pointer-events-auto" : "pointer-events-none"}`}>
                 <AnimatedExpander contentRef={sidePanelContentRef} className={"h-full"}
                                   expanded={visiblePanel !== null}>
                     <div className={"h-full"} ref={sidePanelContentRef} style={{width: `${panelWidth}px`}}>
@@ -396,6 +407,8 @@ const ChatSidePanel = () => {
                                            className={"w-full h-full absolute left-0 top-0"}/>
                         <UserBillingPanel visible={visiblePanel === "user_billing"}
                                            className={"w-full h-full absolute left-0 top-0"}/>
+                        {showDebugControls && <DebugPanel visible={visiblePanel === "debug"}
+                                                          className={"w-full h-full absolute left-0 top-0"}/>}
                     </div>
                 </AnimatedExpander>
             </div>

@@ -46,9 +46,8 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
     }, [dispatch])
 
     return useMemo(() => {
-        const inputDisabled = inProgress;
-        // const inputDisabled = false;
-        const sendButtonDisabled = inputDisabled || (!userInput.trim() && userAttachments.length == 0);
+        const inputDisabled = isLocked;
+        const sendDisabled = isLocked || inProgress || (!userInput.trim() && userAttachments.length == 0);
 
         return (
             <div
@@ -92,7 +91,7 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                                     value={userInput}
                                     onChange={(e) => setUserInputValue(e.target.value)}
                                     onKeyDown={(e) => {
-                                        if (!inputDisabled && e.key === "Enter" && !e.shiftKey) {
+                                        if (!sendDisabled && e.key === "Enter" && !e.shiftKey) {
                                             e.preventDefault();
                                             sendMessage();
                                         }
@@ -114,12 +113,12 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                                         addInputFiles(res)
                                     })
                                 }}
-                                disabled={inputDisabled}
+                                disabled={sendDisabled}
                                 className=" mb-3 rounded-lg font-medium text-gray-600 hover:text-gray-900 disabled:text-gray-300"
                                 aria-label="Add file"
                                 title="Add file"
                             >
-                                <CirclePlus size={18} className={`${inputDisabled ?
+                                <CirclePlus size={18} className={`${sendDisabled ?
                                     (inProgress ? "cursor-wait" : "cursor-auto") :
                                     "cursor-pointer"}`}/>
                             </button>
@@ -127,12 +126,12 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                                 onClick={() => {
                                     sendMessage()
                                 }}
-                                disabled={sendButtonDisabled}
+                                disabled={sendDisabled}
                                 className="mb-3 mr-3 rounded-lg font-medium text-gray-600 hover:text-gray-900 disabled:text-gray-300 ml-auto"
                                 aria-label="Send message"
                                 title="Send"
                             >
-                                <Send size={18} className={`${sendButtonDisabled ?
+                                <Send size={18} className={`${sendDisabled ?
                                     (userInput.trim() || userAttachments.length > 0 ? "cursor-wait" : "cursor-auto") :
                                     "cursor-pointer"}`}/>
                             </button>

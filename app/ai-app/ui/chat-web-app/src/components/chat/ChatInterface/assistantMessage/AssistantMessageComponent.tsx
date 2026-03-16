@@ -140,7 +140,6 @@ export const AssistantMessageComponent = ({
                                               message,
                                               steps,
                                               artifacts,
-                                              isError,
                                               isHistorical,
                                               isGreeting = false,
                                           }: AssistantMessageProps) => {
@@ -330,46 +329,48 @@ export const AssistantMessageComponent = ({
         </div>
     }, [isHistorical, other])
 
-    return (
-        <div className="flex justify-start">
+    return useMemo(() => {
+        return (
+            <div className="flex justify-start">
 
-            <div className="flex flex-col w-full">
-                <div
-                    className={`px-3 pt-2 ${isError ? "text-red-800" : "text-gray-800"} max-w-none`}
-                    ref={mdRed}>
-                    {!isGreeting && (<div
-                        className="flex flex-row w-full [&_button:first-child]:rounded-l-md [&_button:last-child]:rounded-r-md">
-                        <SunkenButton pressed={isPressed("message")} onClick={() => setTab("message")}>
-                            <div className="inline-flex items-center mr-1">{
-                                inProgress ?
-                                    <Loader size={14} className="animate-spin mr-2"/> :
-                                    <MessageCircleMore size={18} className="mx-0.5"/>}
-                                Message
-                            </div>
-                        </SunkenButton>
-                        <SunkenButton pressed={isPressed("steps")} disabled={steps.length < 1}
-                                      onClick={() => setTab("steps")}>
-                            <div className="inline-flex items-center mr-1"><List size={18}
-                                                                                 className="mx-0.5"/>Steps{steps.length > 0 ? ` (${steps.length})` : ""}
-                            </div>
-                        </SunkenButton>
-                        <SunkenButton pressed={isPressed("sources")} disabled={citations.length < 1}
-                                      onClick={() => setTab("sources")}>
-                            <div className="inline-flex items-center mr-1"><ScrollText size={18}
-                                                                                       className="mx-0.5"/>
-                                Sources{citations.length > 0 ? ` (${citations.length})` : ""}
-                            </div>
-                        </SunkenButton>
-                    </div>)}
-                    {isPressed("message") && <div className={"mt-1.5 w-full"}>
-                        {thinkingItemsMemo}
-                        {timelineMemo}
-                        {messageMemo}
-                    </div>}
-                    {isPressed("steps") && stepsMemo}
-                    {isPressed("sources") && sourcesMemo}
+                <div className="flex flex-col w-full">
+                    <div
+                        className={"px-3 pt-2 text-gray-800 max-w-none"}
+                        ref={mdRed}>
+                        {!isGreeting && (<div
+                            className="flex flex-row w-full [&_button:first-child]:rounded-l-md [&_button:last-child]:rounded-r-md">
+                            <SunkenButton pressed={isPressed("message")} onClick={() => setTab("message")}>
+                                <div className="inline-flex items-center mr-1">{
+                                    inProgress ?
+                                        <Loader size={14} className="animate-spin mr-2"/> :
+                                        <MessageCircleMore size={18} className="mx-0.5"/>}
+                                    Message
+                                </div>
+                            </SunkenButton>
+                            <SunkenButton pressed={isPressed("steps")} disabled={steps.length < 1}
+                                          onClick={() => setTab("steps")}>
+                                <div className="inline-flex items-center mr-1"><List size={18}
+                                                                                     className="mx-0.5"/>Steps{steps.length > 0 ? ` (${steps.length})` : ""}
+                                </div>
+                            </SunkenButton>
+                            <SunkenButton pressed={isPressed("sources")} disabled={citations.length < 1}
+                                          onClick={() => setTab("sources")}>
+                                <div className="inline-flex items-center mr-1"><ScrollText size={18}
+                                                                                           className="mx-0.5"/>
+                                    Sources{citations.length > 0 ? ` (${citations.length})` : ""}
+                                </div>
+                            </SunkenButton>
+                        </div>)}
+                        {isPressed("message") && <div className={"mt-1.5 w-full"}>
+                            {thinkingItemsMemo}
+                            {timelineMemo}
+                            {messageMemo}
+                        </div>}
+                        {isPressed("steps") && stepsMemo}
+                        {isPressed("sources") && sourcesMemo}
+                    </div>
                 </div>
             </div>
-        </div>
-    )
+        )
+    }, [citations.length, inProgress, isGreeting, isPressed, messageMemo, sourcesMemo, steps.length, stepsMemo, thinkingItemsMemo, timelineMemo])
 }

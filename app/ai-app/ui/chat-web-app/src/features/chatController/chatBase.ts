@@ -134,6 +134,8 @@ export interface RateLimitPayload {
 
     violations: string[];
     messages_remaining: number | null;
+    total_token_remaining: number | null;
+    usage_percentage: number | null;
 
     retry_after_sec: number | null;
     retry_scope: "hour" | "day" | "month" | "total" | null;
@@ -144,8 +146,12 @@ export interface RateLimitPayload {
     reason?: string | null;
 }
 
+export type ServiceEventType = "rate_limit.warning" | "rate_limit.denied"
+    | "rate_limit.project_exhausted" | "rate_limit.snapshot" | "rate_limit.attachment_failure"
+    | "rate_limit.lane_switch" | "economics.user_underfunded_absorbed";
+
 export interface ChatServiceEnvelope {
-    type: "chat.service";
+    type: ServiceEventType | string;
     conversation?: ConversationInfo | null;
     event: {
         step: RateLimitEventStep;        // 👈 kind of service event

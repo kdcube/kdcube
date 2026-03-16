@@ -10,8 +10,20 @@ import {CanvasLogItem} from "./features/logExtensions/canvas/CanvasLogItem.tsx";
 import CodeExecLogItem from "./features/logExtensions/codeExec/CodeExecLogItem.tsx";
 import WebSearchLogItem from "./features/logExtensions/webSearch/WebSearchLogItem.tsx";
 import TimelineTextLogItem from "./features/logExtensions/timelineText/TimelineTextLogItem.tsx";
-import {getCanvasArtifactLink, matchesCanvasArtifact} from "./features/logExtensions/canvas/utils.ts";
-import {getWebSearchArtifactLink, matchesWebSearchArtifact} from "./features/logExtensions/webSearch/utils.ts";
+import {
+    copyCanvasArtifact,
+    getCanvasArtifactLink,
+    getCanvasArtifactTitle,
+    matchesCanvasArtifact,
+    saveCanvasArtifact
+} from "./features/logExtensions/canvas/utils.ts";
+import {
+    copyWebSearchArtifact,
+    getWebSearchArtifactLink,
+    getWebSearchArtifactTitle,
+    matchesWebSearchArtifact,
+    saveWebSearchArtifact
+} from "./features/logExtensions/webSearch/utils.ts";
 import {CanvasArtifactType} from "./features/logExtensions/canvas/types.ts";
 import {CodeExecArtifactType} from "./features/logExtensions/codeExec/types.ts";
 import {WebSearchArtifactType} from "./features/logExtensions/webSearch/types.ts";
@@ -26,6 +38,8 @@ import {WebSearchArtifactStreamReducer} from "./features/logExtensions/webSearch
 import {WebFetchArtifactStreamReducer} from "./features/logExtensions/webFetch/WebFetchArtifactStreamReducer.ts";
 import {WebFetchArtifactType} from "./features/logExtensions/webFetch/types.ts";
 import WebFetchLogItem from "./features/logExtensions/webFetch/WebFetchLogItem.tsx";
+import ServiceErrorMessage from "./features/logExtensions/service/ServiceErrorMessage.tsx";
+import {ServiceErrorArtifactType} from "./features/logExtensions/service/types.ts";
 
 //chat log extensions
 addChatLogExtension(CanvasArtifactType, CanvasLogItem)
@@ -33,14 +47,30 @@ addChatLogExtension(CodeExecArtifactType, CodeExecLogItem)
 addChatLogExtension(WebSearchArtifactType, WebSearchLogItem)
 addChatLogExtension(TimelineTextArtifactType, TimelineTextLogItem)
 addChatLogExtension(WebFetchArtifactType, WebFetchLogItem)
+addChatLogExtension(ServiceErrorArtifactType, ServiceErrorMessage)
 
 //canvas extension
-addCanvasItemExtension(CanvasArtifactType, CanvasItem, getCanvasArtifactLink, matchesCanvasArtifact)
-addCanvasItemExtension(WebSearchArtifactType, WebSearchCanvasItem, getWebSearchArtifactLink, matchesWebSearchArtifact)
+addCanvasItemExtension(CanvasArtifactType, {
+    component: CanvasItem,
+    linkGenerator: getCanvasArtifactLink,
+    artifactLinkComparator: matchesCanvasArtifact,
+    artifactTitleGenerator: getCanvasArtifactTitle,
+    artifactCopyHandler: copyCanvasArtifact,
+    artifactSaveHandler: saveCanvasArtifact,
+})
+
+addCanvasItemExtension(WebSearchArtifactType, {
+    component: WebSearchCanvasItem,
+    linkGenerator: getWebSearchArtifactLink,
+    artifactLinkComparator: matchesWebSearchArtifact,
+    artifactTitleGenerator: getWebSearchArtifactTitle,
+    artifactCopyHandler: copyWebSearchArtifact,
+    artifactSaveHandler: saveWebSearchArtifact,
+})
 
 //artifact stream parsers (for conversation loader)
 addArtifactStreamParsers(
-    new IgnoredArtifactStreamReducer({marker:"subsystem", subtypes: ["conversation.turn.status"]}),
+    new IgnoredArtifactStreamReducer({marker: "subsystem", subtypes: ["conversation.turn.status"]}),
     new CanvasArtifactStreamReducer(),
     new CodeExecArtifactStreamReducer(),
     new WebSearchArtifactStreamReducer(),
