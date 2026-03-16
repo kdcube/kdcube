@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from kdcube_ai_app.infra.gateway.backpressure import AtomicBackpressureManager
+from kdcube_ai_app.auth.sessions import UserType
+from kdcube_ai_app.infra.gateway.backpressure import AtomicBackpressureManager, AtomicChatQueueManager
 
 
 class _FakeRedis:
@@ -14,6 +15,15 @@ class _FakeRedis:
 
     async def get(self, key):
         return self.sizes.get(key, 0)
+
+
+class _EvalRedis:
+    def __init__(self):
+        self.last_eval = None
+
+    async def eval(self, script, numkeys, *args):
+        self.last_eval = (script, numkeys, args)
+        return [1, "admitted", 3, 12, 2]
 
 
 def _gateway_config():
@@ -69,3 +79,28 @@ async def test_atomic_backpressure_queue_sizes_include_inflight_lists():
         "privileged": 8,
         "paid": 12,
     }
+
+
+@pytest.mark.asyncio
+async def test_atomic_chat_queue_manager_passes_continuation_counter_keys():
+    manager = AtomicChatQueueManager("redis://example", _gateway_config(), monitor=None)
+    manager.redis = _EvalRedis()
+
+    success, reason, stats = await manager.enqueue_chat_task_atomic(
+        UserType.PRIVILEGED,
+        {"task_id": "task-1"},
+        session=None,
+        context=None,
+        endpoint="/api/chat",
+    )
+
+    assert success is True
+    assert reason == "admitted"
+    assert stats["task_id"] == "task-1"
+
+    _, numkeys, args = manager.redis.last_eval
+    keys = args[:numkeys]
+    assert "tenant-a:project-a:kdcube:chat:conversation:mailbox:count:anonymous" in keys
+    assert "tenant-a:project-a:kdcube:chat:conversation:mailbox:count:registered" in keys
+    assert "tenant-a:project-a:kdcube:chat:conversation:mailbox:count:privileged" in keys
+    assert "tenant-a:project-a:kdcube:chat:conversation:mailbox:count:paid" in keys
