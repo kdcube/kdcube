@@ -9,7 +9,11 @@ import random
 import traceback
 from typing import Dict, Any, List, Optional, Type, Callable, Awaitable
 
-from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+from kdcube_ai_app.apps.chat.emitters import (
+    ChatCommunicator,
+    build_comm_from_comm_context,
+    build_relay_from_env,
+)
 from kdcube_ai_app.apps.chat.sdk.continuations import get_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
 from kdcube_ai_app.apps.chat.sdk.context.memory.conv_memories import ConvMemoriesStore
@@ -172,6 +176,45 @@ class BaseWorkflow():
     @property
     def continuation_source(self) -> Optional[Any]:
         return self._continuation_source or get_current_conversation_continuation_source()
+
+    def rebind_request_context(
+        self,
+        *,
+        comm_context: Optional[ChatTaskPayload] = None,
+        pg_pool: Any = None,
+        redis: Any = None,
+    ) -> None:
+        """
+        Refresh request-bound state on cached singleton workflows.
+        """
+        if comm_context is not None:
+            self.comm_context = comm_context
+            self.comm = build_comm_from_comm_context(
+                comm_context,
+                relay=build_relay_from_env(),
+            )
+            self._comm = AIBEmitters(self.comm)
+
+            if getattr(self, "hosting_service", None) is not None:
+                self.hosting_service.comm = self.comm
+            if getattr(self, "turn_status", None) is not None:
+                self.turn_status.emit_delta = self.comm.delta
+
+            runtime_ctx = getattr(self, "runtime_ctx", None)
+            if runtime_ctx is not None:
+                runtime_ctx.tenant = comm_context.actor.tenant_id
+                runtime_ctx.project = comm_context.actor.project_id
+                runtime_ctx.user_id = comm_context.user.user_id
+                runtime_ctx.user_type = comm_context.user.user_type
+                runtime_ctx.timezone = comm_context.user.timezone
+                runtime_ctx.conversation_id = comm_context.routing.conversation_id
+                runtime_ctx.turn_id = comm_context.routing.turn_id
+                runtime_ctx.continuation_source = self.continuation_source
+
+        if pg_pool is not None:
+            self.pg_pool = pg_pool
+        if redis is not None:
+            self.redis = redis
 
     async def pending_continuation_count(self) -> int:
         source = self.continuation_source

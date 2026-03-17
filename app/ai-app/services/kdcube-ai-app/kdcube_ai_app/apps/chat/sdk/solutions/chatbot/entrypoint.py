@@ -90,6 +90,24 @@ class BaseEntrypoint:
     def continuation_source(self) -> Optional[Any]:
         return self._continuation_source or get_current_conversation_continuation_source()
 
+    def rebind_request_context(
+        self,
+        *,
+        comm_context: Optional[ChatTaskPayload] = None,
+        pg_pool: Any = None,
+        redis: Any = None,
+    ) -> None:
+        """
+        Refresh request-bound state on cached singleton workflows.
+        """
+        if comm_context is not None:
+            self.comm_context = comm_context
+            self._comm = None
+        if pg_pool is not None:
+            self.pg_pool = pg_pool
+        if redis is not None:
+            self.redis = redis
+
     async def pending_continuation_count(self) -> int:
         source = self.continuation_source
         if source is None:

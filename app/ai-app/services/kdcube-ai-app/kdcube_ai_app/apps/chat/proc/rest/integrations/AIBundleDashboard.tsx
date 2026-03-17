@@ -1195,7 +1195,7 @@ const AIBundleDashboard: React.FC = () => {
                 <Card>
                     <CardHeader
                         title="Registry"
-                        subtitle="Current bundles stored in the registry."
+                        subtitle="Current bundles stored in the registry. Reset from env replaces the registry and descriptor-backed bundle props from bundles.yaml / AGENTIC_BUNDLES_JSON."
                         action={
                             <div className="flex gap-2">
                                 <Button variant="secondary" onClick={loadBundles}>Refresh</Button>
@@ -1307,7 +1307,7 @@ const AIBundleDashboard: React.FC = () => {
                                 ) : null}
                             </div>
                         }
-                        subtitle="Override bundle props per tenant/project. Reset to code defaults when needed."
+                        subtitle="Override bundle props per tenant/project. Reset from env/startup force-env re-applies bundles.yaml authoritatively; reset from code restores bundle code defaults only."
                         action={
                             <div className="flex gap-2">
                                 <Button variant="secondary" onClick={loadProps} disabled={!propsBundleId || propsLoading}>
@@ -1337,7 +1337,9 @@ const AIBundleDashboard: React.FC = () => {
                         <div className="text-xs text-gray-600">
                             Props resolution order: <strong>code defaults → bundles.yaml → runtime overrides</strong>.
                             The editor shows the full effective props; <strong>Save props</strong> stores exactly what you see.
-                            Use dot-path updates for precise changes.
+                            Use dot-path updates for precise changes. <strong>Reset from env</strong> or proc startup with
+                            <code className="mx-1">BUNDLES_FORCE_ENV_ON_STARTUP=1</code> rebuilds this Redis props layer from
+                            <code className="mx-1">bundles.yaml</code>, removes keys no longer present there, and discards runtime overrides.
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

@@ -96,7 +96,7 @@ class MyWorkflow(BaseEntrypoint):
 ```
 
 Model defaults live in `entrypoint.configuration` (`role_models`, `embedding`, etc).
-Runtime overrides are applied via `bundle_props` (bundles.yaml + admin UI).
+Runtime overrides are applied via `bundle_props` (`bundles.yaml` + admin UI).
 If you override `configuration`, call `super().configuration()` and use
 `setdefault` for defaults so external overrides still win.
 
@@ -156,6 +156,15 @@ def configuration(self) -> Dict[str, Any]:
 This ensures the effective order remains:
 `code defaults → bundles.yaml → runtime overrides`.
 
+Important:
+- `bundles.yaml` is the source of truth for descriptor-backed bundle props.
+- `Reset from env` and proc startup with `BUNDLES_FORCE_ENV_ON_STARTUP=1`
+  rebuild the Redis props layer from `bundles.yaml` authoritatively.
+- If a key was previously present in `bundles.yaml` and is later removed,
+  the env reset deletes that stale Redis key instead of keeping the old value.
+- Runtime/admin overrides can still be applied after startup, but they are
+  overwritten again on the next env reset/startup when force-env is enabled.
+
 Secrets:
 - Defined in `bundles.secrets.yaml` under `items[].secrets`.
 - Injected into the secrets manager using dot‑path keys like:
@@ -171,6 +180,8 @@ with the local secrets sidecar, keep read tokens non‑expiring:
 Bundle secrets are **write‑only**; admin UI shows keys only, not values.
 If secrets come from `bundles.secrets.yaml`, the CLI stores the key list in the
 sidecar as `bundles.<bundle_id>.secrets.__keys` so keys are visible in the UI.
+Current semantics are upsert-only: removing a key from `bundles.secrets.yaml`
+does not auto-delete it from the secrets provider.
 
 ---
 

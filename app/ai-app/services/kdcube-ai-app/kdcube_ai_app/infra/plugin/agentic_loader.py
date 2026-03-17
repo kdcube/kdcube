@@ -426,6 +426,12 @@ def get_workflow_instance(
     # singleton cache hit?
     if spec.singleton and key in _singleton_cache:
         inst, mod = _singleton_cache[key]
+        try:
+            rebind = getattr(inst, "rebind_request_context", None)
+            if callable(rebind):
+                rebind(comm_context=comm_context, pg_pool=pg_pool, redis=redis)
+        except Exception:
+            pass
         return inst, mod
 
     mod = _resolve_module(spec)

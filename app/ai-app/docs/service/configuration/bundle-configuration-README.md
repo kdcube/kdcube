@@ -110,6 +110,11 @@ Notes:
 - Secrets are injected into the secrets manager using **dot‑path keys**:
   - `bundles.<bundle_id>.secrets.openai.api_key`
   - `bundles.<bundle_id>.secrets.stripe.secret_key`
+- Current behavior is **upsert-only**.
+- If a secret is removed from `bundles.secrets.yaml`, it is **not**
+  automatically deleted from the configured secrets provider.
+- Removed secrets must be cleared explicitly via the admin UI/API or by an
+  external secrets-sync process.
 
 ---
 
@@ -125,6 +130,21 @@ Resolution order:
 
 **Effective props** are computed with a **deep merge**:
 `code defaults → bundles.yaml → runtime overrides`.
+
+### Authoritative env reset
+
+`bundles.yaml` is the authoritative descriptor for descriptor-backed bundle props.
+When proc startup runs with `BUNDLES_FORCE_ENV_ON_STARTUP=1`, or when an operator
+uses **Reset from env**, the platform rebuilds the Redis props layer from the
+current `bundles.yaml` content.
+
+That reset is authoritative:
+- props present in `bundles.yaml` are written to Redis
+- props removed from `bundles.yaml` are deleted from Redis
+- runtime/admin overrides stored in Redis are discarded by that reset
+
+This is what makes `bundles.yaml` able to fully control bundle props, together
+with the defaults defined in bundle code.
 
 ### Admin UI: Save props
 The props editor always shows the **full effective props**.
@@ -156,6 +176,10 @@ Example — override embedding:
 siblings in nested objects (for example,
 `role_models.solver.react.v2.decision.v2.strong.model`).
 
+If proc startup has `BUNDLES_FORCE_ENV_ON_STARTUP=1`, remember that runtime
+edits are operational overrides only. They remain effective until the next env
+reset/startup, at which point `bundles.yaml` is re-applied authoritatively.
+
 Secrets are resolved by the secrets manager using dot‑path keys. The UI should
 never expose secret values; it only indicates whether a secret is set.
 
@@ -178,6 +202,11 @@ which secrets are set for a bundle.
 When secrets are provisioned via `bundles.secrets.yaml`, the CLI also stores
 the key list under `bundles.<bundle_id>.secrets.__keys` in the configured
 provider, so the admin UI can display keys even before any UI edits.
+
+Important:
+- unlike `bundles.yaml` props reset, `bundles.secrets.yaml` is currently not
+  applied authoritatively
+- env reset/startup does not auto-delete secrets removed from the descriptor
 
 ---
 

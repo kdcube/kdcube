@@ -255,6 +255,62 @@ async def _apply_bundle_props(
         key = _props_key(tenant=tenant, project=project, bundle_id=bid)
         await redis.set(key, json.dumps(props, ensure_ascii=False))
 
+
+def _decode_redis_key(raw: Any) -> str:
+    if isinstance(raw, bytes):
+        return raw.decode("utf-8", errors="ignore")
+    return str(raw)
+
+
+async def _iter_matching_keys(redis, pattern: str):
+    scan_iter = getattr(redis, "scan_iter", None)
+    if callable(scan_iter):
+        async for key in scan_iter(match=pattern):
+            yield _decode_redis_key(key)
+        return
+
+    keys_fn = getattr(redis, "keys", None)
+    if callable(keys_fn):
+        keys = await keys_fn(pattern)
+        for key in keys or []:
+            yield _decode_redis_key(key)
+
+
+async def _sync_bundle_props_authoritative(
+    redis,
+    *,
+    tenant: str,
+    project: str,
+    props_map: Dict[str, Dict[str, Any]],
+) -> None:
+    """
+    Make Redis bundle props exactly match the descriptor-provided props for this
+    tenant/project scope.
+
+    This is used by explicit env reset paths where AGENTIC_BUNDLES_JSON is the
+    source of truth for bundle-level config overrides.
+    """
+    prefix = _props_key(tenant=tenant, project=project, bundle_id="")
+    pattern = f"{prefix}*"
+    desired: Dict[str, str] = {}
+
+    for bid, props in (props_map or {}).items():
+        if props is None:
+            continue
+        key = _props_key(tenant=tenant, project=project, bundle_id=bid)
+        desired[key] = json.dumps(props, ensure_ascii=False)
+
+    existing = set()
+    async for key in _iter_matching_keys(redis, pattern):
+        existing.add(key)
+
+    for key in existing:
+        if key not in desired:
+            await redis.delete(key)
+
+    for key, payload in desired.items():
+        await redis.set(key, payload)
+
 def _entries_equivalent(a: "BundleEntry", b: "BundleEntry") -> bool:
     return (
         _norm_str(a.id) == _norm_str(b.id)
@@ -467,11 +523,15 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
     reg, _ = _merge_example_bundles(reg)
     reg = _ensure_admin_bundle(reg)
     await save_registry(redis, reg, tenant, project)
-    if props_map:
-        t, p = tenant, project
-        if not t or not p:
-            t, p = _tp_from_env()
-        await _apply_bundle_props(redis, tenant=t, project=p, props_map=props_map)
+    t, p = tenant, project
+    if not t or not p:
+        t, p = _tp_from_env()
+    await _sync_bundle_props_authoritative(
+        redis,
+        tenant=t,
+        project=p,
+        props_map=props_map,
+    )
     return reg
 
 

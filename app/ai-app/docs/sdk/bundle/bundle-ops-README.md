@@ -111,6 +111,15 @@ Fields:
 **CI/CD friendly option (no admin tokens):**
 Set `BUNDLES_FORCE_ENV_ON_STARTUP=1` on **processor**.
 
+`reset-env` and proc startup force-env do two things authoritatively for the
+current tenant/project scope:
+- replace the Redis bundle registry from `AGENTIC_BUNDLES_JSON` / `bundles.yaml`
+- replace the descriptor-backed bundle props layer in Redis
+
+If a bundle prop key was removed from `bundles.yaml`, that key is deleted from
+Redis during env reset. Runtime/admin overrides are also discarded by env reset,
+which makes `bundles.yaml` the startup source of truth.
+
 **Bundle secrets + sidecar tokens (important):**
 Bundle secrets can be added at any time (admin UI or bundles.secrets.yaml),
 so services must be able to read them long after startup. If you use
@@ -127,6 +136,13 @@ When secrets are provisioned via `bundles.secrets.yaml`, the CLI also stores
 the key list under `bundles.<bundle_id>.secrets.__keys` in the secrets sidecar
 so the UI can show keys without exposing values.
 
+Important:
+- this authoritative env reset applies to the registry and bundle props layer
+  only
+- `bundles.secrets.yaml` provisioning is currently upsert-only
+- removing a secret from the descriptor does not auto-delete it from the
+  configured secrets provider
+
 ---
 
 ## Runtime env controls
@@ -135,7 +151,7 @@ so the UI can show keys without exposing values.
 |---------------------------------------|-----------|-------------------------------------------------------------------------|
 | `AGENTIC_BUNDLES_JSON`                | _(unset)_ | Bundle registry descriptor (inline JSON or path to JSON/YAML file).     |
 | `BUNDLE_STORAGE_ROOT`                | _(unset)_ | Shared local filesystem root for bundle data (used by ks:), default: `<bundles_root>/_bundle_storage`. |
-| `BUNDLES_FORCE_ENV_ON_STARTUP`        | `0`       | Force overwrite Redis registry from `AGENTIC_BUNDLES_JSON` at startup.  |
+| `BUNDLES_FORCE_ENV_ON_STARTUP`        | `0`       | Force overwrite Redis registry and descriptor-backed bundle props from `AGENTIC_BUNDLES_JSON` at startup. |
 | `BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS`  | `60`      | Redis lock TTL for startup env reset.                                   |
 | `BUNDLES_INCLUDE_EXAMPLES`            | `1`       | Auto‑add example bundles from `sdk/examples/bundles`.                   |
 | `BUNDLE_GIT_RESOLUTION_ENABLED`       | `1`       | Enable git clone/pull for bundles with `repo`.                          |
@@ -224,6 +240,13 @@ These props can be provided in `bundles.yaml` **or** updated at runtime.
 Bundle defaults come from `entrypoint.configuration` (bundle-defined). Effective
 props are computed as a deep merge: defaults → bundles.yaml → runtime overrides.
 
+Important:
+- during normal runtime, admin edits act as the top override layer
+- during `reset-env` or proc startup with `BUNDLES_FORCE_ENV_ON_STARTUP=1`,
+  Redis props are rebuilt from `bundles.yaml` authoritatively
+- stale keys removed from `bundles.yaml` are deleted from Redis
+- runtime overrides do not survive that authoritative env reset
+
 Admin APIs:
 - `GET /admin/integrations/bundles/{bundle_id}/props`
 - `POST /admin/integrations/bundles/{bundle_id}/props`
@@ -273,7 +296,9 @@ bundles:
           validate_refs: true
 ```
 
-Resolved values are stored in Redis as runtime props.
+Resolved values are stored in Redis as bundle props.
+On `reset-env` / startup force-env this Redis layer is synchronized
+authoritatively from the descriptor, not merged additively.
 
 ### Inspect effective props in Redis
 ```
