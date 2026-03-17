@@ -31,6 +31,8 @@ spec:
           env:
             - name: CHAT_PROCESSOR_PORT
               value: {{ .Values.services.chatProc.servicePort | quote }}
+            - name: UVICORN_TIMEOUT_WORKER_HEALTHCHECK
+              value: {{ .Values.services.chatProc.uvicornWorkerHealthcheckTimeout | quote }}
             - name: GATEWAY_COMPONENT
               value: proc
             - name: POSTGRES_HOST

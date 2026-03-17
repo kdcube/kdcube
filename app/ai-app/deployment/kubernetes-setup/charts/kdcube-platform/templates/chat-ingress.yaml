@@ -31,6 +31,8 @@ spec:
           env:
             - name: CHAT_APP_PORT
               value: {{ .Values.services.chatIngress.servicePort | quote }}
+            - name: UVICORN_TIMEOUT_WORKER_HEALTHCHECK
+              value: {{ .Values.services.chatIngress.uvicornWorkerHealthcheckTimeout | quote }}
             - name: GATEWAY_COMPONENT
               value: ingress
             - name: POSTGRES_HOST
@@ -70,10 +72,13 @@ spec:
                   name: {{ .Values.secrets.platform.name }}
                   key: SECRETS_TOKEN_INGRESS
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: http
-            initialDelaySeconds: 10
-            periodSeconds: 5
+            initialDelaySeconds: {{ .Values.services.chatIngress.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.services.chatIngress.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.services.chatIngress.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.services.chatIngress.readinessProbe.failureThreshold }}
           resources:
 {{ toYaml .Values.services.chatIngress.resources | indent 12 }}
           volumeMounts:

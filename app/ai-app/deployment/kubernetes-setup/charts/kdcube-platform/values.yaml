@@ -85,6 +85,12 @@ services:
       repository: kdcube/kdcube-chat-ingress
       tag: latest
     servicePort: 8010
+    uvicornWorkerHealthcheckTimeout: "60"
+    readinessProbe:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 10
+      failureThreshold: 3
     resources:
       requests:
         cpu: 250m
@@ -100,6 +106,7 @@ services:
       repository: kdcube/kdcube-chat-proc
       tag: latest
     servicePort: 8020
+    uvicornWorkerHealthcheckTimeout: "60"
     resources:
       requests:
         cpu: 500m
