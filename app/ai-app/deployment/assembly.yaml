@@ -16,6 +16,23 @@ storage:
   kdcube: "s3://../data/kdcube"
   bundles: "s3://../data/kdcube"
 
+routines:
+
+  economics:
+    subscription_rollover_enabled: true
+    subscription_rollover_cron: "15 * * * *"
+    subscription_rollover_lock_ttl_seconds: 900
+    subscription_rollover_sweep_limit: 500
+
+  stripe:
+    reconcile_enabled: true
+    reconcile_cron: "45 * * * *"
+    reconcile_lock_ttl_seconds: 900
+
+  opex:
+    agg_cron: "0 3 * * *"
+
+
 auth:
   type: "simple"  # "simple" | "cognito" | "delegated"
   cognito:

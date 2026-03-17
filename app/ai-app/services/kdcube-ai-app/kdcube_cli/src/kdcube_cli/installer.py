@@ -2185,6 +2185,32 @@ def gather_configuration(
 
     _autosave()
 
+    # Routines: apply scheduler settings from assembly descriptor (non-interactive).
+    if assembly_path:
+        routines_block = _get_nested(assembly_data, "routines")
+        if isinstance(routines_block, dict):
+            economics = routines_block.get("economics") or {}
+            stripe = routines_block.get("stripe") or {}
+            opex = routines_block.get("opex") or {}
+            _routines_map = [
+                (economics, "subscription_rollover_enabled", "SUBSCRIPTION_ROLLOVER_ENABLED"),
+                (economics, "subscription_rollover_cron", "SUBSCRIPTION_ROLLOVER_CRON"),
+                (economics, "subscription_rollover_lock_ttl_seconds", "SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS"),
+                (economics, "subscription_rollover_sweep_limit", "SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT"),
+                (stripe, "reconcile_enabled", "STRIPE_RECONCILE_ENABLED"),
+                (stripe, "reconcile_cron", "STRIPE_RECONCILE_CRON"),
+                (stripe, "reconcile_lock_ttl_seconds", "STRIPE_RECONCILE_LOCK_TTL_SECONDS"),
+                (opex, "agg_cron", "OPEX_AGG_CRON"),
+            ]
+            for block, yaml_key, env_key in _routines_map:
+                if not isinstance(block, dict):
+                    continue
+                val = block.get(yaml_key)
+                if val is None or is_placeholder(str(val)):
+                    continue
+                str_val = str(val).lower() if isinstance(val, bool) else str(val)
+                update_env_value(env_ingress, env_key, str_val)
+
     bundles_descriptor_selected = False
     assembly_descriptor_selected = False
 
