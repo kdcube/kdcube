@@ -64,11 +64,12 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
 # 2. MCP tool sources — external tool servers via MCP protocol
 # ──────────────────────────────────────────────────────────────
 MCP_TOOL_SPECS: List[Dict[str, Any]] = [
-    {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},  # Built-in web search
+    # {"server_id": "web_search", "alias": "web_search", "tools": ["web_search"]},  # Built-in web search
     {"server_id": "deepwiki", "alias": "deepwiki", "tools": ["*"]},               # Streamable HTTP — GitHub repo docs
     {"server_id": "stack", "alias": "stack", "tools": ["*"]},   # Stdio transport
     {"server_id": "docs", "alias": "docs", "tools": ["*"]},     # HTTP / Streamable HTTP
     {"server_id": "local", "alias": "local", "tools": ["*"]},   # SSE transport
+    {"server_id": "firecrawl", "alias": "firecrawl", "tools": ["*"]},  # Web scraping/crawling via Firecrawl
 ]
 
 # ──────────────────────────────────────────────────────────────
