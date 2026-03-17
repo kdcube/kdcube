@@ -1,19 +1,16 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.17.110"
+  ref: "2026.3.17.1155"
   description: |
-    This release is mainly a frontend and runtime-stability update. The chat web app now handles backend service/economics events more explicitly: rate-limit warnings, quota denials,
-    and project-budget exhaustion are surfaced as popup notifications instead of being buried in logs. Turn failures are now rendered as structured service-error items in the
-    conversation, so users can see that a turn failed and expand the details. The UI also improves artifact handling: canvas and web-search artifacts now have titles plus copy/save
-    actions, the canvas view has its own header and close control, and embedded srcdoc HTML artifacts are supported. There is also a new optional debug panel, enabled through
-    CHAT_WEB_APP_SHOW_DEBUG_CONTROLS, which can load an example conversation for UI testing.
+    This release fixes two configuration/runtime consistency issues in proc.
   
-    On the platform side, web-proxy startup now includes ROUTE_PREFIX in the runtime envsubst variable list, so generated OpenResty/Nginx config correctly respects route-prefix
-    deployments. In the solution runtime, completed turns now clean up their temporary workspace directories after artifacts are persisted, which reduces leftover disk usage; this
-    behavior can be disabled for debugging with SOLUTION_RETAIN_TURN_WORKSPACE=true.
+    The first fix addresses stale auth context on cached singleton bundles. In long-lived proc workers, especially on Fargate, singleton bundle instances could be reused with an old
+    request context, causing privileged users to be evaluated as registered inside admin bundle operations such as ai_bundles. Proc now rebinds the per-request comm_context,
+    communicator, and runtime context whenever a cached singleton workflow instance is reused, so request-scoped auth and user type are always current.
   
-    Finally, the continuation queueing work received a production fix. Atomic chat enqueue now includes the continuation mailbox counter prefix in its backpressure/queue-capacity path.
-    Without this, chat requests could fail with 503 and atomic_enqueue_error: 'AtomicChatQueueManager' object has no attribute 'QUEUE_CONTINUATION_COUNT_PREFIX'. This release closes
-    that gap and adds a regression test around the atomic enqueue path.
+    The second fix makes bundle descriptor resets authoritative for non-secret bundle props. Reset from env and proc startup with BUNDLES_FORCE_ENV_ON_STARTUP=1 now rebuild the Redis
+    bundle-props layer from bundles.yaml and delete stale keys that were removed from the descriptor, instead of leaving old overrides behind. This restores the intended precedence of
+    code defaults → bundles.yaml → runtime overrides while allowing bundles.yaml to fully control the descriptor-backed props layer on startup/reset. Documentation and the AI Bundle
+    dashboard text were updated to reflect this behavior, and also clarify that bundles.secrets.yaml is still upsert-only and does not yet auto-delete removed secrets.
   config:
-    version: "2026.3.17.110"
+    version: "2026.3.17.1155"
