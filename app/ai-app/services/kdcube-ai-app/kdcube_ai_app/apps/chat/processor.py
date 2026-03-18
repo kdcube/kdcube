@@ -61,6 +61,7 @@ class EnhancedChatRequestProcessor:
             task_timeout_sec: Optional[int] = None,
             lock_ttl_sec: int = 300,
             lock_renew_sec: int = 60,
+            started_marker_ttl_sec: Optional[int] = None,
             redis=None,
     ):
         self.middleware = middleware
@@ -71,6 +72,13 @@ class EnhancedChatRequestProcessor:
         self.task_timeout_sec = int(os.getenv("CHAT_TASK_TIMEOUT_SEC", str(task_timeout_sec or 600)))
         self.lock_ttl_sec = lock_ttl_sec
         self.lock_renew_sec = lock_renew_sec
+        default_started_marker_ttl = max(self.task_timeout_sec + self.lock_ttl_sec + 60, self.lock_ttl_sec * 2)
+        self.started_marker_ttl_sec = int(
+            os.getenv(
+                "CHAT_TASK_STARTED_MARKER_TTL_SEC",
+                str(started_marker_ttl_sec or default_started_marker_ttl),
+            )
+        )
         self.conversation_ctx = conversation_ctx
         self.queue_analytics_updater = queue_analytics_updater
 
@@ -247,7 +255,7 @@ class EnhancedChatRequestProcessor:
         await self.redis.set(
             started_key,
             json.dumps(marker, ensure_ascii=False),
-            ex=self.lock_ttl_sec,
+            ex=self.started_marker_ttl_sec,
         )
         task_data["_started_key"] = started_key
         return started_key
@@ -912,8 +920,15 @@ class EnhancedChatRequestProcessor:
     # ---------------- Per-task execution ----------------
 
     @asynccontextmanager
-    async def _lock_renewer(self, lock_key: str, *, extra_keys: Optional[Iterable[str]] = None):
+    async def _lock_renewer(
+            self,
+            lock_key: str,
+            *,
+            extra_keys: Optional[Iterable[str]] = None,
+            extra_ttl_sec: Optional[int] = None,
+    ):
         lease_keys = tuple(key for key in (extra_keys or ()) if key)
+        extra_key_ttl = int(extra_ttl_sec or self.lock_ttl_sec)
 
         async def renewer():
             try:
@@ -928,7 +943,7 @@ class EnhancedChatRequestProcessor:
                             extra_ttl = await self.redis.ttl(extra_key)
                             if extra_ttl is None or extra_ttl < 0:
                                 continue
-                            await self.redis.expire(extra_key, self.lock_ttl_sec)
+                            await self.redis.expire(extra_key, extra_key_ttl)
                         except Exception:
                             logger.debug("Failed to renew extra lease key %s", extra_key, exc_info=True)
             except asyncio.CancelledError:
@@ -1005,7 +1020,11 @@ class EnhancedChatRequestProcessor:
                     details["started_execution"] = True
                     details["started_at"] = _utc_now_iso()
 
-            async with self._lock_renewer(lock_key=lock_key, extra_keys=[started_key] if started_key else None):
+            async with self._lock_renewer(
+                    lock_key=lock_key,
+                    extra_keys=[started_key] if started_key else None,
+                    extra_ttl_sec=self.started_marker_ttl_sec if started_key else None,
+            ):
                 await comm.start(message=msg, queue_stats={})
                 await comm.step(
                     step="workflow_start",

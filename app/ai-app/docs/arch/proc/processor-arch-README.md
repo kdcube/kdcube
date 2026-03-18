@@ -153,6 +153,9 @@ Why it matters:
 
 - pre-start claims are recoverable
 - started turns are treated as non-idempotent and are not replayed automatically
+- the started marker lease is intentionally longer than the worker claim-lock lease
+- that lease is renewed separately so a hard proc restart does not accidentally let an already-started turn fall back into the "pre-start reclaim" path
+- current product policy is simple: normal inbound chat messages do not opt into idempotent replay; once started, they are treated as non-idempotent
 
 ### Per-conversation continuation mailbox
 
@@ -354,6 +357,12 @@ So the current rule is:
 
 - safe to retry: claimed but not started
 - unsafe to retry: started
+
+Important implementation detail:
+
+- the claim lock and the started marker do **not** share the same effective recovery lease anymore
+- the started marker intentionally outlives the claim lock
+- otherwise a hard worker restart could let both leases expire together and incorrectly requeue a task that had already crossed the non-idempotent boundary
 
 ### 6.4 Cancellation during drain
 
@@ -631,6 +640,11 @@ That can stay as today:
 
 - a per-task started marker
 - or an equivalent turn state persisted in the conversation execution state
+
+Current policy note:
+
+- all normal inbound chat messages are currently treated as non-idempotent after turn start
+- if the platform ever introduces idempotent replay, it must be an explicit task/queue contract rather than inferred from generic processor recovery
 
 ### 12.2 Proposed end-to-end flow
 

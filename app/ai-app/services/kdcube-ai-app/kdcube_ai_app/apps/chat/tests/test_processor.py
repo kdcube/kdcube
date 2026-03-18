@@ -354,6 +354,26 @@ async def test_lock_renewer_keeps_extending_lock_during_drain():
 
 
 @pytest.mark.asyncio
+async def test_lock_renewer_uses_longer_started_marker_ttl_for_extra_keys():
+    redis = _MinimalRedis()
+    redis.lock_ttls["lock:test"] = 300
+    redis.lock_ttls["lock:started:test"] = 960
+    processor = _build_processor(redis)
+    processor.lock_renew_sec = 0.01
+    processor.started_marker_ttl_sec = 960
+
+    async with processor._lock_renewer(
+            "lock:test",
+            extra_keys=["lock:started:test"],
+            extra_ttl_sec=processor.started_marker_ttl_sec,
+    ):
+        await asyncio.sleep(0.03)
+
+    assert ("lock:test", 300) in redis.expire_calls
+    assert ("lock:started:test", 960) in redis.expire_calls
+
+
+@pytest.mark.asyncio
 async def test_requeue_stale_inflight_task_returns_item_to_ready_queue():
     redis = _MinimalRedis()
     processor = _build_processor(redis)
@@ -429,6 +449,8 @@ async def test_process_task_cancellation_keeps_started_inflight_claim(_patch_pro
     assert redis.lists[inflight_key] == [raw_payload]
     assert lock_key in redis.lock_ttls
     assert started_key in redis.lock_ttls
+    assert redis.lock_ttls[started_key] == processor.started_marker_ttl_sec
+    assert redis.lock_ttls[started_key] > redis.lock_ttls[lock_key]
     assert lock_key not in redis.delete_calls
     assert started_key not in redis.delete_calls
     assert processor.get_current_load() == 0
