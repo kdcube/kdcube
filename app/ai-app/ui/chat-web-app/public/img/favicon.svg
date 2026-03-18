@@ -1,0 +1,36 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="fav_body" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%"   stop-color="#C6F3F1"/>
+            <stop offset="100%" stop-color="#4372C3"/>
+        </linearGradient>
+    </defs>
+
+    <!-- Antenna shaft -->
+    <line x1="32" y1="7" x2="32" y2="17"
+          stroke="#2B4B8A" stroke-width="3" stroke-linecap="round"/>
+    <!-- Antenna ball (purple, like small robot in robos.svg) -->
+    <circle cx="32" cy="5" r="5" fill="#6B63FE" stroke="#06101E" stroke-width="1.5"/>
+
+    <!-- Body -->
+    <rect x="7" y="17" width="50" height="40"
+          fill="url(#fav_body)" stroke="#06101E" stroke-width="2.5" rx="4"/>
+
+    <!-- Left eye — white ring + pupil -->
+    <circle cx="23" cy="35" r="9"  fill="white"    stroke="#06101E" stroke-width="1.5"/>
+    <circle cx="23" cy="35" r="4"  fill="#06101E"/>
+
+    <!-- Right eye — white ring + pupil -->
+    <circle cx="41" cy="35" r="9"  fill="white"    stroke="#06101E" stroke-width="1.5"/>
+    <circle cx="41" cy="35" r="4"  fill="#06101E"/>
+
+    <!-- Smile -->
+    <path d="M 23 48 Q 32 55 41 48"
+          stroke="#06101E" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+
+    <!-- Feet -->
+    <rect x="13" y="57" width="12" height="7"
+          fill="#4372C3" stroke="#06101E" stroke-width="1.5" rx="1.5"/>
+    <rect x="39" y="57" width="12" height="7"
+          fill="#4372C3" stroke="#06101E" stroke-width="1.5" rx="1.5"/>
+</svg>

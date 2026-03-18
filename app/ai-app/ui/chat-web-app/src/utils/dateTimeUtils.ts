@@ -14,10 +14,10 @@ export const getClientTimezone = (): ClientTimezone => {
 
     const utcOffsetMin = -new Date().getTimezoneOffset();
 
-    return { tz, utcOffsetMin };
+    return {tz, utcOffsetMin};
 };
 
-export const formatDateToLocalString = (date: Date, timeOnlyForToday: boolean = false, maxDaysAgo: number = 7) => {
+export const formatDateToLocalString = (date: Date, timeOnlyForToday: boolean = false, appendTime: boolean = true, maxDaysAgo: number = 7) => {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -31,19 +31,23 @@ export const formatDateToLocalString = (date: Date, timeOnlyForToday: boolean = 
     const timeString = date.toLocaleTimeString(Intl.DateTimeFormat().resolvedOptions().locale, {
         hour: 'numeric',
         minute: '2-digit',
-        hour12: true
+        hour12: false
     });
+
+    const appendedTimeString = appendTime ? '' : " " + timeString;
 
     if (diffDays === 0) {
         if (timeOnlyForToday) {
             return timeString;
         }
-        return `Today ${timeString}`;
-    } else if (diffDays === 1) {
-        return `Yesterday ${timeString}`;
+        return `Today${appendedTimeString}`;
+    }
+
+    if (diffDays === 1) {
+        return `Yesterday${appendedTimeString}`;
     } else if (diffDays > 1 && diffDays <= maxDaysAgo) {
-        return `${diffDays} days ago ${timeString}`;
+        return `${diffDays} days ago${appendedTimeString}`;
     } else {
-        return `${date.toLocaleDateString()} ${timeString}`;
+        return `${date.toLocaleDateString()}${appendedTimeString}`;
     }
 }

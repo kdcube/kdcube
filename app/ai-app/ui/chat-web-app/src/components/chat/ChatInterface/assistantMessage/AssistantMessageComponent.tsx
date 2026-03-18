@@ -1,7 +1,7 @@
 import {RNFile, TurnStep} from "../../../../features/chatController/chatBase.ts";
 import {useAppSelector} from "../../../../app/store.ts";
 import {selectCurrentTurn} from "../../../../features/chat/chatStateSlice.ts";
-import React, {ReactNode, useMemo, useRef, useState} from "react";
+import React, {ReactNode, useCallback, useMemo, useRef, useState} from "react";
 import {closeUpMarkdown, useWordStreamEffect} from "../../../WordStreamingEffects.tsx";
 import ReactMarkdown from "react-markdown";
 import {markdownComponents, markdownComponentsTight, rehypePlugins, remarkPlugins} from "../markdownRenderUtils.tsx";
@@ -155,7 +155,7 @@ export const AssistantMessageComponent = ({
     );
 
     const [tab, setTab] = useState<AssistantMessageTab>("message")
-    const isPressed = (tabName: AssistantMessageTab) => tab === tabName
+    const isPressed = useCallback((tabName: AssistantMessageTab) => tab === tabName, [tab])
 
     const {thinkingItems, citations, files, other} = useMemo(() => {
         const thinkingItems: ThinkingArtifact[] = []
@@ -332,7 +332,6 @@ export const AssistantMessageComponent = ({
     return useMemo(() => {
         return (
             <div className="flex justify-start">
-
                 <div className="flex flex-col w-full">
                     <div
                         className={"px-3 pt-2 text-gray-800 max-w-none"}
