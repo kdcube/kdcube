@@ -21,7 +21,6 @@
 
 from __future__ import annotations
 
-import traceback
 from typing import Any, Dict
 
 from langgraph.graph import StateGraph, START, END
@@ -71,13 +70,13 @@ class OpenRouterDataBundle(BaseEntrypoint):
         g = StateGraph(BundleState)
 
         async def process(state: BundleState) -> BundleState:
-            orch = OpenRouterDataWorkflow(
-                comm=self.comm,
-                config=self.config,
-                comm_context=self.comm_context,
-            )
-
             try:
+                orch = OpenRouterDataWorkflow(
+                    comm=self.comm,
+                    config=self.config,
+                    comm_context=self.comm_context,
+                )
+
                 res = await orch.process({
                     "request_id": state["request_id"],
                     "tenant": state["tenant"],
@@ -95,15 +94,7 @@ class OpenRouterDataBundle(BaseEntrypoint):
                 state["final_answer"] = res.get("answer") or ""
                 state["followups"] = res.get("followups") or []
             except Exception as e:
-                self.logger.log(traceback.format_exc(), "ERROR")
-                state["error_message"] = str(e)
-                await self.comm.step(
-                    step="turn",
-                    status="error",
-                    title="Processing Error",
-                    data={"error": str(e)},
-                    markdown=f"**Error:** {e}",
-                )
+                await self.report_turn_error(state=state, exc=e, title="Processing Error")
 
             return state
 

@@ -76,6 +76,7 @@ SCENARIOS: List[ScenarioSpec] = [
     ScenarioSpec("10", "10. Program logging INFO+ERROR", "logs info and error via logging"),
     ScenarioSpec("11", "11. Program writes file then crashes", "writes output then raises"),
     ScenarioSpec("12", "12. Side-effects (no contract)", "runs without contract, diff out/"),
+    ScenarioSpec("13", "13. Fargate happy path", "writes expected output using bundle-configured Fargate runtime"),
 ]
 
 
@@ -188,6 +189,14 @@ def build_scenario(*, turn_id: str, scenario: ScenarioSpec) -> Dict[str, object]
             "extra_path = out_dir / f'{turn_id}/files/extra-side-effect.txt'",
             "extra_path.parent.mkdir(parents=True, exist_ok=True)",
             "extra_path.write_text('another output', encoding='utf-8')",
+        ]
+    elif scenario.id == "13":  # Fargate path: remote runtime selected via bundle props
+        # Fargate cold start + image pull + secret injection routinely takes
+        # much longer than the local/docker demo paths.
+        timeout_s = 180
+        lines += [
+            "out_path.write_text('hello from fargate iso-runtime', encoding='utf-8')",
+            "print('fargate scenario wrote expected output')",
         ]
     return {
         "contract": contract,

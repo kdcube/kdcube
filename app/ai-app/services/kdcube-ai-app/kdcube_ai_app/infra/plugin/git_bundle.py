@@ -411,125 +411,124 @@ def ensure_git_bundle(
     force_pull = os.environ.get("BUNDLE_GIT_ALWAYS_PULL", "0").lower() in {"1", "true", "yes"}
     with _redis_bundle_lock(bundle_id=bundle_id, git_ref=git_ref):
         with _bundle_lock(bundle_id=bundle_id, git_ref=git_ref, bundles_root=root):
-            pass
-        try:
-            paths = compute_git_bundle_paths(
-                bundle_id=bundle_id,
-                git_url=git_url,
-                git_ref=git_ref,
-                git_subdir=git_subdir,
-                bundles_root=root,
-            )
-            repo_root = paths.repo_root
-            repo_root.parent.mkdir(parents=True, exist_ok=True)
-            env = _build_git_env()
-            depth = _git_depth()
+            try:
+                paths = compute_git_bundle_paths(
+                    bundle_id=bundle_id,
+                    git_url=git_url,
+                    git_ref=git_ref,
+                    git_subdir=git_subdir,
+                    bundles_root=root,
+                )
+                repo_root = paths.repo_root
+                repo_root.parent.mkdir(parents=True, exist_ok=True)
+                env = _build_git_env()
+                depth = _git_depth()
 
-            git_dir = repo_root / ".git"
-            if git_dir.exists() and not force_pull:
-                # Repo already present; skip fetch/checkout unless forced.
+                git_dir = repo_root / ".git"
+                if git_dir.exists() and not force_pull:
+                    # Repo already present; skip fetch/checkout unless forced.
+                    if not paths.bundle_root.exists():
+                        raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
+                    _clear_fail(fail_key)
+                    return paths
+                if not git_dir.exists():
+                    if atomic:
+                        tmp_root = repo_root.parent / _atomic_dir_name(repo_root.name)
+                        log.log(f"[git.bundle] cloning {git_url} -> {tmp_root}", level="INFO")
+                        clone_args = ["git", "clone"]
+                        if depth:
+                            clone_args += ["--depth", str(depth)]
+                        clone_args += [git_url, str(tmp_root)]
+                        _run_git(clone_args, logger=log, env=env)
+                        try:
+                            tmp_root.rename(repo_root)
+                        except Exception:
+                            # Fallback: if rename fails, keep tmp and point paths to it
+                            repo_root = tmp_root
+                            paths = compute_git_bundle_paths(
+                                bundle_id=repo_root.name,
+                                git_url=git_url,
+                                git_ref=git_ref,
+                                git_subdir=git_subdir,
+                                bundles_root=repo_root.parent,
+                            )
+                    else:
+                        log.log(f"[git.bundle] cloning {git_url} -> {repo_root}", level="INFO")
+                        clone_args = ["git", "clone"]
+                        if depth:
+                            clone_args += ["--depth", str(depth)]
+                        clone_args += [git_url, str(repo_root)]
+                        _run_git(clone_args, logger=log, env=env)
+                else:
+                    try:
+                        # Verify remote URL matches (and fix if needed)
+                        proc = subprocess.run(
+                            ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
+                            check=True, capture_output=True, text=True,
+                        )
+                        remote_url = (proc.stdout or "").strip()
+                        if remote_url and remote_url != git_url:
+                            log.log(
+                                f"[git.bundle] remote mismatch for {repo_root}: {remote_url} != {git_url}",
+                                level="WARNING",
+                            )
+                            if http_token:
+                                _run_git(
+                                    ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
+                                    logger=log,
+                                    env=env,
+                                )
+                    except Exception:
+                        pass
+                    log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")
+                    try:
+                        fetch_args = ["git", "-C", str(repo_root), "fetch", "--all", "--tags", "--prune"]
+                        if depth:
+                            fetch_args += ["--depth", str(depth)]
+                        _run_git(fetch_args, logger=log, env=env)
+                    except Exception as e:
+                        # If repo exists, fetch failures shouldn't block readiness of an existing clone.
+                        log.log(f"[git.bundle] fetch failed: {e}", level="WARNING")
+
+                if git_ref:
+                    log.log(f"[git.bundle] checkout {git_ref}", level="INFO")
+                    try:
+                        _run_git(["git", "-C", str(repo_root), "checkout", git_ref], logger=log, env=env)
+                    except Exception:
+                        if depth:
+                            try:
+                                _run_git(["git", "-C", str(repo_root), "fetch", "--unshallow"], logger=log, env=env)
+                                _run_git(["git", "-C", str(repo_root), "checkout", git_ref], logger=log, env=env)
+                            except Exception:
+                                raise
+                        else:
+                            raise
+                    # If ref is a branch, attempt fast-forward pull
+                    try:
+                        _run_git(["git", "-C", str(repo_root), "pull", "--ff-only"], logger=log, env=env)
+                    except Exception:
+                        pass
+
+                # Log current commit (best-effort)
+                try:
+                    proc = subprocess.run(
+                        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+                        check=True, capture_output=True, text=True, env=env,
+                    )
+                    commit = (proc.stdout or "").strip()
+                    if commit:
+                        log.log(f"[git.bundle] HEAD={commit}", level="INFO")
+                except Exception:
+                    pass
+
                 if not paths.bundle_root.exists():
                     raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
+
                 _clear_fail(fail_key)
                 return paths
-            if not git_dir.exists():
-                if atomic:
-                    tmp_root = repo_root.parent / _atomic_dir_name(repo_root.name)
-                    log.log(f"[git.bundle] cloning {git_url} -> {tmp_root}", level="INFO")
-                    clone_args = ["git", "clone"]
-                    if depth:
-                        clone_args += ["--depth", str(depth)]
-                    clone_args += [git_url, str(tmp_root)]
-                    _run_git(clone_args, logger=log, env=env)
-                    try:
-                        tmp_root.rename(repo_root)
-                    except Exception:
-                        # Fallback: if rename fails, keep tmp and point paths to it
-                        repo_root = tmp_root
-                        paths = compute_git_bundle_paths(
-                            bundle_id=repo_root.name,
-                            git_url=git_url,
-                            git_ref=git_ref,
-                            git_subdir=git_subdir,
-                            bundles_root=repo_root.parent,
-                        )
-                else:
-                    log.log(f"[git.bundle] cloning {git_url} -> {repo_root}", level="INFO")
-                    clone_args = ["git", "clone"]
-                    if depth:
-                        clone_args += ["--depth", str(depth)]
-                    clone_args += [git_url, str(repo_root)]
-                    _run_git(clone_args, logger=log, env=env)
-            else:
-                try:
-                    # Verify remote URL matches (and fix if needed)
-                    proc = subprocess.run(
-                        ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
-                        check=True, capture_output=True, text=True,
-                    )
-                    remote_url = (proc.stdout or "").strip()
-                    if remote_url and remote_url != git_url:
-                        log.log(
-                            f"[git.bundle] remote mismatch for {repo_root}: {remote_url} != {git_url}",
-                            level="WARNING",
-                        )
-                        if http_token:
-                            _run_git(
-                                ["git", "-C", str(repo_root), "remote", "set-url", "origin", git_url],
-                                logger=log,
-                                env=env,
-                            )
-                except Exception:
-                    pass
-                log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")
-                try:
-                    fetch_args = ["git", "-C", str(repo_root), "fetch", "--all", "--tags", "--prune"]
-                    if depth:
-                        fetch_args += ["--depth", str(depth)]
-                    _run_git(fetch_args, logger=log, env=env)
-                except Exception as e:
-                    # If repo exists, fetch failures shouldn't block readiness of an existing clone.
-                    log.log(f"[git.bundle] fetch failed: {e}", level="WARNING")
-
-            if git_ref:
-                log.log(f"[git.bundle] checkout {git_ref}", level="INFO")
-                try:
-                    _run_git(["git", "-C", str(repo_root), "checkout", git_ref], logger=log, env=env)
-                except Exception:
-                    if depth:
-                        try:
-                            _run_git(["git", "-C", str(repo_root), "fetch", "--unshallow"], logger=log, env=env)
-                            _run_git(["git", "-C", str(repo_root), "checkout", git_ref], logger=log, env=env)
-                        except Exception:
-                            raise
-                    else:
-                        raise
-                # If ref is a branch, attempt fast-forward pull
-                try:
-                    _run_git(["git", "-C", str(repo_root), "pull", "--ff-only"], logger=log, env=env)
-                except Exception:
-                    pass
-
-            # Log current commit (best-effort)
-            try:
-                proc = subprocess.run(
-                    ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-                    check=True, capture_output=True, text=True, env=env,
-                )
-                commit = (proc.stdout or "").strip()
-                if commit:
-                    log.log(f"[git.bundle] HEAD={commit}", level="INFO")
-            except Exception:
-                pass
-
-            if not paths.bundle_root.exists():
-                raise FileNotFoundError(f"Bundle subdir not found: {paths.bundle_root}")
-
-            _clear_fail(fail_key)
-            return paths
-        except Exception as e:
-            _record_fail(fail_key, e)
-            raise
+            except Exception as e:
+                _record_fail(fail_key, e)
+                raise
 
 
 def cleanup_old_git_bundles(

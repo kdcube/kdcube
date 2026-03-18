@@ -86,6 +86,30 @@ def build_exec_snapshot_paths(base_prefix: str) -> ExecSnapshotPaths:
     )
 
 
+def resolve_exec_snapshot_uri(snapshot: Dict[str, Any], kind: str) -> Optional[str]:
+    if not isinstance(snapshot, dict):
+        return None
+    legacy = snapshot.get(kind)
+    if legacy:
+        return str(legacy)
+
+    storage_uri = snapshot.get("storage_uri")
+    base_prefix = snapshot.get("base_prefix")
+    if not storage_uri or not base_prefix:
+        return None
+    paths = build_exec_snapshot_paths(str(base_prefix))
+    key_map = {
+        "input_work_uri": paths.input_work_key,
+        "input_out_uri": paths.input_out_key,
+        "output_work_uri": paths.output_work_key,
+        "output_out_uri": paths.output_out_key,
+    }
+    rel_key = key_map.get(kind)
+    if not rel_key:
+        return None
+    return _uri_for_path(str(storage_uri), rel_key)
+
+
 def _should_skip(path: pathlib.Path, *, skip_dirs: set[str], skip_files: set[str]) -> bool:
     if path.name in skip_files:
         return True

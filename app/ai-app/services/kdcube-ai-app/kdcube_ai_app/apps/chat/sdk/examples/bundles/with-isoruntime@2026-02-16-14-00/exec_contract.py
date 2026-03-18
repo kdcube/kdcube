@@ -42,6 +42,7 @@ async def run_with_contract(
     outdir,
     exec_id: str,
     prog_name: str,
+    exec_runtime: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Dict[str, Any]]:
     # Step 1: validate and normalize the contract spec into internal format
     output_contract, normalized_artifacts, err = build_exec_output_contract(contract_spec)
@@ -65,5 +66,6 @@ async def run_with_contract(
         workdir=workdir,
         outdir=outdir,
         exec_id=exec_id,
+        exec_runtime=exec_runtime,
     )
     return envelope, None, tool_params

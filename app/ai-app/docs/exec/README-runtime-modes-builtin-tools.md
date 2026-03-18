@@ -7,7 +7,7 @@ keywords: ["builtin tools", "tool runtime", "isolated subprocess", "docker mode"
 see_also:
   - ks:docs/exec/runtime-README.md
   - ks:docs/exec/README-iso-runtime.md
-  - ks:docs/exec/distributed-exec.md
+  - ks:docs/exec/distributed-exec-README.md
 ---
 # Runtime modes for built-in tools
 

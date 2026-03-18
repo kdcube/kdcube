@@ -7,6 +7,7 @@ keywords: ["bundles.yaml", "bundles.secrets.yaml", "bundle props", "bundle secre
 see_also:
   - ks:docs/service/configuration/code-config-secrets-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
+  - ks:docs/sdk/bundle/bundle-platform-properties-README.md
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
 ---
@@ -54,8 +55,13 @@ Notes:
 - `config` is the preferred key. `props` is accepted as a legacy alias.
 - Nested YAML is preserved as a **nested dict** in `bundle_props`.
 - Dot‑paths are **not expanded** at ingest time. Use a dot‑path resolver in code if needed.
-- If `config.role_models` or `config.embedding` are present, they override the bundle’s
-  `Config` at runtime (same path as `entrypoint.configuration` defaults in code).
+- Some property paths are platform-reserved and have built-in behavior:
+  - `role_models`
+  - `embedding`
+  - `economics.reservation_amount_dollars`
+  - `execution.runtime`
+- Canonical reference for these keys:
+  [docs/sdk/bundle/bundle-platform-properties-README.md](../../sdk/bundle/bundle-platform-properties-README.md).
 
 ### Overriding an existing role model
 Example: override `solver.react.v2.decision.v2.strong` to use `claude-sonnet-4-6`:
@@ -88,6 +94,60 @@ config:
     provider: "openai"
     model: "text-embedding-3-small"
 ```
+
+### Overriding execution runtime
+Example: enable per-bundle Fargate exec routing:
+
+```yaml
+config:
+  execution:
+    runtime:
+      mode: "fargate"
+      enabled: true
+      cluster: "arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster"
+      task_definition: "kdcube-staging-exec"
+      container_name: "exec"
+      subnets: ["subnet-xxxx", "subnet-yyyy"]
+      security_groups: ["sg-xxxx"]
+      assign_public_ip: "DISABLED"
+```
+
+Notes:
+- `execution.runtime` is the canonical path.
+- `exec_runtime` is accepted as a legacy alias.
+- Missing keys fall back to proc service env vars such as `FARGATE_CLUSTER`.
+
+Example: define multiple runtime profiles for one bundle and select the default:
+
+```yaml
+config:
+  execution:
+    runtime:
+      default_profile: "fargate"
+      profiles:
+        docker:
+          mode: "docker"
+          image: "py-code-exec:latest"
+          network_mode: "host"
+          cpus: "1.5"
+          memory: "2g"
+          extra_args: ["--pids-limit", "256"]
+        fargate:
+          mode: "fargate"
+          enabled: true
+          cluster: "arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster"
+          task_definition: "kdcube-staging-exec"
+          container_name: "exec"
+          subnets: ["subnet-xxxx", "subnet-yyyy"]
+          security_groups: ["sg-xxxx"]
+          assign_public_ip: "DISABLED"
+```
+
+Notes:
+- `profiles` is bundle-scoped: it declares the runtimes that this bundle supports.
+- `default_profile` selects the resolved default used by generic exec-tool calls.
+- bundle code can still choose another supported profile explicitly at runtime.
+- Docker profiles may define Docker-specific keys such as `image` and `network_mode`.
 
 ---
 
@@ -212,16 +272,20 @@ Important:
 
 ## 4) In bundle code
 
-Bundle defaults are defined in `entrypoint.configuration_defaults` (base) and
-bundle overrides of `entrypoint.configuration`.
+Bundle defaults are defined in platform entrypoints plus the bundle’s own
+`entrypoint.configuration`.
 Effective props are exposed via `bundle_props` (defaults + runtime overrides).
+
+Platform-reserved paths are documented in:
+[docs/sdk/bundle/bundle-platform-properties-README.md](../../sdk/bundle/bundle-platform-properties-README.md).
 
 **Important:** `configuration` is a **property**. If you override it, use
 `super().configuration` (no `()`) and apply defaults via `setdefault` so
 external overrides from `bundles.yaml` and the admin UI still win.
 
 See:
-`apps/chat/sdk/solutions/chatbot/entrypoint.py` (`configuration`, `bundle_props`).
+- `apps/chat/sdk/solutions/chatbot/entrypoint.py` (`configuration`, `bundle_props`)
+- `apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py`
 
 Secrets should be read via `get_secret()` with the dot‑path key:
 

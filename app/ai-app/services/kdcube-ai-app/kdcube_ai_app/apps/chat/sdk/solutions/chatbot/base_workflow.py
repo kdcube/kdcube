@@ -7,6 +7,7 @@ import os, time, datetime, json, re
 import pathlib
 import random
 import traceback
+import copy
 from typing import Dict, Any, List, Optional, Type, Callable, Awaitable
 
 from kdcube_ai_app.apps.chat.emitters import (
@@ -28,6 +29,10 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitExc
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.turn_reporting import _format_ms_table, _format_ms_table_markdown
 from kdcube_ai_app.apps.chat.sdk.runtime.scratchpad import TurnScratchpad, TurnPhaseError
+from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import (
+    normalize_exec_runtime_config,
+    resolve_exec_runtime_profile,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.gate.gate_contract import GateOut
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.runtime import ReactSolverV2
@@ -86,7 +91,8 @@ class BaseWorkflow():
                  gate_out_class: Optional[Type] = None,
                  answer_system_prompt: Optional[str] = None,
                  graph: GraphCtx = None,
-                 continuation_source: Optional[Any] = None):
+                 continuation_source: Optional[Any] = None,
+                 bundle_props: Optional[Dict[str, Any]] = None):
 
         self.graph = graph
         self.kb = kb
@@ -107,6 +113,7 @@ class BaseWorkflow():
 
         # do not reorder these initializations below
         self.config = config
+        self.bundle_props = dict(bundle_props or {})
         self.ctx_client = ctx_client or ContextRAGClient(conv_idx=self.conv_idx,
                                                         store=self.store,
                                                         model_service=self.model_service,)
@@ -163,6 +170,7 @@ class BaseWorkflow():
                 model_service=self.model_service,
                 runtime_ctx=self.runtime_ctx,
             )
+            self._sync_runtime_ctx_bundle_props()
         except Exception:
             self.runtime_ctx = RuntimeCtx()
             self.runtime_ctx.continuation_source = self.continuation_source
@@ -172,10 +180,34 @@ class BaseWorkflow():
                 model_service=self.model_service,
                 runtime_ctx=self.runtime_ctx,
             )
+            self._sync_runtime_ctx_bundle_props()
 
     @property
     def continuation_source(self) -> Optional[Any]:
         return self._continuation_source or get_current_conversation_continuation_source()
+
+    @staticmethod
+    def get_prop_path(data: Dict[str, Any], path: str, default: Any = None) -> Any:
+        if not path:
+            return default
+        cur: Any = data
+        for part in path.split("."):
+            if not isinstance(cur, dict) or part not in cur:
+                return default
+            cur = cur[part]
+        return cur
+
+    def bundle_prop(self, path: str, default: Any = None) -> Any:
+        return self.get_prop_path(self.bundle_props or {}, path, default)
+
+    def _sync_runtime_ctx_bundle_props(self) -> None:
+        runtime_ctx = getattr(self, "runtime_ctx", None)
+        if runtime_ctx is None:
+            return
+        raw = self.get_prop_path(self.bundle_props or {}, "execution.runtime", default=None)
+        if raw is None:
+            raw = self.get_prop_path(self.bundle_props or {}, "exec_runtime")
+        runtime_ctx.exec_runtime = copy.deepcopy(normalize_exec_runtime_config(raw))
 
     def rebind_request_context(
         self,
@@ -210,11 +242,13 @@ class BaseWorkflow():
                 runtime_ctx.conversation_id = comm_context.routing.conversation_id
                 runtime_ctx.turn_id = comm_context.routing.turn_id
                 runtime_ctx.continuation_source = self.continuation_source
+                self._sync_runtime_ctx_bundle_props()
 
         if pg_pool is not None:
             self.pg_pool = pg_pool
         if redis is not None:
             self.redis = redis
+        self._sync_runtime_ctx_bundle_props()
 
     async def pending_continuation_count(self) -> int:
         source = self.continuation_source
@@ -233,6 +267,28 @@ class BaseWorkflow():
         if source is None:
             return None
         return await source.take_next()
+
+    def resolve_exec_runtime(
+        self,
+        *,
+        profile: Optional[str] = None,
+        overrides: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Resolve a runtime profile from RuntimeCtx.exec_runtime only.
+
+        This helper does not read proc service env vars directly. Backend env
+        fallback, where supported, happens later inside the selected execution
+        runtime if the chosen profile leaves some keys unset.
+        """
+        runtime_ctx = getattr(self, "runtime_ctx", None)
+        if runtime_ctx is None:
+            return dict(overrides or {})
+        return resolve_exec_runtime_profile(
+            runtime=dict(getattr(runtime_ctx, "exec_runtime", {}) or {}),
+            profile=profile,
+            overrides=overrides,
+        )
 
     # ---------- Comm ----------
 

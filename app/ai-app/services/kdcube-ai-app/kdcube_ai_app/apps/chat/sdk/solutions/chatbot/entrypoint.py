@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib
+import copy
 import json
 import os
 import pathlib
@@ -22,7 +23,9 @@ from kdcube_ai_app.apps.chat.emitters import (
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.continuations import get_current_conversation_continuation_source
+from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import EconomicsLimitException
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
+from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import normalize_exec_runtime_config
 from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.infra.service_hub.inventory import (
     APP_STATE_KEYS,
@@ -268,22 +271,34 @@ class BaseEntrypoint:
         if isinstance(embedding, dict) and embedding:
             self.config.set_embedding(embedding)
 
+    def _sync_runtime_ctx_bundle_props(self) -> None:
+        runtime_ctx = getattr(self, "runtime_ctx", None)
+        if runtime_ctx is None:
+            return
+        raw = self.get_prop_path(self.bundle_props or {}, "execution.runtime", default=None)
+        if raw is None:
+            raw = self.get_prop_path(self.bundle_props or {}, "exec_runtime")
+        runtime_ctx.exec_runtime = copy.deepcopy(normalize_exec_runtime_config(raw))
+
     async def refresh_bundle_props(self, *, state: Dict[str, Any]) -> Dict[str, Any]:
         defaults = dict(self.bundle_props_defaults or {})
         if not self.kv_cache and not self.redis:
             self.bundle_props = defaults
             self._apply_bundle_props_overrides()
+            self._sync_runtime_ctx_bundle_props()
             return self.bundle_props
 
         tenant = state.get("tenant") or getattr(getattr(self.comm_context, "actor", None), "tenant_id", None)
         project = state.get("project") or getattr(getattr(self.comm_context, "actor", None), "project_id", None)
         if not tenant or not project:
             self.bundle_props = defaults
+            self._sync_runtime_ctx_bundle_props()
             return self.bundle_props
 
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None)
         if not bundle_id:
             self.bundle_props = defaults
+            self._sync_runtime_ctx_bundle_props()
             return self.bundle_props
 
         from kdcube_ai_app.infra import namespaces
@@ -308,6 +323,7 @@ class BaseEntrypoint:
 
         self.bundle_props = defaults
         self._apply_bundle_props_overrides()
+        self._sync_runtime_ctx_bundle_props()
         return self.bundle_props
 
     @property
@@ -363,6 +379,79 @@ class BaseEntrypoint:
 
     async def post_run_hook(self, *, state: Dict[str, Any], result: Dict[str, Any]) -> None:
         return None
+
+    async def report_turn_error(
+        self,
+        *,
+        state: Dict[str, Any],
+        exc: Exception,
+        title: str = "Turn Error",
+        step: str = "turn",
+        agent: str = "turn.error",
+        final_answer: Optional[str] = "An error occurred.",
+    ) -> None:
+        """
+        Emit a user-visible error envelope and preserve turn-level error state.
+
+        This is intended for bundle-local failures so the client receives a
+        proper `chat.error` event instead of only a diagnostic step.
+        """
+        if isinstance(exc, EconomicsLimitException):
+            raise exc
+
+        message = str(exc)
+        traceback_text = "".join(
+            traceback.format_exception(type(exc), exc, exc.__traceback__)
+        )
+        self.logger.log(traceback_text, "ERROR")
+
+        state["error_message"] = message
+        if final_answer and not state.get("final_answer"):
+            state["final_answer"] = final_answer
+
+        payload = {
+            "error": message,
+            "error_message": message,
+            "error_type": type(exc).__name__,
+        }
+
+        try:
+            await self.comm.error(
+                message=message,
+                data=payload,
+                agent=agent,
+                step=step,
+                title=title,
+            )
+        except Exception as emit_exc:
+            emit_traceback = "".join(
+                traceback.format_exception(
+                    type(emit_exc), emit_exc, emit_exc.__traceback__
+                )
+            )
+            self.logger.log(
+                f"Failed to emit chat.error for bundle failure:\n{emit_traceback}",
+                "ERROR",
+            )
+
+        try:
+            await self.comm.step(
+                step=step,
+                status="error",
+                title=title,
+                data=payload,
+                markdown=f"**Error:** {message}",
+            )
+        except Exception as emit_exc:
+            emit_traceback = "".join(
+                traceback.format_exception(
+                    type(emit_exc), emit_exc, emit_exc.__traceback__
+                )
+            )
+            self.logger.log(
+                f"Failed to emit diagnostic chat.step for bundle failure:\n{emit_traceback}",
+                "ERROR",
+            )
 
     async def run(self, **params) -> Dict[str, Any]:
         state = dict(getattr(self, "_app_state", {}) or {})

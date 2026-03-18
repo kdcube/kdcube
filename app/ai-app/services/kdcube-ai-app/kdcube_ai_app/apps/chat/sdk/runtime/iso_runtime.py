@@ -6,6 +6,7 @@ import contextvars
 import io
 import re
 import json
+import shlex
 import os, sys
 import asyncio
 import time
@@ -13,8 +14,25 @@ import pathlib
 import tokenize
 from typing import Dict, Any, List, Tuple, Optional, Literal
 
+from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
 from kdcube_ai_app.apps.chat.sdk.util import strip_lone_surrogates
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+
+
+def _pick_runtime_cfg(cfg: Dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in cfg:
+            return cfg.get(key)
+    return None
+
+
+def _as_runtime_arg_list(val: Any) -> List[str]:
+    if isinstance(val, (list, tuple)):
+        return [str(v).strip() for v in val if str(v).strip()]
+    if isinstance(val, str) and val.strip():
+        return [part for part in shlex.split(val) if part]
+    return []
+
 
 def _run_in_executor_with_ctx(loop, fn, *args, **kwargs):
     ctx = contextvars.copy_context()
@@ -1746,8 +1764,23 @@ class _InProcessRuntime:
             if dyn_name and dyn_name not in tool_module_names:
                 tool_module_names.append(dyn_name)
 
+        exec_runtime_cfg = resolve_exec_runtime_profile(
+            runtime=g.get("EXEC_RUNTIME_CONFIG"),
+            profile=None,
+        )
+        runtime_mode = ""
+        if isinstance(exec_runtime_cfg, dict):
+            mode_val = exec_runtime_cfg.get("mode")
+            if isinstance(mode_val, str):
+                runtime_mode = mode_val.strip().lower()
+        if not runtime_mode:
+            runtime_mode = (
+                (extra_env or {}).get("EXEC_RUNTIME_MODE")
+                or os.environ.get("EXEC_RUNTIME_MODE")
+                or ""
+            ).strip().lower()
+
         # --- EXTERNAL BRANCH: distributed exec ---
-        runtime_mode = (os.environ.get("EXEC_RUNTIME_MODE") or "").strip().lower()
         if isolation in ("fargate", "external") or runtime_mode in ("fargate", "external"):
             from kdcube_ai_app.apps.chat.sdk.runtime.external import fargate as fargate_runtime
             extra_env = extra_env or {}
@@ -1766,7 +1799,36 @@ class _InProcessRuntime:
         # --- DOCKER BRANCH: Just delegate, don't touch files ---
         if isolation == "docker":
             from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
-            network_mode = os.environ.get("PY_CODE_EXEC_NETWORK_MODE", "host")
+            docker_image = str(
+                _pick_runtime_cfg(exec_runtime_cfg, "image", "docker_image", "PY_CODE_EXEC_IMAGE")
+                or ""
+            ).strip() or None
+            network_mode = str(
+                _pick_runtime_cfg(
+                    exec_runtime_cfg,
+                    "network_mode",
+                    "docker_network_mode",
+                    "PY_CODE_EXEC_NETWORK_MODE",
+                )
+                or os.environ.get("PY_CODE_EXEC_NETWORK_MODE", "host")
+            ).strip() or "host"
+            docker_extra_args: List[str] = []
+            docker_cpus = _pick_runtime_cfg(exec_runtime_cfg, "cpus", "docker_cpus")
+            if docker_cpus not in (None, ""):
+                docker_extra_args.extend(["--cpus", str(docker_cpus).strip()])
+            docker_memory = _pick_runtime_cfg(exec_runtime_cfg, "memory", "docker_memory")
+            if docker_memory not in (None, ""):
+                docker_extra_args.extend(["--memory", str(docker_memory).strip()])
+            docker_extra_args.extend(
+                _as_runtime_arg_list(
+                    _pick_runtime_cfg(
+                        exec_runtime_cfg,
+                        "extra_args",
+                        "docker_args",
+                        "extra_docker_args",
+                    )
+                )
+            )
             extra_env = extra_env or {}
             extra_env.setdefault("EXECUTION_SANDBOX", "docker")
             # Docker will handle everything - just pass globals as-is
@@ -1777,9 +1839,11 @@ class _InProcessRuntime:
                 runtime_globals=g,  # Keep PORTABLE_SPEC in here!
                 tool_module_names=tool_module_names,
                 logger=self.log,
+                image=docker_image,
                 timeout_s=timeout_s,
                 bundle_root=pathlib.Path(bundle_root).resolve() if bundle_root else None,
                 extra_env=extra_env,  # propagate explicit env (e.g., EXECUTION_MODE)
+                extra_docker_args=docker_extra_args or None,
                 network_mode=network_mode
             )
 

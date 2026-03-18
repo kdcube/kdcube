@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
+  - ks:docs/sdk/bundle/bundle-platform-properties-README.md
 ---
 # Bundle Developer Guide (SDK)
 
@@ -18,6 +19,10 @@ If you need **ops/runtime config** (registry, env vars, git bundles, assembly de
 
 If you need **bundle config/secrets** (properties and secret keys), see:
 [docs/service/configuration/bundle-configuration-README.md](../../service/configuration/bundle-configuration-README.md).
+
+If you need the list of **platform-reserved bundle property paths** interpreted by
+base/economics entrypoints and exec runtime, see:
+[docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md).
 
 ---
 
@@ -100,6 +105,96 @@ Runtime overrides are applied via `bundle_props` (`bundles.yaml` + admin UI).
 If you override `configuration`, call `super().configuration()` and use
 `setdefault` for defaults so external overrides still win.
 
+### Canonical turn error propagation
+
+For entrypoint-level turn failures, use the base helper:
+
+```python
+try:
+    orch = MyWorkflow(...)
+    res = await orch.process({...})
+    if not isinstance(res, dict):
+        res = {}
+    state["final_answer"] = res.get("answer") or ""
+    state["followups"] = res.get("followups") or []
+except Exception as e:
+    await self.report_turn_error(state=state, exc=e, title="Turn Error")
+```
+
+Important details:
+- Put workflow construction **inside** the `try`.
+- This catches both constructor failures and runtime failures in the same path.
+- `report_turn_error(...)` emits a real `chat.error` envelope for the client and
+  also records turn-level error state.
+- A plain `self.comm.step(status="error", ...)` is not the canonical user-facing
+  path. It is useful for diagnostics, but the frontend primarily treats
+  `chat.error` as the visible service-error channel.
+- `report_turn_error(...)` also emits a diagnostic step event, so you get both:
+  user-visible error propagation and step-level diagnostics.
+
+Economics bundles:
+- If your bundle extends `BaseEntrypointWithEconomics`, economics and quota
+  exceptions must be allowed to propagate unchanged.
+- The base `report_turn_error(...)` helper already re-raises
+  `EconomicsLimitException`, so calling it from a broad `except Exception`
+  block is safe.
+
+Use this helper for **entrypoint/orchestration-level** failures. Inside deeper
+workflow logic, you can still emit domain-specific `self.comm.error(...)` events
+directly when you want to surface a structured tool/program/runtime failure to
+the user before the whole turn aborts.
+
+### Passing bundle props into custom workflows
+
+`bundle_props` live on the entrypoint. If your custom workflow needs to read
+bundle configuration directly with `self.bundle_prop(...)` or to resolve
+runtime profiles with `self.resolve_exec_runtime(...)`, the workflow constructor
+must accept `bundle_props` and forward them into `BaseWorkflow`.
+
+Pattern:
+
+```python
+# entrypoint.py
+orch = MyWorkflow(
+    ...,
+    bundle_props=self.bundle_props,
+)
+```
+
+```python
+# orchestrator/workflow.py
+class MyWorkflow(BaseWorkflow):
+    def __init__(
+        self,
+        *,
+        conv_idx,
+        kb,
+        store,
+        comm,
+        model_service,
+        conv_ticket_store,
+        config,
+        comm_context,
+        ctx_client=None,
+        bundle_props=None,
+    ):
+        super().__init__(
+            conv_idx=conv_idx,
+            kb=kb,
+            store=store,
+            comm=comm,
+            model_service=model_service,
+            conv_ticket_store=conv_ticket_store,
+            config=config,
+            comm_context=comm_context,
+            ctx_client=ctx_client,
+            bundle_props=bundle_props,
+        )
+```
+
+Without that constructor wiring, entrypoint props are not automatically visible
+inside the workflow instance.
+
 ---
 
 ## Bundle configuration & secrets
@@ -115,8 +210,13 @@ Non‑secret config:
   for defaults so external overrides still win.
 - Nested YAML is preserved as a nested dict.
 - Dot‑paths are not expanded at ingest time; resolve them at read time if needed.
-- If `config.role_models` or `config.embedding` are present, they override the
-  bundle’s `Config` at runtime (same path as `entrypoint.configuration` defaults).
+- Platform-reserved property paths are interpreted by base entrypoints and runtime:
+  - `role_models`
+  - `embedding`
+  - `economics.reservation_amount_dollars`
+  - `execution.runtime`
+- Canonical reference:
+  [docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md).
 
 Example overrides:
 ```yaml
@@ -155,6 +255,59 @@ def configuration(self) -> Dict[str, Any]:
 
 This ensures the effective order remains:
 `code defaults → bundles.yaml → runtime overrides`.
+
+### Example: bundle-level Fargate exec override
+
+If your bundle uses exec tools and you want it to route through Fargate without
+depending only on proc-wide env vars, set:
+
+```yaml
+config:
+  execution:
+    runtime:
+      mode: fargate
+      enabled: true
+      cluster: arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster
+      task_definition: kdcube-staging-exec
+      container_name: exec
+      subnets:
+        - subnet-xxxx
+        - subnet-yyyy
+      security_groups:
+        - sg-xxxx
+      assign_public_ip: DISABLED
+```
+
+That configuration is copied into `RuntimeCtx.exec_runtime` and then passed into
+exec tool execution. Missing keys still fall back to proc env vars.
+
+If your bundle supports more than one runtime, you can declare multiple
+bundle-scoped profiles and either choose a default or select one at call time:
+
+```yaml
+config:
+  execution:
+    runtime:
+      default_profile: fargate
+      profiles:
+        docker:
+          mode: docker
+        fargate:
+          mode: fargate
+          enabled: true
+          cluster: arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster
+          task_definition: kdcube-staging-exec
+          container_name: exec
+          subnets:
+            - subnet-xxxx
+            - subnet-yyyy
+          security_groups:
+            - sg-xxxx
+          assign_public_ip: DISABLED
+```
+
+Bundle code can then use the default resolved runtime or explicitly choose
+another supported profile.
 
 Important:
 - `bundles.yaml` is the source of truth for descriptor-backed bundle props.
@@ -274,6 +427,11 @@ Key patterns:
 - Call `start_turn(scratchpad)` and `finish_turn(scratchpad, ok=...)`.
 - Use `ContextBrowser` for context/timeline access.
 - Build and run the ReAct agent via `build_react(...)` and `react.run(...)`.
+- If the workflow needs bundle configuration, accept `bundle_props` in the
+  workflow constructor and forward it into `BaseWorkflow`.
+- Inside the workflow, use:
+  - `self.bundle_prop("some.dot.path")` to read raw configured values
+  - `self.resolve_exec_runtime(profile="name")` to resolve a named exec profile
 
 Output contract:
 - Set `scratchpad.answer` for the assistant message.
