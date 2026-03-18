@@ -34,6 +34,7 @@ async def run_without_contract(
     outdir: Path,
     exec_id: str,
     prog_name: str,
+    exec_runtime: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     # Run code and capture workspace changes via before/after diff
     envelope = await run_exec_tool_side_effects(
@@ -44,6 +45,7 @@ async def run_without_contract(
         workdir=workdir,
         outdir=outdir,
         exec_id=exec_id,
+        exec_runtime=exec_runtime,
     )
     # Extract the diff of created/modified files in the output directory
     diff = envelope.get("workspace_diff") or {}

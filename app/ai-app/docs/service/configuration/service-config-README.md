@@ -222,9 +222,19 @@ Token TTL/uses:
 | `OIDC_SERVICE_ADMIN_PASSWORD` | n/a |
 | `ODIC_SERVICE_USER_EMAIL` | n/a |
 | `EXEC_WORKSPACE_ROOT` | Exec |
+| `EXEC_RUNTIME_MODE` | Exec runtime selector for proc-side code execution. Typical values: `docker`, `fargate`. |
 | `PY_CODE_EXEC_IMAGE` | n/a |
 | `PY_CODE_EXEC_TIMEOUT` | n/a |
 | `PY_CODE_EXEC_NETWORK_MODE` | n/a |
+| `FARGATE_EXEC_ENABLED` | Enable distributed Fargate exec path. |
+| `FARGATE_CLUSTER` | ECS cluster ARN/name for distributed exec tasks. |
+| `FARGATE_TASK_DEFINITION` | ECS task definition used for distributed exec tasks. |
+| `FARGATE_CONTAINER_NAME` | Container name inside the exec task definition. |
+| `FARGATE_SUBNETS` | Comma-separated subnets for `awsvpc` task launch. |
+| `FARGATE_SECURITY_GROUPS` | Comma-separated security groups for `awsvpc` task launch. |
+| `FARGATE_ASSIGN_PUBLIC_IP` | `ENABLED` or `DISABLED` for distributed exec tasks. |
+| `FARGATE_LAUNCH_TYPE` | Launch type for exec tasks. Typical value: `FARGATE`. |
+| `FARGATE_PLATFORM_VERSION` | Optional ECS platform version for exec tasks. |
 | `TOOLS_WEB_SEARCH_FETCH_CONTENT` | Tools |
 | `WEB_FETCH_RESOURCES_MEDIUM` | Medium credentials (uid and sid from your browser after logging in.) |
 | `WEB_SEARCH_AGENTIC_THINKING_BUDGET` | n/a |
@@ -588,10 +598,20 @@ Conversation artifacts and turn workspace:
 
 | Setting                     | Default    | Purpose                                                                                                                                                                                     |
 |-----------------------------|------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `EXEC_RUNTIME_MODE`         | `docker`   | Default proc-side exec runtime selector. Bundle props can override this per bundle via `execution.runtime.mode`.                                                                           |
 | `PY_CODE_EXEC_IMAGE`        | _(unset)_  | Exec runtime image                                                                                                                                                                          |
 | `PY_CODE_EXEC_TIMEOUT`      | _(unset)_  | Exec timeout (seconds)                                                                                                                                                                      |
 | `PY_CODE_EXEC_NETWORK_MODE` | _(unset)_  | Docker network mode                                                                                                                                                                         |
 | `EXEC_WORKSPACE_ROOT`       | _(auto)_   | Local workspace root for per‑turn workdir/outdir. Defaults to `/exec-workspace` inside Docker or `/tmp` on host. Path is created if missing and **must be writable** or the request fails.  |
+| `FARGATE_EXEC_ENABLED`      | `0`        | Enable distributed exec via ECS/Fargate. When disabled, `EXEC_RUNTIME_MODE=fargate` cannot launch tasks.                                                                                  |
+| `FARGATE_CLUSTER`           | _(unset)_  | ECS cluster ARN/name for distributed exec tasks.                                                                                                                                           |
+| `FARGATE_TASK_DEFINITION`   | _(unset)_  | ECS task definition for distributed exec tasks.                                                                                                                                            |
+| `FARGATE_CONTAINER_NAME`    | `exec`     | Target container name inside the exec task definition.                                                                                                                                     |
+| `FARGATE_SUBNETS`           | _(unset)_  | Comma-separated subnet list for `awsvpc` launch configuration.                                                                                                                             |
+| `FARGATE_SECURITY_GROUPS`   | _(unset)_  | Comma-separated security-group list for `awsvpc` launch configuration.                                                                                                                     |
+| `FARGATE_ASSIGN_PUBLIC_IP`  | `DISABLED` | Whether launched exec tasks receive a public IP.                                                                                                                                           |
+| `FARGATE_LAUNCH_TYPE`       | `FARGATE`  | Launch type used for distributed exec tasks.                                                                                                                                               |
+| `FARGATE_PLATFORM_VERSION`  | _(unset)_  | Optional ECS platform version for distributed exec tasks.                                                                                                                                  |
 
 ## Bundles
 
@@ -638,6 +658,11 @@ kdcube:config:bundles:cleanup:{tenant}:{project}
 ```
 
 Each processor instance only subscribes to its own tenant/project channel.
+
+Bundle properties can also override selected runtime behavior per bundle. Reserved
+platform property paths such as `role_models`, `embedding`,
+`economics.reservation_amount_dollars`, and `execution.runtime` are documented in
+[bundle-platform-properties-README.md](../../sdk/bundle/bundle-platform-properties-README.md).
 
 **Host vs container bundles root**
 

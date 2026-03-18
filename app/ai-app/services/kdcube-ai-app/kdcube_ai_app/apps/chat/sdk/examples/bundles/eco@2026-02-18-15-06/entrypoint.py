@@ -30,7 +30,7 @@
 from __future__ import annotations
 
 import json
-import traceback, os
+import os
 from typing import Any, Dict, Optional
 
 from langgraph.graph import StateGraph, START, END
@@ -107,21 +107,21 @@ class EcoEntrypoint(BaseEntrypointWithEconomics):
                 model_service=self.models_service,
             )
 
-            # Create the workflow instance with all dependencies injected
-            orch = WithReactWorkflow(
-                conv_idx=conv_idx,
-                kb=kb,
-                store=store,
-                comm=self.comm,
-                model_service=self.models_service,
-                conv_ticket_store=conv_ticket_store,
-                config=self.config,
-                comm_context=self.comm_context,
-                ctx_client=ctx_client,
-            )
-
-            # Execute the workflow, passing the full turn state
             try:
+                # Create the workflow instance with all dependencies injected
+                orch = WithReactWorkflow(
+                    conv_idx=conv_idx,
+                    kb=kb,
+                    store=store,
+                    comm=self.comm,
+                    model_service=self.models_service,
+                    conv_ticket_store=conv_ticket_store,
+                    config=self.config,
+                    comm_context=self.comm_context,
+                    ctx_client=ctx_client,
+                )
+
+                # Execute the workflow, passing the full turn state
                 res = await orch.process({
                     "request_id": state["request_id"],
                     "tenant": state["tenant"],
@@ -139,15 +139,7 @@ class EcoEntrypoint(BaseEntrypointWithEconomics):
                 state["final_answer"] = res.get("answer") or ""
                 state["followups"] = res.get("followups") or []
             except Exception as e:
-                self.logger.log(traceback.format_exc(), "ERROR")
-                state["error_message"] = str(e)
-                await self.comm.step(
-                    step="turn",
-                    status="error",
-                    title="Turn Error",
-                    data={"error": str(e)},
-                    markdown=f"**Error:** {e}",
-                )
+                await self.report_turn_error(state=state, exc=e, title="Turn Error")
 
             return state
 

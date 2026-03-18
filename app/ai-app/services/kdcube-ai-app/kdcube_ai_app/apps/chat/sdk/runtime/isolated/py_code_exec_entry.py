@@ -54,10 +54,12 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm, get_comm
 from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all, bootstrap_from_spec  # type: ignore[assignment]
 from kdcube_ai_app.apps.chat.sdk.runtime.external.distributed_snapshot import (
     restore_zip_to_dir,
+    resolve_exec_snapshot_uri,
     rewrite_runtime_globals_for_bundle,
     write_dir_zip_to_uri,
     build_manifest,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.external.payload_secret import get_exec_payload_secret
 
 def _append_errors_log(message: str) -> None:
     try:
@@ -99,6 +101,54 @@ def _load_runtime_globals() -> Dict[str, Any]:
     return data
 
 
+def _hydrate_runtime_payload_from_secret(logger: AgentLogger) -> None:
+    secret_id = (os.environ.get("KDCUBE_EXEC_PAYLOAD_SECRET_ID") or "").strip()
+    has_runtime_globals = bool(os.environ.get("RUNTIME_GLOBALS_JSON"))
+    has_tool_modules = bool(os.environ.get("RUNTIME_TOOL_MODULES"))
+    logger.log(
+        "[exec.payload] hydrate start "
+        f"secret_id_present={bool(secret_id)} "
+        f"has_runtime_globals_env={has_runtime_globals} "
+        f"has_tool_modules_env={has_tool_modules}",
+        "INFO",
+    )
+    if not secret_id:
+        logger.log("[exec.payload] No payload secret id provided; using inline runtime payload only", "INFO")
+        return
+    if has_runtime_globals and has_tool_modules:
+        logger.log("[exec.payload] Inline runtime payload already present; skipping secret hydration", "INFO")
+        return
+    try:
+        payload = get_exec_payload_secret(secret_id=secret_id)
+    except Exception as e:
+        logger.log(f"[exec.payload] Failed to load payload secret {secret_id}: {e}", "ERROR")
+        return
+
+    runtime_globals = payload.get("runtime_globals")
+    if isinstance(runtime_globals, dict) and not os.environ.get("RUNTIME_GLOBALS_JSON"):
+        os.environ["RUNTIME_GLOBALS_JSON"] = json.dumps(runtime_globals, ensure_ascii=False, default=str)
+
+    tool_module_names = payload.get("tool_module_names")
+    if isinstance(tool_module_names, list) and not os.environ.get("RUNTIME_TOOL_MODULES"):
+        os.environ["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
+
+    env_map = payload.get("env")
+    if isinstance(env_map, dict):
+        for key, value in env_map.items():
+            if value is None:
+                continue
+            os.environ[str(key)] = str(value)
+    logger.log(
+        "[exec.payload] Restored runtime payload from secret "
+        f"{secret_id} runtime_globals_keys="
+        f"{len(runtime_globals) if isinstance(runtime_globals, dict) else 0} "
+        f"tool_modules="
+        f"{len(tool_module_names) if isinstance(tool_module_names, list) else 0} "
+        f"env_keys={len(env_map) if isinstance(env_map, dict) else 0}",
+        "INFO",
+    )
+
+
 def _restore_snapshot_if_present(
     runtime_globals: Dict[str, Any],
     workdir: pathlib.Path,
@@ -108,8 +158,8 @@ def _restore_snapshot_if_present(
     snap = runtime_globals.get("EXEC_SNAPSHOT") or {}
     if not isinstance(snap, dict):
         return
-    input_work = snap.get("input_work_uri")
-    input_out = snap.get("input_out_uri")
+    input_work = resolve_exec_snapshot_uri(snap, "input_work_uri")
+    input_out = resolve_exec_snapshot_uri(snap, "input_out_uri")
     if input_work:
         try:
             restore_zip_to_dir(input_work, workdir)
@@ -221,8 +271,8 @@ def _upload_snapshot_outputs(
     snap = runtime_globals.get("EXEC_SNAPSHOT") or {}
     if not isinstance(snap, dict):
         return
-    output_work = snap.get("output_work_uri")
-    output_out = snap.get("output_out_uri")
+    output_work = resolve_exec_snapshot_uri(snap, "output_work_uri")
+    output_out = resolve_exec_snapshot_uri(snap, "output_out_uri")
     if output_work:
         try:
             write_dir_zip_to_uri(str(output_work), workdir, baseline=baseline_work)
@@ -531,6 +581,7 @@ async def _async_main() -> int:
     logger.log(f"[entry] ===== EXECUTION {exec_id} START {ts} =====", level="INFO")
     # Ensure group-writable files across shared volumes (chat user is gid 1000)
     os.umask(0o002)
+    _hydrate_runtime_payload_from_secret(logger)
 
     workdir = pathlib.Path(os.environ.get("WORKDIR", "/workspace/work")).resolve()
     outdir = pathlib.Path(os.environ.get("OUTPUT_DIR", "/workspace/out")).resolve()

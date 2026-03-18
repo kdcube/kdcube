@@ -3,6 +3,7 @@
 
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/react/execution.py
 
+import copy
 import json
 import time
 import pathlib
@@ -58,6 +59,7 @@ def _build_exec_context(
         "bundle_id": runtime_ctx.bundle_id,
         "exec_id": exec_id,
         "codegen_run_id": codegen_run_id,
+        "exec_runtime": copy.deepcopy(getattr(runtime_ctx, "exec_runtime", {}) or {}),
     }
 
 def _normalize_error_dict(err: Any, *, default_where: str) -> Optional[Dict[str, Any]]:
@@ -96,6 +98,7 @@ def _unwrap_tool_envelope(output: Any) -> Tuple[Any, Optional[Dict[str, Any]], b
 
 async def _execute_exec_tool(
     *,
+    runtime_ctx: RuntimeCtx,
     tool_execution_context: Dict[str, Any],
     workdir: pathlib.Path,
     outdir: pathlib.Path,
@@ -179,6 +182,7 @@ async def _execute_exec_tool(
         outdir=outdir,
         workdir=workdir,
         exec_id=exec_id,
+        exec_runtime=copy.deepcopy(getattr(runtime_ctx, "exec_runtime", {}) or {}),
     )
     exec_ms = int((time.perf_counter() - exec_t0) * 1000)
     if exec_streamer:
@@ -514,10 +518,20 @@ async def execute_tool_in_isolation(
 
     # Check for subprocess-level errors
     subprocess_error = None
-    if res.get("error") == "timeout":
+    raw_error = str(res.get("error") or "").strip()
+    timeout_detail = ""
+    if raw_error == "timeout":
+        timeout_code = "timeout"
+    elif raw_error.startswith("timeout:"):
+        timeout_code = "timeout"
+        timeout_detail = raw_error.split(":", 1)[1].strip()
+    else:
+        timeout_code = ""
+
+    if timeout_code == "timeout":
         subprocess_error = {
             "code": "timeout",
-            "message": f"Tool execution exceeded {res.get('seconds', 240)}s timeout",
+            "message": timeout_detail or f"Tool execution exceeded {res.get('seconds', 240)}s timeout",
             "where": "subprocess",
             "managed": True,
         }
@@ -683,6 +697,7 @@ async def execute_tool(
 
     if tools_insights.is_exec_tool(tool_id):
         return await _execute_exec_tool(
+            runtime_ctx=runtime_ctx,
             tool_execution_context=tool_execution_context,
             workdir=workdir,
             outdir=outdir,

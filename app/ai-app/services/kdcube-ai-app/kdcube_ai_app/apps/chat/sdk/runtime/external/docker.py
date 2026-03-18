@@ -6,7 +6,6 @@
 import asyncio
 import re
 import datetime as _dt
-import json
 import os
 import pathlib
 import time
@@ -15,10 +14,14 @@ from typing import Dict, Any, Optional
 from dotenv import find_dotenv, load_dotenv
 
 from kdcube_ai_app.apps.chat.sdk.runtime.external.detect_aws_env import check_and_apply_cloud_environment
+from kdcube_ai_app.apps.chat.sdk.runtime.external.base import build_external_exec_env
 from kdcube_ai_app.apps.chat.sdk.runtime.external.service_discovery import CONTAINER_BUNDLES_ROOT, _path, \
     _translate_container_path_to_host, _is_running_in_docker, _resolve_redis_url_for_container
-from kdcube_ai_app.apps.chat.sdk.runtime.isolated.environment import filter_host_environment
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+from kdcube_ai_app.infra.config import (
+    build_external_runtime_base_env,
+    prepare_external_runtime_globals,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 _DEFAULT_IMAGE = os.environ.get("PY_CODE_EXEC_IMAGE", "py-code-exec:latest")
@@ -80,11 +83,7 @@ def _build_docker_argv(
         argv += [
             "-v",
             f"{_path(bundle_root)}:{subpath}:ro",  # ← :ro is important
-            "-e",
-            f"BUNDLE_ROOT={subpath}",
         ]
-        if bundle_id:
-            argv += ["-e", f"BUNDLE_ID={bundle_id}"]
 
     # Propagate selected host env if you want (keys can be tuned)
     # For now, only pass explicit extra_env to keep it deterministic.
@@ -131,7 +130,7 @@ async def run_py_in_docker(
     """
     log = logger or AgentLogger("docker.exec")
 
-    base_env = filter_host_environment(os.environ.copy())
+    base_env = build_external_runtime_base_env(os.environ)
     # Add any extra_env passed in
     if extra_env:
         base_env.update(extra_env)
@@ -159,61 +158,38 @@ async def run_py_in_docker(
     # This will be the *directory name* under /bundles in the container
     bundle_dir: Optional[str] = None
 
-    # --- Rewrite TOOL_MODULE_FILES for container paths if bundle_root is provided ---
+    bundle_spec = dict(runtime_globals.get("BUNDLE_SPEC") or {})
     if bundle_root is not None:
         bundle_root = bundle_root.resolve()
-        host_bundle_root = str(bundle_root)
-
-        # Runtime globals is what iso_runtime expects
-        tg = dict(runtime_globals)  # shallow copy
-        tmf = dict(tg.get("TOOL_MODULE_FILES") or {})
-
-        bundle_spec = tg.get("BUNDLE_SPEC") or {}
         module_name = bundle_spec.get("module") or ""
         module_first_segment = module_name.split(".", 1)[0] if module_name else None
 
         # 🔹 Single source of truth for container dir name under /bundles
         #    Prefer first segment of module name; fall back to id; then to directory name.
         bundle_dir = module_first_segment or bundle_spec.get("id") or bundle_root.name
+    elif bundle_spec:
+        module_name = bundle_spec.get("module") or ""
+        module_first_segment = module_name.split(".", 1)[0] if module_name else None
+        bundle_dir = module_first_segment or bundle_spec.get("id")
 
-        # This is where the bundle_root will appear *inside the container*
-        container_bundle_root = f"{CONTAINER_BUNDLES_ROOT}/{bundle_dir}"
-
-        rewritten: Dict[str, Optional[str]] = {}
-        for alias, path in tmf.items():
-            if not path:
-                rewritten[alias] = None
-                continue
-            p = str(path)
-            if p.startswith(host_bundle_root):
-                rel = os.path.relpath(p, host_bundle_root)
-                rewritten[alias] = f"{container_bundle_root}/{rel}"
-            else:
-                # Paths outside the bundle root (e.g. site-packages) are importable by name
-                rewritten[alias] = None
-
-        tg["TOOL_MODULE_FILES"] = rewritten
-        tg["BUNDLE_ID"] = bundle_spec.get("id") or bundle_dir
-        tg["BUNDLE_DIR"] = bundle_dir
-        tg["BUNDLE_ROOT_CONTAINER"] = container_bundle_root
-        skills_desc = tg.get("SKILLS_DESCRIPTOR") or {}
-        if isinstance(skills_desc, dict):
-            csr = skills_desc.get("custom_skills_root")
-            if isinstance(csr, str) and csr.startswith(host_bundle_root):
-                rel = os.path.relpath(csr, host_bundle_root)
-                skills_desc = dict(skills_desc)
-                skills_desc["custom_skills_root"] = f"{container_bundle_root}/{rel}"
-                tg["SKILLS_DESCRIPTOR"] = skills_desc
-
-        runtime_globals = tg
-
-    base_env["RUNTIME_GLOBALS_JSON"] = json.dumps(runtime_globals, ensure_ascii=False)
-    base_env["RUNTIME_TOOL_MODULES"] = json.dumps(tool_module_names, ensure_ascii=False)
-    base_env["WORKDIR"]               = "/workspace/work"
-    base_env["OUTPUT_DIR"]            = "/workspace/out"
-    base_env["LOG_DIR"]               = "/workspace/out/logs"
-    base_env["LOG_FILE_PREFIX"]       = "supervisor"
-    base_env.setdefault("EXECUTION_SANDBOX", "docker")
+    container_bundle_root = f"{CONTAINER_BUNDLES_ROOT}/{bundle_dir}" if bundle_dir else None
+    runtime_globals = prepare_external_runtime_globals(
+        runtime_globals,
+        host_bundle_root=bundle_root,
+        bundle_root=container_bundle_root,
+        bundle_dir=bundle_dir,
+        bundle_id=(bundle_spec.get("id") if isinstance(bundle_spec, dict) else None) or bundle_dir,
+    )
+    base_env = build_external_exec_env(
+        base_env=base_env,
+        runtime_globals=runtime_globals,
+        tool_module_names=tool_module_names,
+        exec_id=exec_id,
+        sandbox=base_env.get("EXECUTION_SANDBOX") or "docker",
+        log_file_prefix="supervisor",
+        bundle_root=container_bundle_root,
+        bundle_id=bundle_dir,
+    )
 
     img = image or _DEFAULT_IMAGE
     to = timeout_s or _DEFAULT_TIMEOUT_S

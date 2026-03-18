@@ -4,6 +4,7 @@
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/react/v2/proto.py
 
 from __future__ import annotations
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, List, Callable, Awaitable, Protocol
 
@@ -95,6 +96,7 @@ class RuntimeCtx:
     workdir: Optional[str] = None
     outdir: Optional[str] = None
     bundle_storage: Optional[str] = None
+    exec_runtime: Dict[str, Any] = field(default_factory=dict)
     # Expected signature:
     #   (query: str, root: str = "", max_hits: int = 20, keywords: Optional[List[str]] = None, **kwargs) -> List[Dict]
     # Implementations may be sync or async; callers will await if needed.
@@ -146,6 +148,7 @@ class RuntimeCtx:
             "workdir": self.workdir,
             "outdir": self.outdir,
             "bundle_storage": self.bundle_storage,
+            "exec_runtime": copy.deepcopy(self.exec_runtime or {}),
             "started_at": self.started_at,
             "debug_log_announce": bool(self.debug_log_announce),
             "debug_log_sources_pool": bool(self.debug_log_sources_pool),

@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import re
 import pathlib
+import traceback
 import uuid
 import textwrap
 import mimetypes
@@ -32,6 +33,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
     build_deleted_notices,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
+from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 try:
@@ -145,6 +147,33 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
     if not normalized:
         return None, {"code": "invalid_artifacts", "message": "No valid artifacts found"}
     return normalized, None
+
+
+def _build_exec_context_from_comm_spec(
+    *,
+    comm_spec: Dict[str, Any],
+    runtime_globals: Dict[str, Any],
+    exec_id: Optional[str],
+    exec_runtime: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    service = comm_spec.get("service") if isinstance(comm_spec.get("service"), dict) else {}
+    conversation = comm_spec.get("conversation") if isinstance(comm_spec.get("conversation"), dict) else {}
+    bundle_spec = runtime_globals.get("BUNDLE_SPEC") or {}
+    bundle_id = bundle_spec.get("id") if isinstance(bundle_spec, dict) else None
+    return {
+        "tenant": comm_spec.get("tenant"),
+        "project": comm_spec.get("project"),
+        "user_id": comm_spec.get("user_id"),
+        "user_type": comm_spec.get("user_type"),
+        "conversation_id": conversation.get("conversation_id"),
+        "turn_id": conversation.get("turn_id"),
+        "session_id": conversation.get("session_id"),
+        "request_id": service.get("request_id"),
+        "bundle_id": bundle_id,
+        "exec_id": exec_id,
+        "codegen_run_id": exec_id,
+        "exec_runtime": dict(exec_runtime or {}),
+    }
 
 
 def normalize_exec_contract_for_turn(
@@ -269,6 +298,81 @@ def build_exec_output_contract(
             "description": a["description"],
         }
     return contract, normalized, None
+
+
+def _runtime_error_details(run_res: Dict[str, Any] | None) -> Tuple[bool, str, str]:
+    run_res = run_res or {}
+    runtime_ok = bool(run_res.get("ok", True))
+    raw = str(run_res.get("error") or "").strip()
+    summary = str(run_res.get("error_summary") or "").strip()
+
+    code = "execution_failed"
+    message = ""
+    if raw:
+        if ":" in raw:
+            head, tail = raw.split(":", 1)
+            code = head.strip() or code
+            if tail.strip():
+                message = tail.strip()
+        else:
+            code = raw
+    if summary:
+        message = summary
+    if not message:
+        message = raw or "Execution failed (non-zero exit)"
+    return runtime_ok, code, message
+
+
+def _build_exec_error_payload(
+    *,
+    missing: List[str],
+    errors: List[Dict[str, Any]],
+    run_res: Dict[str, Any] | None,
+    infra_text: str,
+) -> Optional[Dict[str, Any]]:
+    runtime_ok, runtime_code, runtime_message = _runtime_error_details(run_res)
+    if runtime_ok and not missing and not errors:
+        return None
+
+    if not runtime_ok:
+        desc = runtime_message
+        if missing:
+            desc = f"{desc}. Missing output files: {', '.join(missing)}"
+        return {
+            "where": "exec.tool",
+            "code": runtime_code,
+            "message": desc,
+            "error": runtime_code,
+            "description": desc,
+            "managed": True,
+            "details": {"missing": missing, "errors": errors, "run": run_res or {}, "stderr_tail": infra_text},
+        }
+
+    if missing:
+        desc = f"Missing output files: {', '.join(missing)}"
+        return {
+            "where": "exec.tool",
+            "code": "missing_output_files",
+            "message": desc,
+            "error": "missing_output_files",
+            "description": desc,
+            "managed": True,
+            "details": {"missing": missing, "errors": errors, "run": run_res or {}, "stderr_tail": infra_text},
+        }
+
+    desc = "; ".join(
+        f"{e.get('filename') or e.get('artifact_id') or 'unknown'}: {e.get('message') or e.get('code') or 'error'}"
+        for e in errors
+    ).strip() or "Artifact validation failed"
+    return {
+        "where": "exec.tool",
+        "code": "artifact_validation_failed",
+        "message": desc,
+        "error": "artifact_validation_failed",
+        "description": desc,
+        "managed": True,
+        "details": {"missing": missing, "errors": errors, "run": run_res or {}, "stderr_tail": infra_text},
+    }
 
 
 class ExecTools:
@@ -408,6 +512,7 @@ async def run_exec_tool(
     outdir: pathlib.Path,
     logger: Optional[AgentLogger] = None,
     exec_id: Optional[str] = None,
+    exec_runtime: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Execute pre-written code using the same runtime as codegen.
@@ -459,15 +564,30 @@ async def run_exec_tool(
         pass
     spec = build_portable_spec(svc=tool_manager.svc, chat_comm=tool_manager.comm)
     comm_spec = getattr(tool_manager.comm, "_export_comm_spec_for_runtime", lambda: {})()
+    exec_context = _build_exec_context_from_comm_spec(
+        comm_spec=comm_spec if isinstance(comm_spec, dict) else {},
+        runtime_globals=runtime_globals,
+        exec_id=exec_id,
+        exec_runtime=exec_runtime,
+    )
 
     globals_for_runtime = {
         "CONTRACT": output_contract,
         "COMM_SPEC": comm_spec,
         "PORTABLE_SPEC_JSON": spec.to_json(),
+        "EXEC_CONTEXT": exec_context,
         "RESULT_FILENAME": result_filename,
         **({"EXECUTION_ID": exec_id} if exec_id else {}),
         **runtime_globals,
     }
+    if exec_runtime:
+        globals_for_runtime["EXEC_RUNTIME_CONFIG"] = resolve_exec_runtime_profile(
+            runtime=exec_runtime,
+            profile=None,
+        )
+        mode = globals_for_runtime["EXEC_RUNTIME_CONFIG"].get("mode")
+        if isinstance(mode, str) and mode.strip():
+            log.log(f"[exec.tool] runtime override active: mode={mode.strip()}", level="INFO")
 
     try:
         run_res = await runtime.execute_py_code(
@@ -486,10 +606,14 @@ async def run_exec_tool(
             },
         )
     except Exception as e:
+        log.log(f"[exec.tool] runtime.execute_py_code failed: {type(e).__name__}: {e}", level="ERROR")
+        log.log(traceback.format_exc(), level="ERROR")
         return {
             "ok": False,
             "error": {
                 "where": "exec.tool",
+                "code": "execution_error",
+                "message": str(e),
                 "error": "execution_error",
                 "description": str(e),
                 "managed": True,
@@ -639,22 +763,14 @@ async def run_exec_tool(
         infra_tracebacks = "\n\n".join(uniq)
     infra_has_err = bool(infra_error_lines or infra_tracebacks)
 
-    runtime_ok = bool(run_res.get("ok", True))
+    runtime_ok, _, runtime_message = _runtime_error_details(run_res if isinstance(run_res, dict) else {})
     ok = len(missing) == 0 and len(errors) == 0 and runtime_ok
-    error = None
-    if not ok:
-        err_code = "missing_output_files" if missing else "execution_failed"
-        desc = (
-            f"Missing output files: {', '.join(missing)}"
-            if missing else "Execution failed (non-zero exit)"
-        )
-        error = {
-            "where": "exec.tool",
-            "error": err_code,
-            "description": desc,
-            "managed": True,
-            "details": {"missing": missing, "run": run_res, "stderr_tail": infra_text},
-        }
+    error = _build_exec_error_payload(
+        missing=missing,
+        errors=errors,
+        run_res=run_res if isinstance(run_res, dict) else {},
+        infra_text=infra_text,
+    )
 
     # Build human-readable report text
     lines: List[str] = []
@@ -665,6 +781,8 @@ async def run_exec_tool(
         lines.append("Status: success")
     else:
         lines.append(f"Status: error — {err_code}: {err_msg}".strip())
+        if not runtime_ok and runtime_message and runtime_message != err_msg:
+            lines.append(f"Runtime failure: {runtime_message}")
 
     if errors:
         lines.append("File errors:")
@@ -676,6 +794,14 @@ async def run_exec_tool(
                 pass
             msg = e.get("message") or e.get("code") or "error"
             lines.append(f"- {fname}: {msg}")
+    if missing and not (error and (error.get("code") == "missing_output_files")):
+        lines.append("Missing contracted outputs:")
+        for rel in missing:
+            try:
+                rel = pathlib.Path(rel).name
+            except Exception:
+                pass
+            lines.append(f"- {rel}")
     if succeeded:
         lines.append("Succeeded:")
         for s in succeeded:
@@ -779,6 +905,7 @@ async def run_exec_tool_no_contract(
     outdir: pathlib.Path,
     logger: Optional[AgentLogger] = None,
     exec_id: Optional[str] = None,
+    exec_runtime: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Execute code without an output contract (side-effects mode).
@@ -794,6 +921,7 @@ async def run_exec_tool_no_contract(
         outdir=outdir,
         logger=logger,
         exec_id=exec_id,
+        exec_runtime=exec_runtime,
     )
 
 
@@ -806,6 +934,7 @@ async def run_exec_tool_side_effects(
     outdir: pathlib.Path,
     logger: Optional[AgentLogger] = None,
     exec_id: Optional[str] = None,
+    exec_runtime: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Execute code without a contract and report side-effects by diffing outdir.
@@ -819,6 +948,7 @@ async def run_exec_tool_side_effects(
         workdir=workdir,
         outdir=outdir,
         exec_id=exec_id,
+        exec_runtime=exec_runtime,
     )
     after = snapshot_outdir(outdir)
     diff = diff_snapshots(before, after)

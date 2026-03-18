@@ -35,7 +35,7 @@
 
 import os
 import uuid
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
@@ -72,6 +72,24 @@ from .timeline import build_exec_timeline, render_timeline_text
 
 
 class WithIsoRuntimeWorkflow(BaseWorkflow):
+    def _select_exec_runtime_for_scenario(self, scenario_id: str) -> Dict[str, Any]:
+        """
+        Select the exec runtime for a scenario.
+
+        Most scenarios use the bundle's default runtime.
+        Scenario 13 explicitly selects the profile named in bundle props:
+
+          config.execution.runtime.profiles.fargate_default
+
+        via:
+
+          self.resolve_exec_runtime(profile="fargate_default")
+        """
+        if str(scenario_id) == "13":
+            self.logger.log("[with-isoruntime] scenario 13 selecting exec runtime profile=fargate_default")
+            return self.resolve_exec_runtime(profile="fargate_default")
+        return self.resolve_exec_runtime()
+
     def __init__(
             self,
             *,
@@ -84,6 +102,7 @@ class WithIsoRuntimeWorkflow(BaseWorkflow):
             config: Config,
             comm_context: ChatTaskPayload,
             ctx_client: Any = None,
+            bundle_props: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(
             conv_idx=conv_idx,
@@ -95,6 +114,7 @@ class WithIsoRuntimeWorkflow(BaseWorkflow):
             config=config,
             comm_context=comm_context,
             ctx_client=ctx_client,
+            bundle_props=bundle_props,
             # Provide user-friendly error messages (from resources.py)
             message_resources_fn=get_friendly_error_message,
         )
@@ -169,6 +189,7 @@ class WithIsoRuntimeWorkflow(BaseWorkflow):
                 # run_with_contract / run_without_contract delegate to run_exec_tool()
                 # which writes main.py, prepends the injected header, and launches
                 # _InProcessRuntime (subprocess with namespace isolation or Docker)
+                exec_runtime = self._select_exec_runtime_for_scenario(scenario.id)
                 try:
                     if use_contract:  # Most scenarios: check output against contract
                         envelope, err, tool_params = await run_with_contract(
@@ -181,6 +202,7 @@ class WithIsoRuntimeWorkflow(BaseWorkflow):
                             outdir=outdir,
                             exec_id=exec_id,
                             prog_name=scenario.label,
+                            exec_runtime=exec_runtime,
                         )
                         if err:
                             ok = False
@@ -195,6 +217,7 @@ class WithIsoRuntimeWorkflow(BaseWorkflow):
                             outdir=outdir,
                             exec_id=exec_id,
                             prog_name=scenario.label,
+                            exec_runtime=exec_runtime,
                         )
                 finally:
                     # ── Step 5: Always sync sandbox → workspace (even on failure) ──

@@ -1,0 +1,56 @@
+name: Validate KDCube Platform
+
+on:
+  pull_request:
+    paths:
+      - "app/ai-app/services/kdcube-ai-app/**"
+      - "app/ai-app/ui/chat-web-app/**"
+      - "scripts/ci/check.sh"
+      - "Makefile"
+      - ".github/workflows/validate-kdcube-platform.yml"
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - "app/ai-app/services/kdcube-ai-app/**"
+  #     - "app/ai-app/ui/chat-web-app/**"
+  #     - "scripts/ci/check.sh"
+  #     - "Makefile"
+  #     - ".github/workflows/validate-kdcube-platform.yml"
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r app/ai-app/services/kdcube-ai-app/requirements-chat.txt
+
+      - name: Run backend checks
+        run: bash scripts/ci/check.sh backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: app/ai-app/ui/chat-web-app/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: app/ai-app/ui/chat-web-app
+        run: npm ci
+
+      - name: Run frontend checks
+        run: bash scripts/ci/check.sh frontend

@@ -136,6 +136,11 @@ This is how bundle code becomes available to the processor in this setup.
 If you leave `HOST_BUNDLES_DESCRIPTOR_PATH` unset, `/dev/null` is mounted and the loader
 falls back to inline `AGENTIC_BUNDLES_JSON` or the Redis registry.
 
+### Rebuild Code Execution Image
+```bash
+docker build -t py-code-exec:latest -f Dockerfile_Exec ../../..
+```
+
 ## Notes
 
 - `postgres-setup` runs once after Postgres is healthy and creates schemas.

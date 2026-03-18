@@ -41,7 +41,7 @@ Curated index of platform, service, and SDK documentation.
 * Runtime modes for built-in tools: [README-runtime-modes-builtin-tools.md](exec/README-runtime-modes-builtin-tools.md)
 * Isolated Code Execution - Operations Guide: [operations.md](exec/operations.md)
 * Executor log streams: [logging-README.md](exec/logging-README.md)
-* Distributed Execution (Fargate/External): [distributed-exec.md](exec/distributed-exec.md)
+* Distributed Execution (Fargate/External): [distributed-exec-README.md](exec/distributed-exec-README.md)
 
 ## SDK Bundles
 

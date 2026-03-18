@@ -1,5 +1,5 @@
 ---
-id: ks:docs/exec/distributed-exec.md
+id: ks:docs/exec/distributed-exec-README.md
 title: "Distributed Exec — Fargate"
 summary: "End-to-end design and deployment guide for the Fargate isolated execution task."
 tags: ["exec", "distributed", "fargate", "external", "architecture", "ecs"]
@@ -216,17 +216,84 @@ cb/tenants/{tenant}/projects/{project}/
 
 ## How the caller (proc) selects docker vs fargate
 
-The routing is in `iso_runtime` / `run_exec_tool` based on `EXECUTION_SANDBOX` env var
-or explicit `isolation` parameter. In ECS, Docker is not available, so:
+Routing is no longer env-only.
 
-- `EXECUTION_SANDBOX=docker` → `run_py_in_docker()` → **fails** (no Docker daemon)
-- `EXECUTION_SANDBOX=fargate` → `run_py_in_fargate()` → **works**
-- `FARGATE_EXEC_ENABLED=1` must be set on the proc task
+Current selection order for exec tools:
+1. explicit runtime config passed in `EXEC_RUNTIME_CONFIG`
+   - normally sourced from bundle props `execution.runtime`
+2. proc env fallback `EXEC_RUNTIME_MODE`
+3. explicit isolation override on the call site
+4. otherwise the default local/docker path
 
-The proc task definition must set these env vars to enable fargate routing:
+Important:
+- `EXECUTION_SANDBOX` is a marker passed into the chosen child runtime after routing.
+  It is **not** the primary selector on the proc side.
+- For bundle-scoped distributed exec, the canonical config path is
+  `execution.runtime`.
+
+Example bundle props:
+
+```yaml
+config:
+  execution:
+    runtime:
+      mode: fargate
+      enabled: true
+      region: eu-west-1
+      cluster: arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster
+      task_definition: kdcube-staging-exec
+      container_name: exec
+      subnets:
+        - subnet-xxxx
+        - subnet-yyyy
+      security_groups:
+        - sg-xxxx
+      assign_public_ip: DISABLED
+```
+
+Example with multiple bundle-scoped profiles:
+
+```yaml
+config:
+  execution:
+    runtime:
+      default_profile: fargate
+      profiles:
+        docker:
+          mode: docker
+          image: py-code-exec:latest
+          network_mode: host
+          cpus: "1.5"
+          memory: "2g"
+          extra_args:
+            - --pids-limit
+            - "256"
+        fargate:
+          mode: fargate
+          enabled: true
+          cluster: arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster
+          task_definition: kdcube-staging-exec
+          container_name: exec
+          subnets:
+            - subnet-xxxx
+            - subnet-yyyy
+          security_groups:
+            - sg-xxxx
+          assign_public_ip: DISABLED
+```
+
+In that model:
+- `default_profile` provides the default resolved runtime for generic exec calls
+- bundle code may explicitly choose another supported profile when needed
+- missing keys inside the selected profile still fall back to proc env vars
+- Docker profiles can override local Docker execution settings such as `image`,
+  `network_mode`, `cpus`, `memory`, and raw `extra_args`
+
+Global proc env vars are still useful as defaults/fallbacks:
 
 | Variable | Value | Source |
 |---|---|---|
+| `EXEC_RUNTIME_MODE` | `fargate` | proc env fallback |
 | `FARGATE_EXEC_ENABLED` | `1` | task def environment |
 | `FARGATE_CLUSTER` | `{name_prefix}-cluster` | task def environment |
 | `FARGATE_TASK_DEFINITION` | `{name_prefix}-exec` | task def environment |
@@ -234,7 +301,10 @@ The proc task definition must set these env vars to enable fargate routing:
 | `FARGATE_SUBNETS` | `subnet-xxx,subnet-yyy` | task def environment |
 | `FARGATE_SECURITY_GROUPS` | `sg-xxx` | task def environment |
 | `FARGATE_ASSIGN_PUBLIC_IP` | `DISABLED` | task def environment |
-| `EXECUTION_SANDBOX` | `fargate` | task def environment |
+| `FARGATE_PLATFORM_VERSION` | _(optional)_ | task def environment |
+
+Bundle props win over these env vars for keys they provide; missing keys still
+fall back to env.
 
 ---
 
@@ -289,6 +359,7 @@ Injected via `containerOverrides.environment` at `run_task` call time:
 | `BUNDLE_SNAPSHOT_URI` | S3 URI of bundle.zip |
 | `EXEC_SNAPSHOT` | `{input_work_uri, input_out_uri, output_work_uri, output_out_uri}` |
 | `EXEC_CONTEXT` | `{tenant, project, user_id, conversation_id, turn_id, ...}` |
+| `EXEC_RUNTIME_CONFIG` | bundle/runtime exec routing config (for example `mode=fargate`) |
 | `CONTRACT` | output contract spec |
 | `COMM_SPEC` | communicator/SSE spec |
 | `SANDBOX_FS` | filesystem sandbox settings |
@@ -364,21 +435,140 @@ DNS (`redis.kdcube.local`) or the direct ElastiCache endpoint both work.
 
 ## Testing the integration
 
-With the full ECS wiring in place, you can verify end-to-end by pointing at the staging cluster:
+### Recommended smoke test bundle
+
+The bundle `apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
+includes scenario:
+
+- `13. Fargate happy path`
+
+It is a **built-in example bundle** — it registers automatically when proc runs with
+`BUNDLES_INCLUDE_EXAMPLES=1`. No `repo`, `ref`, or `module` entry is needed in
+`bundles.yaml`; only a `config` block is required to supply the runtime profiles.
+
+Use it together with bundle props `execution.runtime` to validate the Fargate
+path without needing a ReAct tool-selection flow.
+
+#### Getting infrastructure values for your deployment
+
+All values come from Terraform state. Run these from the Terraform directory of your
+ECS deployment (the directory that contains `main.tf` and your `.tfvars` files —
+wherever you ran `terraform apply`):
+
+```bash
+# Cluster name (compose into ARN below)
+terraform output -raw ecs_cluster_name
+# → kdcube-staging-cluster
+
+# AWS account ID
+aws sts get-caller-identity --query Account --output text
+# → <account_id>
+
+# Task definition family name (no revision — ECS resolves latest active)
+# Always: <name_prefix>-exec
+
+# Private subnet IDs
+terraform output -json private_subnet_ids
+# → ["subnet-<id1>","subnet-<id2>"]
+
+# ECS tasks security group (shared by all ECS tasks including exec)
+terraform output -raw ecs_tasks_sg_id
+# → sg-<group_id>
+```
+
+| Field | How to get | Staging example |
+|---|---|---|
+| `region` | `aws.deployment.yaml → aws_region` | `eu-west-1` |
+| `cluster` | `arn:aws:ecs:<region>:<account_id>:cluster/<ecs_cluster_name>` | `arn:aws:ecs:eu-west-1:<account_id>:cluster/kdcube-staging-cluster` |
+| `task_definition` | `<name_prefix>-exec` (no revision) | `kdcube-staging-exec` |
+| `container_name` | always `exec` | `exec` |
+| `subnets` | `terraform output -json private_subnet_ids` | `subnet-<id1>`, `subnet-<id2>` |
+| `security_groups` | `terraform output -raw ecs_tasks_sg_id` | `sg-<group_id>` |
+| `assign_public_ip` | always `DISABLED` (private subnets + NAT) | `DISABLED` |
+
+Proc-level env var fallback (still supported — bundle props override, missing keys fall back to these):
 
 ```bash
 # On a machine with AWS credentials + ECS access
 export FARGATE_EXEC_ENABLED=1
+export EXEC_RUNTIME_MODE=fargate
 export FARGATE_CLUSTER=kdcube-staging-cluster
 export FARGATE_TASK_DEFINITION=kdcube-staging-exec
 export FARGATE_CONTAINER_NAME=exec
-export FARGATE_SUBNETS=subnet-xxx,subnet-yyy
-export FARGATE_SECURITY_GROUPS=sg-xxx
+export FARGATE_SUBNETS=subnet-<id1>,subnet-<id2>
+export FARGATE_SECURITY_GROUPS=sg-<group_id>
 export FARGATE_ASSIGN_PUBLIC_IP=DISABLED
-export EXECUTION_SANDBOX=fargate
 
 # then trigger a bundle execution through the proc API
 ```
+
+#### bundles.yaml entry for the smoke test bundle (staging)
+
+`default_profile` is set to `docker_builtin` — all regular scenarios run Docker.
+Scenario 13 (Fargate happy path) directly selects the configured profile named
+`fargate_default` from `config.execution.runtime.profiles`.
+
+```yaml
+    - id: "with-isoruntime@2026-02-16-14-00"
+      config:
+        execution:
+          runtime:
+            default_profile: docker_builtin
+            profiles:
+              docker_builtin:
+                mode: docker
+                image: py-code-exec:latest
+                network_mode: host
+              fargate_default:
+                mode: fargate
+                enabled: true
+                region: eu-west-1
+                cluster: arn:aws:ecs:eu-west-1:<account_id>:cluster/kdcube-staging-cluster
+                task_definition: kdcube-staging-exec
+                container_name: exec
+                subnets:
+                  - subnet-<id1>   # terraform output -json private_subnet_ids
+                  - subnet-<id2>
+                security_groups:
+                  - sg-<group_id>  # terraform output -raw ecs_tasks_sg_id
+                assign_public_ip: DISABLED
+```
+
+```python
+# with-isoruntime workflow.py
+if str(scenario_id) == "13":
+    return self.resolve_exec_runtime(profile="fargate_default")
+return self.resolve_exec_runtime()
+```
+
+Selection semantics:
+- `self.resolve_exec_runtime(profile=...)` resolves only from the canonical
+  bundle runtime config already loaded into `RuntimeCtx.exec_runtime`
+- it does not consult proc env vars directly
+- env vars remain backend-level fallback for missing keys after profile selection
+
+```mermaid
+flowchart LR
+    A["bundles.yaml\nexecution.runtime.profiles.fargate_default"] --> B["bundle props loaded"]
+    B --> C["RuntimeCtx.exec_runtime"]
+    C --> D["workflow\nresolve_exec_runtime(profile='fargate_default')"]
+    D --> E["resolved runtime config"]
+    E --> F["exec_tools.run_exec_tool(...)"]
+    F --> G["_InProcessRuntime.execute_py_code(...)"]
+    G --> H["Fargate runtime backend"]
+    H --> I["ECS exec task"]
+```
+
+### Failure diagnostics
+
+The Fargate runtime now logs:
+- the effective ECS config it resolved
+- `ecs.run_task(...)` exceptions
+- `run_task` response failures
+- `describe_tasks(...)` failures
+
+This is the first place to check when a proc log shows
+`[fargate] launching task ...` but no exec task appears in ECS.
 
 To validate the snapshot round-trip without launching ECS:
 ```python

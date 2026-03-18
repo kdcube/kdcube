@@ -198,15 +198,15 @@ def build_portable_spec(*, svc: ModelServiceBase, chat_comm: ChatCommunicator, i
         c = chat_comm._export_comm_spec_for_runtime()
         comm_spec = CommSpec(**c)
 
-    # Pick the very small set of env you truly need
-    # env_whitelist = [
-    #     "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
-    #     "CUSTOM_MODEL_ENDPOINT", "CUSTOM_MODEL_API_KEY", "CUSTOM_MODEL_NAME",
-    #     "KB_SEARCH_URL", "REDIS_URL", "ORCHESTRATOR_IDENTITY",
-    #     "TENANT_ID", "DEFAULT_PROJECT_NAME",
-    # ]
-    # env_passthrough = {k: os.environ[k] for k in env_whitelist if os.environ.get(k)}
-    env_passthrough = dict(os.environ)
+    # The runtime transport already provides the execution environment directly
+    # (docker env, ECS overrides, local process env). Duplicating the whole host
+    # environment inside the portable spec bloats the payload and can exceed
+    # external runtime transport limits such as ECS containerOverrides.
+    #
+    # Keep this empty by default. If a future runtime path truly needs selected
+    # passthrough keys, add a small explicit allowlist instead of serializing
+    # all of os.environ.
+    env_passthrough: Dict[str, str] = {}
     cache_spec = None
     if isinstance(integrations, dict):
         cache_val = integrations.get("kv_cache")

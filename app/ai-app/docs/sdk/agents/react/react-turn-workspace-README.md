@@ -9,7 +9,7 @@ see_also:
   - ks:docs/sdk/agents/react/turn-log-README.md
   - ks:docs/sdk/agents/react/source-pool-README.md
   - ks:docs/sdk/agents/react/external-exec-README.md
-  - ks:docs/exec/distributed-exec.md
+  - ks:docs/exec/distributed-exec-README.md
 ---
 # ReAct Turn Workspace
 

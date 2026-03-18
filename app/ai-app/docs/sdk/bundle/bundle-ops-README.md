@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/sdk/bundle/bundle-platform-properties-README.md
   - ks:docs/service/configuration/bundle-configuration-README.md
 ---
 # Bundle Ops Guide (Registry, Delivery, Git)
@@ -240,6 +241,15 @@ These props can be provided in `bundles.yaml` **or** updated at runtime.
 Bundle defaults come from `entrypoint.configuration` (bundle-defined). Effective
 props are computed as a deep merge: defaults → bundles.yaml → runtime overrides.
 
+Some prop paths are platform-reserved and have built-in behavior:
+- `role_models`
+- `embedding`
+- `economics.reservation_amount_dollars`
+- `execution.runtime`
+
+Canonical reference:
+[docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md).
+
 Important:
 - during normal runtime, admin edits act as the top override layer
 - during `reset-env` or proc startup with `BUNDLES_FORCE_ENV_ON_STARTUP=1`,
@@ -299,6 +309,49 @@ bundles:
 Resolved values are stored in Redis as bundle props.
 On `reset-env` / startup force-env this Redis layer is synchronized
 authoritatively from the descriptor, not merged additively.
+
+Example: per-bundle Fargate exec override
+
+```yaml
+config:
+  execution:
+    runtime:
+      mode: fargate
+      enabled: true
+      cluster: arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster
+      task_definition: kdcube-staging-exec
+      container_name: exec
+      subnets: ["subnet-xxxx", "subnet-yyyy"]
+      security_groups: ["sg-xxxx"]
+      assign_public_ip: DISABLED
+```
+
+This lets a specific bundle opt into distributed exec even if proc also has
+global env fallbacks for Docker/Fargate execution.
+
+Bundles can also declare multiple supported exec profiles in props:
+
+```yaml
+config:
+  execution:
+    runtime:
+      default_profile: fargate
+      profiles:
+        docker:
+          mode: docker
+        fargate:
+          mode: fargate
+          enabled: true
+          cluster: arn:aws:ecs:eu-west-1:100258542545:cluster/kdcube-staging-cluster
+          task_definition: kdcube-staging-exec
+          container_name: exec
+          subnets: ["subnet-xxxx", "subnet-yyyy"]
+          security_groups: ["sg-xxxx"]
+          assign_public_ip: DISABLED
+```
+
+That keeps the supported runtime set inside bundle props while still allowing
+the bundle to choose the actual profile at runtime.
 
 ### Inspect effective props in Redis
 ```
