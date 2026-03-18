@@ -1214,6 +1214,7 @@ class UserEconomicsRateLimiter:
                 "requests_total": 0,
                 "tokens_today": 0,
                 "tokens_this_month": 0,
+                "tokens_this_hour": 0,
             }}
 
         # Collect usage for each bundle
@@ -1224,6 +1225,7 @@ class UserEconomicsRateLimiter:
             "requests_total": 0,
             "tokens_today": 0,
             "tokens_this_month": 0,
+            "tokens_this_hour": 0,
         }
 
         for bundle_id in bundle_ids:
@@ -1256,12 +1258,16 @@ class UserEconomicsRateLimiter:
                 tok_m = 0
             concurrent = await self.r.zcard(k_locks)
 
+            bucket_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
+            tok_h, _ = await self._rolling_hour_stats(bucket_prefix, now)
+
             bundles[bundle_id] = {
                 "requests_today": req_d,
                 "requests_this_month": req_m,
                 "requests_total": req_t,
                 "tokens_today": tok_d,
                 "tokens_this_month": tok_m,
+                "tokens_this_hour": tok_h,
                 "concurrent": concurrent,
             }
 
@@ -1271,6 +1277,7 @@ class UserEconomicsRateLimiter:
             totals["requests_total"] += req_t
             totals["tokens_today"] += tok_d
             totals["tokens_this_month"] += tok_m
+            totals["tokens_this_hour"] += tok_h
 
         return {"bundles": bundles, "totals": totals}
 

@@ -916,7 +916,11 @@ def ask(console: Console, label: str, default: Optional[str] = None, secret: boo
 def ask_confirm(console: Console, label: str, default: bool = False) -> bool:
     default_hint = "y" if default else "n"
     while True:
-        raw = console.input(f"{label} [y/n] ({default_hint}): ").strip().lower()
+        try:
+            raw = console.input(f"{label} [y/n] ({default_hint}): ").strip().lower()
+        except UnicodeDecodeError:
+            console.print("[yellow]Input encoding error (keyboard shortcut?). Please try again.[/yellow]")
+            continue
         if not raw:
             return default
         if raw in {"q", "quit", "exit"}:
@@ -930,7 +934,13 @@ def ask_confirm(console: Console, label: str, default: bool = False) -> bool:
 
 def prompt_optional(console: Console, label: str, secret: bool = False) -> str:
     console.print(f"{_label(label)} [dim](leave blank to skip)[/dim]")
-    value = console.input("> ", password=secret).strip()
+    while True:
+        try:
+            value = console.input("> ", password=secret).strip()
+        except UnicodeDecodeError:
+            console.print("[yellow]Input encoding error (keyboard shortcut?). Please try again.[/yellow]")
+            continue
+        break
     _abort_if_quit(value)
     return value
 
@@ -940,7 +950,13 @@ def prompt_optional_keep(console: Console, label: str, current: Optional[str]) -
         console.print(f"{_label(label)} [dim](press Enter to keep current)[/dim]")
     else:
         console.print(f"{_label(label)} [dim](leave blank to skip)[/dim]")
-    value = console.input("> ").strip()
+    while True:
+        try:
+            value = console.input("> ").strip()
+        except UnicodeDecodeError:
+            console.print("[yellow]Input encoding error (keyboard shortcut?). Please try again.[/yellow]")
+            continue
+        break
     _abort_if_quit(value)
     if not value:
         return current if current and not is_placeholder(current) else None
@@ -2184,6 +2200,52 @@ def gather_configuration(
     _set_nested(assembly_data, ["ports"], ports_block)
 
     _autosave()
+
+    # Routines: apply scheduler settings from assembly descriptor (non-interactive).
+    if assembly_path:
+        routines_block = _get_nested(assembly_data, "routines")
+        if isinstance(routines_block, dict):
+            economics = routines_block.get("economics") or {}
+            stripe = routines_block.get("stripe") or {}
+            opex = routines_block.get("opex") or {}
+            _routines_map = [
+                (economics, "subscription_rollover_enabled", "SUBSCRIPTION_ROLLOVER_ENABLED"),
+                (economics, "subscription_rollover_cron", "SUBSCRIPTION_ROLLOVER_CRON"),
+                (economics, "subscription_rollover_lock_ttl_seconds", "SUBSCRIPTION_ROLLOVER_LOCK_TTL_SECONDS"),
+                (economics, "subscription_rollover_sweep_limit", "SUBSCRIPTION_ROLLOVER_SWEEP_LIMIT"),
+                (stripe, "reconcile_enabled", "STRIPE_RECONCILE_ENABLED"),
+                (stripe, "reconcile_cron", "STRIPE_RECONCILE_CRON"),
+                (stripe, "reconcile_lock_ttl_seconds", "STRIPE_RECONCILE_LOCK_TTL_SECONDS"),
+                (opex, "agg_cron", "OPEX_AGG_CRON"),
+            ]
+            for block, yaml_key, env_key in _routines_map:
+                if not isinstance(block, dict):
+                    continue
+                val = block.get(yaml_key)
+                if val is None or is_placeholder(str(val)):
+                    continue
+                str_val = str(val).lower() if isinstance(val, bool) else str(val)
+                update_env_value(env_ingress, env_key, str_val)
+
+    # Notifications: apply email settings from assembly descriptor (non-interactive).
+    if assembly_path:
+        email_block = _get_nested(assembly_data, "notifications", "email")
+        if isinstance(email_block, dict):
+            _email_map = [
+                ("enabled", "EMAIL_ENABLED"),
+                ("host", "EMAIL_HOST"),
+                ("port", "EMAIL_PORT"),
+                ("user", "EMAIL_USER"),
+                ("from", "EMAIL_FROM"),
+                ("to", "EMAIL_TO"),
+                ("use_tls", "EMAIL_USE_TLS"),
+            ]
+            for yaml_key, env_key in _email_map:
+                val = email_block.get(yaml_key)
+                if val is None or is_placeholder(str(val)):
+                    continue
+                str_val = str(val).lower() if isinstance(val, bool) else str(val)
+                update_env_value(env_ingress, env_key, str_val)
 
     bundles_descriptor_selected = False
     assembly_descriptor_selected = False

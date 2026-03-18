@@ -28,6 +28,7 @@ _SECRET_ALIASES: dict[str, list[str]] = {
     "services.stripe.webhook_secret": ["STRIPE_WEBHOOK_SECRET"],
     "services.huggingface.api_key": ["HUGGING_FACE_KEY", "HUGGINGFACE_API_KEY"],
     "services.firecrawl.api_key": ["FIRECRAWL_API_KEY"],
+    "services.email.password": ["EMAIL_PASSWORD"],
 }
 _LEGACY_SECRET_TO_CANON: dict[str, str] = {
     legacy: canon for canon, aliases in _SECRET_ALIASES.items() for legacy in aliases
@@ -192,6 +193,15 @@ class Settings(BaseSettings):
     # Force bundles registry to be overwritten from AGENTIC_BUNDLES_JSON at startup (processor only).
     BUNDLES_FORCE_ENV_ON_STARTUP: bool = Field(default=False)
     BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS: int = Field(default=60)
+
+    # Email notifications (admin alerts for Stripe events)
+    EMAIL_ENABLED: bool = Field(default=True)
+    EMAIL_HOST: str | None = None
+    EMAIL_PORT: int = Field(default=587)
+    EMAIL_USER: str | None = None
+    EMAIL_FROM: str | None = None
+    EMAIL_TO: str = Field(default="ops@example.com")
+    EMAIL_USE_TLS: bool = Field(default=True)
 
     # Solution workspace retention — set True to keep workdir/outdir after turn completes (debug).
     SOLUTION_RETAIN_TURN_WORKSPACE: bool = Field(default=False)

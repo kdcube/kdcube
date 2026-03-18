@@ -573,18 +573,21 @@ Admin alerts are sent for:
 - Subscription cancel requested / completed / failed
 - Reconcile results summary
 
-Configuration (via `get_settings()`):
+Configuration via `get_settings()` (non-secret fields) and `get_secret()` (password):
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `EMAIL_ENABLED` | `true` | Enable/disable email sending |
-| `EMAIL_HOST` | _(unset)_ | SMTP host |
-| `EMAIL_PORT` | `587` | SMTP port |
-| `EMAIL_USER` | _(unset)_ | SMTP username |
-| `EMAIL_PASSWORD` | _(unset)_ | SMTP password |
-| `EMAIL_FROM` | _(EMAIL_USER)_ | From address |
-| `EMAIL_TO` | `ops@example.com` | Default recipient |
-| `EMAIL_USE_TLS` | `true` | Enable TLS |
+| Variable | Source | Default | Purpose |
+|----------|--------|---------|---------|
+| `EMAIL_ENABLED` | `get_settings()` / env | `true` | Enable/disable email sending |
+| `EMAIL_HOST` | `get_settings()` / env | _(unset)_ | SMTP host |
+| `EMAIL_PORT` | `get_settings()` / env | `587` | SMTP port |
+| `EMAIL_USER` | `get_settings()` / env | _(unset)_ | SMTP username |
+| `EMAIL_FROM` | `get_settings()` / env | _(EMAIL_USER)_ | From address |
+| `EMAIL_TO` | `get_settings()` / env | `ops@example.com` | Default recipient |
+| `EMAIL_USE_TLS` | `get_settings()` / env | `true` | Enable STARTTLS |
+| `services.email.password` | `get_secret()` / `secrets.yaml` | _(unset)_ | SMTP password |
+
+Set `EMAIL_*` variables via `assembly.yaml` (`notifications.email` section) or directly in `.env.ingress`.
+Set the password in `secrets.yaml` under `services.email.password` (alias: `EMAIL_PASSWORD` env var).
 
 ---
 
@@ -595,7 +598,7 @@ Configuration (via `get_settings()`):
 - [ ] Configure webhook URL in Stripe Dashboard: `POST /api/economics/webhooks/stripe`
 - [ ] Add `bypass_throttling_patterns` for `^.*/webhooks/stripe$` to `GATEWAY_CONFIG_JSON`
 - [ ] Enable and configure `STRIPE_RECONCILE_ENABLED` / `STRIPE_RECONCILE_CRON`
-- [ ] Verify email settings for admin notifications
+- [ ] Set `services.email.password` in `secrets.yaml` and configure `notifications.email` in `assembly.yaml`
 - [ ] For local dev: install Stripe CLI and run `stripe listen --forward-to ...`
 
 ---

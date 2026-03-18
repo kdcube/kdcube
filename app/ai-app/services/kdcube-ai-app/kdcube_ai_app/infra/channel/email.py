@@ -1,4 +1,3 @@
-import os
 import ssl
 import smtplib
 import asyncio
@@ -6,26 +5,22 @@ import logging
 from email.message import EmailMessage
 from typing import Optional, Sequence
 
+from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
+
 logger = logging.getLogger(__name__)
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    v = os.getenv(name)
-    if v is None:
-        return default
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
-
-
 def _smtp_settings() -> dict:
+    s = get_settings()
     return {
-        "host": os.getenv("EMAIL_HOST"),
-        "port": int(os.getenv("EMAIL_PORT") or 587),
-        "user": os.getenv("EMAIL_USER"),
-        "password": os.getenv("EMAIL_PASSWORD"),
-        "from_addr": os.getenv("EMAIL_FROM") or os.getenv("EMAIL_USER"),
-        "to_default": os.getenv("EMAIL_TO") or "lena@nestlogic.com",
-        "use_tls": _env_bool("EMAIL_USE_TLS", True),
-        "enabled": _env_bool("EMAIL_ENABLED", True),
+        "host": s.EMAIL_HOST,
+        "port": s.EMAIL_PORT,
+        "user": s.EMAIL_USER,
+        "password": get_secret("services.email.password"),
+        "from_addr": s.EMAIL_FROM or s.EMAIL_USER,
+        "to_default": s.EMAIL_TO,
+        "use_tls": s.EMAIL_USE_TLS,
+        "enabled": s.EMAIL_ENABLED,
     }
 
 

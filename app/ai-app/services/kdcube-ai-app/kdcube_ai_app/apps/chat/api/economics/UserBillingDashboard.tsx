@@ -52,18 +52,21 @@ interface QuotaBreakdown {
         max_concurrent: number | null;
         requests_per_day: number | null;
         requests_per_month: number | null;
+        tokens_per_hour: number | null;
         tokens_per_day: number | null;
         tokens_per_month: number | null;
     };
     current_usage: {
         requests_today: number;
         requests_this_month: number;
+        tokens_this_hour: number;
         tokens_today: number;
         tokens_this_month: number;
     };
     remaining: {
         requests_today: number | null;
         requests_this_month: number | null;
+        tokens_this_hour: number | null;
         tokens_today: number | null;
         tokens_this_month: number | null;
         percentage_used: number | null;
@@ -515,13 +518,34 @@ const UserBillingDashboard: React.FC = () => {
                                             <span className="font-medium">{new Date(subscription.next_charge_at).toLocaleString()}</span>
                                         </div>
                                     )}
-                                    <div className="border-t border-gray-100 pt-3 flex justify-between text-sm">
-                                        <span className="text-gray-500">Requests Today</span>
-                                        <span className="font-medium">{breakdown.current_usage.requests_today} / {breakdown.effective_policy.requests_per_day || '∞'}</span>
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Hourly</div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">Tokens</span>
+                                            <span className="font-medium">{breakdown.current_usage.tokens_this_hour.toLocaleString()} / {breakdown.effective_policy.tokens_per_hour?.toLocaleString() || '∞'}</span>
+                                        </div>
                                     </div>
-                                    <div className="flex justify-between text-sm">
-                                        <span className="text-gray-500">Tokens Today</span>
-                                        <span className="font-medium">{breakdown.current_usage.tokens_today} / {breakdown.effective_policy.tokens_per_day || '∞'}</span>
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Daily</div>
+                                        <div className="flex justify-between text-sm mb-1.5">
+                                            <span className="text-gray-500">Requests</span>
+                                            <span className="font-medium">{breakdown.current_usage.requests_today} / {breakdown.effective_policy.requests_per_day || '∞'}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">Tokens</span>
+                                            <span className="font-medium">{breakdown.current_usage.tokens_today.toLocaleString()} / {breakdown.effective_policy.tokens_per_day?.toLocaleString() || '∞'}</span>
+                                        </div>
+                                    </div>
+                                    <div className="border-t border-gray-100 pt-3">
+                                        <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Monthly</div>
+                                        <div className="flex justify-between text-sm mb-1.5">
+                                            <span className="text-gray-500">Requests</span>
+                                            <span className="font-medium">{breakdown.current_usage.requests_this_month} / {breakdown.effective_policy.requests_per_month || '∞'}</span>
+                                        </div>
+                                        <div className="flex justify-between text-sm">
+                                            <span className="text-gray-500">Tokens</span>
+                                            <span className="font-medium">{breakdown.current_usage.tokens_this_month.toLocaleString()} / {breakdown.effective_policy.tokens_per_month?.toLocaleString() || '∞'}</span>
+                                        </div>
                                     </div>
                                 </div>
                                 {subscription?.status === 'active' && subscription?.provider === 'stripe' && (

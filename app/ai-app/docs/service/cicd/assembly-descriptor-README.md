@@ -130,6 +130,29 @@ paths:
   host_bundle_storage_path: "/srv/kdcube/data/bundle-storage"
   host_exec_workspace_path: "/srv/kdcube/data/exec-workspace"
 
+notifications:
+  email:
+    enabled: true
+    host: ""
+    port: "587"
+    user: ""
+    from: ""
+    to: "ops@example.com"
+    use_tls: true
+
+routines:
+  economics:
+    subscription_rollover_enabled: true
+    subscription_rollover_cron: "15 * * * *"
+    subscription_rollover_lock_ttl_seconds: 900
+    subscription_rollover_sweep_limit: 500
+  stripe:
+    reconcile_enabled: true
+    reconcile_cron: "45 * * * *"
+    reconcile_lock_ttl_seconds: 900
+  opex:
+    agg_cron: "0 3 * * *"
+
 ```
 
 Bundle definitions moved to `bundles.yaml`.
@@ -198,6 +221,38 @@ Supported keys:
 If `domain` is set at the root of the descriptor, the CLI uses it to expand
 `YOUR_DOMAIN` placeholders in proxylogin URLs. If not set, it falls back to
 `localhost` (and includes the UI port if it’s not 80/443).
+
+### Routines section (CLI usage)
+The `routines` section configures background scheduler jobs. Values are applied
+**non‑interactively** to `.env.ingress` when an assembly descriptor is provided.
+All keys are optional — if omitted, service defaults apply.
+
+Supported keys:
+- `routines.economics.subscription_rollover_enabled`: enable/disable subscription rollover job (default: `true`)
+- `routines.economics.subscription_rollover_cron`: rollover schedule in cron format (default: `15 * * * *`)
+- `routines.economics.subscription_rollover_lock_ttl_seconds`: distributed lock TTL for rollover job (default: `900`)
+- `routines.economics.subscription_rollover_sweep_limit`: max subscriptions processed per rollover run (default: `500`)
+- `routines.stripe.reconcile_enabled`: enable/disable Stripe reconcile job (default: `true`)
+- `routines.stripe.reconcile_cron`: Stripe reconcile schedule in cron format (default: `45 * * * *`)
+- `routines.stripe.reconcile_lock_ttl_seconds`: distributed lock TTL for reconcile job (default: `900`)
+- `routines.opex.agg_cron`: accounting aggregation schedule in cron format (default: `0 3 * * *`)
+
+### Notifications section (CLI usage)
+The `notifications.email` section configures SMTP for admin alert emails (Stripe events,
+refunds, subscription changes). Values are applied **non‑interactively** to `.env.ingress`.
+All keys are optional — if omitted, service defaults apply (email sending is silently skipped
+when `host` is not set).
+
+The SMTP password is **not** set here — put it in `secrets.yaml` under `services.email.password`.
+
+Supported keys:
+- `notifications.email.enabled`: enable/disable email sending entirely (default: `true`)
+- `notifications.email.host`: SMTP server hostname (default: unset — disables sending)
+- `notifications.email.port`: SMTP server port (default: `587`)
+- `notifications.email.user`: SMTP login username (default: unset)
+- `notifications.email.from`: sender address; falls back to `user` if omitted (default: unset)
+- `notifications.email.to`: default recipient for admin alerts (default: `ops@example.com`)
+- `notifications.email.use_tls`: enable STARTTLS (default: `true`)
 
 ### Context / infra / paths (CLI usage)
 When you run the wizard with an assembly descriptor, it will:
