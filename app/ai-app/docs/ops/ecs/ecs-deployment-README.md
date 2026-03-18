@@ -1,152 +1,274 @@
 ---
 id: ks:docs/ops/ecs/ecs-deployment-README.md
 title: "ECS Deployment"
-summary: "ECS deployment templates: env files for ingress, proc, and metrics tasks."
-tags: ["ops", "ecs", "deployment", "templates", "env", "tasks"]
-keywords: ["task definition", "env.template", "ingress", "proc", "metrics", "CloudWatch", "EFS", "AWS"]
+summary: "Current AWS ECS deployment model for KDCube: descriptor-driven provisioning, mixed-capacity runtime, proc on EC2, autoscaling, and rollout behavior."
+tags: ["ops", "ecs", "deployment", "aws", "autoscaling"]
+keywords: ["ecs", "terraform", "github actions", "proc ec2", "fargate", "cloudwatch", "autoscaling", "deployment descriptors"]
 see_also:
-  - ks:docs/ops/ec2/dockercompose-deployment-README.md
-  - ks:docs/ops/ecs/components/metric-server-README.md
-  - ks:docs/ops/ops-overview-README.md
+  - ks:docs/ops/health-README.md
+  - ks:docs/service/scale/metric-server-README.md
+  - ks:docs/service/scale/metrics-README.md
+  - ks:docs/service/ecs/custom-ecs-README.md
 ---
-# ECS Deployment Templates
+# ECS Deployment
 
-This folder contains **environment templates** for ECS tasks/services.
-They are intended as starting points for task definitions or parameter stores.
+This document describes the current AWS ECS deployment model for KDCube.
+It focuses on the runtime shape that operators and developers need to understand:
+what runs where, how proc differs from the other services, how autoscaling works,
+and what graceful rollout behavior can and cannot guarantee.
 
-## Templates
-- `deployment/ecs/ingress/env.template` — Ingress (SSE/API entrypoint).
-- `deployment/ecs/proc/env.template` — Processor (queue worker + integrations API).
-- `deployment/ecs/metrics/env.template` — Metrics service (CloudWatch/Prometheus export).
-- `deployment/ecs/frontend/env.template` — UI service (runtime config injection).
+## Deployment Model
 
-## Descriptor flow (ECS + local/compose)
+The AWS deployment is descriptor-driven.
+Provisioning automation reads a set of YAML deployment descriptors from GitHub
+Secrets and applies Terraform from them.
 
-```mermaid
-flowchart TB
-  subgraph Inputs["Descriptors"]
-    A[assembly.yaml]
-    B[bundles.yaml]
-    BS[bundles.secrets.yaml<br/>(local/dev)]
-    S[secrets.yaml]
-    G[gateway.yaml]
-  end
+The key inputs are:
 
-  subgraph ECS["ECS / Terraform / CD"]
-    T[Task definitions + params]
-    SM[Secrets Manager / SSM]
-    S3[Frontend config (S3) or task env]
-  end
+- `AWS_DEPLOYMENT_YAML` for AWS sizing, networking, image registry, and proc EC2 settings
+- `ASSEMBLY_YAML` for platform configuration and platform image version
+- `GATEWAY_YAML` for gateway and capacity configuration
+- `SECRETS_YAML` for service credentials and API keys
+- `BUNDLES_YAML` and `BUNDLES_SECRETS_YAML` for bundle registry and bundle secrets
 
-  subgraph Local["Local / one-node (CLI)"]
-    ENV[.env.* in workdir]
-    MOUNT[/config/bundles.yaml mount]
-    SC[secrets sidecar injection]
-  end
+In practice:
 
-  A --> T
-  B --> T
-  G --> T
-  A --> S3
-  S --> SM
+- infrastructure and ECS task definitions come from Terraform
+- service runtime behavior comes from this application codebase
+- deployment changes are applied by updating descriptor values and rerunning the provision workflow
 
-  A --> ENV
-  G --> ENV
-  B --> MOUNT
-  S --> SC
-  BS --> SC
-```
+## Runtime Topology
 
-## Required shared settings
-All services must set:
-- `REDIS_URL` (ingress/proc/metrics)
-- `GATEWAY_CONFIG_JSON` (must include `tenant` + `project`)
-- `GATEWAY_COMPONENT` (`ingress` | `proc` | `metrics`)
+Current runtime on ECS:
 
-## AWS runtime (recommended on ECS)
-If running on ECS/EC2 with IAM roles:
-- `AWS_REGION` or `AWS_DEFAULT_REGION`
-- `AWS_EC2_METADATA_DISABLED=false`
-- `NO_PROXY=169.254.169.254,localhost,127.0.0.1` (only if proxy is used)
+- `web-proxy` is the only ALB-facing service
+- `web-ui` serves the SPA
+- `chat-ingress` handles REST and SSE gateway traffic
+- `chat-proc` handles queue processing, bundle execution, and integrations endpoints
+- `metrics` exports autoscaling metrics in Redis mode
+- `proxylogin` is used only for delegated-auth deployments
+- `exec` is an on-demand task launched by proc, not a steady ECS service
 
-## UI Runtime Config (ECS)
-The UI container supports runtime config injection. Use **one** of:
+Routing is roughly:
 
-- `FRONTEND_CONFIG_JSON` — JSON string for `config.json`
-- `FRONTEND_CONFIG_S3_URL` — S3 or HTTPS URL to fetch on startup
+- `/sse/*`, `/api/chat/*`, `/api/cb/*`, `/admin/*` -> `chat-ingress`
+- `/api/integrations/*` -> `chat-proc`
+- `/auth/*` -> `proxylogin` when delegated auth is enabled
+- `/*` -> `web-ui`
 
-Use one of them in the frontend task definition.
+All of these services are private inside ECS and Cloud Map.
+External traffic enters through ALB and `web-proxy`.
 
-**Example (inline JSON):**
-```
-FRONTEND_CONFIG_JSON='{"auth":{"authType":"delegated","apiBase":"/auth/"},"tenant":"<TENANT>","project":"<PROJECT>","routesPrefix":"/chatbot/api"}'
-```
+## Mixed-Capacity Runtime
 
-**Example (S3):**
-```
-FRONTEND_CONFIG_S3_URL=s3://<bucket>/<path>/config.json
-AWS_REGION=eu-west-1
-AWS_EC2_METADATA_DISABLED=false
-NO_PROXY=169.254.169.254,localhost,127.0.0.1
-```
+The ECS deployment is mixed-capacity:
 
-## Component docs
-- Metrics scheduled task example: [docs/ops/ecs/components/metric-server-README.md](components/metric-server-README.md)
+- most services stay on Fargate
+- `chat-proc` can run on an EC2-backed ECS capacity provider when `proc_ec2.enabled: true`
+- the on-demand `exec` task can still run on Fargate even when proc itself runs on EC2
 
-## Bundles from Git (proc)
+This means there are two distinct scaling layers for proc:
 
-For git‑defined bundles, ensure:
+- proc service scaling: ECS service desired task count
+- proc host scaling: EC2 instance count behind the proc capacity provider
 
-- `git` binary is available in the proc image (included by default).
-- `BUNDLE_GIT_RESOLUTION_ENABLED=1`
-- `BUNDLE_GIT_REDIS_LOCK=1` (each replica pulls once)
-- `AGENTIC_BUNDLES_JSON` can point to a JSON/YAML file path mounted into the task (recommended for readability).
-  Mount it to `/config/bundles.yaml` and set:
-  ```
-  AGENTIC_BUNDLES_JSON=/config/bundles.yaml
-  ```
+These are related but not identical.
+Because proc uses `distinctInstance`, each proc task needs its own ECS container instance.
+So `proc_ec2.max_size` must cover both real proc autoscaling and rolling replacement of proc hosts.
 
-**Rule:** set `subdir` to the **parent bundles directory** and use `module: "<bundle_folder>.entrypoint"`.
+## Proc On EC2
 
-**Option A — EFS (recommended for git pulls)**
+When `proc_ec2.enabled: true`, proc changes from a pure Fargate task into a task
+that runs on ECS/EC2 and can launch Docker-based exec locally on the host.
 
-- Mount EFS to `/bundles`
-- Use an EFS Access Point with:
-  - `posix_user.uid = 1000`
-  - `posix_user.gid = 1000`
-- Set:
-  ```
-  AGENTIC_BUNDLES_ROOT=/bundles
-  BUNDLE_GIT_RESOLUTION_ENABLED=1
-  ```
+### Host bootstrap
 
-**Bundle shared local storage (optional)**
+Each proc EC2 host is bootstrapped to:
 
-If you use bundles that expose `ks:` (doc/knowledge or any shared local data),
-mount a shared local store and set:
+- join the ECS cluster
+- mount the required EFS access points on the host under:
+  - `/opt/kdcube/efs/kdcube-storage`
+  - `/opt/kdcube/efs/bundle-storage`
+  - `/opt/kdcube/efs/bundles`
+  - `/opt/kdcube/efs/exec-workspace`
+- maintain Docker registry auth under `/opt/kdcube/docker-auth`
+- refresh ECR auth periodically so long-running proc hosts can keep pulling private images
+- prewarm the exec image without blocking ECS registration
 
-```
-BUNDLE_STORAGE_ROOT=/bundle-storage
-```
+### Proc container wiring
 
-Recommended:
-- Use the same EFS file system (or a separate EFS access point).
-- Mount it to `/bundle-storage`.
+The proc task receives:
 
-**Private repos (SSH):**
-Provide these envs and mount the key/known_hosts into the container:
+- the host Docker socket at `/var/run/docker.sock`
+- host Docker auth mounted into `/home/appuser/.docker`
+- `PY_CODE_EXEC_IMAGE`
+- `EXEC_RUNTIME_MODE=docker` by default on EC2
+- host-path env vars used by nested Docker execution:
+  - `HOST_KDCUBE_STORAGE_PATH`
+  - `HOST_BUNDLE_STORAGE_PATH`
+  - `HOST_BUNDLES_PATH`
+  - `HOST_EXEC_WORKSPACE_PATH`
 
-```
-GIT_SSH_KEY_PATH=/run/secrets/git_ssh_key
-GIT_SSH_KNOWN_HOSTS=/run/secrets/git_known_hosts
-GIT_SSH_STRICT_HOST_KEY_CHECKING=yes
-```
+This lets proc start nested Docker exec containers that bind the same stable
+host-mounted EFS paths that the proc task itself sees.
 
-**Bundles root:**
+### Fargate exec remains available
 
-Set `AGENTIC_BUNDLES_ROOT=/bundles` in the proc task definition.  
-Avoid setting `HOST_BUNDLES_PATH` in ECS unless the path is valid inside the container.
+Even when proc runs on EC2, the deployment still injects the `FARGATE_EXEC_*`
+settings. That keeps the isolated ECS/Fargate exec path available for bundle-
+selected or runtime-selected Fargate execution.
 
-## Notes
-- These templates intentionally use **placeholders**. Replace them in your task
-  definition or inject via parameter store/secrets manager.
+## Images And Rollout Inputs
+
+For AWS ECS deploys:
+
+- the image registry comes from `AWS_DEPLOYMENT_YAML -> image_registry`
+- the image version comes from `ASSEMBLY_YAML -> platform.ref`
+
+So pushing an image to ECR is not enough by itself.
+To deploy a new image, the platform release ref must be updated and the
+provision workflow rerun.
+
+This applies to:
+
+- `kdcube-chat-proc`
+- `py-code-exec`
+- the rest of the platform images
+
+## Shared Storage And Bundles
+
+The ECS deployment relies on EFS for shared mutable state.
+Important mounted areas include:
+
+- `/kdcube-storage`
+- `/bundle-storage`
+- `/bundles`
+- `/config`
+- `/exec-workspace`
+
+In practice:
+
+- bundle registry config is written to EFS and consumed from `/config/bundles.yaml`
+- proc uses `/bundles` as the bundle root
+- proc and nested exec containers share storage through EFS-backed paths
+- bundle config updates can be applied without full infrastructure reprovision
+
+## Autoscaling Model
+
+The metrics service is the autoscaling signal source.
+It runs in Redis mode and publishes CloudWatch metrics for ECS service autoscaling.
+
+### Exported CloudWatch signals
+
+The deployment maps the main autoscaling signals to stable CloudWatch-style names:
+
+- `chat/ingress/sse/saturation`
+- `chat/proc/queue/utilization`
+- `chat/proc/queue/wait/p95`
+- `chat/proc/exec/p95`
+
+The metrics service also computes stronger proc queue signals internally,
+including queue pressure and wait metrics, as described in:
+
+- [metric-server-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/service/scale/metric-server-README.md)
+- [metrics-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/service/scale/metrics-README.md)
+
+### Current scaling shape
+
+Ingress:
+
+- scales from SSE saturation
+
+Proc:
+
+- scales out when queue utilization or queue p95 wait breaches configured thresholds
+- scales in only when both queue utilization and queue p95 wait are low enough for the configured window
+
+Proc scale-in is intentionally stricter than scale-out.
+The infrastructure uses a metric-math AND alarm for scale-in so proc is not
+scaled down just because one signal is temporarily low.
+
+## Rollouts And Graceful Updates
+
+### What infrastructure updates do
+
+Provisioning changes can update:
+
+- task definitions
+- ECS services
+- proc EC2 launch template and userdata
+- proc host fleet through Auto Scaling Group instance refresh
+
+That means task-definition changes and proc host bootstrap changes are both part
+of the deployment contract.
+
+### Host protection during scale-in
+
+The proc capacity provider uses:
+
+- ASG scale-in protection on proc instances
+- ECS managed termination protection for busy proc hosts
+
+This reduces the risk of ASG scale-in killing a proc EC2 host that is still
+running ECS tasks.
+It does not make task shutdown unbounded.
+
+### Proc drain contract
+
+Proc participates in graceful drain:
+
+- `/health` returns `503` while draining
+- the processor stops accepting new work and waits for active work to settle
+- claimed-but-not-started work can be requeued during drain
+
+But task shutdown is still bounded by ECS stop timing.
+
+Current stop contract:
+
+- ECS task `stopTimeout`: `120s`
+- proc app target drain budget: about `110s`
+
+Operational consequence:
+
+- if active work finishes inside that window, the task can stop cleanly
+- if active work exceeds that window, ECS can still hard-kill the container
+- a started task is not guaranteed to run forever just because the host is protected from scale-in
+
+## Health And Readiness
+
+For deployment and autoscaling, use the documented health endpoints rather than
+assuming generic container readiness.
+See [health-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/ops/health-README.md).
+
+In particular:
+
+- proc readiness depends on both service health and bundle readiness
+- a draining proc intentionally becomes unready
+
+## What This Repo Covers
+
+This repo is the right place to understand:
+
+- service runtime behavior
+- health and readiness contracts
+- metrics semantics
+- queue and drain behavior
+- proc exec runtime behavior
+
+For operators, the practical deployment model is:
+
+- descriptor-driven provisioning
+- mixed-capacity ECS runtime
+- proc optionally on EC2, other services mostly on Fargate
+- EFS-backed shared storage for bundles and exec workspace
+- autoscaling driven from the metrics service rather than ad hoc task env templates
+
+## Summary
+
+The relevant ECS model today is:
+
+- AWS ECS provisioned from deployment descriptors
+- `chat-proc` optionally running on EC2 with host Docker and EFS integration
+- `exec` remaining an on-demand isolated task
+- autoscaling driven by Redis-mode metrics exported to CloudWatch
+- graceful drain supported, but still bounded by the ECS stop window
