@@ -196,6 +196,7 @@ Token TTL/uses:
 | `REDIS_URL` | Managed Redis endpoint (reachable from containers) |
 | `CB_RELAY_IDENTITY` | n/a |
 | `CHAT_TASK_TIMEOUT_SEC` | Per-task timeout (seconds). |
+| `PROC_CONTAINER_STOP_TIMEOUT_SEC` | Proc container/task stop window (seconds). Keep aligned with ECS `stopTimeout`; proc derives graceful shutdown budget from it. |
 | `UVICORN_RELOAD` | Dev-only: enable auto-reload when running web_app.py directly (0/1). |
 | `HEARTBEAT_INTERVAL` | n/a |
 | `KDCUBE_STORAGE_PATH` | Storage backend root (file:///... or s3://...). |
@@ -692,6 +693,11 @@ product‑level chatbot capabilities.
 | `GATEWAY_CONFIG_JSON.service_capacity.ingress.processes_per_instance`       | `1`     | Ingress worker processes per instance  | `infra/gateway/config.py`                         |
 | `GATEWAY_CONFIG_JSON.limits.proc.max_queue_size`                            | `0`     | Hard queue size limit (0 = disabled)   | `infra/gateway/backpressure.py`                   |
 | `CHAT_TASK_TIMEOUT_SEC`                                                     | `600`   | Per‑task timeout (seconds)             | `apps/chat/processor.py`                          |
+| `PROC_CONTAINER_STOP_TIMEOUT_SEC`                                           | `120`   | Proc container/task stop window        | `apps/chat/proc/web_app.py`                       |
+
+Notes:
+- `PROC_CONTAINER_STOP_TIMEOUT_SEC` should match the deployment/task-definition `stopTimeout`.
+- Proc derives `timeout_graceful_shutdown` from this value with a small safety buffer, so raising the app-side drain window requires raising the deployment stop window too.
 
 **Note:** The following are currently **not enforced** in the chat service (present only in examples):
 

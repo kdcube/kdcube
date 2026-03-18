@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
+import traceback
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import os
-import traceback
 from typing import Optional, Dict, Any, Iterable
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -19,6 +19,7 @@ from kdcube_ai_app.apps.chat.continuations import build_conversation_continuatio
 from kdcube_ai_app.apps.chat.sdk.continuations import bind_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
+from kdcube_ai_app.infra.aws.task_protection import build_task_scale_in_protection
 from kdcube_ai_app.infra.metrics.rolling_stats import record_metric
 from kdcube_ai_app.infra.namespaces import REDIS
 from kdcube_ai_app.storage.storage import create_storage_backend
@@ -35,6 +36,7 @@ QUEUE_CALL_TIMEOUT_SEC = 2.0
 CONFIG_GET_MESSAGE_TIMEOUT_SEC = 1.0
 CONFIG_CALL_TIMEOUT_SEC = 5.0
 INFLIGHT_REAPER_INTERVAL_SEC = 5.0
+
 
 class EnhancedChatRequestProcessor:
     """
@@ -110,6 +112,7 @@ class EnhancedChatRequestProcessor:
         self._last_reaper_error: Optional[str] = None
         self._stale_requeue_count = 0
         self._stale_interrupted_count = 0
+        self._task_scale_in_protection = build_task_scale_in_protection(logger_=logger)
 
     # ---------------- Public API ----------------
 
@@ -1013,49 +1016,51 @@ class EnhancedChatRequestProcessor:
         exec_started_at = None
         continuation_source = self._continuation_source_for(payload)
         try:
-            started_key = await self._mark_task_started(task_data, payload, request_id)
-            if started_key:
-                details = self._active_task_details.get(asyncio.current_task())
-                if details is not None:
-                    details["started_execution"] = True
-                    details["started_at"] = _utc_now_iso()
+            protection_label = f"task_id={task_id}"
+            async with self._task_scale_in_protection.hold(label=protection_label):
+                started_key = await self._mark_task_started(task_data, payload, request_id)
+                if started_key:
+                    details = self._active_task_details.get(asyncio.current_task())
+                    if details is not None:
+                        details["started_execution"] = True
+                        details["started_at"] = _utc_now_iso()
 
-            async with self._lock_renewer(
-                    lock_key=lock_key,
-                    extra_keys=[started_key] if started_key else None,
-                    extra_ttl_sec=self.started_marker_ttl_sec if started_key else None,
-            ):
-                await comm.start(message=msg, queue_stats={})
-                await comm.step(
-                    step="workflow_start",
-                    status="started",
-                    title="Workflow Start",
-                    data={"default_model": (payload.config.values or {}).get("selected_model"), "task_id": task_id},
-                )
+                async with self._lock_renewer(
+                        lock_key=lock_key,
+                        extra_keys=[started_key] if started_key else None,
+                        extra_ttl_sec=self.started_marker_ttl_sec if started_key else None,
+                ):
+                    await comm.start(message=msg, queue_stats={})
+                    await comm.step(
+                        step="workflow_start",
+                        status="started",
+                        title="Workflow Start",
+                        data={"default_model": (payload.config.values or {}).get("selected_model"), "task_id": task_id},
+                    )
 
-                exec_started_at = time.monotonic()
-                async with bind_accounting(envelope, storage_backend, enabled=True):
-                    async with with_accounting("chat.orchestrator",
-                                               app_bundle_id=payload.routing.bundle_id,
-                                               conversation_id=payload.routing.conversation_id,
-                                               turn_id=payload.routing.turn_id,
-                                               metadata={
-                        "task_id": task_id,
-                        "conversation_id": payload.routing.conversation_id,
-                        "turn_id": payload.routing.turn_id,
-                    }):
-                        with bind_current_conversation_continuation_source(continuation_source):
-                            result = await asyncio.wait_for(
-                                self.chat_handler(
-                                    payload,
+                    exec_started_at = time.monotonic()
+                    async with bind_accounting(envelope, storage_backend, enabled=True):
+                        async with with_accounting("chat.orchestrator",
+                                                   app_bundle_id=payload.routing.bundle_id,
+                                                   conversation_id=payload.routing.conversation_id,
+                                                   turn_id=payload.routing.turn_id,
+                                                   metadata={
+                            "task_id": task_id,
+                            "conversation_id": payload.routing.conversation_id,
+                            "turn_id": payload.routing.turn_id,
+                        }):
+                            with bind_current_conversation_continuation_source(continuation_source):
+                                result = await asyncio.wait_for(
+                                    self.chat_handler(
+                                        payload,
 
-                                ),
-                                timeout=self.task_timeout_sec,
-                            )
+                                    ),
+                                    timeout=self.task_timeout_sec,
+                                )
 
-            result = result or {}
-            success = True
-            await comm.complete(data=result)
+                result = result or {}
+                success = True
+                await comm.complete(data=result)
 
         except asyncio.CancelledError:
             task_cancelled = True

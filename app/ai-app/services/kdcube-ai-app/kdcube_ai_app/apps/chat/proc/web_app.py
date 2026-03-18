@@ -160,9 +160,58 @@ def _uvicorn_run_supports_timeout_worker_healthcheck(uvicorn_module) -> bool:
         return False
 
 
-# Keep this slightly below ECS stopTimeout (currently 120s) so Uvicorn
-# finishes its own shutdown path before the task-level hard stop window.
-PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC = 110
+def _get_proc_container_stop_timeout_sec() -> int:
+    """
+    Effective task/container stop window from deployment configuration.
+
+    This must match the ECS task definition stopTimeout. Task scale-in
+    protection only delays selection for stop; once ECS starts shutdown, this
+    window is still the hard upper bound.
+    """
+    try:
+        return max(15, int(os.getenv("PROC_CONTAINER_STOP_TIMEOUT_SEC", "120")))
+    except Exception:
+        logger.exception(
+            "Invalid PROC_CONTAINER_STOP_TIMEOUT_SEC value; falling back to 120"
+        )
+        return 120
+
+
+def _get_proc_graceful_shutdown_timeout_sec() -> int:
+    """
+    Uvicorn graceful shutdown budget.
+
+    By default we keep a small buffer below the task/container stop window so
+    the app shutdown path finishes before ECS hard-stops the container. Set
+    PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC explicitly only if deployment
+    stopTimeout has been raised accordingly.
+    """
+    container_stop_timeout = _get_proc_container_stop_timeout_sec()
+    try:
+        configured = os.getenv("PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC")
+        timeout = int(configured) if configured is not None else max(5, container_stop_timeout - 10)
+    except Exception:
+        logger.exception(
+            "Invalid PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC value; "
+            "deriving from container stop timeout=%s",
+            container_stop_timeout,
+        )
+        timeout = max(5, container_stop_timeout - 10)
+
+    if timeout >= container_stop_timeout:
+        adjusted = max(5, container_stop_timeout - 10)
+        logger.warning(
+            "PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC=%s must stay below "
+            "PROC_CONTAINER_STOP_TIMEOUT_SEC=%s; using %s",
+            timeout,
+            container_stop_timeout,
+            adjusted,
+        )
+        return adjusted
+    return max(5, timeout)
+
+
+PROC_UVICORN_GRACEFUL_SHUTDOWN_TIMEOUT_SEC = _get_proc_graceful_shutdown_timeout_sec()
 
 
 def _git_prefetch_enabled() -> bool:
