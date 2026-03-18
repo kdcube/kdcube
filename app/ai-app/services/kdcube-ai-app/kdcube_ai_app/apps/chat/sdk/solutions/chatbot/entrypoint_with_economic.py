@@ -12,7 +12,7 @@ import dataclasses
 import json
 import math
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4, UUID
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
@@ -267,6 +267,110 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             payload["show_in_timeline"] = False
             await _emit_event(type=event_type, status="error", title=title, data=payload)
             raise EconomicsLimitException(message, code=code, data=payload)
+
+        def _policy_for_insight(*, admit_result: AdmitResult | None, fallback_policy: QuotaPolicy) -> QuotaPolicy:
+            if admit_result and getattr(admit_result, "used_plan_override", False) and getattr(admit_result, "effective_policy", None):
+                return QuotaPolicy(**(admit_result.effective_policy or {}))
+            if fallback_policy is base_policy and plan_balance and plan_balance.plan_override_is_active():
+                return _merge_policy_with_plan_override(base_policy, plan_balance)
+            return fallback_policy
+
+        def _retry_after_for_turn_shortfall(
+            *,
+            policy: QuotaPolicy,
+            snapshot: dict | None,
+            needed_tokens: int,
+            now: Optional[datetime] = None,
+        ) -> tuple[Optional[int], Optional[str]]:
+            if not snapshot or int(needed_tokens or 0) <= 0:
+                return None, None
+
+            now = (now or datetime.utcnow()).replace(tzinfo=timezone.utc)
+            now_ts = int(now.timestamp())
+            candidates: list[tuple[str, int]] = []
+
+            def _ttl_hour() -> int:
+                reset_at = int(snapshot.get("tok_hour_reset_at") or 0)
+                if reset_at > now_ts:
+                    return max(reset_at - now_ts, 0)
+                end = datetime(now.year, now.month, now.day, now.hour, tzinfo=timezone.utc) + timedelta(hours=1)
+                return max(int(end.timestamp()) - now_ts, 0)
+
+            def _ttl_day() -> int:
+                end = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1)
+                return max(int(end.timestamp()) - now_ts, 0)
+
+            def _ttl_month() -> int:
+                reset_at = int(snapshot.get("month_reset_at") or 0)
+                if reset_at > now_ts:
+                    return max(reset_at - now_ts, 0)
+                if now.month == 12:
+                    end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+                else:
+                    end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+                return max(int(end.timestamp()) - now_ts, 0)
+
+            tok_hour = int(snapshot.get("tok_hour", 0) or 0)
+            tok_day = int(snapshot.get("tok_day", 0) or 0)
+            tok_month = int(snapshot.get("tok_month", 0) or 0)
+
+            if policy.tokens_per_hour is not None:
+                rem = max(int(policy.tokens_per_hour) - tok_hour, 0)
+                if rem < int(needed_tokens):
+                    candidates.append(("hour", _ttl_hour()))
+            if policy.tokens_per_day is not None:
+                rem = max(int(policy.tokens_per_day) - tok_day, 0)
+                if rem < int(needed_tokens):
+                    candidates.append(("day", _ttl_day()))
+            if policy.tokens_per_month is not None:
+                rem = max(int(policy.tokens_per_month) - tok_month, 0)
+                if rem < int(needed_tokens):
+                    candidates.append(("month", _ttl_month()))
+
+            if not candidates:
+                return None, None
+
+            scope, ttl = max(candidates, key=lambda item: item[1])
+            return ttl, scope
+
+        def _build_rate_limit_payload(
+            *,
+            policy: QuotaPolicy,
+            snapshot: dict | None,
+            reason: Optional[str],
+            used_plan_override: bool = False,
+            needed_tokens: Optional[int] = None,
+            now: Optional[datetime] = None,
+        ) -> dict:
+            insight = compute_quota_insight(
+                policy=policy,
+                snapshot=snapshot or {},
+                reason=reason,
+                used_plan_override=used_plan_override,
+                user_budget_tokens=user_budget_tokens,
+                now=now,
+            )
+            payload = dataclasses.asdict(insight)
+
+            retry_after_sec = payload.get("retry_after_sec")
+            retry_scope = payload.get("retry_scope")
+            if (not retry_after_sec) and needed_tokens and int(needed_tokens) > 0:
+                retry_after_sec, retry_scope = _retry_after_for_turn_shortfall(
+                    policy=policy,
+                    snapshot=snapshot or {},
+                    needed_tokens=int(needed_tokens),
+                    now=now,
+                )
+                payload["retry_after_sec"] = retry_after_sec
+                payload["retry_scope"] = retry_scope
+
+            retry_after_hours = None
+            if retry_after_sec:
+                retry_after_hours = math.ceil(int(retry_after_sec) / 3600)
+            payload["retry_after_hours"] = retry_after_hours
+            if needed_tokens is not None:
+                payload["needed_tokens"] = int(needed_tokens)
+            return payload
 
         async def _record_app_analytics_by_provider(
             *,
@@ -782,6 +886,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             lock_released = False
 
             if not admit.allowed:
+                payload = _build_rate_limit_payload(
+                    policy=_policy_for_insight(admit_result=admit, fallback_policy=paid_policy),
+                    snapshot=admit.snapshot,
+                    reason=admit.reason,
+                    used_plan_override=admit.used_plan_override,
+                    needed_tokens=int(est_turn_tokens),
+                )
                 await _econ_fail(
                     code="paid_admit_denied_after_switch",
                     title="Rate limit exceeded",
@@ -793,6 +904,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         "subject_id": self.subj,
                         "user_type": user_type,
                         "snapshot": admit.snapshot,
+                        "rate_limit": payload,
                         "lane": "paid",
                         "switch_reason": switch_reason,
                     },
@@ -854,18 +966,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 admit = plan_admit
             else:
                 if not personal_can_pay_turn or not allow_paid_lane_fallback:
-                    insight = compute_quota_insight(
-                        policy=base_policy,
+                    payload = _build_rate_limit_payload(
+                        policy=_policy_for_insight(admit_result=plan_admit, fallback_policy=base_policy),
                         snapshot=plan_admit.snapshot,
                         reason=plan_admit.reason,
                         used_plan_override=plan_admit.used_plan_override,
-                        user_budget_tokens=user_budget_tokens,
+                        needed_tokens=int(est_turn_tokens),
                     )
-                    payload = dataclasses.asdict(insight)
-                    retry_after_hours = None
-                    if insight.retry_after_sec:
-                        retry_after_hours = math.ceil(int(insight.retry_after_sec) / 3600)
-                    payload["retry_after_hours"] = retry_after_hours
 
                     await _econ_fail(
                         code="rate_limited",
@@ -892,18 +999,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
         if not admit.allowed:
             effective_policy_for_insight = paid_policy if lane == "paid" and paid_policy else base_policy
-            insight = compute_quota_insight(
-                policy=effective_policy_for_insight,
+            payload = _build_rate_limit_payload(
+                policy=_policy_for_insight(admit_result=admit, fallback_policy=effective_policy_for_insight),
                 snapshot=admit.snapshot,
                 reason=admit.reason,
                 used_plan_override=admit.used_plan_override,
-                user_budget_tokens=user_budget_tokens,
+                needed_tokens=int(est_turn_tokens),
             )
-            payload = dataclasses.asdict(insight)
-            retry_after_hours = None
-            if insight.retry_after_sec:
-                retry_after_hours = math.ceil(int(insight.retry_after_sec) / 3600)
-            payload["retry_after_hours"] = retry_after_hours
 
             await _econ_fail(
                 code="rate_limited",
@@ -1101,6 +1203,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                 plan_reserved_tokens=plan_reserved_tokens,
                             )
                         elif not personal_can_pay_turn:
+                            payload = _build_rate_limit_payload(
+                                policy=_policy_for_insight(admit_result=admit, fallback_policy=base_policy),
+                                snapshot=admit.snapshot,
+                                reason=admit.reason or "plan_exhausted",
+                                used_plan_override=admit.used_plan_override,
+                                needed_tokens=int(est_turn_tokens),
+                            )
                             await _econ_fail(
                                 code="plan_exhausted_no_personal",
                                 title="Tier exhausted",
@@ -1112,6 +1221,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                     "subject_id": self.subj,
                                     "user_type": user_type,
                                     "snapshot": admit.snapshot,
+                                    "rate_limit": payload,
                                     "lane": "deny",
                                 },
                             )
