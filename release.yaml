@@ -1,16 +1,21 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.17.1155"
+  ref: "2026.3.18.414"
   description: |
-    This release fixes two configuration/runtime consistency issues in proc.
+    This release refines KDCube’s isolated execution story and the bundle/runtime contract around it.
   
-    The first fix addresses stale auth context on cached singleton bundles. In long-lived proc workers, especially on Fargate, singleton bundle instances could be reused with an old
-    request context, causing privileged users to be evaluated as registered inside admin bundle operations such as ai_bundles. Proc now rebinds the per-request comm_context,
-    communicator, and runtime context whenever a cached singleton workflow instance is reused, so request-scoped auth and user type are always current.
+    The main change is a cleaner execution-runtime model for bundles. Bundle properties can now define named execution profiles under a single execution.runtime object, and workflow
+    code can explicitly select those profiles in a direct way. The built-in with-isoruntime example was updated to demonstrate this clearly, and the platform documentation now
+    explicitly describes the reserved bundle properties that drive runtime selection, model roles, economics, and related platform behavior.
   
-    The second fix makes bundle descriptor resets authoritative for non-secret bundle props. Reset from env and proc startup with BUNDLES_FORCE_ENV_ON_STARTUP=1 now rebuild the Redis
-    bundle-props layer from bundles.yaml and delete stale keys that were removed from the descriptor, instead of leaving old overrides behind. This restores the intended precedence of
-    code defaults → bundles.yaml → runtime overrides while allowing bundles.yaml to fully control the descriptor-backed props layer on startup/reset. Documentation and the AI Bundle
-    dashboard text were updated to reflect this behavior, and also clarify that bundles.secrets.yaml is still upsert-only and does not yet auto-delete removed secrets.
-  config:
-    version: "2026.3.17.1155"
+    On the runtime side, isolated execution delivery was hardened for both local Docker and cloud execution. External runtime environment shaping is now centralized, Docker and Fargate
+    use a shared preparation path, and Fargate no longer tries to push the full execution payload through oversized ECS container overrides. Instead, the runtime payload is delivered
+    through a secret-backed transport and restored inside the exec container before bootstrap. This also comes with much better diagnostics: Fargate task-state logging is more
+    informative, payload hydration is logged explicitly in the exec entrypoint, and runtime failures are surfaced in a clearer way.
+  
+    This release also improves operational robustness around bundle execution. Bundle entrypoints now have a canonical turn-error propagation path that preserves economics limit
+    behavior while making ordinary bundle failures visible to the client. Cached singleton workflows refresh their request-scoped context correctly, avoiding stale user/session state
+    across proc requests. Git-backed bundles now hold the local lock through the actual git operation rather than releasing it too early, preventing concurrent pull races. A centralized
+    local/CI validation entrypoint was also added so the growing test suite can be run through one shared command path.
+config:
+    version: "2026.3.18.414"
