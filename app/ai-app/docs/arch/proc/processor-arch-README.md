@@ -6,6 +6,8 @@ tags: ["arch", "proc", "processor", "queues", "redis", "sse", "shutdown"]
 keywords: ["proc", "chat processor", "inflight", "drain", "turn interruption", "steer", "followup", "redis streams"]
 see_also:
   - ks:docs/arch/architecture-long.md
+  - ks:docs/arch/proc/longrun-protection-README.md
+  - ks:docs/ops/ecs/components/proc-README.md
   - ks:docs/service/maintenance/connection-pooling-README.md
   - ks:docs/clients/sse-events-README.md
   - ks:docs/clients/frontend-awareness-on-service-state-README.md
@@ -223,14 +225,16 @@ Once claimed:
 
 1. proc materializes `ChatTaskPayload`
 2. proc builds `ServiceCtx`, `ConversationCtx`, and `ChatCommunicator`
-3. proc marks the task as started
-4. proc emits `chat.start`
-5. proc emits an initial workflow step
-6. proc runs the bundle handler under:
+3. if running on ECS with `ECS_AGENT_URI`, proc enables task-wide ECS scale-in protection for the busy proc task
+4. proc marks the task as started
+5. proc emits `chat.start`
+6. proc emits an initial workflow step
+7. proc runs the bundle handler under:
    - task timeout
    - accounting binding
    - lock renewal
    - started-marker renewal
+   - ECS task-protection hold
 
 ### 4.4 Completion
 
@@ -393,12 +397,18 @@ Important details:
 
 - proc no longer intentionally cancels its own inflight task set during normal drain
 - lock renewal continues while inflight work is still running
-- Uvicorn graceful shutdown for proc is aligned to the current ECS stop budget (`120s`)
+- when running on ECS, busy proc tasks are additionally protected from ordinary service scale-in/deployment replacement through ECS task scale-in protection while work is active
+- Uvicorn graceful shutdown for proc is derived from `PROC_CONTAINER_STOP_TIMEOUT_SEC` so app drain stays below the real container stop window
 
 Operational caveat:
 
 - if the platform force-kills the worker after that budget, already-started tasks can still end up interrupted
 - those turns are surfaced to the client as interrupted rather than replayed
+
+See also:
+
+- [longrun-protection-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/arch/proc/longrun-protection-README.md)
+- [proc-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/ops/ecs/components/proc-README.md)
 
 ---
 
