@@ -1,21 +1,27 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.18.414"
+  ref: "2026.3.19.311"
   description: |
-    This release refines KDCube’s isolated execution story and the bundle/runtime contract around it.
+    This release focuses on execution reliability, ECS/EC2 operational safety, and React agent workspace improvements.
+
+    Key improvements:
   
-    The main change is a cleaner execution-runtime model for bundles. Bundle properties can now define named execution profiles under a single execution.runtime object, and workflow
-    code can explicitly select those profiles in a direct way. The built-in with-isoruntime example was updated to demonstrate this clearly, and the platform documentation now
-    explicitly describes the reserved bundle properties that drive runtime selection, model roles, economics, and related platform behavior.
+      - React tools now work better with runtime workspace files. The agent can discover files in outdir, convert them into usable logical paths, and read them safely across the React
+        toolchain.
+      - Docker-based isolated execution was hardened for ECS, EC2, and local Docker-in-Docker setups. Exec containers now inherit the correct ECS task credentials, backend failures are
+        surfaced more clearly to the agent, and mount preflight logic no longer falsely rejects valid host paths that are opaque from inside the proc container.
+      - Proc reliability was improved to prevent replay of already-started turns after worker loss. Started tasks are now tracked more safely and are treated as interrupted rather than
+        automatically replayable.
+      - ECS proc instances now hold task scale-in protection while actively executing work, and the graceful shutdown budget is configurable from the container stop timeout instead of
+        being hardcoded.
+      - Metrics export was aligned with the signals used for proc autoscaling, including stronger queue and exec latency signals and improved CloudWatch dimensions handling.
+      - UI polish includes timestamped user messages and updated favicon assets.
   
-    On the runtime side, isolated execution delivery was hardened for both local Docker and cloud execution. External runtime environment shaping is now centralized, Docker and Fargate
-    use a shared preparation path, and Fargate no longer tries to push the full execution payload through oversized ECS container overrides. Instead, the runtime payload is delivered
-    through a secret-backed transport and restored inside the exec container before bootstrap. This also comes with much better diagnostics: Fargate task-state logging is more
-    informative, payload hydration is logged explicitly in the exec entrypoint, and runtime failures are surfaced in a clearer way.
+    Also included:
   
-    This release also improves operational robustness around bundle execution. Bundle entrypoints now have a canonical turn-error propagation path that preserves economics limit
-    behavior while making ordinary bundle failures visible to the client. Cached singleton workflows refresh their request-scoped context correctly, avoiding stale user/session state
-    across proc requests. Git-backed bundles now hold the local lock through the actual git operation rather than releasing it too early, preventing concurrent pull races. A centralized
-    local/CI validation entrypoint was also added so the growing test suite can be run through one shared command path.
+      - clearer React workspace and artifact discovery documentation
+      - updated ECS and exec runtime documentation
+      - expanded regression coverage for Docker exec mounts, AWS credential propagation, processor recovery behavior, React workspace path handling, bundle env reset, and Postgres SSL
+        scenarios
 config:
-    version: "2026.3.18.414"
+    version: "2026.3.19.311"
