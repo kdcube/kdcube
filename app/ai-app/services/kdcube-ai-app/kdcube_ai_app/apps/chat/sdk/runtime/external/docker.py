@@ -375,13 +375,13 @@ async def run_py_in_docker(
         module_name = bundle_spec.get("module") or ""
         module_first_segment = module_name.split(".", 1)[0] if module_name else None
 
-        # 🔹 Single source of truth for container dir name under /bundles
-        #    Prefer first segment of module name; fall back to id; then to directory name.
-        bundle_dir = module_first_segment or bundle_spec.get("id") or bundle_root.name
+        # Use the actual bundle identifier/path name for the mounted container directory.
+        # Using module="entrypoint" here produces misleading paths like /bundles/entrypoint/...
+        bundle_dir = bundle_spec.get("id") or bundle_root.name or module_first_segment
     elif bundle_spec:
         module_name = bundle_spec.get("module") or ""
         module_first_segment = module_name.split(".", 1)[0] if module_name else None
-        bundle_dir = module_first_segment or bundle_spec.get("id")
+        bundle_dir = bundle_spec.get("id") or module_first_segment
 
     container_bundle_root = f"{CONTAINER_BUNDLES_ROOT}/{bundle_dir}" if bundle_dir else None
     runtime_globals = prepare_external_runtime_globals(
@@ -542,7 +542,7 @@ async def run_py_in_docker(
                         error_summary = line.strip()
                         break
             if timed_out and not error_summary:
-                error_summary = f"timeout after {to}s"
+                error_summary = f"Timeout after {to}s"
             if error_summary:
                 diag = f"[docker] ERROR: {error_summary}\n".encode("utf-8")
                 with open(err_path, "ab") as f:
@@ -554,10 +554,12 @@ async def run_py_in_docker(
     if timed_out:
         log.log(f"[docker.exec] Timeout after {to}s", level="ERROR")
         return {
+            "ok": False,
+            "returncode": 124,
             "error": "timeout",
             "seconds": to,
             "stderr_tail": stderr_tail,
-            "error_summary": error_summary,
+            "error_summary": error_summary or f"Timeout after {to}s",
         }
 
     rc = proc.returncode

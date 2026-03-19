@@ -182,6 +182,40 @@ async def test_run_py_in_docker_skips_opaque_host_path_preflight_inside_proc(tmp
 
 
 @pytest.mark.asyncio
+async def test_run_py_in_docker_returns_runtime_failure_on_timeout(tmp_path, monkeypatch):
+    fake_proc = _FakeProc()
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return fake_proc
+
+    monkeypatch.setattr(docker_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(docker_runtime, "check_and_apply_cloud_environment", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(docker_runtime, "_resolve_redis_url_for_container", lambda url, logger=None: url)
+    monkeypatch.setattr(docker_runtime, "_translate_container_path_to_host", lambda path: path)
+    monkeypatch.setattr(docker_runtime, "_is_running_in_docker", lambda: False)
+    monkeypatch.setattr(docker_runtime, "get_settings", lambda: SimpleNamespace(REDIS_URL="redis://example"))
+
+    result = await docker_runtime.run_py_in_docker(
+        workdir=workdir,
+        outdir=outdir,
+        runtime_globals={"EXECUTION_ID": "exec-timeout"},
+        tool_module_names=[],
+        logger=SimpleNamespace(log=lambda *_args, **_kwargs: None),
+        timeout_s=1,
+    )
+
+    assert result["ok"] is False
+    assert result["returncode"] == 124
+    assert result["error"] == "timeout"
+    assert result["error_summary"] == "Timeout after 1s"
+
+
+@pytest.mark.asyncio
 async def test_iso_runtime_terminates_child_process_when_cancelled(tmp_path, monkeypatch):
     fake_proc = _FakeProc()
 

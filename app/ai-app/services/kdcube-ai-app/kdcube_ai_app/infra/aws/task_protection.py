@@ -5,6 +5,7 @@ import errno
 import json
 import math
 import os
+import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -125,6 +126,42 @@ class EcsTaskScaleInProtection:
     def _active_count(self, state: dict[str, Any]) -> int:
         return sum(max(0, int(v)) for v in (state.get("claims") or {}).values())
 
+    def _format_http_error(self, exc: urllib.error.HTTPError) -> str:
+        body_text = ""
+        try:
+            raw_body = exc.read()
+            if raw_body:
+                body_text = raw_body.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            body_text = ""
+
+        detail = body_text
+        if body_text:
+            try:
+                payload = json.loads(body_text)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                failure = payload.get("failure")
+                error = payload.get("error")
+                if isinstance(failure, dict):
+                    reason = failure.get("Reason")
+                    arn = failure.get("Arn")
+                    extra = failure.get("Detail")
+                    parts = [part for part in (f"Reason={reason}" if reason else None, f"Arn={arn}" if arn else None, f"Detail={extra}" if extra else None) if part]
+                    detail = ", ".join(parts) or body_text
+                elif isinstance(error, dict):
+                    code = error.get("Code")
+                    arn = error.get("Arn")
+                    message = error.get("Message")
+                    request_id = payload.get("requestID")
+                    parts = [part for part in (f"Code={code}" if code else None, f"Arn={arn}" if arn else None, f"RequestID={request_id}" if request_id else None, f"Message={message}" if message else None) if part]
+                    detail = ", ".join(parts) or body_text
+
+        if detail:
+            return f"HTTP {exc.code}: {exc.reason}; {detail}"
+        return f"HTTP {exc.code}: {exc.reason}"
+
     def _set_protection(self, enabled: bool) -> None:
         if not self._enabled:
             return
@@ -137,8 +174,12 @@ class EcsTaskScaleInProtection:
             headers={"Content-Type": "application/json"},
             method="PUT",
         )
-        with urllib.request.urlopen(req, timeout=self._request_timeout_sec) as resp:
-            resp.read()
+        try:
+            with urllib.request.urlopen(req, timeout=self._request_timeout_sec) as resp:
+                resp.read()
+        except urllib.error.HTTPError as exc:
+            detail = self._format_http_error(exc)
+            raise RuntimeError(f"ECS task protection API request failed: {detail}") from exc
 
     def _acquire(self, label: str) -> None:
         if not self._enabled:

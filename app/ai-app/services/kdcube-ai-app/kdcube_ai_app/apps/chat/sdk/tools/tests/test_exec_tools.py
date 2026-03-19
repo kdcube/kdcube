@@ -45,6 +45,25 @@ def test_build_exec_error_payload_uses_stderr_tail_when_summary_missing():
     assert "Missing output files" in error["message"]
 
 
+def test_build_exec_error_payload_uses_timeout_summary_from_backend_result():
+    error = _build_exec_error_payload(
+        missing=["turn_1/files/test_report.txt"],
+        errors=[],
+        run_res={
+            "ok": False,
+            "returncode": 124,
+            "error": "timeout",
+            "error_summary": "Timeout after 30s",
+        },
+        infra_text="",
+    )
+
+    assert error is not None
+    assert error["code"] == "timeout"
+    assert "Timeout after 30s" in error["message"]
+    assert "Missing output files" in error["message"]
+
+
 def test_build_exec_context_from_comm_spec_preserves_identity_fields():
     ctx = _build_exec_context_from_comm_spec(
         comm_spec={

@@ -284,7 +284,7 @@ class FargateRuntime(ExternalRuntime):
         bundle_id = bundle_spec.get("id") if isinstance(bundle_spec, dict) else None
         module_name = bundle_spec.get("module") if isinstance(bundle_spec, dict) else None
         module_first_segment = module_name.split(".", 1)[0] if isinstance(module_name, str) and module_name else None
-        bundle_dir = module_first_segment or bundle_id
+        bundle_dir = bundle_id or module_first_segment
         container_bundle_root = f"{_CONTAINER_BUNDLES_ROOT}/{bundle_dir}" if bundle_dir else None
         raw_runtime_globals_bytes = payload_size_bytes(runtime_globals)
         runtime_globals = prepare_external_runtime_globals(
