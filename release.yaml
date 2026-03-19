@@ -1,27 +1,7 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.19.311"
+  ref: "2026.3.19.1347"
   description: |
-    This release focuses on execution reliability, ECS/EC2 operational safety, and React agent workspace improvements.
-
-    Key improvements:
-  
-      - React tools now work better with runtime workspace files. The agent can discover files in outdir, convert them into usable logical paths, and read them safely across the React
-        toolchain.
-      - Docker-based isolated execution was hardened for ECS, EC2, and local Docker-in-Docker setups. Exec containers now inherit the correct ECS task credentials, backend failures are
-        surfaced more clearly to the agent, and mount preflight logic no longer falsely rejects valid host paths that are opaque from inside the proc container.
-      - Proc reliability was improved to prevent replay of already-started turns after worker loss. Started tasks are now tracked more safely and are treated as interrupted rather than
-        automatically replayable.
-      - ECS proc instances now hold task scale-in protection while actively executing work, and the graceful shutdown budget is configurable from the container stop timeout instead of
-        being hardcoded.
-      - Metrics export was aligned with the signals used for proc autoscaling, including stronger queue and exec latency signals and improved CloudWatch dimensions handling.
-      - UI polish includes timestamped user messages and updated favicon assets.
-  
-    Also included:
-  
-      - clearer React workspace and artifact discovery documentation
-      - updated ECS and exec runtime documentation
-      - expanded regression coverage for Docker exec mounts, AWS credential propagation, processor recovery behavior, React workspace path handling, bundle env reset, and Postgres SSL
-        scenarios
+    Improve ECS exec diagnostics, timeout reporting, and task-protection errors
 config:
-    version: "2026.3.19.311"
+    version: "2026.3.19.1347"
