@@ -297,8 +297,10 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 return max(int(end.timestamp()) - now_ts, 0)
 
             def _ttl_day() -> int:
-                end = datetime(now.year, now.month, now.day, tzinfo=timezone.utc) + timedelta(days=1)
-                return max(int(end.timestamp()) - now_ts, 0)
+                reset_at = int(snapshot.get("day_reset_at") or 0)
+                if reset_at > now_ts:
+                    return max(reset_at - now_ts, 0)
+                return 24 * 60 * 60  # fallback: 24 hours from now
 
             def _ttl_month() -> int:
                 reset_at = int(snapshot.get("month_reset_at") or 0)
@@ -1193,6 +1195,21 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         usd_per_token=usd_per_token,
                     )
 
+                    if plan_project_tokens_est > 0:
+                        # Budget system stores amounts in integer cents; anything below $0.01
+                        # rounds to 0 cents in _usd_to_cents() and raises ValueError in reserve().
+                        _min_reserve_usd = 1.0 / 100
+                        if float(plan_project_tokens_est) * float(usd_per_token) * SAFETY_MARGIN < _min_reserve_usd:
+                            _log(
+                                "reserve.plan",
+                                "Plan token reservation below minimum chargeable amount; treating as exhausted",
+                                "WARN",
+                                plan_project_tokens_est=plan_project_tokens_est,
+                                computed_usd=float(plan_project_tokens_est) * float(usd_per_token) * SAFETY_MARGIN,
+                                min_reserve_usd=_min_reserve_usd,
+                            )
+                            plan_project_tokens_est = 0
+
                     if plan_project_tokens_est <= 0:
                         if budget_bypass:
                             _log(
@@ -1366,6 +1383,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                 notes=f"auto-reserve: lane=plan, overflow={overflow_tokens_est}, est_turn={est_turn_tokens}",
                             )
                             if not ok:
+                                payload = _build_rate_limit_payload(
+                                    policy=_policy_for_insight(admit_result=admit, fallback_policy=effective_policy),
+                                    snapshot=admit.snapshot,
+                                    reason=admit.reason or "plan_token_overflow",
+                                    used_plan_override=admit.used_plan_override,
+                                    needed_tokens=int(overflow_tokens_est),
+                                )
                                 await _econ_fail(
                                     code="personal_reservation_failed_plan",
                                     title="Insufficient personal credits",
@@ -1377,6 +1401,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                         "subject_id": self.subj,
                                         "user_type": user_type,
                                         "tokens_required": int(overflow_tokens_est),
+                                        "rate_limit": payload,
                                         "lane": lane,
                                     },
                                 )
@@ -1915,16 +1940,15 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
             if post_run_violations and not budget_bypass:
                 post_reason = "|".join(post_run_violations)
-                post_insight = compute_quota_insight(
+                rate_limit_payload = _build_rate_limit_payload(
                     policy=effective_policy,
                     snapshot=post_run_snapshot or {},
                     reason=post_reason,
                     used_plan_override=admit.used_plan_override if admit else False,
-                    user_budget_tokens=user_budget_tokens,
                     now=now,
+                    needed_tokens=int(ranked_tokens),
                 )
-                payload = dataclasses.asdict(post_insight)
-                payload.update({
+                payload = {
                     "bundle_id": bundle_id,
                     "subject_id": self.subj,
                     "user_type": user_type,
@@ -1932,7 +1956,8 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     "ranked_tokens": int(ranked_tokens),
                     "snapshot": post_run_snapshot,
                     "reason": post_reason,
-                })
+                    "rate_limit": rate_limit_payload,
+                }
                 await _emit_analytics_event(
                     type="analytics.rate_limit.post_run_exceeded",
                     status="completed",

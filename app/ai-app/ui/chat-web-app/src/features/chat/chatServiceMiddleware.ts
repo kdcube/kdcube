@@ -37,8 +37,8 @@ import SSEChat from "../chatController/sseChat.ts";
 import {UserAttachmentDescription, UserMessageRequest} from "./chatTypes.ts";
 import {selectAuthToken, selectIdToken, setCredentials} from "../auth/authSlice.ts";
 import {selectIdTokenHeaderName, selectProject, selectTenant} from "./chatSettingsSlice.ts";
-import {NotificationType} from "../popupNotifications/types.ts";
 import {pushNotification} from "../popupNotifications/popupsSlice.ts";
+import {NotificationType} from "../popupNotifications/types.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -153,6 +153,28 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             }
         }
 
+        const formatResetTime = (retryAfterSec: number): string => {
+            const resetAt = new Date(Date.now() + retryAfterSec * 1000);
+            const now = new Date();
+
+            const timeStr = resetAt.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+
+            const todayDate = now.toDateString();
+            const resetDate = resetAt.toDateString();
+
+            const tomorrowDate = new Date(now);
+            tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+
+            if (resetDate === todayDate) {
+                return `today at ${timeStr}`;
+            } else if (resetDate === tomorrowDate.toDateString()) {
+                return `tomorrow at ${timeStr}`;
+            } else {
+                const dateStr = resetAt.toLocaleDateString([], {month: "long", day: "numeric"});
+                return `on ${dateStr} at ${timeStr}`;
+            }
+        };
+
         const handleServiceMessage = (env: ChatServiceEnvelope) => {
             const eventType = env.type;
             const data = env.data;
@@ -197,14 +219,14 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     break;
                 }
                 case "rate_limit.denied": {
-                    const retryAfterHours = rateLimit?.retry_after_hours ?? null;
+                    const retryAfterSec = rateLimit?.retry_after_sec ?? null;
                     const reason = data.reason as string | undefined;
 
                     let message: string;
 
-                    if (retryAfterHours && retryAfterHours > 0) {
-                        const hourText = retryAfterHours === 1 ? "1 hour" : `${retryAfterHours} hours`;
-                        message = `You've reached your usage limit. Try again in about ${hourText}.`;
+                    if (retryAfterSec && retryAfterSec > 0) {
+                        const resetText = formatResetTime(retryAfterSec);
+                        message = `You've reached your usage limit. Your quota resets ${resetText}.`;
                     } else if (reason === "concurrency" || reason?.includes("concurrent")) {
                         message = "You have too many requests running at once. Please wait for one to complete.";
                     } else if (reason === "quota_lock_timeout") {
@@ -213,6 +235,23 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         message = "You've reached your token limit. Try again later or upgrade your plan.";
                     } else if (reason?.includes("requests")) {
                         message = "You've reached your request limit. Try again later or upgrade your plan.";
+                    } else {
+                        message = "You've reached your usage limit. Please try again later.";
+                    }
+
+                    dispatch(pushNotification({
+                        type: "error",
+                        text: message,
+                    }))
+                    break;
+                }
+                case "rate_limit.post_run_exceeded": {
+                    const retryAfterSec = rateLimit?.retry_after_sec ?? null;
+
+                    let message: string;
+                    if (retryAfterSec && retryAfterSec > 0) {
+                        const resetText = formatResetTime(retryAfterSec);
+                        message = `You've reached your usage limit. Your quota resets ${resetText}.`;
                     } else {
                         message = "You've reached your usage limit. Please try again later.";
                     }

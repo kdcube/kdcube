@@ -844,6 +844,11 @@ class UserEconomicsRateLimiter:
             subject_id=subject_id,
             now=now,
         )
+        day_period_start, day_period_end, day_period_key = await self._rolling_day_period(
+            bundle_id=bundle_id,
+            subject_id=subject_id,
+            now=now,
+        )
 
         # Parse subject_id to get tenant, project, user_id
         subject_parts = subject_id.split(":")
@@ -875,17 +880,17 @@ class UserEconomicsRateLimiter:
         # ---- Build keys using namespace prefix
         k_locks = _k(self.ns, bundle_id, subject_id, "locks")
 
-        k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", ymd)
+        k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", day_period_key)
         k_req_m = _k(self.ns, bundle_id, subject_id, "reqs:month", period_key)
         k_req_t = _k(self.ns, bundle_id, subject_id, "reqs:total")
 
         k_tok_h_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
-        k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", ymd)
+        k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", day_period_key)
         k_tok_m = _k(self.ns, bundle_id, subject_id, "toks:month", period_key)
 
         # Reserved keys
         k_tok_hr = _k(self.ns, bundle_id, subject_id, "toks_resv:hour", ymdh)
-        k_tok_dr = _k(self.ns, bundle_id, subject_id, "toks_resv:day", ymd)
+        k_tok_dr = _k(self.ns, bundle_id, subject_id, "toks_resv:day", day_period_key)
         k_tok_mr = _k(self.ns, bundle_id, subject_id, "toks_resv:month", period_key)
 
         k_resv_idx = _k(self.ns, bundle_id, subject_id, "toks_resv:index")
@@ -922,7 +927,7 @@ class UserEconomicsRateLimiter:
                     int(reserve_tokens),
                     resv_id,
                     now_ts + int(reservation_ttl_sec),
-                    _eod(now),
+                    int(day_period_end.timestamp()),
                     int(period_end.timestamp()),
                     _eoh(now),
                     )
@@ -935,6 +940,7 @@ class UserEconomicsRateLimiter:
             in_flight = int(out[8] or 0)
             reserved = int(out[9] or 0)
             tok_h_reset_at = int(out[10] or 0)
+            day_reset_at = int(day_period_end.timestamp())
             month_reset_at = int(period_end.timestamp())
 
             return AdmitResult(
@@ -947,6 +953,7 @@ class UserEconomicsRateLimiter:
                     "tok_hour": tok_h_eff, "tok_day": tok_d_eff, "tok_month": tok_m_eff,
                     "in_flight": in_flight,
                     "tok_hour_reset_at": tok_h_reset_at,
+                    "day_reset_at": day_reset_at,
                     "month_reset_at": month_reset_at,
                 },
                 used_plan_override=used_plan_override,
@@ -985,6 +992,7 @@ class UserEconomicsRateLimiter:
                     "tok_hour": tok_h, "tok_day": tok_d, "tok_month": tok_m,
                     "in_flight": 0,
                     "tok_hour_reset_at": tok_h_reset_at,
+                    "day_reset_at": int(day_period_end.timestamp()),
                     "month_reset_at": int(period_end.timestamp()),
                 },
                 used_plan_override=used_plan_override,
@@ -1068,13 +1076,18 @@ class UserEconomicsRateLimiter:
             subject_id=subject_id,
             now=now,
         )
+        day_period_start, day_period_end, day_period_key = await self._rolling_day_period(
+            bundle_id=bundle_id,
+            subject_id=subject_id,
+            now=now,
+        )
 
-        k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", ymd)
+        k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", day_period_key)
         k_req_m = _k(self.ns, bundle_id, subject_id, "reqs:month", period_key)
         k_req_t = _k(self.ns, bundle_id, subject_id, "reqs:total")
 
         k_tok_h_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
-        k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", ymd)
+        k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", day_period_key)
         k_tok_m = _k(self.ns, bundle_id, subject_id, "toks:month", period_key)
 
         k_last_t = _k(self.ns, bundle_id, subject_id, "last_turn_tokens")
@@ -1096,14 +1109,14 @@ class UserEconomicsRateLimiter:
                 k_bundle_idx,
             ),
             *_strs(
-                1,                      # +1 request
-                int(tokens or 0),       # +tokens
-                _eod(now),              # day EXPIREAT
-                int(period_end.timestamp()),  # month EXPIREAT
-                _eoh(now),              # hour EXPIREAT
-                int(now.timestamp()),   # last_at
-                str(lock_id),           # release this member
-                str(bundle_id),         # bundle id for index
+                1,                                    # +1 request
+                int(tokens or 0),                     # +tokens
+                int(day_period_end.timestamp()),       # day EXPIREAT (rolling anchor)
+                int(period_end.timestamp()),           # month EXPIREAT
+                _eoh(now),                            # hour EXPIREAT
+                int(now.timestamp()),                 # last_at
+                str(lock_id),                         # release this member
+                str(bundle_id),                       # bundle id for index
                 int(BUNDLE_INDEX_TTL_SEC),
             ),
         )
@@ -1229,33 +1242,47 @@ class UserEconomicsRateLimiter:
         }
 
         for bundle_id in bundle_ids:
-            k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", ymd)
             period_start, period_end, period_key = await self._rolling_month_period(
                 bundle_id=bundle_id,
                 subject_id=subject_id,
                 now=now,
                 create_if_missing=False,
             )
+            day_period_start, day_period_end, day_period_key = await self._rolling_day_period(
+                bundle_id=bundle_id,
+                subject_id=subject_id,
+                now=now,
+                create_if_missing=False,
+            )
+            k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", day_period_key) if day_period_key else None
+            k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", day_period_key) if day_period_key else None
             k_req_t = _k(self.ns, bundle_id, subject_id, "reqs:total")
-            k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", ymd)
             k_locks = _k(self.ns, bundle_id, subject_id, "locks")
+
+            req_d = 0
+            tok_d = 0
+            req_m = 0
+            tok_m = 0
 
             if period_key:
                 k_req_m = _k(self.ns, bundle_id, subject_id, "reqs:month", period_key)
                 k_tok_m = _k(self.ns, bundle_id, subject_id, "toks:month", period_key)
-                vals = await self.r.mget(k_req_d, k_req_m, k_req_t, k_tok_d, k_tok_m)
-                req_d = int(vals[0] or 0)
-                req_m = int(vals[1] or 0)
-                req_t = int(vals[2] or 0)
-                tok_d = int(vals[3] or 0)
-                tok_m = int(vals[4] or 0)
+                keys_to_fetch = [k for k in [k_req_d, k_req_m, k_req_t, k_tok_d, k_tok_m] if k]
+                vals = await self.r.mget(*keys_to_fetch)
+                val_map = dict(zip(keys_to_fetch, vals))
+                req_d = int(val_map.get(k_req_d) or 0) if k_req_d else 0
+                req_m = int(val_map.get(k_req_m) or 0)
+                req_t = int(val_map.get(k_req_t) or 0)
+                tok_d = int(val_map.get(k_tok_d) or 0) if k_tok_d else 0
+                tok_m = int(val_map.get(k_tok_m) or 0)
             else:
-                vals = await self.r.mget(k_req_d, k_req_t, k_tok_d)
-                req_d = int(vals[0] or 0)
-                req_t = int(vals[1] or 0)
-                tok_d = int(vals[2] or 0)
-                req_m = 0
-                tok_m = 0
+                keys_to_fetch = [k for k in [k_req_d, k_req_t, k_tok_d] if k]
+                if keys_to_fetch:
+                    vals = await self.r.mget(*keys_to_fetch)
+                    val_map = dict(zip(keys_to_fetch, vals))
+                    req_d = int(val_map.get(k_req_d) or 0) if k_req_d else 0
+                    req_t = int(val_map.get(k_req_t) or 0)
+                    tok_d = int(val_map.get(k_tok_d) or 0) if k_tok_d else 0
             concurrent = await self.r.zcard(k_locks)
 
             bucket_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
@@ -1323,6 +1350,50 @@ class UserEconomicsRateLimiter:
                 reset_at = (buckets[-1][0] * 60) + 3600
 
         return total, reset_at
+
+    async def _rolling_day_period(
+            self,
+            *,
+            bundle_id: str,
+            subject_id: str,
+            now: datetime,
+            create_if_missing: bool = True,
+    ) -> tuple[Optional[datetime], Optional[datetime], Optional[str]]:
+        """
+        Per-user rolling 24-hour period anchored to each period's first request.
+
+        The anchor key expires together with the period (TTL = 24h), so when the
+        user returns after expiry their next request sets a fresh anchor at that
+        moment — the new 24h window starts from actual first use, not from a
+        fixed clock position.
+
+        Returns (period_start, period_end, period_key).
+        If create_if_missing is False and no anchor exists, returns (None, None, None).
+        """
+        anchor_key = _k(self.ns, bundle_id, subject_id, "day_anchor")
+        now_ts = int(now.timestamp())
+        period_len = 24 * 60 * 60
+
+        anchor_raw = await self.r.get(anchor_key)
+        if anchor_raw is None:
+            if not create_if_missing:
+                return None, None, None
+            if await self.r.setnx(anchor_key, now_ts):
+                anchor_ts = now_ts
+                # Expire the anchor exactly when the period ends so the next
+                # request after expiry creates a fresh anchor from that moment.
+                await self.r.expireat(anchor_key, now_ts + period_len)
+            else:
+                anchor_raw = await self.r.get(anchor_key)
+                anchor_ts = int(anchor_raw or now_ts)
+        else:
+            anchor_ts = int(anchor_raw)
+
+        period_end_ts = anchor_ts + period_len
+        period_start = datetime.fromtimestamp(anchor_ts, tz=timezone.utc)
+        period_end = datetime.fromtimestamp(period_end_ts, tz=timezone.utc)
+        period_key = period_start.strftime("%Y%m%d%H%M")
+        return period_start, period_end, period_key
 
     async def _rolling_month_period(
             self,
@@ -1414,13 +1485,18 @@ class UserEconomicsRateLimiter:
             subject_id=subject_id,
             now=now,
         )
+        day_period_start, day_period_end, day_period_key = await self._rolling_day_period(
+            bundle_id=bundle_id,
+            subject_id=subject_id,
+            now=now,
+        )
 
-        k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", ymd)
+        k_req_d = _k(self.ns, bundle_id, subject_id, "reqs:day", day_period_key)
         k_req_m = _k(self.ns, bundle_id, subject_id, "reqs:month", period_key)
         k_req_t = _k(self.ns, bundle_id, subject_id, "reqs:total")
 
         k_tok_h_prefix = _k(self.ns, bundle_id, subject_id, "toks:hour:bucket")
-        k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", ymd)
+        k_tok_d = _k(self.ns, bundle_id, subject_id, "toks:day", day_period_key)
         k_tok_m = _k(self.ns, bundle_id, subject_id, "toks:month", period_key)
 
         k_last_t = _k(self.ns, bundle_id, subject_id, "last_turn_tokens")
@@ -1449,7 +1525,7 @@ class UserEconomicsRateLimiter:
             *_strs(
                 int(inc_request or 0),
                 int(tokens or 0),
-                _eod(now),
+                int(day_period_end.timestamp()),       # day EXPIREAT (rolling anchor)
                 int(period_end.timestamp()),
                 _eoh(now),
                 int(now.timestamp()),
@@ -1572,7 +1648,16 @@ def _retry_after_from_violations(
 
     for v in violations:
         if v in ("requests_per_day", "tokens_per_day"):
-            ttl = max(_eod(now) - now_ts, 0)
+            reset_at = None
+            if snapshot:
+                try:
+                    reset_at = int(snapshot.get("day_reset_at") or 0)
+                except Exception:
+                    reset_at = None
+            if reset_at and reset_at > now_ts:
+                ttl = max(reset_at - now_ts, 0)
+            else:
+                ttl = 24 * 60 * 60  # fallback: 24 hours
             candidates.append(("day", ttl))
         elif v in ("requests_per_month", "tokens_per_month"):
             reset_at = None

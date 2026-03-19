@@ -5,6 +5,7 @@ import {
     ChatErrorEnvelope,
     ChatOptions,
     ChatRequest,
+    ChatServiceEnvelope,
     ChatStartEnvelope,
     ChatStepEnvelope,
     ConvStatusEnvelope
@@ -78,6 +79,7 @@ class SSEChat extends ChatBase {
         bind<ChatCompleteEnvelope>("chat_complete", this._eventHandlers?.onChatComplete);
         bind<ChatErrorEnvelope>("chat_error", this._eventHandlers?.onChatError);
         bind<ConvStatusEnvelope>("conv_status", this._eventHandlers?.onConvStatus);
+        bind<ChatServiceEnvelope>("chat_service", this._eventHandlers?.onChatService);
     }
 
     public override connect(sessionId?: string | null): void {
