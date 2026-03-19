@@ -27,6 +27,14 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 _DEFAULT_IMAGE = os.environ.get("PY_CODE_EXEC_IMAGE", "py-code-exec:latest")
 _DEFAULT_TIMEOUT_S = int(os.environ.get("PY_CODE_EXEC_TIMEOUT", "600"))  # 10min default
 
+_PROC_VISIBLE_ROOTS = (
+    "/exec-workspace",
+    "/bundles",
+    "/bundle-storage",
+    "/kdcube-storage",
+    "/tmp",
+)
+
 
 def _log_path_translation_context(log: AgentLogger) -> None:
     host_bundles = os.environ.get("HOST_BUNDLES_PATH")
@@ -53,58 +61,178 @@ def _log_path_translation_context(log: AgentLogger) -> None:
         )
 
 
-def _bundle_tool_host_checks(
+def _resolved_path(path: pathlib.Path | str) -> pathlib.Path:
+    p = pathlib.Path(path).expanduser()
+    try:
+        return p.resolve()
+    except Exception:
+        return p
+
+
+def _is_relative_to(path: pathlib.Path, root: pathlib.Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _iter_locally_visible_mount_roots() -> list[pathlib.Path]:
+    roots: list[pathlib.Path] = []
+    for raw_root in _PROC_VISIBLE_ROOTS:
+        root = _resolved_path(raw_root)
+        if root.exists():
+            roots.append(root)
+
+    for env_name in (
+        "HOST_KDCUBE_STORAGE_PATH",
+        "HOST_BUNDLES_PATH",
+        "HOST_BUNDLE_STORAGE_PATH",
+        "HOST_EXEC_WORKSPACE_PATH",
+    ):
+        raw_value = os.environ.get(env_name)
+        if not raw_value:
+            continue
+        root = _resolved_path(raw_value)
+        if root.exists():
+            roots.append(root)
+
+    unique_roots: list[pathlib.Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        marker = str(root)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        unique_roots.append(root)
+    return unique_roots
+
+
+def _can_preflight_translated_host_path(path: pathlib.Path) -> bool:
+    if not _is_running_in_docker():
+        return True
+
+    resolved = _resolved_path(path)
+    if resolved.exists():
+        return True
+
+    for root in _iter_locally_visible_mount_roots():
+        if _is_relative_to(resolved, root):
+            return True
+    return False
+
+
+def _bundle_tool_mount_checks(
         *,
         tool_module_files: Dict[str, Any],
         proc_bundle_root: pathlib.Path | None,
-        host_bundle_root: pathlib.Path | None,
+        checked_bundle_root: pathlib.Path | None,
+        checked_bundle_label: str,
 ) -> list[str]:
     problems: list[str] = []
-    if proc_bundle_root is None or host_bundle_root is None:
+    if proc_bundle_root is None or checked_bundle_root is None:
         return problems
-    proc_bundle_root = proc_bundle_root.resolve()
+    proc_bundle_root = _resolved_path(proc_bundle_root)
+    checked_bundle_root = _resolved_path(checked_bundle_root)
     for alias, raw_path in (tool_module_files or {}).items():
         if not raw_path or not isinstance(raw_path, str):
             continue
         try:
-            tool_path = pathlib.Path(raw_path).resolve()
+            tool_path = _resolved_path(raw_path)
             rel = tool_path.relative_to(proc_bundle_root)
         except Exception:
             continue
-        host_tool_path = host_bundle_root / rel
-        if not host_tool_path.exists():
+        checked_tool_path = checked_bundle_root / rel
+        if not checked_tool_path.exists():
             problems.append(
-                f"translated host bundle path for tool alias '{alias}' does not exist: {host_tool_path}"
+                f"{checked_bundle_label} for tool alias '{alias}' does not exist: {checked_tool_path}"
             )
     return problems
 
 
 def _docker_mount_preflight(
         *,
+        log: AgentLogger,
+        proc_workdir: pathlib.Path,
+        proc_outdir: pathlib.Path,
         host_workdir: pathlib.Path,
         host_outdir: pathlib.Path,
-        host_bundle_root: pathlib.Path | None,
         proc_bundle_root: pathlib.Path | None,
+        host_bundle_root: pathlib.Path | None,
         raw_tool_module_files: Dict[str, Any],
 ) -> list[str]:
     problems: list[str] = []
-    if not host_workdir.exists():
-        problems.append(f"translated host workdir does not exist: {host_workdir}")
-    main_py = host_workdir / "main.py"
+
+    proc_workdir = _resolved_path(proc_workdir)
+    proc_outdir = _resolved_path(proc_outdir)
+    host_workdir = _resolved_path(host_workdir)
+    host_outdir = _resolved_path(host_outdir)
+    proc_bundle_root = _resolved_path(proc_bundle_root) if proc_bundle_root is not None else None
+    host_bundle_root = _resolved_path(host_bundle_root) if host_bundle_root is not None else None
+
+    if not proc_workdir.exists():
+        problems.append(f"proc workdir does not exist: {proc_workdir}")
+    main_py = proc_workdir / "main.py"
     if not main_py.exists():
-        problems.append(f"translated host workdir does not contain main.py: {main_py}")
-    if not host_outdir.exists():
-        problems.append(f"translated host outdir does not exist: {host_outdir}")
-    if host_bundle_root is not None:
-        if not host_bundle_root.exists():
-            problems.append(f"translated host bundle root does not exist: {host_bundle_root}")
+        problems.append(f"proc workdir does not contain main.py: {main_py}")
+    if not proc_outdir.exists():
+        problems.append(f"proc outdir does not exist: {proc_outdir}")
+    if proc_bundle_root is not None:
+        if not proc_bundle_root.exists():
+            problems.append(f"proc bundle root does not exist: {proc_bundle_root}")
         else:
             problems.extend(
-                _bundle_tool_host_checks(
+                _bundle_tool_mount_checks(
                     tool_module_files=raw_tool_module_files,
                     proc_bundle_root=proc_bundle_root,
-                    host_bundle_root=host_bundle_root,
+                    checked_bundle_root=proc_bundle_root,
+                    checked_bundle_label="proc bundle path",
                 )
+            )
+
+    if host_workdir != proc_workdir:
+        if _can_preflight_translated_host_path(host_workdir):
+            if not host_workdir.exists():
+                problems.append(f"translated host workdir does not exist: {host_workdir}")
+            host_main_py = host_workdir / "main.py"
+            if not host_main_py.exists():
+                problems.append(f"translated host workdir does not contain main.py: {host_main_py}")
+        else:
+            log.log(
+                f"[docker.exec] translated host workdir is not locally visible from proc; "
+                f"skipping local existence check: {host_workdir}",
+                level="INFO",
+            )
+
+    if host_outdir != proc_outdir:
+        if _can_preflight_translated_host_path(host_outdir):
+            if not host_outdir.exists():
+                problems.append(f"translated host outdir does not exist: {host_outdir}")
+        else:
+            log.log(
+                f"[docker.exec] translated host outdir is not locally visible from proc; "
+                f"skipping local existence check: {host_outdir}",
+                level="INFO",
+            )
+
+    if host_bundle_root is not None and proc_bundle_root is not None and host_bundle_root != proc_bundle_root:
+        if _can_preflight_translated_host_path(host_bundle_root):
+            if not host_bundle_root.exists():
+                problems.append(f"translated host bundle root does not exist: {host_bundle_root}")
+            else:
+                problems.extend(
+                    _bundle_tool_mount_checks(
+                        tool_module_files=raw_tool_module_files,
+                        proc_bundle_root=proc_bundle_root,
+                        checked_bundle_root=host_bundle_root,
+                        checked_bundle_label="translated host bundle path",
+                    )
+                )
+        else:
+            log.log(
+                f"[docker.exec] translated host bundle root is not locally visible from proc; "
+                f"skipping local existence check: {host_bundle_root}",
+                level="INFO",
             )
     return problems
 
@@ -293,10 +421,13 @@ async def run_py_in_docker(
         log.log(f"[docker.exec] Bundle paths: container={proc_bundle_root}, host={bundle_root}", level="INFO")
 
     preflight_problems = _docker_mount_preflight(
+        log=log,
+        proc_workdir=workdir,
+        proc_outdir=outdir,
         host_workdir=host_workdir,
         host_outdir=host_outdir,
-        host_bundle_root=bundle_root,
         proc_bundle_root=proc_bundle_root,
+        host_bundle_root=bundle_root,
         raw_tool_module_files=raw_tool_module_files,
     )
     if preflight_problems:
