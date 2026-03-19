@@ -1,4 +1,5 @@
 {{- if .Values.services.metrics.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.metrics.image.tag) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +18,7 @@ spec:
     spec:
       containers:
         - name: metrics
-          image: "{{ .Values.services.metrics.image.repository }}:{{ .Values.services.metrics.image.tag }}"
+          image: "{{ .Values.services.metrics.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
@@ -26,9 +27,13 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ .Values.configMaps.backendEnv }}
+            - secretRef:
+                name: {{ .Values.secrets.platform.name }}
           env:
             - name: METRICS_PORT
               value: {{ .Values.services.metrics.servicePort | quote }}
+            - name: GATEWAY_COMPONENT
+              value: metrics
             - name: POSTGRES_HOST
               value: {{ .Values.postgres.host | quote }}
             - name: POSTGRES_PORT

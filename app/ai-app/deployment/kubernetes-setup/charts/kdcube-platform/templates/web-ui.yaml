@@ -1,4 +1,5 @@
 {{- if .Values.services.webUi.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.webUi.image.tag) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +18,7 @@ spec:
     spec:
       containers:
         - name: web-ui
-          image: "{{ .Values.services.webUi.image.repository }}:{{ .Values.services.webUi.image.tag }}"
+          image: "{{ .Values.services.webUi.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

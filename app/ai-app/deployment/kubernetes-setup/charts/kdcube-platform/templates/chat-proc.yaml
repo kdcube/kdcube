@@ -1,4 +1,5 @@
 {{- if .Values.services.chatProc.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.chatProc.image.tag) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +18,7 @@ spec:
     spec:
       containers:
         - name: chat-proc
-          image: "{{ .Values.services.chatProc.image.repository }}:{{ .Values.services.chatProc.image.tag }}"
+          image: "{{ .Values.services.chatProc.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http

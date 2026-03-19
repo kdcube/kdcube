@@ -1,7 +1,0 @@
-# k3d / containerd-specific overrides.
-#
-# k3d nodes do not expose a usable host Docker socket for the processor pod.
-# Keep the docker.sock mount disabled in this profile.
-
-dockerSocket:
-  enabled: false

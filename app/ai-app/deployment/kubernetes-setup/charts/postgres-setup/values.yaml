@@ -3,7 +3,7 @@ fullnameOverride: ""
 
 image:
   repository: kdcube/kdcube-postgres-setup
-  tag: latest
+  tag: ""
   pullPolicy: IfNotPresent
 
 postgres:
@@ -11,6 +11,9 @@ postgres:
   port: 5432
   database: kdcube
   ssl: "False"
+
+redis:
+  port: 6379
 
 existingPostgresSecret:
   name: postgres-db-credentials

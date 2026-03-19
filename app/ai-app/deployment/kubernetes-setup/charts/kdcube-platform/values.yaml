@@ -42,6 +42,44 @@ redis:
   host: redis
   port: "6379"
 
+# Descriptor-compatible values (can be overridden by -f descriptors/*.yaml)
+context:
+  tenant: "TENANT_ID"
+  project: "PROJECT_ID"
+
+auth:
+  type: "simple" # simple | cognito | delegated
+  cognito:
+    region: ""
+    user_pool_id: ""
+    app_client_id: ""
+    service_client_id: ""
+    client_secret: ""
+
+proxy:
+  ssl: false
+  route_prefix: "/chatbot"
+
+storage:
+  kdcube: "file:///kdcube-storage"
+  bundles: "file:///bundle-storage"
+
+aws:
+  region: ""
+  access_key_id: ""
+  secret_access_key: ""
+
+gateway:
+  profile: development
+
+bundles:
+  version: "1"
+  default_bundle_id: ""
+  items: []
+
+frontend:
+  authToken: "test-admin-token-123"
+
 persistence:
   create: true
   storageClassName: ""
@@ -75,7 +113,7 @@ services:
     replicaCount: 1
     image:
       repository: kdcube/kdcube-secrets
-      tag: latest
+      tag: ""
     servicePort: 7777
 
   chatIngress:
@@ -83,7 +121,7 @@ services:
     replicaCount: 1
     image:
       repository: kdcube/kdcube-chat-ingress
-      tag: latest
+      tag: ""
     servicePort: 8010
     uvicornWorkerHealthcheckTimeout: "60"
     readinessProbe:
@@ -104,7 +142,7 @@ services:
     replicaCount: 1
     image:
       repository: kdcube/kdcube-chat-proc
-      tag: latest
+      tag: ""
     servicePort: 8020
     uvicornWorkerHealthcheckTimeout: "60"
     resources:
@@ -120,7 +158,7 @@ services:
     replicaCount: 1
     image:
       repository: kdcube/kdcube-metrics
-      tag: latest
+      tag: ""
     servicePort: 8090
     resources:
       requests:
@@ -135,7 +173,7 @@ services:
     replicaCount: 1
     image:
       repository: kdcube/kdcube-web-ui
-      tag: latest
+      tag: ""
     servicePort: 80
 
   webProxy:
@@ -143,7 +181,7 @@ services:
     replicaCount: 1
     image:
       repository: kdcube/kdcube-web-proxy
-      tag: latest
+      tag: ""
     servicePort: 80
     serviceType: ClusterIP
 

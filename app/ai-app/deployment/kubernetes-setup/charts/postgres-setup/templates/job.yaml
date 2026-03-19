@@ -1,3 +1,12 @@
+{{- $imageTag := include "postgres-setup.imageTag" (dict "root" . "explicitTag" .Values.image.tag) -}}
+{{- $tenantId := .Values.bootstrap.tenantId | default "TENANT_ID" -}}
+{{- if or (eq $tenantId "") (eq $tenantId "TENANT_ID") -}}
+{{- $tenantId = (.Values.context.tenant | default "TENANT_ID") -}}
+{{- end -}}
+{{- $projectId := .Values.bootstrap.projectId | default "PROJECT_ID" -}}
+{{- if or (eq $projectId "") (eq $projectId "PROJECT_ID") -}}
+{{- $projectId = (.Values.context.project | default "PROJECT_ID") -}}
+{{- end -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -14,6 +23,7 @@ spec:
         app.kubernetes.io/name: {{ include "postgres-setup.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
+      enableServiceLinks: false
       restartPolicy: {{ .Values.job.restartPolicy }}
       initContainers:
         - name: wait-for-postgres
@@ -37,7 +47,7 @@ spec:
               value: {{ .Values.postgres.database | quote }}
       containers:
         - name: postgres-setup
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: POSTGRES_HOST
@@ -48,10 +58,12 @@ spec:
               value: {{ .Values.postgres.database | quote }}
             - name: POSTGRES_SSL
               value: {{ .Values.postgres.ssl | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.port | quote }}
             - name: TENANT_ID
-              value: {{ .Values.bootstrap.tenantId | quote }}
+              value: {{ $tenantId | quote }}
             - name: PROJECT_ID
-              value: {{ .Values.bootstrap.projectId | quote }}
+              value: {{ $projectId | quote }}
             - name: POSTGRES_USER
               valueFrom:
                 secretKeyRef:

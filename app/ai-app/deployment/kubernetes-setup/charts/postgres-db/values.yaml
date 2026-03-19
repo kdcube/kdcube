@@ -11,6 +11,10 @@ auth:
   password: postgres
   database: kdcube
 
+infra:
+  postgres:
+    password: ""
+
 postgres:
   maxConnections: 200
 

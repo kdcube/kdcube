@@ -1,4 +1,5 @@
 {{- if .Values.services.chatIngress.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.chatIngress.image.tag) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +18,7 @@ spec:
     spec:
       containers:
         - name: chat-ingress
-          image: "{{ .Values.services.chatIngress.image.repository }}:{{ .Values.services.chatIngress.image.tag }}"
+          image: "{{ .Values.services.chatIngress.image.repository }}:{{ $imageTag }}"
           imagePullPolicy: {{ .Values.global.imagePullPolicy }}
           ports:
             - name: http
