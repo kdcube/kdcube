@@ -8,6 +8,7 @@ see_also:
   - ks:docs/exec/README-iso-runtime.md
   - ks:docs/exec/README-runtime-modes-builtin-tools.md
   - ks:docs/exec/distributed-exec-README.md
+  - ks:docs/sdk/agents/react/external-exec-README.md
 ---
 ## Executor log streams
 
@@ -124,6 +125,31 @@ The report is built to answer three questions:
 2. did the user program fail?
 3. did the execution fail to produce the contracted outputs?
 
+### Public tool contract vs internal helpers
+
+Current public React-facing tool:
+
+- `exec_tools.execute_code_python(...)`
+- requires a non-empty file contract
+- validates produced files against that contract
+
+Current internal helpers:
+
+- `run_exec_tool_no_contract(...)`
+- `run_exec_tool_side_effects(...)`
+
+Those internal helpers allow execution without a declared file contract and can still return logs/summary. They are useful for platform internals and future tool-surface evolution, but they are not the current public agent API.
+
+So today the public tool is:
+
+- file-contract-required
+- but still log-aware
+
+This means the agent already receives a hybrid result:
+
+- artifacts/files
+- plus runtime/program diagnostics
+
 ### Exact current platform-generated log files under `out/logs`
 
 These are the current log files produced by the platform execution stack itself.
@@ -214,6 +240,31 @@ Infra errors (infra.log): ...                # merged infra errors / tracebacks
 Program log (tail): ...                      # per-exec tail from user.log
 ```
 
+`report_text` is the final human-readable execution summary assembled by `exec_tools.py`.
+It is not a raw file.
+
+It can include:
+
+- `Status: ...`
+- `Runtime failure: ...`
+- `Missing contracted outputs: ...`
+- `File errors: ...`
+- `Infra errors (infra.log): ...`
+- `Program log (tail): ...`
+
+So it is the main text the agent sees back from `execute_code_python(...)`.
+
+The full returned envelope also carries structured fields such as:
+
+- `ok`
+- `artifacts`
+- `items`
+- `error`
+- `user_out_tail`
+- `runtime_err_tail`
+- `user_error_lines`
+- `runtime_error_lines`
+
 ### Source of each visible report piece
 
 | Visible report piece | Immediate source | Underlying raw source |
@@ -227,6 +278,66 @@ Program log (tail): ...                      # per-exec tail from user.log
 | `Missing contracted outputs:` | contract reconciliation | no log file; produced by comparing declared outputs with actual files |
 | `Infra errors (infra.log):` | `extract_error_lines(infra_text)` and `extract_traceback_blocks(infra_text)` | `infra_text` starts from the per-exec `infra.log` segment and then may have `run_res.stderr_tail` / `run_res.error_summary` appended in memory |
 | `Program log (tail):` | per-exec segment from `user.log` | raw `out/logs/user.log` |
+
+### Contracted files, logs-only, and hybrid outputs
+
+Current public behavior:
+
+- contracted files: supported
+- contracted files + logs in result text: supported
+- logs-only with empty contract: not exposed publicly yet
+
+Important nuance:
+
+- even when the contract is file-oriented, the agent may still reason over `Program log (tail)` and runtime diagnostics in `report_text`
+- so the practical execution result is already hybrid: file artifacts plus log-derived text
+
+Internal platform capability:
+
+- `run_exec_tool_no_contract(...)` can execute code without a file contract
+- `run_exec_tool_side_effects(...)` can also diff `out/` and report side-effects
+
+That means the platform can support logs-only or side-effects-first execution paths, but the current public `execute_code_python(...)` surface has not been widened to that mode yet
+
+### What should the executed code do so output appears in `user.log`
+
+For `user.log`:
+
+- normal `print(...)` goes there
+- uncaught exceptions / tracebacks go there
+- depending on config, Python `logging` may also go there
+
+The most reliable pattern for agent-written code is simply:
+
+```python
+print("starting step 1")
+print(f"rows loaded: {len(rows)}")
+print("done")
+```
+
+If it wants explicit logging, the safest form is:
+
+```python
+import logging
+
+log = logging.getLogger("user")
+log.info("starting batch job")
+log.warning("row 42 skipped")
+```
+
+That `user` logger is explicitly wired to `user.log`.
+
+Important nuance:
+
+- generic `logging.getLogger(__name__)` may also land in `user.log` when `EXEC_USER_LOG_MODE=include_logging`
+- but if config changes to `print_only`, generic logging may stay out of `user.log`
+- `print(...)` and `logging.getLogger("user")` are the stable choices
+
+So if you want guidance for the agent, it should write code like:
+
+- use `print(...)` for progress it wants surfaced
+- use `logging.getLogger("user")` if it wants structured log lines in the program log
+- still write contracted files when files are required by the tool call
 
 ### Visual composition
 

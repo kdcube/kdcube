@@ -62,6 +62,13 @@ Current exported scalar keys:
 - `throttling.rate_limit_429`
 - `throttling.backpressure_503`
 
+Proc latency export note:
+- the Metrics server exports the proc latency metrics from the **`1m` percentile window** produced by `compute_system_monitoring(...)`
+- specifically:
+  - `proc.queue.wait.p95_ms` comes from `components.proc.latency.queue_wait_ms.1m.p95`
+  - `proc.exec.p95_ms` comes from `components.proc.latency.exec_ms.1m.p95`
+- older flat shapes such as `components.proc.latency.queue_wait_ms.p95` are only treated as a compatibility fallback
+
 ### B) **Proxy mode** (optional)
 - Calls configured upstream `/monitoring/system` endpoints.
 - Requires auth headers or tokens.
@@ -196,6 +203,10 @@ Example:
 CloudWatch naming note:
 - the exporter replaces `.` with `/` when it sends metric names to CloudWatch
 - if you want a stable CloudWatch name, provide it explicitly in `METRICS_MAPPING_JSON`
+- in the current ECS deployment, the main proc metrics appear as:
+  - `chat/proc/queue/utilization`
+  - `chat/proc/queue/wait/p95`
+  - `chat/proc/exec/p95`
 
 ---
 

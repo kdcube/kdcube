@@ -8,8 +8,125 @@ see_also:
   - ks:docs/sdk/agents/react/event-blocks-README.md
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
   - ks:docs/sdk/agents/react/artifact-storage-README.md
+  - ks:docs/exec/exec-logging-error-propagation-README.md
+  - ks:docs/exec/distributed-exec-README.md
 ---
 ## External execution notes (Fargate / distributed)
+
+This page focuses on the React-agent view of external execution.
+
+For the runtime/deployment internals, see:
+
+- [exec-logging-error-propagation-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/exec/exec-logging-error-propagation-README.md)
+- [distributed-exec-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/exec/distributed-exec-README.md)
+
+### What the agent calls
+
+The public tool is `exec_tools.execute_code_python(...)` in [exec_tools.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tools/exec_tools.py).
+
+Current public contract:
+
+- code is provided in the dedicated code channel, not in tool params
+- `contract` is required
+- `contract` must be a non-empty list (or JSON string) of files to produce
+- each contract file must live under `turn_<id>/files/...`
+
+Important current limitation:
+
+- the public `execute_code_python` tool does **not** currently expose a logs-only / empty-contract mode
+- an empty or missing contract is rejected at normalization time
+- there is internal support for no-contract execution via `run_exec_tool_no_contract(...)` and `run_exec_tool_side_effects(...)`, but that is not the public React tool surface today
+
+### What the agent gets back
+
+Independent of runtime mode (`docker`, `fargate`, or local isolated execution), the tool returns the same logical envelope:
+
+- `ok`
+- `artifacts`
+- `error`
+- `report_text`
+- `items`
+- `user_out_tail`
+- `runtime_err_tail`
+
+The most important agent-facing field is `report_text`.
+
+`report_text` is the final human-readable execution summary assembled by `exec_tools.py`.
+It is not a raw file.
+
+It can include:
+
+- final status line
+- runtime failure summary
+- missing contracted outputs
+- artifact validation failures
+- infra/runtime error lines
+- `Program log (tail)` from `out/logs/user.log`
+
+So even in the normal file-producing mode, the agent already receives a hybrid result:
+
+- declared output files if they were produced
+- plus log/diagnostic text from the execution
+
+That means the tool is not "files only". It is "contracted files, with logs folded into the textual result".
+
+### Exactly how the agent should write code if it wants logs to appear
+
+If the agent wants its runtime progress or notes to appear in the execution result, it should write code that emits to `user.log`.
+
+For `user.log`:
+
+- normal `print(...)` goes there
+- uncaught exceptions / tracebacks go there
+- depending on config, Python `logging` may also go there
+
+The most reliable pattern is:
+
+```python
+print("starting step 1")
+print(f"rows loaded: {len(rows)}")
+print("done")
+```
+
+If the agent wants structured log lines, the safest form is:
+
+```python
+import logging
+
+log = logging.getLogger("user")
+log.info("starting batch job")
+log.warning("row 42 skipped")
+```
+
+That `user` logger is explicitly wired to `user.log`.
+
+Important nuance:
+
+- generic `logging.getLogger(__name__)` may also land in `user.log` when `EXEC_USER_LOG_MODE=include_logging`
+- but if config changes to `print_only`, generic logging may stay out of `user.log`
+- `print(...)` and `logging.getLogger("user")` are the stable choices
+
+So the concrete guidance for React agents is:
+
+1. If you need files as outputs, declare them in `contract` and write them under `OUTPUT_DIR/turn_<id>/files/...`.
+2. If you want the model to later see progress/details in the textual tool result, use `print(...)` and/or `logging.getLogger("user")`.
+3. Do not assume that generic `logging.getLogger(__name__)` will always appear in `Program log (tail)`.
+4. Remember that the current public `execute_code_python(...)` tool still requires a non-empty file contract, even though the returned result already includes logs.
+
+### Logs-only and hybrid modes
+
+Current state:
+
+- public mode: contract required, files expected, logs included in diagnostics
+- internal no-contract mode: supported by `run_exec_tool_no_contract(...)`
+- internal side-effects mode: supported by `run_exec_tool_side_effects(...)`
+
+So the platform already has the building blocks for:
+
+- logs-only execution
+- hybrid execution with both files and `user.log`-derived output
+
+But today only the hybrid-with-required-contract variant is exposed to the React agent through `execute_code_python`.
 
 ### Snapshot + merge flow
 - Host creates input snapshot via `snapshot_exec_input`  
@@ -49,13 +166,42 @@ see_also:
 - Runtime globals are rewritten so tool module paths point at restored bundle root.
 - Implemented in `py_code_exec_entry.py` via `rewrite_runtime_globals_for_bundle`.
 
-### Fargate runner (current)
+### Fargate runner
 - `FARGATE_EXEC_ENABLED=1` enables execution.
 - Required env:
   `FARGATE_CLUSTER`, `FARGATE_TASK_DEFINITION`, `FARGATE_CONTAINER_NAME`,
   `FARGATE_SUBNETS` (comma list), `FARGATE_SECURITY_GROUPS` (comma list),
   `FARGATE_ASSIGN_PUBLIC_IP`.
 - Runner is implemented in `kdcube_ai_app/apps/chat/sdk/runtime/external/fargate.py`.
+
+### Runtime-independent result contract
+
+External execution does not change what the agent sees semantically.
+
+Whether exec runs:
+
+- in local isolated mode
+- in Docker on the proc host
+- or in distributed Fargate mode
+
+the final user-facing tool result is still assembled in `exec_tools.py` after runtime completion.
+
+The runtime contributes backend status fields such as:
+
+- `ok`
+- `returncode`
+- `error`
+- `error_summary`
+- `stderr_tail`
+
+Then `exec_tools.py` combines those with:
+
+- contract file checks
+- artifact validation
+- `infra.log`
+- `user.log`
+
+and produces the final `report_text` that the agent reasons over.
 
 ### Output merge rules
 - `logs/*` are appended into existing log files.

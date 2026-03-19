@@ -138,6 +138,9 @@ Processor is bound by **queue depth** and **queue wait time**.
 Notes:
 - Processor metrics are **global for the tenant/project**, good autoscaling signals.
 - Scaling processor increases **DB/Redis connections**; watch pool in‑use windows.
+- The exported CloudWatch `p95` metrics currently use the **`1m` latency window**:
+  - `chat/proc/queue/wait/p95` <- `components.proc.latency.queue_wait_ms.1m.p95`
+  - `chat/proc/exec/p95` <- `components.proc.latency.exec_ms.1m.p95`
 
 ---
 
@@ -204,6 +207,11 @@ When exporting to CloudWatch/Prometheus, use consistent names:
 
 These are recommended CloudWatch-style names.
 The current built-in Metrics service now exports the stronger proc autoscaling signals (`proc.queue.utilization_ratio`, `proc.queue.wait.p95_ms`, `proc.queue.pressure_ratio`) and can map them to stable CloudWatch names through `METRICS_MAPPING_JSON`.
+
+Important export detail:
+- `chat/proc/queue/wait/p95` is the queue-wait p95 from the **1-minute rolling latency window**
+- `chat/proc/exec/p95` is the exec-time p95 from the **1-minute rolling latency window**
+- if these metrics are absent in CloudWatch but `proc/queue/avg_wait_seconds/*` exists, the exporter is still publishing the per-role average wait metrics while the latency percentile path is broken or outdated
 
 ---
 

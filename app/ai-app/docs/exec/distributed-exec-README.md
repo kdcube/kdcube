@@ -8,6 +8,8 @@ see_also:
   - ks:docs/exec/README-iso-runtime.md
   - ks:docs/exec/runtime-README.md
   - ks:docs/exec/operations.md
+  - ks:docs/exec/exec-logging-error-propagation-README.md
+  - ks:docs/sdk/agents/react/external-exec-README.md
 ---
 
 # Distributed Execution — Fargate
@@ -37,6 +39,12 @@ The Fargate exec task is the replacement:
 | Task lifetime | Container exits → docker rm | Task STOPPED |
 | Caller waits | `asyncio.wait_for(proc.communicate())` | Poll `describe_tasks` until STOPPED |
 | Parallel executions | One Docker child per call | One ECS run-task per call |
+
+Important:
+
+- distributed exec changes how code is transported and run
+- it does **not** change the logical result contract seen by the agent
+- the final agent-visible result is still assembled by `exec_tools.py` after the runtime backend returns
 
 ---
 
@@ -138,6 +146,35 @@ chat-proc (FargateRuntime.run)
 │
 │  9. Return ExternalExecResult(ok, returncode, error, seconds=elapsed)
 ```
+
+### Agent-visible result after distributed execution
+
+The Fargate runtime returns backend status fields to `exec_tools.py`, not a final user-facing message.
+
+The caller then still performs:
+
+- contracted-file validation
+- artifact checks
+- infra log merge
+- `user.log` tail extraction
+- final `report_text` assembly
+
+So from the agent point of view, distributed exec still resolves to the same kind of envelope as local/Docker execution:
+
+- `ok`
+- `artifacts`
+- `error`
+- `report_text`
+- `user_out_tail`
+- `runtime_err_tail`
+
+This is why runtime-specific failures such as:
+
+- ECS startup failure
+- Fargate timeout
+- secret/bundle/snapshot restore failure
+
+still appear to the agent through the same final `report_text` / `error` path documented in [exec-logging-error-propagation-README.md](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/docs/exec/exec-logging-error-propagation-README.md).
 
 ### 3. Runtime — exec task side (`py_code_exec_entry.py`)
 
