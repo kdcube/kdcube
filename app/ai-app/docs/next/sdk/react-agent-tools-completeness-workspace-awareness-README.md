@@ -42,7 +42,7 @@ This document records the current state and the recommended near-term boundary.
 | What is the current turn workspace? | Temporary `out/` working set for this turn | Easy to confuse with the whole conversation artifact memory | State explicitly that turn OUT_DIR is ephemeral and hydrated on demand |
 | What is `fi:`? | Logical addressing into conversation artifact memory, plus current-turn materializations | Looks filesystem-like but is not a browsable tree | Keep `fi:` as artifact addressing and retrieval, not browsing |
 | Where is browsing actually needed? | In `ks:` today and future named workspaces later | We do not yet have a fluent, safe way to inspect browseable roots from code | Use isolated exec plus an explicit namespace resolver, not a generic `list_space` tool |
-| How does `react.doc` look to the agent today? | Docs and deploy are searchable; `src` is readable only by exact path; tests are absent | Not enough for source-first or test-first copilot work | Add manifests/indexing for `src` and tests |
+| How does `react.doc` look to the agent today? | Docs and deploy are searchable; `src` is readable only by exact path; tests are exposed as exact `ks:tests/...` reads plus `sk:tests.bundles` guidance | Source-first and test-first browsing still require resolver + exec, and `src` still has no search surface | Keep tests as exact-read only; improve source discovery separately |
 | Is public exec enough for scripted inspection? | Partially; it still requires a non-empty file contract | Probe tasks are awkward but still possible | Short-term: use a tiny summary artifact plus program log; later maybe expose a separate probe tool |
 | Where should semantics live? | Repeated across docs, tool docs, shared instructions, decision prompt, skill | Drift risk | Keep tool args in tool modules, keep mental model in shared instructions, keep bundle-specific entry points in skills |
 
@@ -202,6 +202,8 @@ The `react.doc` bundle currently tells the agent to:
 - open referenced code with `react.read(["ks:src/<path>"])`
 - search deploy docs with `react.search_knowledge(query=..., root="ks:deploy")`
 - open deploy files with `react.read(["ks:deploy/<path>"])`
+- read reusable test fixtures with exact `react.read(["ks:tests/<path>"])`
+- load bundle-test execution guidance from `react.read(["sk:tests.bundles"])`
 
 The knowledge index currently builds entries from:
 - docs under `docs/`
@@ -209,7 +211,7 @@ The knowledge index currently builds entries from:
 
 It does not currently index:
 - `src/` as searchable entries
-- tests as a visible namespace
+- tests for `react.search_knowledge`
 
 This means the agent currently sees this shape:
 
@@ -218,7 +220,8 @@ This means the agent currently sees this shape:
 | `ks:docs/...` | yes | yes | yes | good |
 | `ks:deploy/...` | yes | yes | yes | good |
 | `ks:src/...` | no | no | yes | path must be guessed or learned from a doc |
-| tests | no | no | no | not exposed |
+| `ks:tests/...` | mentioned as exact-read guidance | no | yes | exact paths only; browse in exec if needed |
+| `sk:tests.bundles` | yes | n/a | yes | instruction entrypoint for how to run the reusable smoke tests |
 
 ### What this is good for
 
@@ -491,7 +494,7 @@ flowchart LR
 | `ks:docs` | indexed | keep |
 | `ks:deploy` | indexed for docs | keep |
 | `ks:src` | readable only by exact path | add manifests and searchable index entries |
-| tests | absent | add as `ks:tests` manifests/index |
+| tests | exact-read `ks:tests/...`, with `sk:tests.bundles` as the instruction entrypoint | keep exact-read only; do not add search indexing |
 
 ### Important constraint
 
@@ -511,7 +514,7 @@ That preserves token economy and keeps navigation deliberate.
 | `react.search_files` | turn-local discovery in `outdir` and `workdir` | no change in scope |
 | `react.read` | read logical artifacts and exact `ks:` paths | later add more precise guidance for non-text and logs |
 | `react.write` / `react.patch` | mutate current-turn `files/` outputs only | no change in safety boundary |
-| `react.search_knowledge` | metadata search over indexed docs/deploy | add `src` and tests manifests/indexes |
+| `react.search_knowledge` | metadata search over indexed docs/deploy | consider `src` discovery improvements later; keep tests out of search index |
 | `execute_code_python(...)` | controlled escape hatch for scripted inspection and processing | later optionally expose a public no-contract probe tool |
 | bundle-defined namespace resolver | optional helper for browseable permanent spaces | standardize only after usage proves stable |
 
@@ -525,9 +528,10 @@ That preserves token economy and keeps navigation deliberate.
 
 ### Phase 2: make `react.doc` copilot-capable
 
-1. Add `ks:src` manifests/index entries.
-2. Add `ks:tests` manifests/index entries.
-3. Update `ks:index.md` to show docs, deploy, source areas, and tests.
+1. Improve `ks:src` discovery without forcing full source-tree indexing.
+2. Keep `ks:tests` as exact-read content mounted from `knowledge.tests_root`.
+3. Use `sk:tests.bundles` to tell the agent where the reusable test fixtures live and how to run them from isolated exec.
+4. Update `ks:index.md` to mention docs, deploy, source areas, and exact-read tests.
 
 ### Phase 3: formalize the isolated browse path
 

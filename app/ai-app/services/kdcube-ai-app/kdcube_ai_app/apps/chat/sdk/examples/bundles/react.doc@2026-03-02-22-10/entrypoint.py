@@ -33,6 +33,7 @@ from __future__ import annotations
 import pathlib
 import os
 import shutil
+import traceback
 from typing import Any, Dict
 
 from langgraph.graph import StateGraph, START, END
@@ -172,9 +173,17 @@ class ReactWorkflow(BaseEntrypoint):
         *,
         bundle_root: pathlib.Path,
         storage_root: pathlib.Path,
-    ) -> tuple[pathlib.Path | None, pathlib.Path | None, pathlib.Path | None, bool, str | None, str | None]:
+    ) -> tuple[
+        pathlib.Path | None,
+        pathlib.Path | None,
+        pathlib.Path | None,
+        pathlib.Path | None,
+        bool,
+        str | None,
+        str | None,
+    ]:
         """
-        Resolve docs/src/deploy roots from bundle props.
+        Resolve docs/src/deploy/tests roots from bundle props.
         If a git repo is configured, clones it first via ensure_git_bundle.
         Paths can be absolute or relative to the repo/bundle root.
         """
@@ -185,17 +194,35 @@ class ReactWorkflow(BaseEntrypoint):
         docs_root_raw = (knowledge_def.get("docs_root") or "").strip()
         src_root_raw = (knowledge_def.get("src_root") or "").strip()
         deploy_root_raw = (knowledge_def.get("deploy_root") or "").strip()
+        tests_root_raw = (knowledge_def.get("tests_root") or "").strip()
         validate = knowledge_def.get("validate_refs")
         validate_refs = True if validate is None else bool(validate)
 
+        default_repo_tests_rel = (
+            "app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests"
+        )
+
         # If nothing is configured, try to use local repo (host dev) or fall back
         # to the public platform repo (container/compose).
-        if not repo and not docs_root_raw and not src_root_raw and not deploy_root_raw:
+        if not repo and not docs_root_raw and not src_root_raw and not deploy_root_raw and not tests_root_raw:
             for parent in bundle_root.resolve().parents:
                 if (parent / "docs").is_dir() and (parent / "services").is_dir():
                     docs_root_raw = str((parent / "docs").resolve())
                     src_root_raw = str((parent / "services" / "kdcube-ai-app" / "kdcube_ai_app").resolve())
                     deploy_root_raw = str((parent / "deployment").resolve())
+                    local_tests_root = (
+                        parent
+                        / "services"
+                        / "kdcube-ai-app"
+                        / "kdcube_ai_app"
+                        / "apps"
+                        / "chat"
+                        / "sdk"
+                        / "examples"
+                        / "tests"
+                    )
+                    if local_tests_root.is_dir():
+                        tests_root_raw = str(local_tests_root.resolve())
                     break
             if not docs_root_raw:
                 repo = (os.getenv("KDCUBE_KNOWLEDGE_REPO") or "https://github.com/kdcube/kdcube-ai-app.git").strip()
@@ -204,6 +231,7 @@ class ReactWorkflow(BaseEntrypoint):
                 docs_root_raw = "app/ai-app/docs"
                 src_root_raw = "app/ai-app/services/kdcube-ai-app/kdcube_ai_app"
                 deploy_root_raw = "app/ai-app/deployment"
+                tests_root_raw = default_repo_tests_rel
 
         repo_root = None
         if repo:
@@ -240,9 +268,14 @@ class ReactWorkflow(BaseEntrypoint):
                 self.logger.log(traceback.format_exc(), "WARNING")
 
         base_root = repo_root or bundle_root
+        if not tests_root_raw:
+            candidate = (base_root / default_repo_tests_rel).resolve()
+            if candidate.is_dir():
+                tests_root_raw = str(candidate)
         docs_root = None
         src_root = None
         deploy_root = None
+        tests_root = None
         if docs_root_raw:
             docs_root = pathlib.Path(docs_root_raw)
             if not docs_root.is_absolute():
@@ -259,7 +292,11 @@ class ReactWorkflow(BaseEntrypoint):
             deploy_root = pathlib.Path(deploy_root_raw)
             if not deploy_root.is_absolute():
                 deploy_root = (base_root / deploy_root).resolve()
-        return docs_root, src_root, deploy_root, validate_refs, repo, ref or None
+        if tests_root_raw:
+            tests_root = pathlib.Path(tests_root_raw)
+            if not tests_root.is_absolute():
+                tests_root = (base_root / tests_root).resolve()
+        return docs_root, src_root, deploy_root, tests_root, validate_refs, repo, ref or None
 
     def _ensure_knowledge_space(self) -> None:
         """
@@ -280,11 +317,11 @@ class ReactWorkflow(BaseEntrypoint):
             if not bundle_root:
                 bundle_root = pathlib.Path(__file__).resolve().parent
 
-            docs_root, src_root, deploy_root, validate_refs, repo, ref = self._resolve_knowledge_paths(
+            docs_root, src_root, deploy_root, tests_root, validate_refs, repo, ref = self._resolve_knowledge_paths(
                 bundle_root=bundle_root,
                 storage_root=ws_root,
             )
-            signature = f"{repo}|{ref}|{docs_root}|{src_root}|{deploy_root}|{validate_refs}"
+            signature = f"{repo}|{ref}|{docs_root}|{src_root}|{deploy_root}|{tests_root}|{validate_refs}"
             if self._knowledge_signature == signature:
                 return None
             # Build or refresh the knowledge index under bundle storage.
@@ -294,6 +331,7 @@ class ReactWorkflow(BaseEntrypoint):
                 docs_root=docs_root,
                 src_root=src_root,
                 deploy_root=deploy_root,
+                tests_root=tests_root,
                 validate_refs=validate_refs,
                 logger=self.logger,
             )
@@ -328,12 +366,13 @@ class ReactWorkflow(BaseEntrypoint):
         # If repo is set, docs/src/deploy roots are resolved relative to the repo root.
         # If repo is empty, roots are resolved relative to the bundle directory.
         knowledge = dict(config.get("knowledge") or {})
-        knowledge.setdefault("repo", "")            # Git URL (e.g. https://github.com/org/repo)
-        knowledge.setdefault("ref", "")             # Git ref (branch/tag/commit); empty = default branch
-        knowledge.setdefault("docs_root", "")       # Path to docs/ directory
-        knowledge.setdefault("src_root", "")        # Path to source code root
-        knowledge.setdefault("deploy_root", "")     # Path to deployment configs (compose, env, dockerfiles)
-        knowledge.setdefault("validate_refs", True) # Check that code refs in docs point to existing files
+        knowledge.setdefault("repo", "")            # Git URL (e.g. https://github.com/org/repo); default: empty, then auto-detect local ai-app repo or fall back to KDCUBE_KNOWLEDGE_REPO / public repo
+        knowledge.setdefault("ref", "")             # Git ref (branch/tag/commit); empty = default branch; default: empty, then use KDCUBE_KNOWLEDGE_REF or the repo default branch
+        knowledge.setdefault("docs_root", "")       # Path to docs/ directory; default: empty, then auto-detect local docs/ or use app/ai-app/docs under the repo
+        knowledge.setdefault("src_root", "")        # Path to source code root; default: empty, then auto-detect local services/kdcube-ai-app/kdcube_ai_app or use app/ai-app/services/kdcube-ai-app/kdcube_ai_app under the repo
+        knowledge.setdefault("deploy_root", "")     # Path to deployment configs (compose, env, dockerfiles); default: empty, then auto-detect local deployment/ or use app/ai-app/deployment under the repo
+        knowledge.setdefault("validate_refs", True) # Check that code refs in docs point to existing files; default: True
+        knowledge.setdefault("tests_root", "")      # Path to bundle test fixtures/docs exposed as ks:tests; default: empty, then auto-detect local sdk/examples/tests or use app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests under the repo
         config["knowledge"] = knowledge
         return config
 

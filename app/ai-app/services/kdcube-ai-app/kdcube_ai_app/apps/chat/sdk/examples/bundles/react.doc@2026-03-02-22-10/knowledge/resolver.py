@@ -83,6 +83,7 @@ def prepare_knowledge_space(
     docs_root: Optional[pathlib.Path] = None,
     src_root: Optional[pathlib.Path] = None,
     deploy_root: Optional[pathlib.Path] = None,
+    tests_root: Optional[pathlib.Path] = None,
     validate_refs: bool = True,
     logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
@@ -94,6 +95,7 @@ def prepare_knowledge_space(
         docs_root=docs_root,
         src_root=src_root,
         deploy_root=deploy_root,
+        tests_root=tests_root,
         validate_refs=validate_refs,
         logger=logger,
     )

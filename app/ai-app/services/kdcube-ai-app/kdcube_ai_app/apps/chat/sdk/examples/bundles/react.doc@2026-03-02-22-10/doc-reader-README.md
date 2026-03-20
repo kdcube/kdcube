@@ -35,9 +35,10 @@ Required bundle props:
 - `knowledge.docs_root`: docs root inside the repo (relative to repo root).
 - `knowledge.src_root`: source root inside the repo (relative to repo root).
 - `knowledge.deploy_root`: deployment root inside the repo (relative to repo root).
+- `knowledge.tests_root`: test-fixture root exposed as exact-read `ks:tests/...` paths.
 
 There are **no implicit defaults** for docs/src roots when `knowledge.repo` is set.
-You must define both roots explicitly. `deploy_root` is optional but recommended.
+You must define both roots explicitly. `deploy_root` is optional. `tests_root` is optional and is intended for reusable bundle-test fixtures or similar exact-read content.
 
 If **all** `knowledge.*` fields are empty, the bundle tries to auto‑detect a local
 repo (host dev) or falls back to `KDCUBE_KNOWLEDGE_REPO` (default: public repo).
@@ -50,6 +51,7 @@ knowledge:
   docs_root: app/ai-app/docs
   src_root: app/ai-app/services/kdcube-ai-app/kdcube_ai_app
   deploy_root: app/ai-app/deployment
+  tests_root: app/ai-app/services/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests
   validate_refs: true
 ```
 
@@ -66,6 +68,7 @@ Then `knowledge.docs_root` and `knowledge.src_root` are resolved against that re
   docs/            # symlink or copy of ai-app/docs
   src/             # symlink to ai-app/services/kdcube-ai-app/kdcube_ai_app
   deploy/          # symlink or copy of ai-app/deployment
+  tests/           # symlink or copy of exact-read test fixtures
   index.json
   index.md
 ```
@@ -182,6 +185,7 @@ So the child runtime still sees the same three classes of data:
 - `ks:docs/<path>` — doc pages (Markdown).
 - `ks:src/<path>` — source files referenced by docs (read‑only).
 - `ks:deploy/<path>` — deployment files (compose, env, Dockerfiles).
+- `ks:tests/<path>` — exact-read test fixtures and instructions; not indexed for `react.search_knowledge`.
 
 5) **Doc ↔ code resolution**
 Docs may reference code like:
@@ -197,6 +201,7 @@ React tooling (bundle‑provided):
 - `react.read(["ks:src/<path>"])` — open a source file.
 - `react.search_knowledge(query, root="ks:deploy")` — search deployment docs.
 - `react.read(["ks:deploy/<path>"])` — open deployment files.
+- `react.read(["ks:tests/<path>"])` — open exact test fixtures or README guidance.
 - `bundle_data.resolve_namespace(logical_ref)` — exec-only resolver for generated code. Returns `{ok, error, ret}` where `ret` is `{physical_path: str | null, access: 'r' | 'rw', browseable: bool}`.
   - `physical_path` is usable only inside isolated exec.
   - use the input `logical_ref` itself as the logical base for later `react.read(...)` follow-up.
@@ -214,8 +219,12 @@ Important:
   - set `logical_base = "ks:src"`
   - resolve `logical_base`
   - inspect files under the returned `physical_path`
-  - if code finds a useful file at relative path `foo/bar.py`, emit logical ref `f"{logical_base}/foo/bar.py"`
-  - the agent can later call `react.read(["ks:src/foo/bar.py"])`
+- if code finds a useful file at relative path `foo/bar.py`, emit logical ref `f"{logical_base}/foo/bar.py"`
+- the agent can later call `react.read(["ks:src/foo/bar.py"])`
+- the same rule applies for test browsing:
+  - keep `logical_base = "ks:tests"`
+  - browse descendants under the exec-only `physical_path`
+  - emit follow-up logical refs as `f"{logical_base}/{relative_path}"`
 - For the exact propagation model, see:
   - `ks:docs/exec/exec-logging-error-propagation-README.md`
 

@@ -177,6 +177,7 @@ def build_knowledge_index(
     docs_root: pathlib.Path,
     src_root: Optional[pathlib.Path] = None,
     deploy_root: Optional[pathlib.Path] = None,
+    tests_root: Optional[pathlib.Path] = None,
     logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
@@ -193,6 +194,7 @@ def build_knowledge_index(
         "docs_root": "ks:docs",
         "src_root": "ks:src" if src_root else None,
         "deploy_root": "ks:deploy" if deploy_root else None,
+        "tests_root": "ks:tests" if tests_root else None,
         "items": entries,
     }
     try:
@@ -218,6 +220,11 @@ def build_knowledge_index(
         md_lines += [
             "- Use `react.search_knowledge(query=..., root=\"ks:deploy\")` to search deployment docs.",
             "- Use `react.read([\"ks:deploy/<path>\"])` to open deployment files (compose, env, Dockerfiles).",
+        ]
+    if tests_root:
+        md_lines += [
+            "- Use `react.read([\"ks:tests/<path>\"])` to open bundle test fixtures and instructions.",
+            "- Bundle tests are intentionally not indexed for `react.search_knowledge`; inspect them by exact path or via generated exec code.",
         ]
     md_lines += [
         "",
@@ -252,6 +259,7 @@ def prepare_knowledge_space(
     docs_root: Optional[pathlib.Path] = None,
     src_root: Optional[pathlib.Path] = None,
     deploy_root: Optional[pathlib.Path] = None,
+    tests_root: Optional[pathlib.Path] = None,
     validate_refs: bool = True,
     logger: Optional[Any] = None,
 ) -> Dict[str, Any]:
@@ -298,11 +306,18 @@ def prepare_knowledge_space(
         if not _safe_symlink(deploy_root, target):
             _copy_tree(deploy_root, target)
 
+    # Mount bundle tests (read-only subtree browsed via exact paths or exec code)
+    if tests_root and tests_root.exists():
+        target = knowledge_root / "tests"
+        if not _safe_symlink(tests_root, target):
+            _copy_tree(tests_root, target)
+
     payload = build_knowledge_index(
         knowledge_root=knowledge_root,
         docs_root=knowledge_root / "docs",
         src_root=knowledge_root / "src" if (knowledge_root / "src").exists() else None,
         deploy_root=knowledge_root / "deploy" if (knowledge_root / "deploy").exists() else None,
+        tests_root=knowledge_root / "tests" if (knowledge_root / "tests").exists() else None,
         logger=logger,
     )
 

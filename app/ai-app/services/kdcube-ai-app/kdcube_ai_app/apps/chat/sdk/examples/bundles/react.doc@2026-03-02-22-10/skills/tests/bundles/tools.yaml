@@ -1,0 +1,7 @@
+tools:
+  - id: react.read
+    role: load skill and fixture files
+    why: Read the skill text and exact `ks:tests/...` fixture files into visible context.
+  - id: exec_tools.execute_code_python
+    role: run pytest in isolated exec
+    why: Use isolated Python to execute the draft bundle smoke tests against the generated bundle.
