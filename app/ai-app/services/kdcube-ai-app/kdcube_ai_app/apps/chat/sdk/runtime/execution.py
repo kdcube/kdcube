@@ -106,6 +106,38 @@ def _resolve_bundle_storage_dir(
     )
     return None
 
+
+def _resolve_and_log_bundle_storage_dir(
+    *,
+    runtime_ctx: RuntimeCtx,
+    tool_manager: ToolSubsystem,
+    logger: AgentLogger,
+    purpose: str,
+) -> Optional[pathlib.Path]:
+    bundle_storage_dir = _resolve_bundle_storage_dir(
+        runtime_ctx=runtime_ctx,
+        tool_manager=tool_manager,
+        logger=logger,
+    )
+    if bundle_storage_dir is not None:
+        logger.log(
+            f"[exec] Final BUNDLE_STORAGE_DIR for {purpose}: {bundle_storage_dir}",
+            level="INFO",
+        )
+        return bundle_storage_dir
+
+    bundle_spec = getattr(tool_manager, "bundle_spec", None)
+    bundle_id = getattr(bundle_spec, "id", None) if bundle_spec is not None else None
+    bundle_version = getattr(bundle_spec, "version", None) if bundle_spec is not None else None
+    bundle_ref = getattr(bundle_spec, "ref", None) if bundle_spec is not None else None
+    logger.log(
+        f"[exec] Final BUNDLE_STORAGE_DIR for {purpose} is <unset>; "
+        f"runtime_ctx.bundle_storage={getattr(runtime_ctx, 'bundle_storage', None)!r} "
+        f"bundle_spec.id={bundle_id!r} bundle_spec.version={bundle_version!r} bundle_spec.ref={bundle_ref!r}",
+        level="WARNING",
+    )
+    return None
+
 def _normalize_error_dict(err: Any, *, default_where: str) -> Optional[Dict[str, Any]]:
     if not err:
         return None
@@ -215,6 +247,12 @@ async def _execute_exec_tool(
         }
         summary = "Exec tool missing code from decision stream"
         return await _emit_exec_error(summary, error_obj)
+    bundle_storage_dir = _resolve_and_log_bundle_storage_dir(
+        runtime_ctx=runtime_ctx,
+        tool_manager=tool_manager,
+        logger=logger,
+        purpose="exec tool",
+    )
     exec_t0 = time.perf_counter()
     envelope = await run_exec_tool(
         tool_manager=tool_manager,
@@ -227,6 +265,7 @@ async def _execute_exec_tool(
         workdir=workdir,
         exec_id=exec_id,
         exec_runtime=copy.deepcopy(getattr(runtime_ctx, "exec_runtime", {}) or {}),
+        bundle_storage_dir=str(bundle_storage_dir) if bundle_storage_dir is not None else None,
     )
     exec_ms = int((time.perf_counter() - exec_t0) * 1000)
     if exec_streamer:
@@ -536,28 +575,14 @@ async def execute_tool_in_isolation(
         "EXEC_CONTEXT": exec_context,
         **runtime_globals,  # TOOL_ALIAS_MAP, TOOL_MODULE_FILES, BUNDLE_SPEC, RAW_TOOL_SPECS
     }
-    bundle_storage_dir = _resolve_bundle_storage_dir(
+    bundle_storage_dir = _resolve_and_log_bundle_storage_dir(
         runtime_ctx=runtime_ctx,
         tool_manager=tool_manager,
         logger=logger,
+        purpose="isolated exec",
     )
     if bundle_storage_dir is not None:
         globals_for_runtime["BUNDLE_STORAGE_DIR"] = str(bundle_storage_dir)
-        logger.log(
-            f"[exec] Final BUNDLE_STORAGE_DIR for isolated exec: {bundle_storage_dir}",
-            level="INFO",
-        )
-    else:
-        bundle_spec = getattr(tool_manager, "bundle_spec", None)
-        bundle_id = getattr(bundle_spec, "id", None) if bundle_spec is not None else None
-        bundle_version = getattr(bundle_spec, "version", None) if bundle_spec is not None else None
-        bundle_ref = getattr(bundle_spec, "ref", None) if bundle_spec is not None else None
-        logger.log(
-            "[exec] Final BUNDLE_STORAGE_DIR for isolated exec is <unset>; "
-            f"runtime_ctx.bundle_storage={getattr(runtime_ctx, 'bundle_storage', None)!r} "
-            f"bundle_spec.id={bundle_id!r} bundle_spec.version={bundle_version!r} bundle_spec.ref={bundle_ref!r}",
-            level="WARNING",
-        )
 
     isolation = isolation_override or tools_insights.tool_isolation(tool_id=tool_id)
     # Unless there's no third-party blackboxed tools, and the tools are all verified, it is safe. TODO.

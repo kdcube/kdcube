@@ -537,6 +537,7 @@ async def run_exec_tool(
     logger: Optional[AgentLogger] = None,
     exec_id: Optional[str] = None,
     exec_runtime: Optional[Dict[str, Any]] = None,
+    bundle_storage_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute pre-written code using the same runtime as codegen.
@@ -604,6 +605,8 @@ async def run_exec_tool(
         **({"EXECUTION_ID": exec_id} if exec_id else {}),
         **runtime_globals,
     }
+    if isinstance(bundle_storage_dir, str) and bundle_storage_dir.strip():
+        globals_for_runtime["BUNDLE_STORAGE_DIR"] = bundle_storage_dir.strip()
     if exec_runtime:
         globals_for_runtime["EXEC_RUNTIME_CONFIG"] = resolve_exec_runtime_profile(
             runtime=exec_runtime,
