@@ -30,23 +30,44 @@ from typing import Iterable, Dict, Any, List, Optional, Tuple
 import re
 
 
+def _remove_target(dst: pathlib.Path) -> None:
+    if dst.is_symlink() or dst.is_file():
+        dst.unlink()
+        return
+    if dst.exists():
+        shutil.rmtree(dst)
+
+
 def _safe_symlink(src: pathlib.Path, dst: pathlib.Path) -> bool:
-    """Create a symlink dst → src. Returns True if link exists (or was created)."""
+    """Create or replace a symlink dst → src. Returns True when the link is valid."""
     try:
-        if dst.exists() or dst.is_symlink():
-            return True
+        src = src.resolve()
+        if dst.is_symlink():
+            try:
+                if dst.resolve() == src:
+                    return True
+            except Exception:
+                pass
+            _remove_target(dst)
+        elif dst.exists():
+            try:
+                if dst.resolve() == src:
+                    return True
+            except Exception:
+                pass
+            _remove_target(dst)
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.symlink_to(src, target_is_directory=src.is_dir())
-        return True
+        return dst.exists()
     except Exception:
         return False
 
 
 def _copy_tree(src: pathlib.Path, dst: pathlib.Path) -> bool:
-    """Fallback: copy entire directory tree when symlink is not possible."""
+    """Fallback: replace target with a copied directory tree when symlink is not possible."""
     try:
-        if dst.exists():
-            return True
+        if dst.exists() or dst.is_symlink():
+            _remove_target(dst)
         shutil.copytree(src, dst, dirs_exist_ok=True)
         return True
     except Exception:
