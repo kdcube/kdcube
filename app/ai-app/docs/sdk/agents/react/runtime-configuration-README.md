@@ -27,7 +27,7 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
 - `max_iterations`: max React iterations.
 - `workdir`: working directory for this run.
 - `outdir`: output directory for this run.
-- `bundle_storage`: bundle shared storage root (read‑only knowledge space root).
+- `bundle_storage`: optional per-bundle managed storage directory for bundle-owned data such as cloned repos, built indexes, and other readonly data prepared by the bundle.
 - `model_service`: model service handle.
 - `knowledge_search_fn`: bundle‑supplied search function for `react.search_knowledge`.
 - `knowledge_read_fn`: bundle‑supplied resolver for `react.read(ks:...)` paths.
@@ -40,6 +40,17 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
 - `debug_timeline`: when `true`, write the fully rendered model context to `debug/rendering/` (one file per render).
 - `session`: session-level configuration (see below).
 - `cache`: cache-related limits (see below).
+
+### `bundle_storage` semantics
+
+- `bundle_storage` is not the shared storage root. It is the resolved directory for the current bundle under that shared root, typically isolated by tenant and project.
+- Main workflow initialization attempts to populate it from bundle spec + tenant + project via the bundle storage helper.
+- Cached workflow instances should also refresh it when request context is rebound to a new tenant/project/turn.
+- Typical contents are bundle-managed assets such as cloned repos, generated indexes, and readonly data areas prepared by the bundle.
+- Bundles that expose `ks:` usually rely on this directory together with their `knowledge_read_fn`.
+- In isolated exec, the corresponding exec-visible env var is `BUNDLE_STORAGE_DIR`.
+- Isolated exec can derive the same directory from bundle spec + tenant + project when `RuntimeCtx.bundle_storage` is missing, but that is a fallback for robustness, not the primary contract.
+- Many tests and synthetic runtime constructions use `RuntimeCtx()` directly, so code must not assume `bundle_storage` is always populated outside real workflow initialization.
 
 ## RuntimeSessionConfig (RuntimeCtx.session)
 

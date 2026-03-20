@@ -53,6 +53,7 @@ async def test_react_doc_exec_space_tool_rejects_non_exec_runtime(monkeypatch):
 
     assert result["ok"] is False
     assert result["error"]["code"] == "exec_only_tool"
+    assert result["error"]["details"]["logical_ref"] == "ks:docs"
     assert result["ret"]["browseable"] is False
     assert result["ret"]["physical_path"] is None
     assert result["ret"]["access"] == "r"
@@ -99,6 +100,26 @@ async def test_react_doc_exec_space_tool_returns_managed_error_for_missing_names
     assert result["ok"] is False
     assert result["error"]["code"] == "namespace_not_found"
     assert result["error"]["managed"] is True
+    assert "ks:docs" in result["error"]["message"]
     assert result["ret"]["physical_path"] is None
     assert result["ret"]["access"] == "r"
     assert result["ret"]["browseable"] is False
+
+
+@pytest.mark.asyncio
+async def test_react_doc_exec_space_tool_explains_missing_bundle_storage(monkeypatch):
+    monkeypatch.setenv("RUNTIME_GLOBALS_JSON", "{}")
+    monkeypatch.setenv("OUTPUT_DIR", "/workspace/out")
+    monkeypatch.setenv("WORKDIR", "/workspace/work")
+    monkeypatch.delenv("BUNDLE_STORAGE_DIR", raising=False)
+    sys.modules.pop("_kdcube_react_doc_knowledge_resolver", None)
+
+    module = _load_exec_space_tools_module()
+    result = await module.tools.resolve_namespace("ks:tests")
+
+    assert result["ok"] is False
+    assert result["error"]["code"] == "bundle_storage_unavailable"
+    assert result["error"]["managed"] is True
+    assert "BUNDLE_STORAGE_DIR is missing" in result["error"]["message"]
+    assert "substitute tests" in result["error"]["message"]
+    assert result["ret"]["physical_path"] is None

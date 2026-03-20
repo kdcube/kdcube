@@ -50,6 +50,13 @@ except Exception:
 KNOWLEDGE_ROOT: Optional[pathlib.Path] = None
 
 
+class ExecNamespaceResolutionError(RuntimeError):
+    def __init__(self, *, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def _safe_knowledge_relpath(rel: str) -> bool:
     if rel is None:
         return False
@@ -74,6 +81,31 @@ def _ensure_knowledge_root() -> Optional[pathlib.Path]:
         return None
     KNOWLEDGE_ROOT = candidate
     return KNOWLEDGE_ROOT
+
+
+def require_exec_knowledge_root() -> pathlib.Path:
+    raw = (os.environ.get("BUNDLE_STORAGE_DIR") or "").strip()
+    if not raw:
+        raise ExecNamespaceResolutionError(
+            code="bundle_storage_unavailable",
+            message=(
+                "Bundle readonly data is not available in this isolated exec runtime because "
+                "BUNDLE_STORAGE_DIR is missing. This run cannot browse bundle-managed namespaces "
+                "such as ks:tests. Stop and report this blocker instead of inventing substitute tests or files."
+            ),
+        )
+
+    root = _ensure_knowledge_root()
+    if not root:
+        raise ExecNamespaceResolutionError(
+            code="bundle_storage_unavailable",
+            message=(
+                "Bundle readonly data was expected at BUNDLE_STORAGE_DIR but that path is not present "
+                f"inside this isolated exec runtime: {raw}. Stop and report this blocker instead of "
+                "silently switching to substitute validation inputs."
+            ),
+        )
+    return root
 
 
 def prepare_knowledge_space(
@@ -128,25 +160,50 @@ def resolve_exec_namespace(*, logical_ref: str, **kwargs: Any) -> Dict[str, Any]
         "browseable": False,
     }
     if not raw:
-        return unavailable
+        raise ExecNamespaceResolutionError(
+            code="invalid_logical_ref",
+            message="logical_ref is required and must be a non-empty ks: path.",
+        )
     if not raw.startswith("ks:"):
-        return unavailable
-    if not _ensure_knowledge_root():
-        return unavailable
+        raise ExecNamespaceResolutionError(
+            code="unsupported_namespace",
+            message=(
+                f"Unsupported namespace '{raw}'. react.doc bundle_data.resolve_namespace only accepts ks: paths."
+            ),
+        )
+
+    root = require_exec_knowledge_root()
 
     rel = raw[len("ks:"):].lstrip("/")
     if not _safe_knowledge_relpath(rel):
-        return unavailable
+        raise ExecNamespaceResolutionError(
+            code="invalid_logical_ref",
+            message=(
+                f"Invalid logical_ref '{raw}'. ks: paths must stay within the namespace root and cannot contain '..'."
+            ),
+        )
 
-    root = pathlib.Path(KNOWLEDGE_ROOT).resolve()
+    root = pathlib.Path(root).resolve()
     target = (root / rel).resolve() if rel else root
     try:
         target.relative_to(root)
     except Exception:
-        return unavailable
+        raise ExecNamespaceResolutionError(
+            code="invalid_logical_ref",
+            message=(
+                f"Invalid logical_ref '{raw}'. Resolved path escapes the prepared knowledge root."
+            ),
+        )
 
     if not target.exists():
-        return unavailable
+        raise ExecNamespaceResolutionError(
+            code="namespace_not_found",
+            message=(
+                f"The requested namespace/path '{raw}' is not present under the prepared knowledge root '{root}'. "
+                "For react.doc this usually means that subtree was not materialized into knowledge space for this run "
+                "(for example the configured repo path or tests_root/docs_root/src_root/deploy_root did not exist)."
+            ),
+        )
 
     return {
         "physical_path": str(target),

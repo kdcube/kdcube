@@ -153,6 +153,16 @@ WORKSPACE_MODEL_GUIDE = """
 - If you need deeper filesystem-style exploration than the current tools expose, use isolated code or bundle-specific helpers when available. Never assume host shell access.
 """
 
+SCENARIO_FAILURE_STRICTNESS = """
+[SCENARIO / SKILL FAILURE HANDLING (HARD)]:
+- If you are following a user-requested scenario, validation path, skill, or protocol, do NOT silently replace it with a different path just to get a green result.
+- If a required namespace, skill, artifact, runtime prerequisite, test suite, or tool precondition fails, say so explicitly and treat it as a blocker.
+- Only apply an obvious documented recovery step when the tool/skill/runtime contract clearly defines it.
+- If no obvious documented recovery exists, stop, admit the failure, and ask the user whether they want you to continue by finding workarounds.
+- Never invent substitute tests, substitute sources, substitute artifacts, or substitute validation inputs unless the user explicitly approves that fallback.
+- Managed tool errors that explain missing prerequisites are blockers. Do not reinterpret them as permission to improvise around the failed scenario.
+"""
+
 PATHS_GUIDE = """
 [PATHS & ARTIFACT IDS — HOW TO REFERENCE DATA]
 Agents see PHYSICAL relative paths in the timeline and tool results, and they also see LOGICAL paths which address conversation/context data directly.
@@ -259,6 +269,7 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - Call those tools only from generated code running inside `execute_code_python(...)`.
 - Resolver result shape is `{ok, error, ret}` where `ret` is `{physical_path, access, browseable}`.
 - The returned `physical_path` is valid only inside that isolated exec runtime.
+- If the resolver returns `ok=False`, treat that as a blocker for the requested namespace-driven scenario unless a documented recovery path exists.
 - Keep the original resolver input `logical_ref` as the logical base.
 - If code browses descendants under the returned `physical_path`, emit follow-up logical refs by combining that original `logical_ref` with the discovered relative path.
 - Example:

@@ -140,17 +140,6 @@ class BaseWorkflow():
         self.answer_system_prompt = answer_system_prompt
         # Runtime context + context browser are constructed once per workflow instance
         try:
-            bundle_ws = None
-            try:
-                from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
-                bundle_ws = storage_for_spec(
-                    spec=self.config.ai_bundle_spec,
-                    tenant=self.comm_context.actor.tenant_id,
-                    project=self.comm_context.actor.project_id,
-                    ensure=True,
-                )
-            except Exception:
-                bundle_ws = None
             self.runtime_ctx = RuntimeCtx(
                 tenant=self.comm_context.actor.tenant_id,
                 project=self.comm_context.actor.project_id,
@@ -161,7 +150,7 @@ class BaseWorkflow():
                 turn_id=self.comm_context.routing.turn_id,
                 bundle_id=self.config.ai_bundle_spec.id,
                 max_tokens=getattr(self.config, "max_tokens", None),
-                bundle_storage=str(bundle_ws) if bundle_ws else None,
+                bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
                 continuation_source=self.continuation_source,
             )
             self.ctx_browser = ContextBrowser(
@@ -209,6 +198,20 @@ class BaseWorkflow():
             raw = self.get_prop_path(self.bundle_props or {}, "exec_runtime")
         runtime_ctx.exec_runtime = copy.deepcopy(normalize_exec_runtime_config(raw))
 
+    def _resolve_runtime_ctx_bundle_storage(self) -> Optional[str]:
+        try:
+            from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
+
+            bundle_ws = storage_for_spec(
+                spec=getattr(self.config, "ai_bundle_spec", None),
+                tenant=getattr(getattr(self.comm_context, "actor", None), "tenant_id", None),
+                project=getattr(getattr(self.comm_context, "actor", None), "project_id", None),
+                ensure=True,
+            )
+            return str(bundle_ws) if bundle_ws else None
+        except Exception:
+            return None
+
     def rebind_request_context(
         self,
         *,
@@ -241,6 +244,7 @@ class BaseWorkflow():
                 runtime_ctx.timezone = comm_context.user.timezone
                 runtime_ctx.conversation_id = comm_context.routing.conversation_id
                 runtime_ctx.turn_id = comm_context.routing.turn_id
+                runtime_ctx.bundle_storage = self._resolve_runtime_ctx_bundle_storage()
                 runtime_ctx.continuation_source = self.continuation_source
                 self._sync_runtime_ctx_bundle_props()
 

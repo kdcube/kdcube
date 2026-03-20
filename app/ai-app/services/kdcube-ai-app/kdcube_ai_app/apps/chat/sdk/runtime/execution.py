@@ -62,6 +62,50 @@ def _build_exec_context(
         "exec_runtime": copy.deepcopy(getattr(runtime_ctx, "exec_runtime", {}) or {}),
     }
 
+
+def _resolve_bundle_storage_dir(
+    *,
+    runtime_ctx: RuntimeCtx,
+    tool_manager: ToolSubsystem,
+    logger: AgentLogger,
+) -> Optional[pathlib.Path]:
+    raw = (runtime_ctx.bundle_storage or "").strip() if isinstance(runtime_ctx.bundle_storage, str) else ""
+    if raw:
+        try:
+            resolved = pathlib.Path(raw).expanduser().resolve()
+        except Exception:
+            resolved = pathlib.Path(raw).expanduser()
+        logger.log(
+            f"[exec] Using bundle storage dir from runtime_ctx.bundle_storage: {resolved}",
+            level="INFO",
+        )
+        return resolved
+
+    try:
+        from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
+
+        tenant = runtime_ctx.tenant or getattr(tool_manager.comm, "tenant", None)
+        project = runtime_ctx.project or getattr(tool_manager.comm, "project", None)
+        storage = storage_for_spec(
+            spec=getattr(tool_manager, "bundle_spec", None),
+            tenant=tenant,
+            project=project,
+            ensure=True,
+        )
+        if storage:
+            logger.log(
+                f"[exec] Derived missing bundle storage dir from bundle spec: {storage}",
+                level="INFO",
+            )
+            return pathlib.Path(storage).expanduser().resolve()
+    except Exception as e:
+        logger.log(f"[exec] Failed to derive bundle storage dir: {e}", level="WARNING")
+    logger.log(
+        "[exec] Bundle storage dir unavailable: runtime_ctx.bundle_storage was empty and derivation did not succeed",
+        level="WARNING",
+    )
+    return None
+
 def _normalize_error_dict(err: Any, *, default_where: str) -> Optional[Dict[str, Any]]:
     if not err:
         return None
@@ -492,8 +536,13 @@ async def execute_tool_in_isolation(
         "EXEC_CONTEXT": exec_context,
         **runtime_globals,  # TOOL_ALIAS_MAP, TOOL_MODULE_FILES, BUNDLE_SPEC, RAW_TOOL_SPECS
     }
-    if runtime_ctx.bundle_storage:
-        globals_for_runtime["BUNDLE_STORAGE_DIR"] = str(runtime_ctx.bundle_storage)
+    bundle_storage_dir = _resolve_bundle_storage_dir(
+        runtime_ctx=runtime_ctx,
+        tool_manager=tool_manager,
+        logger=logger,
+    )
+    if bundle_storage_dir is not None:
+        globals_for_runtime["BUNDLE_STORAGE_DIR"] = str(bundle_storage_dir)
 
     isolation = isolation_override or tools_insights.tool_isolation(tool_id=tool_id)
     # Unless there's no third-party blackboxed tools, and the tools are all verified, it is safe. TODO.

@@ -29,15 +29,26 @@ def _ok_ret_result(ret: Any) -> dict[str, Any]:
     return {"ok": True, "error": None, "ret": ret}
 
 
-def _error_result(*, code: str, message: str, where: str, managed: bool, ret: Any) -> dict[str, Any]:
+def _error_result(
+    *,
+    code: str,
+    message: str,
+    where: str,
+    managed: bool,
+    ret: Any,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error = {
+        "code": code,
+        "message": message,
+        "where": where,
+        "managed": managed,
+    }
+    if details:
+        error["details"] = details
     return {
         "ok": False,
-        "error": {
-            "code": code,
-            "message": message,
-            "where": where,
-            "managed": managed,
-        },
+        "error": error,
         "ret": ret,
     }
 
@@ -71,6 +82,7 @@ class ExecSpaceTools:
             "Returns an envelope: {ok, error, ret}. ret shape is "
             "{physical_path: str | null, access: 'r' | 'rw', browseable: bool}. "
             "physical_path is valid only inside the current isolated exec runtime. "
+            "If ok=false, treat that as a blocker for the requested namespace-driven scenario unless a documented recovery path exists. "
             "If generated code discovers useful descendants under physical_path, it should derive follow-up logical "
             "refs from the logical_ref input it originally passed to this tool and emit those refs back through "
             "OUTPUT_DIR files or short user.log output."
@@ -105,31 +117,30 @@ class ExecSpaceTools:
                 where=where,
                 managed=True,
                 ret=unavailable,
+                details={"logical_ref": str(logical_ref or "").strip()},
             )
 
         try:
             resolver = _load_knowledge_resolver()
             resolved = resolver.resolve_exec_namespace(logical_ref=str(logical_ref or "").strip())
-            if not resolved.get("physical_path"):
+            return _ok_ret_result(resolved)
+        except Exception as e:
+            if getattr(e, "code", None):
                 return _error_result(
-                    code="namespace_not_found",
-                    message=(
-                        "The requested namespace/path is not available in this isolated exec runtime. "
-                        "If you need to browse descendants, call the resolver on the logical namespace root "
-                        "you want to use as the follow-up logical base."
-                    ),
+                    code=str(getattr(e, "code", "namespace_resolution_failed")),
+                    message=str(getattr(e, "message", "") or str(e) or "resolve_namespace failed").strip(),
                     where=where,
                     managed=True,
                     ret=unavailable,
+                    details={"logical_ref": str(logical_ref or "").strip()},
                 )
-            return _ok_ret_result(resolved)
-        except Exception as e:
             return _error_result(
                 code=type(e).__name__,
                 message=str(e).strip() or "resolve_namespace failed",
                 where=where,
                 managed=False,
                 ret=unavailable,
+                details={"logical_ref": str(logical_ref or "").strip()},
             )
 
 
