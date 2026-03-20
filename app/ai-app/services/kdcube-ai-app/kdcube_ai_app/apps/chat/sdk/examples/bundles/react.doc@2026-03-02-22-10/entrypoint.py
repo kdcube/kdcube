@@ -35,6 +35,8 @@ import pathlib
 import os
 import shutil
 import traceback
+import fcntl
+from contextlib import contextmanager
 from typing import Any, Dict
 
 from langgraph.graph import StateGraph, START, END
@@ -52,6 +54,63 @@ import sys
 
 # Unique bundle ID — used by the plugin system to discover and load this bundle
 BUNDLE_ID = "react.doc"
+
+
+def _knowledge_lock_path(storage_root: pathlib.Path) -> pathlib.Path:
+    return storage_root / ".knowledge.lock"
+
+
+def _knowledge_signature_path(storage_root: pathlib.Path) -> pathlib.Path:
+    return storage_root / ".knowledge.signature"
+
+
+@contextmanager
+def _knowledge_build_lock(storage_root: pathlib.Path):
+    storage_root.mkdir(parents=True, exist_ok=True)
+    lock_path = _knowledge_lock_path(storage_root)
+    with open(lock_path, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def _read_shared_knowledge_signature(storage_root: pathlib.Path) -> str | None:
+    path = _knowledge_signature_path(storage_root)
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    return raw or None
+
+
+def _write_shared_knowledge_signature(storage_root: pathlib.Path, signature: str) -> None:
+    path = _knowledge_signature_path(storage_root)
+    path.write_text(f"{signature}\n", encoding="utf-8")
+
+
+def _knowledge_outputs_ready(
+    *,
+    storage_root: pathlib.Path,
+    docs_root: pathlib.Path | None,
+    src_root: pathlib.Path | None,
+    deploy_root: pathlib.Path | None,
+    tests_root: pathlib.Path | None,
+) -> bool:
+    if not (storage_root / "index.json").exists():
+        return False
+    if not (storage_root / "index.md").exists():
+        return False
+    if docs_root and not (storage_root / "docs").exists():
+        return False
+    if src_root and not (storage_root / "src").exists():
+        return False
+    if deploy_root and not (storage_root / "deploy").exists():
+        return False
+    if tests_root and not (storage_root / "tests").exists():
+        return False
+    return True
 
 
 # @agentic_workflow — registration decorator: on application startup the system
@@ -399,24 +458,43 @@ class ReactWorkflow(BaseEntrypoint):
                 ),
                 "INFO",
             )
-            if self._knowledge_signature == signature:
-                self.logger.log(
-                    f"[react.doc] knowledge build skipped ({reason}): signature cache hit for storage={ws_root}",
-                    "INFO",
+            with _knowledge_build_lock(ws_root):
+                outputs_ready = _knowledge_outputs_ready(
+                    storage_root=ws_root,
+                    docs_root=docs_root,
+                    src_root=src_root,
+                    deploy_root=deploy_root,
+                    tests_root=tests_root,
                 )
-                return None
-            # Build or refresh the knowledge index under bundle storage.
-            knowledge_resolver.prepare_knowledge_space(
-                bundle_root=bundle_root,
-                knowledge_root=ws_root,
-                docs_root=docs_root,
-                src_root=src_root,
-                deploy_root=deploy_root,
-                tests_root=tests_root,
-                validate_refs=validate_refs,
-                logger=self.logger,
-            )
-            self._knowledge_signature = signature
+                shared_signature = _read_shared_knowledge_signature(ws_root)
+                if shared_signature == signature and outputs_ready:
+                    self._knowledge_signature = signature
+                    self.logger.log(
+                        f"[react.doc] knowledge build skipped ({reason}): shared signature cache hit for storage={ws_root}",
+                        "INFO",
+                    )
+                    return None
+                if self._knowledge_signature == signature and outputs_ready:
+                    if shared_signature != signature:
+                        _write_shared_knowledge_signature(ws_root, signature)
+                    self.logger.log(
+                        f"[react.doc] knowledge build skipped ({reason}): local signature cache hit for storage={ws_root}",
+                        "INFO",
+                    )
+                    return None
+                # Build or refresh the knowledge index under bundle storage.
+                knowledge_resolver.prepare_knowledge_space(
+                    bundle_root=bundle_root,
+                    knowledge_root=ws_root,
+                    docs_root=docs_root,
+                    src_root=src_root,
+                    deploy_root=deploy_root,
+                    tests_root=tests_root,
+                    validate_refs=validate_refs,
+                    logger=self.logger,
+                )
+                _write_shared_knowledge_signature(ws_root, signature)
+                self._knowledge_signature = signature
             self.logger.log(
                 (
                     f"[react.doc] knowledge build done ({reason}): "
