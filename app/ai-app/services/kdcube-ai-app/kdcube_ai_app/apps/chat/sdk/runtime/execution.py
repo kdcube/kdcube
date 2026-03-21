@@ -172,6 +172,38 @@ def _unwrap_tool_envelope(output: Any) -> Tuple[Any, Optional[Dict[str, Any]], b
     return tool_ret, (tool_error if tool_error is not None else None), tool_ok
 
 
+def _preserve_executed_programs(
+    *,
+    source_dir: pathlib.Path,
+    outdir: pathlib.Path,
+    logger: AgentLogger,
+    execution_dir_name: str,
+) -> None:
+    dest_dir = outdir / "executed_programs"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    base_name = _safe_exec_id(execution_dir_name)
+    run_dir = dest_dir / base_name
+    suffix = 0
+    while run_dir.exists():
+        suffix += 1
+        run_dir = dest_dir / f"{base_name}_{suffix}"
+    run_dir.mkdir(parents=True, exist_ok=False)
+
+    copied: list[str] = []
+    for src_name in ("main.py", "user_code.py"):
+        src = source_dir / src_name
+        if not src.exists():
+            continue
+        shutil.copy2(src, run_dir / src_name)
+        copied.append(src_name)
+
+    for name in copied:
+        logger.log(
+            f"[react.exec] preserved executed program as executed_programs/{run_dir.name}/{name}"
+        )
+
+
 async def _execute_exec_tool(
     *,
     runtime_ctx: RuntimeCtx,
@@ -279,19 +311,16 @@ async def _execute_exec_tool(
             logger.log("[react.exec] Failed to emit execution status", level="WARNING")
 
     exec_workdir = pathlib.Path(envelope.get("workdir") or "")
-    codefile_path = exec_workdir / "main.py"
     try:
-        if codefile_path.exists():
-            dest_dir = outdir / "executed_programs"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            i = 0
-            while (dest_dir / f"{_safe_label(tool_id)}_{i}_main.py").exists():
-                i += 1
-            dest_main = dest_dir / f"{_safe_label(tool_id)}_{i}_main.py"
-            shutil.copy2(codefile_path, dest_main)
-            logger.log(f"[react.exec] main.py preserved as {dest_main.relative_to(outdir)}")
+        if exec_workdir.exists():
+            _preserve_executed_programs(
+                source_dir=exec_workdir,
+                outdir=outdir,
+                logger=logger,
+                execution_dir_name=exec_id or tool_call_id or f"{_safe_label(tool_id)}_0",
+            )
     except Exception as e:
-        logger.log(f"[react.exec] Failed to preserve main.py: {e}", level="WARNING")
+        logger.log(f"[react.exec] Failed to preserve executed programs: {e}", level="WARNING")
 
     err_obj = envelope.get("error")
     report_text = (envelope.get("report_text") or "").strip()
@@ -531,8 +560,8 @@ async def execute_tool_in_isolation(
 
     Additionally:
       - If workdir/main.py (or another discovered main.py) exists after execution,
-        it is copied to: outdir/executed_programs/{safe_tool_id}_{call_index}_main.py
-        where call_index == len(files) from tool_calls_index.json for this tool_id.
+        it is copied to: outdir/executed_programs/<execution_id>/main.py
+        and user_code.py is copied beside it when present.
     """
     tool_id = tool_execution_context["tool_id"]
     params = tool_execution_context.get("params") or {}
@@ -728,31 +757,26 @@ async def execute_tool_in_isolation(
     else:
         summary = ""
 
-    # Preserve executed main.py (existing code)
+    # Preserve executed program sources
     try:
-        # Prefer workdir/main.py; otherwise pick the newest main.py under workdir
-        src_main = workdir / "main.py"
-        if not src_main.exists():
+        source_dir = workdir
+        if not (source_dir / "main.py").exists():
             candidates = sorted(workdir.rglob("main.py"), key=lambda p: p.stat().st_mtime, reverse=True)
-            src_main = candidates[0] if candidates else None
+            source_dir = candidates[0].parent if candidates else None
 
-        if src_main and src_main.exists():
-            dest_dir = outdir / "executed_programs"
-            dest_dir.mkdir(parents=True, exist_ok=True)
-            label = f"{_safe_label(tool_id)}_{call_index}_main.py"
-            dest_main = dest_dir / label
-
-            # Avoid rare collision
-            if dest_main.exists():
-                i = 1
-                while (dest_dir / f"{_safe_label(tool_id)}_{call_index}_{i}_main.py").exists():
-                    i += 1
-                dest_main = dest_dir / f"{_safe_label(tool_id)}_{call_index}_{i}_main.py"
-
-            shutil.copy2(src_main, dest_main)
-            logger.log(f"[react.exec] main.py preserved as {dest_main.relative_to(outdir)}")
+        if source_dir is not None and (source_dir / "main.py").exists():
+            _preserve_executed_programs(
+                source_dir=source_dir,
+                outdir=outdir,
+                logger=logger,
+                execution_dir_name=(
+                    tool_execution_context.get("exec_id")
+                    or tool_execution_context.get("tool_call_id")
+                    or f"{_safe_label(tool_id)}_{call_index}"
+                ),
+            )
     except Exception as e:
-        logger.log(f"[react.exec] Failed to preserve main.py: {e}", level="WARNING")
+        logger.log(f"[react.exec] Failed to preserve executed programs: {e}", level="WARNING")
 
     # inputs/call_record_* not used in v2
     return {
@@ -776,7 +800,7 @@ async def execute_tool(
     """
     Unified entry with error capture and optional LLM summarization.
       - if tool_id ∈ IN_MEMORY_TOOL_IDS → run in-process (io_tools.tool_call)
-      - else → run in sandbox subprocess (preserves main.py into executed_programs/)
+      - else → run in sandbox subprocess (preserves main.py/user_code.py into executed_programs/<execution_id>/)
     """
     tool_id = tool_execution_context.get("tool_id") or ""
     runtime_override = None

@@ -10,6 +10,7 @@ import kdcube_ai_app.apps.chat.sdk.tools.exec_tools as exec_tools_module
 from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     _build_exec_context_from_comm_spec,
     _build_exec_error_payload,
+    _build_exec_loader_wrapper,
     run_exec_tool,
 )
 
@@ -147,3 +148,62 @@ async def test_run_exec_tool_forwards_bundle_storage_dir_to_runtime(tmp_path, mo
 
     assert result["ok"] is True
     assert captured["globals"]["BUNDLE_STORAGE_DIR"] == "/bundle-storage/demo-tenant/demo-project/react.doc__test"
+
+
+@pytest.mark.asyncio
+async def test_run_exec_tool_preserves_user_code_verbatim_and_uses_loader_wrapper(tmp_path, monkeypatch):
+    captured = {}
+    original_code = (
+        "entrypoint_content = '''\"\"\"Minimal bundle entrypoint.\"\"\"\n"
+        "\n"
+        "from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint\n"
+        "\n"
+        "BUNDLE_ID = \"minimal_test_bundle\"\n"
+        "\n"
+        "class MinimalWorkflow(BaseEntrypoint):\n"
+        "    \"\"\"Minimal workflow implementation.\"\"\"\n"
+        "    pass\n"
+        "'''\n"
+        "await agent_io_tools.tool_call(fn=None, params={}, call_reason='x', tool_id='y')\n"
+    )
+
+    class _FakeRuntime:
+        def __init__(self, logger):
+            self.logger = logger
+
+        async def execute_py_code(self, **kwargs):
+            workdir = kwargs["workdir"]
+            captured["main.py"] = (workdir / "main.py").read_text(encoding="utf-8")
+            captured["user_code.py"] = (workdir / "user_code.py").read_text(encoding="utf-8")
+            return {"ok": True, "returncode": 0}
+
+    monkeypatch.setattr(exec_tools_module, "_InProcessRuntime", _FakeRuntime)
+    monkeypatch.setattr(
+        exec_tools_module,
+        "build_portable_spec",
+        lambda **_kwargs: SimpleNamespace(to_json=lambda: "{}"),
+    )
+
+    tool_manager = SimpleNamespace(
+        svc=object(),
+        comm=SimpleNamespace(_export_comm_spec_for_runtime=lambda: {}),
+        export_runtime_globals=lambda: {},
+        tool_modules_tuple_list=lambda: [],
+        bundle_root=None,
+    )
+
+    result = await run_exec_tool(
+        tool_manager=tool_manager,
+        output_contract={},
+        code=original_code,
+        contract=[],
+        timeout_s=30,
+        workdir=tmp_path / "work",
+        outdir=tmp_path / "out",
+    )
+
+    assert result["ok"] is True
+    assert captured["user_code.py"] == original_code
+    assert captured["main.py"] == _build_exec_loader_wrapper()
+    assert "ast.PyCF_ALLOW_TOP_LEVEL_AWAIT" in captured["main.py"]
+    assert "scope['__name__'] = '__kdcube_exec_user_code__'" in captured["main.py"]

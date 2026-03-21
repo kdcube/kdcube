@@ -35,6 +35,12 @@ The isolated execution system allows running untrusted AI-generated code safely 
 - **Tool proxying (Docker mode)** - All tool calls are proxied via Unix socket to the supervisor
 - **Read-only filesystem** - Container has read-only root, only workspace is writable
 
+Current executed-program layout:
+- the isolated runtime still enters through `work/main.py`
+- `main.py` is now a stable platform loader
+- the actual verbatim agent program is stored in `work/user_code.py`
+- preserved sources are grouped under `out/executed_programs/<execution_id>/`
+
 **Supported deployment modes:**
 1. **Bare metal** - Chat service runs on host, spawns Docker containers for code execution
 2. **Docker-in-Docker** - Chat service runs in Docker, spawns sibling containers for code execution

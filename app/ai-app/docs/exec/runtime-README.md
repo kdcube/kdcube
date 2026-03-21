@@ -27,7 +27,7 @@ These are transported separately in external exec.
 │  ┌───────────────────────────────────────────────────────────────┐    │
 │  │ Agent Service (Python)                                        │    │
 │  │                                                                │    │
-│  │  1. Codegen produces main.py with tool calls                  │    │
+│  │  1. Codegen produces main.py loader + user_code.py            │    │
 │  │  2. Prepares runtime_globals:                                 │    │
 │  │     - PORTABLE_SPEC_JSON (ModelService, KB, Redis config)     │    │
 │  │     - TOOL_ALIAS_MAP (io_tools → dyn_io_tools_abc123)        │    │
@@ -73,7 +73,7 @@ These are transported separately in external exec.
 │         ▼                          │          ▼                       │  │
 │  ┌──────────────────────┐          │   ┌──────────────────────────┐  │  │
 │  │ SUPERVISOR           │          │   │ EXECUTOR SUBPROCESS      │  │  │
-│  │ (async server)       │◄─────────┼───│ (main.py)                │  │  │
+│  │ (async server)       │◄─────────┼───│ (main.py loader)         │  │  │
 │  │                      │  Unix    │   │                          │  │  │
 │  │ - Port 0 (no listen) │  Socket  │   │ preexec_fn():            │  │  │
 │  │ - UID 0 (root)       │          │   │  1. unshare(CLONE_NEWNET)│  │  │
@@ -91,8 +91,9 @@ These are transported separately in external exec.
 │  │ • generate_content() │          │   │   limited                │  │  │
 │  └──────────────────────┘          │   │                          │  │  │
 │         ▲                          │   │ Executes:                │  │  │
-│         │                          │   │ • User logic             │  │  │
-│         │ Tool call via socket     │   │ • Calculations           │  │  │
+│         │                          │   │ • main.py loader         │  │  │
+│         │ Tool call via socket     │   │ • user_code.py logic     │  │  │
+│         │                          │   │ • Calculations           │  │  │
 │         │                          │   │ • Data transformations   │  │  │
 │         │                          │   │                          │  │  │
 │         │                          │   │ Tool calls proxied:      │  │  │
@@ -314,8 +315,8 @@ These are transported separately in external exec.
 │  • Manage tool accounting & audit trail                                │
 │  • Dump delta cache & cleanup                                          │
 │                                                                         │
-│  Executor (main.py subprocess):                                        │
-│  • Run user-generated code                                             │
+│  Executor (main.py loader subprocess):                                 │
+│  • Run loader-owned main.py, which executes user_code.py               │
 │  • Execute pure computation                                            │
 │  • Proxy tool calls to supervisor                                      │
 │  • Write result.json                                                   │

@@ -246,11 +246,12 @@ ECS FARGATE EXEC TASK
 │  │       → ModelService, KB client, Redis comm, tool bindings
 │  │     start PrivilegedSupervisor on /tmp/supervisor.sock
 │  │
-│  ├── run_py_code()     ← main.py in executor subprocess
+│  ├── run_py_code()     ← main.py loader in executor subprocess
 │  │     executor subprocess:
 │  │       setuid(1001)                  (unprivileged)
 │  │       unshare(CLONE_NEWNET)         (network-isolated — best-effort)
 │  │       executes main.py
+│  │       main.py loads and executes user_code.py
 │  │       tool calls → Unix socket → supervisor
 │  │     supervisor:
 │  │       handles tool calls (web_search, write_file, llm, kb, ...)
@@ -445,7 +446,7 @@ Injected via `containerOverrides.environment` at `run_task` call time:
 
 | Variable | Set by | Purpose |
 |---|---|---|
-| `WORKDIR` | fargate.py | `/workspace/work` — where main.py runs |
+| `WORKDIR` | fargate.py | `/workspace/work` — where main.py loader and user_code.py live |
 | `OUTPUT_DIR` | fargate.py | `/workspace/out` — artifacts, result.json |
 | `LOG_DIR` | fargate.py | `/workspace/out/logs` |
 | `LOG_FILE_PREFIX` | fargate.py | `executor` |

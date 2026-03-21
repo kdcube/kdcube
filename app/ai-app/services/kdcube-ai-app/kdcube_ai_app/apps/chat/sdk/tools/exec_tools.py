@@ -9,7 +9,6 @@ import re
 import pathlib
 import traceback
 import uuid
-import textwrap
 import mimetypes
 from typing import Any, Dict, Optional, Annotated, Tuple, List
 
@@ -63,6 +62,7 @@ TEXT_MIME_TYPES = {
     "application/csv",
     "text/csv",
 }
+EXEC_USER_CODE_FILENAME = "user_code.py"
 
 
 def _is_text_mime(mime: str) -> bool:
@@ -80,6 +80,51 @@ def _strip_exec_banner(text: str) -> str:
     if lines and lines[0].startswith("===== EXECUTION "):
         return "\n".join(lines[1:]).lstrip()
     return text
+
+
+def _build_exec_loader_wrapper(*, user_code_filename: str = EXEC_USER_CODE_FILENAME) -> str:
+    return "\n".join([
+        "import asyncio",
+        "import ast",
+        "import inspect",
+        "import pathlib",
+        "import sys",
+        "import traceback",
+        "",
+        f"USER_CODE_PATH = pathlib.Path(__file__).with_name({user_code_filename!r})",
+        "",
+        "async def _run_user_code():",
+        "    source = USER_CODE_PATH.read_text(encoding='utf-8')",
+        "    scope = dict(globals())",
+        "    scope['__file__'] = str(USER_CODE_PATH)",
+        "    scope['__name__'] = '__kdcube_exec_user_code__'",
+        "    code_obj = compile(",
+        "        source,",
+        "        str(USER_CODE_PATH),",
+        "        'exec',",
+        "        flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,",
+        "        dont_inherit=True,",
+        "    )",
+        "    result = eval(code_obj, scope, scope)",
+        "    if inspect.isawaitable(result):",
+        "        await result",
+        "",
+        "async def _main():",
+        "    try:",
+        "        await _run_user_code()",
+        "    except Exception as e:",
+        "        tb = traceback.format_exc()",
+        "        try:",
+        "            await fail(\"Unhandled error\", where=\"main\", error=f\"{type(e).__name__}: {e}\", details=tb, managed=False)",
+        "        except Exception:",
+        "            pass",
+        "        print(tb, file=sys.stderr)",
+        "        raise",
+        "",
+        "if __name__ == '__main__':",
+        "    asyncio.run(_main())",
+        "",
+    ])
 
 
 def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
@@ -397,11 +442,12 @@ class ExecTools:
             "You cannot provide the code in the call of this function directly.\n"
             "\n"
             "[Requirements to code which can be executed by this tool]:\n"
-            "- Must be SNIPPET that is inserted inside an async main() wrapper.\n"
-            "- The snippet SHOULD use async operations (await where needed).\n"
+            "- Must be a Python module body / snippet.\n"
+            "- Top-level await is allowed.\n"
             "\n"
             "RUNTIME BEHAVIOR\n"
-            "- The executor wraps your snippet into an async main() and runs it.\n"
+            "- The executor runs your snippet verbatim from a separate user_code.py module.\n"
+            "- The executor supports top-level await and does not indent or rewrite your program body.\n"
             "- After execution, the executor checks for the requested output files.\n"
             "- Each requested file that exists and is non-empty is considered.\n"
             "- Expected as a result of this snippet files are described in contract.\n"
@@ -552,29 +598,8 @@ async def run_exec_tool(
     workdir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
 
-    snippet = textwrap.indent(code or "", "        ")
-    wrapper = "\n".join([
-        "import asyncio",
-        "import traceback",
-        "import sys",
-        "",
-        "async def _main():",
-        "    try:",
-        snippet or "        pass",
-        "    except Exception as e:",
-        "        tb = traceback.format_exc()",
-        "        try:",
-        "            await fail(\"Unhandled error\", where=\"main\", error=f\"{type(e).__name__}: {e}\", details=tb, managed=False)",
-        "        except Exception:",
-        "            pass",
-        "        print(tb, file=sys.stderr)",
-        "        raise",
-        "",
-        "if __name__ == '__main__':",
-        "    asyncio.run(_main())",
-        "",
-    ])
-    (workdir / "main.py").write_text(wrapper, encoding="utf-8")
+    (workdir / EXEC_USER_CODE_FILENAME).write_text(code or "", encoding="utf-8")
+    (workdir / "main.py").write_text(_build_exec_loader_wrapper(), encoding="utf-8")
 
     # 3) execute in sandbox (same as codegen)
     runtime = _InProcessRuntime(log)

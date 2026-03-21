@@ -48,11 +48,13 @@ The React solver routes tool calls through `execute_tool` in
 `kdcube_ai_app/apps/chat/sdk/runtime/execution.py`.
 
 1) **Codegen tool** (`codegen_tools.codegen_python`)
-   - Generates a `main.py` and runs it in isolation.
+   - Generates a stable `main.py` loader plus the verbatim generated `user_code.py`.
+   - The isolated runtime executes `main.py`, which then runs `user_code.py`.
    - Output artifacts are written to the current React run outdir.
 
 2) **Exec tool** (`exec_tools.execute_code_python`)
-   - Directly executes provided code in isolation.
+   - Writes the provided code verbatim to `user_code.py`.
+   - The isolated runtime still enters through `main.py`, which loads and executes `user_code.py`.
    - Output artifacts and logs are written to the same outdir.
 
 3) **Other tools**
@@ -140,14 +142,18 @@ Each React run creates a directory under `/exec-workspace`:
 ```
 /exec-workspace/react_<id>/
   work/
-    main.py                    # injected and executed
+    main.py                    # stable loader; injected and executed
+    user_code.py               # verbatim generated/exec tool program
   out/
     timeline.json              # React timeline (written by chat)
     tool_calls_index.json      # tool call index (shared)
     exec_result_*.json         # exec tool outputs
     codegen_result_*.json      # codegen outputs
     delta_aggregates.json      # deltas from supervisor
-    executed_programs/         # copy of executed code (optional)
+    executed_programs/         # preserved loader + original user program, grouped per execution
+      <execution_id>/
+        main.py
+        user_code.py
     logs/
       supervisor.log
       executor.log
@@ -157,6 +163,13 @@ Each React run creates a directory under `/exec-workspace`:
       docker.err.log
       errors.log
 ```
+
+Important:
+
+- `py_code_exec.py` still executes `workdir/main.py`
+- `main.py` is now a small loader owned by the platform
+- the actual agent-written program body is `workdir/user_code.py`
+- when debugging generated code, inspect `executed_programs/<execution_id>/user_code.py` first
 
 ## Permissions and ownership model
 

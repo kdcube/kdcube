@@ -368,16 +368,22 @@ class ReactSolverV2:
         dest_dir = outdir / "executed_programs"
         if not dest_dir.exists():
             return 0
+        execution_dirs = [p for p in dest_dir.iterdir() if p.is_dir() and (p / "main.py").exists()]
+        if execution_dirs:
+            return len(execution_dirs)
+
+        # Backward compatibility with older flat files:
         label = _safe_label(tool_id)
         max_idx = -1
         for path in dest_dir.glob("*_main.py"):
-            if not path.name.startswith(label + "_"):
+            name = path.name
+            prefix = f"{label}_"
+            suffix = "_main.py"
+            if not name.startswith(prefix) or not name.endswith(suffix):
                 continue
-            parts = path.name.split("_")
-            if len(parts) < 2:
-                continue
+            middle = name[len(prefix):-len(suffix)]
             try:
-                idx = int(parts[1])
+                idx = int(middle)
                 max_idx = max(max_idx, idx)
             except Exception:
                 continue

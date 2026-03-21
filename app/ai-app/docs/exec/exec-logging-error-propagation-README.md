@@ -67,7 +67,12 @@ By default, traceback lines referencing `main.py` are **remapped** to point to t
 original user snippet (before the injected runtime header). To disable this:
 - `EXEC_TRACEBACK_REMAP=0`
 
-This only affects `main.py` line numbers; other files are untouched.
+This only affects loader `main.py` line numbers; other files are untouched.
+
+Current source split:
+- `main.py` is the platform loader executed by the isolated runtime
+- `user_code.py` is the verbatim user program body
+- tracebacks that already reference `user_code.py` are not remapped and should already match the real user code line numbers
 
 ### Error detection
 - **Program errors** are detected by scanning `user.log` for:
@@ -113,6 +118,10 @@ It is assembled in memory in `exec_tools.py` from two input families:
 
 1. persisted log files under `out/logs`
 2. transient backend fields in `run_res`
+
+For debugging the executed source itself, the platform also preserves program sources under:
+- `out/executed_programs/<execution_id>/main.py` — platform loader as actually executed
+- `out/executed_programs/<execution_id>/user_code.py` — verbatim user program body
 
 The important distinction is:
 

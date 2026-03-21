@@ -40,6 +40,8 @@ Native libraries (HTML parsers, PDFs, browser bindings) can crash the process. I
 
 Execution uses the ISO runtime (`kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`). For `local`, it spawns a standalone subprocess via `py_code_exec_entry.py`. For `docker`, the supervisor runs inside the container and brokers tool execution while the exec sandbox stays restricted (no network, no secrets).
 
+In both isolated modes, the runtime still executes `work/main.py`, but that file is now a stable platform loader. The actual verbatim agent program body is written to `work/user_code.py`, and preserved copies live under `out/executed_programs/<execution_id>/`.
+
 Sources are merged back into the main sources pool; artifacts and logs are recorded in the same way as in-process tools.
 
 ## Changing runtime for a tool
