@@ -1,7 +1,33 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.19.1347"
+  ref: "2026.3.21.410"
   description: |
-    Improve ECS exec diagnostics, timeout reporting, and task-protection errors
+    This release is in SDK area mostly and significantly extends the React copilot’s bundle-authoring and isolated-execution capabilities.
+
+    A major addition is the new bundle-owned namespace resolver model for readonly bundle data. This allows agents to browse bundle-managed knowledge and validation content
+    efficiently in isolated exec without hardcoding storage paths or depending on raw filesystem conventions. react.doc now exposes docs, source, deploy assets, and reusable bundle
+    smoke tests through its knowledge space, and provides an exec-only namespace resolution tool for generated code. The bundle’s knowledge-space lifecycle was also hardened with
+    build-on-load behavior, stale-link replacement, relative symlink materialization, and per-storage-root locking.
+  
+    The isolated execution stack was improved end to end. External exec now transports per-bundle readonly storage into Docker and Fargate correctly, propagates BUNDLE_STORAGE_DIR,
+    mounts local KDCUBE_STORAGE_PATH writable when local filesystem storage is used, and returns clearer managed errors when bundle-managed namespaces cannot be browsed.
+    execute_code_python was reworked so the agent’s program is preserved verbatim in user_code.py, executed through a stable loader main.py with top-level await support, and stored
+    for debugging under executed_programs/<execution_id>/. This removes a class of code-corruption issues caused by wrapper indentation and makes exec failures much easier to
+    inspect.
+  
+    On the copilot side, this release also improves compliance with user intent and documented workflows. React now better respects explicit user framing such as “plan only”, treats
+    mandatory skill/protocol requirements more carefully, and avoids silently inventing substitute paths when required flows fail. Instead, it reports blockers clearly and asks
+    before proceeding with workarounds. In parallel, proc long-run protection and ECS behavior were documented more thoroughly, proc latency metric export was corrected, and the
+    exec/runtime/workspace documentation set was substantially expanded so the copilot can answer product questions from docs and support bundle creation with more accurate
+    operational guidance.
+  
+    Key Areas
+  
+    - Bundle readonly-data namespace resolution for exec
+    - react.doc knowledge/test-space exposure and lifecycle hardening
+    - External exec storage propagation and mount fixes
+    - Verbatim user-code preservation and improved executed-program debugging
+    - Stronger agent compliance with user scope and documented workflows
+    - Proc metrics/export fixes and expanded architecture/operations documentation
 config:
-    version: "2026.3.19.1347"
+    version: "2026.3.21.410"
