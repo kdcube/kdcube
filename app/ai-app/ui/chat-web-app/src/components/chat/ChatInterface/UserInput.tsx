@@ -11,8 +11,7 @@ import {
 } from "../../../features/chat/chatStateSlice.ts";
 import {sendChatMessage} from "../../../features/chat/chatServiceMiddleware.ts";
 import {UserAttachment} from "../../../features/chat/chatTypes.ts";
-import {resetPopupNotifications} from "../../../features/popupNotifications/popupsSlice.ts";
-import {AppNotification} from "../../../features/popupNotifications/types.ts";
+import {dismissNotification, selectPopupNotifications} from "../../../features/popupNotifications/popupsSlice.ts";
 
 const notificationColors: Record<string, string> = {
     error: "bg-red-50 border-red-200 text-red-800",
@@ -33,10 +32,9 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
     const currentTurn = useAppSelector(selectCurrentTurn)
     const inProgress = useMemo(() => !!currentTurn, [currentTurn])
 
-    const notifications = useAppSelector(
-        (state: {popupNotifications: {messages: AppNotification[]}}) => state.popupNotifications.messages
-    );
+    const notifications = useAppSelector(selectPopupNotifications);
     const hasNotifications = notifications.length > 0;
+    const hasErrors = notifications.some(n => n.type === "error");
 
     const userInputFieldRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -59,8 +57,8 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
     }, [dispatch])
 
     return useMemo(() => {
-        const inputDisabled = isLocked || hasNotifications;
-        const sendDisabled = isLocked || hasNotifications || inProgress || (!userInput.trim() && userAttachments.length == 0);
+        const inputDisabled = isLocked || hasErrors;
+        const sendDisabled = isLocked || hasErrors || inProgress || (!userInput.trim() && userAttachments.length == 0);
 
         return (
             <div
@@ -69,15 +67,15 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                 onClick={() => userInputFieldRef.current?.focus()}
             >
                 <div className="pointer-events-none mx-auto px-8 w-full max-w-[50vw]">
-                    {hasNotifications && notifications.map((msg, i) => (
+                    {hasNotifications && notifications.map((msg) => (
                         <div
-                            key={i}
+                            key={msg.id}
                             className={`flex items-center gap-2 px-4 py-3 mb-2 text-sm rounded-xl border pointer-events-auto ${notificationColors[msg.type] ?? notificationColors.info}`}
                         >
                             <span className="flex-1">{msg.text}</span>
                             <button
                                 className="shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
-                                onClick={() => dispatch(resetPopupNotifications())}
+                                onClick={() => dispatch(dismissNotification(msg.id))}
                                 aria-label="Dismiss"
                             >
                                 <X size={14}/>
@@ -109,7 +107,7 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                                 }
                             </div>}
                         <div className="flex max-h-72 min-h-12 w-full">
-                            {isLocked && !hasNotifications ? (
+                            {isLocked && !hasErrors ? (
                                 <div className="flex-1 m-3 flex flex-col items-center">
                                     <span
                                         className="font-semibold text-gray-400">{lockMessage || "Daily token limit reached. Please try again later."}</span>
@@ -168,7 +166,7 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                 </div>
             </div>
         );
-    }, [addInputFiles, dispatch, hasNotifications, inProgress, inputPlaceholder, isLocked, lockMessage, notifications, removeInputFiles, sendMessage, setUserInputValue, userAttachments, userInput]);
+    }, [addInputFiles, dispatch, hasErrors, hasNotifications, inProgress, inputPlaceholder, isLocked, lockMessage, notifications, removeInputFiles, sendMessage, setUserInputValue, userAttachments, userInput]);
 }
 
 export default UserInput;

@@ -143,13 +143,15 @@ export interface RateLimitPayload {
     retry_after_hours?: number | null;
     reset_text?: string | null;
     user_message?: string | null;
+    notification_type?: "info" | "warning" | "error" | null;
 
     snapshot?: RateLimitSnapshot;
     reason?: string | null;
 }
 
 export type ServiceEventType = "rate_limit.warning" | "rate_limit.denied"
-    | "rate_limit.project_exhausted" | "rate_limit.snapshot" | "rate_limit.attachment_failure"
+    | "rate_limit.project_exhausted" | "rate_limit.no_funding" | "rate_limit.subscription_exhausted"
+    | "rate_limit.snapshot" | "rate_limit.attachment_failure"
     | "rate_limit.lane_switch" | "economics.user_underfunded_absorbed";
 
 export interface ChatServiceEnvelope {

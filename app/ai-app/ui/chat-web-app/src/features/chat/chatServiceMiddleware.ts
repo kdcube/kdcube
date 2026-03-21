@@ -184,52 +184,38 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
 
             switch (eventType) {
                 case "rate_limit.warning": {
-                    const messagesRemaining = rateLimit?.messages_remaining ?? null;
-                    const tokenRemaining = rateLimit?.total_token_remaining ?? null;
-                    const usagePercentage = rateLimit?.usage_percentage ?? null;
-
-
-                    let message: string;
-                    let notificationType: NotificationType = "info";
-
-                    if (messagesRemaining !== null && messagesRemaining === 0) {
-                        message = "You have no messages remaining in your current quota.";
-                        notificationType = "error";
-                    } else if (messagesRemaining !== null && messagesRemaining === 1) {
-                        message = "You have 1 message remaining in your current quota.";
-                        notificationType = "warning";
-                    } else if (messagesRemaining !== null && messagesRemaining <= 5) {
-                        message = `You have ${messagesRemaining} messages remaining in your current quota.`;
-                        notificationType = "warning";
-                    } else if (tokenRemaining !== null && tokenRemaining < 133_333) {
-                        const tokensK = Math.floor(tokenRemaining / 1000);
-                        message = `You're running low on tokens (~${tokensK}K remaining). Consider upgrading.`;
-                        notificationType = "warning";
-                    } else if (usagePercentage !== null && usagePercentage >= 80) {
-                        message = `You've used ${Math.round(usagePercentage)}% of your quota.`;
-                        if (usagePercentage >= 95) {
-                            notificationType = "error";
-                        }
-                    } else {
-                        message = "You're approaching your usage limit.";
-                        notificationType = "warning";
-                    }
-                    dispatch(pushNotification({
-                        type: notificationType,
-                        text: message,
-                    }))
+                    const serverMessage = rateLimit?.user_message ?? null;
+                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
+                    const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType;
+                    dispatch(pushNotification({type: notificationType, text: message}))
                     break;
                 }
                 case "rate_limit.denied": {
                     const serverMessage = rateLimit?.user_message ?? (data.user_message as string | undefined) ?? null;
                     const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
-                    dispatch(pushNotification({type: "error", text: message}))
+                    const notificationType = (rateLimit?.notification_type ?? "error") as NotificationType; 
+                    dispatch(pushNotification({type: notificationType, text: message}))
                     break;
                 }
                 case "rate_limit.post_run_exceeded": {
                     const serverMessage = rateLimit?.user_message ?? null;
                     const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
-                    dispatch(pushNotification({type: "error", text: message}))
+                    const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType; 
+                    dispatch(pushNotification({type: notificationType, text: message}))
+                    break;
+                }
+                case "rate_limit.no_funding": {
+                    const serverMessage = (data.user_message as string | undefined) ?? null;
+                    const message = serverMessage ?? "This service is not available for your account type. Please contact support.";
+                    const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
+                    dispatch(pushNotification({type: notificationType, text: message}))
+                    break;
+                }
+                case "rate_limit.subscription_exhausted": {
+                    const serverMessage = (data.user_message as string | undefined) ?? null;
+                    const message = serverMessage ?? "Your subscription balance is exhausted. Please top up your subscription to continue.";
+                    const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
+                    dispatch(pushNotification({type: notificationType, text: message}))
                     break;
                 }
                 case "rate_limit.project_exhausted": {

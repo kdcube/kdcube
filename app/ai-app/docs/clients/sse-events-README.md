@@ -195,14 +195,42 @@ These events are emitted when rate‑limits or gateway checks trigger, or for gl
 Emitted from the economic entrypoint and delivered on `chat_service` route.
 
 Known `env.type` values:
-- `rate_limit.warning`
-- `rate_limit.denied`
-- `rate_limit.no_funding`
-- `rate_limit.project_exhausted`
-- `rate_limit.subscription_exhausted`
-- `rate_limit.post_run_exceeded`
+- `rate_limit.warning` — quota is approaching its limit (request still allowed)
+- `rate_limit.denied` — request blocked before execution (quota or concurrency limit exceeded)
+- `rate_limit.no_funding` — no funding source available for this user type
+- `rate_limit.project_exhausted` — project budget exhausted
+- `rate_limit.subscription_exhausted` — subscription balance exhausted
+- `rate_limit.post_run_exceeded` — request completed but actual token usage exceeded the limit (next requests will be blocked)
+- `rate_limit.lane_switch` — informational; user silently switched from plan lane to paid lane
 
-Typical payload (`data.rate_limit` contains the snapshot):
+
+**`data.rate_limit` shape** (present on `warning`, `denied`, `post_run_exceeded`):
+
+```json
+{
+  "messages_remaining": 0,
+  "total_token_remaining": 0,
+  "usage_percentage": 100.0,
+  "retry_after_sec": 3247,
+  "retry_after_hours": 1,
+  "retry_scope": "hour | day | month | total",
+  "reset_text": "tomorrow at 8:42 PM",
+  "user_message": "You've reached your usage limit. Your quota resets tomorrow at 8:42 PM.",
+  "notification_type": "error | warning | info",
+  "violations": ["tokens_per_hour"],
+  "limits": { "tokens_per_hour": 18000, "tokens_per_day": 333333 },
+  "remaining": { "tokens_per_hour": 0, "tokens_per_day": 12000 },
+  "snapshot": { ... }
+}
+```
+
+Notes:
+- `reset_text` — human-readable reset time formatted in the user's timezone (e.g. `"today at 9:32 PM"`). Generated server-side using `comm_context.user.timezone`.
+- `user_message` — complete human-readable message ready for display. Clients should prefer this over constructing their own message. Falls back to client-side construction if absent.
+- `notification_type` — intended display severity. `rate_limit.denied` defaults to `"error"`, `rate_limit.post_run_exceeded` defaults to `"warning"`.
+- `retry_after_sec` — seconds until quota resets. More precise than `retry_after_hours`.
+
+**Full `rate_limit.denied` envelope example:**
 
 ```json
 {
@@ -214,15 +242,40 @@ Typical payload (`data.rate_limit` contains the snapshot):
     "title": "Rate limit exceeded"
   },
   "data": {
-    "rate_limit": {
-      "messages_remaining": 0,
-      "retry_after_hours": 2,
-      "snapshot": { ... }
-    },
+    "reason": "tokens_per_hour",
     "bundle_id": "...",
-    "user_type": "registered"
+    "user_type": "free",
+    "lane": "deny",
+    "rate_limit": {
+      "messages_remaining": 5,
+      "total_token_remaining": 0,
+      "retry_after_sec": 3247,
+      "retry_after_hours": 1,
+      "retry_scope": "hour",
+      "reset_text": "today at 9:32 PM",
+      "user_message": "You've reached your usage limit. Your quota resets today at 9:32 PM.",
+      "notification_type": "error",
+      "violations": ["tokens_per_hour"],
+      "snapshot": { ... }
+    }
   }
 }
+```
+
+**Special case — `quota_lock_timeout`:**
+
+When a Redis quota lock cannot be acquired within 5 seconds, `user_message` is placed directly on `data` (not inside `data.rate_limit`), since no rate_limit snapshot is available at that point:
+
+```json
+{
+  "type": "rate_limit.denied",
+  "data": {
+    "reason": "quota_lock_timeout",
+    "user_message": "Too many requests are being processed right now. Please try again in a moment.",
+    "lane": "deny"
+  }
+}
+```
 ```
 
 ### Gateway rejections
