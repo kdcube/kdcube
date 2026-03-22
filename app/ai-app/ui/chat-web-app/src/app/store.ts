@@ -10,6 +10,7 @@ import conversationsSlice from "../features/conversations/conversationsSlice.ts"
 import conversationsMiddleware from "../features/conversations/conversationsMiddleware.ts";
 import {widgetPanelsApiSlice} from "../features/widgetPanels/widgetPanels.ts";
 import chatSettingsSlice from "../features/chat/chatSettingsSlice.ts";
+import popupNotificationsReducer from "../features/popupNotifications/popupsSlice.ts";
 
 export const store = configureStore({
     devTools:true,
@@ -19,6 +20,7 @@ export const store = configureStore({
         chatSettings: chatSettingsSlice,
         userProfile: userProfileSlice,
         conversations: conversationsSlice,
+        popupNotifications: popupNotificationsReducer,
         [suggestedQuestionsApiSlice.reducerPath]: suggestedQuestionsApiSlice.reducer,
         [widgetPanelsApiSlice.reducerPath]: widgetPanelsApiSlice.reducer,
         // [userProfileApiSlice.reducerPath]: userProfileApiSlice.reducer,

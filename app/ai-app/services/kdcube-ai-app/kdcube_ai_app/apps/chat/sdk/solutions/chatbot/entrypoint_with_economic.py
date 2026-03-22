@@ -12,12 +12,29 @@ import dataclasses
 import json
 import math
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import uuid4, UUID
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.infra.service_hub.inventory import Config, _mid
+from kdcube_ai_app.apps.chat.sdk.infra.economics.events_resources import (
+    msg_denied_quota_reset,
+    MSG_DENIED_LOCK_TIMEOUT,
+    MSG_DENIED_CONCURRENCY,
+    MSG_DENIED_TOKEN_LIMIT,
+    MSG_DENIED_REQUEST_LIMIT,
+    MSG_DENIED_GENERIC,
+    msg_warning_last_msg_reset,
+    MSG_WARNING_LAST_MSG_SOON,
+    MSG_WARNING_ONE_REQUEST_REMAINING,
+    msg_warning_low_tokens,
+    MSG_WARNING_APPROACHING,
+    MSG_NO_FUNDING,
+    MSG_SUBSCRIPTION_EXHAUSTED,
+    MSG_PROJECT_EXHAUSTED,
+)
 
 
 class BaseEntrypointWithEconomics(BaseEntrypoint):
@@ -268,6 +285,155 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             await _emit_event(type=event_type, status="error", title=title, data=payload)
             raise EconomicsLimitException(message, code=code, data=payload)
 
+        def _policy_for_insight(*, admit_result: AdmitResult | None, fallback_policy: QuotaPolicy) -> QuotaPolicy:
+            if admit_result and getattr(admit_result, "used_plan_override", False) and getattr(admit_result, "effective_policy", None):
+                return QuotaPolicy(**(admit_result.effective_policy or {}))
+            if fallback_policy is base_policy and plan_balance and plan_balance.plan_override_is_active():
+                return _merge_policy_with_plan_override(base_policy, plan_balance)
+            return fallback_policy
+
+        def _format_reset_time(
+            *,
+            retry_after_sec: int,
+            now: Optional[datetime] = None,
+            user_timezone: Optional[str] = None,
+        ) -> str:
+            try:
+                tz = ZoneInfo(user_timezone) if user_timezone else timezone.utc
+            except ZoneInfoNotFoundError:
+                tz = timezone.utc
+            base = (now or datetime.now(timezone.utc)).astimezone(tz)
+            reset_at = base + timedelta(seconds=retry_after_sec)
+            time_str = reset_at.strftime("%-I:%M %p")
+            if reset_at.date() == base.date():
+                return f"today at {time_str}"
+            tomorrow = (base + timedelta(days=1)).date()
+            if reset_at.date() == tomorrow:
+                return f"tomorrow at {time_str}"
+            date_str = reset_at.strftime("%B %-d")
+            return f"on {date_str} at {time_str}"
+
+        def _build_user_message(*, reason: Optional[str], reset_text: Optional[str]) -> str:
+            if reset_text:
+                return msg_denied_quota_reset(reset_text)
+            if reason == "quota_lock_timeout":
+                return MSG_DENIED_LOCK_TIMEOUT
+            if reason in ("concurrency", "max_concurrent") or (reason and "concurrent" in reason):
+                return MSG_DENIED_CONCURRENCY
+            if reason and "token" in reason:
+                return MSG_DENIED_TOKEN_LIMIT
+            if reason and "request" in reason:
+                return MSG_DENIED_REQUEST_LIMIT
+            return MSG_DENIED_GENERIC
+
+        def _retry_after_for_turn_shortfall(
+            *,
+            policy: QuotaPolicy,
+            snapshot: dict | None,
+            needed_tokens: int,
+            now: Optional[datetime] = None,
+        ) -> tuple[Optional[int], Optional[str]]:
+            if not snapshot or int(needed_tokens or 0) <= 0:
+                return None, None
+
+            now = (now or datetime.utcnow()).replace(tzinfo=timezone.utc)
+            now_ts = int(now.timestamp())
+            candidates: list[tuple[str, int]] = []
+
+            def _ttl_hour() -> int:
+                reset_at = int(snapshot.get("tok_hour_reset_at") or 0)
+                if reset_at > now_ts:
+                    return max(reset_at - now_ts, 0)
+                end = datetime(now.year, now.month, now.day, now.hour, tzinfo=timezone.utc) + timedelta(hours=1)
+                return max(int(end.timestamp()) - now_ts, 0)
+
+            def _ttl_day() -> int:
+                reset_at = int(snapshot.get("day_reset_at") or 0)
+                if reset_at > now_ts:
+                    return max(reset_at - now_ts, 0)
+                return 24 * 60 * 60  # fallback: 24 hours from now
+
+            def _ttl_month() -> int:
+                reset_at = int(snapshot.get("month_reset_at") or 0)
+                if reset_at > now_ts:
+                    return max(reset_at - now_ts, 0)
+                if now.month == 12:
+                    end = datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+                else:
+                    end = datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+                return max(int(end.timestamp()) - now_ts, 0)
+
+            tok_hour = int(snapshot.get("tok_hour", 0) or 0)
+            tok_day = int(snapshot.get("tok_day", 0) or 0)
+            tok_month = int(snapshot.get("tok_month", 0) or 0)
+
+            if policy.tokens_per_hour is not None:
+                rem = max(int(policy.tokens_per_hour) - tok_hour, 0)
+                if rem < int(needed_tokens):
+                    candidates.append(("hour", _ttl_hour()))
+            if policy.tokens_per_day is not None:
+                rem = max(int(policy.tokens_per_day) - tok_day, 0)
+                if rem < int(needed_tokens):
+                    candidates.append(("day", _ttl_day()))
+            if policy.tokens_per_month is not None:
+                rem = max(int(policy.tokens_per_month) - tok_month, 0)
+                if rem < int(needed_tokens):
+                    candidates.append(("month", _ttl_month()))
+
+            if not candidates:
+                return None, None
+
+            scope, ttl = max(candidates, key=lambda item: item[1])
+            return ttl, scope
+
+        def _build_rate_limit_payload(
+            *,
+            policy: QuotaPolicy,
+            snapshot: dict | None,
+            reason: Optional[str],
+            used_plan_override: bool = False,
+            needed_tokens: Optional[int] = None,
+            now: Optional[datetime] = None,
+        ) -> dict:
+            insight = compute_quota_insight(
+                policy=policy,
+                snapshot=snapshot or {},
+                reason=reason,
+                used_plan_override=used_plan_override,
+                user_budget_tokens=user_budget_tokens,
+                now=now,
+            )
+            payload = dataclasses.asdict(insight)
+
+            retry_after_sec = payload.get("retry_after_sec")
+            retry_scope = payload.get("retry_scope")
+            if (not retry_after_sec) and needed_tokens and int(needed_tokens) > 0:
+                retry_after_sec, retry_scope = _retry_after_for_turn_shortfall(
+                    policy=policy,
+                    snapshot=snapshot or {},
+                    needed_tokens=int(needed_tokens),
+                    now=now,
+                )
+                payload["retry_after_sec"] = retry_after_sec
+                payload["retry_scope"] = retry_scope
+
+            retry_after_hours = None
+            reset_text = None
+            if retry_after_sec:
+                retry_after_hours = math.ceil(int(retry_after_sec) / 3600)
+                reset_text = _format_reset_time(
+                    retry_after_sec=int(retry_after_sec),
+                    now=now,
+                    user_timezone=getattr(getattr(getattr(self, "comm_context", None), "user", None), "timezone", None),
+                )
+            payload["retry_after_hours"] = retry_after_hours
+            payload["reset_text"] = reset_text
+            payload["user_message"] = _build_user_message(reason=reason, reset_text=reset_text)
+            payload["notification_type"] = "error"
+            if needed_tokens is not None:
+                payload["needed_tokens"] = int(needed_tokens)
+            return payload
+
         async def _record_app_analytics_by_provider(
             *,
             app_spend_usd: float,
@@ -371,6 +537,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         event_type="rate_limit.denied",
                         data={
                             "reason": "quota_lock_timeout",
+                            "user_message": _build_user_message(reason="quota_lock_timeout", reset_text=None),
                             "bundle_id": bundle_id,
                             "subject_id": self.subj,
                             "user_type": user_type,
@@ -782,6 +949,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             lock_released = False
 
             if not admit.allowed:
+                payload = _build_rate_limit_payload(
+                    policy=_policy_for_insight(admit_result=admit, fallback_policy=paid_policy),
+                    snapshot=admit.snapshot,
+                    reason=admit.reason,
+                    used_plan_override=admit.used_plan_override,
+                    needed_tokens=int(est_turn_tokens),
+                )
                 await _econ_fail(
                     code="paid_admit_denied_after_switch",
                     title="Rate limit exceeded",
@@ -793,6 +967,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         "subject_id": self.subj,
                         "user_type": user_type,
                         "snapshot": admit.snapshot,
+                        "rate_limit": payload,
                         "lane": "paid",
                         "switch_reason": switch_reason,
                     },
@@ -815,8 +990,12 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                             "funding_source": funding_source,
                             "user_budget_tokens": user_budget_tokens_int,
                             "user_budget_usd": user_budget_tokens_int * usd_per_token,
+                            "user_message": MSG_NO_FUNDING,
+                            "notification_type": "error",
                         },
                     )
+                usd_short = max(0.0, (int(est_turn_tokens) - user_budget_tokens_int) * usd_per_token)
+                sub_user_message = MSG_SUBSCRIPTION_EXHAUSTED if funding_source == "subscription" else MSG_PROJECT_EXHAUSTED
                 await _econ_fail(
                     code=f"{funding_source}_budget_exhausted",
                     title=f"{funding_label.title()} exhausted",
@@ -829,15 +1008,16 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         "user_type": user_type,
                         "funding_source": funding_source,
                         "funding_available_usd": funding_available_usd,
-                        "funding_budget": funding_budget,
                         "user_budget_tokens": user_budget_tokens_int,
                         "user_budget_usd": user_budget_tokens_int * usd_per_token,
                         "min_tokens_required": int(est_turn_tokens),
                         "min_usd_required": int(est_turn_tokens) * usd_per_token,
                         "tokens_short": max(0, int(est_turn_tokens) - user_budget_tokens_int),
-                        "usd_short": max(0.0, (int(est_turn_tokens) - user_budget_tokens_int) * usd_per_token),
+                        "usd_short": usd_short,
                         "has_personal_budget": bool(plan_balance and plan_balance.has_lifetime_budget()),
                         "min_user_tokens": int(est_turn_tokens),
+                        "user_message": sub_user_message,
+                        "notification_type": "error",
                     },
                 )
             lane = "paid"
@@ -854,18 +1034,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                 admit = plan_admit
             else:
                 if not personal_can_pay_turn or not allow_paid_lane_fallback:
-                    insight = compute_quota_insight(
-                        policy=base_policy,
+                    payload = _build_rate_limit_payload(
+                        policy=_policy_for_insight(admit_result=plan_admit, fallback_policy=base_policy),
                         snapshot=plan_admit.snapshot,
                         reason=plan_admit.reason,
                         used_plan_override=plan_admit.used_plan_override,
-                        user_budget_tokens=user_budget_tokens,
+                        needed_tokens=int(est_turn_tokens),
                     )
-                    payload = dataclasses.asdict(insight)
-                    retry_after_hours = None
-                    if insight.retry_after_sec:
-                        retry_after_hours = math.ceil(int(insight.retry_after_sec) / 3600)
-                    payload["retry_after_hours"] = retry_after_hours
 
                     await _econ_fail(
                         code="rate_limited",
@@ -892,18 +1067,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
 
         if not admit.allowed:
             effective_policy_for_insight = paid_policy if lane == "paid" and paid_policy else base_policy
-            insight = compute_quota_insight(
-                policy=effective_policy_for_insight,
+            payload = _build_rate_limit_payload(
+                policy=_policy_for_insight(admit_result=admit, fallback_policy=effective_policy_for_insight),
                 snapshot=admit.snapshot,
                 reason=admit.reason,
                 used_plan_override=admit.used_plan_override,
-                user_budget_tokens=user_budget_tokens,
+                needed_tokens=int(est_turn_tokens),
             )
-            payload = dataclasses.asdict(insight)
-            retry_after_hours = None
-            if insight.retry_after_sec:
-                retry_after_hours = math.ceil(int(insight.retry_after_sec) / 3600)
-            payload["retry_after_hours"] = retry_after_hours
 
             await _econ_fail(
                 code="rate_limited",
@@ -941,26 +1111,9 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
             reason=admit.reason,
             used_plan_override=admit.used_plan_override,
             user_budget_tokens=user_budget_tokens,
+            est_tokens_per_turn=est_turn_tokens,
         )
         _log("insight", "Computed quota insight", lane=lane, insight=dataclasses.asdict(insight))
-
-        if (
-            (insight.messages_remaining is not None and insight.messages_remaining == 1)
-            or (insight.total_token_remaining is not None and insight.total_token_remaining < int(est_turn_tokens))
-        ):
-            await _emit_event(
-                type="rate_limit.warning",
-                status="running",
-                title="Approaching quota",
-                data={
-                    "bundle_id": bundle_id,
-                    "subject_id": self.subj,
-                    "user_type": user_type,
-                    "snapshot": admit.snapshot,
-                    "rate_limit": dataclasses.asdict(insight),
-                    "lane": lane,
-                },
-            )
 
         app_reservation_id: UUID | None = None
         app_reserved_usd: float = 0.0
@@ -1091,6 +1244,21 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                         usd_per_token=usd_per_token,
                     )
 
+                    if plan_project_tokens_est > 0:
+                        # Budget system stores amounts in integer cents; anything below $0.01
+                        # rounds to 0 cents in _usd_to_cents() and raises ValueError in reserve().
+                        _min_reserve_usd = 1.0 / 100
+                        if float(plan_project_tokens_est) * float(usd_per_token) * SAFETY_MARGIN < _min_reserve_usd:
+                            _log(
+                                "reserve.plan",
+                                "Plan token reservation below minimum chargeable amount; treating as exhausted",
+                                "WARN",
+                                plan_project_tokens_est=plan_project_tokens_est,
+                                computed_usd=float(plan_project_tokens_est) * float(usd_per_token) * SAFETY_MARGIN,
+                                min_reserve_usd=_min_reserve_usd,
+                            )
+                            plan_project_tokens_est = 0
+
                     if plan_project_tokens_est <= 0:
                         if budget_bypass:
                             _log(
@@ -1101,6 +1269,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                 plan_reserved_tokens=plan_reserved_tokens,
                             )
                         elif not personal_can_pay_turn:
+                            payload = _build_rate_limit_payload(
+                                policy=_policy_for_insight(admit_result=admit, fallback_policy=base_policy),
+                                snapshot=admit.snapshot,
+                                reason=admit.reason or "plan_exhausted",
+                                used_plan_override=admit.used_plan_override,
+                                needed_tokens=int(est_turn_tokens),
+                            )
                             await _econ_fail(
                                 code="plan_exhausted_no_personal",
                                 title="Tier exhausted",
@@ -1112,6 +1287,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                     "subject_id": self.subj,
                                     "user_type": user_type,
                                     "snapshot": admit.snapshot,
+                                    "rate_limit": payload,
                                     "lane": "deny",
                                 },
                             )
@@ -1199,7 +1375,6 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                             "subject_id": self.subj,
                                             "user_type": user_type,
                                             "funding_source": funding_source,
-                                            "funding_budget": funding_budget,
                                             "app_reserved_usd": app_reserved_usd,
                                             "user_budget_tokens": user_budget_tokens,
                                         },
@@ -1256,6 +1431,13 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                 notes=f"auto-reserve: lane=plan, overflow={overflow_tokens_est}, est_turn={est_turn_tokens}",
                             )
                             if not ok:
+                                payload = _build_rate_limit_payload(
+                                    policy=_policy_for_insight(admit_result=admit, fallback_policy=effective_policy),
+                                    snapshot=admit.snapshot,
+                                    reason=admit.reason or "plan_token_overflow",
+                                    used_plan_override=admit.used_plan_override,
+                                    needed_tokens=int(overflow_tokens_est),
+                                )
                                 await _econ_fail(
                                     code="personal_reservation_failed_plan",
                                     title="Insufficient personal credits",
@@ -1267,6 +1449,7 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                                         "subject_id": self.subj,
                                         "user_type": user_type,
                                         "tokens_required": int(overflow_tokens_est),
+                                        "rate_limit": payload,
                                         "lane": lane,
                                     },
                                 )
@@ -1803,18 +1986,95 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     lock_released = True
                     _log("rl.release", "RL lock released", lane=lane)
 
+            if not post_run_violations and post_run_snapshot and not budget_bypass:
+                post_insight = compute_quota_insight(
+                    policy=effective_policy,
+                    snapshot=post_run_snapshot,
+                    reason=None,
+                    used_plan_override=admit.used_plan_override if admit else False,
+                    user_budget_tokens=user_budget_tokens,
+                    est_tokens_per_turn=est_turn_tokens,
+                )
+                _log("post_run.insight", "Computed post-run quota insight", insight=dataclasses.asdict(post_insight))
+                pr_mr = post_insight.messages_remaining
+                pr_tok = post_insight.total_token_remaining
+                if (
+                    (pr_mr is not None and pr_mr <= 1)
+                    or (pr_tok is not None and pr_tok < int(est_turn_tokens))
+                ):
+                    if pr_mr is not None and pr_mr == 0:
+                        # Synthesize the exhausted dimension so _format_reset_time can produce a specific time
+                        rem = post_insight.remaining
+                        exhausted = []
+                        if rem.get("requests_per_day") == 0 and getattr(effective_policy, "requests_per_day", None) is not None:
+                            exhausted.append("requests_per_day")
+                        if rem.get("requests_per_month") == 0 and getattr(effective_policy, "requests_per_month", None) is not None:
+                            exhausted.append("requests_per_month")
+                        if rem.get("tokens_per_hour") == 0 and getattr(effective_policy, "tokens_per_hour", None) is not None:
+                            exhausted.append("tokens_per_hour")
+                        if rem.get("tokens_per_day") == 0 and getattr(effective_policy, "tokens_per_day", None) is not None:
+                            exhausted.append("tokens_per_day")
+                        exhausted_insight = compute_quota_insight(
+                            policy=effective_policy,
+                            snapshot=post_run_snapshot,
+                            reason="|".join(exhausted) if exhausted else None,
+                            used_plan_override=admit.used_plan_override if admit else False,
+                            user_budget_tokens=user_budget_tokens,
+                            est_tokens_per_turn=est_turn_tokens,
+                        )
+                        reset_text = _format_reset_time(
+                            retry_after_sec=exhausted_insight.retry_after_sec,
+                            now=now,
+                            user_timezone=getattr(self.comm_context.user, "timezone", None) if self.comm_context and self.comm_context.user else None,
+                        ) if exhausted_insight.retry_after_sec else None
+                        if reset_text:
+                            warning_user_message = msg_warning_last_msg_reset(reset_text)
+                        else:
+                            warning_user_message = MSG_WARNING_LAST_MSG_SOON
+                    elif pr_mr is not None and pr_mr == 1:
+                        # Check if the binding constraint is requests or tokens
+                        rem = post_insight.remaining
+                        req_candidates = [rem.get(k) for k in ("requests_per_day", "requests_per_month", "total_requests") if rem.get(k) is not None]
+                        request_remaining = min(req_candidates) if req_candidates else None
+                        if request_remaining is not None and request_remaining <= 1:
+                            warning_user_message = MSG_WARNING_ONE_REQUEST_REMAINING
+                        elif pr_tok is not None:
+                            warning_user_message = msg_warning_low_tokens(pr_tok // 1000)
+                        else:
+                            warning_user_message = MSG_WARNING_ONE_REQUEST_REMAINING
+                    elif pr_tok is not None:
+                        warning_user_message = msg_warning_low_tokens(pr_tok // 1000)
+                    else:
+                        warning_user_message = MSG_WARNING_APPROACHING
+                    warning_rate_limit = dataclasses.asdict(post_insight)
+                    warning_rate_limit["user_message"] = warning_user_message
+                    warning_rate_limit["notification_type"] = "warning"
+                    await _emit_event(
+                        type="rate_limit.warning",
+                        status="completed",
+                        title="Approaching quota",
+                        data={
+                            "bundle_id": bundle_id,
+                            "subject_id": self.subj,
+                            "user_type": user_type,
+                            "snapshot": post_run_snapshot,
+                            "rate_limit": warning_rate_limit,
+                            "lane": lane,
+                        },
+                    )
+
             if post_run_violations and not budget_bypass:
                 post_reason = "|".join(post_run_violations)
-                post_insight = compute_quota_insight(
+                rate_limit_payload = _build_rate_limit_payload(
                     policy=effective_policy,
                     snapshot=post_run_snapshot or {},
                     reason=post_reason,
                     used_plan_override=admit.used_plan_override if admit else False,
-                    user_budget_tokens=user_budget_tokens,
                     now=now,
+                    needed_tokens=int(ranked_tokens),
                 )
-                payload = dataclasses.asdict(post_insight)
-                payload.update({
+                rate_limit_payload["notification_type"] = "warning"
+                payload = {
                     "bundle_id": bundle_id,
                     "subject_id": self.subj,
                     "user_type": user_type,
@@ -1822,7 +2082,8 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
                     "ranked_tokens": int(ranked_tokens),
                     "snapshot": post_run_snapshot,
                     "reason": post_reason,
-                })
+                    "rate_limit": rate_limit_payload,
+                }
                 await _emit_analytics_event(
                     type="analytics.rate_limit.post_run_exceeded",
                     status="completed",

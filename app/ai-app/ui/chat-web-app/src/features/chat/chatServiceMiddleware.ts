@@ -4,7 +4,8 @@ import {
     ChatEventHandlers,
     ChatMessage,
     ChatRequest,
-    ChatServiceEnvelope
+    ChatServiceEnvelope,
+    RateLimitPayload,
 } from "../chatController/chatBase.ts";
 import {v4 as uuidv4} from "uuid";
 import {AppStore, RootState} from "../../app/store.ts";
@@ -37,8 +38,8 @@ import SSEChat from "../chatController/sseChat.ts";
 import {UserAttachmentDescription, UserMessageRequest} from "./chatTypes.ts";
 import {selectAuthToken, selectIdToken, setCredentials} from "../auth/authSlice.ts";
 import {selectIdTokenHeaderName, selectProject, selectTenant} from "./chatSettingsSlice.ts";
-import {NotificationType} from "../popupNotifications/types.ts";
 import {pushNotification} from "../popupNotifications/popupsSlice.ts";
+import {NotificationType} from "../popupNotifications/types.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -153,6 +154,29 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             }
         }
 
+        const _fallbackRateLimitMessage = (rateLimit: RateLimitPayload | undefined, data: Record<string, unknown>): string => {
+            const retryAfterSec = rateLimit?.retry_after_sec ?? null;
+            const reason = data.reason as string | undefined;
+            if (retryAfterSec && retryAfterSec > 0 && rateLimit) {
+                const resetText = rateLimit.reset_text ?? (() => {
+                    const resetAt = new Date(Date.now() + retryAfterSec * 1000);
+                    const now = new Date();
+                    const timeStr = resetAt.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+                    const tomorrow = new Date(now);
+                    tomorrow.setDate(tomorrow.getDate() + 1);
+                    if (resetAt.toDateString() === now.toDateString()) return `today at ${timeStr}`;
+                    if (resetAt.toDateString() === tomorrow.toDateString()) return `tomorrow at ${timeStr}`;
+                    return `on ${resetAt.toLocaleDateString([], {month: "long", day: "numeric"})} at ${timeStr}`;
+                })();
+                return `You've reached your usage limit. Your quota resets ${resetText}.`;
+            }
+            if (reason === "concurrency" || reason?.includes("concurrent")) return "You have too many requests running at once. Please wait for one to complete.";
+            if (reason === "quota_lock_timeout") return "Too many requests are being processed right now. Please try again in a moment.";
+            if (reason?.includes("token")) return "You've reached your token limit. Try again later or upgrade your plan.";
+            if (reason?.includes("request")) return "You've reached your request limit. Try again later or upgrade your plan.";
+            return "You've reached your usage limit. Please try again later.";
+        };
+
         const handleServiceMessage = (env: ChatServiceEnvelope) => {
             const eventType = env.type;
             const data = env.data;
@@ -160,67 +184,38 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
 
             switch (eventType) {
                 case "rate_limit.warning": {
-                    const messagesRemaining = rateLimit?.messages_remaining ?? null;
-                    const tokenRemaining = rateLimit?.total_token_remaining ?? null;
-                    const usagePercentage = rateLimit?.usage_percentage ?? null;
-
-
-                    let message: string;
-                    let notificationType: NotificationType = "info";
-
-                    if (messagesRemaining !== null && messagesRemaining === 0) {
-                        message = "You have no messages remaining in your current quota.";
-                        notificationType = "error";
-                    } else if (messagesRemaining !== null && messagesRemaining === 1) {
-                        message = "You have 1 message remaining in your current quota.";
-                        notificationType = "warning";
-                    } else if (messagesRemaining !== null && messagesRemaining <= 5) {
-                        message = `You have ${messagesRemaining} messages remaining in your current quota.`;
-                        notificationType = "warning";
-                    } else if (tokenRemaining !== null && tokenRemaining < 133_333) {
-                        const tokensK = Math.floor(tokenRemaining / 1000);
-                        message = `You're running low on tokens (~${tokensK}K remaining). Consider upgrading.`;
-                        notificationType = "warning";
-                    } else if (usagePercentage !== null && usagePercentage >= 80) {
-                        message = `You've used ${Math.round(usagePercentage)}% of your quota.`;
-                        if (usagePercentage >= 95) {
-                            notificationType = "error";
-                        }
-                    } else {
-                        message = "You're approaching your usage limit.";
-                        notificationType = "warning";
-                    }
-                    dispatch(pushNotification({
-                        type: notificationType,
-                        text: message,
-                    }))
+                    const serverMessage = rateLimit?.user_message ?? null;
+                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
+                    const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType;
+                    dispatch(pushNotification({type: notificationType, text: message}))
                     break;
                 }
                 case "rate_limit.denied": {
-                    const retryAfterHours = rateLimit?.retry_after_hours ?? null;
-                    const reason = data.reason as string | undefined;
-
-                    let message: string;
-
-                    if (retryAfterHours && retryAfterHours > 0) {
-                        const hourText = retryAfterHours === 1 ? "1 hour" : `${retryAfterHours} hours`;
-                        message = `You've reached your usage limit. Try again in about ${hourText}.`;
-                    } else if (reason === "concurrency" || reason?.includes("concurrent")) {
-                        message = "You have too many requests running at once. Please wait for one to complete.";
-                    } else if (reason === "quota_lock_timeout") {
-                        message = "Too many requests are being processed right now. Please try again in a moment.";
-                    } else if (reason?.includes("tokens")) {
-                        message = "You've reached your token limit. Try again later or upgrade your plan.";
-                    } else if (reason?.includes("requests")) {
-                        message = "You've reached your request limit. Try again later or upgrade your plan.";
-                    } else {
-                        message = "You've reached your usage limit. Please try again later.";
-                    }
-
-                    dispatch(pushNotification({
-                        type: "error",
-                        text: message,
-                    }))
+                    const serverMessage = rateLimit?.user_message ?? (data.user_message as string | undefined) ?? null;
+                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
+                    const notificationType = (rateLimit?.notification_type ?? "error") as NotificationType; 
+                    dispatch(pushNotification({type: notificationType, text: message}))
+                    break;
+                }
+                case "rate_limit.post_run_exceeded": {
+                    const serverMessage = rateLimit?.user_message ?? null;
+                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
+                    const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType; 
+                    dispatch(pushNotification({type: notificationType, text: message}))
+                    break;
+                }
+                case "rate_limit.no_funding": {
+                    const serverMessage = (data.user_message as string | undefined) ?? null;
+                    const message = serverMessage ?? "This service is not available for your account type. Please contact support.";
+                    const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
+                    dispatch(pushNotification({type: notificationType, text: message}))
+                    break;
+                }
+                case "rate_limit.subscription_exhausted": {
+                    const serverMessage = (data.user_message as string | undefined) ?? null;
+                    const message = serverMessage ?? "Your subscription balance is exhausted. Please top up your balance to continue.";
+                    const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
+                    dispatch(pushNotification({type: notificationType, text: message}))
                     break;
                 }
                 case "rate_limit.project_exhausted": {
