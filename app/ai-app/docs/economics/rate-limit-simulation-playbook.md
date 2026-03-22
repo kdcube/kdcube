@@ -1,3 +1,15 @@
+---
+id: ks:docs/economics/rate-limit-simulation-playbook.md
+title: "Rate Limit Event Simulation Playbook"
+summary: "Step-by-step scenarios to trigger each rate_limit.* SSE event in local dev."
+tags: ["economics", "rate-limit", "sse", "testing", "playbook"]
+keywords: ["rate_limit.warning", "rate_limit.denied", "SSE", "quota", "throttling"]
+see_also:
+  - ks:docs/economics/economics-events-README.md
+  - ks:docs/clients/sse-events-README.md
+  - ks:docs/economics/eco-test-README.md
+  - ks:docs/economics/operational-README.md
+---
 # Rate Limit Event Simulation Playbook
 
 Use this playbook to manually trigger each `rate_limit.*` SSE event in a local dev environment and verify the client handles it correctly.
@@ -164,7 +176,6 @@ Use this playbook to manually trigger each `rate_limit.*` SSE event in a local d
 - `data.user_message = "Your subscription balance is exhausted. Please top up your subscription to continue."`
 - Client shows a **red error** notification with that message.
 - Input is **blocked**.
-
 
 
 

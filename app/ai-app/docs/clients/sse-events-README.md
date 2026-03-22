@@ -8,6 +8,7 @@ see_also:
   - ks:docs/clients/frontend-awareness-on-service-state-README.md
   - ks:docs/service/comm/comm-system.md
   - ks:docs/arch/architecture-long.md
+  - ks:docs/economics/rate-limit-simulation-playbook.md
 ---
 # SSE Events (Chat)
 
