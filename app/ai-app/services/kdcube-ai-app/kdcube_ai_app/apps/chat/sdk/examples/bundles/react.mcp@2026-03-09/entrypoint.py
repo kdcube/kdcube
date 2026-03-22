@@ -112,6 +112,7 @@ class ReactWorkflow(BaseEntrypoint):
                 config=self.config,
                 comm_context=self.comm_context,
                 ctx_client=ctx_client,
+                bundle_props=self.bundle_props,
             )
 
             try:
@@ -172,6 +173,9 @@ class ReactWorkflow(BaseEntrypoint):
 
         })
         config["role_models"] = role_models
+        mcp = dict(config.get("mcp") or {})
+        mcp.setdefault("services", {})
+        config["mcp"] = mcp
         return config
 
     async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]):

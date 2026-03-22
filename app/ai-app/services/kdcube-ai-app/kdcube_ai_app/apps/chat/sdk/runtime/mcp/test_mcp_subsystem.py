@@ -55,6 +55,44 @@ def test_mcp_services_env_accepts_mcpServers():
     assert server.command == "npx"
 
 
+def test_mcp_services_config_accepts_dict_payload():
+    services_cfg = {
+        "mcpServers": {
+            "docs": {
+                "transport": "http",
+                "url": "https://mcp.example.com",
+                "auth": {"type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"},
+            }
+        }
+    }
+    ss = MCPToolsSubsystem(
+        bundle_id="b1",
+        mcp_tool_specs=[{"server_id": "docs", "alias": "docs"}],
+        adapter_factory=_dummy_factory,
+        services_config=services_cfg,
+    )
+    server = ss._server_spec("docs")
+    assert server is not None
+    assert server.transport == "http"
+    assert server.endpoint == "https://mcp.example.com"
+    assert server.auth_profile == {"type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"}
+
+
+def test_export_services_config_round_trips_server_map():
+    services_cfg = {
+        "mcpServers": {
+            "stack": {"transport": "stdio", "command": "npx", "args": ["mcp-remote", "mcp.stackoverflow.com"]},
+        }
+    }
+    ss = MCPToolsSubsystem(
+        bundle_id="b1",
+        mcp_tool_specs=[{"server_id": "stack", "alias": "stack"}],
+        adapter_factory=_dummy_factory,
+        services_config=services_cfg,
+    )
+    assert ss.export_services_config() == services_cfg
+
+
 def test_interactive_auth_is_hidden():
     env_json = """
     {

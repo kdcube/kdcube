@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/tools/mcp-README.md
 title: "MCP"
-summary: "MCP tool integration: descriptor allow-lists, MCP_SERVICES transport/auth config, and runtime execution flow (host + isolated)."
+summary: "MCP tool integration: descriptor allow-lists, bundle-props MCP service config, named-secret auth, and runtime execution flow (host + isolated)."
 tags: ["sdk", "tools", "mcp", "runtime", "descriptor", "transport", "auth"]
 keywords: ["MCP_TOOL_SPECS", "MCP_SERVICES", "MCPToolsSubsystem", "mcp.<alias>.<tool>", "stdio", "http", "streamable-http", "sse", "oauth_gui", "tool_call"]
 see_also:
@@ -20,7 +20,10 @@ For shared tool-subsystem behavior (`TOOLS_SPECS`, alias resolution, isolated su
 
 You configure MCP in two places:
 1. `MCP_TOOL_SPECS` in bundle `tools_descriptor.py` (what is visible/exposed).
-2. `MCP_SERVICES` env JSON (how to connect and authenticate).
+2. Bundle props `mcp.services` (how to connect and authenticate).
+
+`MCP_SERVICES` env JSON is still supported as a legacy / local-dev fallback, but
+it is not the preferred platform contract.
 
 ### 1) Descriptor: `MCP_TOOL_SPECS`
 
@@ -33,36 +36,40 @@ MCP_TOOL_SPECS = [
 ```
 
 Rules:
-- `server_id` must match an entry in `MCP_SERVICES`.
+- `server_id` must match an entry in bundle props `mcp.services` (or legacy `MCP_SERVICES` fallback).
 - `alias` is used in tool IDs: `mcp.<alias>.<tool_id>`.
 - `tools` omitted or `["*"]` exposes all server tools.
 - A concrete list is an allow-list.
 
-### 2) Environment: `MCP_SERVICES`
+### 2) Bundle props: `mcp.services`
 
 Supported top-level keys:
 - `mcpServers` (preferred)
 - `servers` (also supported)
 
+```yaml
+mcp:
+  services:
+    mcpServers:
+      stack:
+        transport: stdio
+        command: npx
+        args: ["mcp-remote", "mcp.stackoverflow.com"]
+      docs:
+        transport: http
+        url: https://mcp.example.com
+        auth:
+          type: bearer
+          secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+      local:
+        transport: sse
+        url: http://127.0.0.1:8787/sse
+```
+
+Legacy/dev fallback:
+
 ```bash
-export MCP_SERVICES='{
-  "mcpServers": {
-    "stack": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["mcp-remote", "mcp.stackoverflow.com"]
-    },
-    "docs": {
-      "transport": "http",
-      "url": "https://mcp.example.com",
-      "auth": { "type": "bearer", "env": "MCP_DOCS_TOKEN" }
-    },
-    "local": {
-      "transport": "sse",
-      "url": "http://127.0.0.1:8787/sse"
-    }
-  }
-}'
+export MCP_SERVICES='{"mcpServers":{"docs":{"transport":"http","url":"https://mcp.example.com"}}}'
 ```
 
 ## Supported transports
@@ -77,10 +84,25 @@ export MCP_SERVICES='{
 ## Auth behavior
 
 - `oauth_gui` / interactive auth servers are hidden (not listed in tool catalog).
-- `bearer` / `api_key` / `header` auth reads secrets from env and injects headers.
+- `bearer` / `api_key` / `header` auth supports either:
+  - `auth.secret` → `get_secret("dot.path.key")`
+  - `auth.env` → env lookup / `get_secret(env_key)` fallback
 - Secrets are not written to Redis cache.
 
-## Secret resolution: `${secret:...}` syntax
+## Secret resolution: named secrets and `${secret:...}` syntax
+
+Two secret patterns are supported:
+
+1. Auth block secret resolution:
+
+```json
+"auth": {
+  "type": "bearer",
+  "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"
+}
+```
+
+2. Stdio env interpolation:
 
 For stdio servers, env values can use the `${secret:dot.path.key}` syntax to
 resolve secrets via `get_secret()` at session creation time:
@@ -103,12 +125,17 @@ needs a corresponding alias in `_SECRET_ALIASES` (e.g.,
 **CLI deploy:** the CLI reads `secrets.yaml` / `bundles.secrets.yaml` and
 injects values into the secrets-service sidecar or AWS Secrets Manager.
 
+Bundle-props `mcp.services` is preferred because it is bundle-scoped and can
+use named bundle secrets. `MCP_SERVICES` remains useful for process-wide local
+dev experiments only.
+
 ## Runtime execution flow
 
 1. `MCPToolsSubsystem.build_tool_entries()` contributes MCP entries to the tool catalog.
 2. Planner selects an MCP tool ID: `mcp.<alias>.<tool_id>`.
 3. `io_tools.tool_call(...)` parses `mcp` origin and routes to `MCPToolsSubsystem.execute_tool(...)`.
 4. In isolated runtime, executor still calls `io_tools.tool_call(...)`; tool calls are delegated to supervisor, and MCP routing still happens there.
+5. For isolated exec, the current MCP service config is exported from the live tool subsystem into runtime globals; it is not expected to be rebuilt from a fresh process env.
 
 ## Tool ID format
 
@@ -140,28 +167,25 @@ python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server --t
 
 Client config example:
 
-```bash
-export MCP_SERVICES='{
-  "mcpServers": {
-    "web_search": {
-      "transport": "stdio",
-      "command": "python",
-      "args": [
-        "-m",
-        "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server",
-        "--transport",
-        "stdio"
-      ]
-    }
-  }
-}'
+```yaml
+mcp:
+  services:
+    mcpServers:
+      web_search:
+        transport: stdio
+        command: python
+        args:
+          - -m
+          - kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server
+          - --transport
+          - stdio
 ```
 
 ## Troubleshooting
 
 - No MCP tools in catalog:
   - check `MCP_TOOL_SPECS` has the server alias entry.
-  - check `MCP_SERVICES` has a matching `server_id`.
+  - check bundle props `mcp.services` has a matching `server_id` (or legacy `MCP_SERVICES` fallback).
   - validate transport fields (`command` for stdio, `url` for http/sse).
   - verify auth is not interactive (`oauth_gui`).
 - MCP call fails at runtime:

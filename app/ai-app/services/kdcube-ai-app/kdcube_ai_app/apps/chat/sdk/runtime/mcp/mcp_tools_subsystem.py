@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -41,13 +42,18 @@ class MCPAdapterFactory(Protocol):
         ...
 
 
-def _parse_mcp_services_env(env_json: str) -> Dict[str, Dict[str, Any]]:
-    if not env_json:
+def _parse_mcp_services_config(raw: Any) -> Dict[str, Dict[str, Any]]:
+    if not raw:
         return {}
-    try:
-        data = json.loads(env_json)
-    except Exception:
-        logger.warning("MCP_SERVICES env is not valid JSON")
+    if isinstance(raw, str):
+        try:
+            data = json.loads(raw)
+        except Exception:
+            logger.warning("MCP services config is not valid JSON")
+            return {}
+    elif isinstance(raw, dict):
+        data = raw
+    else:
         return {}
     if isinstance(data, dict) and "servers" in data and isinstance(data["servers"], dict):
         return data["servers"]
@@ -97,14 +103,15 @@ class MCPToolsSubsystem:
         mcp_tool_specs: List[Dict[str, Any]],
         adapter_factory: Optional[MCPAdapterFactory] = None,
         cache: Optional[Any] = None,
+        services_config: Optional[Any] = None,
         env_json: Optional[str] = None,
     ):
         self.bundle_id = bundle_id or "default"
         self.adapter_factory = adapter_factory
         self.mcp_specs = _normalize_mcp_specs(mcp_tool_specs)
 
-        env_json = env_json or ""
-        self._services_cfg = _parse_mcp_services_env(env_json)
+        services_config = services_config if services_config is not None else (env_json or "")
+        self._services_cfg = _parse_mcp_services_config(services_config)
 
         if cache is not None:
             try:
@@ -126,6 +133,9 @@ class MCPToolsSubsystem:
         for spec in self.mcp_specs:
             alias = spec.alias or f"mcp_{spec.server_id}"
             self._alias_to_server[alias] = spec.server_id
+
+    def export_services_config(self) -> Dict[str, Any]:
+        return {"mcpServers": copy.deepcopy(self._services_cfg or {})}
 
     def _build_cache(self) -> Optional[NamespacedKVCache]:
         try:

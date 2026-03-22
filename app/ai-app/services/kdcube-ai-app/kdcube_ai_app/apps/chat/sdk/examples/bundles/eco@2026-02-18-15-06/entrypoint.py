@@ -119,6 +119,7 @@ class EcoEntrypoint(BaseEntrypointWithEconomics):
                     config=self.config,
                     comm_context=self.comm_context,
                     ctx_client=ctx_client,
+                    bundle_props=self.bundle_props,
                 )
 
                 # Execute the workflow, passing the full turn state

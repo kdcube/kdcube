@@ -297,10 +297,12 @@ def _build_tool_subsystem_from_runtime_globals(
     if isinstance(mcp_specs, list) and mcp_specs:
         try:
             from kdcube_ai_app.apps.chat.sdk.runtime.mcp.mcp_tools_subsystem import MCPToolsSubsystem
+            mcp_services = rg.get("MCP_SERVICES")
             mcp_subsystem = MCPToolsSubsystem(
                 bundle_id=bundle_spec.id,
                 mcp_tool_specs=mcp_specs,
                 cache=(integrations or {}).get("kv_cache") if isinstance(integrations, dict) else None,
+                services_config=mcp_services if isinstance(mcp_services, dict) and mcp_services else None,
                 env_json=os.environ.get("MCP_SERVICES") or "",
             )
         except Exception:

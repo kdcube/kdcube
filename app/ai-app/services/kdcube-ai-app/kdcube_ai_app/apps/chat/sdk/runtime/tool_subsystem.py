@@ -786,6 +786,11 @@ class ToolSubsystem:
                 {"server_id": s.server_id, "alias": s.alias, "tools": s.tools}
                 for s in (getattr(self.mcp_subsystem, "mcp_specs", []) or [])
             ] if self.mcp_subsystem else [],
+            "MCP_SERVICES": (
+                self.mcp_subsystem.export_services_config()
+                if self.mcp_subsystem and hasattr(self.mcp_subsystem, "export_services_config")
+                else {}
+            ),
         }
 
 def resolve_codegen_tools_specs(tool_specs: List[Dict[str, Any]],
@@ -825,6 +830,7 @@ def create_tool_subsystem_with_mcp(
         raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
         tool_runtime: Optional[Dict[str, str]] = None,
         mcp_tool_specs: Optional[List[Dict[str, Any]]] = None,
+        mcp_services_config: Optional[Any] = None,
         mcp_env_json: Optional[str] = None,
 ):
     """
@@ -838,6 +844,7 @@ def create_tool_subsystem_with_mcp(
             mcp_subsystem = MCPToolsSubsystem(
                 bundle_id=bundle_spec.id,
                 mcp_tool_specs=mcp_tool_specs,
+                services_config=mcp_services_config,
                 env_json=mcp_env_json or "",
             )
     except Exception:

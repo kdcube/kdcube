@@ -58,7 +58,7 @@ Declared in `tools_descriptor.py` → `MCP_TOOL_SPECS`:
 
 Tool ID format: `mcp.<alias>.<tool_id>` (e.g., `mcp.web_search.web_search`, `mcp.firecrawl.firecrawl_scrape`).
 
-Full configuration guide: [react-mcp-configuration-README.md](react-mcp-configuration-README.md).
+Full configuration guide: [sample-bundle-configuration-README.md](sample-bundle-configuration-README.md).
 
 ---
 
@@ -179,6 +179,20 @@ POST /admin/integrations/bundles/react.mcp@2026-03-09/props
       "repo": "git@github.com:kdcube/kdcube-ai-app.git",
       "ref": "v0.4.0",
       "docs_root": "app/ai-app/docs"
+    },
+    "mcp": {
+      "services": {
+        "mcpServers": {
+          "docs": {
+            "transport": "http",
+            "url": "https://mcp.internal.example.com",
+            "auth": {
+              "type": "bearer",
+              "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"
+            }
+          }
+        }
+      }
     }
   }
 }
@@ -190,7 +204,7 @@ POST /admin/integrations/bundles/react.mcp@2026-03-09/props
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `MCP_SERVICES` | Yes | JSON with MCP server connection configs |
+| `MCP_SERVICES` | No | Legacy/local-dev fallback for MCP service config; platform deployments should use bundle props `mcp.services` |
 | `AGENTIC_BUNDLES_JSON` | Yes | Bundle registry (inline JSON or path) |
 | `ANTHROPIC_API_KEY` | Yes | API key for Claude models |
 | `REDIS_URL` | Yes | Redis connection URL |
@@ -198,7 +212,7 @@ POST /admin/integrations/bundles/react.mcp@2026-03-09/props
 | `BUNDLE_STORAGE_ROOT` | No | Shared local bundle storage path |
 | `CB_BUNDLE_STORAGE_URL` | No | Per-bundle storage backend (`file://` or `s3://`) |
 | `FIRECRAWL_API_KEY` | If using `firecrawl` | API key for Firecrawl MCP server (https://www.firecrawl.dev/) |
-| `MCP_DOCS_TOKEN` | If using `docs` with auth | Bearer token for remote docs MCP server |
+| `MCP_DOCS_TOKEN` | Optional legacy fallback | Only needed if you still use `auth.env`; prefer bundle secret via `auth.secret` |
 
 ---
 
@@ -215,7 +229,7 @@ POST /admin/integrations/bundles/react.mcp@2026-03-09/props
 
 ## Related docs
 
-- Bundle overview: [react-mcp-README.md](react-mcp-README.md)
-- MCP connector configuration: [react-mcp-configuration-README.md](react-mcp-configuration-README.md)
+- Bundle overview: [sample-bundle-README.md](sample-bundle-README.md)
+- MCP connector configuration: [sample-bundle-configuration-README.md](sample-bundle-configuration-README.md)
 - Bundle ops guide: [docs/sdk/bundle/bundle-ops-README.md](../bundle-ops-README.md)
 - Bundle developer guide: [docs/sdk/bundle/bundle-dev-README.md](../bundle-dev-README.md)

@@ -112,6 +112,7 @@ class ReactWorkflow(BaseEntrypoint):
                     config=self.config,
                     comm_context=self.comm_context,
                     ctx_client=ctx_client,
+                    bundle_props=self.bundle_props,
                 )
 
                 res = await orch.process({

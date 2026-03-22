@@ -189,6 +189,31 @@ class BaseWorkflow():
     def bundle_prop(self, path: str, default: Any = None) -> Any:
         return self.get_prop_path(self.bundle_props or {}, path, default)
 
+    def _resolve_mcp_services_config(self) -> Any:
+        props = self.bundle_props or {}
+
+        raw = self.get_prop_path(props, "mcp.services", default=None)
+        if isinstance(raw, dict) and raw:
+            return copy.deepcopy(raw)
+        if isinstance(raw, str) and raw.strip():
+            return raw
+
+        mcp_block = self.get_prop_path(props, "mcp", default=None)
+        if isinstance(mcp_block, dict):
+            if isinstance(mcp_block.get("mcpServers"), dict) and mcp_block.get("mcpServers"):
+                return {"mcpServers": copy.deepcopy(mcp_block["mcpServers"])}
+            if isinstance(mcp_block.get("servers"), dict) and mcp_block.get("servers"):
+                return {"servers": copy.deepcopy(mcp_block["servers"])}
+
+        raw = self.get_prop_path(props, "mcp_services", default=None)
+        if isinstance(raw, dict) and raw:
+            return copy.deepcopy(raw)
+        if isinstance(raw, str) and raw.strip():
+            return raw
+
+        env_json = os.environ.get("MCP_SERVICES") or ""
+        return env_json or None
+
     def _sync_runtime_ctx_bundle_props(self) -> None:
         runtime_ctx = getattr(self, "runtime_ctx", None)
         if runtime_ctx is None:
@@ -932,6 +957,7 @@ class BaseWorkflow():
             raw_tool_specs=mod_tools_spec,
             tool_runtime=tools_runtime,
             mcp_tool_specs=mcp_tools_spec or [],
+            mcp_services_config=self._resolve_mcp_services_config(),
             mcp_env_json=os.environ.get("MCP_SERVICES") or "",
         )
 

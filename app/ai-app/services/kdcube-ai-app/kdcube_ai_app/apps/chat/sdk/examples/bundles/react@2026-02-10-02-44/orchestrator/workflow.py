@@ -57,6 +57,7 @@ class WithReactWorkflow(BaseWorkflow):
         config: Config,
         comm_context: ChatTaskPayload,
         ctx_client: Any = None,
+        bundle_props: Dict[str, Any] | None = None,
     ):
         super().__init__(
             conv_idx=conv_idx,
@@ -68,6 +69,7 @@ class WithReactWorkflow(BaseWorkflow):
             config=config,
             comm_context=comm_context,
             ctx_client=ctx_client,
+            bundle_props=bundle_props,
             # Provide user-friendly error messages (from resources.py)
             message_resources_fn=get_friendly_error_message,
         )

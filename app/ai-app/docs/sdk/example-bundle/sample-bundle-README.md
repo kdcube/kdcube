@@ -41,7 +41,8 @@ The bundles are **nearly identical**. Only `tools_descriptor.py` differs:
 
 4) **MCP tools are resolved at runtime**:
    - `MCP_TOOL_SPECS` (descriptor) declares which MCP servers are visible.
-   - `MCP_SERVICES` (env) defines how to connect and authenticate.
+   - bundle props `mcp.services` define how to connect and authenticate.
+   - `MCP_SERVICES` env remains only as a legacy/local-dev fallback.
    - The tool subsystem merges MCP tools into the agent's tool catalog alongside
      native Python tools.
 
@@ -95,34 +96,29 @@ react.mcp@2026-03-09/
 
 ## Quick start
 
-1. Configure MCP servers (see [react-mcp-configuration-README.md](react-mcp-configuration-README.md)):
+1. Configure MCP servers in bundle props (see [sample-bundle-configuration-README.md](sample-bundle-configuration-README.md)):
 
-```bash
-export MCP_SERVICES='{
-  "mcpServers": {
-    "web_search": {
-      "transport": "stdio",
-      "command": "python",
-      "args": ["-m", "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server", "--transport", "stdio"]
-    },
-    "deepwiki": {
-      "transport": "streamable-http",
-      "url": "https://mcp.deepwiki.com/mcp"
-    },
-    "firecrawl": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_KEY": "${secret:services.firecrawl.api_key}"
-      }
-    }
-  }
-}'
+```yaml
+mcp:
+  services:
+    mcpServers:
+      web_search:
+        transport: stdio
+        command: python
+        args: ["-m", "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server", "--transport", "stdio"]
+      deepwiki:
+        transport: streamable-http
+        url: https://mcp.deepwiki.com/mcp
+      firecrawl:
+        transport: stdio
+        command: npx
+        args: ["-y", "firecrawl-mcp"]
+        env:
+          FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
 ```
 
 > **Firecrawl** requires an API key. Get one at https://www.firecrawl.dev/ (free tier: 500 credits).
-> For secret resolution details, see [react-mcp-configuration-README.md](react-mcp-configuration-README.md) §4.
+> For secret resolution details, see [sample-bundle-configuration-README.md](sample-bundle-configuration-README.md) §4.
 
 2. Register the bundle:
 
@@ -156,8 +152,8 @@ export AGENTIC_BUNDLES_JSON='{
 
 ## Related docs
 
-- MCP connector configuration: [react-mcp-configuration-README.md](react-mcp-configuration-README.md)
-- Bundle properties and integrations: [react-mcp-properties-README.md](react-mcp-properties-README.md)
+- MCP connector configuration: [sample-bundle-configuration-README.md](sample-bundle-configuration-README.md)
+- Bundle properties and integrations: [sample-bundle-properties-README.md](sample-bundle-properties-README.md)
 - SDK MCP integration: [docs/sdk/tools/mcp-README.md](../../tools/mcp-README.md)
 - Bundle developer guide: [docs/sdk/bundle/bundle-dev-README.md](../bundle-dev-README.md)
 - Base react bundle: `sdk/examples/bundles/react@2026-02-10-02-44/`

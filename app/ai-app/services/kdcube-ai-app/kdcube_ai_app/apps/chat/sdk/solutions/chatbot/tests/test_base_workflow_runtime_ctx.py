@@ -47,3 +47,34 @@ def test_rebind_request_context_refreshes_runtime_ctx_bundle_storage(monkeypatch
     assert wf.runtime_ctx.project == "project-b"
     assert wf.runtime_ctx.turn_id == "turn-2"
     assert wf.runtime_ctx.bundle_storage == str(resolved_storage)
+
+
+def test_resolve_mcp_services_config_prefers_bundle_props_over_env(monkeypatch):
+    monkeypatch.setenv("MCP_SERVICES", '{"mcpServers":{"env_only":{"transport":"stdio","command":"python"}}}')
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.bundle_props = {
+        "mcp": {
+            "services": {
+                "mcpServers": {
+                    "docs": {
+                        "transport": "http",
+                        "url": "https://mcp.example.com",
+                        "auth": {"type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"},
+                    }
+                }
+            }
+        }
+    }
+
+    resolved = wf._resolve_mcp_services_config()
+
+    assert resolved == {
+        "mcpServers": {
+            "docs": {
+                "transport": "http",
+                "url": "https://mcp.example.com",
+                "auth": {"type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"},
+            }
+        }
+    }

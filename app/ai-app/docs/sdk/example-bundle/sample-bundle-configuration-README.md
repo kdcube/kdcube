@@ -1,6 +1,6 @@
 ---
 title: "React.mcp Bundle — MCP Configuration"
-summary: "How to configure MCP connectors for the react.mcp bundle: transports, authentication, secrets management, and troubleshooting."
+summary: "How to configure MCP connectors for the react.mcp bundle: bundle-props service config, transports, named-secret authentication, and troubleshooting."
 tags: ["bundle", "mcp", "configuration", "auth", "secrets", "transport"]
 keywords: ["MCP_SERVICES", "MCP_TOOL_SPECS", "stdio", "http", "sse", "bearer", "api_key", "secrets", "web_search", "mcp_adapter"]
 ---
@@ -18,19 +18,19 @@ MCP is configured in two independent layers:
 ```mermaid
 flowchart LR
     D["tools_descriptor.py<br/><b>MCP_TOOL_SPECS</b><br/>what is visible"] --> TS[ToolSubsystem]
-    E["Environment<br/><b>MCP_SERVICES</b><br/>how to connect"] --> TS
+    E["Bundle props<br/><b>mcp.services</b><br/>how to connect"] --> TS
     TS --> CAT[Agent tool catalog]
 ```
 
 | Layer | Where | What it controls |
 |-------|-------|------------------|
 | **Descriptor** | `tools_descriptor.py` → `MCP_TOOL_SPECS` | Which MCP servers and tools are **visible** to the agent |
-| **Environment** | `MCP_SERVICES` env variable | **How** to connect: transport, URL/command, auth |
+| **Bundle props** | `mcp.services` | **How** to connect: transport, URL/command, auth |
 
 The descriptor says _"expose tools from server X under alias Y"_.
-The environment says _"server X is reachable at this URL with this auth"_.
+The bundle props say _"server X is reachable at this URL with this auth"_.
 
-Both must agree on `server_id` — if a descriptor entry has no matching env entry,
+Both must agree on `server_id` — if a descriptor entry has no matching service entry,
 that MCP server is silently skipped.
 
 ---
@@ -52,7 +52,7 @@ MCP_TOOL_SPECS = [
 
 | Field | Description |
 |-------|-------------|
-| `server_id` | Must match a key in `MCP_SERVICES` → `mcpServers` |
+| `server_id` | Must match a key in bundle props `mcp.services` → `mcpServers` |
 | `alias` | Prefix for tool IDs: `mcp.<alias>.<tool_id>` |
 | `tools` | `["*"]` = expose all tools; `["tool_a"]` = allow-list |
 
@@ -69,103 +69,81 @@ MCP_TOOL_SPECS = [
 
 ---
 
-## 2) Environment: `MCP_SERVICES`
+## 2) Bundle props: `mcp.services`
 
-Set the `MCP_SERVICES` environment variable as a JSON string.
+Set bundle props `mcp.services`.
 Supported top-level keys: `mcpServers` (preferred) or `servers`.
 
-### Production example (from `.env.proc`)
+### Production-style example (bundle props)
 
 This is the actual configuration used in the project:
 
-```bash
-export MCP_SERVICES='{
-  "mcpServers": {
-
-    "deepwiki": {
-      "transport": "streamable-http",
-      "url": "https://mcp.deepwiki.com/mcp"
-    },
-
-    "firecrawl": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_KEY": "${secret:services.firecrawl.api_key}"
-      }
-    }
-
-  }
-}'
+```yaml
+mcp:
+  services:
+    mcpServers:
+      deepwiki:
+        transport: streamable-http
+        url: https://mcp.deepwiki.com/mcp
+      firecrawl:
+        transport: stdio
+        command: npx
+        args: ["-y", "firecrawl-mcp"]
+        env:
+          FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
 ```
 
 > **Note:** `web_search` is not included in the production config above but can be
-> re-enabled by adding its entry to both `MCP_TOOL_SPECS` and `MCP_SERVICES`.
+> re-enabled by adding its entry to both `MCP_TOOL_SPECS` and bundle props `mcp.services`.
 
 ### Extended example (all connector types)
 
-```bash
-export MCP_SERVICES='{
-  "mcpServers": {
-
-    "web_search": {
-      "transport": "stdio",
-      "command": "python",
-      "args": [
-        "-m",
-        "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server",
-        "--transport", "stdio"
-      ]
-    },
-
-    "deepwiki": {
-      "transport": "streamable-http",
-      "url": "https://mcp.deepwiki.com/mcp"
-    },
-
-    "firecrawl": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["-y", "firecrawl-mcp"],
-      "env": {
-        "FIRECRAWL_API_KEY": "${secret:services.firecrawl.api_key}"
-      }
-    },
-
-    "stack": {
-      "transport": "stdio",
-      "command": "npx",
-      "args": ["mcp-remote", "mcp.stackoverflow.com"]
-    },
-
-    "docs": {
-      "transport": "http",
-      "url": "https://mcp.internal.example.com",
-      "auth": { "type": "bearer", "env": "MCP_DOCS_TOKEN" }
-    },
-
-    "local": {
-      "transport": "sse",
-      "url": "http://127.0.0.1:8787/sse"
-    }
-
-  }
-}'
+```yaml
+mcp:
+  services:
+    mcpServers:
+      web_search:
+        transport: stdio
+        command: python
+        args:
+          - -m
+          - kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server
+          - --transport
+          - stdio
+      deepwiki:
+        transport: streamable-http
+        url: https://mcp.deepwiki.com/mcp
+      firecrawl:
+        transport: stdio
+        command: npx
+        args: ["-y", "firecrawl-mcp"]
+        env:
+          FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+      stack:
+        transport: stdio
+        command: npx
+        args: ["mcp-remote", "mcp.stackoverflow.com"]
+      docs:
+        transport: http
+        url: https://mcp.internal.example.com
+        auth:
+          type: bearer
+          secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+      local:
+        transport: sse
+        url: http://127.0.0.1:8787/sse
 ```
 
 ### Minimal example (web_search only)
 
-```bash
-export MCP_SERVICES='{
-  "mcpServers": {
-    "web_search": {
-      "transport": "stdio",
-      "command": "python",
-      "args": ["-m", "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server", "--transport", "stdio"]
-    }
-  }
-}'
+```yaml
+mcp:
+  services:
+    mcpServers:
+      web_search:
+        transport: stdio
+        command: python
+        args: ["-m", "kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server", "--transport", "stdio"]
 ```
 
 > **Environment inheritance for stdio servers:**
@@ -189,9 +167,9 @@ export MCP_SERVICES='{
 ### Running the built-in `web_search` server
 
 **stdio** — no manual start needed, the platform spawns the process automatically
-from the `command` + `args` in `MCP_SERVICES`.
+from the `command` + `args` in bundle props `mcp.services`.
 
-**sse** — start manually, then point `MCP_SERVICES` at it:
+**sse** — start manually, then point bundle props `mcp.services` at it:
 
 ```bash
 python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server \
@@ -251,6 +229,17 @@ _SECRET_ALIASES = {
 the secrets-service sidecar (or AWS SM). `get_secret()` then reads from the
 configured secrets provider.
 
+### `auth.secret` for HTTP/SSE auth blocks
+
+```yaml
+auth:
+  type: bearer
+  secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+```
+
+`auth.secret` resolves through `get_secret()` and is the preferred way to wire
+bundle-specific MCP credentials in platform deployments.
+
 ### `${secret:...}` syntax for stdio env blocks
 
 For stdio MCP servers, env values can reference secrets via the
@@ -277,7 +266,7 @@ If the value does not match `${secret:...}`, it is passed through as-is.
 
 ### Where secrets are stored
 
-- For **stdio** servers: in the `env` block of the `MCP_SERVICES` entry, or
+- For **stdio** servers: in the `env` block of the `mcp.services` entry, or
   inherited from the parent process env.
 - For **http/sse** servers: in the `auth.env` field, which names the env var
   containing the token/key.
@@ -287,9 +276,9 @@ If the value does not match `${secret:...}`, it is passed through as-is.
 
 | Auth type | Config example | Behavior |
 |-----------|---------------|----------|
-| `bearer` | `"auth": {"type": "bearer", "env": "TOKEN_VAR"}` | Reads token from env, sends `Authorization: Bearer {token}` |
-| `api_key` | `"auth": {"type": "api_key", "env": "KEY_VAR"}` | Reads key from env, sends `X-API-Key` header |
-| `header` | `"auth": {"type": "header", "name": "X-Custom", "env": "VAR"}` | Custom header injection |
+| `bearer` | `"auth": {"type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"}` | Reads token via `get_secret()`, sends `Authorization: Bearer {token}` |
+| `api_key` | `"auth": {"type": "api_key", "secret": "bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key"}` | Reads key via `get_secret()`, sends `X-API-Key` header |
+| `header` | `"auth": {"type": "header", "name": "X-Custom", "secret": "bundles.react.mcp@2026-03-09.secrets.custom.value"}` | Custom header injection via named secret |
 
 ### Example: Firecrawl (stdio with `${secret:...}`)
 
@@ -337,11 +326,11 @@ GitHub repository documentation. No authentication required:
 # 1. Set the secret in env
 export MCP_DOCS_TOKEN="eyJhbGciOi..."
 
-# 2. Reference it in MCP_SERVICES auth block
+# 2. Reference it in mcp.services auth block
 "docs": {
   "transport": "http",
   "url": "https://mcp.internal.example.com",
-  "auth": { "type": "bearer", "env": "MCP_DOCS_TOKEN" }
+  "auth": { "type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token" }
 }
 ```
 
@@ -402,7 +391,7 @@ Key details:
 
 | Symptom | Check |
 |---------|-------|
-| MCP tools not in agent catalog | `MCP_TOOL_SPECS` has entry with matching `server_id`? `MCP_SERVICES` has matching key? |
+| MCP tools not in agent catalog | `MCP_TOOL_SPECS` has entry with matching `server_id`? `mcp.services` has matching key? |
 | `mcp.<alias>.<tool>` call fails | Server running? Transport fields correct? (`command` for stdio, `url` for http/sse) |
 | Auth errors (401/403) | Env var with token is set? `auth.env` points to correct var name? |
 | `${secret:...}` not resolving | Is `_SECRET_ALIASES` in `sdk/config.py` configured for this key? Is the env var set in `.env.proc`? (local dev) Or is the secret injected into secrets-service? (CLI deploy) |
@@ -422,7 +411,7 @@ Key details:
 
 ## Related docs
 
-- Bundle overview: [react-mcp-README.md](react-mcp-README.md)
-- Bundle properties: [react-mcp-properties-README.md](react-mcp-properties-README.md)
+- Bundle overview: [sample-bundle-README.md](sample-bundle-README.md)
+- Bundle properties: [sample-bundle-properties-README.md](sample-bundle-properties-README.md)
 - SDK MCP integration: [docs/sdk/tools/mcp-README.md](../../tools/mcp-README.md)
 - MCP demo: `sdk/runtime/mcp/demo/README.md`
