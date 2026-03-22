@@ -4,11 +4,11 @@ import {
     ChatDeltaEnvelope,
     ChatErrorEnvelope,
     ChatOptions,
-    ChatRequest, ChatServiceEnvelope,
-    ChatStartEnvelope,
+    ChatRequest, ChatStartEnvelope,
     ChatStepEnvelope
 } from "./chatBase.ts";
 import {Manager, Socket} from "socket.io-client";
+import {ChatServiceEnvelope} from "../chat/serviceEventTypes.ts";
 
 type EngineKey = string;
 const managers = new Map<EngineKey, Manager>();

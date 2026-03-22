@@ -3,38 +3,31 @@ import {CirclePlus, Send, X} from "lucide-react";
 import {selectFileAdvanced} from "../../shared.ts";
 import {useAppDispatch, useAppSelector} from "../../../app/store.ts";
 import {
-    addUserAttachments, removeUserAttachment,
+    addUserAttachments,
+    removeUserAttachment,
     selectCurrentTurn,
-    selectLocked,
     selectUserAttachments,
-    selectUserMessage, setUserMessage
+    selectUserInputLocked,
+    selectUserInputLockMessage,
+    selectUserMessage,
+    setUserMessage
 } from "../../../features/chat/chatStateSlice.ts";
 import {sendChatMessage} from "../../../features/chat/chatServiceMiddleware.ts";
 import {UserAttachment} from "../../../features/chat/chatTypes.ts";
-import {dismissNotification, selectPopupNotifications} from "../../../features/popupNotifications/popupsSlice.ts";
-
-const notificationColors: Record<string, string> = {
-    error: "bg-red-50 border-red-200 text-red-800",
-    warning: "bg-yellow-50 border-yellow-200 text-yellow-800",
-    info: "bg-blue-50 border-blue-200 text-blue-800",
-};
+import PopupArea from "../../../features/popupNotifications/PopupArea.tsx";
 
 interface UserInputProps {
-    lockMessage?: string;
     inputPlaceholder?: string;
 }
 
-const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserInputProps) => {
+const UserInput = ({inputPlaceholder = "Ask me anything..."}: UserInputProps) => {
     const dispatch = useAppDispatch();
     const userInput = useAppSelector(selectUserMessage)
     const userAttachments = useAppSelector(selectUserAttachments)
-    const isLocked = useAppSelector(selectLocked)
+    const isLocked = useAppSelector(selectUserInputLocked)
+    const lockMessage = useAppSelector(selectUserInputLockMessage)
     const currentTurn = useAppSelector(selectCurrentTurn)
     const inProgress = useMemo(() => !!currentTurn, [currentTurn])
-
-    const notifications = useAppSelector(selectPopupNotifications);
-    const hasNotifications = notifications.length > 0;
-    const hasErrors = notifications.some(n => n.type === "error");
 
     const userInputFieldRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -57,8 +50,8 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
     }, [dispatch])
 
     return useMemo(() => {
-        const inputDisabled = isLocked || hasErrors;
-        const sendDisabled = isLocked || hasErrors || inProgress || (!userInput.trim() && userAttachments.length == 0);
+        const inputDisabled = isLocked;
+        const sendDisabled = isLocked || inProgress || (!userInput.trim() && userAttachments.length == 0);
 
         return (
             <div
@@ -67,21 +60,7 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                 onClick={() => userInputFieldRef.current?.focus()}
             >
                 <div className="pointer-events-none mx-auto px-8 w-full max-w-[50vw]">
-                    {hasNotifications && notifications.map((msg) => (
-                        <div
-                            key={msg.id}
-                            className={`flex items-center gap-2 px-4 py-3 mb-2 text-sm rounded-xl border pointer-events-auto ${notificationColors[msg.type] ?? notificationColors.info}`}
-                        >
-                            <span className="flex-1">{msg.text}</span>
-                            <button
-                                className="shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
-                                onClick={() => dispatch(dismissNotification(msg.id))}
-                                aria-label="Dismiss"
-                            >
-                                <X size={14}/>
-                            </button>
-                        </div>
-                    ))}
+                    <PopupArea className={"max-w-full mb-2"}/>
                     <div
                         className={`flex flex-col mx-auto border rounded-t-xl border-gray-400 shadow-sm pointer-events-auto ${isLocked ? "bg-yellow-50" : "bg-white"}`}
                     >
@@ -107,12 +86,12 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                                 }
                             </div>}
                         <div className="flex max-h-72 min-h-12 w-full">
-                            {isLocked && !hasErrors ? (
+                            {isLocked ?
                                 <div className="flex-1 m-3 flex flex-col items-center">
                                     <span
                                         className="font-semibold text-gray-400">{lockMessage || "Daily token limit reached. Please try again later."}</span>
                                 </div>
-                            ) : (
+                                :
                                 <textarea
                                     value={userInput}
                                     onChange={(e) => setUserInputValue(e.target.value)}
@@ -128,7 +107,7 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                                     rows={2}
                                     ref={userInputFieldRef}
                                 />
-                            )}
+                            }
 
                         </div>
                         <div className="flex">
@@ -166,7 +145,7 @@ const UserInput = ({lockMessage, inputPlaceholder = "Ask me anything..."}: UserI
                 </div>
             </div>
         );
-    }, [addInputFiles, dispatch, hasErrors, hasNotifications, inProgress, inputPlaceholder, isLocked, lockMessage, notifications, removeInputFiles, sendMessage, setUserInputValue, userAttachments, userInput]);
+    }, [addInputFiles, inProgress, inputPlaceholder, isLocked, lockMessage, removeInputFiles, sendMessage, setUserInputValue, userAttachments, userInput]);
 }
 
 export default UserInput;

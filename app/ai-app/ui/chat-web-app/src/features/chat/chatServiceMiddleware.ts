@@ -4,22 +4,21 @@ import {
     ChatEventHandlers,
     ChatMessage,
     ChatRequest,
-    ChatServiceEnvelope,
-    RateLimitPayload,
+
 } from "../chatController/chatBase.ts";
 import {v4 as uuidv4} from "uuid";
-import {AppStore, RootState} from "../../app/store.ts";
+import {AppDispatch, AppStore, RootState} from "../../app/store.ts";
 import SocketIOChat from "../chatController/socketIOChat.ts";
 import {
     chatCompleted,
     chatConnected,
     chatDelta,
     chatDisconnected,
-    chatStarted,
+    chatStarted, clearUserAttachments,
     clearUserInput,
     conversationStatus,
     disconnect,
-    getUserAttachmentFile,
+    getUserAttachmentFile, lockInput,
     newTurn,
     selectChatConnected,
     selectChatStayConnected,
@@ -40,6 +39,12 @@ import {selectAuthToken, selectIdToken, setCredentials} from "../auth/authSlice.
 import {selectIdTokenHeaderName, selectProject, selectTenant} from "./chatSettingsSlice.ts";
 import {pushNotification} from "../popupNotifications/popupsSlice.ts";
 import {NotificationType} from "../popupNotifications/types.ts";
+import {
+    ChatServiceEnvelope,
+    ChatServiceMessageTrait, PopupShow, PopupShowType,
+    RateLimitPayload, UserInputAttachmentRejectedType,
+    UserInputLockTraitType
+} from "./serviceEventTypes.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -122,12 +127,28 @@ const getConversationHistory = (store: AppStore): ChatMessage[] => {
     }, [] as ChatMessage[]);
 }
 
+// @ts-expect-error store is unused for now
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const processServiceMessageTrait = (trait: ChatServiceMessageTrait, store: AppStore, dispatch: AppDispatch) => {
+    switch (trait.type) {
+        case PopupShowType:
+            dispatch(pushNotification((trait as PopupShow).data))
+            break;
+        case UserInputLockTraitType:
+            dispatch(lockInput())
+            break;
+        case UserInputAttachmentRejectedType:
+            dispatch(clearUserAttachments())
+            break;
+    }
+}
+
 export const chatServiceMiddleware = (transportType: TransportType): Middleware => {
     const sendChatHistory = true
     let transport: ChatBase;
 
     return (store) => (next) => (action) => {
-        const dispatch = store.dispatch
+        const dispatch = store.dispatch as AppDispatch
         const createTransport = () => {
             console.debug("create transport", transportType);
             const state = store.getState() as RootState;
@@ -154,7 +175,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             }
         }
 
-        const _fallbackRateLimitMessage = (rateLimit: RateLimitPayload | undefined, data: Record<string, unknown>): string => {
+        const fallbackRateLimitMessage = (rateLimit: RateLimitPayload | undefined, data: Record<string, unknown>): string => {
             const retryAfterSec = rateLimit?.retry_after_sec ?? null;
             const reason = data.reason as string | undefined;
             if (retryAfterSec && retryAfterSec > 0 && rateLimit) {
@@ -182,40 +203,58 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
             const data = env.data;
             const rateLimit = data?.rate_limit;
 
+            const traits: ChatServiceMessageTrait[] = []
+            const lockInputOnError = (notificationType: NotificationType) => {
+                if (notificationType === "error") {
+                    traits.push({type: UserInputLockTraitType})
+                }
+            }
+
+            const showPopup = (type: NotificationType, text: string) => {
+                traits.push({type: PopupShowType, data: {type, text}} as PopupShow)
+            }
+
+            //todo: remove hardcoded event types when traits system will be available
+
             switch (eventType) {
                 case "rate_limit.warning": {
                     const serverMessage = rateLimit?.user_message ?? null;
-                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
+                    const message = serverMessage ?? fallbackRateLimitMessage(rateLimit, data);
                     const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType;
-                    dispatch(pushNotification({type: notificationType, text: message}))
+                    showPopup(notificationType, message)
+                    lockInputOnError(notificationType)
                     break;
                 }
                 case "rate_limit.denied": {
                     const serverMessage = rateLimit?.user_message ?? (data.user_message as string | undefined) ?? null;
-                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
-                    const notificationType = (rateLimit?.notification_type ?? "error") as NotificationType; 
-                    dispatch(pushNotification({type: notificationType, text: message}))
+                    const message = serverMessage ?? fallbackRateLimitMessage(rateLimit, data);
+                    const notificationType = (rateLimit?.notification_type ?? "error") as NotificationType;
+                    showPopup(notificationType, message)
+                    lockInputOnError(notificationType)
                     break;
                 }
                 case "rate_limit.post_run_exceeded": {
                     const serverMessage = rateLimit?.user_message ?? null;
-                    const message = serverMessage ?? _fallbackRateLimitMessage(rateLimit, data);
-                    const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType; 
-                    dispatch(pushNotification({type: notificationType, text: message}))
+                    const message = serverMessage ?? fallbackRateLimitMessage(rateLimit, data);
+                    const notificationType = (rateLimit?.notification_type ?? "warning") as NotificationType;
+                    showPopup(notificationType, message)
+                    lockInputOnError(notificationType)
                     break;
                 }
                 case "rate_limit.no_funding": {
                     const serverMessage = (data.user_message as string | undefined) ?? null;
                     const message = serverMessage ?? "This service is not available for your account type. Please contact support.";
                     const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
-                    dispatch(pushNotification({type: notificationType, text: message}))
+                    showPopup(notificationType, message)
+                    lockInputOnError(notificationType)
                     break;
                 }
                 case "rate_limit.subscription_exhausted": {
                     const serverMessage = (data.user_message as string | undefined) ?? null;
                     const message = serverMessage ?? "Your subscription balance is exhausted. Please top up your balance to continue.";
                     const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
-                    dispatch(pushNotification({type: notificationType, text: message}))
+                    showPopup(notificationType, message)
+                    lockInputOnError(notificationType)
                     break;
                 }
                 case "rate_limit.project_exhausted": {
@@ -232,104 +271,31 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         message = "Project budget exhausted. Unable to process this request.";
                     }
 
-                    dispatch(pushNotification({
-                        type: "error",
-                        text: message,
-                    }))
+                    const notificationType = "error"
+
+                    showPopup(notificationType, message)
+
+                    lockInputOnError(notificationType)
+                    traits.push({type: UserInputAttachmentRejectedType})
                     break;
                 }
+                case "rate_limit.attachment_failure": {
+                    const serverMessage = (data.user_message as string | undefined) ?? null;
+                    const message = serverMessage ?? "Attachment was rejected.";
+                    const notificationType = ((data.notification_type as string | undefined) ?? "error") as NotificationType;
+                    showPopup(notificationType, message)
+                    break;
+                }
+                case "rate_limit.lane_switch":
+                case "economics.user_underfunded_absorbed":
+                    console.info(env)
+                    break;
                 default:
                     console.warn("unknown eventType", env);
             }
+
+            traits.forEach((trait) => processServiceMessageTrait(trait, store as AppStore, dispatch))
         }
-        //
-        //     // ========================================================================
-        //     // 4) LANE SWITCH - Informational (don't show to user, just log)
-        //     // ========================================================================
-        //     if (eventType === "rate_limit.lane_switch") {
-        //         const laneFrom = data.lane_from;
-        //         const laneTo = data.lane_to;
-        //         const reason = data.reason;
-        //
-        //         console.info(`[Economics] Lane switch: ${laneFrom} → ${laneTo} (${reason})`);
-        //
-        //         // Optional: Show very subtle info notification
-        //         // Uncomment if you want users to be aware they're using personal credits:
-        //         /*
-        //         if (laneTo === "paid") {
-        //             setRateLimitNotice({
-        //                 kind: "info",
-        //                 message: "Using your personal credits for this request.",
-        //                 retryAfterHours: null,
-        //                 messagesRemaining: null,
-        //             });
-        //
-        //             // Auto-dismiss after 5 seconds
-        //             setTimeout(() => {
-        //                 setRateLimitNotice(null);
-        //             }, 5000);
-        //         }
-        //         */
-        //
-        //         return;
-        //     }
-        //
-        //     // ========================================================================
-        //     // 5) USER UNDERFUNDED - Internal event (don't show to user)
-        //     // ========================================================================
-        //     if (eventType === "economics.user_underfunded_absorbed") {
-        //         const uncoveredTokens = data.user_uncovered_tokens;
-        //         const uncoveredUsd = data.user_uncovered_usd;
-        //
-        //         console.info(
-        //             `[Economics] User underfunded: ${uncoveredTokens} tokens (~$${uncoveredUsd?.toFixed(4)}) absorbed by project`
-        //         );
-        //         return;
-        //     }
-        //
-        //     // ========================================================================
-        //     // 6) SNAPSHOT - Just log (debugging)
-        //     // ========================================================================
-        //     if (eventType === "rate_limit.snapshot") {
-        //         if (logChatUpdates()) {
-        //             console.debug("[Economics] Rate limit snapshot:", rl || data);
-        //         }
-        //         return;
-        //     }
-        //     // ========================================================================
-        //     // X) AI SERVICES QUOTA (provider / platform throttling)
-        //     // ========================================================================
-        //     if (eventType === "rate_limit.ai_services_quota") {
-        //         // const msg = String(data.message ?? "AI services are temporarily at capacity. Please try again later.");
-        //         const msg = "We are a bit overloaded temporarily. Please try again later."
-        //
-        //         setRateLimitNotice({
-        //             kind: "error",
-        //             message: msg,
-        //             retryAfterHours: null,
-        //             messagesRemaining: null,
-        //         });
-        //
-        //         // attach to current turn; backend sets show_in_timeline=false
-        //         attachTurnError(msg, data.show_in_timeline ?? false);
-        //         return;
-        //     }
-        //     // ========================================================================
-        //     // X) ATTACHMENT FAILURE (upload rejected)
-        //     // ========================================================================
-        //     if (eventType === "rate_limit.attachment_failure") {
-        //         const msg = String(data.message ?? "Attachment was rejected.");
-        //
-        //         attachUserTurnError(new UserAttachmentError(msg));
-        //         return;
-        //     }
-        //     // ========================================================================
-        //     // Fallback: Unknown economics event
-        //     // ========================================================================
-        //     if (eventType?.startsWith("rate_limit.") || eventType?.startsWith("economics.")) {
-        //         console.warn("[Economics] Unhandled event:", eventType, data);
-        //     }
-        // }
 
         //move parsers and other logic here
         const eventHandlers: ChatEventHandlers = {

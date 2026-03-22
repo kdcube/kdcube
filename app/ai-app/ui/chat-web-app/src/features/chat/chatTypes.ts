@@ -36,7 +36,8 @@ export interface ConversationState {
 export interface ChatState extends ConversationState {
     stayConnected: boolean;
     connected: boolean;
-    locked: boolean;
+    userInputLocked: boolean;
+    userInputLockMessage: string | null;
     userMessage: string;
     userAttachments: UserAttachment[];
 }

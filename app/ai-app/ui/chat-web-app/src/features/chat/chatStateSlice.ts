@@ -297,7 +297,8 @@ const chatStateSlice = createSlice({
             conversationId: undefined,
             turns: {},
             turnOrder: [],
-            locked: false,
+            userInputLocked: false,
+            userInputLockMessage: null,
             userMessage: "",
             userAttachments: []
         }
@@ -372,6 +373,9 @@ const chatStateSlice = createSlice({
             } else {
                 console.warn("Received event for an unknown user attachment", action.payload)
             }
+        },
+        clearUserAttachments(state: WritableDraft<ChatState>) {
+            clearUserAttachmentsInternal(state)
         },
         clearUserInput(state) {
             state.userMessage = ""
@@ -766,7 +770,8 @@ const chatStateSlice = createSlice({
         newConversation: (state) => {
             state.turns = {}
             state.turnOrder = []
-            state.locked = false
+            state.userInputLocked = false
+            state.userInputLockMessage = null
             state.userMessage = ""
             state.userAttachments = []
             state.conversationId = null
@@ -783,6 +788,14 @@ const chatStateSlice = createSlice({
             state.turns = exampleConversationData.turns
             state.conversationId = exampleConversationData.conversationId
             state.conversationTitle = exampleConversationData.conversationTitle
+        },
+        lockInput: (state, action: PayloadAction<string | null | undefined>) => {
+            state.userInputLocked = true
+            state.userInputLockMessage = action.payload ? action.payload : null
+        },
+        unlockInput: (state) => {
+            state.userInputLocked = false
+            state.userInputLockMessage = null
         }
     }
 })
@@ -807,10 +820,14 @@ export const {
     loadConversation,
     loadExampleConversation,
     conversationStatus,
+    lockInput,
+    unlockInput,
+    clearUserAttachments
 } = chatStateSlice.actions
 export const selectChatConnected = (state: RootState) => state.chatState.connected
 export const selectChatStayConnected = (state: RootState) => state.chatState.stayConnected
-export const selectLocked = (state: RootState) => state.chatState.locked
+export const selectUserInputLocked = (state: RootState) => state.chatState.userInputLocked
+export const selectUserInputLockMessage = (state: RootState) => state.chatState.userInputLockMessage
 export const selectCurrentTurn = (state: RootState) => {
     return Object.entries(state.chatState.turns).map(([_unused, v]) => v).find(t => t.state === "inProgress")
 }

@@ -5,13 +5,13 @@ import {
     ChatErrorEnvelope,
     ChatOptions,
     ChatRequest,
-    ChatServiceEnvelope,
     ChatStartEnvelope,
     ChatStepEnvelope,
     ConvStatusEnvelope
 } from "./chatBase.ts";
 
 import {v4 as uuidv4} from "uuid";
+import {ChatServiceEnvelope} from "../chat/serviceEventTypes.ts";
 
 interface SSEChatOptions extends ChatOptions {
     baseUrl: string;
