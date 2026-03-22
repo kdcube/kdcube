@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/bundle-platform-properties-README.md
 title: "Bundle Platform Properties"
 summary: "Reserved bundle property paths interpreted by the platform entrypoints and runtimes."
 tags: ["sdk", "bundle", "configuration", "runtime", "economics", "exec"]
-keywords: ["role_models", "embedding", "economics.reservation_amount_dollars", "execution.runtime", "exec_runtime"]
+keywords: ["role_models", "embedding", "economics.reservation_amount_dollars", "execution.runtime", "exec_runtime", "mcp.services"]
 see_also:
   - ks:docs/service/configuration/bundle-configuration-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
@@ -38,6 +38,7 @@ authoritatively from `bundles.yaml`, so removed keys are deleted from Redis on e
 | `economics.reservation_amount_dollars` | `2.0` in `BaseEntrypointWithEconomics.configuration` | `BaseEntrypointWithEconomics` | Per-bundle reservation floor for pre-run economics admission |
 | `execution.runtime` | no default | `BaseEntrypoint`, `RuntimeCtx`, exec runtime | Per-bundle exec runtime selection/overrides |
 | `exec_runtime` | no default | same as `execution.runtime` | Legacy compatibility alias for `execution.runtime` |
+| `mcp.services` | no default | `BaseWorkflow`, MCP runtime/bootstrap | MCP server transport/auth config for tool subsystem |
 
 ## `role_models`
 
@@ -223,6 +224,49 @@ Docker notes:
 - prefer explicit keys like `image`, `network_mode`, `cpus`, and `memory` when possible
 
 `exec_runtime` is accepted as a legacy alias, but `execution.runtime` is the canonical path.
+
+## `mcp.services`
+
+This property is reserved for MCP connector configuration.
+
+It is read by the workflow/runtime tool-subsystem path and propagated into
+isolated exec, so MCP tool resolution does not depend on a process-global
+`MCP_SERVICES` env var.
+
+Preferred example:
+
+```yaml
+config:
+  mcp:
+    services:
+      mcpServers:
+        docs:
+          transport: http
+          url: https://mcp.internal.example.com
+          auth:
+            type: bearer
+            secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+        firecrawl:
+          transport: stdio
+          command: npx
+          args: ["-y", "firecrawl-mcp"]
+          env:
+            FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+```
+
+Behavior:
+- `mcp.services.mcpServers` and `mcp.services.servers` are both accepted.
+- `auth.secret` resolves through `get_secret("dot.path.key")` and is the
+  preferred way to supply bearer/api-key/header auth.
+- `${secret:...}` references inside stdio `env` blocks are resolved via
+  `get_secret()` when the MCP session is created.
+- `MCP_SERVICES` env is still accepted only as a legacy/local-dev fallback when
+  `mcp.services` is not configured in bundle props.
+
+This property works together with `MCP_TOOL_SPECS` from the bundle
+`tools_descriptor.py`:
+- `MCP_TOOL_SPECS` controls which MCP tools are exposed
+- `mcp.services` controls how those MCP servers are connected and authenticated
 
 ### Sourcing Fargate values for `execution.runtime`
 

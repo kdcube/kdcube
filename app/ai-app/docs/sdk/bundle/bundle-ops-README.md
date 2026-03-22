@@ -246,9 +246,37 @@ Some prop paths are platform-reserved and have built-in behavior:
 - `embedding`
 - `economics.reservation_amount_dollars`
 - `execution.runtime`
+- `mcp.services`
 
 Canonical reference:
 [docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md).
+
+Example: MCP service config in bundle props
+
+```yaml
+config:
+  mcp:
+    services:
+      mcpServers:
+        docs:
+          transport: http
+          url: https://mcp.internal.example.com
+          auth:
+            type: bearer
+            secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+        firecrawl:
+          transport: stdio
+          command: npx
+          args: ["-y", "firecrawl-mcp"]
+          env:
+            FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+```
+
+Notes:
+- `mcp.services` is the preferred platform contract for MCP connector config.
+- `MCP_SERVICES` env remains only as a legacy/local-dev fallback.
+- `auth.secret` is the preferred way to wire HTTP/SSE auth through named bundle secrets.
+- `${secret:...}` is supported for stdio server `env` values and resolves through `get_secret()` at session creation time.
 
 Important:
 - during normal runtime, admin edits act as the top override layer

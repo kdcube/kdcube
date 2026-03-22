@@ -60,6 +60,7 @@ Notes:
   - `embedding`
   - `economics.reservation_amount_dollars`
   - `execution.runtime`
+  - `mcp.services`
 - Canonical reference for these keys:
   [docs/sdk/bundle/bundle-platform-properties-README.md](../../sdk/bundle/bundle-platform-properties-README.md).
 
@@ -149,6 +150,34 @@ Notes:
 - bundle code can still choose another supported profile explicitly at runtime.
 - Docker profiles may define Docker-specific keys such as `image` and `network_mode`.
 
+### Configuring MCP services in bundle props
+Example: define MCP connectors in `bundles.yaml` with named bundle secrets:
+
+```yaml
+config:
+  mcp:
+    services:
+      mcpServers:
+        docs:
+          transport: http
+          url: https://mcp.internal.example.com
+          auth:
+            type: bearer
+            secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+        firecrawl:
+          transport: stdio
+          command: npx
+          args: ["-y", "firecrawl-mcp"]
+          env:
+            FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+```
+
+Notes:
+- `mcp.services` is the preferred platform contract for MCP connector config.
+- `MCP_SERVICES` env is still accepted only as a legacy/local-dev fallback.
+- `auth.secret` is preferred for HTTP/SSE auth.
+- `${secret:...}` inside stdio `env` values resolves via `get_secret()` when the MCP subprocess is started.
+
 ---
 
 ## 2) bundles.secrets.yaml (secret)
@@ -163,6 +192,10 @@ bundles:
           api_key: null
         stripe:
           secret_key: null
+        docs:
+          token: null
+        firecrawl:
+          api_key: null
 ```
 
 Notes:
@@ -170,6 +203,8 @@ Notes:
 - Secrets are injected into the secrets manager using **dot‑path keys**:
   - `bundles.<bundle_id>.secrets.openai.api_key`
   - `bundles.<bundle_id>.secrets.stripe.secret_key`
+  - `bundles.<bundle_id>.secrets.docs.token`
+  - `bundles.<bundle_id>.secrets.firecrawl.api_key`
 - Current behavior is **upsert-only**.
 - If a secret is removed from `bundles.secrets.yaml`, it is **not**
   automatically deleted from the configured secrets provider.
@@ -294,6 +329,31 @@ from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 api_key = get_secret("bundles.app@2-0.secrets.openai.api_key")
 ```
+
+Example: MCP config can consume the same bundle secrets directly:
+
+```yaml
+config:
+  mcp:
+    services:
+      mcpServers:
+        docs:
+          transport: http
+          url: https://mcp.internal.example.com
+          auth:
+            type: bearer
+            secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+        firecrawl:
+          transport: stdio
+          command: npx
+          args: ["-y", "firecrawl-mcp"]
+          env:
+            FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+```
+
+Meaning:
+- `auth.secret` resolves through `get_secret("bundles.react.mcp@2026-03-09.secrets.docs.token")`
+- `${secret:...}` in stdio `env` values resolves through `get_secret()` when the MCP subprocess is started
 
 ### Inspect effective props in Redis
 Bundle props are stored per tenant/project:
