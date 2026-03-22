@@ -68,10 +68,10 @@ ReAct interacts with **three data spaces**. Only two exist today:
 
 ```mermaid
 flowchart LR
-  Agent[ReAct Agent] -->|react.read ks:...| KS[Knowledge Space (read-only)]
-  Agent -->|react.read fi:...| OUT[OUT_DIR (per-turn)]
+  Agent[ReAct Agent] -->|react.read ks:...| KS["Knowledge Space (read-only)"]
+  Agent -->|react.read fi:...| OUT["OUT_DIR (per-turn)"]
   Agent -->|react.write / react.patch| OUT
-  Agent -. future: read/write .-> WK[Conversation Workspace (future, RW)]
+  Agent -. future: read/write .-> WK["Conversation Workspace (future, RW)"]
 ```
 
 Notes:
