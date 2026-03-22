@@ -520,7 +520,6 @@ const UserBillingDashboard: React.FC = () => {
     if (!settings.getAccessToken()) return <div className="p-6 text-center text-gray-500">Not authenticated. Please log in.</div>;
 
     const currentPlanId = breakdown?.plan_id || subscription?.plan_id || 'free';
-    const scopedBundleId = breakdown?.reset_windows?.bundle_id || '';
     const availablePersonalCreditsUsd = breakdown?.lifetime_credits?.available_usd || 0;
     const availablePersonalCreditTokens = breakdown?.lifetime_credits?.tokens_available || 0;
     const hasPersonalOverflowCover = availablePersonalCreditTokens > 0;
@@ -568,7 +567,7 @@ const UserBillingDashboard: React.FC = () => {
                                 <div className="mt-6 rounded-xl border border-sky-100 bg-sky-50 px-4 py-3 text-sm text-sky-900">
                                     <div className="font-semibold">Usage windows are rolling</div>
                                     <p className="mt-1 text-sky-800">
-                                        The hourly numbers below are for the last 60 minutes, the daily numbers are for the last 24 hours, and the monthly numbers are for a rolling 30-day window{scopedBundleId ? ' for this app' : ''}.
+                                        The numbers below reflect your combined usage across all apps in this workspace. The hourly numbers are for the last 60 minutes, the daily numbers are for the last 24 hours, and the monthly numbers are for a rolling 30-day window.
                                     </p>
                                 </div>
                                 <div className="mt-6 space-y-4">

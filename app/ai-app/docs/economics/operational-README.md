@@ -48,7 +48,8 @@ Window semantics (global per tenant/project):
 
 Customer billing widget:
 - `GET /api/economics/me/budget-breakdown` accepts an optional `bundle_id`.
-- If omitted, the backend resolves the currently loaded default app bundle via `resolve_bundle_async(None, override=None)` and returns bundle-scoped reset windows for that app.
+- If omitted, the backend uses limiter bundle id `__project__`, which matches the actual quota enforcement scope.
+- The displayed usage therefore covers the user’s combined usage across all bundles/apps in the tenant/project.
 - The customer widget should use this endpoint rather than relying on frontend-patched bundle ids.
 - The widget labels should match the rolling limiter semantics: `Last 60 minutes`, `Last 24 hours`, and `Rolling 30-day window`.
 

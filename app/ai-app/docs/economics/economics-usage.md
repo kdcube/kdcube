@@ -160,18 +160,19 @@ Important semantics:
 
 ## Customer-facing billing widget
 
-The customer widget at `apps/chat/api/economics/UserBillingDashboard.tsx` is intended to explain the user-facing side of economics for the currently loaded app.
+The customer widget at `apps/chat/api/economics/UserBillingDashboard.tsx` is intended to explain the user-facing side of economics for the authenticated user.
 
 - `GET /api/economics/me/budget-breakdown` resolves the effective plan for the authenticated user.
-- If `bundle_id` is not supplied, the backend resolves the current default app bundle with `resolve_bundle_async(None, override=None)` and uses that bundle to compute bundle-scoped reset windows.
+- By default, the endpoint uses limiter bundle id `__project__`, which matches the real quota scope enforced at runtime.
+- This means the usage shown in the widget is combined across all bundles/apps in the same tenant/project, not scoped to the currently loaded app.
 - The widget should present:
   - `Last 60 minutes`, `Last 24 hours`, and `Rolling 30-day window` usage,
   - remaining headroom for each window,
-  - reset timestamps for bundle-scoped rolling windows,
+  - reset timestamps for the same project-wide rolling windows,
   - personal lifetime credit balance,
   - the rule that requests larger than remaining plan quota require personal credits for the overflow.
 
-This is important because app/project budget alone does not explain a blocked free user: a user can still be blocked when plan headroom is low and personal credits are zero, even if project budget remains available.
+This is important because app/project budget alone does not explain a blocked free user: a user can still be blocked when plan headroom is low and personal credits are zero, even if project budget remains available. The user-facing widget therefore needs to describe the quota that is actually enforced, which is global across the tenant/project.
 
 ## Diagnostics script
 
