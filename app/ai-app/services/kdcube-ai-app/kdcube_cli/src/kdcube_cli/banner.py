@@ -1,6 +1,7 @@
 import random
 import sys
 import os
+import shutil
 
 # Enable ANSI escape sequences on Windows
 if os.name == 'nt':
@@ -328,6 +329,34 @@ def _build_label_3d(text: str) -> tuple:
     return ["".join(row) for row in canvas], baseline_row
 
 
+def _terminal_columns(default: int = 120) -> int:
+    try:
+        return shutil.get_terminal_size((default, 24)).columns
+    except Exception:
+        return default
+
+
+def _banner_layout(
+    label_width: int,
+    main_width: int,
+    mini_width: int,
+) -> tuple[str, str, bool]:
+    """Choose a pixel width that fits the current terminal."""
+    columns = _terminal_columns()
+
+    full_width_double = label_width * 2 + main_width * 2 + 2 + mini_width
+    full_width_single = label_width + main_width + 2 + mini_width
+    robot_width_double = main_width * 2 + 2 + mini_width
+
+    if columns >= full_width_double:
+        return "  ", "  ", True
+    if columns >= full_width_single:
+        return " ", " ", True
+    if columns >= robot_width_double:
+        return "  ", "  ", False
+    return " ", " ", False
+
+
 def print_cli_banner():
     """Print the KDCube label, main robot, and mini robot side-by-side."""
     selected_robot = random.choice([BOX_ROBOT, ISO_ROBOT])
@@ -340,6 +369,8 @@ def print_cli_banner():
     mini_pix_rows = len(MINI_ROBOT)          # pixel rows  (8)
     mini_term_rows = (mini_pix_rows + 1) // 2  # terminal rows (4, via half-blocks)
     mini_width     = len(MINI_ROBOT[0])
+    main_width     = len(selected_robot[0]) if selected_robot else 0
+    pixel_fill, pixel_blank, show_label = _banner_layout(label_width, main_width, mini_width)
 
     # Align label baseline with the last robot row
     text_start  = (robot_height - 1) - label_baseline
@@ -351,21 +382,22 @@ def print_cli_banner():
     for i in range(robot_height):
         # ── 3-D label ────────────────────────────────────────────────────────
         rel = i - text_start
-        if 0 <= rel < label_height:
+        if show_label and 0 <= rel < label_height:
             for ch in label_bitmap[rel]:
                 if ch == ".":
-                    sys.stdout.write("  ")
+                    sys.stdout.write(pixel_blank)
                 else:
-                    sys.stdout.write(COLORS[ch] + "  " + RESET)
+                    sys.stdout.write(COLORS[ch] + pixel_fill + RESET)
         else:
-            sys.stdout.write("  " * label_width)
+            if show_label:
+                sys.stdout.write(pixel_blank * label_width)
 
         # ── main robot ───────────────────────────────────────────────────────
         for pixel in selected_robot[i]:
             if pixel == "0":
-                sys.stdout.write(RESET + "  ")
+                sys.stdout.write(RESET + pixel_blank)
             else:
-                sys.stdout.write(COLORS[pixel] + "  " + RESET)
+                sys.stdout.write(COLORS[pixel] + pixel_fill + RESET)
 
         # ── mini robot (half-block, 1:1 square pixels) ───────────────────────
         sys.stdout.write("  ")   # gap
