@@ -2,9 +2,13 @@ import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 import {ConversationDescriptorDTO, ConversationDTO} from "./conversationsTypes.ts";
 import {chatAPIBasePath} from "../../BuildConfig.ts";
 
-export const getConversations = async (tenant: string, project: string) => {
+export const getConversations = async (tenant: string, project: string, bundleId?:string | null) => {
     const headers = appendDefaultCredentialsHeader({"Content-Type": "application/json"});
-    const res = await fetch(`${chatAPIBasePath}/api/cb/conversations/${tenant}/${project}`, {
+    const params = new URLSearchParams();
+    if (bundleId) params.set('bundle_id', bundleId);
+    const query = params.toString();
+
+    const res = await fetch(`${chatAPIBasePath}/api/cb/conversations/${tenant}/${project}${query ? `?${query}` : ''}`, {
         method: "GET",
         headers
     });

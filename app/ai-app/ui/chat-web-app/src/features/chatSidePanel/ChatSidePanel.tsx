@@ -40,6 +40,7 @@ import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 import {getChatPagePath} from "../chat/configHelper.ts";
 import {showDebugControls} from "../../BuildConfig.ts";
 import DebugPanel from "../debugPanel/DebugPanel.tsx";
+import {selectCurrentBundle} from "../bundles/bundlesSlice.ts";
 
 interface MenuButtonProps {
     children: ReactNode | ReactNode[];
@@ -106,9 +107,13 @@ const ConversationsPanel = ({visible, className}: ConversationsPanelProps) => {
 
     const [searchFor, setSearchFor] = useState("");
 
+    const currentBundle = useAppSelector(selectCurrentBundle);
+
     useEffect(() => {
-        dispatch(loadConversationList())
-    }, [dispatch]);
+        if (currentBundle && visible) {
+            dispatch(loadConversationList())
+        }
+    }, [currentBundle, dispatch, visible]);
 
     return useMemo(() => {
         return <motion.div

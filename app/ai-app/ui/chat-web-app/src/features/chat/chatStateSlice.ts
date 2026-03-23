@@ -69,6 +69,7 @@ import {
 } from "../logExtensions/webFetch/types.ts";
 import {ServiceErrorArtifactType} from "../logExtensions/service/types.ts";
 import {exampleConversationData} from "./debug.ts";
+import {setCurrentBundle} from "../bundles/bundlesSlice.ts";
 
 const userAttachmentMapping = new Map<string, File>();
 
@@ -288,6 +289,18 @@ const clearUserAttachmentsInternal = (state: WritableDraft<ChatState>) => {
     state.userAttachments = []
 }
 
+const startNewConversation = (state: WritableDraft<ChatState>) => {
+    state.turns = {}
+    state.turnOrder = []
+    state.userInputLocked = false
+    state.userInputLockMessage = null
+    state.userMessage = ""
+    state.userAttachments = []
+    state.conversationId = null
+    state.conversationTitle = null
+    state.conversationBundleId = null
+}
+
 const chatStateSlice = createSlice({
     name: 'chatState',
     initialState: (): ChatState => {
@@ -295,6 +308,7 @@ const chatStateSlice = createSlice({
             stayConnected: false,
             connected: false,
             conversationId: undefined,
+            conversationBundleId: null,
             turns: {},
             turnOrder: [],
             userInputLocked: false,
@@ -768,20 +782,14 @@ const chatStateSlice = createSlice({
             }
         },
         newConversation: (state) => {
-            state.turns = {}
-            state.turnOrder = []
-            state.userInputLocked = false
-            state.userInputLockMessage = null
-            state.userMessage = ""
-            state.userAttachments = []
-            state.conversationId = null
-            state.conversationTitle = null
+            startNewConversation(state)
         },
         loadConversation: (state, action: PayloadAction<ConversationState>) => {
             state.turnOrder = action.payload.turnOrder
             state.turns = action.payload.turns
             state.conversationId = action.payload.conversationId
             state.conversationTitle = action.payload.conversationTitle
+            state.conversationBundleId = action.payload.conversationBundleId
         },
         loadExampleConversation: (state) => {
             state.turnOrder = exampleConversationData.turnOrder
@@ -797,6 +805,13 @@ const chatStateSlice = createSlice({
             state.userInputLocked = false
             state.userInputLockMessage = null
         }
+    },
+    extraReducers: (builder) => {
+        builder.addCase(setCurrentBundle.type, (state, action) => {
+            if (state.conversationId && state.conversationBundleId !== (action as PayloadAction<string>).payload) {
+                startNewConversation(state)
+            }
+        })
     }
 })
 

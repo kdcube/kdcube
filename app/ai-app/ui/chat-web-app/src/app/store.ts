@@ -11,6 +11,8 @@ import conversationsMiddleware from "../features/conversations/conversationsMidd
 import {widgetPanelsApiSlice} from "../features/widgetPanels/widgetPanels.ts";
 import chatSettingsSlice from "../features/chat/chatSettingsSlice.ts";
 import popupNotificationsReducer from "../features/popupNotifications/popupsSlice.ts";
+import {bundlesApiSlice} from "../features/bundles/bundlesAPI.ts";
+import bundlesSlice from "../features/bundles/bundlesSlice.ts";
 
 export const store = configureStore({
     devTools:true,
@@ -21,8 +23,10 @@ export const store = configureStore({
         userProfile: userProfileSlice,
         conversations: conversationsSlice,
         popupNotifications: popupNotificationsReducer,
+        bundles:bundlesSlice,
         [suggestedQuestionsApiSlice.reducerPath]: suggestedQuestionsApiSlice.reducer,
         [widgetPanelsApiSlice.reducerPath]: widgetPanelsApiSlice.reducer,
+        [bundlesApiSlice.reducerPath]: bundlesApiSlice.reducer,
         // [userProfileApiSlice.reducerPath]: userProfileApiSlice.reducer,
         // [userProfileApiSlice.reducerPath]: userProfileApiSlice.reducer,
     },
@@ -31,6 +35,7 @@ export const store = configureStore({
             .concat(
                 suggestedQuestionsApiSlice.middleware,
                 widgetPanelsApiSlice.middleware,
+                bundlesApiSlice.middleware,
                 chatServiceMiddleware("sse"),
                 authMiddleware(),
                 conversationsMiddleware()

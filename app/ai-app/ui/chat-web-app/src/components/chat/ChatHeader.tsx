@@ -1,8 +1,12 @@
 import {useCallback, useMemo} from "react";
-import {Bot, Loader, LogOut, Wifi, WifiOff} from "lucide-react";
+import {Blocks, Loader, LogOut, Wifi, WifiOff} from "lucide-react";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {selectChatConnected, selectChatStayConnected} from "../../features/chat/chatStateSlice.ts";
 import {logOut} from "../../features/auth/authMiddleware.ts";
+import {useGetBundlesListQuery} from "../../features/bundles/bundlesAPI.ts";
+import {selectProject, selectTenant} from "../../features/chat/chatSettingsSlice.ts";
+import {selectCurrentBundle, setCurrentBundle} from "../../features/bundles/bundlesSlice.ts";
+import IconContainer from "../IconContainer.tsx";
 
 const ChatHeader = () => {
     const dispatch = useAppDispatch()
@@ -23,6 +27,34 @@ const ChatHeader = () => {
         dispatch(logOut())
     }, [dispatch]);
 
+    const tenant = useAppSelector(selectTenant)
+    const project = useAppSelector(selectProject)
+
+    const {data, isSuccess} = useGetBundlesListQuery({tenant, project})
+
+    const currentBundle = useAppSelector(selectCurrentBundle)
+
+    const bundlesSelector = useMemo(() => {
+        if (isSuccess) {
+            return <div className={"flex flex-row items-center p-1 border border-gray-200 rounded-md h-8 w-48 mr-auto ml-2"}>
+                {/*<label htmlFor={"bundles_selector"} className={"text-sm"}>Bundle</label>*/}
+                <IconContainer icon={Blocks} size={1.2} className={"stroke-[1.5px]"}/>
+                <select id={"bundles_selector"} className={"text-sm w-full focus:outline-none truncate"}
+                        value={currentBundle ?? undefined}
+                        onChange={(event)=> {
+                            dispatch(setCurrentBundle(event.target.value))
+                        }}
+                >
+                    {Object.values(data.bundles).map(bundle => {
+                        return <option value={bundle.id}
+                                       key={bundle.id}>{bundle.name}{bundle.id === data.defaultBundle ? " (default)" : ""}</option>
+                    })}
+                </select>
+            </div>
+        }
+        return null
+    }, [currentBundle, data, dispatch, isSuccess])
+
     return useMemo(() => {
         return (
             <div className="bg-white border-b border-gray-200 px-4 py-2">
@@ -35,8 +67,10 @@ const ChatHeader = () => {
                             </h1>
                         </div>
                     </div>
-
+                    {bundlesSelector}
                     <div className="flex items-center gap-2">
+
+
                         <div className={`flex items-center px-3 py-1 rounded-lg text-sm ${connectionStatus.color}`}>
                             {connectionStatus.icon}
                             <span className="ml-2 font-medium">{connectionStatus.text}</span>
@@ -69,6 +103,7 @@ const ChatHeader = () => {
                         {/*    )}*/}
                         {/*</button>*/}
 
+
                         <button
                             onClick={handleLogout}
                             className="flex items-center px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg"
@@ -80,7 +115,7 @@ const ChatHeader = () => {
                 </div>
             </div>
         )
-    }, [connectionStatus.color, connectionStatus.icon, connectionStatus.text, handleLogout])
+    }, [bundlesSelector, connectionStatus.color, connectionStatus.icon, connectionStatus.text, handleLogout])
 }
 
 export default ChatHeader;

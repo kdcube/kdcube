@@ -42,6 +42,7 @@ import {RichLink, RNFile} from "../chatController/chatBase.ts";
 import {requestConversationStatus} from "../chat/chatServiceMiddleware.ts";
 import {TimelineTextArtifact, TimelineTextArtifactType} from "../logExtensions/timelineText/types.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
+import {selectCurrentBundle} from "../bundles/bundlesSlice.ts";
 
 const LOAD_CONVERSATION_LIST = "conversations/loadConversationList"
 
@@ -86,7 +87,7 @@ const conversationsMiddleware = (): Middleware => {
         const state = store.getState()
         if (selectConversationDescriptorsLoading(state)) return
         dispatch(setConversationDescriptorsLoading())
-        getConversations(selectTenant(state), selectProject(state)).then((conversations) => {
+        getConversations(selectTenant(state), selectProject(state), selectCurrentBundle(state)).then((conversations) => {
             const list = conversations.map((it): ConversationDescriptor => {
                 return {
                     id: it.conversation_id,
@@ -107,6 +108,7 @@ const conversationsMiddleware = (): Middleware => {
         const state = store.getState()
         fetchConversation(selectTenant(state), selectProject(state), conversationId).then((conversation) => {
             dispatch(loadConversation({
+                conversationBundleId: conversation.bundle_id,
                 turnOrder: conversation.turns.map(it => it.turn_id),
                 turns: conversation.turns.reduce((previousValue, currentValue, i, arr) => {
                     let userMessage: UserMessage | null = null;

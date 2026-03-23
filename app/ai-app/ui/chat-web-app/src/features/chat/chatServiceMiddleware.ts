@@ -45,6 +45,7 @@ import {
     RateLimitPayload, UserInputAttachmentRejectedType,
     UserInputLockTraitType
 } from "./serviceEventTypes.ts";
+import {selectCurrentBundle} from "../bundles/bundlesSlice.ts";
 
 type TransportType = "sse" | "websocket";
 
@@ -425,7 +426,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         project: selectProject(state),
                         tenant: selectTenant(state),
                         turn_id: turnId,
-                        //bundle_id: "", //todo: add bundle
+                        bundle_id: selectCurrentBundle(state) ?? undefined,
                     }
 
                     console.info(

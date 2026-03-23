@@ -3,11 +3,12 @@ import {
     AIBundlesResponse,
     ConversationsBrowserResponse,
     EconomicsResponse,
+    EconomicUsageResponse,
     GatewayResponse,
-    RedisBrowserResponse,
-    EconomicUsageResponse
+    RedisBrowserResponse
 } from "./types.ts";
 import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
+import {ChatScope} from "../chat/chatTypes.ts";
 
 const EconomicsTag = "economics"
 const AIBundlesTag = "ai_bundles"
@@ -16,10 +17,7 @@ const ConversationBrowserTag = "conversation_browser"
 const RedisBrowserTag = "redis_browser"
 const EconomicUsageTag = "economic_usage"
 
-export interface GetWidgetParams {
-    tenant: string
-    project: string
-}
+export type GetWidgetParams = ChatScope
 
 export const widgetPanelsApiSlice = createApi({
     reducerPath: 'widgetPanels',

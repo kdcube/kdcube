@@ -3,10 +3,13 @@ import {RichLink, RNFile, TurnStep} from "../chatController/chatBase.ts";
 import {AuthConfig} from "../auth/authTypes.ts";
 
 
-export interface ChatSettings {
-    auth: AuthConfig;
+export interface ChatScope {
     tenant: string;
     project: string;
+}
+
+export interface ChatSettings extends ChatScope {
+    auth: AuthConfig;
     routesPrefix: string;
 }
 
@@ -31,6 +34,7 @@ export interface ConversationState {
     turns: Record<string, ChatTurn>;
     turnOrder: string[]
     conversationTitle?: string | null;
+    conversationBundleId: string | null,
 }
 
 export interface ChatState extends ConversationState {

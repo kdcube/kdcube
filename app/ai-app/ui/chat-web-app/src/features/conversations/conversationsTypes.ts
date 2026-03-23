@@ -130,6 +130,7 @@ export interface TurnDTO {
 export interface ConversationDTO {
     conversation_id: string
     conversation_title: string
+    bundle_id: string
     turns: TurnDTO[]
 }
 
