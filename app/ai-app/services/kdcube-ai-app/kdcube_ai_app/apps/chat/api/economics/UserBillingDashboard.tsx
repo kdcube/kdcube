@@ -532,15 +532,28 @@ const UserBillingDashboard: React.FC = () => {
                         <h1 className="text-3xl font-bold tracking-tight">Billing & Plans</h1>
                         <p className="text-gray-500 mt-2">Manage your subscription and lifetime token balance.</p>
                     </div>
-                    {subscription?.stripe_customer_id && (
+                    <div className="shrink-0 flex items-center gap-2">
                         <button
-                            onClick={handleCustomerPortal}
+                            onClick={loadData}
                             disabled={loading}
-                            className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 disabled:opacity-50"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium bg-gray-100 text-gray-600 border border-gray-200 hover:bg-gray-200 disabled:opacity-50"
                         >
-                            Manage Billing ↗
+                            <svg xmlns="http://www.w3.org/2000/svg" className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+                                <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+                            </svg>
+                            Refresh
                         </button>
-                    )}
+                        {subscription?.stripe_customer_id && (
+                            <button
+                                onClick={handleCustomerPortal}
+                                disabled={loading}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 disabled:opacity-50"
+                            >
+                                Manage Billing ↗
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 {error && (
