@@ -1221,6 +1221,32 @@ def ensure_ui_env_build_file(console: Console, build_context: Optional[str], env
         return
 
 
+def ensure_ui_nginx_config_file(
+    console: Console,
+    build_context: Optional[str],
+    nginx_config_relative: Optional[str],
+    source_path: Optional[Path],
+) -> None:
+    if not build_context or not nginx_config_relative or source_path is None:
+        return
+    try:
+        rel_path = Path(nginx_config_relative)
+        if rel_path.is_absolute():
+            return
+        root = Path(build_context).expanduser().resolve()
+        source = source_path.expanduser().resolve()
+        if not source.exists():
+            console.print(f"[yellow]UI nginx config source missing: {source}[/yellow]")
+            return
+        target = (root / rel_path).resolve()
+        if not str(target).startswith(str(root)):
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    except Exception:
+        return
+
+
 def normalize_docker_host(console: Console, host: Optional[str], label: str) -> Optional[str]:
     if not host:
         return host
@@ -2644,6 +2670,7 @@ def gather_configuration(
     frontend_image: Optional[str] = None
     frontend_config_value: Optional[str] = None
     nginx_ui_config_value: Optional[str] = None
+    nginx_ui_template_override: Optional[Path] = None
     env_build_value: Optional[str] = None
 
     if isinstance(frontend_descriptor, dict):
@@ -2696,12 +2723,16 @@ def gather_configuration(
             update_env_value(env_main, "UI_ENV_BUILD_RELATIVE", env_build_value)
         else:
             update_env_value(env_main, "UI_ENV_BUILD_RELATIVE", ".env.ui.build")
-        if isinstance(nginx_ui_config_value, str) and nginx_ui_config_value:
-            update_env_value(env_main, "NGINX_UI_CONFIG_FILE_PATH", nginx_ui_config_value)
 
     if isinstance(frontend_config_value, str) and frontend_config_value:
         frontend_template_override = _resolve_descriptor_path(
             frontend_config_value,
+            repo_root=frontend_root,
+            descriptor_dir=descriptor_dir,
+        )
+    if isinstance(nginx_ui_config_value, str) and nginx_ui_config_value:
+        nginx_ui_template_override = _resolve_descriptor_path(
+            nginx_ui_config_value,
             repo_root=frontend_root,
             descriptor_dir=descriptor_dir,
         )
@@ -2712,6 +2743,13 @@ def gather_configuration(
     if ui_env_build_rel_final:
         update_env_value(env_main, "UI_ENV_BUILD_RELATIVE", ui_env_build_rel_final)
     ensure_ui_env_build_file(console, ui_build_context_final, ui_env_build_rel_final)
+
+    ui_nginx_rel_final = ".kdcube/nginx_ui.conf"
+    ui_nginx_source: Optional[Path] = nginx_ui_template_override
+    if ui_nginx_source is None:
+        ui_nginx_source = (ctx.ai_app_root.parent.parent / defaults["nginx_ui_config"]).resolve()
+    update_env_value(env_main, "NGINX_UI_CONFIG_FILE_PATH", ui_nginx_rel_final)
+    ensure_ui_nginx_config_file(console, ui_build_context_final, ui_nginx_rel_final, ui_nginx_source)
 
     company_name_raw = _get_nested(assembly_data, "company")
     company_name = company_name_raw.strip() if isinstance(company_name_raw, str) else None
