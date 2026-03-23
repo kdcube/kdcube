@@ -32,9 +32,9 @@ import {
     useLazyGetAIBundlesWidgetQuery,
     useLazyGetConversationBrowserWidgetQuery,
     useLazyGetEconomicsWidgetQuery,
+    useLazyGetEconomicUsageWidgetQuery,
     useLazyGetGatewayWidgetQuery,
     useLazyGetRedisBrowserWidgetQuery,
-    useLazyGetUserBillingWidgetQuery
 } from "../widgetPanels/widgetPanels.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 import {getChatPagePath} from "../chat/configHelper.ts";
@@ -202,7 +202,7 @@ interface PanelLoadingProps {
 const PanelLoadingError = ({className}: PanelLoadingProps) => {
     return useMemo(() => {
         return <div className={className}>
-            <div className={"w-full h-full flex text-gray-200"}>
+            <div className={"w-full h-full flex text-gray-600 p-2"}>
                 <div>Sorry, an error has occurred</div>
             </div>
         </div>
@@ -213,6 +213,7 @@ interface GenericWidgetPanelProps {
     visible: boolean;
     className?: string;
     trigger: (params: GetWidgetParams, preferCache?: boolean) => void;
+    reloadOnShow?: boolean;
     lastArg: {
         data?: string | undefined;
         isFetching: boolean;
@@ -221,7 +222,9 @@ interface GenericWidgetPanelProps {
     }
 }
 
-const GenericPanel = ({visible, className, trigger, lastArg}: GenericWidgetPanelProps) => {
+const GenericPanel = ({visible, className, trigger, lastArg, reloadOnShow}: GenericWidgetPanelProps) => {
+    const wasVisible = useRef(visible);
+
     const {data, isFetching, isError, isUninitialized} = useMemo(() => {
         return lastArg
     }, [lastArg]);
@@ -230,17 +233,29 @@ const GenericPanel = ({visible, className, trigger, lastArg}: GenericWidgetPanel
     const project = useAppSelector(selectProject);
 
     useEffect(() => {
-        if (visible && isUninitialized) trigger({tenant, project}, true)
-    }, [isUninitialized, project, tenant, trigger, visible]);
+        if (!wasVisible.current && reloadOnShow && visible) {
+            trigger({tenant, project}, false);
+        } else if (visible && isUninitialized) {
+            trigger({tenant, project}, true)
+        }
+        wasVisible.current = visible;
+    }, [isUninitialized, project, reloadOnShow, tenant, trigger, visible]);
 
     return useMemo(() => {
-        if (isFetching) {
-            return <PanelLoading className={className}/>
+        if (visible) {
+            if (isFetching) {
+                return <PanelLoading className={className}/>
+            }
+            if (isError) {
+                return <PanelLoadingError className={className}/>
+            }
         }
-        if (isError) {
-            return <PanelLoadingError className={className}/>
+
+        if (!isFetching && !isError) {
+            return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
         }
-        return <IFrameSrcDocPanel visible={visible} className={className} srcDoc={data as string}/>
+
+        return null
     }, [className, data, isError, isFetching, visible])
 }
 
@@ -289,15 +304,25 @@ const RedisBrowserPanel = ({visible, className}: WidgetPanelProps) => {
     }, [trigger, lastArg, visible, className]);
 }
 
-const UserBillingPanel = ({visible, className}: WidgetPanelProps) => {
-    const [trigger, lastArg] = useLazyGetUserBillingWidgetQuery();
+const EconomicUsagePanel = ({visible, className}: WidgetPanelProps) => {
+    const [trigger, lastArg] = useLazyGetEconomicUsageWidgetQuery();
 
     return useMemo(() => {
-        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}/>
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}
+                             reloadOnShow={true}/>
     }, [trigger, lastArg, visible, className]);
 }
 
-type Panels = "conversations" | "economics" | "ai_bundles" | "gateway" | "conv_browser" | "redis_browser" | "user_billing" | "debug" | null
+type Panels =
+    "conversations"
+    | "economics"
+    | "ai_bundles"
+    | "gateway"
+    | "conv_browser"
+    | "redis_browser"
+    | "economic_usage"
+    | "debug"
+    | null
 
 const ChatSidePanel = () => {
     const dispatch = useAppDispatch();
@@ -346,7 +371,7 @@ const ChatSidePanel = () => {
                 </MenuButton>
                 <MenuButton
                     onClick={() => {
-                        onPanelButtonClick("user_billing");
+                        onPanelButtonClick("economic_usage");
                     }}
                 >
                     <IconContainer icon={CreditCard} size={1.5}/>
@@ -405,8 +430,8 @@ const ChatSidePanel = () => {
                                           className={"w-full h-full absolute left-0 top-0"}/>
                         <RedisBrowserPanel visible={visiblePanel === "redis_browser"}
                                            className={"w-full h-full absolute left-0 top-0"}/>
-                        <UserBillingPanel visible={visiblePanel === "user_billing"}
-                                           className={"w-full h-full absolute left-0 top-0"}/>
+                        <EconomicUsagePanel visible={visiblePanel === "economic_usage"}
+                                            className={"w-full h-full absolute left-0 top-0"}/>
                         {showDebugControls && <DebugPanel visible={visiblePanel === "debug"}
                                                           className={"w-full h-full absolute left-0 top-0"}/>}
                     </div>

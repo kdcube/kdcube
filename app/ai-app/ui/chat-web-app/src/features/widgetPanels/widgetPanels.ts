@@ -5,7 +5,7 @@ import {
     EconomicsResponse,
     GatewayResponse,
     RedisBrowserResponse,
-    UserBillingResponse
+    EconomicUsageResponse
 } from "./types.ts";
 import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 
@@ -14,7 +14,7 @@ const AIBundlesTag = "ai_bundles"
 const GatewayTag = "gateway"
 const ConversationBrowserTag = "conversation_browser"
 const RedisBrowserTag = "redis_browser"
-const UserBillingTag = "user_billing"
+const EconomicUsageTag = "economic_usage"
 
 export interface GetWidgetParams {
     tenant: string
@@ -28,7 +28,7 @@ export const widgetPanelsApiSlice = createApi({
             return appendDefaultCredentialsHeader(headers) as Headers;
         }
     }),
-    tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag, UserBillingTag],
+    tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag, EconomicUsageTag],
     endpoints: builder => ({
         getEconomicsWidget: builder.query<string, {
             tenant: string,
@@ -125,13 +125,13 @@ export const widgetPanelsApiSlice = createApi({
             },
             providesTags: [RedisBrowserTag],
         }),
-        getUserBillingWidget: builder.query<string, {
+        getEconomicUsageWidget: builder.query<string, {
             tenant: string,
             project: string,
         }>({
             query: ({tenant, project}: GetWidgetParams) => {
                 return {
-                    url: `/api/integrations/bundles/${tenant}/${project}/operations/user_billing`,
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/economic_usage`,
                     method: 'POST',
                     headers: [
                         ["Content-Type", "application/json"]
@@ -139,10 +139,10 @@ export const widgetPanelsApiSlice = createApi({
                     body: "{}"
                 }
             },
-            transformResponse(res: UserBillingResponse) {
-                return res.user_billing[0]
+            transformResponse(res: EconomicUsageResponse) {
+                return res.economic_usage[0]
             },
-            providesTags: [UserBillingTag],
+            providesTags: [EconomicUsageTag],
         }),
     })
 })
@@ -153,5 +153,5 @@ export const {
     useGetGatewayWidgetQuery, useLazyGetGatewayWidgetQuery,
     useGetConversationBrowserWidgetQuery, useLazyGetConversationBrowserWidgetQuery,
     useGetRedisBrowserWidgetQuery, useLazyGetRedisBrowserWidgetQuery,
-    useGetUserBillingWidgetQuery, useLazyGetUserBillingWidgetQuery,
+    useGetEconomicUsageWidgetQuery, useLazyGetEconomicUsageWidgetQuery,
 } = widgetPanelsApiSlice
