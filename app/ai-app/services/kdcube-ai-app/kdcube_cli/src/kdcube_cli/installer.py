@@ -1199,12 +1199,33 @@ def normalize_docker_host(console: Console, host: Optional[str], label: str) -> 
 
 
 def select_option(console: Console, title: str, options: List[str], default_index: int = 0) -> str:
+    def _plain_prompt_enabled() -> bool:
+        raw = os.environ.get("KDCUBE_CLI_PLAIN_PROMPTS", "").strip().lower()
+        return raw not in {"", "0", "false", "no"}
+
+    def _prompt_numbered() -> str:
+        console.print(f"[bold]{title}[/bold]")
+        for i, option in enumerate(options, start=1):
+            marker = " (default)" if i - 1 == default_index else ""
+            console.print(f"  {i}. {option}{marker}")
+        choice = Prompt.ask(
+            "Select option number",
+            choices=[str(i) for i in range(1, len(options) + 1)],
+            default=str(default_index + 1),
+        )
+        _abort_if_quit(choice)
+        return options[int(choice) - 1]
+
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        return prompt_choice(console, title, options, options[default_index])
+        return _prompt_numbered()
+    if _plain_prompt_enabled():
+        return _prompt_numbered()
+    if not console.is_terminal or console.is_jupyter or os.environ.get("TERM", "").lower() == "dumb":
+        return _prompt_numbered()
     try:
         from readchar import readkey, key
     except Exception:
-        return prompt_choice(console, title, options, options[default_index])
+        return _prompt_numbered()
 
     idx = max(0, min(default_index, len(options) - 1))
 

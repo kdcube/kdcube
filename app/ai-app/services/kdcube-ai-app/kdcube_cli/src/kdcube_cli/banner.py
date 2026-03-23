@@ -329,6 +329,21 @@ def _build_label_3d(text: str) -> tuple:
     return ["".join(row) for row in canvas], baseline_row
 
 
+def _trim_bitmap_rows(rows: list[str], blank: str = "0") -> list[str]:
+    if not rows:
+        return rows
+    min_x = None
+    max_x = None
+    for row in rows:
+        for idx, ch in enumerate(row):
+            if ch != blank:
+                min_x = idx if min_x is None else min(min_x, idx)
+                max_x = idx if max_x is None else max(max_x, idx)
+    if min_x is None or max_x is None:
+        return rows
+    return [row[min_x : max_x + 1] for row in rows]
+
+
 def _terminal_columns(default: int = 120) -> int:
     try:
         return shutil.get_terminal_size((default, 24)).columns
@@ -340,26 +355,38 @@ def _banner_layout(
     label_width: int,
     main_width: int,
     mini_width: int,
-) -> tuple[str, str, bool]:
+) -> tuple[str, str, str]:
     """Choose a pixel width that fits the current terminal."""
     columns = _terminal_columns()
 
     full_width_double = label_width * 2 + main_width * 2 + 2 + mini_width
     full_width_single = label_width + main_width + 2 + mini_width
-    robot_width_double = main_width * 2 + 2 + mini_width
 
     if columns >= full_width_double:
-        return "  ", "  ", True
+        return "full", "  ", "  "
     if columns >= full_width_single:
-        return " ", " ", True
-    if columns >= robot_width_double:
-        return "  ", "  ", False
-    return " ", " ", False
+        return "full", " ", " "
+    return "stacked", " ", " "
+
+
+def _render_label_row(row: str, pixel_fill: str, pixel_blank: str) -> str:
+    parts: list[str] = []
+    for ch in row:
+        if ch == ".":
+            parts.append(pixel_blank)
+        else:
+            parts.append(COLORS[ch] + pixel_fill + RESET)
+    return "".join(parts)
+
+
+def _center_pad(rendered_width: int) -> str:
+    columns = _terminal_columns()
+    return " " * max(0, (columns - rendered_width) // 2)
 
 
 def print_cli_banner():
     """Print the KDCube label, main robot, and mini robot side-by-side."""
-    selected_robot = random.choice([BOX_ROBOT, ISO_ROBOT])
+    selected_robot = _trim_bitmap_rows(random.choice([BOX_ROBOT, ISO_ROBOT]))
     robot_height = len(selected_robot)
 
     label_bitmap, label_baseline = _build_label_3d("KDCube")
@@ -370,7 +397,7 @@ def print_cli_banner():
     mini_term_rows = (mini_pix_rows + 1) // 2  # terminal rows (4, via half-blocks)
     mini_width     = len(MINI_ROBOT[0])
     main_width     = len(selected_robot[0]) if selected_robot else 0
-    pixel_fill, pixel_blank, show_label = _banner_layout(label_width, main_width, mini_width)
+    layout_mode, pixel_fill, pixel_blank = _banner_layout(label_width, main_width, mini_width)
 
     # Align label baseline with the last robot row
     text_start  = (robot_height - 1) - label_baseline
@@ -379,18 +406,47 @@ def print_cli_banner():
 
     sys.stdout.write("\n")
 
+    if layout_mode == "stacked":
+        if label_bitmap:
+            label_render_width = label_width * len(pixel_fill)
+            label_pad = _center_pad(label_render_width)
+            for row in label_bitmap:
+                sys.stdout.write(label_pad + _render_label_row(row, pixel_fill, pixel_blank) + "\n")
+            sys.stdout.write("\n")
+
+        robot_render_width = main_width * len(pixel_fill) + 2 + mini_width
+        robot_pad = _center_pad(robot_render_width)
+        for i in range(robot_height):
+            sys.stdout.write(robot_pad)
+
+            for pixel in selected_robot[i]:
+                if pixel == "0":
+                    sys.stdout.write(RESET + pixel_blank)
+                else:
+                    sys.stdout.write(COLORS[pixel] + pixel_fill + RESET)
+
+            sys.stdout.write("  ")
+            term_rel = i - mini_start
+            if 0 <= term_rel < mini_term_rows:
+                pix = term_rel * 2
+                row_top = MINI_ROBOT[pix]
+                row_bot = MINI_ROBOT[pix + 1] if pix + 1 < mini_pix_rows else "0" * mini_width
+                for t, b in zip(row_top, row_bot):
+                    sys.stdout.write(_halfblock_char(t, b))
+            else:
+                sys.stdout.write(" " * mini_width)
+            sys.stdout.write("\n")
+
+        sys.stdout.write("\n")
+        return
+
     for i in range(robot_height):
         # ── 3-D label ────────────────────────────────────────────────────────
         rel = i - text_start
-        if show_label and 0 <= rel < label_height:
-            for ch in label_bitmap[rel]:
-                if ch == ".":
-                    sys.stdout.write(pixel_blank)
-                else:
-                    sys.stdout.write(COLORS[ch] + pixel_fill + RESET)
+        if 0 <= rel < label_height:
+            sys.stdout.write(_render_label_row(label_bitmap[rel], pixel_fill, pixel_blank))
         else:
-            if show_label:
-                sys.stdout.write(pixel_blank * label_width)
+            sys.stdout.write(pixel_blank * label_width)
 
         # ── main robot ───────────────────────────────────────────────────────
         for pixel in selected_robot[i]:
@@ -400,7 +456,7 @@ def print_cli_banner():
                 sys.stdout.write(COLORS[pixel] + pixel_fill + RESET)
 
         # ── mini robot (half-block, 1:1 square pixels) ───────────────────────
-        sys.stdout.write("  ")   # gap
+        sys.stdout.write("  ")
         term_rel = i - mini_start
         if 0 <= term_rel < mini_term_rows:
             pix = term_rel * 2

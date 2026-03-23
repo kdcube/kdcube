@@ -36,6 +36,18 @@ Alternative (pip):
 python -m pip install --user kdcube-cli
 ```
 
+On Debian/Ubuntu hosts that enforce PEP 668 (`externally-managed-environment`),
+install the CLI into a dedicated virtual environment instead of the system
+Python:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-pip python3-venv
+python3 -m venv ~/.venvs/kdcube-cli
+~/.venvs/kdcube-cli/bin/pip install -e /path/to/kdcube_cli
+~/.venvs/kdcube-cli/bin/kdcube-setup --help
+```
+
 ## Run
 
 ```bash

@@ -280,12 +280,35 @@ def _parse_secret_pairs(items: list[str]) -> dict[str, str]:
 
 
 def _select_option(console: Console, title: str, options: list[str], default_index: int = 0) -> str:
+    def _plain_prompt_enabled() -> bool:
+        raw = os.environ.get("KDCUBE_CLI_PLAIN_PROMPTS", "").strip().lower()
+        return raw not in {"", "0", "false", "no"}
+
+    def _prompt_numbered() -> str:
+        console.print(f"[bold]{title}[/bold]")
+        for i, option in enumerate(options, start=1):
+            marker = " (default)" if i - 1 == default_index else ""
+            console.print(f"  {i}. {option}{marker}")
+        choice = Prompt.ask(
+            "Select option number",
+            choices=[str(i) for i in range(1, len(options) + 1)],
+            default=str(default_index + 1),
+        )
+        return options[int(choice) - 1]
+
     if not sys.stdin.isatty() or not sys.stdout.isatty():
-        return Prompt.ask(title, choices=options, default=options[default_index])
+        return _prompt_numbered()
+
+    if _plain_prompt_enabled():
+        return _prompt_numbered()
+
+    if not console.is_terminal or console.is_jupyter or os.environ.get("TERM", "").lower() == "dumb":
+        return _prompt_numbered()
+
     try:
         from readchar import readkey, key
     except Exception:
-        return Prompt.ask(title, choices=options, default=options[default_index])
+        return _prompt_numbered()
 
     idx = max(0, min(default_index, len(options) - 1))
 

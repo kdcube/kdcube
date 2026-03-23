@@ -52,6 +52,19 @@ CLI root (code): `services/kdcube-ai-app/kdcube_cli`
 
 ## 2) Commands (initial)
 
+Note for Debian/Ubuntu operators: recent system Python builds may block direct
+`pip install` into the system environment with `externally-managed-environment`
+(PEP 668). In that case, install the CLI into a dedicated virtual environment,
+for example:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y python3-pip python3-venv
+python3 -m venv ~/.venvs/kdcube-cli
+~/.venvs/kdcube-cli/bin/pip install -e /path/to/kdcube_cli
+~/.venvs/kdcube-cli/bin/kdcube-setup --help
+```
+
 ### 2.1 `kdcube env init` (platform dev, host)
 
 **Goal:** Create envs for running ingress/proc on host + infra via `local-infra-stack`.
