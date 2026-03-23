@@ -2747,7 +2747,7 @@ def gather_configuration(
     ui_nginx_rel_final = ".kdcube/nginx_ui.conf"
     ui_nginx_source: Optional[Path] = nginx_ui_template_override
     if ui_nginx_source is None:
-        ui_nginx_source = (ctx.ai_app_root.parent.parent / defaults["nginx_ui_config"]).resolve()
+        ui_nginx_source = (ctx.ai_app_root / defaults["nginx_ui_config"]).resolve()
     update_env_value(env_main, "NGINX_UI_CONFIG_FILE_PATH", ui_nginx_rel_final)
     ensure_ui_nginx_config_file(console, ui_build_context_final, ui_nginx_rel_final, ui_nginx_source)
 
