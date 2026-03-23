@@ -1889,6 +1889,7 @@ class ContextRAGClient:
                 user_id=user_id,
                 conversation_id=conversation_id,
                 with_payload=False,
+                bundle_id=bundle_id,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
@@ -1945,6 +1946,7 @@ class ContextRAGClient:
             "conversation_title": conversation_title,
             "started_at": started_at,
             "last_activity_at": last_activity_at,
+            "bundle_id": bundle_id,
             "turns": turns,
             "sources_pool": sources_pool
         }
@@ -2041,6 +2043,7 @@ class ContextRAGClient:
                 user_id=user_id,
                 conversation_id=conversation_id,
                 with_payload=False,
+                bundle_id=bundle_id,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
@@ -2071,6 +2074,7 @@ class ContextRAGClient:
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "conversation_title": conversation_title,
+                "bundle_id": bundle_id,
                 "turns": []
             }
 
@@ -2374,6 +2378,7 @@ class ContextRAGClient:
             "user_id": user_id,
             "conversation_id": conversation_id,
             "conversation_title": conversation_title,
+            "bundle_id": bundle_id,
             "turns": [turns_map[tid] for tid in order],
         }
 

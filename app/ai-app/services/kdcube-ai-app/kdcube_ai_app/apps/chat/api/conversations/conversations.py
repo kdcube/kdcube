@@ -155,6 +155,22 @@ class ConversationDeleteResponse(BaseModel):
 
 # -------------------- Endpoints --------------------
 
+
+async def _resolve_bundle_id_or_default(
+    tenant: str,
+    project: str,
+    bundle_id: Optional[str],
+) -> str:
+    if bundle_id:
+        return bundle_id
+    resolved = await resolve_default_bundle_id_from_runtime_ctx(router.state, tenant, project)
+    if resolved:
+        return resolved
+    raise HTTPException(
+        status_code=500,
+        detail="Default bundle_id unavailable for this tenant/project",
+    )
+
 @router.get("/{tenant}/{project}", response_model=ConversationListResponse)
 async def list_conversations(
         tenant: str,
@@ -163,6 +179,10 @@ async def list_conversations(
         started_after: Optional[str] = Query(default=None, description="ISO8601 timestamp"),
         days: int = Query(default=365, ge=1, le=3650),
         include_titles: bool = Query(default=True),
+        bundle_id: Optional[str] = Query(
+            default=None,
+            description="If omitted, the default bundle_id from Redis is used.",
+        ),
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
     if not session.user_id:
@@ -176,12 +196,15 @@ async def list_conversations(
         except Exception:
             raise HTTPException(status_code=400, detail="Invalid started_after timestamp")
 
+    bundle_id = await _resolve_bundle_id_or_default(tenant, project, bundle_id)
+
     data = await router.state.conversation_browser.list_conversations(
         user_id=session.user_id,
         last_n=last_n,
         started_after=sa,
         days=days,
         include_titles=include_titles,
+        bundle_id=bundle_id,
     )
     return data
 
@@ -199,15 +222,23 @@ async def conversation_details(
         tenant: str,
         project: str,
         conversation_id: str,
+        bundle_id: Optional[str] = Query(
+            default=None,
+            description="If omitted, the default bundle_id from Redis is used.",
+        ),
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
 
+    bundle_id = await _resolve_bundle_id_or_default(tenant, project, bundle_id)
+
     out = await router.state.conversation_browser.get_conversation_details(
         user_id=session.user_id,
         conversation_id=conversation_id,
+        bundle_id=bundle_id,
     )
+    out["bundle_id"] = bundle_id
     #  Shape is:
     # {
     #   'conversation_id': ...,
@@ -226,6 +257,10 @@ async def fetch_conversation(
         project: str,
         conversation_id: str,
         req: ConversationFetchRequest = Body(...),
+        bundle_id: Optional[str] = Query(
+            default=None,
+            description="If omitted, the default bundle_id from Redis is used.",
+        ),
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
@@ -236,13 +271,17 @@ async def fetch_conversation(
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
 
+    bundle_id = await _resolve_bundle_id_or_default(tenant, project, bundle_id)
+
     data = await router.state.conversation_browser.fetch_conversation_artifacts(
         user_id=session.user_id,
         conversation_id=conversation_id,
         turn_ids=(req.turn_ids or None),
         materialize=bool(req.materialize),
         days=int(req.days),
+        bundle_id=bundle_id,
     )
+    data["bundle_id"] = bundle_id
     for turn in (data or {}).get("turns", []):
         for artifact in turn.get("artifacts", []):
             strip_base64_from_citables_artifact(artifact)
