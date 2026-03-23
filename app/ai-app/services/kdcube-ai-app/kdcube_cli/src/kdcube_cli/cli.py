@@ -344,31 +344,37 @@ def _select_option(console: Console, title: str, options: list[str], default_ind
         return Panel(text, title="Select")
 
     if _use_manual_redraw():
-        try:
-            console.show_cursor(False)
-            while True:
-                console.print(Control.home(), end="")
-                console.print(Control.clear(), end="")
+        def _capture() -> tuple[str, int]:
+            with console.capture() as capture:
                 console.print(_render())
-                k = readkey()
-                if k in (key.UP, "k"):
-                    idx = (idx - 1) % len(options)
-                elif k in (key.DOWN, "j"):
-                    idx = (idx + 1) % len(options)
-                elif k in (key.ENTER, "\r", "\n"):
-                    console.print(Control.home(), end="")
-                    console.print(Control.clear(), end="")
-                    return options[idx]
-                elif k in ("q", key.ESC):
-                    console.print(Control.home(), end="")
-                    console.print(Control.clear(), end="")
-                    raise KeyboardInterrupt
-                elif k in (key.CTRL_C, "\x03"):
-                    console.print(Control.home(), end="")
-                    console.print(Control.clear(), end="")
-                    raise KeyboardInterrupt
-        finally:
-            console.show_cursor(True)
+            rendered = capture.get()
+            lines = rendered.splitlines()
+            return rendered, max(1, len(lines))
+
+        def _rewrite(rendered: str, line_count: int) -> None:
+            if line_count > 0:
+                sys.stdout.write(f"\x1b[{line_count}F")
+            sys.stdout.write(rendered)
+            sys.stdout.flush()
+
+        rendered, line_count = _capture()
+        sys.stdout.write(rendered)
+        sys.stdout.flush()
+
+        while True:
+            k = readkey()
+            if k in (key.UP, "k"):
+                idx = (idx - 1) % len(options)
+            elif k in (key.DOWN, "j"):
+                idx = (idx + 1) % len(options)
+            elif k in (key.ENTER, "\r", "\n"):
+                return options[idx]
+            elif k in ("q", key.ESC):
+                raise KeyboardInterrupt
+            elif k in (key.CTRL_C, "\x03"):
+                raise KeyboardInterrupt
+            rendered, _ = _capture()
+            _rewrite(rendered, line_count)
 
     with Live(
         _render(),
