@@ -1,45 +1,27 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.22.013"
+  ref: "2026.3.25.1215"
   description: |
-    Compared with `2026.3.21.410`, this release is smaller in scope but fixes an important deployment/runtime correctness problem around built-in bundles on shared ECS storage.
+    This release is centered on deployment reliability for descriptor-driven installs, better bundle-aware API behavior, and cleaner runtime configuration for MCP, economics, and conversation surfaces.
 
-    The main change is that built-in example bundles copied into shared `/bundles` are no longer treated as a single stable directory that survives image upgrades forever.
-    Previously, on ECS/EC2 with EFS-backed shared bundle storage, a built-in bundle such as `react.doc@2026-03-02-22-10` could remain stale after a new platform image was deployed,
-    because proc reused an already-existing `/bundles/<bundle-id>` copy instead of refreshing it from the image. This made new bundle code and skills invisible even after a
-    successful rollout.
-    
-    This release changes built-in shared bundle materialization to a versioned-path model. Shared example bundles are now copied under paths of the form:
-    
-    `/bundles/{bundle_id}__{platform.ref}__{content_sha12}`
-    
-    where `platform.ref` is the deployed release/image tag and `content_sha12` is the content hash of the bundled source. This gives two important guarantees:
-      - new proc tasks resolve and load the new bundle code from a new shared directory after rollout
-      - already-running requests can continue safely on the old loaded bundle path, without in-place mutation of code under active workers
-    
-    The loader behavior remains registry-driven. Processor workers and proc-side integration/admin bundle loaders resolve bundles through the current registry entry and therefore
-    through the current `BundleSpec.path`, not through a hardcoded `/bundles/<bundle-id>` filesystem shortcut. After a bundle registry update is applied and loader caches are
-    cleared, subsequent bundle loads on that worker use the new published shared path automatically. This keeps bundle cutover safe while preserving the current request model.
-    
-    This release also extends stale-bundle cleanup to these new versioned shared example bundle paths. Old shared built-in bundle copies are now cleaned through the existing bundle
-    cleanup flows, using the same active-path tracking and Redis-locked cleanup coordination already used for bundle lifecycle maintenance. That means the system can safely retain
-    active bundle paths while eventually removing inactive old bundle versions from shared EFS storage.
-    
-    On the documentation side, processor architecture documentation was updated to explain current bundle code loading, cutover behavior, and shared built-in bundle versioning/
-    cleanup in the context of proc workers and proc-side APIs. The stale ECS metrics component document was also replaced with a current description of how the Metrics service is
-    actually deployed on ECS today, including its Fargate service shape, CloudWatch export wiring, and the authoritative service-scale metrics docs and Terraform sources to use.
-    
-    In practical terms, this release makes built-in bundle upgrades on ECS much more reliable:
-      - new bundle code is no longer masked by an older persistent `/bundles` copy
-      - rollouts no longer depend on manually deleting stale shared built-in bundle directories
-      - old bundle versions can coexist safely during transition and then be cleaned later
-      - proc and proc-side APIs continue to load bundle code from the current published registry path
-    
+    The largest operational improvement is in the local/EC2 CLI deployment flow. Descriptor-driven installs now correctly support delegated-auth frontend defaults, SSL proxy domain rendering, proxylogin defaults, and custom frontend builds without requiring hand-maintained nginx/UI config files. For custom UI builds, the CLI now stages the nginx UI config into the actual frontend build context instead of passing a platform-repo path that Docker cannot see from the customer/frontend repo context. This fixes a real class of deployment failures where `web-ui` image builds broke on `COPY ${NGINX_UI_CONFIG_FILE_PATH}` even though the descriptor itself was valid. The CLI also now fails loudly on invalid descriptor YAML/JSON instead of silently falling back to prompts, no longer re-prompts Cognito IDs when the assembly descriptor already supplied them, comments out `TOKEN_COOKIES_DOMAIN` in generated proxylogin envs when a real DNS domain is configured, and adds an explicit `kdcube-setup --stop` path for shutting down rendered compose stacks.
+
+    The CLI terminal experience was also hardened substantially for real SSH usage. Banner rendering now degrades more safely on narrow terminals, selector input no longer relies on `readchar`, and key handling now reads directly from the controlling TTY. The selector flow was adjusted repeatedly for SSH, `screen`, and `tmux` sessions, and debug logging to file was added to make broken PTY/input chains diagnosable instead of opaque. While this is not a feature headline, it removes a major source of friction when using the deployment wizard on remote Ubuntu/EC2 hosts.
+
+    On the runtime side, bundle-aware behavior is now more consistent across APIs. Ingress-side default bundle resolution was previously inconsistent: some request paths read the current default bundle from Redis, while others fell back to stale process-local registry state. This release moves ingress/API default bundle resolution onto the Redis-backed registry helpers, and the conversations API now accepts an optional `bundle_id`, defaults it from Redis when omitted, and propagates that scope into the actual conversation query path. Conversation details and fetch responses now also expose top-level `bundle_id`, and timeline/title lookups are scoped consistently by bundle instead of mixing bundle-filtered and unfiltered retrieval paths.
+
+    MCP configuration is also cleaner and more platform-native in this release. Bundle props can now drive MCP service configuration directly through `mcp.services`, including named-secret-backed auth configuration, rather than forcing the integration to depend on a raw `MCP_SERVICES` environment variable contract. The runtime can export the effective MCP config into isolated execution, and the docs now describe `auth.secret` and `${secret:...}` usage as first-class bundle configuration patterns instead of local shell conventions.
+
+    Economics and usage reporting were refined as well. Budget/usage APIs and UI wording now consistently emphasize project-wide quota scope where that is the true enforcement boundary, and the usage widget integration path was improved. The release also includes related economics UX and profiling improvements, including better visibility of usage data and clearer handling of bundle/project scope in supporting API surfaces.
+
     Key areas:
-      - Versioned shared built-in bundle paths using `platform.ref` and content hash
-      - Safe new-bundle cutover without in-place mutation of active bundle directories
-      - Cleanup support for old shared built-in bundle versions on EFS
-      - Processor architecture documentation updated for bundle cutover semantics
-      - ECS metrics component documentation refreshed to match current deployment reality
+      - Descriptor-driven CLI installs for delegated auth, SSL proxying, and custom frontend builds
+      - Correct staging of nginx UI config into custom frontend Docker build contexts
+      - Proxylogin env generation fixes for real-domain deployments
+      - SSH/screen/tmux hardening for interactive CLI usage
+      - Redis-backed default bundle resolution across ingress/API paths
+      - Bundle-scoped conversations listing/details/fetch behavior
+      - MCP service configuration from bundle props with named secrets
+      - Project-scope economics usage and budget reporting improvements
 config:
-    version: "2026.3.22.013"
+    version: "2026.3.25.1215"
