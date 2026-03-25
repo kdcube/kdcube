@@ -80,6 +80,28 @@ class ConvIndex:
         if self._pool and not self.shared_pool:
             await self._pool.close()
 
+    def _load_ctx(self, ctx: Optional[dict] = None) -> dict:
+        if ctx is not None:
+            return ctx
+        # Fallback to ambient accounting context
+        try:
+            from kdcube_ai_app.infra.accounting import get_context
+            return get_context()
+        except ImportError:
+            return {}
+
+    def _scope_from_ctx(
+            self,
+            ctx: dict,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        u = user_id or ctx.get("user_id")
+        c = conversation_id or ctx.get("conversation_id")
+        b = bundle_id or ctx.get("app_bundle_id") or ctx.get("bundle_id")
+        return u, c, b
+
     async def ensure_schema(self):
         sql_raw = (await self._read_sql()).decode()
         sql = sql_raw.replace("<SCHEMA>", self.schema)
@@ -591,8 +613,8 @@ class ConvIndex:
     async def search_context(
             self,
             *,
-            user_id: str,
-            conversation_id: Optional[str],
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
             turn_id: Optional[str] = None,
             query_embedding: Optional[List[float]] = None,   # <-- now optional
             top_k: int = 12,
@@ -609,7 +631,17 @@ class ConvIndex:
             sort: str = "hybrid",  # 'hybrid' | 'semantic' | 'recency'
             timestamp_filters: Optional[List[Dict[str, Any]]] = None,   # [{'op': '>=', 'value': iso/datetime}, ...]
             bundle_id: Optional[str] = None,
+            ctx: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
+        user_id, conversation_id, bundle_id = self._scope_from_ctx(
+            self._load_ctx(ctx),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+        if not user_id:
+            return []
+
         if kinds:
             any_tags = (list(any_tags or []) + list(kinds))
 
@@ -740,7 +772,7 @@ class ConvIndex:
     async def fetch_recent(
             self,
             *,
-            user_id: str,
+            user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
             any_tags: Optional[Sequence[str]] = None,
@@ -750,7 +782,17 @@ class ConvIndex:
             days: int = 30,
             bundle_id: Optional[str] = None,
             turn_id: Optional[str] = None,
+            ctx: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
+        user_id, conversation_id, bundle_id = self._scope_from_ctx(
+            self._load_ctx(ctx),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+        if not user_id:
+            return []
+
         args: List[Any] = [user_id, list(roles), str(days)]
         where = [
             "user_id = $1",
@@ -838,7 +880,7 @@ class ConvIndex:
     async def fetch_recent_after_ts(
             self,
             *,
-            user_id: str,
+            user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
             roles: tuple[str, ...] = ("user", "assistant", "artifact"),
             any_tags: Optional[Sequence[str]] = None,
@@ -848,7 +890,17 @@ class ConvIndex:
             days: int = 365,
             bundle_id: Optional[str] = None,
             after_ts: Optional[str] = None,
+            ctx: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
+        user_id, conversation_id, bundle_id = self._scope_from_ctx(
+            self._load_ctx(ctx),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+        if not user_id:
+            return []
+
         args: List[Any] = [user_id, list(roles), str(days)]
         where = [
             "user_id = $1",
@@ -1314,13 +1366,22 @@ class ConvIndex:
     async def get_conversation_turn_ids_from_tags(
             self,
             *,
-            user_id: str,
-            conversation_id: str,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
             days: int = 365,
             bundle_id: Optional[str] = None,
             turn_ids: Optional[Sequence[str]] = None,
-
+            ctx: Optional[dict] = None,
     ) -> List[Dict[str, Any]]:
+        user_id, conversation_id, bundle_id = self._scope_from_ctx(
+            self._load_ctx(ctx),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+        if not user_id or not conversation_id:
+            return []
+
         """
         Return occurrences of turn tags ('turn:<id>') for the given user & conversation,
         ordered oldest→newest, preserving duplicates. Each item includes:
