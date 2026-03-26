@@ -518,6 +518,7 @@ class ContextRAGClient:
             ctx: Optional[dict] = None,
             user_id: Optional[str] = None,
             conversation_id: Optional[str] = None,
+            bundle_id: Optional[str] = None,
             with_payload: bool = True,
             include_turn_log_payload: bool = True,
             turn_log_payload_override: Optional[Dict[str, Any]] = None,
@@ -537,6 +538,7 @@ class ContextRAGClient:
             ctx_loaded,
             user_id=user_id,
             conversation_id=conversation_id,
+            bundle_id=bundle_id,
         )
 
         # If we don't know user or conversation, we can't hit the index safely
@@ -1157,6 +1159,7 @@ class ContextRAGClient:
             turn_ids: Optional[List[str]] = None,
             days: int = 365,
             bundle_id: Optional[str] = None,
+            ctx: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         Return per-turn package for turns that have feedbacks (reaction artifacts and/or
@@ -1196,6 +1199,7 @@ class ContextRAGClient:
                 all_tags=all_tags,
                 with_payload=True,
                 bundle_id=bundle_id,
+                ctx=ctx,
             )
             return (res.get("items") or [None])[0]
 
@@ -1215,6 +1219,7 @@ class ContextRAGClient:
                 with_payload=True,
                 sort="hybrid",
                 bundle_id=bundle_id,
+                ctx=ctx,
             )
             for it in (reactions.get("items") or []):
                 tid = it.get("turn_id")
@@ -1237,6 +1242,7 @@ class ContextRAGClient:
                 with_payload=True,
                 sort="hybrid",
                 bundle_id=bundle_id,
+                ctx=ctx,
             )
             for it in (turn_logs_recent.get("items") or []):
                 tid = it.get("turn_id")
@@ -1278,6 +1284,7 @@ class ContextRAGClient:
                     days=days,
                     user_id=user_id,
                     conversation_id=conversation_id,
+                    bundle_id=bundle_id,
                     with_payload=True,
                 )
 
@@ -1310,6 +1317,7 @@ class ContextRAGClient:
                     all_tags=[f"turn:{tid}"],
                     with_payload=True,
                     bundle_id=bundle_id,
+                    ctx=ctx,
                 )
 
                 # For assistant/user messages, prefer materialized bundle
@@ -1791,6 +1799,7 @@ class ContextRAGClient:
             days: int = 365,
             include_titles: bool = True,
             bundle_id: Optional[str] = None,
+            ctx: Optional[dict] = None,
     ) -> Dict[str, Any]:
         """
         List conversations for a user.
@@ -1822,6 +1831,7 @@ class ContextRAGClient:
             days=days,
             limit=fetch_limit,
             bundle_id=bundle_id,
+            ctx=ctx,
         )
 
         by_conv: Dict[str, Dict[str, Any]] = {}
@@ -1868,7 +1878,7 @@ class ContextRAGClient:
         return {"user_id": user_id, "items": items}
 
     async def get_conversation_details(
-        self, user_id: str, conversation_id: str, *, bundle_id: Optional[str] = None
+        self, user_id: str, conversation_id: str, *, bundle_id: Optional[str] = None, ctx: Optional[dict] = None
     ):
         """
         Reconstructed from conv timeseries
@@ -1890,6 +1900,7 @@ class ContextRAGClient:
                 conversation_id=conversation_id,
                 with_payload=False,
                 bundle_id=bundle_id,
+                ctx=ctx,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
@@ -2021,6 +2032,7 @@ class ContextRAGClient:
         materialize: bool = False,
         days: int = 365,
         bundle_id: Optional[str] = None,
+        ctx: Optional[dict] = None,
     ) -> Dict[str, Any]:
         # 1) Collect UI-visible artifacts per turn (existing behavior)
         occ = await self.idx.get_conversation_turn_ids_from_tags(
@@ -2044,6 +2056,7 @@ class ContextRAGClient:
                 conversation_id=conversation_id,
                 with_payload=False,
                 bundle_id=bundle_id,
+                ctx=ctx,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
@@ -2156,7 +2169,9 @@ class ContextRAGClient:
                 days=days,
                 user_id=user_id,
                 conversation_id=conversation_id,
+                bundle_id=bundle_id,
                 with_payload=True,
+                ctx=ctx,
             )
             turn_log_item = mat.get("turn_log") or {}
             turn_log_payload = unwrap_payload(turn_log_item)

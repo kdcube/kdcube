@@ -255,12 +255,14 @@ async def _get_turn_timings(
             user_id=user_id,
             conversation_id=conversation_id,
             with_payload=True,
+            ctx={},  # Bypass ambient bundle_id filtering
         )
         turn_log = mat.get("turn_log") or {}
         payload = _extract_payload(turn_log.get("payload"))
         tl = payload.get("turn_log") if isinstance(payload.get("turn_log"), dict) else payload
-        start = _parse_iso(tl.get("started_at_iso") or tl.get("started_at"))
-        end = _parse_iso(tl.get("ended_at_iso") or tl.get("ended_at"))
+        # Support both old (started_at) and new (ts/end_ts) turn_log timing keys
+        start = _parse_iso(tl.get("started_at_iso") or tl.get("started_at") or tl.get("ts"))
+        end = _parse_iso(tl.get("ended_at_iso") or tl.get("ended_at") or tl.get("end_ts"))
         duration = (end - start).total_seconds() if start and end else None
         results[tid] = {
             "started_at": start.isoformat() if start else None,
@@ -432,6 +434,7 @@ async def list_user_conversations(
         started_after=started_after_dt,
         days=days,
         include_titles=include_titles,
+        ctx={},  # Bypass ambient bundle_id filtering
     )
 
 
@@ -445,7 +448,7 @@ async def get_conversation_details(
 ):
     pool = await _get_pg_pool_from_state()
     ctx = _build_ctx(pool, tenant, project)
-    return await ctx.get_conversation_details(user_id=user_id, conversation_id=conversation_id)
+    return await ctx.get_conversation_details(user_id=user_id, conversation_id=conversation_id, ctx={})
 
 
 @router.post("/{tenant}/{project}/{user_id}/conversations/{conversation_id}/fetch")
@@ -465,6 +468,7 @@ async def fetch_conversation(
         turn_ids=req.turn_ids or None,
         materialize=bool(req.materialize),
         days=int(req.days),
+        ctx={},  # Bypass ambient bundle_id filtering
     )
 
 
@@ -507,19 +511,20 @@ async def export_user_conversations(
     if selected_ids:
         items = [{"conversation_id": cid, "title": None} for cid in sorted(selected_ids)]
     else:
-        conversations = await ctx.list_conversations(user_id=user_id, days=days, include_titles=True)
+        conversations = await ctx.list_conversations(user_id=user_id, days=days, include_titles=True, ctx={})
         items = conversations.get("items") or []
 
     for item in items:
         conversation_id = item.get("conversation_id")
         if not conversation_id:
             continue
-        details = await ctx.get_conversation_details(user_id=user_id, conversation_id=conversation_id)
+        details = await ctx.get_conversation_details(user_id=user_id, conversation_id=conversation_id, ctx={})
         fetch_data = await ctx.fetch_conversation_artifacts(
             user_id=user_id,
             conversation_id=conversation_id,
             materialize=True,
             days=days,
+            ctx={},  # Bypass ambient bundle_id filtering
         )
         turns = details.get("turns") or []
         turn_ids = [t.get("turn_id") for t in turns if t.get("turn_id")]
