@@ -1,7 +1,22 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.26.1101"
+  ref: "2026.3.27.2050"
   description: |
-    Frontend: exec widget fixed
+    This release tightens a few important platform behaviors around control-plane data access,
+    descriptor-driven CLI setup, and React UX wording.
+
+    Control-plane conversation browsing and related `conv_messages` queries no longer inherit an
+    ambient bundle scope when they should operate across the broader project/control-plane view.
+    This prevents unintended filtering by the currently active app bundle and makes these endpoints
+    behave consistently for shared control-plane data.
+
+    The CLI installer was also improved for descriptor-driven deployments: repository source
+    handling in assembly descriptors is now normalized more consistently across local and upstream
+    source modes, with matching documentation updates in the CLI and assembly-descriptor docs.
+    This makes descriptor-based setup less error-prone when choosing where platform and frontend
+    sources come from.
+
+    On the React side, suggested follow-up wording was clarified in the shared instructions and
+    decision layer so the assistant presents follow-up guidance more cleanly and consistently.
 config:
-    version: "2026.3.26.1101"
+    version: "2026.3.27.2050"
