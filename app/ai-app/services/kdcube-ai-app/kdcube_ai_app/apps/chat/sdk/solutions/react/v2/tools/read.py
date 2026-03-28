@@ -59,7 +59,12 @@ TOOL_SPEC = {
         "Paths must be context paths (fi:/ar:/so:/sk:/ks:), not physical paths. "
         "search_files results are directly readable here only when they include logical_path. "
         "Each path you read becomes visible in the timeline; skills are shown with ACTIVE 💡 banner. "
-        "Use ks:<relpath> to read files from the knowledge space (read-only reference files prepared by the system)."
+        "Use ks:<relpath> to read files from the knowledge space (read-only reference files prepared by the system). "
+        "For fi: files, normal readable content is text, plus multimodal PDF/image payloads. "
+        "Other binary files such as xlsx/xls/pptx/docx/zip are not decoded into usable content by react.read; "
+        "inspect those with code and exec tool against their physical OUTPUT_DIR path. "
+        "If your own earlier tools produced the binary file, inspect the generating tool call/result (tc:) and any related text/code source artifacts (fi:) "
+        "from that generating step; do not expect react.read on the binary fi: file itself to reveal its content."
     ),
     "args": {
         "paths": (
@@ -67,10 +72,14 @@ TOOL_SPEC = {
             "files via fi:<turn_id>.files/<filepath>, "
             "sources via so:sources_pool[...], "
             "skills via sk:<skill_id or num>, "
-            "knowledge space via ks:<relpath> (read-only reference files)."
+            "knowledge space via ks:<relpath> (read-only reference files). "
+            "fi: normally yields full text for text files and multimodal/base64 payloads for PDF/images only."
         ),
     },
-    "returns": "ok",
+    "returns": (
+        "ok for readable text/PDF/image paths; for unsupported binary files react.read may only surface metadata/path presence. "
+        "Deeper inspection should be done with code and exec tool, or via related tc: and text/code fi: artifacts from the generating step."
+    ),
 }
 
 

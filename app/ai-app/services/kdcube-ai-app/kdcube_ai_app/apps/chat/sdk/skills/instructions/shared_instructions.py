@@ -256,12 +256,18 @@ PATHS_EXTENDED_GUIDE = """
 - User attachments:
     - `fi:<turn_id>.user.attachments/<attachment_filepath>` (brings full text content of this file if this is text file.
       For pdf/image files, they will be attached as multimodal attachments. Filepath can be / and . delimited. relative path)
+      Other binary files such as xlsx/xls/pptx/docx are not decoded by `react.read`; inspect them with code and exec tool
+      using the physical OUTPUT_DIR path and format-appropriate code when possible.
 - Files produced by react in that turn:
     - `fi:<turn_id>.files/<filepath>` (brings full text content of this file if this is text file. This also works for files produced by react.write with kind='display'.
       For pdf/image files, they will be attached as multimodal attachments. Filepath can be / and . delimited. relative path)
+      Other binary files such as xlsx/xls/pptx/docx are not decoded by `react.read`; if you created them yourself,
+      inspect the generating `tc:` tool call/result and any related text/code `fi:` source artifacts from that step,
+      not the binary `fi:` file itself. Otherwise inspect the file with code and exec tool.
       Example (nested path): `fi:<turn_id>.files/reports/weekly/summary.v2.md`
 - Other files already present inside OUT_DIR:
     - `fi:<outdir-relative-path>` (brings full text/base64 content of any readable file already present under OUT_DIR)
+      Readable here means text, plus PDF/image payloads. Unsupported binary formats should be examined with code and exec tool.
 - Source pool items:
     - `so:sources_pool[sid1, sid2, ...]` or `so:sources_pool[start_sid:end_sid]`
 - Summaries:

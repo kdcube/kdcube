@@ -411,7 +411,11 @@ It is preferable to use react.write for streaming large content and use renderin
   Physically this will create a file artifact with the name you provide and replace dots with slashes in the filesystem (e.g., "report.md" → report.md, "analysis.findings.txt" → analysis/findings.txt).
 - Physical paths are used in react.patch, rendering_tools.write_*, and exec snippets.
 - react.read still requires logical paths.
-- All artifacts are files. You always can look at their content if they are text or pdf/image if you don't see them in full by calling react.read([paths to see]).
+- All artifacts are files. You can directly inspect them with react.read when they are text or pdf/image.
+- For non-text binary artifacts (for example xlsx/xls/pptx/docx), do NOT expect react.read to decode the payload.
+  If you need to understand such a file, inspect it with code and exec tool using its physical OUTPUT_DIR path and format-specific code.
+  If the binary file was created by your own earlier tools, first inspect the corresponding generating `tc:` tool call/result and any related text/code `fi:` source artifacts from that step.
+  Do not expect react.read on the binary `fi:` file itself to reveal its content.
  - Reuse the SAME artifact path name if you still retry the same unit of work (overwrite is OK).
 - In the visible context, artifacts may show `kind=file|display` and `visibility=external|internal`.
   - `kind=display` means displayed to a user in rendering canvas; `kind=file` means it was [also] shared as a file to the user. For internal files this is 'file' automatically.
