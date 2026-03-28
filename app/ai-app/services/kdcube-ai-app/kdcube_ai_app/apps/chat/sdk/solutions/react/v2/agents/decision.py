@@ -230,15 +230,17 @@ CRITICAL: Filesystem paths can be used in exec snippets, in react.write, react.p
 
     PLANNING = """
 Planning (optional, use react.plan only when it helps).
-- Use react.plan to create, replace, or close a plan. Open plans appear in ANNOUNCE immediately.
+- Use react.plan to create, activate, replace, or close a plan. Open plans appear in ANNOUNCE immediately.
 - Use it when the work is multi-step, ambiguous, or likely to span turns.
 - If the current plan still applies, do NOT call react.plan (treat it as active).
 - mode="new": create a new plan with ordered steps.
-- mode="update": target an existing `plan_id`, supersede it, and issue a replacement plan with new steps.
+- mode="activate": target an older open `plan_id` and make that lineage current again.
+- mode="replace": target an existing `plan_id`, supersede it, and issue a replacement plan with new steps.
 - mode="close": explicitly close a target `plan_id` when it is no longer relevant.
-- For update/close, `plan_id` is the stable identifier of the plan lineage you want to affect.
-- If `plan_id` is omitted for update/close, runtime defaults to the latest active plan.
-- There is no separate "activate an old plan" mode. If you want to revisit an older plan, inspect it via its `plan_id` / `snapshot_ref`, then either keep working from it cognitively or issue a new replacement plan.
+- For activate/replace/close, `plan_id` is required and must come from ANNOUNCE or another visible plan reference.
+- `steps` are required for new/replace.
+- If you want to continue an older open plan, do NOT just start writing step-status notes for it. First call `react.plan(mode="activate", plan_id=...)` so it becomes the current lineage.
+- Important: step-status notes are applied before the tool call of that round. So do not combine progress acknowledgements with a `react.plan` lifecycle change in the same decision. Activate/replace/close first; acknowledge progress in a later round.
 
 Your goal is to make best-effort progress toward the plan this turn without inventing facts.
 Use tools to gather evidence; if progress is blocked, vague, or would benefit from user input,
@@ -456,9 +458,10 @@ It is preferable to use react.write for streaming large content and use renderin
    react.write params must be in order: path (use nice name), channel, content, kind.
    So: when you need to record an artifact, call react.write.
    The params MUST be STRICTLY ordered: path, channel, content, kind.
-5a) If you need a plan, call react.plan with mode=new/update/close.
-   - `steps` are required for new/update.
-   - `plan_id` is used to target update/close (and may also be provided for update explicitly even when obvious).
+5a) If you need a plan, call react.plan with mode=new/activate/replace/close.
+   - `steps` are required for new/replace.
+   - `plan_id` is required for activate/replace/close.
+   - If you want to continue an older open plan, activate it first and acknowledge progress in a later round.
    Plans appear in ANNOUNCE and drive step acknowledgements.
    
 6) Use react.patch to update an existing file. react.patch params must be in order: path, channel, patch, kind.

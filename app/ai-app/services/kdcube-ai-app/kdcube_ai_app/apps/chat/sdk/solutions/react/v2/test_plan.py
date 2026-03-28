@@ -12,6 +12,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
     apply_plan_updates,
     build_plan_block,
     create_plan_snapshot,
+    latest_active_plan_snapshot,
     plan_snapshot_ref,
     latest_plan_snapshot,
 )
@@ -91,6 +92,7 @@ async def test_react_plan_close_persists_closed_snapshot() -> None:
             "tool_call": {
                 "params": {
                     "mode": "close",
+                    "plan_id": snap.plan_id,
                 }
             }
         },
@@ -176,7 +178,68 @@ async def test_react_plan_ack_updates_current_plan_without_new_plan_id() -> None
 
 
 @pytest.mark.asyncio
-async def test_react_plan_update_supersedes_target_and_announce_shows_only_new_open_plan() -> None:
+async def test_react_plan_activate_makes_older_open_plan_current() -> None:
+    old_snap = create_plan_snapshot(
+        plan={"steps": ["collect metrics", "compare trends"]},
+        turn_id="turn_1",
+        created_ts="2026-03-28T10:00:00Z",
+    )
+    newer_snap = create_plan_snapshot(
+        plan={"steps": ["draft answer", "verify citations"]},
+        turn_id="turn_2",
+        created_ts="2026-03-28T10:05:00Z",
+    )
+    blocks = [
+        build_plan_block(snap=old_snap, turn_id="turn_1", ts="2026-03-28T10:00:00Z"),
+        build_plan_block(snap=newer_snap, turn_id="turn_2", ts="2026-03-28T10:05:00Z"),
+    ]
+    ctx_browser = _CtxBrowserStub(
+        turn_id="turn_3",
+        started_at="2026-03-28T10:10:00Z",
+        blocks=blocks,
+    )
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "mode": "activate",
+                    "plan_id": old_snap.plan_id,
+                }
+            }
+        },
+        "plan_steps": list(newer_snap.steps),
+        "plan_status": {},
+    }
+
+    out = await handle_react_plan(
+        react=None,
+        ctx_browser=ctx_browser,
+        state=state,
+        tool_call_id="plan_activate_1",
+    )
+
+    assert out["plan_id"] == old_snap.plan_id
+    assert out["plan_steps"] == old_snap.steps
+    assert latest_active_plan_snapshot(ctx_browser.timeline.blocks).plan_id == old_snap.plan_id
+
+    status_map, out_blocks = apply_plan_updates(
+        notes="✓ [1] collect metrics",
+        plan_steps=list(old_snap.steps),
+        status_map={},
+        timeline_blocks=ctx_browser.timeline.blocks,
+        turn_id="turn_4",
+        iteration=4,
+        ts="2026-03-28T10:11:00Z",
+    )
+    assert status_map == {"1": "done"}
+    payloads = [json.loads(b["text"]) for b in out_blocks if b.get("type") == "react.plan"]
+    assert len(payloads) == 1
+    assert payloads[0]["plan_id"] == old_snap.plan_id
+    assert payloads[0]["status"] == {"1": "done"}
+
+
+@pytest.mark.asyncio
+async def test_react_plan_replace_supersedes_target_and_announce_shows_only_new_open_plan() -> None:
     old_snap = create_plan_snapshot(
         plan={"steps": ["collect metrics", "compare trends"]},
         turn_id="turn_1",
@@ -192,7 +255,7 @@ async def test_react_plan_update_supersedes_target_and_announce_shows_only_new_o
         "last_decision": {
             "tool_call": {
                 "params": {
-                    "mode": "update",
+                    "mode": "replace",
                     "plan_id": old_snap.plan_id,
                     "steps": ["draft answer", "verify citations"],
                 }

@@ -54,6 +54,7 @@ Each snapshot carries:
 - `created_ts`
 - `last_ts`
 - `origin_turn_id`
+- `last_turn_id`
 - `last_ack_turn_id`
 - `last_ack_ts`
 - `closed_ts`
@@ -204,6 +205,12 @@ Model-facing effect:
 
 So the model should think of `notes` as the normal progress-reporting mechanism.
 
+Important:
+
+- status-marker notes are applied only in rounds that are not also changing plan lifecycle
+- if the model is calling `react.plan(mode="activate"|"replace"|"close"|"new")`, it should use `notes` only for short explanation in that round
+- if it wants to acknowledge progress on an older plan, it should first activate that plan, then acknowledge progress in a later round
+
 There is a reserved structured tool `react.plan_ack`, but it is not published to the model yet.
 
 ## 7) Lifecycle operations
@@ -217,7 +224,43 @@ Use when starting a fresh plan.
 - stores ordered `steps`
 - appears in ANNOUNCE immediately
 
-### 7.2 `mode="update"`
+### 7.2 `mode="activate"`
+
+Use when an older open plan should become current again.
+
+Current semantics:
+
+- target an existing open `plan_id`
+- runtime appends a fresh snapshot for that same lineage
+- that refreshed snapshot becomes the newest active plan
+- future note-based acknowledgements apply to that now-current lineage
+
+Rendered example:
+
+```text
+[TOOL CALL tc_plan_8].call react.plan
+tc:turn_17.tc_plan_8.call
+Params:
+{
+  "mode": "activate",
+  "plan_id": "plan_alpha"
+}
+
+[TOOL RESULT tc_plan_8].summary react.plan
+mode: activate
+target_plan_id: plan_alpha
+target_snapshot_ref: ar:plan.latest:plan_alpha
+plan_id: plan_alpha
+latest_snapshot_ref: ar:plan.latest:plan_alpha
+```
+
+Important:
+
+- activation changes which open lineage is current
+- it does not create a new `plan_id`
+- do not try to acknowledge progress for the newly activated plan in the same decision; do that in a later round
+
+### 7.3 `mode="replace"`
 
 Use when replacing an existing plan with a new one.
 
@@ -227,7 +270,7 @@ Current semantics:
 - runtime appends a terminal snapshot for that old lineage with `superseded_*`
 - runtime appends a new lineage with a new `plan_id`
 
-So `update` means:
+So `replace` means:
 
 - “this old plan is no longer the open plan”
 - “here is the replacement plan”
@@ -241,7 +284,7 @@ Rendered example:
 tc:turn_18.tc_plan_9.call
 Params:
 {
-  "mode": "update",
+  "mode": "replace",
   "plan_id": "plan_alpha",
   "steps": [
     "draft answer",
@@ -250,7 +293,7 @@ Params:
 }
 
 [TOOL RESULT tc_plan_9].summary react.plan
-mode: update
+mode: replace
 target_plan_id: plan_alpha
 target_snapshot_ref: ar:plan.latest:plan_alpha
 plan_id: plan_beta
@@ -263,7 +306,7 @@ After execution:
 - the replacement plan appears in ANNOUNCE with its own `plan_id`
 - the stable reread handle for the new plan is `ar:plan.latest:<new_plan_id>`
 
-### 7.3 `mode="close"`
+### 7.4 `mode="close"`
 
 Use when a plan should stop being open without being replaced.
 
@@ -342,10 +385,20 @@ Do not call `react.plan` again.
 Call:
 
 ```text
-react.plan(mode="update", plan_id="<old_plan_id>", steps=[...])
+react.plan(mode="replace", plan_id="<old_plan_id>", steps=[...])
 ```
 
 This explicitly retires the old lineage and creates the replacement.
+
+### If an older open plan should become current again
+
+Call:
+
+```text
+react.plan(mode="activate", plan_id="<older_open_plan_id>")
+```
+
+Then, in a later round, acknowledge progress on that now-current plan in `notes`.
 
 ### If a plan is no longer relevant and should disappear from open plans
 
@@ -367,15 +420,14 @@ react.read(["ar:plan.latest:<plan_id>"])
 If the alias-backed snapshot is already present as an equivalent visible block in the current timeline, `react.read` may only emit the status/result block and mark it as already present instead of repeating the full snapshot payload.
 
 3. decide whether to:
-   - keep it in mind as relevant history
+   - activate it
    - close it
-   - or supersede it with a new plan
+   - or replace it with a new plan
 
 Important:
 
-- there is no separate “activate old plan” mode
-- revisiting an older plan is a reasoning decision by the model
-- if the model wants a new current plan, it should issue an explicit replacement plan
+- if the model wants to continue an older open plan directly, it should activate it first
+- if the model wants a new current plan instead, it should issue an explicit replacement plan
 
 ## 11) Hot timeline vs cold timeline
 
@@ -453,8 +505,8 @@ The current mechanism is efficient enough for normal use:
 
 Current limitations:
 
-- no explicit “activate older plan” tool mode
 - ANNOUNCE shows only the last few open plans
 - progress acknowledgements are still parsed from `notes`
+- progress acknowledgements happen in a later round than lifecycle changes such as activate/replace/close
 
 Those are known constraints of the current design, not accidental behavior.

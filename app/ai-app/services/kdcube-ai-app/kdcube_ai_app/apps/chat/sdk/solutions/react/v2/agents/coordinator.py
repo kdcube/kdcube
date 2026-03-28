@@ -40,11 +40,11 @@ NextStepV2 = Literal["react_loop", "final_answer"]
 
 
 class PlanV2(BaseModel):
-    mode: Literal["active", "new", "update", "close"] = Field(
+    mode: Literal["active", "new", "activate", "replace", "close"] = Field(
         default="new",
-        description="Plan handling: active (reuse last), new (fresh), update (revise), close (discard active).",
+        description="Plan handling: active (reuse last), new (fresh), activate (resume older open plan), replace (supersede with new steps), close (discard target).",
     )
-    steps: List[str] = Field(default_factory=list, description="Plan steps for this turn when mode=new|update.")
+    steps: List[str] = Field(default_factory=list, description="Plan steps for this turn when mode=new|replace.")
     plan_id: Optional[str] = Field(default=None, description="Optional explicit plan id. If absent, runtime will assign.")
     exploration_budget: int = Field(
         default=1,
@@ -138,11 +138,12 @@ async def coordinator_planner_stream_v2(
         f"{USER_GENDER_ASSUMPTIONS}\n"
         "\n"
         "[PLANS]\n"
-        "Plan only the next feasible slice (this turn). Use 2–5 short plan steps when mode=new|update.\n"
+        "Plan only the next feasible slice (this turn). Use 2–5 short plan steps when mode=new|replace.\n"
         "If mode=active, keep the previous plan active and do NOT emit steps.\n"
         "If mode=close, discard the active plan and do NOT emit steps.\n"
-        "If mode=update, emit updated steps and note in notes that the plan was updated.\n"
-        "If next_step=final_answer because the user explicitly asked for plan/advice only, you MAY still return plan.mode=new|update with plan steps.\n"
+        "If mode=replace, emit replacement steps and note in notes that the plan was replaced.\n"
+        "If mode=activate, target an older open plan id and do not emit progress acknowledgements in the same round.\n"
+        "If next_step=final_answer because the user explicitly asked for plan/advice only, you MAY still return plan.mode=new|replace with plan steps.\n"
         "Otherwise, if next_step=final_answer, set plan.mode=close and leave steps empty.\n"
         "\n"
         "[BUDGETS]\n"
@@ -191,7 +192,7 @@ async def coordinator_planner_stream_v2(
     json_hint = (
         "{\n"
         "  \"plan\": {\n"
-        "    \"mode\": \"active|new|update|close\",\n"
+        "    \"mode\": \"active|new|activate|replace|close\",\n"
         "    \"steps\": [\"bullet 1\", \"bullet 2\"],\n"
         "    \"plan_id\": \"optional-id\",\n"
         "    \"exploration_budget\": <num of steps to explore>,\n"

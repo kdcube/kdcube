@@ -1961,7 +1961,7 @@ class Timeline:
             except Exception:
                 retained_snap = None
             if not retained_snap or retained_snap.plan_id != active_plan_before.plan_id:
-                carry_turn_id = summary_turn_id or self.runtime.turn_id or active_plan_before.last_ack_turn_id or active_plan_before.origin_turn_id
+                carry_turn_id = summary_turn_id or self.runtime.turn_id or active_plan_before.last_turn_id or active_plan_before.origin_turn_id
                 carry_ts = active_plan_before.last_ts or active_plan_before.created_ts or ""
                 updated_blocks.insert(
                     insert_pos,

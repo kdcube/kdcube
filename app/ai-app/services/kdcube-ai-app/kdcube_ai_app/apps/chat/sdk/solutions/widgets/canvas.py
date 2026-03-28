@@ -877,13 +877,14 @@ class TimelineStreamer:
             return ""
         params = tool_call.get("params") if isinstance(tool_call.get("params"), dict) else {}
         mode = str(params.get("mode") or "").strip().lower()
-        if mode not in {"new", "update", "close"}:
+        if mode not in {"new", "activate", "replace", "close"}:
             return ""
         target_plan_id = str(params.get("plan_id") or "").strip()
         steps = [str(s).strip() for s in (params.get("steps") or []) if isinstance(s, str) and str(s).strip()]
         title = {
             "new": "• New Plan",
-            "update": "• Updated Plan",
+            "activate": "• Activated Plan",
+            "replace": "• Replaced Plan",
             "close": "• Closed Plan",
         }.get(mode, "• Plan")
         summary = self._first_nonempty_line(str(payload.get("notes") or ""))
@@ -894,14 +895,16 @@ class TimelineStreamer:
                 list_steps = list_steps[1:]
             elif mode == "close" and target_plan_id:
                 summary = f"Close plan `{target_plan_id}`."
-            elif mode == "update" and target_plan_id:
+            elif mode == "activate" and target_plan_id:
+                summary = f"Activate plan `{target_plan_id}`."
+            elif mode == "replace" and target_plan_id:
                 summary = f"Replace plan `{target_plan_id}`."
             elif mode == "new":
                 summary = "Start a new plan."
         lines = [title]
         if summary:
             lines.append(f"└ {summary}")
-        if mode in {"new", "update"}:
+        if mode in {"new", "replace"}:
             for step in list_steps:
                 lines.append(f"  □ {step}")
         return "\n".join(lines).strip()

@@ -18,6 +18,7 @@ class PlanSnapshot:
     created_ts: str = ""
     last_ts: str = ""
     origin_turn_id: str = ""
+    last_turn_id: str = ""
     last_ack_turn_id: str = ""
     last_ack_ts: str = ""
     closed_ts: str = ""
@@ -34,6 +35,7 @@ class PlanSnapshot:
             "created_ts": self.created_ts,
             "last_ts": self.last_ts,
             "origin_turn_id": self.origin_turn_id,
+            "last_turn_id": self.last_turn_id,
             "last_ack_turn_id": self.last_ack_turn_id,
             "last_ack_ts": self.last_ack_ts,
             "closed_ts": self.closed_ts,
@@ -55,6 +57,7 @@ class PlanSnapshot:
                 created_ts=str(raw.get("created_ts") or ""),
                 last_ts=str(raw.get("last_ts") or ""),
                 origin_turn_id=str(raw.get("origin_turn_id") or ""),
+                last_turn_id=str(raw.get("last_turn_id") or ""),
                 last_ack_turn_id=str(raw.get("last_ack_turn_id") or ""),
                 last_ack_ts=str(raw.get("last_ack_ts") or ""),
                 closed_ts=str(raw.get("closed_ts") or ""),
@@ -64,6 +67,17 @@ class PlanSnapshot:
                 superseded_by_plan_id=str(raw.get("superseded_by_plan_id") or ""),
             )
         return None
+
+    def touch(
+        self,
+        *,
+        ts: Optional[str] = None,
+        turn_id: Optional[str] = None,
+    ) -> None:
+        if ts:
+            self.last_ts = ts
+        if turn_id:
+            self.last_turn_id = str(turn_id)
 
     def update_status(
         self,
@@ -77,11 +91,11 @@ class PlanSnapshot:
         for k, v in updates.items():
             if v:
                 self.status[str(k)] = v
+        self.touch(ts=ts, turn_id=turn_id)
         if ts:
-            self.last_ts = ts
             self.last_ack_ts = ts
         if turn_id:
-            self.last_ack_turn_id = str(turn_id)
+            self.last_ack_turn_id = self.last_turn_id
 
     def status_mark(self, idx: int) -> str:
         status = self.status.get(str(idx), "")
@@ -119,9 +133,9 @@ class PlanSnapshot:
         return not self.is_closed() and not self.is_superseded() and not self.is_complete()
 
     def close(self, *, ts: Optional[str] = None, turn_id: Optional[str] = None) -> None:
+        self.touch(ts=ts, turn_id=turn_id)
         if ts:
             self.closed_ts = ts
-            self.last_ts = ts
         if turn_id:
             self.closed_turn_id = str(turn_id)
 
@@ -132,9 +146,9 @@ class PlanSnapshot:
         turn_id: Optional[str] = None,
         by_plan_id: Optional[str] = None,
     ) -> None:
+        self.touch(ts=ts, turn_id=turn_id)
         if ts:
             self.superseded_ts = ts
-            self.last_ts = ts
         if turn_id:
             self.superseded_turn_id = str(turn_id)
         if by_plan_id:
@@ -206,6 +220,7 @@ def create_plan_snapshot(*, plan: Any, turn_id: str, created_ts: str) -> PlanSna
         created_ts=created_ts,
         last_ts=created_ts,
         origin_turn_id=turn_id,
+        last_turn_id=turn_id,
     )
 
 
@@ -223,6 +238,7 @@ def build_plan_block(*, snap: PlanSnapshot, turn_id: str, ts: str) -> Dict[str, 
             "plan_id": snap.plan_id,
             "origin_turn_id": snap.origin_turn_id,
             "created_ts": snap.created_ts,
+            "last_turn_id": snap.last_turn_id,
             "last_ack_turn_id": snap.last_ack_turn_id,
             "last_ack_ts": snap.last_ack_ts,
             "last_ts": snap.last_ts,
@@ -249,6 +265,7 @@ def build_plan_carry_block(*, snap: PlanSnapshot, turn_id: str, ts: str) -> Dict
             "plan_id": snap.plan_id,
             "origin_turn_id": snap.origin_turn_id,
             "created_ts": snap.created_ts,
+            "last_turn_id": snap.last_turn_id,
             "last_ack_turn_id": snap.last_ack_turn_id,
             "last_ack_ts": snap.last_ack_ts,
             "last_ts": snap.last_ts,
@@ -396,6 +413,7 @@ def collect_plan_snapshots(blocks: List[Dict[str, Any]]) -> Tuple[Dict[str, Dict
                 "origin_turn_id",
                 "created_ts",
                 "last_ts",
+                "last_turn_id",
                 "last_ack_turn_id",
                 "last_ack_ts",
                 "closed_ts",
@@ -511,6 +529,20 @@ def close_plan_snapshot(
     return snap
 
 
+def activate_plan_snapshot(
+    *,
+    blocks: List[Dict[str, Any]],
+    plan_id: str,
+    turn_id: str,
+    ts: str,
+) -> Optional[PlanSnapshot]:
+    snap = latest_plan_snapshot_by_id(blocks, plan_id)
+    if not snap or not snap.is_active():
+        return None
+    snap.touch(ts=ts, turn_id=turn_id)
+    return snap
+
+
 def supersede_plan_snapshot(
     *,
     blocks: List[Dict[str, Any]],
@@ -560,6 +592,7 @@ def build_active_plan_blocks(
         "meta": {
             "plan_id": pid,
             "origin_turn_id": p.get("origin_turn_id"),
+            "last_turn_id": p.get("last_turn_id"),
             "last_ack_turn_id": p.get("last_ack_turn_id"),
             "last_ack_ts": p.get("last_ack_ts"),
             "last_ts": p.get("last_ts"),
@@ -601,6 +634,7 @@ def _plan_snapshot_from_block(
             "origin_turn_id",
             "created_ts",
             "last_ts",
+            "last_turn_id",
             "last_ack_turn_id",
             "last_ack_ts",
             "closed_ts",

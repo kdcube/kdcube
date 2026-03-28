@@ -182,7 +182,7 @@ async def test_timeline_streamer_emits_new_plan_to_timeline_text():
             "params": {
                 "mode": "new",
                 "steps": [
-                    "Add plan lifecycle fields/helpers for targeted close/update/supersede and stable latest-snapshot alias resolution",
+                    "Add plan lifecycle fields/helpers for targeted close/activate/replace and stable latest-snapshot alias resolution",
                     "Change react.plan tool semantics and visible tool-call payloads to include explicit plan ids/refs",
                     "Adjust timeline/ANNOUNCE rendering and TTL pruning so hot view shows notes + plan tool calls + open-plan announce, not raw plan snapshots/acks",
                 ],
@@ -204,19 +204,29 @@ async def test_timeline_streamer_emits_new_plan_to_timeline_text():
     rendered = collector.text_for_artifact("timeline_text.react.plan")
     assert "• New Plan" in rendered
     assert "└ Implement stable plan-id based lifecycle and hot-render visibility." in rendered
-    assert "□ Add plan lifecycle fields/helpers for targeted close/update/supersede and stable latest-snapshot alias resolution" in rendered
+    assert "□ Add plan lifecycle fields/helpers for targeted close/activate/replace and stable latest-snapshot alias resolution" in rendered
     assert "□ Change react.plan tool semantics and visible tool-call payloads to include explicit plan ids/refs" in rendered
 
 
 @pytest.mark.asyncio
-async def test_timeline_streamer_emits_updated_and_closed_plan_to_timeline_text():
-    update_payload = {
+async def test_timeline_streamer_emits_activate_replace_and_close_plan_to_timeline_text():
+    activate_payload = {
+        "action": "call_tool",
+        "tool_call": {
+            "tool_id": "react.plan",
+            "params": {
+                "mode": "activate",
+                "plan_id": "plan_alpha",
+            },
+        },
+    }
+    replace_payload = {
         "action": "call_tool",
         "notes": "Refocus the work on the final answer path.",
         "tool_call": {
             "tool_id": "react.plan",
             "params": {
-                "mode": "update",
+                "mode": "replace",
                 "plan_id": "plan_alpha",
                 "steps": [
                     "Draft the answer",
@@ -244,11 +254,25 @@ async def test_timeline_streamer_emits_updated_and_closed_plan_to_timeline_text(
         plan_artifact_name="timeline_text.react.plan.case",
     )
 
-    for chunk in _chunk_text(_json_stream_payload(update_payload), size=19):
+    for chunk in _chunk_text(_json_stream_payload(activate_payload), size=19):
         await streamer.feed(chunk)
     await streamer.finish()
     rendered = collector.text_for_artifact("timeline_text.react.plan.case")
-    assert "• Updated Plan" in rendered
+    assert "• Activated Plan" in rendered
+    assert "└ Activate plan `plan_alpha`." in rendered
+
+    collector = _Collector()
+    streamer = TimelineStreamer(
+        emit_delta=collector.emit,
+        agent="test.agent",
+        sources_list=[],
+        plan_artifact_name="timeline_text.react.plan.case",
+    )
+    for chunk in _chunk_text(_json_stream_payload(replace_payload), size=19):
+        await streamer.feed(chunk)
+    await streamer.finish()
+    rendered = collector.text_for_artifact("timeline_text.react.plan.case")
+    assert "• Replaced Plan" in rendered
     assert "└ Refocus the work on the final answer path." in rendered
     assert "□ Draft the answer" in rendered
     assert "□ Verify citations" in rendered

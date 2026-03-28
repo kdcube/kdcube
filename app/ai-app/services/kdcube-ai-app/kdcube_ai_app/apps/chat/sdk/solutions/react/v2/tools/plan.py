@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
+    activate_plan_snapshot,
     apply_plan_status_updates,
     build_plan_block,
     close_plan_snapshot,
@@ -23,17 +24,18 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
 TOOL_SPEC = {
     "id": "react.plan",
     "purpose": (
-        "Create or update the current plan for this turn. "
-        "Use mode='new' to start a plan, 'update' to replace it, or 'close' to clear it. "
-    "Plans are shown in ANNOUNCE and used for step acknowledgements."
+        "Manage plan lineages for this turn. "
+        "Use mode='new' to start a plan, 'activate' to make an older open plan current, "
+        "'replace' to supersede a plan and start a new one, or 'close' to retire a plan. "
+        "Plans are shown in ANNOUNCE and used for step acknowledgements."
     ),
     "args": {
-        "mode": "str. One of: new | update | close.",
+        "mode": "str. One of: new | activate | replace | close.",
         "plan_id": (
-            "str. Optional stable target plan id for update/close. "
-            "If omitted, runtime defaults to the latest active plan."
+            "str. Stable target plan id for activate/replace/close. "
+            "Required for those modes."
         ),
-        "steps": "list[str]. Required for new/update. Each item is a plan step.",
+        "steps": "list[str]. Required for new/replace. Each item is a plan step.",
     },
     "returns": "plan stored in timeline; state updated",
 }
@@ -101,10 +103,8 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
     turn_id = ctx_browser.runtime_ctx.turn_id or ""
     started_at = ctx_browser.runtime_ctx.started_at or ""
     timeline_blocks = list(getattr(ctx_browser.timeline, "blocks", []) or [])
-    current_active = latest_active_plan_snapshot(timeline_blocks)
-    target_plan_id = requested_plan_id or (current_active.plan_id if current_active else "")
 
-    if mode not in {"new", "update", "close"}:
+    if mode not in {"new", "activate", "replace", "close"}:
         tool_call_block(
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
@@ -119,7 +119,7 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
             code="protocol_violation.plan_mode",
-            message="react.plan mode must be one of: new | update | close",
+            message="react.plan mode must be one of: new | activate | replace | close",
             extra={"mode": mode},
             rel="call",
         )
@@ -127,7 +127,30 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
         state["error"] = {"where": "tool_execution", "error": "bad_plan_mode", "managed": True}
         return state
 
-    if mode in {"new", "update"}:
+    if mode in {"activate", "replace", "close"} and not requested_plan_id:
+        tool_call_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            tool_id="react.plan",
+            payload={
+                "tool_id": "react.plan",
+                "tool_call_id": tool_call_id,
+                "params": params,
+            },
+        )
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="protocol_violation.plan_target_required",
+            message="react.plan requires explicit plan_id for mode=activate|replace|close.",
+            extra={"mode": mode},
+            rel="call",
+        )
+        state["exit_reason"] = "error"
+        state["error"] = {"where": "tool_execution", "error": "missing_plan_target", "managed": True}
+        return state
+
+    if mode in {"new", "replace"}:
         if not isinstance(steps, list) or not all(isinstance(s, str) and s.strip() for s in steps):
             tool_call_block(
                 ctx_browser=ctx_browser,
@@ -143,7 +166,7 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
                 ctx_browser=ctx_browser,
                 tool_call_id=tool_call_id,
                 code="protocol_violation.plan_steps",
-                message="react.plan requires non-empty steps list for mode=new/update.",
+                message="react.plan requires non-empty steps list for mode=new|replace.",
                 extra={"mode": mode},
                 rel="call",
             )
@@ -151,6 +174,87 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
             state["error"] = {"where": "tool_execution", "error": "bad_plan_steps", "managed": True}
             return state
 
+    if mode == "new":
+        plan_obj = {"steps": [s.strip() for s in steps]}
+        new_snap = create_plan_snapshot(plan=plan_obj, turn_id=turn_id, created_ts=started_at)
+        tool_call_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            tool_id="react.plan",
+            payload={
+                "tool_id": "react.plan",
+                "tool_call_id": tool_call_id,
+                "params": params,
+                "new_plan_id": new_snap.plan_id,
+                "new_snapshot_ref": plan_snapshot_ref(new_snap.plan_id),
+            },
+        )
+        add_block(ctx_browser, build_plan_block(snap=new_snap, turn_id=turn_id, ts=started_at))
+        _add_plan_result_summary(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            mode=mode,
+            plan_id=new_snap.plan_id,
+            latest_snapshot_ref=plan_snapshot_ref(new_snap.plan_id),
+        )
+        state["plan_id"] = new_snap.plan_id
+        state["plan_ts"] = new_snap.created_ts
+        state["plan_origin_turn_id"] = new_snap.origin_turn_id
+        state["plan_last_ts"] = new_snap.last_ts
+        state["plan_steps"] = list(new_snap.steps or [])
+        state["plan_status"] = {}
+        return state
+
+    if mode == "activate":
+        tool_call_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            tool_id="react.plan",
+            payload={
+                "tool_id": "react.plan",
+                "tool_call_id": tool_call_id,
+                "params": params,
+                "target_plan_id": requested_plan_id,
+                "target_snapshot_ref": plan_snapshot_ref(requested_plan_id),
+            },
+        )
+        snap = activate_plan_snapshot(
+            blocks=timeline_blocks,
+            plan_id=requested_plan_id,
+            turn_id=turn_id,
+            ts=started_at,
+        )
+        if snap is None:
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="protocol_violation.plan_target_missing",
+                message="react.plan(mode=activate) target plan_id was not found or not active.",
+                extra={"plan_id": requested_plan_id},
+                rel="call",
+            )
+            state["exit_reason"] = "error"
+            state["error"] = {"where": "tool_execution", "error": "plan_target_missing", "managed": True}
+            return state
+        add_block(ctx_browser, build_plan_block(snap=snap, turn_id=turn_id, ts=started_at))
+        _add_plan_result_summary(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            mode=mode,
+            plan_id=snap.plan_id,
+            target_plan_id=requested_plan_id,
+            latest_snapshot_ref=plan_snapshot_ref(snap.plan_id),
+            target_snapshot_ref=plan_snapshot_ref(requested_plan_id),
+        )
+        state["plan_id"] = snap.plan_id
+        state["plan_ts"] = snap.created_ts
+        state["plan_origin_turn_id"] = snap.origin_turn_id
+        state["plan_last_ts"] = snap.last_ts
+        state["plan_steps"] = list(snap.steps or [])
+        state["plan_status"] = dict(snap.status or {})
+        return state
+
+    if mode == "replace":
         plan_obj = {"steps": [s.strip() for s in steps]}
         new_snap = create_plan_snapshot(plan=plan_obj, turn_id=turn_id, created_ts=started_at)
         tool_payload = {
@@ -159,47 +263,44 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
             "params": params,
             "new_plan_id": new_snap.plan_id,
             "new_snapshot_ref": plan_snapshot_ref(new_snap.plan_id),
+            "target_plan_id": requested_plan_id,
+            "target_snapshot_ref": plan_snapshot_ref(requested_plan_id),
         }
-        if mode == "update" and target_plan_id:
-            tool_payload["target_plan_id"] = target_plan_id
-            tool_payload["target_snapshot_ref"] = plan_snapshot_ref(target_plan_id)
         tool_call_block(
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
             tool_id="react.plan",
             payload=tool_payload,
         )
-        if mode == "update" and target_plan_id:
-            old_snap = supersede_plan_snapshot(
-                blocks=timeline_blocks,
-                plan_id=target_plan_id,
-                turn_id=turn_id,
-                ts=started_at,
-                by_plan_id=new_snap.plan_id,
+        old_snap = supersede_plan_snapshot(
+            blocks=timeline_blocks,
+            plan_id=requested_plan_id,
+            turn_id=turn_id,
+            ts=started_at,
+            by_plan_id=new_snap.plan_id,
+        )
+        if old_snap is None:
+            notice_block(
+                ctx_browser=ctx_browser,
+                tool_call_id=tool_call_id,
+                code="protocol_violation.plan_target_missing",
+                message="react.plan(mode=replace) target plan_id was not found or not active.",
+                extra={"plan_id": requested_plan_id},
+                rel="call",
             )
-            if requested_plan_id and old_snap is None:
-                notice_block(
-                    ctx_browser=ctx_browser,
-                    tool_call_id=tool_call_id,
-                    code="protocol_violation.plan_target_missing",
-                    message="react.plan(mode=update) target plan_id was not found or not active.",
-                    extra={"plan_id": target_plan_id},
-                    rel="call",
-                )
-                state["exit_reason"] = "error"
-                state["error"] = {"where": "tool_execution", "error": "plan_target_missing", "managed": True}
-                return state
-            if old_snap:
-                add_block(ctx_browser, build_plan_block(snap=old_snap, turn_id=turn_id, ts=started_at))
+            state["exit_reason"] = "error"
+            state["error"] = {"where": "tool_execution", "error": "plan_target_missing", "managed": True}
+            return state
+        add_block(ctx_browser, build_plan_block(snap=old_snap, turn_id=turn_id, ts=started_at))
         add_block(ctx_browser, build_plan_block(snap=new_snap, turn_id=turn_id, ts=started_at))
         _add_plan_result_summary(
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
             mode=mode,
             plan_id=new_snap.plan_id,
-            target_plan_id=target_plan_id if mode == "update" else "",
+            target_plan_id=requested_plan_id,
             latest_snapshot_ref=plan_snapshot_ref(new_snap.plan_id),
-            target_snapshot_ref=plan_snapshot_ref(target_plan_id) if mode == "update" and target_plan_id else "",
+            target_snapshot_ref=plan_snapshot_ref(requested_plan_id),
         )
         state["plan_id"] = new_snap.plan_id
         state["plan_ts"] = new_snap.created_ts
@@ -215,9 +316,8 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
         "tool_call_id": tool_call_id,
         "params": params,
     }
-    if target_plan_id:
-        tool_payload["target_plan_id"] = target_plan_id
-        tool_payload["target_snapshot_ref"] = plan_snapshot_ref(target_plan_id)
+    tool_payload["target_plan_id"] = requested_plan_id
+    tool_payload["target_snapshot_ref"] = plan_snapshot_ref(requested_plan_id)
     tool_call_block(
         ctx_browser=ctx_browser,
         tool_call_id=tool_call_id,
@@ -226,40 +326,39 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
     )
     snap = close_plan_snapshot(
         blocks=timeline_blocks,
-        plan_id=target_plan_id,
+        plan_id=requested_plan_id,
         turn_id=turn_id,
         ts=started_at,
-    ) if target_plan_id else None
-    if requested_plan_id and snap is None:
+    )
+    if snap is None:
         notice_block(
             ctx_browser=ctx_browser,
             tool_call_id=tool_call_id,
             code="protocol_violation.plan_target_missing",
             message="react.plan(mode=close) target plan_id was not found or not active.",
-            extra={"plan_id": target_plan_id},
+            extra={"plan_id": requested_plan_id},
             rel="call",
         )
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "plan_target_missing", "managed": True}
         return state
-    if snap:
-        add_block(
-            ctx_browser,
-            build_plan_block(
-                snap=snap,
-                turn_id=turn_id,
-                ts=started_at,
-            ),
-        )
-        _add_plan_result_summary(
-            ctx_browser=ctx_browser,
-            tool_call_id=tool_call_id,
-            mode=mode,
-            plan_id=snap.plan_id,
-            target_plan_id=target_plan_id,
-            latest_snapshot_ref=plan_snapshot_ref(snap.plan_id),
-            target_snapshot_ref=plan_snapshot_ref(target_plan_id) if target_plan_id else "",
-        )
+    add_block(
+        ctx_browser,
+        build_plan_block(
+            snap=snap,
+            turn_id=turn_id,
+            ts=started_at,
+        ),
+    )
+    _add_plan_result_summary(
+        ctx_browser=ctx_browser,
+        tool_call_id=tool_call_id,
+        mode=mode,
+        plan_id=snap.plan_id,
+        target_plan_id=requested_plan_id,
+        latest_snapshot_ref=plan_snapshot_ref(snap.plan_id),
+        target_snapshot_ref=plan_snapshot_ref(requested_plan_id),
+    )
     refreshed_blocks = list(getattr(ctx_browser.timeline, "blocks", []) or [])
     active_after = latest_active_plan_snapshot(refreshed_blocks)
     if active_after:
@@ -281,7 +380,7 @@ async def handle_react_plan(*, react: Any, ctx_browser: Any, state: Dict[str, An
         tool_call_id=tool_call_id,
         code="plan_closed",
         message="Plan closed by react.plan(mode=close).",
-        extra={"plan_id": target_plan_id} if target_plan_id else {},
+        extra={"plan_id": requested_plan_id},
         rel="result",
     )
     return state

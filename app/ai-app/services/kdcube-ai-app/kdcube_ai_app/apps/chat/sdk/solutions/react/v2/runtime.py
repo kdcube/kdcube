@@ -546,7 +546,7 @@ class ReactSolverV2:
             if tool_id == "react.read":
                 allowed_params.update({"paths"})
             elif tool_id == "react.plan":
-                allowed_params.update({"mode", "steps"})
+                allowed_params.update({"mode", "steps", "plan_id"})
             elif tool_id == "react.hide":
                 allowed_params.update({"path", "replacement"})
             elif tool_id == "react.memsearch":
@@ -1122,20 +1122,21 @@ class ReactSolverV2:
                 except Exception:
                     pass
             try:
-                status_map = state.get("plan_status") or {}
-                status_map, plan_blocks = apply_plan_updates(
-                    notes=notes,
-                    plan_steps=plan_steps,
-                    status_map=status_map if isinstance(status_map, dict) else {},
-                    timeline_blocks=self.ctx_browser.timeline.blocks if self.ctx_browser else [],
-                    turn_id=state.get("turn_id") or "",
-                    iteration=iteration,
-                    ts=time.time(),
-                )
-                if status_map:
-                    state["plan_status"] = status_map
-                if plan_blocks and self.ctx_browser:
-                    self.ctx_browser.contribute(blocks=plan_blocks)
+                if tool_id != "react.plan":
+                    status_map = state.get("plan_status") or {}
+                    status_map, plan_blocks = apply_plan_updates(
+                        notes=notes,
+                        plan_steps=plan_steps,
+                        status_map=status_map if isinstance(status_map, dict) else {},
+                        timeline_blocks=self.ctx_browser.timeline.blocks if self.ctx_browser else [],
+                        turn_id=state.get("turn_id") or "",
+                        iteration=iteration,
+                        ts=time.time(),
+                    )
+                    if status_map:
+                        state["plan_status"] = status_map
+                    if plan_blocks and self.ctx_browser:
+                        self.ctx_browser.contribute(blocks=plan_blocks)
             except Exception:
                 pass
 

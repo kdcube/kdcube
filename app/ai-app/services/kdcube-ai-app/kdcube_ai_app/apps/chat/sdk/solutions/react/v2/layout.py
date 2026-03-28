@@ -217,7 +217,7 @@ def build_announce_plan_lines(
                 lines.append(f"      created_turn={snap.origin_turn_id}")
             if snap.created_ts:
                 lines.append(f"      created_ts={snap.created_ts}")
-            last_turn = snap.last_ack_turn_id or snap.origin_turn_id
+            last_turn = snap.last_turn_id or snap.origin_turn_id
             if last_turn:
                 lines.append(f"      last_update_turn={last_turn}")
             last_ts = snap.last_ts or snap.created_ts
