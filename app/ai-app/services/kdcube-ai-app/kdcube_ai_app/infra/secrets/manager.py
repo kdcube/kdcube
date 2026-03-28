@@ -48,6 +48,32 @@ def _normalize_provider_name(provider: Optional[str], *, url: Optional[str] = No
     return "in-memory"
 
 
+def _default_aws_sm_prefix(settings: Any | None = None) -> str:
+    explicit = _first_non_empty(
+        getattr(settings, "SECRETS_AWS_SM_PREFIX", None),
+        getattr(settings, "SECRETS_SM_PREFIX", None),
+        os.getenv("SECRETS_AWS_SM_PREFIX"),
+        os.getenv("SECRETS_SM_PREFIX"),
+    )
+    if explicit:
+        return explicit
+
+    tenant = _first_non_empty(
+        getattr(settings, "TENANT", None),
+        os.getenv("TENANT_ID"),
+        os.getenv("DEFAULT_TENANT"),
+    )
+    project = _first_non_empty(
+        getattr(settings, "PROJECT", None),
+        os.getenv("PROJECT_ID"),
+        os.getenv("DEFAULT_PROJECT_NAME"),
+        os.getenv("CHAT_WEB_APP_PROJECT"),
+    )
+    if tenant and project:
+        return f"kdcube/{tenant}/{project}"
+    return "kdcube"
+
+
 def _get_httpx():
     import httpx
 
@@ -313,13 +339,7 @@ def build_secrets_manager_config(settings: Any | None = None) -> SecretsManagerC
             getattr(settings, "AWS_PROFILE", None),
             os.getenv("AWS_PROFILE"),
         ),
-        aws_sm_prefix=_first_non_empty(
-            getattr(settings, "SECRETS_AWS_SM_PREFIX", None),
-            os.getenv("SECRETS_AWS_SM_PREFIX"),
-            os.getenv("SECRETS_SM_PREFIX"),
-            "kdcube",
-        )
-        or "kdcube",
+        aws_sm_prefix=_default_aws_sm_prefix(settings),
     )
 
 

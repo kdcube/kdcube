@@ -199,7 +199,7 @@ def test_build_external_runtime_inline_env_is_small_bootstrap_subset():
             "AWS_DEFAULT_REGION": "eu-west-1",
             "SECRETS_PROVIDER": "aws_sm",
             "SECRETS_SM_REGION": "eu-west-1",
-            "SECRETS_SM_PREFIX": "kdcube/services",
+            "SECRETS_SM_PREFIX": "kdcube/demo/demo-march",
             "OPENAI_API_KEY": "sk-openai",
             "WEB_FETCH_RESOURCES_MEDIUM": '{"cookies":{"sid":"x"}}',
             "REDIS_URL": "redis://localhost:6379/0",
@@ -208,7 +208,7 @@ def test_build_external_runtime_inline_env_is_small_bootstrap_subset():
 
     assert inline_env["AWS_REGION"] == "eu-west-1"
     assert inline_env["SECRETS_PROVIDER"] == "aws_sm"
-    assert inline_env["SECRETS_SM_PREFIX"] == "kdcube/services"
+    assert inline_env["SECRETS_SM_PREFIX"] == "kdcube/demo/demo-march"
     assert "OPENAI_API_KEY" not in inline_env
     assert "WEB_FETCH_RESOURCES_MEDIUM" not in inline_env
     assert "REDIS_URL" not in inline_env
