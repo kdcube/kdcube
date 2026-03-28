@@ -1,0 +1,4 @@
+mcp[cli]>=1.0.0
+neo4j>=5.0.0
+sentence-transformers>=2.2.0
+PyYAML>=6.0

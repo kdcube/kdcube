@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "coding-core": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["C:\\Users\\drpoz\\OneDrive\\Desktop\\KDCube\\kdcube-ai-app\\integration\\coding-core\\server.py"],
+      "env": {
+        "DB_URI": "bolt://127.0.0.1:7690",
+        "DB_USER": "neo4j",
+        "DB_PASSWORD": "65433456",
+        "DB_NAME": "code-core",
+        "PROJECT_ROOT": "C:\\Users\\drpoz\\OneDrive\\Desktop\\KDCube\\kdcube-ai-app"
+      }
+    }
+  }
+}
