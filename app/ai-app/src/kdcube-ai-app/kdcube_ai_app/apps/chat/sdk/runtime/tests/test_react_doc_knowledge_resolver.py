@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import pathlib
 import sys
 
@@ -148,3 +149,79 @@ def test_resolve_exec_namespace_allows_symlinked_source_subtree(tmp_path, monkey
 
     assert resolved["browseable"] is True
     assert pathlib.Path(resolved["physical_path"]).resolve() == target_dir.resolve()
+
+
+def test_build_knowledge_index_includes_headings_and_rich_metadata(tmp_path):
+    index_builder = _load_index_builder_module()
+
+    knowledge_root = tmp_path / "knowledge"
+    docs_root = knowledge_root / "docs" / "sdk" / "bundle"
+    docs_root.mkdir(parents=True, exist_ok=True)
+
+    doc_path = docs_root / "bundle-platform-properties-README.md"
+    doc_path.write_text(
+        "\n".join(
+            [
+                "---",
+                'id: ks:docs/sdk/bundle/bundle-platform-properties-README.md',
+                'title: "Bundle Platform Properties"',
+                'summary: "Reserved bundle property paths interpreted by the platform entrypoints and runtimes."',
+                'tags: ["sdk", "bundle", "configuration", "runtime", "economics", "exec"]',
+                'keywords: ["role_models", "embedding", "economics.reservation_amount_dollars", "execution.runtime"]',
+                "see_also:",
+                "  - ks:docs/sdk/bundle/bundle-dev-README.md",
+                "---",
+                "# Bundle Platform Properties",
+                "",
+                "## Reserved property paths",
+                "",
+                "## role_models",
+                "",
+                "## embedding",
+                "",
+                "## economics.reservation_amount_dollars",
+                "",
+                "## execution.runtime",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = index_builder.build_knowledge_index(
+        knowledge_root=knowledge_root,
+        docs_root=knowledge_root / "docs",
+        deployment_root=None,
+        logger=None,
+    )
+
+    assert payload["items"]
+    item = payload["items"][0]
+    assert item["path"] == "ks:docs/sdk/bundle/bundle-platform-properties-README.md"
+    assert item["summary"] == "Reserved bundle property paths interpreted by the platform entrypoints and runtimes."
+    assert "sdk" in item["tags"]
+    assert "role_models" in item["keywords"]
+    assert [h["text"] for h in item["headings"]] == [
+        "Reserved property paths",
+        "role_models",
+        "embedding",
+        "economics.reservation_amount_dollars",
+        "execution.runtime",
+    ]
+
+    written = json.loads((knowledge_root / "index.json").read_text(encoding="utf-8"))
+    written_item = written["items"][0]
+    assert [h["text"] for h in written_item["headings"]] == [
+        "Reserved property paths",
+        "role_models",
+        "embedding",
+        "economics.reservation_amount_dollars",
+        "execution.runtime",
+    ]
+
+    index_md = (knowledge_root / "index.md").read_text(encoding="utf-8")
+    assert "summary: Reserved bundle property paths interpreted by the platform entrypoints and runtimes." in index_md
+    assert "tags: sdk, bundle, configuration, runtime, economics, exec" in index_md
+    assert "keywords: role_models, embedding, economics.reservation_amount_dollars, execution.runtime" in index_md
+    assert "see also: ks:docs/sdk/bundle/bundle-dev-README.md" in index_md
+    assert "sections: Reserved property paths; role_models; embedding; economics.reservation_amount_dollars; execution.runtime" in index_md

@@ -17,6 +17,8 @@
 #
 # Front-matter fields parsed:
 #   title, summary, tags, keywords, see_also, id
+# Markdown body fields extracted:
+#   headings
 #
 # Output files:
 #   index.json — {"items": [{path, title, summary, tags, keywords, ...}]}
@@ -146,12 +148,59 @@ def _parse_front_matter(text: str) -> Dict[str, Any]:
     return data
 
 
+def _strip_front_matter(text: str) -> str:
+    stripped = text.lstrip()
+    if not stripped.startswith("---"):
+        return text
+    lines = stripped.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return text
+    for idx in range(1, len(lines)):
+        if lines[idx].strip() == "---":
+            return "\n".join(lines[idx + 1 :])
+    return text
+
+
+def _extract_markdown_headings(text: str, *, skip_texts: Optional[set[str]] = None) -> List[Dict[str, Any]]:
+    headings: List[Dict[str, Any]] = []
+    body = _strip_front_matter(text)
+    in_fence = False
+    skip_norm = {s.strip().lower() for s in (skip_texts or set()) if str(s).strip()}
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        match = re.match(r"^(#{1,6})\s+(.*\S)\s*$", line)
+        if not match:
+            continue
+        text_value = re.sub(r"\s+#+\s*$", "", match.group(2).strip())
+        if not text_value:
+            continue
+        if text_value.strip().lower() in skip_norm:
+            continue
+        headings.append({
+            "level": len(match.group(1)),
+            "text": text_value,
+        })
+    return headings
+
+
 def _load_doc_meta(path: pathlib.Path) -> Dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8", errors="ignore")
     except Exception:
         return {}
-    return _parse_front_matter(text)
+    meta = _parse_front_matter(text)
+    title = str(meta.get("title") or "").strip()
+    meta["headings"] = _extract_markdown_headings(
+        text,
+        skip_texts={title} if title else None,
+    )
+    return meta
 
 
 def _iter_docs(root: Optional[pathlib.Path]) -> Iterable[pathlib.Path]:
@@ -207,6 +256,7 @@ def _build_index_entries(
                 "tags": meta.get("tags") or [],
                 "keywords": meta.get("keywords") or [],
                 "see_also": meta.get("see_also") or [],
+                "headings": meta.get("headings") or [],
                 "id": meta_id,
                 "kind": kind,
             })
@@ -316,6 +366,17 @@ def build_knowledge_index(
         if item.get("kind") != "doc":
             continue
         md_lines.append(f"- {item.get('path')} — {item.get('title')}")
+        if item.get("summary"):
+            md_lines.append(f"  summary: {item.get('summary')}")
+        if item.get("tags"):
+            md_lines.append(f"  tags: {', '.join(str(t) for t in item.get('tags') or [])}")
+        if item.get("keywords"):
+            md_lines.append(f"  keywords: {', '.join(str(t) for t in item.get('keywords') or [])}")
+        if item.get("see_also"):
+            md_lines.append(f"  see also: {', '.join(str(t) for t in item.get('see_also') or [])}")
+        headings = [str(h.get("text") or "").strip() for h in (item.get("headings") or []) if isinstance(h, dict)]
+        if headings:
+            md_lines.append(f"  sections: {'; '.join(headings)}")
     if deployment_root:
         md_lines += [
             "",
@@ -325,6 +386,17 @@ def build_knowledge_index(
             if item.get("kind") != "deployment":
                 continue
             md_lines.append(f"- {item.get('path')} — {item.get('title')}")
+            if item.get("summary"):
+                md_lines.append(f"  summary: {item.get('summary')}")
+            if item.get("tags"):
+                md_lines.append(f"  tags: {', '.join(str(t) for t in item.get('tags') or [])}")
+            if item.get("keywords"):
+                md_lines.append(f"  keywords: {', '.join(str(t) for t in item.get('keywords') or [])}")
+            if item.get("see_also"):
+                md_lines.append(f"  see also: {', '.join(str(t) for t in item.get('see_also') or [])}")
+            headings = [str(h.get("text") or "").strip() for h in (item.get("headings") or []) if isinstance(h, dict)]
+            if headings:
+                md_lines.append(f"  sections: {'; '.join(headings)}")
     try:
         index_md_path.write_text("\n".join(md_lines).strip() + "\n", encoding="utf-8")
     except Exception as exc:

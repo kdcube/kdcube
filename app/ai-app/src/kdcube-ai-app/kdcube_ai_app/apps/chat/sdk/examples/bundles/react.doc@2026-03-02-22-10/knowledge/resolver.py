@@ -271,8 +271,11 @@ def search_knowledge(
             continue
         title = str(item.get("title") or "")
         summary = str(item.get("summary") or "")
+        headings = item.get("headings") or []
         tags = [str(t).lower() for t in (item.get("tags") or []) if str(t).strip()]
         keywords = [str(t).lower() for t in (item.get("keywords") or []) if str(t).strip()]
+        heading_texts = [str(h.get("text") or "").strip().lower() for h in headings if isinstance(h, dict)]
+        headings_l = " ".join([h for h in heading_texts if h])
 
         title_l = title.lower()
         summary_l = summary.lower()
@@ -288,6 +291,9 @@ def search_knowledge(
         if q and q in summary_l:
             score += 1.5
             matched = True
+        if q and headings_l and q in headings_l:
+            score += 1.8
+            matched = True
         if q and q in path_l:
             score += 0.7
             matched = True
@@ -299,6 +305,9 @@ def search_knowledge(
                 matched = True
             if t in tag_set:
                 score += 0.8
+                matched = True
+            if headings_l and t in headings_l:
+                score += 0.7
                 matched = True
             if t in summary_l:
                 score += 0.4
