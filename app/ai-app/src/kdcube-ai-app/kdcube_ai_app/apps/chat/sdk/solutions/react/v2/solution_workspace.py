@@ -318,8 +318,12 @@ async def rehost_files_from_timeline(
         outdir: pathlib.Path,
 ) -> Dict[str, Any]:
     """
-    Rehost referenced files by logical path "turn_id/files/<relpath>" into OUT_DIR.
-    Uses turn log blocks to resolve hosted_uri/rn/key from timeline blocks.
+    Rehost referenced files or directory-shaped prefixes like
+    ``turn_id/files/<dir>`` into OUT_DIR.
+
+    Exact files are resolved from timeline / turn-log artifact metadata. If the
+    referenced path is a directory-like prefix, descendant artifacts found under
+    that prefix are expanded and rehosted into the matching OUT_DIR subtree.
     """
     if not paths:
         return {"rehosted": [], "missing": [], "errors": []}
@@ -333,6 +337,8 @@ async def rehost_files_from_timeline(
     rehosted: List[str] = []
     missing: List[str] = []
     errors: List[str] = []
+    processed_targets: set[str] = set()
+    turn_blocks_cache: Dict[str, List[Dict[str, Any]]] = {}
 
     by_turn: Dict[str, List[str]] = {}
     by_turn_attachments: Dict[str, List[str]] = {}
@@ -356,6 +362,87 @@ async def rehost_files_from_timeline(
                 continue
             by_turn_attachments.setdefault(tid, []).append(rel)
 
+    async def _turn_blocks(turn_id: str) -> List[Dict[str, Any]]:
+        if turn_id in turn_blocks_cache:
+            return turn_blocks_cache[turn_id]
+        blocks: List[Dict[str, Any]] = []
+        try:
+            timeline = getattr(ctx_browser, "timeline", None)
+            timeline_blocks = getattr(timeline, "blocks", None)
+            if isinstance(timeline_blocks, list):
+                blocks.extend([b for b in timeline_blocks if isinstance(b, dict)])
+        except Exception:
+            pass
+        try:
+            turn_log = await ctx_browser.get_turn_log(turn_id=turn_id)
+        except Exception:
+            turn_log = {}
+        contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
+        if isinstance(contrib_log, list):
+            blocks.extend([b for b in contrib_log if isinstance(b, dict)])
+        turn_blocks_cache[turn_id] = blocks
+        return blocks
+
+    def _collect_descendant_relpaths(*, blocks: List[Dict[str, Any]], turn_id: str, rel_prefix: str, kind: str) -> List[str]:
+        normalized_prefix = (rel_prefix or "").strip().strip("/")
+        if kind == "attachments":
+            logical_roots = (
+                f"fi:{turn_id}.user.attachments/",
+                f"fi:{turn_id}.attachments/",
+            )
+            physical_root = f"{turn_id}/attachments/"
+        else:
+            logical_roots = (f"fi:{turn_id}.files/",)
+            physical_root = f"{turn_id}/files/"
+
+        seen: set[str] = set()
+        out: List[str] = []
+
+        def _record_rel(rel_value: str) -> None:
+            rel_value = (rel_value or "").strip().strip("/")
+            if not rel_value:
+                return
+            if normalized_prefix:
+                child_prefix = normalized_prefix + "/"
+                if not rel_value.startswith(child_prefix):
+                    return
+            if rel_value in seen:
+                return
+            seen.add(rel_value)
+            out.append(rel_value)
+
+        def _record_logical(candidate: str) -> None:
+            candidate = (candidate or "").strip()
+            if not candidate:
+                return
+            for root in logical_roots:
+                if candidate.startswith(root):
+                    _record_rel(candidate[len(root):])
+                    return
+
+        def _record_physical(candidate: str) -> None:
+            candidate = (candidate or "").strip().strip("/")
+            if not candidate or not candidate.startswith(physical_root):
+                return
+            _record_rel(candidate[len(physical_root):])
+
+        for block in blocks or []:
+            if not isinstance(block, dict):
+                continue
+            _record_logical(block.get("path") or "")
+            meta = block.get("meta")
+            if isinstance(meta, dict):
+                _record_physical(meta.get("physical_path") or meta.get("filepath") or meta.get("local_path") or "")
+            if (block.get("type") or "") == "react.tool.result" and (block.get("mime") or "").strip() == "application/json":
+                try:
+                    payload = json.loads(block.get("text") or "{}")
+                except Exception:
+                    payload = {}
+                if isinstance(payload, dict):
+                    _record_logical(payload.get("artifact_path") or payload.get("path") or "")
+                    _record_physical(payload.get("physical_path") or payload.get("filepath") or "")
+        return out
+
     async def _resolve_artifact(*, turn_id: str, rel: str, kind: str) -> Optional[Dict[str, Any]]:
         artifact_path = (
             f"fi:{turn_id}.files/{rel}"
@@ -372,117 +459,150 @@ async def rehost_files_from_timeline(
         except Exception:
             pass
         # 2) Fall back to persisted turn log.
-        try:
-            turn_log = await ctx_browser.get_turn_log(turn_id=turn_id)
-        except Exception:
-            turn_log = {}
-        contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
+        contrib_log = await _turn_blocks(turn_id)
         return resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, artifact_path)
 
     for turn_id, rels in by_turn.items():
         for rel in rels:
             artifact = await _resolve_artifact(turn_id=turn_id, rel=rel, kind="files")
-            if not isinstance(artifact, dict):
+            rel_targets = [rel] if isinstance(artifact, dict) else _collect_descendant_relpaths(
+                blocks=await _turn_blocks(turn_id),
+                turn_id=turn_id,
+                rel_prefix=rel,
+                kind="files",
+            )
+            if not rel_targets:
                 missing.append(f"{turn_id}/files/{rel}")
                 continue
-            src = (artifact.get("hosted_uri") or artifact.get("key") or artifact.get("rn") or "").strip()
-            mime = (artifact.get("mime") or "").strip().lower()
-            expected_size = artifact.get("size_bytes")
-            if not isinstance(expected_size, int):
-                expected_size = None
-            target = outdir / turn_id / "files" / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                needs_rehost = not target.exists()
-                if target.exists():
-                    try:
-                        current_size = target.stat().st_size
-                    except Exception:
-                        current_size = None
-                    if expected_size:
-                        if current_size == expected_size:
-                            rehosted.append(f"{turn_id}/files/{rel}")
-                            continue
-                        needs_rehost = True
-                    elif src and current_size == 0:
-                        needs_rehost = True
-                if needs_rehost:
-                    if src:
+            for target_rel in rel_targets:
+                target_key = f"{turn_id}/files/{target_rel}"
+                if target_key in processed_targets:
+                    continue
+                processed_targets.add(target_key)
+                target_artifact = artifact if target_rel == rel and isinstance(artifact, dict) else await _resolve_artifact(
+                    turn_id=turn_id,
+                    rel=target_rel,
+                    kind="files",
+                )
+                if not isinstance(target_artifact, dict):
+                    missing.append(target_key)
+                    continue
+                src = (target_artifact.get("hosted_uri") or target_artifact.get("key") or target_artifact.get("rn") or "").strip()
+                mime = (target_artifact.get("mime") or "").strip().lower()
+                expected_size = target_artifact.get("size_bytes")
+                if not isinstance(expected_size, int):
+                    expected_size = None
+                target = outdir / turn_id / "files" / target_rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    needs_rehost = not target.exists()
+                    if target.exists():
                         try:
-                            data = await store.get_blob_bytes(src)
-                            target.write_bytes(data)
+                            current_size = target.stat().st_size
                         except Exception:
-                            # fall back to inline content only when mime supports it
-                            if artifact.get("base64"):
-                                import base64 as _b64
-                                target.write_bytes(_b64.b64decode(artifact.get("base64")))
-                            elif isinstance(artifact.get("text"), str) and _is_text_mime(mime):
-                                target.write_text(artifact.get("text"), encoding="utf-8")
-                            else:
-                                raise
-                    elif artifact.get("base64"):
-                        import base64 as _b64
-                        target.write_bytes(_b64.b64decode(artifact.get("base64")))
-                    elif isinstance(artifact.get("text"), str) and _is_text_mime(mime):
-                        target.write_text(artifact.get("text"), encoding="utf-8")
-                    else:
-                        missing.append(f"{turn_id}/files/{rel}")
-                        continue
-                rehosted.append(f"{turn_id}/files/{rel}")
-            except Exception as e:
-                errors.append(f"rehost_failed:{turn_id}/files/{rel}:{e}")
+                            current_size = None
+                        if expected_size:
+                            if current_size == expected_size:
+                                rehosted.append(target_key)
+                                continue
+                            needs_rehost = True
+                        elif src and current_size == 0:
+                            needs_rehost = True
+                    if needs_rehost:
+                        if src:
+                            try:
+                                data = await store.get_blob_bytes(src)
+                                target.write_bytes(data)
+                            except Exception:
+                                if target_artifact.get("base64"):
+                                    import base64 as _b64
+                                    target.write_bytes(_b64.b64decode(target_artifact.get("base64")))
+                                elif isinstance(target_artifact.get("text"), str) and _is_text_mime(mime):
+                                    target.write_text(target_artifact.get("text"), encoding="utf-8")
+                                else:
+                                    raise
+                        elif target_artifact.get("base64"):
+                            import base64 as _b64
+                            target.write_bytes(_b64.b64decode(target_artifact.get("base64")))
+                        elif isinstance(target_artifact.get("text"), str) and _is_text_mime(mime):
+                            target.write_text(target_artifact.get("text"), encoding="utf-8")
+                        else:
+                            missing.append(target_key)
+                            continue
+                    rehosted.append(target_key)
+                except Exception as e:
+                    errors.append(f"rehost_failed:{target_key}:{e}")
 
     for turn_id, rels in by_turn_attachments.items():
         for rel in rels:
             artifact = await _resolve_artifact(turn_id=turn_id, rel=rel, kind="attachments")
-            if not isinstance(artifact, dict):
+            rel_targets = [rel] if isinstance(artifact, dict) else _collect_descendant_relpaths(
+                blocks=await _turn_blocks(turn_id),
+                turn_id=turn_id,
+                rel_prefix=rel,
+                kind="attachments",
+            )
+            if not rel_targets:
                 missing.append(f"{turn_id}/attachments/{rel}")
                 continue
-            src = (artifact.get("hosted_uri") or artifact.get("key") or artifact.get("rn") or "").strip()
-            mime = (artifact.get("mime") or "").strip().lower()
-            expected_size = artifact.get("size_bytes")
-            if not isinstance(expected_size, int):
-                expected_size = None
-            target = outdir / turn_id / "attachments" / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                needs_rehost = not target.exists()
-                if target.exists():
-                    try:
-                        current_size = target.stat().st_size
-                    except Exception:
-                        current_size = None
-                    if expected_size:
-                        if current_size == expected_size:
-                            rehosted.append(f"{turn_id}/attachments/{rel}")
-                            continue
-                        needs_rehost = True
-                    elif src and current_size == 0:
-                        needs_rehost = True
-                if needs_rehost:
-                    if src:
+            for target_rel in rel_targets:
+                target_key = f"{turn_id}/attachments/{target_rel}"
+                if target_key in processed_targets:
+                    continue
+                processed_targets.add(target_key)
+                target_artifact = artifact if target_rel == rel and isinstance(artifact, dict) else await _resolve_artifact(
+                    turn_id=turn_id,
+                    rel=target_rel,
+                    kind="attachments",
+                )
+                if not isinstance(target_artifact, dict):
+                    missing.append(target_key)
+                    continue
+                src = (target_artifact.get("hosted_uri") or target_artifact.get("key") or target_artifact.get("rn") or "").strip()
+                mime = (target_artifact.get("mime") or "").strip().lower()
+                expected_size = target_artifact.get("size_bytes")
+                if not isinstance(expected_size, int):
+                    expected_size = None
+                target = outdir / turn_id / "attachments" / target_rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    needs_rehost = not target.exists()
+                    if target.exists():
                         try:
-                            data = await store.get_blob_bytes(src)
-                            target.write_bytes(data)
+                            current_size = target.stat().st_size
                         except Exception:
-                            if artifact.get("base64"):
-                                import base64 as _b64
-                                target.write_bytes(_b64.b64decode(artifact.get("base64")))
-                            elif isinstance(artifact.get("text"), str) and _is_text_mime(mime):
-                                target.write_text(artifact.get("text"), encoding="utf-8")
-                            else:
-                                raise
-                    elif artifact.get("base64"):
-                        import base64 as _b64
-                        target.write_bytes(_b64.b64decode(artifact.get("base64")))
-                    elif isinstance(artifact.get("text"), str) and _is_text_mime(mime):
-                        target.write_text(artifact.get("text"), encoding="utf-8")
-                    else:
-                        missing.append(f"{turn_id}/attachments/{rel}")
-                        continue
-                rehosted.append(f"{turn_id}/attachments/{rel}")
-            except Exception as e:
-                errors.append(f"rehost_failed:{turn_id}/attachments/{rel}:{e}")
+                            current_size = None
+                        if expected_size:
+                            if current_size == expected_size:
+                                rehosted.append(target_key)
+                                continue
+                            needs_rehost = True
+                        elif src and current_size == 0:
+                            needs_rehost = True
+                    if needs_rehost:
+                        if src:
+                            try:
+                                data = await store.get_blob_bytes(src)
+                                target.write_bytes(data)
+                            except Exception:
+                                if target_artifact.get("base64"):
+                                    import base64 as _b64
+                                    target.write_bytes(_b64.b64decode(target_artifact.get("base64")))
+                                elif isinstance(target_artifact.get("text"), str) and _is_text_mime(mime):
+                                    target.write_text(target_artifact.get("text"), encoding="utf-8")
+                                else:
+                                    raise
+                        elif target_artifact.get("base64"):
+                            import base64 as _b64
+                            target.write_bytes(_b64.b64decode(target_artifact.get("base64")))
+                        elif isinstance(target_artifact.get("text"), str) and _is_text_mime(mime):
+                            target.write_text(target_artifact.get("text"), encoding="utf-8")
+                        else:
+                            missing.append(target_key)
+                            continue
+                    rehosted.append(target_key)
+                except Exception as e:
+                    errors.append(f"rehost_failed:{target_key}:{e}")
 
     return {"rehosted": rehosted, "missing": missing, "errors": errors}
 
@@ -609,7 +729,10 @@ def build_exec_snapshot_workspace(
         seen.add(phys)
         src = outdir / phys
         if src.exists():
-            _copy_file(src, snap_out / phys)
+            if src.is_dir():
+                _copy_tree(src, snap_out / phys)
+            else:
+                _copy_file(src, snap_out / phys)
 
     return {"workdir": snap_work, "outdir": snap_out, "root": tmp_root}
 
