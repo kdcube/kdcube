@@ -178,18 +178,18 @@ def resolve_exec_namespace(*, logical_ref: str, **kwargs: Any) -> Dict[str, Any]
         )
 
     root = pathlib.Path(root).resolve()
-    target = (root / rel).resolve() if rel else root
+    logical_target = (root / rel) if rel else root
     try:
-        target.relative_to(root)
+        logical_target.relative_to(root)
     except Exception:
         raise ExecNamespaceResolutionError(
             code="invalid_logical_ref",
             message=(
-                f"Invalid logical_ref '{raw}'. Resolved path escapes the prepared knowledge root."
+                f"Invalid logical_ref '{raw}'. Logical path escapes the prepared knowledge root."
             ),
         )
 
-    if not target.exists():
+    if not logical_target.exists():
         raise ExecNamespaceResolutionError(
             code="namespace_not_found",
             message=(
@@ -199,10 +199,12 @@ def resolve_exec_namespace(*, logical_ref: str, **kwargs: Any) -> Dict[str, Any]
             ),
         )
 
+    target = logical_target.resolve()
+
     return {
         "physical_path": str(target),
         "access": "r",
-        "browseable": bool(target.is_dir()),
+        "browseable": bool(logical_target.is_dir()),
     }
 
 

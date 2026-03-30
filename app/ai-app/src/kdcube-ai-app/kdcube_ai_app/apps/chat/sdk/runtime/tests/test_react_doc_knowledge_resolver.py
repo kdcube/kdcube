@@ -127,3 +127,24 @@ def test_prepare_knowledge_space_replaces_stale_symlinks(tmp_path):
     assert (knowledge_root / "docs").readlink().is_absolute() is False
     assert (knowledge_root / "docs").resolve() == fresh_docs.resolve()
     assert (knowledge_root / "deployment").resolve() == fresh_deployment.resolve()
+
+
+def test_resolve_exec_namespace_allows_symlinked_source_subtree(tmp_path, monkeypatch):
+    resolver = _load_resolver_module()
+    knowledge_root = tmp_path / "bundle-storage" / "tenant" / "project" / "react.doc__main"
+    repo_root = tmp_path / "bundle-storage" / "tenant" / "project" / "repos" / "react.doc.knowledge__main" / "app" / "ai-app"
+    target_dir = repo_root / "src" / "kdcube-ai-app" / "kdcube_ai_app" / "apps" / "chat" / "sdk" / "examples" / "tests"
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / "README.md").write_text("bundle tests\n", encoding="utf-8")
+    knowledge_root.mkdir(parents=True, exist_ok=True)
+    (knowledge_root / "src").symlink_to(pathlib.Path("../repos/react.doc.knowledge__main/app/ai-app/src"), target_is_directory=True)
+
+    monkeypatch.setenv("BUNDLE_STORAGE_DIR", str(knowledge_root))
+    resolver.KNOWLEDGE_ROOT = None
+
+    resolved = resolver.resolve_exec_namespace(
+        logical_ref="ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests"
+    )
+
+    assert resolved["browseable"] is True
+    assert pathlib.Path(resolved["physical_path"]).resolve() == target_dir.resolve()
