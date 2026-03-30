@@ -91,7 +91,7 @@ Default replacement behavior:
 | Skip rules | Always skip `turn.header`, `conv.range.summary`; others follow window rules | Same |
 | TTL bootstrap | First render uses stored `cache_last_ttl_seconds`, then sync to runtime | Same |
 | Size thresholds | Configurable: `cache_truncation_max_text_chars`, `cache_truncation_max_field_chars`, `cache_truncation_max_list_items`, `cache_truncation_max_dict_keys`, `cache_truncation_max_base64_chars` | Same |
-| Extensibility | Per-tool truncation views in `tools/session.py` | Same |
+| Extensibility | Per-tool truncation views in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/session.py` | Same |
 
 ## Runtime Configuration
 

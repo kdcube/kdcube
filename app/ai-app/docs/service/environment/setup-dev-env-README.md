@@ -22,7 +22,7 @@ from `workdir/config` instead of copying sample envs manually.
 
 ## 1) Minimal env for bundles (proc)
 
-Add these to your `chat-proc` env (e.g. `apps/chat/proc/.env.proc`):
+Add these to your `chat-proc` env (e.g. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/.env.proc`):
 
 ```bash
 # Path to assembly descriptor (YAML or JSON)

@@ -95,7 +95,7 @@ flowchart TB
 
 **Storage**
 - `KDCUBE_STORAGE_PATH` can point to **local FS** or **S3**.
-- For S3 usage and bucket layout, see `docs/ops/s3.md`.
+- For S3 usage and bucket layout, see `docs/ops/s3-README.md`.
 
 ## Descriptor flow (ECS + local)
 

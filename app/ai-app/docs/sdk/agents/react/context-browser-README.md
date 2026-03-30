@@ -16,9 +16,9 @@ It loads historical turns, builds the current‑turn user blocks, and lets agent
 progress blocks that become part of the in‑turn log.
 
 Relevant code:
-- `runtime/solution/context/browser.py`
-- `context/retrieval/ctx_rag.py`
-- `react/v2/layout.py` (block formatting)
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/browser.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/layout.py` (block formatting)
 
 ---
 

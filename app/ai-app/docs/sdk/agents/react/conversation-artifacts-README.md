@@ -24,9 +24,9 @@ Notes:
 - Embeddings are caller‑supplied; the store does not compute embeddings.
 
 Reference implementations:
-- Save API: `context/retrieval/ctx_rag.py`
-- Core workflow writers: `solutions/chatbot/base_workflow.py`
-- Streaming artifacts persistence: `solutions/chatbot/entrypoint.py`
+- Save API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+- Core workflow writers: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py`
+- Streaming artifacts persistence: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
 
 ## Artifact Table
 
@@ -87,11 +87,11 @@ Reference implementations:
   ```
 - The timeline artifact stores only a lightweight sources_pool snapshot for indexing/local access;
   the full pool lives in `conv:sources_pool` and is loaded at turn start.
-- Loading happens in `ContextBrowser.load_timeline` (`kdcube_ai_app/apps/chat/sdk/solutions/react/v2/browser.py`).
+- Loading happens in `ContextBrowser.load_timeline` (`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/browser.py`).
 
 ## Storage Layout (Blob Store)
 
-See: `storage/sdk-store-README.md`
+See: `docs/sdk/storage/sdk-store-README.md`
 
 ```
 <kdcube>/cb/tenants/<tenant>/projects/<project>/conversation/<role>/<user_id>/<conversation_id>/<turn_id>/
@@ -111,7 +111,7 @@ See: `storage/sdk-store-README.md`
 ```
 
 ## Where These Are Written
-- Core workflow artifacts: `solutions/chatbot/base_workflow.py`
-- Streaming artifacts: `solutions/chatbot/entrypoint.py`
-- Turn log + reactions: `context/retrieval/ctx_rag.py`
-- Memory artifacts: `context/memory/conv_memories.py`, `context/memory/buckets.py`
+- Core workflow artifacts: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py`
+- Streaming artifacts: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
+- Turn log + reactions: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
+- Memory artifacts: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/conv_memories.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/memory/buckets.py`

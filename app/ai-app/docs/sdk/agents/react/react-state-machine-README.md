@@ -12,7 +12,7 @@ see_also:
 # ReAct v2 State Machine
 
 This describes the **v2** runtime loop and its control gates.
-It matches the current `react/v2/runtime.py` implementation.
+It matches the current `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/runtime.py` implementation.
 
 ---
 

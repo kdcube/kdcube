@@ -319,8 +319,8 @@ Platform-reserved paths are documented in:
 external overrides from `bundles.yaml` and the admin UI still win.
 
 See:
-- `apps/chat/sdk/solutions/chatbot/entrypoint.py` (`configuration`, `bundle_props`)
-- `apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py` (`configuration`, `bundle_props`)
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py`
 
 Secrets should be read via `get_secret()` with the dot‑path key:
 

@@ -30,7 +30,7 @@ It is increased only by admin actions or by the subscription rollover job.
 
 ## API Routes
 
-All Stripe and economics routes live in `apps/chat/ingress/economics/` and are mounted
+All Stripe and economics routes live in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/economics/` and are mounted
 under `/api/economics` prefix.
 
 | Method | Path | Module | Purpose |
@@ -472,7 +472,7 @@ Admin email notifications are sent at each step.
 **Purpose:** recover from missed webhooks. Events that Stripe fired but the service
 could not process (downtime, restarts, 429 from rate limiting) are replayed.
 
-**Location:** `apps/chat/ingress/economics/routines.py` → `run_stripe_reconcile_sweep_once()`
+**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/economics/routines.py` → `run_stripe_reconcile_sweep_once()`
 
 **Trigger:** cron scheduler (`stripe_reconcile_scheduler_loop`) or manually via
 `POST /admin/stripe/reconcile`.
@@ -504,7 +504,7 @@ event ID before applying. Safe to run multiple times.
 **Purpose:** close subscription periods that have ended; move unused balance to
 project budget.
 
-**Location:** `apps/chat/ingress/economics/routines.py` → `run_subscription_rollover_sweep_once()`
+**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/economics/routines.py` → `run_subscription_rollover_sweep_once()`
 
 **Redis keys used:**
 

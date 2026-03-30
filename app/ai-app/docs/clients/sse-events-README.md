@@ -539,7 +539,7 @@ If your client does not recognize a type:
 - Treat it as a `chat_step` payload.
 - Use `event.step`, `event.status`, and `event.markdown` for display.
 
-Custom event filtering can be applied per bundle (see `sdk/comm/event_filter.py`).
+Custom event filtering can be applied per bundle (see `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/comm/event_filter.py`).
 
 ---
 

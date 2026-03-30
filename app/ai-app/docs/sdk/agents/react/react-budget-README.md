@@ -60,6 +60,6 @@ The snapshot appears in the active state block (tail, uncached).
 
 ## Where it lives
 
-- `react/v2/budget.py` — BudgetStateV2
-- `react/v2/runtime.py` — budget gates + decision routing
-- `react/doc/react-state-machine-README.md` — loop and exit conditions
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/budget.py` — BudgetStateV2
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/runtime.py` — budget gates + decision routing
+- `docs/sdk/agents/react/react-state-machine-README.md` — loop and exit conditions

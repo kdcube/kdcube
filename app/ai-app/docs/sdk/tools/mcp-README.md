@@ -114,7 +114,7 @@ resolve secrets via `get_secret()` at session creation time:
 ```
 
 `get_secret()` resolution order:
-1. Environment variables (via `_SECRET_ALIASES` in `sdk/config.py`)
+1. Environment variables (via `_SECRET_ALIASES` in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py`)
 2. Settings attributes (Pydantic BaseSettings)
 3. Secrets manager provider (secrets-service / AWS SM / in-memory)
 

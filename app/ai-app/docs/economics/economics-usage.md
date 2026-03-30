@@ -160,7 +160,7 @@ Important semantics:
 
 ## Customer-facing billing widget
 
-The customer widget at `apps/chat/ingress/economics/UserBillingDashboard.tsx` is intended to explain the user-facing side of economics for the authenticated user.
+The customer widget at `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/economics/UserBillingDashboard.tsx` is intended to explain the user-facing side of economics for the authenticated user.
 
 - `GET /api/economics/me/budget-breakdown` resolves the effective plan for the authenticated user.
 - By default, the endpoint uses limiter bundle id `__project__`, which matches the real quota scope enforced at runtime.
@@ -178,7 +178,7 @@ This is important because app/project budget alone does not explain a blocked fr
 
 For one-user investigations, use:
 
-- `apps/chat/sdk/infra/economics/profile_user_economics.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/infra/economics/profile_user_economics.py`
 
 Purpose:
 - profile one user’s current quota state,

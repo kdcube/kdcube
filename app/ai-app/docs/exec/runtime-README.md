@@ -13,7 +13,7 @@ see_also:
 
 Important distinction used throughout this document:
 
-- **bundle code root** = bundle-local Python/code files such as `tools/react_tools.py`
+- **bundle code root** = bundle-local Python/code files, for example a path like `tools/react_tools.py` under the bundle root
 - **bundle readonly data** = prepared local bundle data such as built knowledge indexes, cloned docs repos, and other per-bundle cached assets
 
 These are transported separately in external exec.

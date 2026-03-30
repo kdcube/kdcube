@@ -164,4 +164,4 @@ export AGENTIC_BUNDLES_JSON='{
 - Bundle configuration: [../bundle/bundle-config-README.md](../bundle/bundle-config-README.md)
 - SDK MCP integration: [docs/sdk/tools/mcp-README.md](../../tools/mcp-README.md)
 - Bundle developer guide: [docs/sdk/bundle/bundle-dev-README.md](../bundle-dev-README.md)
-- Base react bundle: `sdk/examples/bundles/react@2026-02-10-02-44/`
+- Base react bundle: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/`

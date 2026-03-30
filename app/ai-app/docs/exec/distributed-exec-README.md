@@ -552,7 +552,7 @@ DNS (`redis.kdcube.local`) or the direct ElastiCache endpoint both work.
 
 ### Recommended smoke test bundle
 
-The bundle `apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
+The bundle `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
 includes scenario:
 
 - `13. Fargate happy path`

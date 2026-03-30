@@ -115,10 +115,10 @@ To override the prefix, set `REDIS_CLIENT_NAME`.
 
 **Where implemented**
 - `kdcube_ai_app/infra/redis/client.py`
-- `apps/chat/ingress/resolvers.py`
-- `apps/chat/ingress/web_app.py`
-- `apps/chat/proc/web_app.py`
-- `apps/chat/processor.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/resolvers.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`
 
 ---
 
@@ -150,8 +150,8 @@ Where:
 - `pg_pool_max_size` = gateway config pool size or fallback
 
 **Where implemented**
-- `apps/chat/ingress/resolvers.py` → `get_pg_pool()`
-- `apps/chat/ingress/web_app.py` → lifespan startup/shutdown
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/resolvers.py` → `get_pg_pool()`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py` → lifespan startup/shutdown
 
 ---
 
@@ -293,9 +293,9 @@ Key points:
 - This uses the standard communicator path (`ChatRelayCommunicator` → `ServiceCommunicator._ensure_async()`).
 
 Relevant code:
-- `apps/chat/sdk/runtime/bootstrap.py` → `make_chat_comm(...)` builds the communicator.
-- `apps/chat/sdk/runtime/comm_ctx.py` → `get_comm()` returns the communicator lazily.
-- `infra/orchestration/app/communicator.py` → `_ensure_async()` creates the Redis client on first publish.
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/bootstrap.py` → `make_chat_comm(...)` builds the communicator.
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/comm_ctx.py` → `get_comm()` returns the communicator lazily.
+- `src/kdcube-ai-app/kdcube_ai_app/infra/orchestration/app/communicator.py` → `_ensure_async()` creates the Redis client on first publish.
 
 Operational impact:
 - Expect **+1 Redis connection per executor container** that actually emits events.

@@ -330,7 +330,7 @@ AWS_PROFILE=your-profile
 
 The same computation is reused from the chat monitoring endpoint:
 
-- `infra/metrics/system_monitoring.py`
+- `src/kdcube-ai-app/kdcube_ai_app/infra/metrics/system_monitoring.py`
 - Used by `/monitoring/system` in chat API.
 - Used by Metrics server directly (redis mode). No proxy needed.
 

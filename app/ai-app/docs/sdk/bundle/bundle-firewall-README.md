@@ -54,7 +54,7 @@ class MyFilter(IEventFilter):
 The `eco` demo bundle uses an event filter to suppress some `chat.step` types
 for non‑privileged users:
 
-- `apps/chat/sdk/examples/bundles/eco@2026-02-18-15-06/event_filter.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/eco@2026-02-18-15-06/event_filter.py`
 
 That filter allows **privileged** users to see everything,
 but hides internal steps for other roles.

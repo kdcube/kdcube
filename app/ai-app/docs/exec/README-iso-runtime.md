@@ -110,7 +110,7 @@ Exec container (entrypoint runs as root)
 Important:
 
 - bundle code and bundle readonly data are separate surfaces
-- bundle code contains tool modules such as `tools/react_tools.py`
+- bundle code contains bundle-local tool modules, for example a path like `tools/react_tools.py` under the bundle root
 - bundle readonly data contains prepared local assets such as built knowledge indexes or cloned docs repos
 - inside isolated exec, the physical readonly data path is exposed as `BUNDLE_STORAGE_DIR`
 

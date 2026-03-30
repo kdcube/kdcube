@@ -350,8 +350,8 @@ def configuration(self) -> Dict[str, Any]:
 
 ## References
 
-- `apps/chat/sdk/solutions/chatbot/entrypoint.py`
-- `apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py`
-- `apps/chat/sdk/solutions/react/v2/proto.py`
-- `apps/chat/sdk/runtime/execution.py`
-- `apps/chat/sdk/runtime/external/fargate.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/proto.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/fargate.py`

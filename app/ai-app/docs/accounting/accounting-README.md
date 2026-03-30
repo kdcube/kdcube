@@ -197,7 +197,7 @@ Aggregates are written under:
 analytics/<tenant>/<project>/accounting/
 ```
 
-OPEX endpoints in `apps/chat/ingress/opex/opex.py` read from both raw and aggregated data.
+OPEX endpoints in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/opex/opex.py` read from both raw and aggregated data.
 
 See:
 
@@ -210,7 +210,7 @@ See:
 Key inputs that affect accounting behavior:
 
 - **Storage backend**: derived from `KDCUBE_STORAGE_PATH` / `settings.STORAGE_PATH`
-- **Web search pricing tiers**: `ACCOUNTING_SERVICES` (JSON) in `infra/accounting/usage.py` and OPEX API
+- **Web search pricing tiers**: `ACCOUNTING_SERVICES` (JSON) in `src/kdcube-ai-app/kdcube_ai_app/infra/accounting/usage.py` and OPEX API
 - **Redis turn cache**: enabled in `AccountingSystem.init_storage()` by default
 
 The accounting system itself is controlled by the service entrypoints and binders; there is no single global switch unless explicitly wired in the caller.

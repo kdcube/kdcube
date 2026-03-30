@@ -17,9 +17,9 @@ see_also:
 This document describes the current `proc` service architecture, including the currently implemented continuation mailbox behavior for `followup` and `steer`, and the next-step design beyond that slice.
 
 It reflects the current implementation in:
-- `apps/chat/proc/web_app.py`
-- `apps/chat/processor.py`
-- `infra/gateway/backpressure.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`
+- `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/backpressure.py`
 
 ---
 

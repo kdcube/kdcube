@@ -69,6 +69,9 @@ CODEGEN_BEST_PRACTICES_V2 = """
   Confirm exact names from current docs, tests, examples, or source files before you use them.
 - Skills are orientation, not proof of exact API names. If a needed platform symbol is not explicitly confirmed in the evidence currently visible to you, search/read first and only then code.
 - For implementation tasks that must satisfy an existing framework, test suite, or platform contract, gather enough current evidence before coding to understand the expected shape.
+- Be economical when gathering evidence: read the smallest relevant set of exact docs/tests/source/example files that can confirm the needed contract.
+- If candidate source paths are mentioned in docs or tests, read those exact files before browsing wider trees.
+- Prefer the smallest implementation that can satisfy the currently confirmed contract; validate early, then extend.
 - Never claim validation or tests succeeded unless you actually ran them and they passed.
 
 During code execution round you structure your output in 3 channels as schematically shown below:

@@ -54,7 +54,7 @@ Final timeline order:
 ```
 
 Block formatting lives in:
-- `react/v2/layout.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/layout.py`
 
 ---
 

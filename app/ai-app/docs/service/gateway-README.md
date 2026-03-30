@@ -59,7 +59,7 @@ graph TD
 ## 2) Where it is enforced today
 
 ### HTTP middleware (session by default)
-The HTTP middleware in `apps/chat/ingress/web_app.py` resolves the session and applies
+The HTTP middleware in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py` resolves the session and applies
 **policy‑based throttling/backpressure**.
 
 - **Default**: REST is **session‑only** (bypass throttling/backpressure).

@@ -38,27 +38,27 @@ Important distinction:
 | Timeout | Current value | Source | What it controls |
 | --- | --- | --- | --- |
 | ECS container `stopTimeout` | `60s` | `deployment/ecs/terraform/modules/ecs/task_chat_ingress.tf` | How long ECS waits after sending stop to the ingress container before force-killing it. |
-| Uvicorn `timeout_graceful_shutdown` | `15s` | `apps/chat/ingress/web_app.py` | How long Uvicorn lets ingress workers finish shutdown before it gives up. |
-| Uvicorn `timeout_keep_alive` | `45s` | `apps/chat/ingress/web_app.py` | Idle HTTP keep-alive timeout during normal serving. Not a shutdown budget. |
-| Uvicorn `timeout_worker_healthcheck` | default `60s` | `apps/chat/ingress/web_app.py` | Worker startup healthcheck timeout. Startup only, not shutdown. |
+| Uvicorn `timeout_graceful_shutdown` | `15s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py` | How long Uvicorn lets ingress workers finish shutdown before it gives up. |
+| Uvicorn `timeout_keep_alive` | `45s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py` | Idle HTTP keep-alive timeout during normal serving. Not a shutdown budget. |
+| Uvicorn `timeout_worker_healthcheck` | default `60s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py` | Worker startup healthcheck timeout. Startup only, not shutdown. |
 
 ### Proc
 
 | Timeout | Current value | Source | What it controls |
 | --- | --- | --- | --- |
 | ECS container `stopTimeout` | `120s` | `deployment/ecs/terraform/modules/ecs/task_chat_proc.tf` | How long ECS waits after sending stop to the proc container before force-killing it. |
-| Uvicorn `timeout_graceful_shutdown` | `110s` | `apps/chat/proc/web_app.py` | How long Uvicorn lets proc workers finish shutdown and drain inflight work before it gives up. |
-| Proc task timeout (`CHAT_TASK_TIMEOUT_SEC`) | `600s` effective | `task_chat_proc.tf` + `apps/chat/processor.py` | Maximum runtime of one bundle turn during normal processing. |
-| Proc lock TTL | `300s` | `apps/chat/processor.py` | Redis lease for an inflight task. Used for ownership/recovery, not for normal runtime limits. |
-| Proc lock renew interval | `60s` | `apps/chat/processor.py` | How often the inflight lock is extended while work is alive. |
-| Queue block timeout | `0.1s` | `apps/chat/processor.py` | How long queue polling waits per lane. Used so drain can stop taking new work quickly. |
-| Queue call timeout | `2.0s` | `apps/chat/processor.py` | Client-side timeout around Redis queue claim calls. Recovery-related, not turn runtime. |
-| Uvicorn `timeout_worker_healthcheck` | default `60s` | `apps/chat/proc/web_app.py` | Worker startup healthcheck timeout. Startup only, not shutdown. |
+| Uvicorn `timeout_graceful_shutdown` | `110s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py` | How long Uvicorn lets proc workers finish shutdown and drain inflight work before it gives up. |
+| Proc task timeout (`CHAT_TASK_TIMEOUT_SEC`) | `600s` effective | `task_chat_proc.tf` + `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` | Maximum runtime of one bundle turn during normal processing. |
+| Proc lock TTL | `300s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` | Redis lease for an inflight task. Used for ownership/recovery, not for normal runtime limits. |
+| Proc lock renew interval | `60s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` | How often the inflight lock is extended while work is alive. |
+| Queue block timeout | `0.1s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` | How long queue polling waits per lane. Used so drain can stop taking new work quickly. |
+| Queue call timeout | `2.0s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` | Client-side timeout around Redis queue claim calls. Recovery-related, not turn runtime. |
+| Uvicorn `timeout_worker_healthcheck` | default `60s` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py` | Worker startup healthcheck timeout. Startup only, not shutdown. |
 
 Important nuance:
 
-- `apps/chat/ingress/resolvers.py` passes `task_timeout_sec=900` to the processor constructor
-- but `apps/chat/processor.py` then overrides from `CHAT_TASK_TIMEOUT_SEC`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/resolvers.py` passes `task_timeout_sec=900` to the processor constructor
+- but `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` then overrides from `CHAT_TASK_TIMEOUT_SEC`
 - ECS currently sets `CHAT_TASK_TIMEOUT_SEC=600`
 - so the effective proc turn timeout in production is currently **600 seconds**
 

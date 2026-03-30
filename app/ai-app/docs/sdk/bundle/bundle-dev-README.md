@@ -42,19 +42,19 @@ Reference implementation:
 `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`
 
 Key files:
-- `entrypoint.py` — bundle entrypoint (decorated workflow)
-- `orchestrator/workflow.py` — orchestration (BaseWorkflow)
-- `agents/` — bundle-local agents (gate, etc.)
-- `tools_descriptor.py` — tool registry for this bundle
-- `skills_descriptor.py` — skills visibility config
-- `resources.py` — user-facing error messages
-- `event_filter.py` — event filtering policy
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/entrypoint.py` — bundle entrypoint (decorated workflow)
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/orchestrator/workflow.py` — orchestration (BaseWorkflow)
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/agents/` — bundle-local agents (gate, etc.)
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/tools_descriptor.py` — tool registry for this bundle
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/skills_descriptor.py` — skills visibility config
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/resources.py` — user-facing error messages
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/event_filter.py` — event filtering policy
 
 Related runtime entrypoints:
-- Processor task runner: `apps/chat/processor.py` (loads bundle + calls `run`)
-- Integrations API: `apps/chat/proc/rest/integrations/integrations.py`
+- Processor task runner: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` (loads bundle + calls `run`)
+- Integrations API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
   - `POST /bundles/{tenant}/{project}/operations/{operation}` invokes `workflow.<operation>(...)`
-- Base entrypoint features: `apps/chat/sdk/solutions/chatbot/entrypoint.py`
+- Base entrypoint features: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
   - Admin React apps like `ai_bundles`, `svc_gateway` can be exposed from bundles
 
 ---
@@ -469,8 +469,8 @@ Outputs:
 - Final JSON response (`final_answer`, `suggested_followups`, etc.) returned by the workflow.
 
 Code references:
-- `apps/chat/sdk/protocol.py`
-- `apps/chat/sdk/solutions/chatbot/base_workflow.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/protocol.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py`
 
 ---
 
@@ -542,9 +542,9 @@ Docs:
 
 Bundles can expose **React panels** and **operations**:
 
-- Base entrypoint: `apps/chat/sdk/solutions/chatbot/entrypoint.py`
+- Base entrypoint: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
   - Admin panels like `ai_bundles`, `svc_gateway` are exported as bundle apps.
-- Integrations API: `apps/chat/proc/rest/integrations/integrations.py`
+- Integrations API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
   - `POST /bundles/{tenant}/{project}/operations/{operation}` calls `workflow.<operation>(...)`.
 
 Docs:
@@ -556,24 +556,24 @@ Docs:
 
 | Capability | What you get | Where to learn |
 |---|---|---|
-| Streaming | deltas, steps, widgets | `docs/sdk/comm/README-comm.md` |
-| Timeline + context | read/write, search, attachments | `docs/sdk/runtime/solution/context/browser-README.md` |
+| Streaming | deltas, steps, widgets | `docs/service/comm/README-comm.md` |
+| Timeline + context | read/write, search, attachments | `docs/sdk/agents/react/context-browser-README.md` |
 | Tools | local + isolated + MCP | [docs/sdk/tools/tool-subsystem-README.md](../tools/tool-subsystem-README.md), [docs/sdk/tools/mcp-README.md](../tools/mcp-README.md) |
 | Skills | prompt-time skills registry | [docs/sdk/skills/skills-README.md](../skills/skills-README.md), [docs/sdk/skills/skills-infra-README.md](../skills/skills-infra-README.md) |
 | Storage | per‑bundle storage (file/S3) | [docs/sdk/bundle/bundle-storage-cache-README.md](bundle-storage-cache-README.md) |
 | Knowledge space | bundle‑defined `ks:` docs + search | [docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md) |
 | Cache | Redis KV cache | [docs/sdk/bundle/bundle-storage-cache-README.md](bundle-storage-cache-README.md) |
 | Custom UI | widgets + React panels | [docs/sdk/bundle/bundle-interfaces-README.md](bundle-interfaces-README.md) |
-| Economics | budgets/usage tracking | `docs/sdk/infra/economics/economics-usage.md` |
+| Economics | budgets/usage tracking | `docs/economics/economics-usage.md` |
 
 ---
 
 ## Custom tools (bundle‑local)
 
 Use `tools_descriptor.py` to expose tools to the runtime. Example:
-- Bundle: `apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
-- Tool module: `apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools/local_tools.py`
-- Descriptor: `apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools_descriptor.py`
+- Bundle: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
+- Tool module: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools/local_tools.py`
+- Descriptor: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools_descriptor.py`
 
 Docs:
 - [docs/sdk/tools/tool-subsystem-README.md](../tools/tool-subsystem-README.md)
@@ -586,8 +586,8 @@ Docs:
 
 Use `skills_descriptor.py` to register bundle‑specific skills. Example:
 - Bundle: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`
-- Skill: `skills/product`
-- Descriptor: `skills_descriptor.py`
+- Skill: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/skills/product`
+- Descriptor: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/skills_descriptor.py`
 
 Docs:
 - [docs/sdk/skills/skills-README.md](../skills/skills-README.md)
@@ -599,7 +599,7 @@ Docs:
 - Bundles may be loaded per request or reused as singletons.
 - If `singleton=true` in the registry, the workflow instance is cached and reused.
 - Use the KV cache abstraction for lightweight runtime state or config.
-  See: `infra/service_hub/cache-README.md`
+  See: `docs/sdk/storage/cache-README.md`
 
 ---
 
@@ -653,11 +653,11 @@ export AGENTIC_BUNDLES_ROOT=/bundles
 - Tool subsystem:
   [docs/sdk/tools/tool-subsystem-README.md](../tools/tool-subsystem-README.md)
 - Comm system:
-  `docs/sdk/comm/README-comm.md`
+  `docs/service/comm/README-comm.md`
 - Context browser:
-  `docs/sdk/runtime/solution/context/browser-README.md`
+  `docs/sdk/agents/react/context-browser-README.md`
 - ISO runtime:
-  `docs/sdk/runtime/isolated/README-iso-runtime.md`
+  `docs/exec/README-iso-runtime.md`
 
 ---
 

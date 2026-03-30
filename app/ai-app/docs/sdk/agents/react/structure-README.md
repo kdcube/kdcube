@@ -11,7 +11,7 @@ see_also:
 ---
 # React v2 Structure
 
-All v2 runtime code lives under `react/v2/`.
+All v2 runtime code lives under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/`.
 
 ## Core Modules
 - `runtime.py` — state machine and decision loop. Orchestrates rounds and updates context blocks.

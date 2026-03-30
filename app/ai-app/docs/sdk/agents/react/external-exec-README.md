@@ -27,7 +27,7 @@ External exec transports two different bundle-side inputs:
 - bundle code root
 - per-bundle readonly storage dir
 
-The bundle code root is where bundle-local tools live, for example:
+The bundle code root is where bundle-local tools live, for example bundle-relative paths like:
 
 - `tools/react_tools.py`
 - `knowledge/resolver.py`

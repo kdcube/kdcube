@@ -56,6 +56,9 @@ Bundle-authoring rule:
   docs/examples/source that define the requested SDK pattern.
 - Use only platform symbols, import paths, runtime types, and helper APIs that you have confirmed from
   current docs or source. Do not invent them.
+- Be economical: read the smallest relevant set of exact docs/source/example files that can confirm the requested pattern.
+- If docs mention candidate code paths, treat those paths as the next files to read.
+- If the exact file is still unclear, browse a small relevant subtree in exec and then read the exact discovered files.
 
 ## Knowledge space navigation
 This bundle exposes a read‑only knowledge space:
@@ -107,6 +110,11 @@ When a doc references files and the exact `ks:` path is unclear:
 4. Browse the returned exec-local `physical_path`.
 5. Emit exact logical refs such as `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py` or `ks:deployment/docker/local-infra-stack/docker-compose.yml` into an OUTPUT_DIR file or short `user.log` note.
 6. Back in the React loop, call `react.read(...)` on those emitted logical refs.
+
+For implementation tasks:
+- prefer current source/examples over prose when exact symbol names matter
+- if a requested integration is still uncertain after docs, read one or more current example/source files before coding
+- if examples differ, start from the smallest implementation that matches the confirmed contract and extend only after validation
 
 `bundle_data.resolve_namespace(...)` is exec-only. It is not a normal planning-time tool.
 

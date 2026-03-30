@@ -20,7 +20,7 @@ We currently materialize:
 * **Monthly totals**
 * **Yearly totals**
 
-These aggregates live under the `analytics` tree and are consumed by `RateCalculator` (in `infra/accounting/calculator.py`) and the OPEX endpoints in `apps/chat/ingress/opex/opex.py`.
+These aggregates live under the `analytics` tree and are consumed by `RateCalculator` (in `src/kdcube-ai-app/kdcube_ai_app/infra/accounting/calculator.py`) and the OPEX endpoints in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/opex/opex.py`.
 
 ---
 
@@ -495,7 +495,7 @@ Response:
 
 ## 3. Queries that leverage aggregates
 
-Aggregates are consumed by `RateCalculator` in `infra/accounting/calculator.py`.
+Aggregates are consumed by `RateCalculator` in `src/kdcube-ai-app/kdcube_ai_app/infra/accounting/calculator.py`.
 
 Below is a summary of **which methods use aggregates** vs raw scanning.
 
@@ -658,7 +658,7 @@ So even though they’re raw-based, they do **not** blindly scan the entire buck
 
 ### 3.5 OPEX HTTP endpoints
 
-In `apps/chat/ingress/opex/opex.py`:
+In `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/opex/opex.py`:
 
 * `/total`
 

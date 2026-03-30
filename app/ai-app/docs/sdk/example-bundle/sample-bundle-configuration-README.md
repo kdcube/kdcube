@@ -197,7 +197,7 @@ python -m kdcube_ai_app.apps.chat.sdk.tools.mcp.web_search.web_search_server \
 
 ### Secret resolution: two paths
 
-MCP server secrets are resolved through `get_secret()` (in `sdk/config.py`),
+MCP server secrets are resolved through `get_secret()` (in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py`),
 which supports two resolution paths depending on the deployment mode:
 
 ```mermaid
@@ -214,7 +214,7 @@ flowchart TD
 ```
 
 **Local dev (no sidecar):** secrets come from env vars in `.env.proc`.
-`get_secret()` finds them via `_SECRET_ALIASES` mapping in `sdk/config.py`:
+`get_secret()` finds them via `_SECRET_ALIASES` mapping in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py`:
 
 ```python
 _SECRET_ALIASES = {
@@ -394,7 +394,7 @@ Key details:
 | MCP tools not in agent catalog | `MCP_TOOL_SPECS` has entry with matching `server_id`? `mcp.services` has matching key? |
 | `mcp.<alias>.<tool>` call fails | Server running? Transport fields correct? (`command` for stdio, `url` for http/sse) |
 | Auth errors (401/403) | Env var with token is set? `auth.env` points to correct var name? |
-| `${secret:...}` not resolving | Is `_SECRET_ALIASES` in `sdk/config.py` configured for this key? Is the env var set in `.env.proc`? (local dev) Or is the secret injected into secrets-service? (CLI deploy) |
+| `${secret:...}` not resolving | Is `_SECRET_ALIASES` in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py` configured for this key? Is the env var set in `.env.proc`? (local dev) Or is the secret injected into secrets-service? (CLI deploy) |
 | Tools not refreshed after update | MCP tool listings cached in Redis (TTL 3600s). Wait or clear cache. |
 | stdio server not starting | `command` is in PATH? `args` correct? Check proc logs for spawn errors. |
 
@@ -414,4 +414,4 @@ Key details:
 - Bundle overview: [sample-bundle-README.md](sample-bundle-README.md)
 - Bundle properties: [sample-bundle-properties-README.md](sample-bundle-properties-README.md)
 - SDK MCP integration: [docs/sdk/tools/mcp-README.md](../../tools/mcp-README.md)
-- MCP demo: `sdk/runtime/mcp/demo/README.md`
+- MCP demo: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/mcp/demo/README.md`

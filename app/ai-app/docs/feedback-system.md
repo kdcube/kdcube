@@ -218,7 +218,7 @@ meta: {
 
 ### 1A. User Feedback Reception (API)
 
-**Location:** `api/conversations/conversations.py`
+**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/conversations/conversations.py`
 
 **Endpoint:**
 
@@ -249,7 +249,7 @@ POST /conversations/{tenant}/{project}/{conversation_id}/turns/{turn_id}/feedbac
 
 ### 1B. Machine Feedback Detection (Gate Agent)
 
-**Location:** `models/gate_agent.py`
+**Typical location:** bundle-local gate agent, for example `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/agents/gate.py`
 
 * Detect from incoming user messages.
 * If `confidence ≥ 0.70`, infer `reaction` and proceed.
@@ -259,14 +259,14 @@ POST /conversations/{tenant}/{project}/{conversation_id}/turns/{turn_id}/feedbac
 
 ### 2. Target Location (Semantic Search)
 
-**Location:** `orchestrator/workflow.py → handle_feedback()`
+**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py → handle_feedback()`
 Score: `0.85*similarity + 0.15*recency`, `top_k=5`, `days=365`.
 
 ---
 
 ### 3. Feedback Application
 
-**Location:** `apps/chat/sdk/context/retrieval/ctx_rag.py`
+**Location:** `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/context/retrieval/ctx_rag.py`
 
 * `append_reaction_to_turn_log(...)` writes the **reaction artifact** (`artifact:turn.log.reaction`).
 * `remove_user_reaction(...)` clears prior user-origin reactions for a turn.

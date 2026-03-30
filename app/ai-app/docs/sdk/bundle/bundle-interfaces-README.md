@@ -43,7 +43,7 @@ Bundles stream output through the platform communicator. Clients receive events 
 
 Docs:
 - SSE events: [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
-- Comm system: `docs/sdk/comm/README-comm.md`
+- Comm system: `docs/service/comm/README-comm.md`
 
 The communicator is **asynchronous**: bundle execution and streaming can happen on
 separate workers and still route events back to the active client channel.
@@ -144,7 +144,7 @@ Bundles can return React app definitions (panels) via the base entrypoint.
 Examples include the admin bundle apps: `ai_bundles`, `svc_gateway`.
 
 Entry point:
-- `apps/chat/sdk/solutions/chatbot/entrypoint.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
 
 ---
 

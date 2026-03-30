@@ -165,11 +165,11 @@ These are the current log files produced by the platform execution stack itself.
 
 | File | Producer | Runtime mode(s) | Used for |
 | --- | --- | --- | --- |
-| `user.log` | executor header in `iso_runtime.py`; redirected stdout/stderr in the untrusted executor | local, Docker, Fargate | program output shown later as `Program log (tail)` |
-| `runtime.err.log` | `_run_subprocess(...)` in `iso_runtime.py`; inner executor process inside the exec container | local, Docker, Fargate | raw stderr source for local/Fargate runtime summaries; also merged into `infra.log` |
-| `docker.out.log` | outer Docker launcher in `runtime/external/docker.py` | Docker only | merged into `infra.log` |
-| `docker.err.log` | outer Docker launcher in `runtime/external/docker.py` | Docker only | raw stderr source for Docker runtime summaries; also merged into `infra.log` |
-| `supervisor.log` | `py_code_exec_entry.py` via `logging_config.configure_logging()` with `LOG_FILE_PREFIX=supervisor` | Docker, Fargate | merged into `infra.log` |
+| `user.log` | executor header in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`; redirected stdout/stderr in the untrusted executor | local, Docker, Fargate | program output shown later as `Program log (tail)` |
+| `runtime.err.log` | `_run_subprocess(...)` in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`; inner executor process inside the exec container | local, Docker, Fargate | raw stderr source for local/Fargate runtime summaries; also merged into `infra.log` |
+| `docker.out.log` | outer Docker launcher in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/docker.py` | Docker only | merged into `infra.log` |
+| `docker.err.log` | outer Docker launcher in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/docker.py` | Docker only | raw stderr source for Docker runtime summaries; also merged into `infra.log` |
+| `supervisor.log` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py` via `logging_config.configure_logging()` with `LOG_FILE_PREFIX=supervisor` | Docker, Fargate | merged into `infra.log` |
 | `executor.log` | untrusted executor subprocess via `LOG_FILE_PREFIX=executor` | local, Docker, Fargate | merged into `infra.log` |
 | `infra.log` | `merge_infra_logs(...)` in `diagnose.py` | created during diagnostics/report assembly | synthesized merged infra view later shown as `Infra errors (infra.log)` |
 
@@ -199,8 +199,8 @@ Typical shape:
 `run_res` is not persisted as a log file. It is created by:
 
 - local/in-process runtime: `_InProcessRuntime.run_py_code(...)`
-- Docker runtime: `apps/chat/sdk/runtime/external/docker.py`
-- Fargate runtime: `apps/chat/sdk/runtime/external/fargate.py`
+- Docker runtime: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/docker.py`
+- Fargate runtime: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/fargate.py`
 
 ### Where `error`, `error_summary`, and `stderr_tail` come from
 

@@ -74,4 +74,4 @@ See `kdcube_ai_app/apps/chat/sdk/solutions/react/v2/caching.py`.
 ## Eviction Rule
 Eviction is only allowed **after** the additional checkpoint. Use
 `is_before_pre_tail_cache(...)` or `cache_points_for_blocks(...)` from
-`react/v2/caching.py` to validate.
+`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/caching.py` to validate.

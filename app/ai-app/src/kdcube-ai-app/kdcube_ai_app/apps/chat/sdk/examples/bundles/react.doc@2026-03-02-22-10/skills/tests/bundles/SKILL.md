@@ -41,6 +41,7 @@ Companion loading rule:
 - Use the tests to understand the expected contract first, then write code to satisfy that contract.
 - When platform or framework symbols are needed, confirm them from current docs/examples/source before coding.
 - Do not invent platform symbols or import paths.
+- Prefer the smallest implementation that can satisfy the currently confirmed contract; validate early, then expand.
 
 ## Where the tests are
 
@@ -71,6 +72,12 @@ Instead:
    - run pytest on the discovered test file(s)
 4. Set environment variable `BUNDLE_UNDER_TEST` to the generated bundle root.
 5. Write the pytest results to `OUTPUT_DIR/...` so they come back to the agent clearly.
+
+Implementation strategy:
+- read the tests first to understand the minimum required shape
+- implement the smallest version that can satisfy that shape
+- run the smoke test early
+- only add non-essential structure after the minimal contract passes
 
 ## Important protocol detail
 
