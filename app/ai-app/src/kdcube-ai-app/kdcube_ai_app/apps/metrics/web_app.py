@@ -33,7 +33,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 get_settings.cache_clear()
 
 from kdcube_ai_app.apps.utils.cors import configure_cors
-from kdcube_ai_app.apps.chat.api.resolvers import (
+from kdcube_ai_app.apps.chat.ingress.resolvers import (
     get_fastapi_adapter,
     get_pg_pool,
     get_redis_clients,

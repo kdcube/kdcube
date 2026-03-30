@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# chat/api/resources/resources.py
+# chat/ingress/resources/resources.py
 from typing import List, Dict, Any, Optional
 import logging
 import json, io, mimetypes, re
@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from fastapi import Depends, HTTPException, APIRouter, Request
 from fastapi.responses import StreamingResponse
 
-from kdcube_ai_app.apps.chat.api.resolvers import require_auth, get_project, get_tenant_dep
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, get_project, get_tenant_dep
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import PRIVILEGED_ROLES, RequireUser

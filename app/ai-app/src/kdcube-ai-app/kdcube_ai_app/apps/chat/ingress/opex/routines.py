@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# # kdcube_ai_app/apps/chat/api/opex/routines.py
+# # kdcube_ai_app/apps/chat/ingress/opex/routines.py
 
 import asyncio
 from typing import Optional

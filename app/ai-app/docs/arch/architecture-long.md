@@ -304,7 +304,7 @@ References:
 - **Socket.IO**: `/socket.io` handshake + `chat_message`, `conv_status.get`
 - **REST**: `/profile`, admin/monitoring/control‑plane routes
 
-Key entrypoint: [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py)
+Key entrypoint: [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py)
 
 ---
 
@@ -454,8 +454,8 @@ References:
 - Socket.IO limits are configured via max buffer size; SSE uses server‑side validation.
 
 References:
-- [Socket.IO transport](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
-- [SSE transport](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py)
+- [Socket.IO transport](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
+- [SSE transport](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py)
 
 ---
 
@@ -485,9 +485,9 @@ References:
 
 ## 16) Appendix — key files
 
-- Chat API entrypoint: [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py)
-- SSE transport: [sse/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py)
-- Socket.IO transport: [socketio/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
+- Chat API entrypoint: [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py)
+- SSE transport: [sse/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py)
+- Socket.IO transport: [socketio/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
 - Processor: [apps/chat/processor.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py)
 - Comm subsystem: [comm-system.md](../service/comm/comm-system.md)
 - Comm integrations: [README-comm.md](../service/comm/README-comm.md)

@@ -10,7 +10,7 @@ from datetime import datetime
 from fastapi import Depends
 from fastapi.responses import JSONResponse
 
-from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure, INSTANCE_ID, get_fastapi_adapter, require_auth, \
+from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure, INSTANCE_ID, get_fastapi_adapter, require_auth, \
     reset_circuit_breaker, get_circuit_breaker_stats
 from kdcube_ai_app.apps.middleware.gateway import CircuitBreakersResponse, CircuitBreakerSummaryResponse, \
     CircuitBreakerStatusResponse

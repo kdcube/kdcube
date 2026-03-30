@@ -84,7 +84,7 @@ from kdcube_ai_app.infra.gateway.config import (
 )
 from kdcube_ai_app.infra.namespaces import CONFIG
 
-from kdcube_ai_app.apps.chat.api.resolvers import (
+from kdcube_ai_app.apps.chat.ingress.resolvers import (
     get_fastapi_adapter, get_fast_api_accounting_binder, get_user_session_dependency, require_auth,
     INSTANCE_ID, CHAT_APP_PORT, REDIS_URL, _announce_startup,
     get_pg_pool, get_conversation_system, get_redis_clients, close_redis_clients, get_redis_monitor_instance,
@@ -103,8 +103,8 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest
 
-from kdcube_ai_app.apps.chat.api.socketio.chat import create_socketio_chat_handler
-from kdcube_ai_app.apps.chat.api.sse.chat import create_sse_router, SSEHub
+from kdcube_ai_app.apps.chat.ingress.socketio.chat import create_socketio_chat_handler
+from kdcube_ai_app.apps.chat.ingress.sse.chat import create_sse_router, SSEHub
 
 logger = logging.getLogger(__name__)
 
@@ -262,7 +262,7 @@ async def lifespan(app: FastAPI):
         raise
 
     # --- Heartbeats / processor (moved to proc service) ---
-    # from kdcube_ai_app.apps.chat.api.resolvers import get_heartbeats_mgr_and_middleware, get_external_request_processor, \
+    # from kdcube_ai_app.apps.chat.ingress.resolvers import get_heartbeats_mgr_and_middleware, get_external_request_processor, \
     #     service_health_checker
 
     app.state.chat_comm = ChatRelayCommunicator(redis_url=REDIS_URL,
@@ -655,31 +655,31 @@ async def circuit_breaker_exception_handler(request: Request, exc: CircuitBreake
 
 
 # Mount monitoring routers
-from kdcube_ai_app.apps.chat.api.monitoring import mount_monitoring_routers
+from kdcube_ai_app.apps.chat.ingress.monitoring import mount_monitoring_routers
 mount_monitoring_routers(app)
 
 # Mount integrations router (moved to chat-proc)
-# from kdcube_ai_app.apps.chat.api.integrations import mount_integrations_routers
+# from kdcube_ai_app.apps.chat.ingress.integrations import mount_integrations_routers
 # mount_integrations_routers(app)
 
 # Mount resources router
-from kdcube_ai_app.apps.chat.api.resources import mount_resources_router
+from kdcube_ai_app.apps.chat.ingress.resources import mount_resources_router
 mount_resources_router(app)
 
 # Mount conversations router
-from kdcube_ai_app.apps.chat.api.conversations import mount_conversations_router
+from kdcube_ai_app.apps.chat.ingress.conversations import mount_conversations_router
 mount_conversations_router(app)
 
 # Mount opex router
-from kdcube_ai_app.apps.chat.api.opex import mount_opex_router
+from kdcube_ai_app.apps.chat.ingress.opex import mount_opex_router
 mount_opex_router(app)
 
 # Mount Control Plane router
-from kdcube_ai_app.apps.chat.api.control_plane import mount_control_plane_router
+from kdcube_ai_app.apps.chat.ingress.control_plane import mount_control_plane_router
 mount_control_plane_router(app)
 
 # Mount Economics router
-from kdcube_ai_app.apps.chat.api.economics import mount_economics_router
+from kdcube_ai_app.apps.chat.ingress.economics import mount_economics_router
 mount_economics_router(app)
 
 # ================================
@@ -699,7 +699,7 @@ if __name__ == "__main__":
 
     # Uvicorn requires an import string when using workers or reload.
     use_import_string = workers > 1 or reload_enabled
-    app_target = "kdcube_ai_app.apps.chat.api.web_app:app" if use_import_string else app
+    app_target = "kdcube_ai_app.apps.chat.ingress.web_app:app" if use_import_string else app
 
     run_kwargs = {
         "host": "0.0.0.0",

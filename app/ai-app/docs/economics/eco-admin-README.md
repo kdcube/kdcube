@@ -14,10 +14,10 @@ see_also:
 This document describes what can be done from the Economics admin dashboard and how each action affects the control plane.
 
 UI file:
-- [EconomicsDashboard.tsx](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/control_plane/EconomicsDashboard.tsx)
+- [EconomicsDashboard.tsx](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/control_plane/EconomicsDashboard.tsx)
 
 Backend routes:
-- [control_plane.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/control_plane/control_plane.py)
+- [control_plane.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/control_plane/control_plane.py)
 
 ## Overview of Admin Capabilities
 

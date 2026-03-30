@@ -50,7 +50,7 @@ If you are implementing a UI, API client, or a new transport, start here.
   - multipart/form-data for attachments
 
 **Code references**
-- SSE transport: [sse/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py)
+- SSE transport: [sse/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py)
 - SSE relay: [CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md](CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md)
 
 ### C) Socket.IO (stream + send)
@@ -68,7 +68,7 @@ If you are implementing a UI, API client, or a new transport, start here.
 - Payload: JSON (message + metadata) + optional binary frames for attachments
 
 **Code reference**
-- Socket.IO transport: [socketio/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
+- Socket.IO transport: [socketio/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
 
 ---
 
@@ -114,7 +114,7 @@ The gateway/auth adapters accept tokens from multiple sources, so clients can ch
   - `registered` or `privileged` depending on roles.
 
 **Upgrade implementation**
-- [ingress/chat_core.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/ingress/chat_core.py)
+- [ingress/chat_core.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/chat_core.py)
 
 ---
 
@@ -132,8 +132,8 @@ The gateway/auth adapters accept tokens from multiple sources, so clients can ch
   - binary frames follow the JSON payload (one per attachment)
 
 **Code references**
-- SSE attachments: [sse/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py)
-- Socket.IO attachments: [socketio/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
+- SSE attachments: [sse/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py)
+- Socket.IO attachments: [socketio/chat.py](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
 
 ---
 

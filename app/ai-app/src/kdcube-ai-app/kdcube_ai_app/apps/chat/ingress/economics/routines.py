@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-# kdcube_ai_app/apps/chat/api/economics/routines.py
+# kdcube_ai_app/apps/chat/ingress/economics/routines.py
 
 import asyncio
 import uuid
@@ -74,7 +74,7 @@ async def run_stripe_reconcile_sweep_once(*, actor: str = "scheduler") -> dict:
     tenant = settings.TENANT
     project = settings.PROJECT
 
-    from kdcube_ai_app.apps.chat.api.resolvers import get_pg_pool
+    from kdcube_ai_app.apps.chat.ingress.resolvers import get_pg_pool
     from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import (
         StripeEconomicsAdminService,
         StripeEconomicsWebhookHandler,
@@ -238,7 +238,7 @@ async def run_subscription_rollover_sweep_once(*, actor: str = "scheduler") -> d
     project = settings.PROJECT
     limit = _subscription_rollover_sweep_limit()
 
-    from kdcube_ai_app.apps.chat.api.resolvers import get_pg_pool
+    from kdcube_ai_app.apps.chat.ingress.resolvers import get_pg_pool
     from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import SubscriptionManager
 
     pg_pool = await get_pg_pool()

@@ -38,9 +38,9 @@ Important distinction:
 | Timeout | Current value | Source | What it controls |
 | --- | --- | --- | --- |
 | ECS container `stopTimeout` | `60s` | `deployment/ecs/terraform/modules/ecs/task_chat_ingress.tf` | How long ECS waits after sending stop to the ingress container before force-killing it. |
-| Uvicorn `timeout_graceful_shutdown` | `15s` | `apps/chat/api/web_app.py` | How long Uvicorn lets ingress workers finish shutdown before it gives up. |
-| Uvicorn `timeout_keep_alive` | `45s` | `apps/chat/api/web_app.py` | Idle HTTP keep-alive timeout during normal serving. Not a shutdown budget. |
-| Uvicorn `timeout_worker_healthcheck` | default `60s` | `apps/chat/api/web_app.py` | Worker startup healthcheck timeout. Startup only, not shutdown. |
+| Uvicorn `timeout_graceful_shutdown` | `15s` | `apps/chat/ingress/web_app.py` | How long Uvicorn lets ingress workers finish shutdown before it gives up. |
+| Uvicorn `timeout_keep_alive` | `45s` | `apps/chat/ingress/web_app.py` | Idle HTTP keep-alive timeout during normal serving. Not a shutdown budget. |
+| Uvicorn `timeout_worker_healthcheck` | default `60s` | `apps/chat/ingress/web_app.py` | Worker startup healthcheck timeout. Startup only, not shutdown. |
 
 ### Proc
 
@@ -57,7 +57,7 @@ Important distinction:
 
 Important nuance:
 
-- `apps/chat/api/resolvers.py` passes `task_timeout_sec=900` to the processor constructor
+- `apps/chat/ingress/resolvers.py` passes `task_timeout_sec=900` to the processor constructor
 - but `apps/chat/processor.py` then overrides from `CHAT_TASK_TIMEOUT_SEC`
 - ECS currently sets `CHAT_TASK_TIMEOUT_SEC=600`
 - so the effective proc turn timeout in production is currently **600 seconds**

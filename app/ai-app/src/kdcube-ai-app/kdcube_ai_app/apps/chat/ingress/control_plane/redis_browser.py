@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure
+from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure
 
 
 router = APIRouter()

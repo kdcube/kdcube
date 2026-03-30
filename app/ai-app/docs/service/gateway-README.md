@@ -59,7 +59,7 @@ graph TD
 ## 2) Where it is enforced today
 
 ### HTTP middleware (session by default)
-The HTTP middleware in `apps/chat/api/web_app.py` resolves the session and applies
+The HTTP middleware in `apps/chat/ingress/web_app.py` resolves the session and applies
 **policy‑based throttling/backpressure**.
 
 - **Default**: REST is **session‑only** (bypass throttling/backpressure).
@@ -69,7 +69,7 @@ The HTTP middleware in `apps/chat/api/web_app.py` resolves the session and appli
   to the authenticated user**. Mismatches are rejected (401/403).
 
 Key files:
-- [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py)
+- [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py)
 - [gateway_policy.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/middleware/gateway_policy.py)
 - [gateway.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/middleware/gateway.py)
 
@@ -89,9 +89,9 @@ After admission, the task is enqueued via **atomic enqueue** with backpressure:
 - `AtomicChatQueueManager.enqueue_chat_task_atomic(...)`
 
 Key files:
-- [chat_core.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/ingress/chat_core.py)
-- [sse/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py)
-- [socketio/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
+- [chat_core.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/chat_core.py)
+- [sse/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py)
+- [socketio/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
 - [backpressure.py](../../src/kdcube-ai-app/kdcube_ai_app/infra/gateway/backpressure.py)
 
 ---
@@ -185,7 +185,7 @@ if you need to pin a specific base path.
 
 Gateway configuration is centralized in:
 - [config.py](../../src/kdcube-ai-app/kdcube_ai_app/infra/gateway/config.py)
-- [resolvers.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/resolvers.py)
+- [resolvers.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/resolvers.py)
 
 Key environment variables:
 - `GATEWAY_COMPONENT` (`ingress` | `proc`). Each service sets this at startup; it selects the component slice.
@@ -266,7 +266,7 @@ Redis keys/channels (per tenant/project):
 - `"<tenant>:<project>:kdcube:config:gateway:update"`
 
 Subscriber wiring:
-- Chat API subscribes on startup in [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py).
+- Chat API subscribes on startup in [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py).
 
 Restart note:
 - Updating `pools.<component>.redis_max_connections` or `pools.<component>.pg_pool_*` in gateway config does **not** resize already-created pools in running workers.

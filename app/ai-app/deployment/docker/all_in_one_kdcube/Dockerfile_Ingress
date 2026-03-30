@@ -55,4 +55,4 @@ COPY --chown=appuser:appuser src/kdcube-ai-app/ .
 RUN chown -R appuser:appuser /app
 
 USER appuser
-CMD ["python", "kdcube_ai_app/apps/chat/api/web_app.py"]
+CMD ["python", "kdcube_ai_app/apps/chat/ingress/web_app.py"]

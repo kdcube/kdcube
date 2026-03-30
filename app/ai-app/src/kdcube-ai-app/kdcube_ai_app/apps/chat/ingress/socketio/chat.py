@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# chat/api/socketio/chat.py
+# chat/ingress/socketio/chat.py
 """
 Modular Socket.IO chat handler with gateway integration and Redis relay.
 Redis pub/sub listener relays chat events (chat.events) to clients
@@ -28,7 +28,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
 )
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 
-from kdcube_ai_app.apps.chat.api.ingress.chat_core import (
+from kdcube_ai_app.apps.chat.ingress.chat_core import (
     IngressConfig,
     RawAttachment,
     run_gateway_checks,

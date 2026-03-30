@@ -119,7 +119,7 @@ Mode note:
 - `GET /debug/capacity-calculation`
 - `GET /debug/environment`
 
-See implementation: [monitoring.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/monitoring/monitoring.py)
+See implementation: [monitoring.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/monitoring/monitoring.py)
 
 ---
 
@@ -143,12 +143,12 @@ sequenceDiagram
 
 ## 5) Key files
 
-- Gateway middleware: [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py)
+- Gateway middleware: [web_app.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py)
 - Gateway policy: [gateway_policy.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/middleware/gateway_policy.py)
 - Gateway core: [infra/gateway](../../src/kdcube-ai-app/kdcube_ai_app/infra/gateway/gateway.py)
 - Backpressure + queue: [backpressure.py](../../src/kdcube-ai-app/kdcube_ai_app/infra/gateway/backpressure.py)
-- SSE transport: [sse/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py)
-- Socket.IO transport: [socketio/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
+- SSE transport: [sse/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py)
+- Socket.IO transport: [socketio/chat.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
 
 ---
 

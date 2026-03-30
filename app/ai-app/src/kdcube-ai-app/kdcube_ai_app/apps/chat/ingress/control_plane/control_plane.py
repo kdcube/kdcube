@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# apps/chat/api/control_plane/control_plane.py
+# apps/chat/ingress/control_plane/control_plane.py
 
 """
 Control Plane API
@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Request, APIRouter, Query, Header, Response
 from datetime import datetime, timedelta, timezone
 
-from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure
+from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter

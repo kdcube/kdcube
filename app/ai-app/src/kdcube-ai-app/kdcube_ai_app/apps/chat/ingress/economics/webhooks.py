@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-# apps/chat/api/economics/webhooks.py
+# apps/chat/ingress/economics/webhooks.py
 
 import logging
 from datetime import datetime

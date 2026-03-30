@@ -18,7 +18,7 @@ in the ConversationStore, and then used in two downstream paths: multimodal
 LLM inference (base64 blocks) and code-generated execution (rehosted files).
 
 Key components:
-- Ingress: `kdcube_ai_app/apps/chat/api/sse/chat.py`, `kdcube_ai_app/apps/chat/api/socketio/chat.py`
+- Ingress: `kdcube_ai_app/apps/chat/ingress/sse/chat.py`, `kdcube_ai_app/apps/chat/ingress/socketio/chat.py`
 - Storage: `kdcube_ai_app/apps/chat/sdk/storage/conversation_store.py`
 - Preflight/AV: `kdcube_ai_app/infra/gateway/safe_preflight.py`
 - Attachment ingestion and conversion: `kdcube_ai_app/apps/chat/sdk/runtime/user_inputs.py`
@@ -44,8 +44,8 @@ flowchart LR
 ### 2.1 Ingress and hosting
 
 When a user submits attachments:
-- SSE: `kdcube_ai_app/apps/chat/api/sse/chat.py`
-- Socket.IO: `kdcube_ai_app/apps/chat/api/socketio/chat.py`
+- SSE: `kdcube_ai_app/apps/chat/ingress/sse/chat.py`
+- Socket.IO: `kdcube_ai_app/apps/chat/ingress/socketio/chat.py`
 
 Both flows:
 1) Collect raw bytes + metadata (filename, mime).

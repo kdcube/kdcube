@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# chat/api/sse/chat.py
+# chat/ingress/sse/chat.py
 
 from __future__ import annotations
 import asyncio
@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 
-from kdcube_ai_app.apps.chat.api.resolvers import require_auth
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.util import _iso
 from kdcube_ai_app.auth.AuthManager import AuthenticationError, RequireUser
@@ -28,7 +28,7 @@ from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
 )
-from kdcube_ai_app.apps.chat.api.ingress.chat_core import (
+from kdcube_ai_app.apps.chat.ingress.chat_core import (
     IngressConfig,
     RawAttachment,
     run_gateway_checks,

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-# apps/chat/api/economics/stripe_router.py
+# apps/chat/ingress/economics/stripe_router.py
 
 from typing import Optional
 import logging
@@ -27,7 +27,7 @@ async def stripe_lifespan(app: FastAPI):
     Registered via app.add_event_handler in economics/__init__.py.
     """
     global _stripe_reconcile_task, _subscription_rollover_task
-    from kdcube_ai_app.apps.chat.api.economics import routines
+    from kdcube_ai_app.apps.chat.ingress.economics import routines
 
     if _stripe_reconcile_task is None and routines.stripe_reconcile_enabled():
         _stripe_reconcile_task = asyncio.create_task(routines.stripe_reconcile_scheduler_loop())

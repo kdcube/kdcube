@@ -64,7 +64,7 @@ docker compose up -d
 
 3. Run services locally:
 
-- Ingress: `apps/chat/api/web_app.py`
+- Ingress: `apps/chat/ingress/web_app.py`
 - Proc: `apps/chat/proc/web_app.py`
 - Metrics: `apps/metrics/web_app.py`
 - Frontend: run Vite using `.env.frontend`

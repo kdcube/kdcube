@@ -4,7 +4,7 @@ Prereqs
 
 AUTH_PROVIDER=simple
 IDP_DB_PATH=/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/
-chat/api/idp_users.json
+chat/ingress/idp_users.json
 GATEWAY_CONFIG_JSON='{"tenant":"<TENANT_ID>","project":"<PROJECT_ID>"}'
 
 Note: `burst_sse_load.py` targets **ingress** (`/sse/*` and `/monitoring/system`).
@@ -53,7 +53,7 @@ python /Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/k
 --user-role anonymous \
 --requests 50 \
 --concurrency 10 \
---idp-path /Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/idp_users.json
+--idp-path /Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/idp_users.json
 
 Expected: guarded endpoint shows 429; bypass endpoint shows **0** 429
 (other 4xx/5xx can still happen if payload/signature is invalid).

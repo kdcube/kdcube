@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# # kdcube_ai_app/apps/chat/api/opex/opex.py
+# # kdcube_ai_app/apps/chat/ingress/opex/opex.py
 from typing import Optional, List
 import logging, asyncio, os, json
 
@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Request, APIRouter, Query, FastAPI
 from contextlib import asynccontextmanager
 
-from kdcube_ai_app.apps.chat.api.resolvers import require_auth, auth_without_pressure
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without_pressure
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
@@ -42,7 +42,7 @@ async def opex_lifespan(app: FastAPI):
     """
     global _scheduler_task, _bundle_cleanup_task, _idp_import_task
 
-    import kdcube_ai_app.apps.chat.api.opex.routines as routines
+    import kdcube_ai_app.apps.chat.ingress.opex.routines as routines
     if _scheduler_task is None:
         _scheduler_task = asyncio.create_task(routines.aggregation_scheduler_loop())
         logger.info("[OPEX Aggregator] Background scheduler task started")
@@ -821,7 +821,7 @@ async def admin_run_aggregation_range(
         -> backfills 2025-01-01 .. 2025-01-10.
     """
 
-    import kdcube_ai_app.apps.chat.api.opex.routines as routines
+    import kdcube_ai_app.apps.chat.ingress.opex.routines as routines
     from datetime import datetime, timedelta, date
 
     try:

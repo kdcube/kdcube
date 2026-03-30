@@ -716,8 +716,8 @@ returns a **system error** with:
   - `queue_size_exceeded` (when `GATEWAY_CONFIG_JSON.limits.proc.max_queue_size` is set and exceeded)
   - `hard_limit_exceeded` / `registered_threshold_exceeded` / `anonymous_threshold_exceeded`
 
-This is emitted from `apps/chat/api/ingress/chat_core.py` and handled in SSE at
-`apps/chat/api/sse/chat.py`.
+This is emitted from `apps/chat/ingress/chat_core.py` and handled in SSE at
+`apps/chat/ingress/sse/chat.py`.
 
 ## Metrics & Rolling Windows
 

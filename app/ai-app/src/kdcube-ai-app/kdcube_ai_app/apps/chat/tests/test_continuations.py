@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import kdcube_ai_app.apps.chat.api.ingress.chat_core as chat_core
-from kdcube_ai_app.apps.chat.api.ingress.chat_core import IngressConfig, process_chat_message
+import kdcube_ai_app.apps.chat.ingress.chat_core as chat_core
+from kdcube_ai_app.apps.chat.ingress.chat_core import IngressConfig, process_chat_message
 from kdcube_ai_app.apps.chat.continuations import RedisConversationContinuationSource
 from kdcube_ai_app.auth.sessions import UserType
 

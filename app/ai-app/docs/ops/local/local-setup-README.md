@@ -104,7 +104,7 @@ resources routes (RN-based lookup).
 
 See:
 - Hosting / retrieval overview: https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/hosting/files-storage-system-README.md
-- Resource routes: `kdcube_ai_app/apps/chat/api/resources/resources.py`
+- Resource routes: `kdcube_ai_app/apps/chat/ingress/resources/resources.py`
 
 ### Storage + hosting flow (local)
 ```mermaid

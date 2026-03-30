@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# chat/api/ingress/chat_core.py
+# chat/ingress/chat_core.py
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ from kdcube_ai_app.apps.middleware.token_extract import (
     resolve_auth_from_headers_and_cookies,
     resolve_socket_auth_tokens,
 )
-from kdcube_ai_app.apps.chat.api.resolvers import get_auth_manager
+from kdcube_ai_app.apps.chat.ingress.resolvers import get_auth_manager
 from kdcube_ai_app.infra.plugin.bundle_registry import load_persisted_registry_from_runtime_ctx
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError, PRIVILEGED_ROLES

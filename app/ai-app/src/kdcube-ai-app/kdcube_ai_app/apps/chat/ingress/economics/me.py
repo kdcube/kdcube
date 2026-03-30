@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-# apps/chat/api/economics/me.py
+# apps/chat/ingress/economics/me.py
 
 import logging
 
@@ -9,7 +9,7 @@ from fastapi import Depends, HTTPException, Query, APIRouter
 
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
-from kdcube_ai_app.apps.chat.api.resolvers import require_auth
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import GLOBAL_BUNDLE_ID
 from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import StripeEconomicsAdminService
@@ -42,7 +42,7 @@ async def get_my_budget_breakdown(
 
     mgr = _get_control_plane_manager(router)
 
-    from kdcube_ai_app.apps.chat.api.control_plane.control_plane import _resolve_plan_id_for_user
+    from kdcube_ai_app.apps.chat.ingress.control_plane.control_plane import _resolve_plan_id_for_user
     resolved_plan_id, plan_source = await _resolve_plan_id_for_user(
         mgr=mgr,
         redis=redis,

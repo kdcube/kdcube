@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, Set
 from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from pydantic import BaseModel
 
-from kdcube_ai_app.apps.chat.api.resolvers import require_auth, auth_without_pressure
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without_pressure
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret

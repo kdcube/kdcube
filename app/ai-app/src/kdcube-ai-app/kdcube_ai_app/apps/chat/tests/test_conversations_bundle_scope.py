@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from kdcube_ai_app.apps.chat.api.conversations import conversations
+from kdcube_ai_app.apps.chat.ingress.conversations import conversations
 
 
 class _FakeConversationBrowser:

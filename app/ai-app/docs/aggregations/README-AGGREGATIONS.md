@@ -20,7 +20,7 @@ We currently materialize:
 * **Monthly totals**
 * **Yearly totals**
 
-These aggregates live under the `analytics` tree and are consumed by `RateCalculator` (in `infra/accounting/calculator.py`) and the OPEX endpoints in `apps/chat/api/opex/opex.py`.
+These aggregates live under the `analytics` tree and are consumed by `RateCalculator` (in `infra/accounting/calculator.py`) and the OPEX endpoints in `apps/chat/ingress/opex/opex.py`.
 
 ---
 
@@ -378,7 +378,7 @@ Key methods:
 
 The scheduler logic is implemented in:
 
-* `kdcube_ai_app.apps.chat.api.opex.routines`
+* `kdcube_ai_app.apps.chat.ingress.opex.routines`
 
 It is started via the OPEX router lifespan:
 
@@ -658,7 +658,7 @@ So even though they’re raw-based, they do **not** blindly scan the entire buck
 
 ### 3.5 OPEX HTTP endpoints
 
-In `apps/chat/api/opex/opex.py`:
+In `apps/chat/ingress/opex/opex.py`:
 
 * `/total`
 

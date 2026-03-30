@@ -527,7 +527,7 @@ class BaseEntrypoint:
 
         if bundle_root:
             try:
-                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.opex")
+                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.ingress.opex")
                 fallback_path = Path(cp_mod.__file__).parent / "OpexDashboard.tsx"
                 content = fallback_path.read_text(encoding="utf-8")
                 output_content = patch_dashboard(
@@ -556,7 +556,7 @@ class BaseEntrypoint:
 
         if bundle_root:
             try:
-                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.control_plane")
+                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.ingress.control_plane")
                 fallback_path = Path(cp_mod.__file__).parent / "EconomicsDashboard.tsx"
                 content = fallback_path.read_text(encoding="utf-8")
                 output_content = patch_dashboard(
@@ -587,7 +587,7 @@ class BaseEntrypoint:
 
         if bundle_root:
             try:
-                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.control_plane")
+                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.ingress.control_plane")
                 fallback_path = Path(cp_mod.__file__).parent / "ConversationBrowser.tsx"
                 content = fallback_path.read_text(encoding="utf-8")
 
@@ -620,7 +620,7 @@ class BaseEntrypoint:
 
         if bundle_root:
             try:
-                monitoring_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.monitoring")
+                monitoring_mod = importlib.import_module("kdcube_ai_app.apps.chat.ingress.monitoring")
                 fallback_path = Path(monitoring_mod.__file__).parent / "ControlPlaneMonitoringDashboard.tsx"
                 content = fallback_path.read_text(encoding="utf-8")
 
@@ -650,7 +650,7 @@ class BaseEntrypoint:
 
         if bundle_root:
             try:
-                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.control_plane")
+                cp_mod = importlib.import_module("kdcube_ai_app.apps.chat.ingress.control_plane")
                 fallback_path = Path(cp_mod.__file__).parent / "RedisBrowser.tsx"
                 content = fallback_path.read_text(encoding="utf-8")
                 output_content = patch_dashboard(
@@ -709,7 +709,7 @@ class BaseEntrypoint:
         default_html = f"<div style='margin: 0; position: absolute'>{default_content}</div>"
 
         try:
-            economics_mod = importlib.import_module("kdcube_ai_app.apps.chat.api.economics")
+            economics_mod = importlib.import_module("kdcube_ai_app.apps.chat.ingress.economics")
             fallback_path = Path(economics_mod.__file__).parent / "UserBillingDashboard.tsx"
             content = fallback_path.read_text(encoding="utf-8")
 

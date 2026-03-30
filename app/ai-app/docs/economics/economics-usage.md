@@ -160,7 +160,7 @@ Important semantics:
 
 ## Customer-facing billing widget
 
-The customer widget at `apps/chat/api/economics/UserBillingDashboard.tsx` is intended to explain the user-facing side of economics for the authenticated user.
+The customer widget at `apps/chat/ingress/economics/UserBillingDashboard.tsx` is intended to explain the user-facing side of economics for the authenticated user.
 
 - `GET /api/economics/me/budget-breakdown` resolves the effective plan for the authenticated user.
 - By default, the endpoint uses limiter bundle id `__project__`, which matches the real quota scope enforced at runtime.

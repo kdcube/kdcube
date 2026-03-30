@@ -20,7 +20,7 @@ from typing import Optional, Dict, Any, List
 
 import logging
 
-from kdcube_ai_app.apps.chat.api.resolvers import get_pg_pool
+from kdcube_ai_app.apps.chat.ingress.resolvers import get_pg_pool
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.availability.health_and_heartbeat import get_expected_services, ServiceConfig
 from kdcube_ai_app.infra.gateway.config import load_gateway_config_raw, parse_gateway_config_for_component

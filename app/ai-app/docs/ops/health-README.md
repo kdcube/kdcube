@@ -33,7 +33,7 @@ Readiness:
 - `503` when draining
 
 Code:
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py`
 
 ---
 

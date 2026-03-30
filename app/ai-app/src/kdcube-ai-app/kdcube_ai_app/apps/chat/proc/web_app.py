@@ -61,7 +61,7 @@ from kdcube_ai_app.infra.rendering.link_preview import close_shared_link_preview
 from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
-from kdcube_ai_app.apps.chat.api.resolvers import (
+from kdcube_ai_app.apps.chat.ingress.resolvers import (
     get_fastapi_adapter,
     get_fast_api_accounting_binder,
     INSTANCE_ID,
@@ -572,7 +572,7 @@ async def lifespan(app: FastAPI):
 
     # Bundle cleanup loop (proc only)
     try:
-        from kdcube_ai_app.apps.chat.api.opex import routines as opex_routines
+        from kdcube_ai_app.apps.chat.ingress.opex import routines as opex_routines
         app.state.bundle_cleanup_task = asyncio.create_task(opex_routines.bundle_cleanup_loop())
         logger.info("[Bundles] Cleanup task started (proc)")
     except Exception:

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure, get_pg_pool
+from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure, get_pg_pool
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex

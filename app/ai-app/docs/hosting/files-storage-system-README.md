@@ -34,7 +34,7 @@ https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/storage/sd
 - `kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/external.py`
 
 **Resource retrieval (ingress)**
-- `kdcube_ai_app/apps/chat/api/resources/resources.py`
+- `kdcube_ai_app/apps/chat/ingress/resources/resources.py`
 
 ## Notes
 - Artifacts are **hosted as soon as they are produced** (during the turn).

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 Elena Viter
 
-# chat/api/conversations/conversations.py
+# chat/ingress/conversations/conversations.py
 from __future__ import annotations
 
 import uuid
@@ -12,7 +12,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 
-from kdcube_ai_app.apps.chat.api.resolvers import (
+from kdcube_ai_app.apps.chat.ingress.resolvers import (
     require_auth,
     get_conversation_system,
     get_pg_pool,

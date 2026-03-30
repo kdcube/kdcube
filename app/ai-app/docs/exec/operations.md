@@ -129,7 +129,7 @@ PY_CODE_EXEC_NETWORK_MODE=host       # Supervisor needs network
 pip install -r requirements-chat.txt
 
 # Run service
-python kdcube_ai_app/apps/chat/api/web_app.py
+python kdcube_ai_app/apps/chat/ingress/web_app.py
 ```
 
 #### 4. Verify Execution
@@ -250,7 +250,7 @@ COPY deployment/docker/all_in_one/docker-entrypoint.sh /usr/local/bin/docker-ent
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["python", "kdcube_ai_app/apps/chat/api/web_app.py"]
+CMD ["python", "kdcube_ai_app/apps/chat/ingress/web_app.py"]
 ```
 
 #### 3. Create Entrypoint Script

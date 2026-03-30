@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-# apps/chat/api/economics/checkout.py
+# apps/chat/ingress/economics/checkout.py
 
 import logging
 
@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, APIRouter
 
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
-from kdcube_ai_app.apps.chat.api.resolvers import require_auth
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 from .stripe_router import router, _get_stripe, _get_control_plane_manager, _resolve_stripe_customer

@@ -75,7 +75,7 @@ Reference:
 Ingress creates an `AccountingEnvelope` using:
 
 - `build_envelope_from_session()` in `kdcube_ai_app/infra/accounting/envelope.py`
-- Example usage in `kdcube_ai_app/apps/chat/api/ingress/chat_core.py`
+- Example usage in `kdcube_ai_app/apps/chat/ingress/chat_core.py`
 
 The envelope includes:
 
@@ -188,7 +188,7 @@ These results feed:
 Aggregates are computed by `AccountingAggregator`:
 
 - `kdcube_ai_app/infra/accounting/aggregator.py`
-- scheduled via `kdcube_ai_app/apps/chat/api/opex/routines.py`
+- scheduled via `kdcube_ai_app/apps/chat/ingress/opex/routines.py`
 
 Raw events live under `accounting/…`  
 Aggregates are written under:
@@ -197,7 +197,7 @@ Aggregates are written under:
 analytics/<tenant>/<project>/accounting/
 ```
 
-OPEX endpoints in `apps/chat/api/opex/opex.py` read from both raw and aggregated data.
+OPEX endpoints in `apps/chat/ingress/opex/opex.py` read from both raw and aggregated data.
 
 See:
 
@@ -224,5 +224,5 @@ The accounting system itself is controlled by the service entrypoints and binder
 - Storage cache: `kdcube_ai_app/infra/accounting/turn_cache.py`
 - Cost calculator: `kdcube_ai_app/infra/accounting/calculator.py`
 - Aggregator: `kdcube_ai_app/infra/accounting/aggregator.py`
-- OPEX API: `kdcube_ai_app/apps/chat/api/opex/opex.py`
-- Aggregation scheduler: `kdcube_ai_app/apps/chat/api/opex/routines.py`
+- OPEX API: `kdcube_ai_app/apps/chat/ingress/opex/opex.py`
+- Aggregation scheduler: `kdcube_ai_app/apps/chat/ingress/opex/routines.py`

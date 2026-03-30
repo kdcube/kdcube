@@ -83,9 +83,9 @@ support:
 
 Notes:
 - For SSE, query param tokens are injected into headers in
-  [chat web app](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/web_app.py) before gateway processing.
+  [chat web app](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/web_app.py) before gateway processing.
 - For Socket.IO, the gateway session upgrade uses auth payload first, then cookies
-  in [ingress chat core](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/ingress/chat_core.py).
+  in [ingress chat core](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/chat_core.py).
 - If cookies are present, they are treated as valid credentials (same as headers).
 
 ## Configuration
@@ -112,6 +112,6 @@ Role sets are defined in `kdcube_ai_app/auth/AuthManager.py`.
   [gateway adapter](../../../src/kdcube-ai-app/kdcube_ai_app/apps/middleware/gateway.py),
   [auth adapter](../../../src/kdcube-ai-app/kdcube_ai_app/apps/middleware/auth.py)
 - SSE + Socket.IO ingress:
-  [SSE chat](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/sse/chat.py),
-  [Socket.IO chat](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py),
-  [ingress chat core](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/ingress/chat_core.py)
+  [SSE chat](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/sse/chat.py),
+  [Socket.IO chat](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py),
+  [ingress chat core](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/chat_core.py)

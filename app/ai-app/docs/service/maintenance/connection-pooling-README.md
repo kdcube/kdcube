@@ -115,8 +115,8 @@ To override the prefix, set `REDIS_CLIENT_NAME`.
 
 **Where implemented**
 - `kdcube_ai_app/infra/redis/client.py`
-- `apps/chat/api/resolvers.py`
-- `apps/chat/api/web_app.py`
+- `apps/chat/ingress/resolvers.py`
+- `apps/chat/ingress/web_app.py`
 - `apps/chat/proc/web_app.py`
 - `apps/chat/processor.py`
 
@@ -150,8 +150,8 @@ Where:
 - `pg_pool_max_size` = gateway config pool size or fallback
 
 **Where implemented**
-- `apps/chat/api/resolvers.py` → `get_pg_pool()`
-- `apps/chat/api/web_app.py` → lifespan startup/shutdown
+- `apps/chat/ingress/resolvers.py` → `get_pg_pool()`
+- `apps/chat/ingress/web_app.py` → lifespan startup/shutdown
 
 ---
 

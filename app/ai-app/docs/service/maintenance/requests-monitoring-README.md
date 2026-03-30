@@ -29,10 +29,10 @@ Primary places to measure latency:
 5. If avg wait is low but UI is quiet, check SSE stream delivery logs.
 
 ## Key files and UIs
-- Monitoring UI: `kdcube_ai_app/apps/chat/api/monitoring/ControlPlaneMonitoringDashboard.tsx`
-- Redis Browser UI: `kdcube_ai_app/apps/chat/api/control_plane/RedisBrowser.tsx`
-- SSE entrypoint: `kdcube_ai_app/apps/chat/api/sse/chat.py`
-- Ingress + enqueue: `kdcube_ai_app/apps/chat/api/ingress/chat_core.py`
+- Monitoring UI: `kdcube_ai_app/apps/chat/ingress/monitoring/ControlPlaneMonitoringDashboard.tsx`
+- Redis Browser UI: `kdcube_ai_app/apps/chat/ingress/control_plane/RedisBrowser.tsx`
+- SSE entrypoint: `kdcube_ai_app/apps/chat/ingress/sse/chat.py`
+- Ingress + enqueue: `kdcube_ai_app/apps/chat/ingress/chat_core.py`
 - Processor: `kdcube_ai_app/apps/chat/processor.py`
 
 ## Monitoring Dashboard (Control Plane)
@@ -225,7 +225,7 @@ Location:
 
 Prerequisites:
 - `AUTH_PROVIDER=simple`
-- `IDP_DB_PATH=/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/idp_users.json`
+- `IDP_DB_PATH=/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/idp_users.json`
 - Ensure admin + registered tokens exist in that file.
 
 ### Case 1: 15 registered, 1 message each (no SSE streams)

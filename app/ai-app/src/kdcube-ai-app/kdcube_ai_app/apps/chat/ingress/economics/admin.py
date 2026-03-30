@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 
-# apps/chat/api/economics/admin.py
+# apps/chat/ingress/economics/admin.py
 
 import logging
 from typing import Optional
@@ -9,7 +9,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Query, APIRouter
 
-from kdcube_ai_app.apps.chat.api.resolvers import auth_without_pressure
+from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import (

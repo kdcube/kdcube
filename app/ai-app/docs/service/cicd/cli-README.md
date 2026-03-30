@@ -82,7 +82,7 @@ kdcube env init \
 - `deployment/docker/local-infra-stack/.env`
 - `deployment/docker/local-infra-stack/.env.postgres.setup`
 - `deployment/docker/local-infra-stack/.env.proxylogin`
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/.env.ingress`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/.env.ingress`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/.env.proc`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/metrics/.env.metrics`
 - `ui/chat-web-app/public/private/config.hardcoded.json` (generated UI config)

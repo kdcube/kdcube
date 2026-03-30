@@ -13,7 +13,7 @@ see_also:
 
 > Note: This document focuses on SSE fan-out, but the same relay/channeling
 > design is used by Socket.IO as well. See:
-> - [Socket.IO transport](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/api/socketio/chat.py)
+> - [Socket.IO transport](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py)
 > - [Comm integrations overview](README-comm.md)
 
 This document describes the architecture of the **chat relay** in the KDCube AI App, specifically:
@@ -174,7 +174,7 @@ async def start_listener(self, on_message: Callable[[dict], Any]):
 
 ### `SSEHub` – Redis → SSE fan-out
 
-File: `kdcube_ai_app/apps/chat/api/sse/chat.py` (inside `SSEHub` class)
+File: `kdcube_ai_app/apps/chat/ingress/sse/chat.py` (inside `SSEHub` class)
 
 Responsibilities:
 

@@ -81,7 +81,7 @@ Entry points:
 
 - Automatic: `stripe_reconcile_scheduler_loop()` — background asyncio task, started at app lifespan.
 - Manual trigger: `POST /api/economics/admin/stripe/reconcile`
-- Code: `apps/chat/api/economics/routines.py` → `run_stripe_reconcile_sweep_once()`
+- Code: `apps/chat/ingress/economics/routines.py` → `run_stripe_reconcile_sweep_once()`
 
 Configuration (env vars):
 
@@ -118,7 +118,7 @@ Entry points:
 
 - Automatic: `subscription_rollover_scheduler_loop()` — background asyncio task, started at app lifespan.
 - Manual trigger: `POST /api/economics/admin/subscriptions/rollover/sweep`
-- Code: `apps/chat/api/economics/routines.py` → `run_subscription_rollover_sweep_once()`
+- Code: `apps/chat/ingress/economics/routines.py` → `run_subscription_rollover_sweep_once()`
 
 Configuration (env vars):
 
