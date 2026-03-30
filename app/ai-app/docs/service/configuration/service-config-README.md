@@ -253,6 +253,7 @@ Token TTL/uses:
 | `BUNDLE_REF_TTL_SECONDS` | Active bundle ref TTL (seconds). |
 | `BUNDLES_FORCE_ENV_ON_STARTUP` | Force bundles registry overwrite from env on startup (processor only). |
 | `BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS` | n/a |
+| `BUNDLES_PRELOAD_ON_START` | Eagerly load all configured bundle modules and run on_bundle_load hooks at proc startup. Eliminates cold start on first request. Proc health returns 503 until preload completes (default: `0`). |
 | `AGENTIC_BUNDLES_ROOT` | Agentic bundles root inside the container. All bundles (subfolders, wheels, zips) will be linked there. The paths in the AGENTIC_BUNDLES_JSON must start with this root. Container bundle root (from .env.proc): Docker/ECS: set AGENTIC_BUNDLES_ROOT=/bundles and mount your host/EFS path there. Host path for mounts lives in .env (HOST_BUNDLES_PATH). |
 | `BUNDLE_GIT_RESOLUTION_ENABLED` | Git bundle resolution Disable git bundle resolution until git bundles are fully configured. |
 | `BUNDLE_GIT_ATOMIC` | Atomic checkout (clone to temp dir then rename) |

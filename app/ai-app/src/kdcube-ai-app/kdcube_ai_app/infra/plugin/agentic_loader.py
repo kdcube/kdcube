@@ -476,6 +476,53 @@ def get_workflow_instance(
 
     return instance, mod
 
+class _StartupCommContext:
+    """
+    Minimal comm_context stub for startup bundle preloading.
+    """
+    class _Actor:
+        def __init__(self, tenant: str, project: str) -> None:
+            self.tenant_id = tenant
+            self.project_id = project
+
+    def __init__(self, tenant: str, project: str) -> None:
+        self.actor = self._Actor(tenant, project)
+
+
+async def preload_bundle_async(
+    spec: AgenticBundleSpec,
+    bundle_spec: Any,
+    *,
+    tenant: str,
+    project: str,
+    pg_pool: Optional[Any] = None,
+    redis: Optional[Any] = None,
+) -> None:
+    """
+    Eagerly load a bundle module and run its on_bundle_load hook (if any).
+    Called at proc startup when BUNDLES_PRELOAD_ON_START=1.
+
+    Builds a minimal startup comm_context. Read from settings.TENANT /
+    settings.PROJECT. This ensures _bundle_load_key() produces the same
+    key that real requests will use, so the hook is not re-run on first
+    actual request.
+    """
+    from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
+
+    comm_ctx = _StartupCommContext(tenant, project)
+    wf_config = create_workflow_config(ConfigRequest())
+    wf_config.ai_bundle_spec = bundle_spec
+
+    await asyncio.to_thread(
+        get_workflow_instance,
+        spec,
+        wf_config,
+        comm_context=comm_ctx,
+        pg_pool=pg_pool,
+        redis=redis,
+    )
+
+
 def clear_agentic_caches() -> None:
     """Utility for tests/dev hot-reload."""
     _module_cache.clear()

@@ -155,6 +155,7 @@ Important:
 | `BUNDLES_FORCE_ENV_ON_STARTUP`        | `0`       | Force overwrite Redis registry and descriptor-backed bundle props from `AGENTIC_BUNDLES_JSON` at startup. |
 | `BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS`  | `60`      | Redis lock TTL for startup env reset.                                   |
 | `BUNDLES_INCLUDE_EXAMPLES`            | `1`       | Auto‑add example bundles from `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles`.                   |
+| `BUNDLES_PRELOAD_ON_START`            | `0`       | Eagerly load all configured bundle modules and run `on_bundle_load` hooks at proc startup. Eliminates cold start on first request. Proc `/health` returns 503 until preload completes. |
 | `BUNDLE_GIT_RESOLUTION_ENABLED`       | `1`       | Enable git clone/pull for bundles with `repo`.                          |
 | `BUNDLE_GIT_ALWAYS_PULL`              | `0`       | Always pull even if local path exists (useful for branch refs).         |
 | `BUNDLE_GIT_ATOMIC`                   | `1`       | Use atomic checkout (clone to temp dir then rename).                    |

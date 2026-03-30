@@ -428,6 +428,8 @@ class ReactWorkflow(BaseEntrypoint):
                 "INFO",
             )
             with _knowledge_build_lock(ws_root):
+                # Always register the root so search_knowledge() works even on cache hits.
+                knowledge_resolver.KNOWLEDGE_ROOT = ws_root
                 outputs_ready = _knowledge_outputs_ready(
                     storage_root=ws_root,
                     source_root=source_root,

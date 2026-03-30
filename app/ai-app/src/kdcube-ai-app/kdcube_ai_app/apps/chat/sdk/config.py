@@ -195,6 +195,8 @@ class Settings(BaseSettings):
     # Force bundles registry to be overwritten from AGENTIC_BUNDLES_JSON at startup (processor only).
     BUNDLES_FORCE_ENV_ON_STARTUP: bool = Field(default=False)
     BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS: int = Field(default=60)
+    # Eagerly load all configured bundles at proc startup.
+    BUNDLES_PRELOAD_ON_START: bool = Field(default=False)
 
     # Email notifications (admin alerts for Stripe events)
     EMAIL_ENABLED: bool = Field(default=True)
