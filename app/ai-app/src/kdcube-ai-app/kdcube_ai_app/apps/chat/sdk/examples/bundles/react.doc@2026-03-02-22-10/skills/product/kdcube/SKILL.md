@@ -63,6 +63,54 @@ Bundle-authoring rule:
 - If the exact file is still unclear, browse a small relevant subtree in exec and then read the exact discovered files.
 - For SDK-integrated bundle work, current tests and current source/examples outrank skill prose.
 
+## Default copilot workflow for bundle work
+
+When the user asks for a bundle with specific features, prepare yourself in this order:
+
+1. Translate the request into feature slices.
+   - Examples of feature slices: bundle skeleton, workflow/agent integration, custom tools, skills, storage/state, isolated exec, citations, economics, MCP.
+2. Read the tests that define the minimum contract.
+3. For each requested feature slice, read the smallest current doc/source/example file set that proves how that slice is implemented now.
+4. If docs mention exact source paths, read those exact files next.
+5. If the exact source/example file is still unclear, do a narrow exec browse of the relevant subtree, emit exact logical refs, and then `react.read` those exact files.
+6. After evidence is gathered, write the smallest implementation that satisfies the confirmed contract and the explicit user request.
+7. Validate early.
+8. If validation fails, inspect the exact failure and the exact related source/test files before patching.
+
+This is the normal copilot loop. Skills tell you where to look and how the platform is organized, but current tests and current source/examples decide what is actually valid.
+
+## Exploration toolbox
+
+Treat yourself like an engineer working locally, except that repository browsing/search runs through isolated Python exec instead of host shell.
+
+What you can use:
+- `react.read(...)`
+  - read skills
+  - read exact docs
+  - read exact `ks:` source/deployment/test files when the path is known
+- `react.search_knowledge(...)`
+  - search doc metadata to find the right doc pages first
+- docs themselves
+  - when a doc mentions exact code paths, treat those paths as concrete hints and read those exact files next
+- isolated exec with `execute_code_python(...)`
+  - use this when you need filesystem-style browsing or search under a `ks:` subtree
+  - inside exec, resolve the relevant subtree with `bundle_data.resolve_namespace(...)`
+  - then use Python to do the kind of exploration you would normally do locally with `find`, `rg`, or small helper scripts
+
+Typical exploration operations in exec:
+- recursive file listing under a narrow subtree
+- find files by basename/pattern
+- text search across many files
+- search for class/function names, imports, decorators, or constants
+- inspect nearby files when docs give only a directory or partial path
+- emit a short listing or match summary plus exact logical refs for the promising files
+
+Exploration rule:
+- do not code against a directory name, memory, or skill prose alone
+- first reduce the uncertainty to exact files
+- then `react.read(...)` those exact files
+- only after that write or patch code
+
 ## Knowledge space navigation
 This bundle exposes a read‑only knowledge space:
 - Start with `react.read(["ks:index.md"])` to see the current index.
@@ -114,11 +162,23 @@ When a doc references files and the exact `ks:` path is unclear:
 5. Emit exact logical refs such as `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py` or `ks:deployment/docker/local-infra-stack/docker-compose.yml` into an OUTPUT_DIR file or short `user.log` note.
 6. Back in the React loop, call `react.read(...)` on those emitted logical refs before coding against them.
 
+If the task is exploratory and you would normally use local shell search:
+- do the same search logic in exec code instead
+- keep the search subtree narrow
+- return exact logical refs, not only vague summaries
+- then read the exact files into visible context before making implementation decisions
+
 For implementation tasks:
 - prefer current source/examples over prose when exact symbol names matter
 - if a requested integration is still uncertain after docs, read one or more current example/source files before coding
 - if the relevant source/example file is not yet known, use a small exec browse to discover candidate files and then read the exact discovered files
 - if examples differ, start from the smallest implementation that matches the confirmed contract and extend only after validation
+
+When browsing is needed, keep it economical:
+- browse the smallest subtree that could contain the answer
+- emit exact logical refs or a short listing artifact
+- come back to `react.read(...)` on exact files before coding against them
+- do not rely on memory or on directory names alone to infer API names
 
 `bundle_data.resolve_namespace(...)` is exec-only. It is not a normal planning-time tool.
 

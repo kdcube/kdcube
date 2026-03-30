@@ -46,6 +46,18 @@ Companion loading rule:
   First read the actual current tests that define the contract.
 - If the bundle uses platform-integrated SDK/runtime/agent patterns, also read at least one current source/example/doc file that proves that pattern before writing code.
 
+## Pre-write checklist
+
+Before the first bundle file write, make sure all of the following are true:
+
+- You have read the actual current pytest/README material that defines the bundle contract.
+- You know the exact test file you plan to run, or you have a concrete discovery plan to find it.
+- For every requested platform-integrated feature, you have read at least one current source/example/doc file that proves the needed pattern.
+- The exact import paths and runtime symbols you intend to use are confirmed in visible evidence.
+- You know the smallest bundle shape that should pass the current contract.
+
+If any item above is still missing, do not write bundle code yet. Gather the missing evidence first.
+
 ## Where the tests are
 
 The reusable test fixtures are exposed by `react.doc` under their real knowledge-space path:
@@ -85,6 +97,41 @@ Implementation strategy:
 - implement the smallest version that can satisfy that shape
 - run the smoke test early
 - only add non-essential structure after the minimal contract passes
+
+## Default authoring loop
+
+Use this as the normal workflow for bundle generation, repair, and modification:
+
+1. Read the tests and fixture README first.
+2. Read the current source/examples/docs that prove the requested feature patterns.
+3. If exact files are still unknown, use a small exec browse to discover candidate files, then `react.read` the exact discovered paths.
+4. Write the smallest implementation that should satisfy both the tests and the explicit user request.
+5. Run the smoke test immediately.
+6. If it fails, read the exact traceback and the exact failing test/source/import targets before patching.
+7. Repeat with small corrections until the smoke test passes.
+8. Only then add optional polish, additional helpers, or non-essential features.
+
+Do not jump from skills directly to large speculative code generation.
+Do not patch repeatedly from guesses when the traceback already tells you what exact file or import to inspect.
+
+## Test-oriented exploration strategy
+
+When preparing to write or repair a bundle, use this exploration strategy:
+
+1. Read the tests and their README first.
+2. Extract any exact file paths, import paths, symbol names, or structural expectations from the tests.
+3. If the tests imply a platform pattern that is still unclear, read the current source/example/doc files that prove that pattern.
+4. If exact files are still unknown, use isolated exec to search the relevant subtree like you would locally:
+   - resolve the subtree with `bundle_data.resolve_namespace(...)`
+   - recursively list files
+   - search for imports, base classes, descriptor patterns, decorators, or symbol names
+   - emit exact logical refs for the promising matches
+5. `react.read(...)` the exact discovered files before writing code.
+
+This means:
+- the agent is allowed to do sophisticated repository searches
+- but those searches must happen in isolated Python exec, not by assuming local shell access
+- the result of the search should be exact files to read next, not speculative code generation
 
 ## Important protocol detail
 
