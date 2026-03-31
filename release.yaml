@@ -1,22 +1,21 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.27.2050"
+  ref: "2026.3.31.158"
   description: |
-    This release tightens a few important platform behaviors around control-plane data access,
-    descriptor-driven CLI setup, and React UX wording.
+    This release focuses on React agent workspace clarity, bundle-authoring guidance, and
+    documentation/source discoverability.
 
-    Control-plane conversation browsing and related `conv_messages` queries no longer inherit an
-    ambient bundle scope when they should operate across the broader project/control-plane view.
-    This prevents unintended filtering by the currently active app bundle and makes these endpoints
-    behave consistently for shared control-plane data.
+    React tool behavior and prompt guidance were tightened so the agent works more reliably with
+    current-turn files, historical artifacts, and bundle knowledge space paths. Related React docs
+    were updated to make the workspace model, path usage, and artifact discovery rules much clearer.
 
-    The CLI installer was also improved for descriptor-driven deployments: repository source
-    handling in assembly descriptors is now normalized more consistently across local and upstream
-    source modes, with matching documentation updates in the CLI and assembly-descriptor docs.
-    This makes descriptor-based setup less error-prone when choosing where platform and frontend
-    sources come from.
+    The `react.doc` bundle was improved as a bundle-authoring copilot: its knowledge index now
+    includes richer document metadata and headings, its skills more strongly steer evidence-first
+    bundle authoring, and its guidance now explicitly teaches repository exploration through
+    isolated exec plus namespace resolution when exact source files are not yet known.
 
-    On the React side, suggested follow-up wording was clarified in the shared instructions and
-    decision layer so the assistant presents follow-up guidance more cleanly and consistently.
+    Across the docs tree, source/code references were normalized to the real `app/ai-app` root so
+    mentioned files are actually reachable by users and by the agent. This reduces dead shorthand
+    references and makes doc-driven exploration more dependable.
 config:
-    version: "2026.3.27.2050"
+    version: "2026.3.31.158"
