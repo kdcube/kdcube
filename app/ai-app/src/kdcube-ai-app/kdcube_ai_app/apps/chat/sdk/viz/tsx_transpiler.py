@@ -195,8 +195,13 @@ class ClientSideTSXTranspiler:
         tsx_code = re.sub(r'export\s+default\s+', '', tsx_code)
 
         # Find main component name
-        component_match = re.search(r'(?:const|function)\s+([A-Z][a-zA-Z0-9]*)\s*[=:]', tsx_code)
-        main_component = component_match.group(1) if component_match else None
+        component_match = re.search(
+            r'(?:const\s+([A-Z][a-zA-Z0-9]*)\s*[=:]|function\s+([A-Z][a-zA-Z0-9]*)\s*\()',
+            tsx_code,
+        )
+        main_component = None
+        if component_match:
+            main_component = component_match.group(1) or component_match.group(2)
 
         # Check if already has render logic
         has_render = 'ReactDOM.createRoot' in tsx_code

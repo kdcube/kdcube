@@ -29,3 +29,7 @@ export interface RedisBrowserResponse extends PanelResponse {
 export interface EconomicUsageResponse extends PanelResponse {
     economic_usage: string[];
 }
+
+export interface VersatilePreferencesResponse extends PanelResponse {
+    preferences_widget: string[];
+}

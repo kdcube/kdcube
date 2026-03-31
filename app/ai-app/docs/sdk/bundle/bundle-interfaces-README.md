@@ -159,7 +159,7 @@ Example:
 
 ```json
 {
-  "bundle_id": "versatile",
+  "bundle_id": "versatile@2026-03-31-13-36",
   "data": {
     "recency": 10,
     "kwords": "timezone email"

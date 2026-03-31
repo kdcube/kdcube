@@ -117,7 +117,9 @@ class SettingsManager {
     }
 
     getBundleId(): string {
-        return this.settings.defaultAppBundleId === PLACEHOLDER_BUNDLE_ID ? 'versatile' : this.settings.defaultAppBundleId;
+        return this.settings.defaultAppBundleId === PLACEHOLDER_BUNDLE_ID
+            ? 'versatile@2026-03-31-13-36'
+            : this.settings.defaultAppBundleId;
     }
 
     hasPlaceholders(): boolean {
