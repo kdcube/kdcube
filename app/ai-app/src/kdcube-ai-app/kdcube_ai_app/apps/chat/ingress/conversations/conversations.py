@@ -224,28 +224,27 @@ async def conversation_details(
         conversation_id: str,
         bundle_id: Optional[str] = Query(
             default=None,
-            description="If omitted, the default bundle_id from Redis is used.",
+            description="If omitted, conversation details are not filtered by bundle_id and bundle ids are inferred from stored rows.",
         ),
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
 
-    bundle_id = await _resolve_bundle_id_or_default(tenant, project, bundle_id)
-
     out = await router.state.conversation_browser.get_conversation_details(
         user_id=session.user_id,
         conversation_id=conversation_id,
         bundle_id=bundle_id,
     )
-    out["bundle_id"] = bundle_id
     #  Shape is:
     # {
     #   'conversation_id': ...,
     #   'conversation_title': ...,
     #   'last_activity_at': ...,
     #   'started_at': ...,
-    #   'turns': [ { 'artifacts': [...], 'ts_first': ..., 'ts_last': ..., 'turn_id': ... } ],
+    #   'bundle_id': '...',      # present only when all returned rows share one bundle
+    #   'bundle_ids': ['...'],   # inferred distinct bundle ids from fetched rows
+    #   'turns': [ { 'artifacts': [...], 'ts_first': ..., 'ts_last': ..., 'turn_id': ..., 'bundle_id': '...' } ],
     #   'user_id': ...
     # }
     return out
@@ -259,7 +258,7 @@ async def fetch_conversation(
         req: ConversationFetchRequest = Body(...),
         bundle_id: Optional[str] = Query(
             default=None,
-            description="If omitted, the default bundle_id from Redis is used.",
+            description="If omitted, conversation fetch is not filtered by bundle_id and bundle ids are inferred from stored rows.",
         ),
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
@@ -271,8 +270,6 @@ async def fetch_conversation(
     if not session.user_id:
         raise HTTPException(status_code=401, detail="No user in session")
 
-    bundle_id = await _resolve_bundle_id_or_default(tenant, project, bundle_id)
-
     data = await router.state.conversation_browser.fetch_conversation_artifacts(
         user_id=session.user_id,
         conversation_id=conversation_id,
@@ -281,7 +278,6 @@ async def fetch_conversation(
         days=int(req.days),
         bundle_id=bundle_id,
     )
-    data["bundle_id"] = bundle_id
     for turn in (data or {}).get("turns", []):
         for artifact in turn.get("artifacts", []):
             strip_base64_from_citables_artifact(artifact)
@@ -290,9 +286,11 @@ async def fetch_conversation(
     # {
     #   "user_id": ...,
     #   "conversation_id": ...,
+    #   "bundle_id": "...",      # present only when all returned artifacts share one bundle
+    #   "bundle_ids": ["..."],   # inferred distinct bundle ids from fetched rows
     #   "turns": [
     #       {"turn_id": "t1", "artifacts": [
-    #           {"message_id": "...", "type": "...", "ts": "...", "hosted_uri": "...", ["data": {...}]}
+    #           {"message_id": "...", "type": "...", "ts": "...", "hosted_uri": "...", "bundle_id": "...", ["data": {...}]}
     #       ]},
     #       ...
     #   ]
@@ -325,8 +323,16 @@ async def delete_conversation(
     raw_user_type = getattr(session, "user_type", "standard")
     user_type_str = getattr(raw_user_type, "value", str(raw_user_type))
 
-    # Bundle scoping (same pattern as feedback endpoints)
-    bundle_id = await resolve_default_bundle_id_from_runtime_ctx(router.state, tenant, project)
+    inferred_bundle_id = None
+    try:
+        details = await router.state.conversation_browser.get_conversation_details(
+            user_id=session.user_id,
+            conversation_id=conversation_id,
+            bundle_id=None,
+        )
+        inferred_bundle_id = (details or {}).get("bundle_id")
+    except Exception:
+        inferred_bundle_id = None
 
     try:
         result = await router.state.conversation_browser.delete_conversation(
@@ -335,7 +341,7 @@ async def delete_conversation(
             user_id=session.user_id,
             conversation_id=conversation_id,
             user_type=user_type_str,
-            bundle_id=bundle_id,
+            bundle_id=None,
         )
     except HTTPException:
         raise
@@ -357,7 +363,7 @@ async def delete_conversation(
         request_id=str(uuid.uuid4()),
         tenant=tenant,
         project=project,
-        bundle_id=bundle_id,
+        bundle_id=inferred_bundle_id,
         user_id=session.user_id or session.fingerprint,
         session_id=session.session_id,
         conversation_id=conversation_id,
@@ -432,7 +438,6 @@ async def submit_turn_feedback(
         # Get tenant, project info from session or config
         user_type = session.user_type if hasattr(session, 'user_type') else 'standard'
 
-        bundle_id = await resolve_default_bundle_id_from_runtime_ctx(router.state, tenant, project)
         # CASE 1: Clear feedback (reaction is null)
         if req.reaction is None:
             removed = await router.state.conversation_browser.remove_user_reaction(
@@ -448,7 +453,7 @@ async def submit_turn_feedback(
                 user_type=user_type.value,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
-                bundle_id=bundle_id,
+                bundle_id=None,
             )
 
             logger.info(
@@ -495,7 +500,7 @@ async def submit_turn_feedback(
             fingerprint=None,
             user_type=user_type.value,
             conversation_id=conversation_id,
-            bundle_id=bundle_id,
+            bundle_id=None,
             origin="user",
         )
 
@@ -507,7 +512,7 @@ async def submit_turn_feedback(
             user_type=user_type.value,
             conversation_id=conversation_id,
             turn_id=turn_id,
-            bundle_id=bundle_id,
+            bundle_id=None,
             feedback={
                 "text": req.text or "",
                 "confidence": 1.0,
@@ -571,22 +576,22 @@ async def fetch_turns_with_feedbacks(
         raise HTTPException(status_code=401, detail="No user in session")
 
     try:
-        bundle_id = await resolve_default_bundle_id_from_runtime_ctx(router.state, tenant, project)
-
         data = await router.state.conversation_browser.fetch_turns_with_feedbacks(
             user_id=session.user_id,
             conversation_id=conversation_id,
             turn_ids=(req.turn_ids or None),
             days=int(req.days),
-            bundle_id=bundle_id,
         )
         # Shape:
         # {
         #   "user_id": ...,
         #   "conversation_id": ...,
+        #   "bundle_id": "...",      # present only when all returned turns share one bundle
+        #   "bundle_ids": ["..."],   # inferred distinct bundle ids from fetched rows
         #   "turns": [
         #       {
         #           "turn_id": "...",
+        #           "bundle_id": "...",   # inferred from fetched turn rows
         #           "turn_log": { ... },   # full object
         #           "assistant": { ... }, # item with payload
         #           "user": { ... },      # item with payload

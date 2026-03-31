@@ -839,7 +839,7 @@ class ContextRAGClient:
             user_type: str,
             conversation_id: str,
             turn_id: str,
-            bundle_id: str,
+            bundle_id: Optional[str] = None,
     ) -> bool:
         """
         Remove all user-origin feedbacks (and matching timeline entries) from the
@@ -865,6 +865,7 @@ class ContextRAGClient:
             return False
 
         turn_log_item = items[0]
+        inferred_bundle_id = bundle_id or turn_log_item.get("bundle_id")
         payload = turn_log_item.get("payload") or {}
         tl = payload.get("turn_log") or {}
         changed = False
@@ -905,7 +906,7 @@ class ContextRAGClient:
             # Write new blob
             hosted_uri, message_id, rn = await self.store.put_message(
                 tenant=tenant, project=project, user=user, fingerprint=None,
-                conversation_id=conversation_id, bundle_id=bundle_id,
+                conversation_id=conversation_id, bundle_id=inferred_bundle_id,
                 role="artifact", text="", id="turn.log",
                 payload=payload,
                 meta={"kind": "turn.log", "turn_id": turn_id},
@@ -922,6 +923,7 @@ class ContextRAGClient:
                 tags=tags,
                 ts=original_ts,
                 text=index_text if index_text else "",
+                bundle_id=inferred_bundle_id,
             )
             return True
 
@@ -931,7 +933,7 @@ class ContextRAGClient:
                                           tenant: str, project: str, user: str,
                                           fingerprint: Optional[str],
                                           user_type: str, conversation_id: str,
-                                          bundle_id: str,
+                                          bundle_id: Optional[str] = None,
                                           origin: str = "machine"):
         """
         Add a reaction to a turn log.
@@ -951,6 +953,25 @@ class ContextRAGClient:
                 conversation_id=conversation_id
             )
 
+        inferred_bundle_id = bundle_id
+        if inferred_bundle_id is None:
+            existing = await self.search(
+                query=None,
+                kinds=("artifact:turn.log",),
+                roles=("artifact",),
+                scope="conversation",
+                user_id=user,
+                conversation_id=conversation_id,
+                days=3650,
+                top_k=1,
+                include_deps=False,
+                with_payload=False,
+                all_tags=[f"turn:{turn_id}"],
+            )
+            items = existing.get("items") or []
+            if items:
+                inferred_bundle_id = items[0].get("bundle_id")
+
         payload = {"reaction": reaction}
         try:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.feeback import Feedback
@@ -966,7 +987,7 @@ class ContextRAGClient:
         hosted_uri, message_id, rn = await self.store.put_message(
             tenant=tenant, project=project, user=user,
             conversation_id=conversation_id,
-            bundle_id=bundle_id,
+            bundle_id=inferred_bundle_id,
             role="artifact",
             text=reaction_text,
             payload=payload,
@@ -977,7 +998,7 @@ class ContextRAGClient:
         )
         await self.idx.add_message(
             user_id=user, conversation_id=conversation_id, turn_id=turn_id,
-            bundle_id=bundle_id,
+            bundle_id=inferred_bundle_id,
             role="artifact",
             text=reaction_text, hosted_uri=hosted_uri, ts=payload["reaction"]["ts"],
             tags=tags,
@@ -993,7 +1014,7 @@ class ContextRAGClient:
             user_type: str,
             conversation_id: str,
             turn_id: str,
-            bundle_id: str,
+            bundle_id: Optional[str] = None,
             feedback: dict,  # {"text": str, "confidence": float, "ts": str, "from_turn_id": str, "origin": str, "reaction": str}
     ) -> Optional[dict]:
         """
@@ -1024,6 +1045,7 @@ class ContextRAGClient:
                 return None
 
             turn_log_item = items[0]
+            inferred_bundle_id = bundle_id or turn_log_item.get("bundle_id")
             payload = turn_log_item.get("payload") or {}
 
             # 2) Extract current turn_log array and text
@@ -1108,7 +1130,7 @@ class ContextRAGClient:
                 user=user,
                 fingerprint=None,
                 conversation_id=conversation_id,
-                bundle_id=bundle_id,
+                bundle_id=inferred_bundle_id,
                 role="artifact",
                 text="",  # Not used for S3 storage
                 id="turn.log",
@@ -1132,6 +1154,7 @@ class ContextRAGClient:
                 tags=merged_tags,
                 ts=original_ts,  # PRESERVE original timestamp
                 text=index_text if index_text else "",
+                bundle_id=inferred_bundle_id,
             )
 
             logger.info(
@@ -1169,9 +1192,12 @@ class ContextRAGClient:
         {
           "user_id": ...,
           "conversation_id": ...,
+          "bundle_id": "...",            # present only when all returned turns share one bundle
+          "bundle_ids": ["...", "..."],  # inferred distinct bundle ids from fetched rows
           "turns": [
             {
               "turn_id": "t-001",
+              "bundle_id": "...",              # inferred from fetched turn rows
               "turn_log": <payload dict of artifact:turn.log>,
               "assistant": <assistant message item with payload>,
               "user": <user message item with payload>,
@@ -1182,6 +1208,15 @@ class ContextRAGClient:
           ]
         }
         """
+
+        # For this endpoint, missing external bundle_id means "do not filter by bundle".
+        # Preserve other context fields if present, but strip ambient bundle fields so
+        # nested search/recent/materialize_turn calls do not silently reintroduce a
+        # bundle filter from request/accounting context.
+        query_ctx = dict(self._load_ctx(ctx) or {})
+        if bundle_id is None:
+            query_ctx.pop("bundle_id", None)
+            query_ctx.pop("app_bundle_id", None)
 
         # Helper to read a single recent item for role/kind with payload
         async def _first_recent(
@@ -1199,7 +1234,7 @@ class ContextRAGClient:
                 all_tags=all_tags,
                 with_payload=True,
                 bundle_id=bundle_id,
-                ctx=ctx,
+                ctx=query_ctx,
             )
             return (res.get("items") or [None])[0]
 
@@ -1219,7 +1254,7 @@ class ContextRAGClient:
                 with_payload=True,
                 sort="hybrid",
                 bundle_id=bundle_id,
-                ctx=ctx,
+                ctx=query_ctx,
             )
             for it in (reactions.get("items") or []):
                 tid = it.get("turn_id")
@@ -1242,7 +1277,7 @@ class ContextRAGClient:
                 with_payload=True,
                 sort="hybrid",
                 bundle_id=bundle_id,
-                ctx=ctx,
+                ctx=query_ctx,
             )
             for it in (turn_logs_recent.get("items") or []):
                 tid = it.get("turn_id")
@@ -1285,6 +1320,7 @@ class ContextRAGClient:
                     user_id=user_id,
                     conversation_id=conversation_id,
                     bundle_id=bundle_id,
+                    ctx=query_ctx,
                     with_payload=True,
                 )
 
@@ -1317,7 +1353,7 @@ class ContextRAGClient:
                     all_tags=[f"turn:{tid}"],
                     with_payload=True,
                     bundle_id=bundle_id,
-                    ctx=ctx,
+                    ctx=query_ctx,
                 )
 
                 # For assistant/user messages, prefer materialized bundle
@@ -1330,8 +1366,16 @@ class ContextRAGClient:
                 if not user_msg:
                     user_msg = await _first_recent(roles=("user",), all_tags=[f"turn:{tid}"])
 
+                inferred_bundle_id = (
+                    turn_log_item.get("bundle_id")
+                    or (assistant or {}).get("bundle_id")
+                    or (user_msg or {}).get("bundle_id")
+                    or next((item.get("bundle_id") for item in (reactions.get("items") or []) if item.get("bundle_id")), None)
+                )
+
                 return {
                     "turn_id": tid,
+                    "bundle_id": inferred_bundle_id,
                     "turn_log": turn_log_payload,                 # full object as requested
                     "assistant": assistant,                       # full item incl. payload
                     "user": user_msg,                             # full item incl. payload
@@ -1340,8 +1384,20 @@ class ContextRAGClient:
                 }
 
         out_turns = await asyncio.gather(*(_build_turn(tid) for tid in turn_ids))
+        bundle_ids: List[str] = []
+        seen_bundle_ids = set()
+        for turn in out_turns:
+            inferred_bundle_id = turn.get("bundle_id")
+            if inferred_bundle_id and inferred_bundle_id not in seen_bundle_ids:
+                seen_bundle_ids.add(inferred_bundle_id)
+                bundle_ids.append(inferred_bundle_id)
 
-        return {"user_id": user_id, "conversation_id": conversation_id, "turns": out_turns}
+        result = {"user_id": user_id, "conversation_id": conversation_id, "turns": out_turns}
+        if bundle_ids:
+            result["bundle_ids"] = bundle_ids
+            if len(bundle_ids) == 1:
+                result["bundle_id"] = bundle_ids[0]
+        return result
 
     async def fetch_feedback_conversations_in_period(
             self,
@@ -1886,11 +1942,15 @@ class ContextRAGClient:
         :param conversation_id:
         :return:
         """
-
+        query_ctx = dict(self._load_ctx(ctx) or {})
+        if bundle_id is None:
+            query_ctx.pop("bundle_id", None)
+            query_ctx.pop("app_bundle_id", None)
         # 1) Load the latest timeline artifact and extract conversation details.
         conversation_title = None
         conversation_started_at = None
         sources_pool = []
+        timeline_bundle_id = None
         try:
             res_ws = await self.recent(
                 kinds=[f"artifact:{TIMELINE_KIND}"],
@@ -1900,11 +1960,12 @@ class ContextRAGClient:
                 conversation_id=conversation_id,
                 with_payload=False,
                 bundle_id=bundle_id,
-                ctx=ctx,
+                ctx=query_ctx,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
                 timeline_metadata = ws_items[0]
+                timeline_bundle_id = timeline_metadata.get("bundle_id")
                 timeline_metadata = json.loads(timeline_metadata.get("text") or "") or {}
                 title = (timeline_metadata.get("conversation_title") or "").strip()
                 if title:
@@ -1920,13 +1981,16 @@ class ContextRAGClient:
         occurrences = await self.idx.get_conversation_turn_ids_from_tags(
             user_id=user_id,
             conversation_id=conversation_id,
-            bundle_id=bundle_id
+            bundle_id=bundle_id,
+            ctx=query_ctx,
         )
         # 4) Aggregate to first/last timestamps per turn_id, preserving first-seen order
         turns_map: Dict[str, Dict[str, str|List]] = {}
         order: List[str] = []
         started_at = conversation_started_at
         last_activity_at = None
+        bundle_ids: List[str] = []
+        seen_bundle_ids = set()
 
         for occ in occurrences:
 
@@ -1938,29 +2002,49 @@ class ContextRAGClient:
                 started_at = ts
 
             tags = occ.get("tags") or []
+            occ_bundle_id = occ.get("bundle_id")
+            if occ_bundle_id and occ_bundle_id not in seen_bundle_ids:
+                seen_bundle_ids.add(occ_bundle_id)
+                bundle_ids.append(occ_bundle_id)
             hit = next((t for t in tags if t in ui_artifacts_tags), None)
             turn_ui_artifacts = turns_map.get(tid, {}).get("artifacts", [])
             if hit:
                 turn_ui_artifacts.append({"message_id": occ.get("mid"), "type": hit})
             if tid not in turns_map:
-                turns_map[tid] = {"turn_id": tid, "ts_first": ts, "ts_last": ts, "artifacts": turn_ui_artifacts}
+                turns_map[tid] = {
+                    "turn_id": tid,
+                    "ts_first": ts,
+                    "ts_last": ts,
+                    "artifacts": turn_ui_artifacts,
+                    "bundle_id": occ_bundle_id,
+                }
                 order.append(tid)
             else:
                 # update last-seen timestamp
                 turns_map[tid]["ts_last"] = ts
+                if not turns_map[tid].get("bundle_id") and occ_bundle_id:
+                    turns_map[tid]["bundle_id"] = occ_bundle_id
                 last_activity_at = ts
 
+        if timeline_bundle_id and timeline_bundle_id not in seen_bundle_ids:
+            seen_bundle_ids.add(timeline_bundle_id)
+            bundle_ids.append(timeline_bundle_id)
+
         turns = [turns_map[tid] for tid in order]
-        return {
+        result = {
             "user_id": user_id,
             "conversation_id": conversation_id,
             "conversation_title": conversation_title,
             "started_at": started_at,
             "last_activity_at": last_activity_at,
-            "bundle_id": bundle_id,
             "turns": turns,
             "sources_pool": sources_pool
         }
+        if bundle_ids:
+            result["bundle_ids"] = bundle_ids
+            if len(bundle_ids) == 1:
+                result["bundle_id"] = bundle_ids[0]
+        return result
 
     async def conversation_exists(
             self,
@@ -2034,6 +2118,15 @@ class ContextRAGClient:
         bundle_id: Optional[str] = None,
         ctx: Optional[dict] = None,
     ) -> Dict[str, Any]:
+        # For this endpoint, missing external bundle_id means "do not filter by bundle".
+        # Preserve other context fields if present, but strip ambient bundle fields so
+        # nested index/recent/materialize_turn calls do not silently reintroduce a
+        # bundle filter from request/accounting context.
+        query_ctx = dict(self._load_ctx(ctx) or {})
+        if bundle_id is None:
+            query_ctx.pop("bundle_id", None)
+            query_ctx.pop("app_bundle_id", None)
+
         # 1) Collect UI-visible artifacts per turn (existing behavior)
         occ = await self.idx.get_conversation_turn_ids_from_tags(
             user_id=user_id,
@@ -2041,6 +2134,7 @@ class ContextRAGClient:
             days=days,
             bundle_id=bundle_id,
             turn_ids=turn_ids or None,
+            ctx=query_ctx,
         )
 
         conversation_title = None
@@ -2056,7 +2150,7 @@ class ContextRAGClient:
                 conversation_id=conversation_id,
                 with_payload=False,
                 bundle_id=bundle_id,
-                ctx=ctx,
+                ctx=query_ctx,
             )
             ws_items = list(res_ws.get("items") or [])
             if ws_items:
@@ -2087,7 +2181,6 @@ class ContextRAGClient:
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "conversation_title": conversation_title,
-                "bundle_id": bundle_id,
                 "turns": []
             }
 
@@ -2171,7 +2264,7 @@ class ContextRAGClient:
                 conversation_id=conversation_id,
                 bundle_id=bundle_id,
                 with_payload=True,
-                ctx=ctx,
+                ctx=query_ctx,
             )
             turn_log_item = mat.get("turn_log") or {}
             turn_log_payload = unwrap_payload(turn_log_item)
@@ -2389,13 +2482,28 @@ class ContextRAGClient:
                         rendered = citation_utils.replace_citation_tokens_batch(raw_text, citation_map, opts)
                         data["text"] = rendered
 
-        return {
+        bundle_ids: List[str] = []
+        seen_bundle_ids = set()
+        for turn in (turns_map.get(tid) for tid in order):
+            if not turn:
+                continue
+            for artifact in turn.get("artifacts") or []:
+                inferred_bundle_id = artifact.get("bundle_id")
+                if inferred_bundle_id and inferred_bundle_id not in seen_bundle_ids:
+                    seen_bundle_ids.add(inferred_bundle_id)
+                    bundle_ids.append(inferred_bundle_id)
+
+        result = {
             "user_id": user_id,
             "conversation_id": conversation_id,
             "conversation_title": conversation_title,
-            "bundle_id": bundle_id,
             "turns": [turns_map[tid] for tid in order],
         }
+        if bundle_ids:
+            result["bundle_ids"] = bundle_ids
+            if len(bundle_ids) == 1:
+                result["bundle_id"] = bundle_ids[0]
+        return result
 
     async def get_conversation_state(self, *, user_id: str, conversation_id: str) -> dict:
         row = await self.idx.get_conversation_state_row(user_id=user_id, conversation_id=conversation_id)
