@@ -1,6 +1,6 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.31.158"
+  ref: "2026.3.31.203"
   description: |
     This release focuses on React agent workspace clarity, bundle-authoring guidance, and
     documentation/source discoverability.
@@ -18,4 +18,4 @@ platform:
     mentioned files are actually reachable by users and by the agent. This reduces dead shorthand
     references and makes doc-driven exploration more dependable.
 config:
-    version: "2026.3.31.158"
+    version: "2026.3.31.203"

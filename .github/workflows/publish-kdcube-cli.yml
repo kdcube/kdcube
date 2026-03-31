@@ -49,17 +49,17 @@ jobs:
           version = os.environ.get("VERSION", "")
           if not version:
               raise SystemExit("VERSION is not set")
-          path = Path(" app/ai-app/src/kdcube-ai-app/kdcube_cli/pyproject.toml")
+          path = Path("app/ai-app/src/kdcube-ai-app/kdcube_cli/pyproject.toml")
           text = path.read_text()
           text = re.sub(r'version = ".*"', f'version = "{version}"', text, count=1)
           path.write_text(text)
           PY
       - name: Build package
-        working-directory:  app/ai-app/src/kdcube-ai-app/kdcube_cli
+        working-directory: app/ai-app/src/kdcube-ai-app/kdcube_cli
         run: |
           python -m pip install --upgrade pip build
           python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          packages-dir:  app/ai-app/src/kdcube-ai-app/kdcube_cli/dist
+          packages-dir: app/ai-app/src/kdcube-ai-app/kdcube_cli/dist
