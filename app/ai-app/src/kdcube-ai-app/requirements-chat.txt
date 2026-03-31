@@ -63,6 +63,7 @@ python-dateutil
 xlsxwriter
 openpyxl
 httpx
+trio
 tinycss2
 python-pptx
 
