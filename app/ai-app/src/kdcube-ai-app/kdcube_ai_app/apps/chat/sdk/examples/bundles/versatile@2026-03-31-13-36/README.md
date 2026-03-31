@@ -54,14 +54,15 @@ This bundle exposes two entrypoint operations:
 - `preferences_widget`
   - reads current preference data
   - renders `ui/PreferencesBrowser.tsx`
-  - returns iframe-ready HTML
+- returns iframe-ready HTML
 - `preferences_widget_data`
   - returns the current widget payload as JSON for the authenticated iframe client
-  - is intended to be called by the widget through the integrations operations API
+  - is called by the widget through the integrations operations API
 - `preferences_exec_report`
   - runs a tiny report job through the isolated exec runtime
   - writes a markdown report artifact from bundle storage content
-  - is wired to the widget's `Run Exec Report` button through the same integrations operations API
+  - is wired to the widget's `Run Exec Report` button through the same integrations
+operations API
 
 ## Widget integration contract
 
@@ -82,6 +83,30 @@ Reference frontend patterns:
 Reference backend endpoint:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
+The widget uses the platform iframe config handshake and then calls:
+
+- `POST /api/integrations/bundles/{tenant}/{project}/operations/preferences_widget_data`
+- `POST /api/integrations/bundles/{tenant}/{project}/operations/preferences_exec_report`
+
+Important request shape:
+
+```json
+{
+  "bundle_id": "versatile@2026-03-31-13-36",
+  "data": {
+    "recency": 10,
+    "kwords": "language timezone"
+  }
+}
+```
+
+The integrations endpoint forwards `data` as keyword arguments to the bundle
+method. In this bundle:
+- `preferences_widget_data(...)` uses the per-request `self.comm` context and
+  ignores extra params
+- `preferences_exec_report(recency=..., kwords=...)` consumes forwarded values
+  and falls back to defaults when they are absent
+
 ## Tool surface
 
 The bundle includes:
@@ -90,6 +115,7 @@ The bundle includes:
   - `io_tools`
   - `ctx_tools`
   - `exec_tools`
+  - `web_tools`
   - `rendering_tools`
 - Bundle-local tools:
   - `preferences`

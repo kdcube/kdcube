@@ -5,7 +5,8 @@ import {
     EconomicsResponse,
     EconomicUsageResponse,
     GatewayResponse,
-    RedisBrowserResponse
+    RedisBrowserResponse,
+    VersatilePreferencesResponse
 } from "./types.ts";
 import {appendDefaultCredentialsHeader} from "../../app/api/utils.ts";
 import {ChatScope} from "../chat/chatTypes.ts";
@@ -16,6 +17,7 @@ const GatewayTag = "gateway"
 const ConversationBrowserTag = "conversation_browser"
 const RedisBrowserTag = "redis_browser"
 const EconomicUsageTag = "economic_usage"
+const VersatilePreferencesTag = "versatile_preferences"
 
 export type GetWidgetParams = ChatScope
 
@@ -26,7 +28,7 @@ export const widgetPanelsApiSlice = createApi({
             return appendDefaultCredentialsHeader(headers) as Headers;
         }
     }),
-    tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag, EconomicUsageTag],
+    tagTypes: [EconomicsTag, AIBundlesTag, GatewayTag, ConversationBrowserTag, RedisBrowserTag, EconomicUsageTag, VersatilePreferencesTag],
     endpoints: builder => ({
         getEconomicsWidget: builder.query<string, {
             tenant: string,
@@ -142,6 +144,27 @@ export const widgetPanelsApiSlice = createApi({
             },
             providesTags: [EconomicUsageTag],
         }),
+        getVersatilePreferencesWidget: builder.query<string, {
+            tenant: string,
+            project: string,
+        }>({
+            query: ({tenant, project}: GetWidgetParams) => {
+                return {
+                    url: `/api/integrations/bundles/${tenant}/${project}/operations/preferences_widget`,
+                    method: 'POST',
+                    headers: [
+                        ["Content-Type", "application/json"]
+                    ],
+                    body: JSON.stringify({
+                        bundle_id: "versatile@2026-03-31-13-36"
+                    })
+                }
+            },
+            transformResponse(res: VersatilePreferencesResponse) {
+                return res.preferences_widget[0]
+            },
+            providesTags: [VersatilePreferencesTag],
+        }),
     })
 })
 
@@ -152,4 +175,5 @@ export const {
     useGetConversationBrowserWidgetQuery, useLazyGetConversationBrowserWidgetQuery,
     useGetRedisBrowserWidgetQuery, useLazyGetRedisBrowserWidgetQuery,
     useGetEconomicUsageWidgetQuery, useLazyGetEconomicUsageWidgetQuery,
+    useGetVersatilePreferencesWidgetQuery, useLazyGetVersatilePreferencesWidgetQuery,
 } = widgetPanelsApiSlice

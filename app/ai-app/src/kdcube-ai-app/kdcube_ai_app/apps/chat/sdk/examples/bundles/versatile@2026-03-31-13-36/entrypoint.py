@@ -16,6 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsy
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import (
     BaseEntrypointWithEconomics,
 )
+from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     build_exec_output_contract,
     run_exec_tool,
@@ -151,7 +152,7 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             rendered = content.replace("__PREFERENCES_JSON__", json.dumps(payload))
             actor = getattr(self.comm_context, "actor", None)
             bundle_spec = getattr(getattr(self, "config", None), "ai_bundle_spec", None)
-            patched = patch_dashboard(
+            rendered = patch_dashboard(
                 input_content=rendered,
                 base_url=f"http://localhost:{os.environ.get('CHAT_APP_PORT') or '8010'}",
                 default_tenant=getattr(actor, "tenant_id", None) or self.settings.TENANT,
@@ -161,12 +162,17 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
                 id_token=None,
                 id_token_header="X-ID-Token",
             )
-            return [self._render_dashboard_html(content=patched, title="Preferences Browser")]
+            return [self._render_dashboard_html(content=rendered, title="Preferences Browser")]
         except Exception:
             self.logger.log(traceback.format_exc(), "ERROR")
             return ["<p>Unable to render the preferences widget right now.</p>"]
 
-    def preferences_widget_data(self, user_id: Optional[str] = None, fingerprint: Optional[str] = None, **kwargs):
+    def preferences_widget_data(
+        self,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs,
+    ):
         storage_root = self._preferences_storage_root()
         if not storage_root:
             return {
@@ -217,7 +223,10 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
         outdir = op_root / "out"
         exec_id = f"preferences-{uuid.uuid4().hex[:10]}"
         target_user = user_id or fingerprint or getattr(self.comm, "user_id", None) or "anonymous"
-        report_recency = max(1, int(recency or 10))
+        try:
+            report_recency = max(1, min(100, int(recency)))
+        except Exception:
+            report_recency = 10
         report_keywords = str(kwords or "").strip()
         contract_items = [
             {
@@ -257,30 +266,32 @@ if events_path.exists():
         except Exception:
             pass
 
-raw_keywords = {json.dumps(report_keywords)}
-keywords = [part.strip().lower() for part in raw_keywords.replace(";", ",").split(",") if part.strip()]
+report_keywords = {json.dumps(report_keywords)}
+keyword_tokens = [token.lower() for token in report_keywords.split() if token.strip()]
+if keyword_tokens:
+    filtered_current = {{}}
+    for key, item in current.items():
+        haystack = f"{{key}} {{item.get('value', '')}} {{item.get('origin', '')}}".lower()
+        if all(token in haystack for token in keyword_tokens):
+            filtered_current[key] = item
+    current = filtered_current
 
-def _matches(event):
-    if not keywords:
-        return True
-    haystack = " ".join(
-        [
-            str(event.get("key") or ""),
-            str(event.get("value") or ""),
-            str(event.get("evidence") or ""),
-        ]
-    ).lower()
-    return all(keyword in haystack for keyword in keywords)
-
-matched_events = [event for event in reversed(events) if _matches(event)]
-recent_events = matched_events[: {report_recency}]
+    filtered_events = []
+    for event in events:
+        haystack = (
+            f"{{event.get('key', '')}} {{event.get('value', '')}} "
+            f"{{event.get('origin', '')}} {{event.get('evidence', '')}}"
+        ).lower()
+        if all(token in haystack for token in keyword_tokens):
+            filtered_events.append(event)
+    events = filtered_events
 
 lines = [
     "# Preferences Exec Report",
     "",
     f"User: {target_user}",
     f"Recency: {report_recency}",
-    f"Keywords: {{', '.join(keywords) if keywords else '(none)'}}",
+    f"Keywords: {{report_keywords or '(none)'}}",
     "",
     "## Current preferences",
 ]
@@ -296,8 +307,8 @@ else:
     lines.append("- No stored preferences yet.")
 
 lines.extend(["", "## Recent observations"])
-if recent_events:
-    for event in recent_events:
+if events:
+    for event in events[-{report_recency}:]:
         lines.append(
             f"- {{event.get('captured_at')}} | {{event.get('key')}} = {{event.get('value')}} "
             f"(origin={{event.get('origin')}})"

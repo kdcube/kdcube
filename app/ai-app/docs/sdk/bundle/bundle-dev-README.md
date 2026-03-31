@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-config-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/bundle-platform-properties-README.md
 ---
@@ -25,6 +26,8 @@ Read these first:
   [docs/sdk/bundle/bundle-config-README.md](bundle-config-README.md)
 - primary full-feature reference bundle:
   [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
+- declarative platform integration (`@api`, `@ui_widget`, `@ui_main`, `@on_message`):
+  [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 - optional React `ks:` integration:
   [docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)
 
@@ -51,8 +54,9 @@ Overview doc:
 Recommended first read sequence for bundle builders:
 1. [docs/sdk/bundle/bundle-index-README.md](bundle-index-README.md)
 2. [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
-3. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
-4. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+3. [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+4. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+5. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
 
 Key files:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` — entrypoint, economics, widget operation, direct isolated-exec operation
@@ -76,6 +80,7 @@ Related runtime entrypoints:
 - Processor task runner: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` (loads bundle + calls `run`)
 - Integrations API: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
   - `POST /bundles/{tenant}/{project}/operations/{operation}` invokes `workflow.<operation>(...)`
+  - future declarative routing is described in [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 - Base entrypoint features: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
   - Admin React apps like `ai_bundles`, `svc_gateway` can be exposed from bundles
 

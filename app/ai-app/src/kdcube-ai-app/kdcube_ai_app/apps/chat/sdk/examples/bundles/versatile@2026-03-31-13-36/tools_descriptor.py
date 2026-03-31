@@ -22,6 +22,11 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "use_sk": True,
     },
     {
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.web_tools",
+        "alias": "web_tools",
+        "use_sk": True,
+    },
+    {
         "module": "kdcube_ai_app.apps.chat.sdk.tools.rendering_tools",
         "alias": "rendering_tools",
         "use_sk": True,
@@ -42,4 +47,7 @@ MCP_TOOL_SPECS: List[Dict[str, Any]] = [
     {"server_id": "firecrawl", "alias": "firecrawl", "tools": ["*"]},
 ]
 
-TOOL_RUNTIME: Dict[str, str] = {}
+TOOL_RUNTIME: Dict[str, str] = {
+    "web_tools.web_search": "local",
+    "web_tools.fetch_url_contents": "local",
+}

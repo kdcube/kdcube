@@ -11,7 +11,8 @@ import {
     LoaderCircle,
     MessageSquareMore,
     MessagesSquare,
-    Search
+    Search,
+    SlidersHorizontal
 } from "lucide-react";
 import IconContainer from "../../components/IconContainer.tsx";
 import AnimatedExpander from "../../components/AnimatedExpander.tsx";
@@ -36,6 +37,7 @@ import {
     useLazyGetEconomicUsageWidgetQuery,
     useLazyGetGatewayWidgetQuery,
     useLazyGetRedisBrowserWidgetQuery,
+    useLazyGetVersatilePreferencesWidgetQuery,
 } from "../widgetPanels/widgetPanels.ts";
 import {selectProject, selectTenant} from "../chat/chatSettingsSlice.ts";
 import {getChatPagePath} from "../chat/configHelper.ts";
@@ -364,6 +366,15 @@ const EconomicUsagePanel = ({visible, className}: WidgetPanelProps) => {
     }, [trigger, lastArg, visible, className]);
 }
 
+const VersatilePreferencesPanel = ({visible, className}: WidgetPanelProps) => {
+    const [trigger, lastArg] = useLazyGetVersatilePreferencesWidgetQuery();
+
+    return useMemo(() => {
+        return <GenericPanel trigger={trigger} lastArg={lastArg} visible={visible} className={className}
+                             reloadOnShow={true}/>
+    }, [trigger, lastArg, visible, className]);
+}
+
 type Panels =
     "conversations"
     | "economics"
@@ -372,6 +383,7 @@ type Panels =
     | "conv_browser"
     | "redis_browser"
     | "economic_usage"
+    | "versatile_preferences"
     | "echo_ui"
     | "debug"
     | null
@@ -460,6 +472,13 @@ const ChatSidePanel = () => {
                 </MenuButton>
                 <MenuButton
                     onClick={() => {
+                        onPanelButtonClick("versatile_preferences");
+                    }}
+                >
+                    <IconContainer icon={SlidersHorizontal} size={1.5}/>
+                </MenuButton>
+                <MenuButton
+                    onClick={() => {
                         onPanelButtonClick("echo_ui");
                     }}
                 >
@@ -494,6 +513,8 @@ const ChatSidePanel = () => {
                                            className={"w-full h-full absolute left-0 top-0"}/>
                         <EconomicUsagePanel visible={visiblePanel === "economic_usage"}
                                             className={"w-full h-full absolute left-0 top-0"}/>
+                        <VersatilePreferencesPanel visible={visiblePanel === "versatile_preferences"}
+                                                   className={"w-full h-full absolute left-0 top-0"}/>
                         <EchoUIPanel visible={visiblePanel === "echo_ui"}
                                      className={"w-full h-full absolute left-0 top-0"}/>
                         {showDebugControls && <DebugPanel visible={visiblePanel === "debug"}
