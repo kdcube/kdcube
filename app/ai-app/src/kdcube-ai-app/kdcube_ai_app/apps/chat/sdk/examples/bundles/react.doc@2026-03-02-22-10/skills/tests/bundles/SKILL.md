@@ -41,6 +41,9 @@ Companion loading rule:
 - When platform or framework symbols are needed, confirm them from current docs/examples/source before coding.
 - Do not invent platform symbols or import paths.
 - Prefer the smallest implementation that can satisfy the currently confirmed contract; validate early, then expand.
+- Bundle docs start point for authoring is `ks:docs/sdk/bundle/bundle-index-README.md`.
+- Primary full reference bundle doc is `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`.
+- Normal reference bundle code root is `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`.
 - For bundle authoring/modification, do not start with `react.write` or `react.patch` after reading only skills.
   First read the actual current tests that define the contract.
 - If the bundle uses platform-integrated SDK/runtime/agent patterns, also read at least one current source/example/doc file that proves that pattern before writing code.
@@ -61,6 +64,11 @@ If any item above is still missing, do not write bundle code yet. Gather the mis
 
 The current bundle pytest suite is exposed by `react.doc` under its real knowledge-space path:
 - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/...`
+
+Normal docs start point before reading individual tests:
+- `ks:docs/sdk/bundle/bundle-index-README.md`
+- then `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`
+- then `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
 
 That is a real path under one common `ks:` root, not a separate test-only namespace.
 
@@ -113,23 +121,28 @@ Interpretation rule:
 
 1. Read this skill if it is relevant:
    - `react.read(["sk:tests.bundles"])`
-2. Read the actual current test files before writing bundle code:
+2. Read the bundle docs start point if you have not already:
+   - `react.read(["ks:docs/sdk/bundle/bundle-index-README.md"])`
+   - `react.read(["ks:docs/sdk/bundle/bundle-reference-versatile-README.md"])`
+   - `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md"])`
+3. Read the actual current test files before writing bundle code:
    - start from `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
    - discover the relevant pytest files by browsing from generated exec code if the exact file is not already known
    - bring the exact discovered file(s) back into visible context with `react.read(...)`
-3. In generated exec code, if discovery is needed:
+4. In generated exec code, if discovery is needed:
    - resolve `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle` with `bundle_data.resolve_namespace(...)`
    - browse the returned `physical_path`
    - identify the relevant pytest files for bundle validation
    - emit exact logical refs or a short listing into `OUTPUT_DIR/...`
-4. Only after the tests are actually read, write or patch the bundle code.
-5. Run the narrowest exact file or subset that validates the current step.
-6. Write the pytest results to `OUTPUT_DIR/...` so they come back to the agent clearly.
+5. Only after the tests are actually read, write or patch the bundle code.
+6. Run the narrowest exact file or subset that validates the current step.
+7. Write the pytest results to `OUTPUT_DIR/...` so they come back to the agent clearly.
 
 Implementation strategy:
 - read the tests first to understand the minimum required shape
 - if exact test paths are not obvious, do a narrow browse of the test subtree first and then read the exact discovered files
 - for platform-integrated bundle code, read at least one current source/example/doc file that proves the needed SDK pattern before implementing it
+- for normal bundle authoring in this repo, the default paired source example is the `versatile` bundle unless the question is specifically about `ks:` or a stripped-down isolated-exec example
 - implement the smallest version that can satisfy that shape
 - run the most relevant tests early
 - only add non-essential structure after the current contract passes

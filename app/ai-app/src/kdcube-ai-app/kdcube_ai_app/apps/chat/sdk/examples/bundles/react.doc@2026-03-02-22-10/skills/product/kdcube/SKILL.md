@@ -66,20 +66,28 @@ Bundle-authoring rule:
 - If docs mention candidate code paths, treat those paths as the next files to read.
 - If the exact file is still unclear, browse a small relevant subtree in exec and then read the exact discovered files.
 - For SDK-integrated bundle work, current tests and current source/examples outrank skill prose.
+- For bundle authoring in this repo, the normal docs start point is `ks:docs/sdk/bundle/bundle-index-README.md`.
+- The normal full reference bundle is `ks:docs/sdk/bundle/bundle-reference-versatile-README.md` and the actual code root `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`.
+- For bundle authoring, the normal paired validation root is `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`.
 
 ## Default copilot workflow for bundle work
 
 When the user asks for a bundle with specific features, prepare yourself in this order:
 
-1. Translate the request into feature slices.
+1. Read the bundle docs start point:
+   - `ks:docs/sdk/bundle/bundle-index-README.md`
+   - then the primary reference bundle doc `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`
+   - then the actual reference bundle README `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+2. Translate the request into feature slices.
    - Examples of feature slices: bundle skeleton, workflow/agent integration, custom tools, skills, storage/state, isolated exec, citations, economics, MCP.
-2. Read the tests that define the minimum contract.
-3. For each requested feature slice, read the smallest current doc/source/example file set that proves how that slice is implemented now.
-4. If docs mention exact source paths, read those exact files next.
-5. If the exact source/example file is still unclear, do a narrow exec browse of the relevant subtree, emit exact logical refs, and then `react.read` those exact files.
-6. After evidence is gathered, write the smallest implementation that satisfies the confirmed contract and the explicit user request.
-7. Validate early.
-8. If validation fails, inspect the exact failure and the exact related source/test files before patching.
+3. Read the tests that define the minimum contract.
+4. For each requested feature slice, read the smallest current doc/source/example file set that proves how that slice is implemented now.
+5. If docs mention exact source paths, read those exact files next.
+   - For normal bundle authoring in this repo, use the `versatile` bundle as the default source example unless the question is specifically about `ks:` or a stripped-down isolated-exec example.
+6. If the exact source/example file is still unclear, do a narrow exec browse of the relevant subtree, emit exact logical refs, and then `react.read` those exact files.
+7. After evidence is gathered, write the smallest implementation that satisfies the confirmed contract and the explicit user request.
+8. Validate early.
+9. If validation fails, inspect the exact failure and the exact related source/test files before patching.
 
 This is the normal copilot loop. Skills tell you where to look and how the platform is organized, but current tests and current source/examples decide what is actually valid.
 
@@ -164,6 +172,11 @@ Advertised roots for this bundle:
   - browseable in exec if you resolve it
 
 ## Bundle structure anchors
+
+Primary reference bundle for bundle authoring in this repo:
+- `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
+- pair it with the validation root:
+  `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
 
 When reasoning about a bundle, keep these common anchors in mind:
 - `entrypoint.py`

@@ -1,0 +1,7 @@
+tools:
+  - id: preferences.get_preferences
+    role: load stored user preferences
+    why: Check whether the current user already has known preferences relevant to the response.
+  - id: preferences.set_preference
+    role: save explicit durable preferences
+    why: Persist a user preference when the user clearly states it and it should influence future answers.

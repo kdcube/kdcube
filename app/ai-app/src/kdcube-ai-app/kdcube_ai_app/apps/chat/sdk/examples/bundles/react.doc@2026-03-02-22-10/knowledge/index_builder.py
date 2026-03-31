@@ -320,7 +320,7 @@ def build_knowledge_index(
     advertised_examples: list[tuple[str, str, str]] = []
     sdk_root = knowledge_root / "src" / "kdcube-ai-app" / "kdcube_ai_app" / "apps" / "chat" / "sdk"
     infra_root = knowledge_root / "src" / "kdcube-ai-app" / "kdcube_ai_app" / "apps" / "infra"
-    tests_root = sdk_root / "examples" / "tests"
+    tests_root = sdk_root / "tests" / "bundle"
     if (knowledge_root / "docs").exists():
         advertised_examples.append((
             "`ks:docs`",
@@ -347,8 +347,8 @@ def build_knowledge_index(
         ))
     if tests_root.exists():
         advertised_examples.append((
-            "`ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests`",
-            "reusable test fixtures",
+            "`ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`",
+            "bundle pytest suite",
             "not indexed for search; exact-readable when path is known; browseable in exec",
         ))
     if advertised_examples:

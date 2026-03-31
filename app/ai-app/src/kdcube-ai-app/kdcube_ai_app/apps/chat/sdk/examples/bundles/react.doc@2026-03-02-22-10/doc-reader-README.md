@@ -187,20 +187,20 @@ So the child runtime still sees the same three classes of data:
   - `ks:docs/<path>` — doc pages (Markdown).
   - `ks:src/<path>` — source files under the real `app/ai-app/src` tree.
   - `ks:deployment/<path>` — deployment files under the real `app/ai-app/deployment` tree.
-  - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests/<path>` — reusable test fixtures under the real source tree.
+  - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/<path>` — bundle pytest files under the real source tree.
 
 ### Advertised roots for this bundle
 
 These are the intended starting points this bundle advertises to the agent.
 They are real app-relative paths under one common `ks:` root, not special platform namespaces.
 
-| Logical base | Intended content | `react.search_knowledge` | `react.read` | Exec browsing via `bundle_data.resolve_namespace(...)` |
-| --- | --- | --- | --- | --- |
-| `ks:docs` | platform docs | yes | yes | yes |
-| `ks:deployment` | deployment files and deployment markdown | deployment markdown only | yes | yes |
-| `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk` | SDK source | no | yes, when exact path is known | yes |
-| `ks:src/kdcube-ai-app/kdcube_ai_app/apps/infra` | infra source | no | yes, when exact path is known | yes |
-| `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests` | reusable test fixtures | no | yes, when exact path is known | yes |
+| Logical base                                                      | Intended content                         | `react.search_knowledge`  | `react.read`                     | Exec browsing via `bundle_data.resolve_namespace(...)` |
+|-------------------------------------------------------------------|------------------------------------------|---------------------------|----------------------------------|--------------------------------------------------------|
+| `ks:docs`                                                         | platform docs                            | yes                       | yes                              | yes                                                    |
+| `ks:deployment`                                                   | deployment files and deployment markdown | deployment markdown only  | yes                              | yes                                                    |
+| `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk`                | SDK source                               | no                        | yes, when exact path is known    | yes                                                    |
+| `ks:src/kdcube-ai-app/kdcube_ai_app/apps/infra`                   | infra source                             | no                        | yes, when exact path is known    | yes                                                    |
+| `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle` | bundle pytest suite                     | no                        | yes, when exact path is known    | yes                                                    |
 
 Guidance:
 - Use `react.search_knowledge(...)` first for docs and deployment markdown.
@@ -221,7 +221,7 @@ React tooling (bundle‑provided):
 - `react.read(["ks:src/<path>"])` — open a source file.
 - `react.search_knowledge(query, root="ks:deployment")` — search deployment docs.
 - `react.read(["ks:deployment/<path>"])` — open deployment files.
-- `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests/<path>"])` — open exact test fixtures or README guidance.
+- `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/<path>"])` — open exact bundle pytest files or suite guidance.
 - `bundle_data.resolve_namespace(logical_ref)` — exec-only resolver for generated code. Returns `{ok, error, ret}` where `ret` is `{physical_path: str | null, access: 'r' | 'rw', browseable: bool}`.
   - `physical_path` is usable only inside isolated exec.
   - use the input `logical_ref` itself as the logical base for later `react.read(...)` follow-up.
@@ -242,7 +242,7 @@ Important:
 - if code finds a useful file at relative path `runtime/execution.py`, emit logical ref `f"{logical_base}/runtime/execution.py"`
 - the agent can later call `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py"])`
 - the same rule applies for test browsing:
-  - keep `logical_base = "ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests"`
+  - keep `logical_base = "ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle"`
   - browse descendants under the exec-only `physical_path`
   - emit follow-up logical refs as `f"{logical_base}/{relative_path}"`
 - For the exact propagation model, see:

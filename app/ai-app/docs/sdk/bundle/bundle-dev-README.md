@@ -17,10 +17,14 @@ see_also:
 This guide is for **bundle developers** who build workflows, tools, and UI experiences on top of the KDCube Chat SDK.
 
 Read these first:
+- docs index + reference bundle:
+  [docs/sdk/bundle/bundle-index-README.md](bundle-index-README.md)
 - lifecycle and storage surfaces:
   [docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)
 - bundle config and secrets:
   [docs/sdk/bundle/bundle-config-README.md](bundle-config-README.md)
+- primary full-feature reference bundle:
+  [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
 - optional React `ks:` integration:
   [docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)
 
@@ -38,17 +42,35 @@ base/economics entrypoints and exec runtime, see:
 
 ## Reference bundle (start here)
 
-Reference implementation:
-`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44`
+Primary reference implementation:
+`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
+
+Overview doc:
+- [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
+
+Recommended first read sequence for bundle builders:
+1. [docs/sdk/bundle/bundle-index-README.md](bundle-index-README.md)
+2. [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
+3. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+4. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
 
 Key files:
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/entrypoint.py` — bundle entrypoint (decorated workflow)
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/orchestrator/workflow.py` — orchestration (BaseWorkflow)
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/agents/` — bundle-local agents (gate, etc.)
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/tools_descriptor.py` — tool registry for this bundle
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/skills_descriptor.py` — skills visibility config
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/resources.py` — user-facing error messages
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react@2026-02-10-02-44/event_filter.py` — event filtering policy
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` — entrypoint, economics, widget operation, direct isolated-exec operation
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/orchestrator/workflow.py` — React orchestration
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools_descriptor.py` — SDK tools + bundle-local tools + MCP connectors
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills_descriptor.py` — bundle-local skill visibility
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools/preference_tools.py` — custom tools
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/preferences_store.py` — shared local bundle storage model
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx` — TSX widget example
+
+Current shared bundle test suite:
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+
+Specialized examples only when the task is narrower than the full reference:
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10`
+  - bundle-defined `ks:` knowledge space and namespace resolution
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
+  - stripped-down direct isolated-exec harness
 
 Related runtime entrypoints:
 - Processor task runner: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py` (loads bundle + calls `run`)
