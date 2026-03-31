@@ -118,6 +118,18 @@ ${baseUrl}/api/...
 
 and attach auth headers. This ensures cookies or tokens are applied correctly in the iframe.
 
+Integration rule:
+- if a widget talks to bundle or platform REST APIs, keep this handshake/auth pattern exact
+- do not invent a separate auth flow for localhost or hardcoded-auth prototyping
+- the same widget must work when auth comes from:
+  - cookies only
+  - bearer token
+  - ID token in a configured header
+
+Reference implementations:
+- `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
+
 ## 4) Bundle operations endpoint (loop-back)
 
 Widgets can call bundle-defined operations via the integrations endpoint:
@@ -129,6 +141,39 @@ POST /api/integrations/bundles/{tenant}/{project}/operations/{op}
 The `{op}` is a method name on the bundle entrypoint (e.g., `suggestions`, `price_model`, or any custom op). The SDK resolves the bundle and calls the operation with the user context.
 
 This allows UI → backend → bundle round-trips without exposing a separate service.
+
+Important:
+- today this endpoint is POST-only
+- widgets should call it with the real tenant/project scope and the intended `bundle_id`
+- the integration wiring should match the reference widgets above without ad-hoc deviations
+
+### Widget ↔ bundle exchange
+
+```mermaid
+sequenceDiagram
+    participant Host as Parent app / host frame
+    participant Widget as Bundle widget iframe
+    participant API as Integrations API
+    participant Bundle as Bundle entrypoint
+
+    Widget->>Host: CONFIG_REQUEST(identity, requestedFields)
+    Host-->>Widget: CONFIG_RESPONSE(baseUrl, tokens, tenant, project, bundle_id)
+
+    Widget->>API: POST /api/integrations/bundles/{tenant}/{project}/operations/{op}
+    Note over Widget,API: credentials: include<br/>Authorization / ID token headers when present<br/>body includes bundle_id
+    API->>Bundle: invoke workflow.<op>(user_id=..., fingerprint=...)
+    Bundle-->>API: JSON result
+    API-->>Widget: {status, tenant, project, bundle_id, op: result}
+    Widget->>Widget: render / refresh UI state
+```
+
+Concrete example:
+- parent-frame config handshake:
+  `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
+- platform widget with the same auth/config pattern:
+  `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
+- bundle-operation backend:
+  `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
 ## 5) Reading bundle props from cache
 

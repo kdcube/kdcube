@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     build_exec_output_contract,
     run_exec_tool,
 )
+from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
@@ -148,12 +149,48 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             tsx_path = Path(bundle_root) / "ui" / "PreferencesBrowser.tsx"
             content = tsx_path.read_text(encoding="utf-8")
             rendered = content.replace("__PREFERENCES_JSON__", json.dumps(payload))
-            return [self._render_dashboard_html(content=rendered, title="Preferences Browser")]
+            actor = getattr(self.comm_context, "actor", None)
+            bundle_spec = getattr(getattr(self, "config", None), "ai_bundle_spec", None)
+            patched = patch_dashboard(
+                input_content=rendered,
+                base_url=f"http://localhost:{os.environ.get('CHAT_APP_PORT') or '8010'}",
+                default_tenant=getattr(actor, "tenant_id", None) or self.settings.TENANT,
+                default_project=getattr(actor, "project_id", None) or self.settings.PROJECT,
+                default_app_bundle_id=getattr(bundle_spec, "id", None) or BUNDLE_ID,
+                access_token=None,
+                id_token=None,
+                id_token_header="X-ID-Token",
+            )
+            return [self._render_dashboard_html(content=patched, title="Preferences Browser")]
         except Exception:
             self.logger.log(traceback.format_exc(), "ERROR")
             return ["<p>Unable to render the preferences widget right now.</p>"]
 
-    async def preferences_exec_report(self, user_id: Optional[str] = None, **kwargs):
+    def preferences_widget_data(self, user_id: Optional[str] = None, fingerprint: Optional[str] = None, **kwargs):
+        storage_root = self._preferences_storage_root()
+        if not storage_root:
+            return {
+                "ok": False,
+                "error": "Bundle storage is not configured for this bundle.",
+                "user_id": user_id or fingerprint or "anonymous",
+                "current": {},
+                "recent": [],
+                "matched_count": 0,
+            }
+
+        target_user = user_id or fingerprint or getattr(self.comm, "user_id", None) or "anonymous"
+        payload = build_widget_payload(storage_root=storage_root, user_id=target_user)
+        payload["ok"] = True
+        return payload
+
+    async def preferences_exec_report(
+        self,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        recency: int = 10,
+        kwords: str = "",
+        **kwargs,
+    ):
         storage_root = self._preferences_storage_root()
         if not storage_root:
             return {
@@ -179,7 +216,9 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
         workdir = op_root / "work"
         outdir = op_root / "out"
         exec_id = f"preferences-{uuid.uuid4().hex[:10]}"
-        target_user = user_id or getattr(self.comm, "user_id", None) or "anonymous"
+        target_user = user_id or fingerprint or getattr(self.comm, "user_id", None) or "anonymous"
+        report_recency = max(1, int(recency or 10))
+        report_keywords = str(kwords or "").strip()
         contract_items = [
             {
                 "filename": "turn_preferences_exec/files/preferences_exec_report.md",
@@ -218,23 +257,47 @@ if events_path.exists():
         except Exception:
             pass
 
+raw_keywords = {json.dumps(report_keywords)}
+keywords = [part.strip().lower() for part in raw_keywords.replace(";", ",").split(",") if part.strip()]
+
+def _matches(event):
+    if not keywords:
+        return True
+    haystack = " ".join(
+        [
+            str(event.get("key") or ""),
+            str(event.get("value") or ""),
+            str(event.get("evidence") or ""),
+        ]
+    ).lower()
+    return all(keyword in haystack for keyword in keywords)
+
+matched_events = [event for event in reversed(events) if _matches(event)]
+recent_events = matched_events[: {report_recency}]
+
 lines = [
     "# Preferences Exec Report",
     "",
     f"User: {target_user}",
+    f"Recency: {report_recency}",
+    f"Keywords: {{', '.join(keywords) if keywords else '(none)'}}",
     "",
     "## Current preferences",
 ]
 
 if current:
     for key, item in sorted(current.items()):
+        if keywords:
+            haystack = f"{{key}} {{item.get('value', '')}}".lower()
+            if not all(keyword in haystack for keyword in keywords):
+                continue
         lines.append(f"- {{key}}: {{item.get('value')}}")
 else:
     lines.append("- No stored preferences yet.")
 
 lines.extend(["", "## Recent observations"])
-if events:
-    for event in events[-10:]:
+if recent_events:
+    for event in recent_events:
         lines.append(
             f"- {{event.get('captured_at')}} | {{event.get('key')}} = {{event.get('value')}} "
             f"(origin={{event.get('origin')}})"
@@ -267,6 +330,8 @@ print(f"wrote {{report_path}}")
             "items": envelope.get("items") or [],
             "out_dyn": envelope.get("out_dyn") or {},
             "error": envelope.get("error"),
+            "recency": report_recency,
+            "keywords": report_keywords,
         }
 
     @property
