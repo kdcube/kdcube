@@ -118,6 +118,17 @@ ${baseUrl}/api/...
 
 and attach auth headers. This ensures cookies or tokens are applied correctly in the iframe.
 
+The important integration rule is:
+- the widget must follow the real platform request contract exactly
+- do not invent an ad hoc widget-to-bundle transport
+- if the widget calls bundle or platform REST, it must use the real integrations
+  request shape and the real auth/config handshake
+
+Reference examples:
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
+- `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`
+
 ## 4) Bundle operations endpoint (loop-back)
 
 Widgets can call bundle-defined operations via the integrations endpoint:
@@ -127,6 +138,41 @@ POST /api/integrations/bundles/{tenant}/{project}/operations/{op}
 ```
 
 The `{op}` is a method name on the bundle entrypoint (e.g., `suggestions`, `price_model`, or any custom op). The SDK resolves the bundle and calls the operation with the user context.
+
+Current POST body shape:
+
+```json
+{
+  "bundle_id": "my.bundle",
+  "conversation_id": null,
+  "config_request": null,
+  "data": {
+    "some_param": "value"
+  }
+}
+```
+
+`data` is forwarded into the bundle method as kwargs.
+
+Example:
+- widget sends:
+
+```json
+{
+  "bundle_id": "versatile",
+  "data": {
+    "recency": 10,
+    "kwords": "timezone email"
+  }
+}
+```
+
+- bundle operation receives:
+
+```python
+async def preferences_exec_report(self, recency: int = 10, kwords: str = "", **kwargs):
+    ...
+```
 
 This allows UI → backend → bundle round-trips without exposing a separate service.
 

@@ -55,9 +55,36 @@ This bundle exposes two entrypoint operations:
   - reads current preference data
   - renders `ui/PreferencesBrowser.tsx`
   - returns iframe-ready HTML
+- `preferences_widget_data`
+  - returns refreshed preference JSON for the widget
+  - is called by the widget through the integrations operations API
 - `preferences_exec_report`
   - runs a tiny report job through the isolated exec runtime
   - writes a markdown report artifact from bundle storage content
+
+The widget uses the platform iframe config handshake and then calls:
+
+- `POST /api/integrations/bundles/{tenant}/{project}/operations/preferences_widget_data`
+- `POST /api/integrations/bundles/{tenant}/{project}/operations/preferences_exec_report`
+
+Important request shape:
+
+```json
+{
+  "bundle_id": "versatile",
+  "data": {
+    "recency": 10,
+    "kwords": "language timezone"
+  }
+}
+```
+
+The integrations endpoint forwards `data` as keyword arguments to the bundle
+method. In this bundle:
+- `preferences_widget_data(...)` uses the per-request `self.comm` context and
+  ignores extra params
+- `preferences_exec_report(recency=..., kwords=...)` consumes forwarded values
+  and falls back to defaults when they are absent
 
 ## Tool surface
 

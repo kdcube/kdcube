@@ -16,6 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsy
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import (
     BaseEntrypointWithEconomics,
 )
+from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     build_exec_output_contract,
     run_exec_tool,
@@ -148,12 +149,41 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
             tsx_path = Path(bundle_root) / "ui" / "PreferencesBrowser.tsx"
             content = tsx_path.read_text(encoding="utf-8")
             rendered = content.replace("__PREFERENCES_JSON__", json.dumps(payload))
+            rendered = patch_dashboard(
+                input_content=rendered,
+                base_url=f"http://localhost:{os.environ.get('CHAT_APP_PORT') or '8010'}",
+                access_token=None,
+                default_tenant=self.settings.TENANT,
+                default_project=self.settings.PROJECT,
+                default_app_bundle_id=self.config.ai_bundle_spec.id,
+            )
             return [self._render_dashboard_html(content=rendered, title="Preferences Browser")]
         except Exception:
             self.logger.log(traceback.format_exc(), "ERROR")
             return ["<p>Unable to render the preferences widget right now.</p>"]
 
-    async def preferences_exec_report(self, user_id: Optional[str] = None, **kwargs):
+    def preferences_widget_data(self, user_id: Optional[str] = None, **kwargs):
+        storage_root = self._preferences_storage_root()
+        if not storage_root:
+            return {
+                "ok": False,
+                "error": "Bundle storage is not configured for this bundle.",
+            }
+
+        target_user = user_id or getattr(self.comm, "user_id", None) or "anonymous"
+        payload = build_widget_payload(storage_root=storage_root, user_id=target_user)
+        return {
+            "ok": True,
+            **payload,
+        }
+
+    async def preferences_exec_report(
+        self,
+        user_id: Optional[str] = None,
+        recency: int = 10,
+        kwords: str = "",
+        **kwargs,
+    ):
         storage_root = self._preferences_storage_root()
         if not storage_root:
             return {
@@ -180,6 +210,11 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
         outdir = op_root / "out"
         exec_id = f"preferences-{uuid.uuid4().hex[:10]}"
         target_user = user_id or getattr(self.comm, "user_id", None) or "anonymous"
+        try:
+            report_recency = max(1, min(100, int(recency)))
+        except Exception:
+            report_recency = 10
+        report_keywords = str(kwords or "").strip()
         contract_items = [
             {
                 "filename": "turn_preferences_exec/files/preferences_exec_report.md",
@@ -218,10 +253,32 @@ if events_path.exists():
         except Exception:
             pass
 
+report_keywords = {json.dumps(report_keywords)}
+keyword_tokens = [token.lower() for token in report_keywords.split() if token.strip()]
+if keyword_tokens:
+    filtered_current = {{}}
+    for key, item in current.items():
+        haystack = f"{{key}} {{item.get('value', '')}} {{item.get('origin', '')}}".lower()
+        if all(token in haystack for token in keyword_tokens):
+            filtered_current[key] = item
+    current = filtered_current
+
+    filtered_events = []
+    for event in events:
+        haystack = (
+            f"{{event.get('key', '')}} {{event.get('value', '')}} "
+            f"{{event.get('origin', '')}} {{event.get('evidence', '')}}"
+        ).lower()
+        if all(token in haystack for token in keyword_tokens):
+            filtered_events.append(event)
+    events = filtered_events
+
 lines = [
     "# Preferences Exec Report",
     "",
     f"User: {target_user}",
+    f"Recency: {report_recency}",
+    f"Keywords: {{report_keywords or '(none)'}}",
     "",
     "## Current preferences",
 ]
@@ -234,7 +291,7 @@ else:
 
 lines.extend(["", "## Recent observations"])
 if events:
-    for event in events[-10:]:
+    for event in events[-{report_recency}:]:
         lines.append(
             f"- {{event.get('captured_at')}} | {{event.get('key')}} = {{event.get('value')}} "
             f"(origin={{event.get('origin')}})"
@@ -267,6 +324,8 @@ print(f"wrote {{report_path}}")
             "items": envelope.get("items") or [],
             "out_dyn": envelope.get("out_dyn") or {},
             "error": envelope.get("error"),
+            "recency": report_recency,
+            "keywords": report_keywords,
         }
 
     @property
