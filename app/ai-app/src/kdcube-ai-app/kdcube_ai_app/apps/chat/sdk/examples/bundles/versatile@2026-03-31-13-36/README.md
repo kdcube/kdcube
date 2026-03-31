@@ -6,18 +6,18 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 
 ## What it demonstrates
 
-| Capability | Where to look |
-| --- | --- |
-| Minimal bundle contract | `entrypoint.py`, `orchestrator/workflow.py`, `tools_descriptor.py`, `skills_descriptor.py` |
-| React workflow | `entrypoint.py`, `orchestrator/workflow.py`, `agents/gate.py` |
-| Economics / quotas | `entrypoint.py` via `BaseEntrypointWithEconomics` and `app_quota_policies` |
-| Bundle-local tools | `tools/preference_tools.py` |
-| Bundle-local skills | `skills/product/preferences/SKILL.md` |
-| Shared local bundle storage | `preferences_store.py`, `entrypoint.py:on_bundle_load`, `orchestrator/workflow.py` |
-| Storage backend (`AIBundleStorage`) | `tools/preference_tools.py:export_preferences_snapshot` |
-| MCP tools | `tools_descriptor.py` |
-| Direct isolated exec from bundle code | `entrypoint.py:preferences_exec_report` |
-| Custom TSX widget | `ui/PreferencesBrowser.tsx`, `entrypoint.py:preferences_widget` |
+| Capability                             | Where to look                                                                              |
+|----------------------------------------|--------------------------------------------------------------------------------------------|
+| Minimal bundle contract                | `entrypoint.py`, `orchestrator/workflow.py`, `tools_descriptor.py`, `skills_descriptor.py` |
+| React workflow                         | `entrypoint.py`, `orchestrator/workflow.py`, `agents/gate.py`                              |
+| Economics / quotas                     | `entrypoint.py` via `BaseEntrypointWithEconomics` and `app_quota_policies`                 |
+| Bundle-local tools                     | `tools/preference_tools.py`                                                                |
+| Bundle-local skills                    | `skills/product/preferences/SKILL.md`                                                      |
+| Shared local bundle storage            | `preferences_store.py`, `entrypoint.py:on_bundle_load`, `orchestrator/workflow.py`         |
+| Storage backend (`AIBundleStorage`)    | `tools/preference_tools.py:export_preferences_snapshot`                                    |
+| MCP tools                              | `tools_descriptor.py`                                                                      |
+| Direct isolated exec from bundle code  | `entrypoint.py:preferences_exec_report`                                                    |
+| Custom TSX widget                      | `ui/PreferencesBrowser.tsx`, `entrypoint.py:preferences_widget`                            |
 
 ## Bundle behavior
 
@@ -54,13 +54,34 @@ This bundle exposes two entrypoint operations:
 - `preferences_widget`
   - reads current preference data
   - renders `ui/PreferencesBrowser.tsx`
-  - returns iframe-ready HTML
+- returns iframe-ready HTML
 - `preferences_widget_data`
-  - returns refreshed preference JSON for the widget
+  - returns the current widget payload as JSON for the authenticated iframe client
   - is called by the widget through the integrations operations API
 - `preferences_exec_report`
   - runs a tiny report job through the isolated exec runtime
   - writes a markdown report artifact from bundle storage content
+  - is wired to the widget's `Run Exec Report` button through the same integrations
+operations API
+
+## Widget integration contract
+
+The widget is not a static mockup. It follows the real platform integration pattern:
+
+- it requests runtime config from the parent frame with `CONFIG_REQUEST`
+- it accepts `baseUrl`, `accessToken`, `idToken`, `idTokenHeader`, `defaultTenant`, `defaultProject`, and `defaultAppBundleId`
+- it calls the bundle backend through:
+  - `POST /api/integrations/bundles/{tenant}/{project}/operations/preferences_widget_data`
+- it sends `credentials: "include"` and forwards bearer / ID-token headers when present
+
+This integration shape matters. If a bundle widget talks to bundle or platform REST APIs, keep the config/auth wiring aligned with the platform examples instead of inventing a different handshake.
+
+Reference frontend patterns:
+- `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
+
+Reference backend endpoint:
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
 The widget uses the platform iframe config handshake and then calls:
 

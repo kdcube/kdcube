@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     build_exec_output_contract,
     run_exec_tool,
 )
+from kdcube_ai_app.apps.chat.sdk.viz.patch_platform_dashboard import patch_dashboard
 from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
 from kdcube_ai_app.infra.service_hub.inventory import BundleState, Config
 
@@ -297,6 +298,10 @@ lines = [
 
 if current:
     for key, item in sorted(current.items()):
+        if keywords:
+            haystack = f"{{key}} {{item.get('value', '')}}".lower()
+            if not all(keyword in haystack for keyword in keywords):
+                continue
         lines.append(f"- {{key}}: {{item.get('value')}}")
 else:
     lines.append("- No stored preferences yet.")

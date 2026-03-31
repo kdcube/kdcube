@@ -176,6 +176,39 @@ async def preferences_exec_report(self, recency: int = 10, kwords: str = "", **k
 
 This allows UI → backend → bundle round-trips without exposing a separate service.
 
+Important:
+- today this endpoint is POST-only
+- widgets should call it with the real tenant/project scope and the intended `bundle_id`
+- the integration wiring should match the reference widgets above without ad-hoc deviations
+
+### Widget ↔ bundle exchange
+
+```mermaid
+sequenceDiagram
+    participant Host as Parent app / host frame
+    participant Widget as Bundle widget iframe
+    participant API as Integrations API
+    participant Bundle as Bundle entrypoint
+
+    Widget->>Host: CONFIG_REQUEST(identity, requestedFields)
+    Host-->>Widget: CONFIG_RESPONSE(baseUrl, tokens, tenant, project, bundle_id)
+
+    Widget->>API: POST /api/integrations/bundles/{tenant}/{project}/operations/{op}
+    Note over Widget,API: credentials: include<br/>Authorization / ID token headers when present<br/>body includes bundle_id
+    API->>Bundle: invoke workflow.<op>(user_id=..., fingerprint=...)
+    Bundle-->>API: JSON result
+    API-->>Widget: {status, tenant, project, bundle_id, op: result}
+    Widget->>Widget: render / refresh UI state
+```
+
+Concrete example:
+- parent-frame config handshake:
+  `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
+- platform widget with the same auth/config pattern:
+  `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
+- bundle-operation backend:
+  `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
+
 ## 5) Reading bundle props from cache
 
 Bundles can store UI config or parameters in bundle props. The admin UI writes props to Redis (KV cache), and the bundle reads them at runtime. Define defaults in `entrypoint.configuration` and read effective values from `bundle_props` (defaults + overrides).
