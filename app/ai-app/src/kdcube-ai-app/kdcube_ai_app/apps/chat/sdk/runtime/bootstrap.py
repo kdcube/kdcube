@@ -22,6 +22,7 @@ from kdcube_ai_app.apps.chat.emitters import (
     ChatCommunicator,
 )
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_module_bindings import bind_module_target
 from kdcube_ai_app.apps.chat.sdk.runtime.portable_spec import PortableSpec
 from kdcube_ai_app.infra.service_hub.inventory import (
     ConfigRequest,
@@ -202,30 +203,12 @@ def _make_storage_backend_from_spec(spec: PortableSpec) -> IStorageBackend|_Loca
 
 def _bind_target(target, *, svc, registry=None, integrations=None):
     try:
-        # idempotence guard on any object we bind into
-        if getattr(target, "__KDCUBE_BIND_DONE__", False):
-            return
-        if hasattr(target, "bind_service") and callable(target.bind_service):
-            target.bind_service(svc)
-        elif hasattr(target, "set_service") and callable(target.set_service):
-            target.set_service(svc)
-        else:
-            setattr(target, "SERVICE", svc)
-            setattr(target, "model_service", svc)
-
-        if registry is not None:
-            if hasattr(target, "bind_registry") and callable(target.bind_registry):
-                target.bind_registry(registry)
-            else:
-                setattr(target, "REGISTRY", registry)
-
-        if integrations is not None:
-            if hasattr(target, "bind_integrations") and callable(target.bind_integrations):
-                target.bind_integrations(integrations)
-            else:
-                setattr(target, "INTEGRATIONS", integrations)
-
-        setattr(target, "__KDCUBE_BIND_DONE__", True)
+        bind_module_target(
+            target,
+            svc=svc,
+            registry=registry,
+            integrations=integrations,
+        )
     except Exception:
         pass
 
@@ -519,6 +502,16 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
     except Exception:
         registry = {}
 
+    # 5) Rebuild communicator and set COMM_CV (optional)
+    comm = None
+    try:
+        comm = make_chat_comm(spec)
+        if comm:
+            from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm
+            set_comm(comm)
+    except Exception:
+        logger.exception(f"make_chat_comm / set_comm failed {traceback.format_exc()}")
+
     try:
         bind_into_module(
             tool_module,
@@ -528,14 +521,5 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
         )
     except Exception:
         logger.exception(f"bind_into_module failed {traceback.format_exc()}")
-
-    # 5) Rebuild communicator and set COMM_CV (optional)
-    try:
-        comm = make_chat_comm(spec)
-        if comm:
-            from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm
-            set_comm(comm)
-    except Exception:
-        logger.exception(f"make_chat_comm / set_comm failed {traceback.format_exc()}")
 
     return {"ok": True}

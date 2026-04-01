@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
     load_dynamic_module_for_path,
     load_dynamic_module_from_file,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.tool_module_bindings import bind_module_target
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
 from kdcube_ai_app.infra.service_hub.cache import create_kv_cache
@@ -134,24 +135,17 @@ class ToolSubsystem:
                 alias = f"{base_alias}{i}"; i += 1
             used_aliases.add(alias)
 
-            # optional service bindings into modules
             try:
-                if hasattr(mod, "bind_service"):
-                    mod.bind_service(self.svc)
-            except Exception:
-                pass
-            try:
-                if hasattr(mod, "bind_registry"):
-                    mod.bind_registry(self.registry)
-            except Exception:
-                pass
-            try:
-                if hasattr(mod, "bind_integrations"):
-                    mod.bind_integrations({
+                bind_module_target(
+                    mod,
+                    svc=self.svc,
+                    registry=self.registry,
+                    integrations={
                         "ctx_client": self.context_rag_client,
                         "kv_cache": self.kv_cache,
                         "tool_subsystem": self,
-                    })
+                    },
+                )
             except Exception:
                 pass
 
@@ -496,8 +490,16 @@ class ToolSubsystem:
         # bind into both the dynamic copy AND the canonical module.
         try:
             from kdcube_ai_app.apps.chat.sdk.tools import io_tools as _canonical_io
-            if hasattr(_canonical_io, "bind_integrations"):
-                _canonical_io.bind_integrations({"tool_subsystem": self})
+            bind_module_target(
+                _canonical_io,
+                svc=self.svc,
+                registry=self.registry,
+                integrations={
+                    "ctx_client": self.context_rag_client,
+                    "kv_cache": self.kv_cache,
+                    "tool_subsystem": self,
+                },
+            )
         except Exception:
             pass
 
