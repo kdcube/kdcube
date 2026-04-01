@@ -148,12 +148,12 @@ function makeAuthHeaders(base?: HeadersInit): Headers {
 // =============================================================================
 
 async function callEcho(text: string): Promise<string> {
-  const url = `${settings.getBaseUrl()}/api/integrations/bundles/${settings.getTenant()}/${settings.getProject()}/operations/echo`
+  const url = `${settings.getBaseUrl()}/api/integrations/bundles/${settings.getTenant()}/${settings.getProject()}/${BUNDLE_ID}/operations/echo`
   const res = await fetch(url, {
     method: 'POST',
     credentials: 'include',
     headers: makeAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ bundle_id: BUNDLE_ID, data: { text } }),
+    body: JSON.stringify({ data: { text } }),
   })
   if (!res.ok) {
     const detail = await res.text().catch(() => res.statusText)

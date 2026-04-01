@@ -157,7 +157,7 @@ Current guarded endpoints (exact patterns):
 - `/conversations/{tenant}/{project}/{conversation_id}/fetch`
 - `/conversations/{tenant}/{project}/turns-with-feedbacks`
 - `/conversations/{tenant}/{project}/feedback/conversations-in-period`
-- `/integrations/bundles/{tenant}/{project}/operations/{operation}`
+- `/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}`
 
 Example public webhook bypass:
 - `bypass_throttling_patterns = ["^/webhooks/stripe$"]`
@@ -378,7 +378,7 @@ Notes:
     "^/conversations/[^/]+/[^/]+/[^/]+/fetch$",
     "^/conversations/[^/]+/[^/]+/turns-with-feedbacks$",
     "^/conversations/[^/]+/[^/]+/feedback/conversations-in-period$",
-    "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
+    "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
     "^/api/cb/conversations/[^/]+/[^/]+$",
     "^/api/opex/total$"
   ],
@@ -453,7 +453,7 @@ GATEWAY_CONFIG_JSON='{
     "^/conversations/[^/]+/[^/]+/[^/]+/fetch$",
     "^/conversations/[^/]+/[^/]+/turns-with-feedbacks$",
     "^/conversations/[^/]+/[^/]+/feedback/conversations-in-period$",
-    "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
+    "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
     "^/api/cb/conversations/[^/]+/[^/]+$",
     "^/api/opex/total$"
   ],
@@ -523,7 +523,7 @@ Use these if you want client-side boot calls to count toward the gateway limits.
 ```json
 {
   "guarded_rest_patterns": [
-    "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
+    "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
     "^/api/cb/conversations/[^/]+/[^/]+$",
     "^/api/opex/total$"
   ]

@@ -112,7 +112,6 @@ _LOCALHOST = {"127.0.0.1", "::1"}
 
 
 class BundleSuggestionsRequest(BaseModel):
-    bundle_id: Optional[str] = None
     conversation_id: Optional[str] = None
     config_request: Optional[ConfigRequest] = None
     data: Optional[Dict[str, Any]] = None
@@ -908,26 +907,27 @@ async def bundle_static_asset(
                                     session=session)
 
 
-@router.post("/bundles/{tenant}/{project}/operations/{operation}")
+@router.post("/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}")
 async def call_bundle_op(
         tenant: str,
         project: str,
+        bundle_id: str,
+        operation: str,
         request: Request,
         payload: BundleSuggestionsRequest = Body(default_factory=BundleSuggestionsRequest),
-        operation: str = "suggestions",  # news, etc.
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
     """
     Load (or reuse singleton) bundle instance and call its operation (e.g. suggestions()).
     Returns generic JSON from the bundle.
     """
-    settings = get_settings()
     sem = _get_integrations_semaphore()
     if sem:
         async with sem:
             return await _call_bundle_op_inner(
                 tenant=tenant,
                 project=project,
+                bundle_id=bundle_id,
                 payload=payload,
                 request=request,
                 operation=operation,
@@ -936,6 +936,7 @@ async def call_bundle_op(
     return await _call_bundle_op_inner(
         tenant=tenant,
         project=project,
+        bundle_id=bundle_id,
         payload=payload,
         request=request,
         operation=operation,
@@ -947,6 +948,7 @@ async def _call_bundle_op_inner(
         *,
         tenant: str,
         project: str,
+        bundle_id: str,
         payload: BundleSuggestionsRequest,
         request: Request,
         operation: str,
@@ -967,8 +969,7 @@ async def _call_bundle_op_inner(
     if not cfg_req.claude_api_key:
         cfg_req.claude_api_key = settings.ANTHROPIC_API_KEY
 
-    if payload.bundle_id:
-        cfg_req.agentic_bundle_id = payload.bundle_id
+    cfg_req.agentic_bundle_id = bundle_id
 
     tenant_id = cfg_req.tenant or tenant or settings.TENANT
     project_id = cfg_req.project or project or settings.PROJECT
