@@ -52,6 +52,7 @@ PLATFORM_ENV_GROUPS: dict[str, tuple[str, ...]] = {
         "KDCUBE_STORAGE_PATH",
         "NO_PROXY",
         "PROJECT_ID",
+        "STREAM_ID_HEADER_NAME",
         "TENANT_ID",
     ),
     "gateway": (

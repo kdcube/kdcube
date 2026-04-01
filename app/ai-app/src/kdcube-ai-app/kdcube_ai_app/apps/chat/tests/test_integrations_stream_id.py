@@ -7,6 +7,7 @@ from starlette.datastructures import Headers
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.proc.rest.integrations import integrations
+from kdcube_ai_app.infra.namespaces import CONFIG
 from kdcube_ai_app.apps.middleware.gateway import (
     STATE_STREAM_ID,
     bind_stream_id_to_request_state,
@@ -27,7 +28,7 @@ def _session() -> SimpleNamespace:
 
 
 def _request(*, stream_id: str | None = None) -> SimpleNamespace:
-    headers = Headers({"KDC-Stream-ID": stream_id} if stream_id else {})
+    headers = Headers({CONFIG.STREAM_ID_HEADER_NAME: stream_id} if stream_id else {})
     return SimpleNamespace(
         headers=headers,
         state=SimpleNamespace(**({STATE_STREAM_ID: stream_id} if stream_id else {})),
@@ -42,7 +43,7 @@ def test_bind_stream_id_to_request_state_extracts_header():
             "method": "GET",
             "path": "/api/integrations/demo",
             "query_string": b"",
-            "headers": [(b"kdc-stream-id", b"stream-123")],
+            "headers": [(CONFIG.STREAM_ID_HEADER_NAME.lower().encode("utf-8"), b"stream-123")],
             "scheme": "http",
             "server": ("testserver", 80),
             "client": ("127.0.0.1", 12345),

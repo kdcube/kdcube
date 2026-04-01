@@ -65,6 +65,7 @@ to overwrite cached gateway config from env on each start.
 | `CORS_CONFIG` | CORS config JSON |
 | `AUTH_PROVIDER` | `simple` or `cognito` |
 | `ID_TOKEN_HEADER_NAME` | Extra ID token header (non‑simple auth) |
+| `STREAM_ID_HEADER_NAME` | Header carrying connected peer/stream id for REST → SSE/socket targeting |
 | `AUTH_TOKEN_COOKIE_NAME` / `ID_TOKEN_COOKIE_NAME` | Cookie names (proxylogin) |
 | `COGNITO_*` | Cognito settings if used |
 | `OIDC_SERVICE_ADMIN_*` | Service account for auth |

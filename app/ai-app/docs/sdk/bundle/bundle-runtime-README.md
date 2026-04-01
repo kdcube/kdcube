@@ -104,7 +104,8 @@ What the bundle has in this path:
 
 Important current communicator rule for REST operations:
 - communicator is available
-- if the request carries the `KDC-Stream-ID` HTTP header, meaning the header
+- if the request carries the `KDC-Stream-ID` HTTP header, configurable via
+  `STREAM_ID_HEADER_NAME`, meaning the header
   that identifies the connected peer/stream which issued the request, the
   runtime maps that value into `routing.socket_id`
 - that lets communicator target the initiating SSE / Socket.IO peer directly

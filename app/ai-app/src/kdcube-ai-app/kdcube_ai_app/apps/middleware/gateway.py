@@ -58,7 +58,7 @@ STATE_FLAG = "_gw_processed"
 STATE_SESSION = "user_session"
 STATE_USER_TYPE = "user_type"
 STATE_STREAM_ID = "stream_id"
-STREAM_ID_HEADER = "KDC-Stream-ID"
+STREAM_ID_HEADER = CONFIG.STREAM_ID_HEADER_NAME
 
 
 def extract_stream_id(request: Request) -> Optional[str]:

@@ -142,6 +142,7 @@ Token TTL/uses:
 | `DEFAULT_EMBEDDING_MODEL_ID` | n/a |
 | `AUTH_PROVIDER` | Auth Auth provider, simple|cognito |
 | `ID_TOKEN_HEADER_NAME` | For non-simple auth, id token must be sent by client in addition to the access token in the auth header. |
+| `STREAM_ID_HEADER_NAME` | Header carrying the connected peer/stream id for REST requests that need peer-targeted communicator delivery. |
 | `AUTH_TOKEN_COOKIE_NAME` | n/a |
 | `ID_TOKEN_COOKIE_NAME` | n/a |
 | `COGNITO_REGION` | # Cognito specifics |
@@ -212,6 +213,7 @@ Token TTL/uses:
 | `DEFAULT_EMBEDDING_MODEL_ID` | n/a |
 | `AUTH_PROVIDER` | Auth Auth provider, simple|cognito |
 | `ID_TOKEN_HEADER_NAME` | For non-simple auth, id token must be sent by client in addition to the access token in the auth header. |
+| `STREAM_ID_HEADER_NAME` | Header carrying the connected peer/stream id for REST requests that need peer-targeted communicator delivery. |
 | `AUTH_TOKEN_COOKIE_NAME` | n/a |
 | `ID_TOKEN_COOKIE_NAME` | n/a |
 | `COGNITO_REGION` | # Cognito specifics |
@@ -573,6 +575,7 @@ Conversation artifacts and turn workspace:
 |-----------------------------|----------|---------|
 | `AUTH_PROVIDER`             | ✅        | `simple` or `cognito` |
 | `ID_TOKEN_HEADER_NAME`      | ➖        | Header for id token |
+| `STREAM_ID_HEADER_NAME`     | ➖        | Header for connected peer/stream id |
 | `AUTH_TOKEN_COOKIE_NAME`    | ➖        | Access token cookie name |
 | `ID_TOKEN_COOKIE_NAME`      | ➖        | ID token cookie name |
 | `COGNITO_REGION`            | ➖        | Cognito region |
