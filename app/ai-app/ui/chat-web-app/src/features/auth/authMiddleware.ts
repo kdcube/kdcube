@@ -1,9 +1,10 @@
-import {Middleware, UnknownAction} from "@reduxjs/toolkit";
+import {Middleware, PayloadAction, UnknownAction} from "@reduxjs/toolkit";
 import CognitoAuth from "./cognitoAuth.ts";
 import {AppStore, RootState} from "../../app/store.ts";
 import {loadChatSettings, selectAuthConfig} from "../chat/chatSettingsSlice.ts";
-import {setCredentials} from "./authSlice.ts";
+import {AuthAction, setCredentials} from "./authSlice.ts";
 import {HardcodedAuthConfig} from "./authTypes.ts";
+import {CookieOptions, removeCookie, setCookie} from "../../utils/cookies.ts";
 
 export const LOG_IN = "auth/LogIn"
 
@@ -68,13 +69,40 @@ export interface WithActionHandler {
     handleAction: HandleAction
 }
 
-export const authMiddleware = (): Middleware => {
+export const authMiddleware = (useCookies: boolean = true,
+                               authCookieName: string = "__Secure-LATC", idCookieName: string = "__Secure-LITC",
+                               cookieOpts: CookieOptions = {
+                                   secure: true,
+                                   sameSite: "Strict"
+                               }): Middleware => {
     let handler: HandleAction | null = null;
     return ((store) => (next: (action: unknown) => unknown) => (action: unknown) => {
         next(action)
         const state = store.getState() as RootState;
         const authConfig = selectAuthConfig(state)
         let handlerParent: WithActionHandler | null = null
+
+        const removeAuthCookie = () => {
+            removeCookie(authCookieName)
+        }
+
+        const removeIdCookie = () => {
+            removeCookie(idCookieName)
+        }
+
+        const removeCookies = () => {
+            removeAuthCookie()
+            removeIdCookie()
+        }
+
+        const setAuthToken = (token: string) => {
+            setCookie(authCookieName, token, cookieOpts)
+        }
+
+        const setIdToken = (idToken: string) => {
+            setCookie(idCookieName, idToken, cookieOpts)
+        }
+
         switch ((action as UnknownAction).type) {
             case loadChatSettings.fulfilled.type:
                 if (!handler) {
@@ -104,6 +132,28 @@ export const authMiddleware = (): Middleware => {
                 }
                 handler(store as AppStore, action as AuthActions);
                 break;
+            case setCredentials.type:
+                if (useCookies) {
+                    switch (authConfig.authType) {
+                        case "hardcoded":
+                        case "cognito": {
+                            const payload = (action as PayloadAction<AuthAction>).payload;
+                            removeCookies()
+                            if (!payload.loggedIn) {
+                                return
+                            }
+
+                            if (payload.authToken) {
+                                setAuthToken(payload.authToken)
+                            }
+
+                            if (payload.idToken) {
+                                setIdToken(payload.idToken)
+                            }
+                        }
+                    }
+                    break
+                }
         }
     })
 }

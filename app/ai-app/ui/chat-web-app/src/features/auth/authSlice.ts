@@ -12,7 +12,7 @@ interface AuthState {
     idToken?: string | null;
 }
 
-interface AuthAction {
+export interface AuthAction {
     loggedIn?: boolean | null;
     user?: AppUser | null;
     authToken?: string | null;
