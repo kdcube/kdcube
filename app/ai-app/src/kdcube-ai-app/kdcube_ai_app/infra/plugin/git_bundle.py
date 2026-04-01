@@ -383,6 +383,21 @@ def _run_git(args: list[str], *, logger: Optional[AgentLogger] = None, env: Opti
         raise
 
 
+def _current_branch_name(repo_root: pathlib.Path, *, env: Optional[Dict[str, str]] = None) -> Optional[str]:
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(repo_root), "symbolic-ref", "--quiet", "--short", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+    except subprocess.CalledProcessError:
+        return None
+    branch = (proc.stdout or "").strip()
+    return branch or None
+
+
 def ensure_git_bundle(
     *,
     bundle_id: Optional[str],
@@ -481,33 +496,31 @@ def ensure_git_bundle(
                     except Exception:
                         pass
                     log.log(f"[git.bundle] fetching updates in {repo_root}", level="INFO")
-                    try:
-                        fetch_args = ["git", "-C", str(repo_root), "fetch", "--all", "--tags", "--prune"]
-                        if depth:
-                            fetch_args += ["--depth", str(depth)]
-                        _run_git(fetch_args, logger=log, env=env)
-                    except Exception as e:
-                        # If repo exists, fetch failures shouldn't block readiness of an existing clone.
-                        log.log(f"[git.bundle] fetch failed: {e}", level="WARNING")
+                    fetch_args = ["git", "-C", str(repo_root), "fetch", "--all", "--tags", "--prune", "--force"]
+                    if depth:
+                        fetch_args += ["--depth", str(depth)]
+                    _run_git(fetch_args, logger=log, env=env)
 
                 if git_ref:
                     log.log(f"[git.bundle] checkout {git_ref}", level="INFO")
                     try:
-                        _run_git(["git", "-C", str(repo_root), "checkout", git_ref], logger=log, env=env)
+                        _run_git(["git", "-C", str(repo_root), "checkout", "--force", git_ref], logger=log, env=env)
                     except Exception:
                         if depth:
                             try:
                                 _run_git(["git", "-C", str(repo_root), "fetch", "--unshallow"], logger=log, env=env)
-                                _run_git(["git", "-C", str(repo_root), "checkout", git_ref], logger=log, env=env)
+                                _run_git(["git", "-C", str(repo_root), "checkout", "--force", git_ref], logger=log, env=env)
                             except Exception:
                                 raise
                         else:
                             raise
-                    # If ref is a branch, attempt fast-forward pull
-                    try:
-                        _run_git(["git", "-C", str(repo_root), "pull", "--ff-only"], logger=log, env=env)
-                    except Exception:
-                        pass
+                    branch_name = _current_branch_name(repo_root, env=env)
+                    if branch_name:
+                        _run_git(
+                            ["git", "-C", str(repo_root), "reset", "--hard", f"origin/{branch_name}"],
+                            logger=log,
+                            env=env,
+                        )
 
                 # Log current commit (best-effort)
                 try:
