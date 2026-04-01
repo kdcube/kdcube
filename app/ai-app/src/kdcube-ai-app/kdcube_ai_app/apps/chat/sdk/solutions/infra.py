@@ -46,8 +46,8 @@ def _log_exec_workspace_error(msg: str) -> None:
         pass
 
 
-def mk_thinking_streamer(author: str,
-                        comm: ChatCommunicator) -> Callable[[str], Awaitable[None]]:
+def mk_streamer(author: str,
+                comm: ChatCommunicator) -> Callable[[str], Awaitable[None]]:
     counter = {"n": 0}
     async def emit_thinking_delta(text: str, completed: bool = False):
         if not text:
@@ -56,6 +56,9 @@ def mk_thinking_streamer(author: str,
         # author = f"{self.AGENT_NAME}.{phase}"
         await comm.delta(text=text, index=i, marker="thinking", agent=author, completed=completed)
     return emit_thinking_delta
+
+
+mk_thinking_streamer = mk_streamer
 
 async def emit_event(comm: ChatCommunicator,
                      etype: str, title: str, step: str,

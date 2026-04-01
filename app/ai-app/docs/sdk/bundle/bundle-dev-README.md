@@ -570,7 +570,7 @@ This matters for bundle widgets and custom bundle frontends:
 
 Prefer the higher-level SDK paths first:
 
-- `BaseWorkflow.mk_thinking_streamer(...)` for thought/progress streaming
+- `BaseWorkflow.mk_streamer(...)` for thought/progress streaming
 
 If the active solver is the React agent, it may emit its own agent-side
 `canvas` / `timeline_text` output through React tools. That is not the

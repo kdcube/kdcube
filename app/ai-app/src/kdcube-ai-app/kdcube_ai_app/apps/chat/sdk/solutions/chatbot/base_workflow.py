@@ -894,10 +894,13 @@ class BaseWorkflow():
             format="text",
         )
 
-    def mk_thinking_streamer(self, agent: str):
+    def mk_streamer(self, agent: str):
         async def _emit(text: str, completed: bool = False, **_):
             await self._emit_thinking_delta(agent=agent, text=text, completed=completed)
         return _emit
+
+    def mk_thinking_streamer(self, agent: str):
+        return self.mk_streamer(agent)
 
     async def _emit_answer_delta(self, *, text: str, completed: bool = False, agent: str = "answer.generator") -> None:
         if not text and not completed:

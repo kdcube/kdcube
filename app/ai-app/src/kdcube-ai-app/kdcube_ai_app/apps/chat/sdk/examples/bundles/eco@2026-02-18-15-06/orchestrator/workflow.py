@@ -106,7 +106,7 @@ class WithReactWorkflow(BaseWorkflow):
                     gate_payload, gate_channels = await gate_stream(
                         self.model_service,
                         is_new_conversation=bool(getattr(scratchpad, "is_new_conversation", False)),
-                        on_thinking_delta=self.mk_thinking_streamer("gate"),
+                        on_thinking_delta=self.mk_streamer("gate"),
                         ctx_browser=self.ctx_browser,
                         render_params={
                             "include_sources": False,   # gate doesn't use sources block
