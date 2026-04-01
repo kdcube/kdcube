@@ -6,10 +6,13 @@ import pytest
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.proc.rest.integrations import integrations
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
 from kdcube_ai_app.infra.plugin.agentic_loader import (
     api,
     discover_bundle_interface_manifest,
     on_message,
+    resolve_bundle_message_method,
     resolve_bundle_api_endpoint,
     resolve_bundle_widget,
     ui_main,
@@ -115,6 +118,14 @@ def test_string_widget_icon_is_normalized_to_tailwind_provider():
 
     manifest = discover_bundle_interface_manifest(_LegacyWidgetWorkflow(), bundle_id="bundle.demo")
     assert manifest.ui_widgets[0].icon == {"tailwind": "heroicons-outline:swatch"}
+
+
+def test_base_entrypoints_expose_run_as_on_message():
+    base = resolve_bundle_message_method(BaseEntrypoint, bundle_id="base")
+    econ = resolve_bundle_message_method(BaseEntrypointWithEconomics, bundle_id="base.econ")
+
+    assert base and base.method_name == "run"
+    assert econ and econ.method_name == "run"
 
 
 @pytest.mark.asyncio
