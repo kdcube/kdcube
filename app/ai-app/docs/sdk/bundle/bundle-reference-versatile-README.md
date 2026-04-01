@@ -79,6 +79,8 @@ Recommended reading order:
 7. `ui/PreferencesBrowser.tsx`
 8. bundle pytest files under:
    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+9. bundle-local tests under:
+   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tests`
 
 ## When to branch to specialized examples
 
@@ -93,6 +95,17 @@ Do not start with those examples unless the task is specifically about those nar
 
 Current shared bundle pytest suite:
 `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+
+Bundle-local tests for this reference bundle:
+`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tests`
+
+Preferred broad validation command:
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+  --bundle-path /abs/path/to/versatile@2026-03-31-13-36 -v --tb=short
+```
 
 Typical first validation subset:
 

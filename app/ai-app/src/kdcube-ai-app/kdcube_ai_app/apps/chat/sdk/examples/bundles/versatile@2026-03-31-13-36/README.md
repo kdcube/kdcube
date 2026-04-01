@@ -172,6 +172,23 @@ PYTHONPATH=app/ai-app/src/kdcube-ai-app \
 pytest -q app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle
 ```
 
+## Running shared + bundle-local tests
+
+Bundle-local tests for this reference bundle live under:
+- `tests/`
+
+Preferred combined validation command:
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+  --bundle-path /abs/path/to/versatile@2026-03-31-13-36 -v --tb=short
+```
+
+This runs:
+- the shared SDK bundle suite under `sdk/tests/bundle`
+- this bundle's own `tests/` directory when present
+
 ## Related docs
 
 - `docs/sdk/bundle/bundle-index-README.md`

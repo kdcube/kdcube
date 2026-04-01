@@ -57,6 +57,7 @@ Recommended first read sequence for bundle builders:
 3. [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 4. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
 5. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+6. if the bundle already has package-specific tests, also read `<bundle>/tests`
 
 Key files:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` — entrypoint, economics, widget operation, direct isolated-exec operation
@@ -69,6 +70,16 @@ Key files:
 
 Current shared bundle test suite:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+
+Default combined runner:
+- `python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite --bundle-path /abs/path/to/bundle`
+  - runs the shared SDK bundle suite
+  - automatically adds `<bundle>/tests` when the bundle defines bundle-local tests
+
+Bundle-local tests:
+- A bundle may legitimately define its own package-specific tests under `<bundle>/tests`
+- Use that for reference-bundle or feature-specific behavior that is not part of the generic SDK contract
+- Those tests are not auto-collected by plain `pytest sdk/tests/bundle`; use the runner above for combined validation
 
 Specialized examples only when the task is narrower than the full reference:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10`
