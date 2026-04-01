@@ -57,6 +57,18 @@ interface ExecReportOptions {
     kwords: string;
 }
 
+interface PreferencesCanvasPayload {
+    ok?: boolean;
+    error?: string;
+    user_id?: string;
+    path?: string | null;
+    document_format?: string;
+    document_text?: string;
+    last_modified?: number | string | null;
+    changed_keys?: string[];
+    removed_keys?: string[];
+}
+
 const INITIAL_DATA: WidgetPayload = __PREFERENCES_JSON__;
 
 const PLACEHOLDER_BASE_URL = '{{CHAT_BASE_URL}}';
@@ -66,6 +78,10 @@ const PLACEHOLDER_ID_TOKEN_HEADER = '{{ID_TOKEN_HEADER}}';
 const PLACEHOLDER_TENANT = '{{DEFAULT_TENANT}}';
 const PLACEHOLDER_PROJECT = '{{DEFAULT_PROJECT}}';
 const PLACEHOLDER_BUNDLE_ID = '{{DEFAULT_APP_BUNDLE_ID}}';
+
+function isTemplatePlaceholder(value: string | null | undefined): boolean {
+    return typeof value === 'string' && value.includes('{{') && value.includes('}}');
+}
 
 class SettingsManager {
     private settings: AppSettings = {
@@ -81,7 +97,7 @@ class SettingsManager {
     private configReceivedCallback: (() => void) | null = null;
 
     getBaseUrl(): string {
-        if (this.settings.baseUrl === PLACEHOLDER_BASE_URL) {
+        if (isTemplatePlaceholder(this.settings.baseUrl)) {
             return window.location.origin;
         }
         try {
@@ -97,33 +113,50 @@ class SettingsManager {
     }
 
     getAccessToken(): string | null {
-        return this.settings.accessToken === PLACEHOLDER_ACCESS_TOKEN ? null : this.settings.accessToken;
+        if (!this.settings.accessToken || isTemplatePlaceholder(this.settings.accessToken)) {
+            return null;
+        }
+        return this.settings.accessToken;
     }
 
     getIdToken(): string | null {
-        return this.settings.idToken === PLACEHOLDER_ID_TOKEN ? null : this.settings.idToken;
+        if (!this.settings.idToken || isTemplatePlaceholder(this.settings.idToken)) {
+            return null;
+        }
+        return this.settings.idToken;
     }
 
     getIdTokenHeader(): string {
-        return this.settings.idTokenHeader === PLACEHOLDER_ID_TOKEN_HEADER ? 'X-ID-Token' : this.settings.idTokenHeader;
+        if (!this.settings.idTokenHeader || isTemplatePlaceholder(this.settings.idTokenHeader)) {
+            return 'X-ID-Token';
+        }
+        return this.settings.idTokenHeader;
     }
 
     getTenant(): string {
-        return this.settings.defaultTenant === PLACEHOLDER_TENANT ? '' : this.settings.defaultTenant;
+        return isTemplatePlaceholder(this.settings.defaultTenant) ? '' : this.settings.defaultTenant;
     }
 
     getProject(): string {
-        return this.settings.defaultProject === PLACEHOLDER_PROJECT ? '' : this.settings.defaultProject;
+        return isTemplatePlaceholder(this.settings.defaultProject) ? '' : this.settings.defaultProject;
     }
 
     getBundleId(): string {
-        return this.settings.defaultAppBundleId === PLACEHOLDER_BUNDLE_ID
+        return !this.settings.defaultAppBundleId || isTemplatePlaceholder(this.settings.defaultAppBundleId)
             ? 'versatile@2026-03-31-13-36'
             : this.settings.defaultAppBundleId;
     }
 
     hasPlaceholders(): boolean {
-        return this.settings.baseUrl === PLACEHOLDER_BASE_URL;
+        return [
+            this.settings.baseUrl,
+            this.settings.accessToken,
+            this.settings.idToken,
+            this.settings.idTokenHeader,
+            this.settings.defaultTenant,
+            this.settings.defaultProject,
+            this.settings.defaultAppBundleId,
+        ].some((value) => isTemplatePlaceholder(value ?? undefined));
     }
 
     update(partial: Partial<AppSettings>): void {
@@ -222,6 +255,20 @@ function normalizePayload(payload: WidgetPayload | null | undefined): WidgetPayl
     };
 }
 
+function normalizeCanvasPayload(payload: PreferencesCanvasPayload | null | undefined): PreferencesCanvasPayload {
+    return {
+        ok: payload?.ok ?? true,
+        error: payload?.error,
+        user_id: payload?.user_id ?? INITIAL_DATA.user_id ?? 'anonymous',
+        path: payload?.path ?? null,
+        document_format: payload?.document_format ?? 'json',
+        document_text: payload?.document_text ?? '{}\n',
+        last_modified: payload?.last_modified ?? null,
+        changed_keys: payload?.changed_keys ?? [],
+        removed_keys: payload?.removed_keys ?? [],
+    };
+}
+
 async function fetchPreferencesPayload(): Promise<WidgetPayload> {
     const tenant = settings.getTenant();
     const project = settings.getProject();
@@ -245,6 +292,61 @@ async function fetchPreferencesPayload(): Promise<WidgetPayload> {
 
     const json = await response.json();
     return normalizePayload(json.preferences_widget_data ?? json);
+}
+
+async function fetchPreferencesCanvas(): Promise<PreferencesCanvasPayload> {
+    const tenant = settings.getTenant();
+    const project = settings.getProject();
+    const bundleId = settings.getBundleId();
+    if (!tenant || !project) {
+        throw new Error('Widget configuration is incomplete: tenant/project are not available.');
+    }
+
+    const url = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/operations/preferences_canvas_data`;
+    const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: makeAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ bundle_id: bundleId }),
+    });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => response.statusText);
+        throw new Error(`${response.status}: ${detail}`);
+    }
+
+    const json = await response.json();
+    return normalizeCanvasPayload(json.preferences_canvas_data ?? json);
+}
+
+async function savePreferencesCanvas(documentText: string): Promise<PreferencesCanvasPayload> {
+    const tenant = settings.getTenant();
+    const project = settings.getProject();
+    const bundleId = settings.getBundleId();
+    if (!tenant || !project) {
+        throw new Error('Widget configuration is incomplete: tenant/project are not available.');
+    }
+
+    const url = `${settings.getBaseUrl()}/api/integrations/bundles/${tenant}/${project}/operations/preferences_canvas_save`;
+    const response = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: makeAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+            bundle_id: bundleId,
+            data: {
+                document_text: documentText,
+            },
+        }),
+    });
+
+    if (!response.ok) {
+        const detail = await response.text().catch(() => response.statusText);
+        throw new Error(`${response.status}: ${detail}`);
+    }
+
+    const json = await response.json();
+    return normalizeCanvasPayload(json.preferences_canvas_save ?? json);
 }
 
 async function fetchPreferencesExecReport(reportOptions: ExecReportOptions): Promise<ExecReportPayload> {
@@ -282,6 +384,11 @@ function PreferencesBrowser() {
     const [ready, setReady] = useState(false);
     const [query, setQuery] = useState('');
     const [data, setData] = useState<WidgetPayload>(() => normalizePayload(INITIAL_DATA));
+    const [canvas, setCanvas] = useState<PreferencesCanvasPayload | null>(null);
+    const [canvasText, setCanvasText] = useState('{\n}\n');
+    const [canvasLoading, setCanvasLoading] = useState(false);
+    const [canvasSaving, setCanvasSaving] = useState(false);
+    const [canvasSavedAt, setCanvasSavedAt] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [reportLoading, setReportLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -300,6 +407,36 @@ function PreferencesBrowser() {
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setLoading(false);
+        }
+    }
+
+    async function loadCanvas() {
+        setCanvasLoading(true);
+        setError(null);
+        try {
+            const payload = await fetchPreferencesCanvas();
+            setCanvas(payload);
+            setCanvasText(payload.document_text || '{}\n');
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setCanvasLoading(false);
+        }
+    }
+
+    async function saveCanvas() {
+        setCanvasSaving(true);
+        setError(null);
+        try {
+            const payload = await savePreferencesCanvas(canvasText);
+            setCanvas(payload);
+            setCanvasText(payload.document_text || canvasText);
+            setCanvasSavedAt(new Date().toISOString());
+            await refreshPreferences();
+        } catch (err) {
+            setError(err instanceof Error ? err.message : String(err));
+        } finally {
+            setCanvasSaving(false);
         }
     }
 
@@ -322,7 +459,7 @@ function PreferencesBrowser() {
     useEffect(() => {
         settings.setupParentListener().then(() => {
             setReady(true);
-            refreshPreferences();
+            void Promise.all([refreshPreferences(), loadCanvas()]);
         });
     }, []);
 
@@ -347,6 +484,10 @@ function PreferencesBrowser() {
             return !filterValue || haystack.includes(filterValue);
         }),
         [recent, filterValue],
+    );
+    const canvasDirty = useMemo(
+        () => canvasText !== (canvas?.document_text || '{\n}\n'),
+        [canvas, canvasText],
     );
 
     if (!ready) {
@@ -549,6 +690,96 @@ function PreferencesBrowser() {
                         ) : null}
                     </section>
                 ) : null}
+
+                <section style={{
+                    background: "rgba(255,255,255,0.86)",
+                    border: "1px solid rgba(24,35,29,0.12)",
+                    borderRadius: "24px",
+                    padding: "22px",
+                }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+                        <div>
+                            <h2 style={{ margin: "0 0 8px" }}>Collaborative preferences canvas</h2>
+                            <p style={{ margin: 0, opacity: 0.76, maxWidth: "760px" }}>
+                                Edit the user-facing preferences document as simple JSON. Saving normalizes it back into the
+                                bundle’s structured <code>current.json</code>, so both the user and the agent work from the same
+                                preference state.
+                            </p>
+                            <p style={{ margin: "8px 0 0", fontSize: "13px", opacity: 0.66 }}>
+                                Operation: <code>POST /api/integrations/bundles/&lt;tenant&gt;/&lt;project&gt;/operations/preferences_canvas_save</code>
+                            </p>
+                            {canvas?.path ? (
+                                <p style={{ margin: "8px 0 0", fontSize: "13px", opacity: 0.66 }}>
+                                    Storage path: <code>{canvas.path}</code>
+                                </p>
+                            ) : null}
+                        </div>
+                        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                            <button
+                                type="button"
+                                onClick={loadCanvas}
+                                disabled={canvasLoading}
+                                style={{
+                                    padding: "12px 18px",
+                                    borderRadius: "999px",
+                                    border: "1px solid rgba(24,35,29,0.14)",
+                                    background: canvasLoading ? "#d9ded7" : "#f7faf7",
+                                    color: "#18231d",
+                                    cursor: canvasLoading ? "default" : "pointer",
+                                    fontSize: "14px",
+                                }}
+                            >
+                                {canvasLoading ? 'Loading…' : 'Reload canvas'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={saveCanvas}
+                                disabled={canvasSaving}
+                                style={{
+                                    padding: "12px 18px",
+                                    borderRadius: "999px",
+                                    border: "none",
+                                    background: canvasSaving ? "#6d7f75" : "#1d4d3a",
+                                    color: "#fff",
+                                    cursor: canvasSaving ? "default" : "pointer",
+                                    fontSize: "14px",
+                                }}
+                            >
+                                {canvasSaving ? 'Saving…' : 'Save canvas'}
+                            </button>
+                        </div>
+                    </div>
+                    <div style={{ marginTop: "14px", display: "flex", gap: "14px", flexWrap: "wrap", fontSize: "12px", opacity: 0.66 }}>
+                        <span>Status: {canvasDirty ? 'unsaved changes' : 'synced'}</span>
+                        {canvasSavedAt ? <span>Last save: {canvasSavedAt}</span> : null}
+                        {canvas?.changed_keys && canvas.changed_keys.length > 0 ? (
+                            <span>Changed: {canvas.changed_keys.join(', ')}</span>
+                        ) : null}
+                        {canvas?.removed_keys && canvas.removed_keys.length > 0 ? (
+                            <span>Removed: {canvas.removed_keys.join(', ')}</span>
+                        ) : null}
+                    </div>
+                    <textarea
+                        value={canvasText}
+                        onChange={(event) => setCanvasText(event.target.value)}
+                        spellCheck={false}
+                        style={{
+                            marginTop: "16px",
+                            width: "100%",
+                            minHeight: "320px",
+                            padding: "18px",
+                            borderRadius: "18px",
+                            border: "1px solid rgba(24,35,29,0.12)",
+                            background: "#fbfcfb",
+                            color: "#18231d",
+                            fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                            fontSize: "13px",
+                            lineHeight: 1.6,
+                            boxSizing: "border-box",
+                            resize: "vertical",
+                        }}
+                    />
+                </section>
 
                 <section style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: "18px" }}>
                     <div style={{
