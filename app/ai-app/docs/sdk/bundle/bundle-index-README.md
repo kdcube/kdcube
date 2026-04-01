@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
+  - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-config-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
 ---
@@ -20,11 +21,13 @@ Use this as the **docs start point** when building, repairing, or reviewing a bu
 1. Start with [[docs/sdk/bundle/bundle-dev-README.md](bundle-dev-README.md)](bundle-dev-README.md).
 2. Read the primary full-feature reference:
    [[docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)](bundle-reference-versatile-README.md).
-3. Read the declarative platform integration design:
+3. Read the runtime execution model:
+   [[docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)](bundle-runtime-README.md).
+4. Read the declarative platform integration design:
    [[docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)](bundle-platform-integration-README.md).
-4. Read the current shared bundle pytest suite under:
+5. Read the current shared bundle pytest suite under:
    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
-5. Only after that, branch into narrower specialized examples if the task is specifically about `ks:` or direct isolated-exec internals.
+6. Only after that, branch into narrower specialized examples if the task is specifically about `ks:` or direct isolated-exec internals.
 
 ## Bundle-builder map
 
@@ -32,6 +35,7 @@ Use this as the **docs start point** when building, repairing, or reviewing a bu
 | --- | --- | --- |
 | Minimal bundle contract | [[docs/sdk/bundle/bundle-dev-README.md](bundle-dev-README.md)](bundle-dev-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/orchestrator/workflow.py` |
 | Bundle lifecycle + instance model | [[docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)](bundle-lifecycle-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
+| Runtime surfaces across REST, SSE, tools, and iso runtime | [[docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)](bundle-runtime-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool_subsystem.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/bootstrap.py` |
 | Config, secrets, reserved platform props | [[docs/sdk/bundle/bundle-config-README.md](bundle-config-README.md)](bundle-config-README.md), [[docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md)](bundle-platform-properties-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | Custom tools + MCP | [[docs/sdk/tools/custom-tools-README.md](../tools/custom-tools-README.md)](../tools/custom-tools-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools_descriptor.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools/preference_tools.py` |
 | Custom skills | [[docs/sdk/skills/custom-skills-README.md](../skills/custom-skills-README.md)](../skills/custom-skills-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills_descriptor.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills/product/preferences/SKILL.md` |
@@ -66,6 +70,8 @@ Why this is the primary reference:
   [[docs/sdk/bundle/bundle-dev-README.md](bundle-dev-README.md)](bundle-dev-README.md)
 - Lifecycle, instance model, and storage surfaces:
   [[docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)](bundle-lifecycle-README.md)
+- Runtime surfaces across entrypoints, tools, and isolation:
+  [[docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)](bundle-runtime-README.md)
 - Bundle configuration and secrets:
   [[docs/sdk/bundle/bundle-config-README.md](bundle-config-README.md)](bundle-config-README.md)
 - Reserved platform property paths:

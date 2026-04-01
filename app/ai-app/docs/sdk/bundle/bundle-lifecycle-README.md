@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "lifecycle", "storage", "configuration", "entrypoint"]
 keywords: ["agentic_workflow", "on_bundle_load", "execute_core", "pre_run_hook", "post_run_hook", "singleton", "bundle_props", "bundle_storage_root", "ui", "main_view", "_ensure_ui_build"]
 see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
+  - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-config-README.md
   - ks:docs/sdk/bundle/bundle-storage-cache-README.md
   - ks:docs/sdk/bundle/bundle-knowledge-space-README.md

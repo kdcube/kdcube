@@ -2,11 +2,12 @@
 id: ks:docs/sdk/tools/custom-tools-README.md
 title: "Custom Tools"
 summary: "How to author bundle-local tools and register them in tools_descriptor.py with module/ref entries and consumer runtime wiring."
-tags: ["sdk", "tools", "custom", "bundle", "descriptor", "semantic-kernel", "authoring"]
-keywords: ["tools_descriptor.py", "TOOLS_SPECS", "module", "ref", "alias", "kernel_function", "create_tool_subsystem_with_mcp", "tool_call", "TOOL_RUNTIME", "MCP_TOOL_SPECS"]
+tags: ["sdk", "tools", "custom", "bundle", "descriptor", "semantic-kernel", "authoring", "runtime"]
+keywords: ["tools_descriptor.py", "TOOLS_SPECS", "module", "ref", "alias", "kernel_function", "create_tool_subsystem_with_mcp", "tool_call", "TOOL_RUNTIME", "MCP_TOOL_SPECS", "_SERVICE", "_INTEGRATIONS", "KV_CACHE", "get_comm"]
 see_also:
   - ks:docs/sdk/tools/tool-subsystem-README.md
   - ks:docs/sdk/tools/mcp-README.md
+  - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/exec/README-runtime-modes-builtin-tools.md
 ---
@@ -82,7 +83,106 @@ resp = await agent_io_tools.tool_call(
 )
 ```
 
-## 5) Optional per-tool runtime overrides
+## 5) What a tool module receives at runtime
+
+Tool modules are bound centrally by the runtime before use.
+
+That happens in both:
+- the normal in-process tool subsystem
+- the isolated execution bootstrap path
+
+Tool code should treat that runtime context as already prepared. Do not try to
+construct it yourself.
+
+### Optional bind hooks
+
+If the module defines these hooks, the runtime calls them during binding:
+- `bind_service(svc)`
+- `bind_registry(registry)`
+- `bind_integrations(integrations)`
+
+These are optional convenience hooks. The runtime also stamps canonical globals
+onto the module so tools can read the same names in both proc and isolated
+execution.
+
+### Canonical globals available in tool modules
+
+| Name | Meaning |
+| --- | --- |
+| `_SERVICE` / `SERVICE` | The current `ModelServiceBase` for model/router access |
+| `model_service` | Same service, under a more explicit name |
+| `_INTEGRATIONS` / `INTEGRATIONS` | Small integration map prepared by the runtime |
+| `_TOOL_SUBSYSTEM` / `TOOL_SUBSYSTEM` | Current `ToolSubsystem` instance when available |
+| `_COMMUNICATOR` / `COMMUNICATOR` | Current `ChatCommunicator` when request context exists |
+| `_KV_CACHE` / `KV_CACHE` | Shared KV cache handle when configured |
+| `_CTX_CLIENT` / `CTX_CLIENT` | Current `ContextRAGClient` when present |
+| `REGISTRY` | Registry objects explicitly provided by the workflow |
+
+Current `INTEGRATIONS` content is intentionally small:
+- `ctx_client`
+- `kv_cache`
+- `tool_subsystem`
+
+Do not assume arbitrary host objects are present there unless your workflow
+explicitly provides them.
+
+### Communicator inside tools
+
+Tools can emit progress or user-facing events through the normal chat
+communicator.
+
+The preferred read paths are:
+- `_COMMUNICATOR` / `COMMUNICATOR` if your module wants a direct bound global
+- `from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import get_comm`
+
+Important current behavior:
+- when a tool is used inside a chat turn, communicator usually has request and
+  session context
+- when the originating request carried an exact socket/stream target, direct
+  peer delivery is possible
+- when the originating path only carried `session_id`, emits fan out to the
+  whole session room
+
+For the request-path details, see [Bundle Runtime](../bundle/bundle-runtime-README.md).
+
+### Shared browser and other importable runtime services
+
+Some facilities are not stamped as globals, but are still safe to use from tool
+modules as normal SDK services. For example:
+
+```python
+from kdcube_ai_app.infra.rendering.shared_browser import get_shared_browser
+
+browser = await get_shared_browser()
+```
+
+This is the same shared browser service used by rendering tools such as
+`rendering_tools` / `md2pdf_async`.
+
+### Example pattern
+
+```python
+_SERVICE = None
+_INTEGRATIONS = None
+
+def bind_service(svc):
+    global _SERVICE
+    _SERVICE = svc
+
+def bind_integrations(integrations):
+    global _INTEGRATIONS
+    _INTEGRATIONS = integrations or {}
+
+async def my_tool(...):
+    cache = (_INTEGRATIONS or {}).get("kv_cache")
+    comm = (_INTEGRATIONS or {}).get("tool_subsystem").comm if (_INTEGRATIONS or {}).get("tool_subsystem") else None
+    ...
+```
+
+If you prefer not to read from `_INTEGRATIONS`, reading `_KV_CACHE`,
+`_COMMUNICATOR`, or `get_comm()` is also valid.
+
+## 6) Optional per-tool runtime overrides
 
 ```python
 TOOL_RUNTIME = {
@@ -95,7 +195,7 @@ TOOL_RUNTIME = {
 
 If a tool is not listed, default runtime policy applies.
 
-## 6) Optional MCP tool sources
+## 7) Optional MCP tool sources
 
 ```python
 MCP_TOOL_SPECS = [

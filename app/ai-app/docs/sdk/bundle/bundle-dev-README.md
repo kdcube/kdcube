@@ -7,6 +7,7 @@ keywords: ["agentic_workflow", "BaseEntrypoint", "tools_descriptor", "skills_des
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
+  - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-config-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -22,6 +23,8 @@ Read these first:
   [docs/sdk/bundle/bundle-index-README.md](bundle-index-README.md)
 - lifecycle and storage surfaces:
   [docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)
+- runtime surfaces and request/tool execution modes:
+  [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
 - bundle config and secrets:
   [docs/sdk/bundle/bundle-config-README.md](bundle-config-README.md)
 - primary full-feature reference bundle:
@@ -54,10 +57,11 @@ Overview doc:
 Recommended first read sequence for bundle builders:
 1. [docs/sdk/bundle/bundle-index-README.md](bundle-index-README.md)
 2. [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
-3. [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
-4. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
-5. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
-6. if the bundle already has package-specific tests, also read `<bundle>/tests`
+3. [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
+4. [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+5. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+6. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+7. if the bundle already has package-specific tests, also read `<bundle>/tests`
 
 Key files:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` — entrypoint, economics, widget operation, direct isolated-exec operation
