@@ -11,7 +11,7 @@ import re
 import json
 import textwrap
 import asyncio
-from typing import Annotated, Optional, Any
+from typing import Annotated, Optional, Any, Dict
 
 import semantic_kernel as sk
 import logging
