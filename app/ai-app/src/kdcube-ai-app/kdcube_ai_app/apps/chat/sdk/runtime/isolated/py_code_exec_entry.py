@@ -28,7 +28,6 @@ import os
 import pathlib
 import signal
 import importlib
-import sys
 import time
 from typing import Any, Dict, List, Optional
 
@@ -60,6 +59,10 @@ from kdcube_ai_app.apps.chat.sdk.runtime.external.distributed_snapshot import (
     build_manifest,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.external.payload_secret import get_exec_payload_secret
+from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
+    ensure_dynamic_package_chain as _ensure_dynamic_package_chain,
+    load_dynamic_module_from_file,
+)
 
 def _append_errors_log(message: str) -> None:
     try:
@@ -77,7 +80,6 @@ def _append_errors_log(message: str) -> None:
                 f.write("\n")
     except Exception:
         pass
-
 
 def _load_runtime_globals() -> Dict[str, Any]:
     raw = os.environ.get("RUNTIME_GLOBALS_JSON") or "{}"
@@ -342,7 +344,6 @@ def _bootstrap_supervisor_runtime(
     """
     import traceback
     import json as _json
-    import importlib.util as _importlib_util
 
     # ---------- Get portable spec ----------
     ps = runtime_globals.get("PORTABLE_SPEC_JSON")
@@ -406,19 +407,8 @@ def _bootstrap_supervisor_runtime(
         logger.log(f"[supervisor.bootstrap] loading {dyn_name} from {path}", "INFO")
 
         try:
-            spec = _importlib_util.spec_from_file_location(dyn_name, path)
-            if spec is None or spec.loader is None:
-                error = f"spec_from_file_location returned None or no loader"
-                logger.log(f"[supervisor.bootstrap] {error} for {dyn_name}", "ERROR")
-                failed_modules.append((alias, dyn_name, error))
-                continue
-
-            mod = _importlib_util.module_from_spec(spec)
-            sys.modules[dyn_name] = mod
-            logger.log(f"[supervisor.bootstrap] added {dyn_name} to sys.modules, executing...", "INFO")
-
-            spec.loader.exec_module(mod)  # type: ignore[union-attr]
-
+            logger.log(f"[supervisor.bootstrap] preparing package context for {dyn_name}", "INFO")
+            load_dynamic_module_from_file(dyn_name, path)
             logger.log(f"[supervisor.bootstrap] ✅ loaded dyn module {dyn_name} from {path}", "INFO")
             loaded_modules.append((alias, dyn_name, path))
 

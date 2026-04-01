@@ -16,6 +16,10 @@ import importlib.util
 from typing import Any, Dict, List, Optional, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
+from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import (
+    load_dynamic_module_for_path,
+    load_dynamic_module_from_file,
+)
 from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
 from kdcube_ai_app.infra.service_hub.inventory import ModelServiceBase, AgentLogger
 from kdcube_ai_app.infra.service_hub.cache import create_kv_cache
@@ -452,7 +456,6 @@ class ToolSubsystem:
         Mirror sandbox bootstrap in-process so io_tools writes to the same outdir/workdir and
         tool modules have service bindings.
         """
-        from importlib import util as _import_util
         from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
         from kdcube_ai_app.apps.chat.sdk.runtime.bootstrap import bootstrap_bind_all
         from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import set_comm
@@ -474,12 +477,7 @@ class ToolSubsystem:
             if not path:
                 continue
             try:
-                spec_obj = _import_util.spec_from_file_location(dyn_mod, path)
-                if not spec_obj or not spec_obj.loader:
-                    continue
-                mod_obj = _import_util.module_from_spec(spec_obj)
-                spec_obj.loader.exec_module(mod_obj)  # type: ignore
-                sys.modules[dyn_mod] = mod_obj
+                load_dynamic_module_from_file(dyn_mod, path)
             except Exception as e:
                 logger.log(f"[tool-subsystem] preload dyn module failed: {dyn_mod}: {e}", level="WARNING")
 
@@ -537,17 +535,10 @@ class ToolSubsystem:
             if not p.exists():
                 raise RuntimeError(f"Tools module not found: {ref} -> {p}")
 
-            import hashlib
-            digest = hashlib.sha1(str(p).encode("utf-8")).hexdigest()[:8]
-            mod_name = f"dyn_{p.stem}_{digest}"
-
-            spec = importlib.util.spec_from_file_location(mod_name, str(p))
-            if not spec or not spec.loader:
-                raise RuntimeError(f"Cannot load tools module from path: {p}")
-            mod = importlib.util.module_from_spec(spec)
-            sys.modules[mod_name] = mod
-            spec.loader.exec_module(mod)  # type: ignore
-            return mod_name, mod
+            try:
+                return load_dynamic_module_for_path(p)
+            except Exception as e:
+                raise RuntimeError(f"Cannot load tools module from path: {p}: {e}") from e
 
         # dotted import
         mod = importlib.import_module(ref)

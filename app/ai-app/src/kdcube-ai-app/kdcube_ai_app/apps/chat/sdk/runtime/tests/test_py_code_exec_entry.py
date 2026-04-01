@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import json
+import pathlib
+import sys
 
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry import (
+    _ensure_dynamic_package_chain,
     _hydrate_runtime_payload_from_secret,
 )
 
@@ -51,3 +54,25 @@ def test_hydrate_runtime_payload_from_secret_skips_when_inline_payload_present(m
 
     assert any("hydrate start" in msg for _, msg in logger.messages)
     assert any("skipping secret hydration" in msg for _, msg in logger.messages)
+
+
+def test_ensure_dynamic_package_chain_creates_parent_packages(tmp_path):
+    bundle_root = tmp_path / "bundle"
+    tools_dir = bundle_root / "tools"
+    tools_dir.mkdir(parents=True)
+    tool_file = tools_dir / "preference_tools.py"
+    tool_file.write_text("", encoding="utf-8")
+
+    root_name = "dynpkg_60bebbdd6f"
+    tools_name = f"{root_name}.tools"
+    full_name = f"{tools_name}.preference_tools"
+
+    for name in (root_name, tools_name):
+        sys.modules.pop(name, None)
+
+    _ensure_dynamic_package_chain(full_name, tool_file)
+
+    assert root_name in sys.modules
+    assert tools_name in sys.modules
+    assert pathlib.Path(sys.modules[root_name].__path__[0]).resolve() == bundle_root.resolve()  # type: ignore[attr-defined]
+    assert pathlib.Path(sys.modules[tools_name].__path__[0]).resolve() == tools_dir.resolve()  # type: ignore[attr-defined]

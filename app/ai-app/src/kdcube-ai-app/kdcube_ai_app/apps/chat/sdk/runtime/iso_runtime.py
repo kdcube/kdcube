@@ -943,6 +943,7 @@ from pathlib import Path
 import json as _json
 import os, asyncio, atexit, signal, sys, importlib, time
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
+from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_from_file
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
 import logging
@@ -1019,13 +1020,7 @@ for _alias, _dyn_name in (_ALIAS_TO_DYN or {}).items():
         continue
         
     try:
-        _spec = importlib.util.spec_from_file_location(_dyn_name, _path)
-        if _spec is None or _spec.loader is None:
-            logger.error(f"[executor] Could not create spec for {_dyn_name} from {_path}")
-            continue
-        _mod = importlib.util.module_from_spec(_spec)
-        sys.modules[_dyn_name] = _mod
-        _spec.loader.exec_module(_mod)
+        load_dynamic_module_from_file(_dyn_name, _path)
         logger.info(f"[executor] Loaded dynamic module {_dyn_name} from {_path}")
     except Exception as e:
         logger.error(f"[executor] Failed to load {_dyn_name} from {_path}: {e}", exc_info=True)
@@ -1277,6 +1272,7 @@ from pathlib import Path
 import json as _json
 import os, asyncio, atexit, signal, sys, importlib, time
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV, WORKDIR_CV
+from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_from_file
 from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
 import logging
@@ -1427,13 +1423,7 @@ for _alias, _dyn_name in (_ALIAS_TO_DYN or {}).items():
         continue
         
     try:
-        _spec = importlib.util.spec_from_file_location(_dyn_name, _path)
-        if _spec is None or _spec.loader is None:
-            logger.error(f"[executor] Could not create spec for {_dyn_name} from {_path}")
-            continue
-        _mod = importlib.util.module_from_spec(_spec)
-        sys.modules[_dyn_name] = _mod
-        _spec.loader.exec_module(_mod)
+        load_dynamic_module_from_file(_dyn_name, _path)
         logger.info(f"[executor] Loaded dynamic module {_dyn_name} from {_path}")
     except Exception as e:
         logger.error(f"[executor] Failed to load {_dyn_name} from {_path}: {e}", exc_info=True)
