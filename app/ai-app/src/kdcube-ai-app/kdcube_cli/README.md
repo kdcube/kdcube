@@ -311,6 +311,7 @@ Note: secrets descriptors are **not** prefilled or cached.
 The CLI stages `bundles.yaml` into the workdir and, when enabled:
 - mounts `bundles.yaml` as `/config/bundles.yaml`
 - sets `AGENTIC_BUNDLES_JSON=/config/bundles.yaml`
+- sets `BUNDLES_PRELOAD_ON_START=1` in `.env.proc` by default
 - enables bundle git resolution and env sync on startup
 
 `bundles.secrets.yaml` is **not copied** into the workdir. It is read from the

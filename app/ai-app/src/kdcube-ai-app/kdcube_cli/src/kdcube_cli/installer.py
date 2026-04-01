@@ -2648,6 +2648,7 @@ def gather_configuration(
         update_env_value(env_proc, "BUNDLE_STORAGE_ROOT", "/bundle-storage")
     if is_placeholder(env_proc.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1]):
         update_env_value(env_proc, "AGENTIC_BUNDLES_ROOT", "/bundles")
+    update_if_placeholder(env_proc, "BUNDLES_PRELOAD_ON_START", "1")
     if is_placeholder(env_proc.entries.get("HOST_BUNDLE_STORAGE_PATH", (None, None))[1]):
         update_env_value(env_proc, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
 
