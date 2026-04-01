@@ -8,8 +8,11 @@ see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/tools/custom-tools-README.md
   - ks:docs/sdk/tools/tool-subsystem-README.md
+  - ks:docs/clients/client-communication-README.md
+  - ks:docs/clients/sse-events-README.md
 ---
 # Bundle Runtime
 
@@ -117,6 +120,11 @@ Practical consequence:
 - without it, all clients listening on that session receive the event
 - if nobody is listening on that session, nobody receives it
 
+If the bundle also ships widget or frontend code, that code must follow the
+client transport contract when it calls `/api/integrations/*`:
+
+- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+
 ### 3) Tool execution in normal in-process runtime
 
 Bundle tools and SDK tools are loaded by `ToolSubsystem`.
@@ -211,6 +219,11 @@ That is why:
 - REST bundle operations can target one client when the `KDC-Stream-ID` header,
   which identifies the connected peer, is carried with the HTTP request;
   otherwise they broadcast to the session room
+
+For actual event names, `chat.delta` shape, and predefined markers such as
+`answer`, `thinking`, `canvas`, `timeline_text`, and `subsystem`, read:
+
+- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
 
 ## Shared browser, cache, and retrieval from tools
 

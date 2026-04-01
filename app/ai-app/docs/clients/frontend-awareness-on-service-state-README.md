@@ -5,6 +5,8 @@ summary: "Frontend guidance for multi‑replica, serverless‑like backend: SSE 
 tags: ["clients", "frontend", "sse", "retries", "rate-limits", "backpressure", "scaling"]
 keywords: ["serverless behavior", "multi-replica", "backoff", "jitter", "draining", "http-429", "http-503", "multi-tab", "ingress", "proc"]
 see_also:
+  - ks:docs/clients/README.md
+  - ks:docs/clients/client-communication-README.md
   - ks:docs/clients/sse-events-README.md
   - ks:docs/service/README-monitoring-observability.md
   - ks:docs/service/auth/auth-README.md
@@ -132,7 +134,12 @@ This avoids duplicate SSE streams and rate‑limit bursts.
 
 - Non‑simple auth requires **access token + ID token**.
 - SSE accepts auth tokens via **query params** if headers aren’t available.
+- REST/integrations may also carry the connected peer id via the configured stream-id header
+  (default `KDC-Stream-ID`) when the client wants bundle-originated events targeted back to
+  one connected peer instead of broadcast to the whole session.
 - If using a proxylogin service, the browser should not handle raw tokens.
+
+See [client-communication-README.md](client-communication-README.md) for the full header/cookie/query-param contract.
 
 ---
 

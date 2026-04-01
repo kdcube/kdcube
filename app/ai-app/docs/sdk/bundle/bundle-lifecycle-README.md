@@ -10,10 +10,18 @@ see_also:
   - ks:docs/sdk/bundle/bundle-config-README.md
   - ks:docs/sdk/bundle/bundle-storage-cache-README.md
   - ks:docs/sdk/bundle/bundle-knowledge-space-README.md
+  - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/clients/client-communication-README.md
 ---
 # Bundle Lifecycle
 
 This doc explains the **runtime lifecycle** of a bundle and the **storage/config surfaces** available to it.
+
+Read it together with:
+
+- [Bundle Runtime](bundle-runtime-README.md) for request/tool runtime surfaces
+- [Bundle Interfaces](bundle-interfaces-README.md) for streaming/widgets/operations
+- [Client Communication](../../clients/client-communication-README.md) when the bundle also ships client code
 
 ## Mental model
 
@@ -182,6 +190,12 @@ for client-side routing.
   endpoint (`POST /api/integrations/bundles/{tenant}/{project}/operations/{operation}`)
   and receives runtime config (base URL, auth tokens, tenant/project) via `postMessage`
   from the host frame.
+- That UI is a normal platform client. If it needs bundle-originated progress or
+  step events to target one exact connected peer, it must follow the client
+  communication contract and propagate the connected peer id on REST requests.
+- See:
+  [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+  and [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
 
 ## React integration
 

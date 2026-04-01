@@ -9,6 +9,8 @@ see_also:
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/auth/auth-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
+  - ks:docs/clients/client-communication-README.md
+  - ks:docs/clients/sse-events-README.md
 ---
 # Communication Integrations (External + Internal)
 
@@ -188,6 +190,23 @@ Supported by default in the platform:
 Custom markers are allowed, but the client must know how to render them.
 See [comm-system.md](comm-system.md) for the envelope details.
 
+### Client-visible payload patterns
+
+The platform already has well-understood rendering behavior for these shapes:
+
+| Pattern | Transport shape | Typical use |
+| --- | --- | --- |
+| Main answer | `chat.delta` + `marker="answer"` | assistant answer text |
+| Thinking/progress text | `chat.delta` + `marker="thinking"` | transient thought/progress stream |
+| Subsystem JSON | `chat.delta` + `marker="subsystem"` + `extra.sub_type` | tool/widget-specific panels |
+| Canvas artifact | `chat.delta` + `marker="canvas"` + `extra.format`/`artifact_name` | inline rendered artifact/content |
+| Timeline entry | `chat.delta` + `marker="timeline_text"` | compact visible activity entries |
+| Custom typed event | `chat_step` route with custom `env.type` | domain-specific semantic event |
+
+For the client-facing contract and examples, see:
+- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+
 ---
 
 ## 7) Bundle‑level outbound firewall
@@ -218,6 +237,19 @@ await emit.delta(text='{"type":"chart","data":{...}}', index=0, marker="canvas",
 
 # timeline_text (compact timeline entries)
 await emit.delta(text="Loaded 3 prior turns", index=0, marker="timeline_text", agent="orchestrator")
+```
+
+Custom typed event example:
+
+```python
+await emit.event(
+    type="bundle.preferences.updated",
+    step="preferences.updated",
+    status="completed",
+    title="Preferences updated",
+    data={"keys": ["city", "diet"]},
+    agent="preferences",
+)
 ```
 
 ---

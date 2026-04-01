@@ -5,6 +5,8 @@ summary: "SSE protocol reference: envelope, lifecycle events, continuation ackno
 tags: ["clients", "sse", "protocol", "events", "streaming", "chat"]
 keywords: ["event envelope", "chat_step", "delta", "server_shutdown", "conv_status", "rate_limit", "backpressure", "bundle events", "followup", "steer", "continuation"]
 see_also:
+  - ks:docs/clients/README.md
+  - ks:docs/clients/client-communication-README.md
   - ks:docs/clients/frontend-awareness-on-service-state-README.md
   - ks:docs/service/comm/comm-system.md
   - ks:docs/arch/architecture-long.md

@@ -6,8 +6,11 @@ tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations
 keywords: ["SSE", "Socket.IO", "Communicator", "operations API", "bundle widgets", "React panels", "artifacts", "attachments", "knowledge space", "ks:deployment"]
 see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
+  - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
+  - ks:docs/clients/client-communication-README.md
+  - ks:docs/clients/sse-events-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
@@ -42,11 +45,19 @@ Bundles stream output through the platform communicator. Clients receive events 
 - Socket.IO (`/socket.io`)
 
 Docs:
+- client request contract:
+  [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
 - SSE events: [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
 - Comm system: `docs/service/comm/README-comm.md`
 
 The communicator is **asynchronous**: bundle execution and streaming can happen on
 separate workers and still route events back to the active client channel.
+
+Targeting model:
+
+- if communicator has a peer target (`target_sid` / connected stream id), one
+  exact SSE or Socket.IO peer receives the event
+- otherwise the event is broadcast to all peers connected on that session
 
 Common stream payloads:
 - `delta` (token streams)
@@ -57,6 +68,70 @@ Common stream payloads:
 
 See:
 - [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+
+### Concrete bundle-to-client examples
+
+Main answer text:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
+
+emit = AIBEmitters(self.comm)
+await emit.delta(
+    text="Here is the answer.",
+    index=0,
+    marker="answer",
+    agent="answer.generator",
+)
+```
+
+Structured subsystem payload:
+
+```python
+await emit.delta(
+    text='{"status":"running","progress":42}',
+    index=0,
+    marker="subsystem",
+    agent="tool.exec",
+    sub_type="code_exec.status",
+    format="json",
+    artifact_name="code_exec.status",
+)
+```
+
+Canvas payload:
+
+```python
+await emit.delta(
+    text='{"type":"chart","data":{"points":[1,2,3]}}',
+    index=0,
+    marker="canvas",
+    agent="viz",
+    format="json",
+    artifact_name="canvas.chart.v1",
+    title="Chart",
+)
+```
+
+Custom typed semantic event:
+
+```python
+await emit.event(
+    type="bundle.preferences.updated",
+    step="preferences.updated",
+    status="completed",
+    title="Preferences updated",
+    data={"keys": ["city", "diet"]},
+    agent="preferences",
+)
+```
+
+Client rule:
+
+- built-in markers and built-in event families are already understood by the
+  platform client
+- custom markers or custom event types are allowed, but client code must opt in
+  to render them specially
 
 ---
 
@@ -129,6 +204,12 @@ Reference examples:
 - `src/kdcube-ai-app/kdcube_ai_app/journal/26/03/widgets/App.tsx`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`
 
+This is not bundle-specific magic. Widget/frontend code is regular platform
+client code and should follow:
+
+- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+
 ## 4) Bundle operations endpoint (loop-back)
 
 Widgets can call bundle-defined operations via the integrations endpoint:
@@ -180,6 +261,9 @@ Important:
 - today this endpoint is POST-only
 - widgets should call it with the real tenant/project scope and the intended `bundle_id`
 - the integration wiring should match the reference widgets above without ad-hoc deviations
+- if the bundle operation may emit communicator events that should go back only
+  to the initiating peer, the request must also carry the configured stream-id
+  header (default `KDC-Stream-ID`) with the already-connected peer id
 
 ### Widget ↔ bundle exchange
 

@@ -13,6 +13,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/bundle-platform-properties-README.md
+  - ks:docs/clients/client-communication-README.md
+  - ks:docs/clients/sse-events-README.md
 ---
 # Bundle Developer Guide (SDK)
 
@@ -25,6 +27,8 @@ Read these first:
   [docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)
 - runtime surfaces and request/tool execution modes:
   [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
+- client communication contract for bundle UI/widgets/frontends:
+  [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
 - bundle config and secrets:
   [docs/sdk/bundle/bundle-config-README.md](bundle-config-README.md)
 - primary full-feature reference bundle:
@@ -59,9 +63,10 @@ Recommended first read sequence for bundle builders:
 2. [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
 3. [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
 4. [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
-5. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
-6. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
-7. if the bundle already has package-specific tests, also read `<bundle>/tests`
+5. [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+6. `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+7. the smallest relevant pytest files under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
+8. if the bundle already has package-specific tests, also read `<bundle>/tests`
 
 Key files:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` — entrypoint, economics, widget operation, direct isolated-exec operation
@@ -537,21 +542,66 @@ If you don’t need filtering, omit it or pass no filter to `BaseEntrypoint`.
 
 ## Streaming and output
 
-Prefer BaseWorkflow’s built-in emitters:
-- `mk_thinking_streamer` for thinking
-- ReAct streaming via `react.write` (canvas or timeline_text)
+Streaming means:
+
+- bundle code emits events through the platform communicator
+- clients receive those events over an already-connected SSE stream or Socket.IO connection
+- bundle UI code inside widgets or custom frontends is itself a client and must follow the same client communication contract as any other frontend
+
+In normal chat turns:
+
+- the connected peer already exists through `/sse/stream` or Socket.IO
+- bundle-side `self.comm` events flow back through that chat transport
+
+In REST-triggered bundle operations:
+
+- the bundle still has a communicator
+- if the REST request carries the configured stream-id header
+  (default `KDC-Stream-ID`) with the connected peer id, the bundle can emit
+  directly to that one peer
+- if the header is absent, bundle-originated events are broadcast to the whole session
+
+This matters for bundle widgets and custom bundle frontends:
+
+- if they call `/api/integrations/*` and want progress/events routed back only to
+  the initiating browser peer, they must propagate the connected peer id on the
+  REST request
+- see [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+
+Prefer the higher-level SDK paths first:
+
+- `BaseWorkflow.mk_thinking_streamer(...)` for thought/progress streaming
+
+If the active solver is the React agent, it may emit its own agent-side
+`canvas` / `timeline_text` output through React tools. That is not the
+bundle-author API and should not be treated as the primary bundle streaming
+surface.
 
 If you need direct streaming, use `AIBEmitters(self.comm)`:
-- `delta(...)` for token streams
-- `step(...)` for progress steps
-- `event(...)` for custom widgets
 
-Common markers:
+- `delta(...)` for streamed text/artifact chunks
+- `step(...)` for progress/status updates
+- `event(...)` for structured custom events
+- `error(...)` for user-visible failures
+
+Common `chat.delta` markers:
+
 - `answer`
 - `thinking`
 - `canvas`
 - `timeline_text`
 - `subsystem`
+
+Read these next, not just this summary:
+
+- client transport, auth, stream-id, peer targeting:
+  [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+- streaming event envelope, routes, and all predefined delta markers:
+  [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+- bundle runtime surfaces and communicator behavior:
+  [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
+- widget/frontend ↔ bundle exchange over REST:
+  [docs/sdk/bundle/bundle-interfaces-README.md](bundle-interfaces-README.md)
 
 ---
 
@@ -591,6 +641,7 @@ Bundles can expose **React panels** and **operations**:
 
 Docs:
 - [docs/sdk/bundle/bundle-interfaces-README.md](bundle-interfaces-README.md)
+- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
 
 ---
 
