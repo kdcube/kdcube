@@ -743,26 +743,33 @@ def materialize_show_artifacts(timeline: Dict[str, Any], show_paths: List[str]) 
             continue
         path = raw_path.strip()
         if path.startswith("tc:"):
-            blocks = _collect_blocks(timeline)
-            matching = [b for b in blocks if (b.get("path") or "") == path]
-            if matching:
-                texts: List[str] = []
-                for b in matching:
-                    txt = b.get("text")
-                    if isinstance(txt, str) and txt.strip():
-                        texts.append(txt)
-                if texts:
-                    combined = "\n\n".join(texts)
-                    artifact = {
-                        "format": "text",
-                        "mime": "text/markdown",
-                        "text": combined,
-                    }
-                    items.append({
-                        "context_path": path,
-                        "artifact": artifact,
-                    })
-                    continue
+            # Prefer the canonical resolved artifact so tc:<...>.result reads back the
+            # actual inline tool payload when present, not just the envelope/meta block.
+            val = resolve_artifact_from_timeline(timeline, path)
+            if isinstance(val, dict) and (
+                (isinstance(val.get("text"), str) and val.get("text").strip())
+                or val.get("base64")
+            ):
+                text = val.get("text")
+                base64 = val.get("base64")
+                mime = (val.get("mime") or "").strip()
+                fmt = "text"
+                if mime == "application/json":
+                    fmt = "json"
+                elif mime == "text/html":
+                    fmt = "html"
+                artifact: Dict[str, Any] = {"format": fmt}
+                if mime:
+                    artifact["mime"] = mime
+                if isinstance(text, str) and text.strip():
+                    artifact["text"] = text
+                if base64:
+                    artifact["base64"] = base64
+                items.append({
+                    "context_path": path,
+                    "artifact": artifact,
+                })
+                continue
         if path.startswith("so:"):
             path = path[len("so:"):]
         if path.startswith("sources_pool["):

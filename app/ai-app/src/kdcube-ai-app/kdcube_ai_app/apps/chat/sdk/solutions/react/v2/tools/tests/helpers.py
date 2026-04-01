@@ -23,7 +23,7 @@ class FakeBrowser:
         }])
 
     def timeline_artifacts(self, paths):
-        return self.timeline.timeline_artifacts(paths)
+        return self.timeline.materialize_show_artifacts(paths)
 
     def unhide_paths(self, paths=None):
         return None

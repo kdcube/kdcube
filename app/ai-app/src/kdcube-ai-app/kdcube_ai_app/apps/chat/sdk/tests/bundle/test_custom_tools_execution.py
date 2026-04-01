@@ -12,6 +12,8 @@ Run with:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
@@ -80,6 +82,35 @@ class TestToolModuleLoading:
             assert mod is not None
         except ImportError:
             pytest.skip("exec_tools not available")
+
+    def test_ref_module_loading_supports_relative_imports(self, tmp_path):
+        """File-based ref modules can use normal relative imports within a bundle package."""
+        from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
+
+        bundle_root = tmp_path / "bundle@2026-04-01"
+        tools_dir = bundle_root / "tools"
+        bundle_root.mkdir()
+        tools_dir.mkdir()
+        (bundle_root / "__init__.py").write_text("", encoding="utf-8")
+        (tools_dir / "__init__.py").write_text("", encoding="utf-8")
+        (bundle_root / "helper.py").write_text("VALUE = 7\n", encoding="utf-8")
+        mod_path = tools_dir / "sample_tool.py"
+        mod_path.write_text(
+            "\n".join(
+                [
+                    "from ..helper import VALUE",
+                    "EXPORTED_VALUE = VALUE",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        ts = object.__new__(ToolSubsystem)
+        mod_name, mod = ts._load_tools_module(str(mod_path))
+
+        assert mod_name.endswith(".tools.sample_tool")
+        assert mod.EXPORTED_VALUE == 7
 
 
 class TestToolSubsystemGetToolRuntime:
