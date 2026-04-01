@@ -74,10 +74,7 @@ See:
 Main answer text:
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
-
-emit = AIBEmitters(self.comm)
-await emit.delta(
+await self.comm.delta(
     text="Here is the answer.",
     index=0,
     marker="answer",
@@ -88,7 +85,7 @@ await emit.delta(
 Structured subsystem payload:
 
 ```python
-await emit.delta(
+await self.comm.delta(
     text='{"status":"running","progress":42}',
     index=0,
     marker="subsystem",
@@ -102,7 +99,7 @@ await emit.delta(
 Canvas payload:
 
 ```python
-await emit.delta(
+await self.comm.delta(
     text='{"type":"chart","data":{"points":[1,2,3]}}',
     index=0,
     marker="canvas",
@@ -116,7 +113,7 @@ await emit.delta(
 Custom typed semantic event:
 
 ```python
-await emit.event(
+await self.comm.event(
     type="bundle.preferences.updated",
     step="preferences.updated",
     status="completed",

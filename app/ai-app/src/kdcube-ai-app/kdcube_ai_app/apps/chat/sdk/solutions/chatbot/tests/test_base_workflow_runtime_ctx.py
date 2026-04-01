@@ -30,7 +30,6 @@ def test_rebind_request_context_refreshes_runtime_ctx_bundle_storage(monkeypatch
     )
     monkeypatch.setattr(workflow_mod, "build_comm_from_comm_context", lambda *args, **kwargs: SimpleNamespace(delta=None))
     monkeypatch.setattr(workflow_mod, "build_relay_from_env", lambda: None)
-    monkeypatch.setattr(workflow_mod, "AIBEmitters", lambda comm: SimpleNamespace())
 
     wf = BaseWorkflow.__new__(BaseWorkflow)
     wf.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="react.doc@2026-03-02-22-10"))

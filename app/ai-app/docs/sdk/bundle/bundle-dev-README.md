@@ -577,12 +577,67 @@ If the active solver is the React agent, it may emit its own agent-side
 bundle-author API and should not be treated as the primary bundle streaming
 surface.
 
-If you need direct streaming, use `AIBEmitters(self.comm)`:
+If you need direct streaming, use `self.comm` directly:
 
 - `delta(...)` for streamed text/artifact chunks
 - `step(...)` for progress/status updates
 - `event(...)` for structured custom events
 - `error(...)` for user-visible failures
+
+Keep the mental model simple:
+
+| Method                         | Use it for                                   | Has `marker`? | Has `broadcast`?                              |
+|--------------------------------|----------------------------------------------|---------------|-----------------------------------------------|
+| `self.comm.step(...)`          | normal progress/status updates               | no            | no, helper is request-targeted/session-scoped |
+| `self.comm.delta(...)`         | streamed chunks or streamed artifact content | yes           | no, helper is request-targeted/session-scoped |
+| `self.comm.event(...)`         | custom typed semantic events                 | no            | yes                                           |
+| `self.comm.service_event(...)` | service-level events on `chat_service`       | no            | yes                                           |
+| `self.comm.emit(...)`          | low-level route control only                 | N/A           | yes                                           |
+
+Important:
+
+- `marker` belongs to `delta(...)`, not to `step(...)` or `event(...)`
+- use `step(...)` when you want a normal progress/status event rendered on the
+  standard `chat_step` path
+- use `delta(...)` when the client is supposed to treat the payload as a stream
+  and route it by marker such as `answer`, `thinking`, `canvas`, `timeline_text`,
+  or `subsystem`
+- use `event(...)` when the bundle defines its own semantic event type and may
+  also want explicit `broadcast=True`
+
+Example: get the communicator from the bundle runtime and emit both a supported
+step update and a custom typed broadcast event:
+
+```python
+async def refresh_preferences(self) -> dict:
+    # In entrypoints and workflows, the active communicator is available as self.comm
+    await self.comm.step(
+        step="preferences.refresh",
+        status="started",
+        title="Refreshing preferences",
+        agent="preferences",
+        data={"source": "bundle"},
+    )
+
+    # ... do the actual work ...
+
+    await self.comm.event(
+        type="bundle.preferences.updated",
+        step="preferences.updated",
+        status="completed",
+        title="Preferences updated",
+        agent="preferences",
+        data={"keys": ["city", "diet"]},
+        broadcast=True,
+    )
+
+    return {"ok": True}
+```
+
+Use:
+
+- `step(...)` when the event fits the normal progress/status model already understood by clients
+- `event(...)` when the bundle wants to define a custom semantic event type or explicitly choose `broadcast=True`
 
 Common `chat.delta` markers:
 

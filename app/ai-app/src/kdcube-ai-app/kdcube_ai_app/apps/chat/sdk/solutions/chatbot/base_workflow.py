@@ -16,7 +16,6 @@ from kdcube_ai_app.apps.chat.emitters import (
     build_relay_from_env,
 )
 from kdcube_ai_app.apps.chat.sdk.continuations import get_current_conversation_continuation_source
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
 from kdcube_ai_app.apps.chat.sdk.context.memory.conv_memories import ConvMemoriesStore
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.browser import ContextBrowser
@@ -97,7 +96,6 @@ class BaseWorkflow():
         self.graph = graph
         self.kb = kb
         self.comm = comm
-        self._comm = AIBEmitters(comm)
         self.comm_context = comm_context
         self._continuation_source = continuation_source
 
@@ -258,7 +256,6 @@ class BaseWorkflow():
                 comm_context,
                 relay=build_relay_from_env(),
             )
-            self._comm = AIBEmitters(self.comm)
 
             if getattr(self, "hosting_service", None) is not None:
                 self.hosting_service.comm = self.comm

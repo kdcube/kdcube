@@ -1,0 +1,1829 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KDCube Bundle Developer Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg:       #F6FAFA;   /* page — barely-there mint */
+    --surface:  #ffffff;
+    --surface2: #EEF8F7;   /* teal wash */
+    --border:   #D8ECEB;
+    --accent:   #01BEB2;   /* teal — primary brand */
+    --accent2:  #6B63FE;   /* purple — AI / premium */
+    --accent3:  #4372C3;   /* blue — structural */
+    --green:    #52B044;   /* meadow green */
+    --yellow:   #F0BC2E;   /* sunflower gold */
+    --red:      #dc2626;
+    --text:     #0D1E2C;   /* dark navy */
+    --muted:    #3A5672;   /* mid blue-grey */
+    --code-bg:  #0D1E2C;   /* dark navy code blocks */
+    --code-text:#C6F3F1;   /* mint cyan code text */
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.07), 0 4px 12px rgba(0,0,0,0.05);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+
+  /* NAV */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; align-items: center; gap: 2rem;
+    height: 54px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .nav-brand {
+    font-weight: 800; font-size: 16px;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    white-space: nowrap;
+  }
+  .nav-links { display: flex; gap: 1.1rem; overflow-x: auto; flex: 1; }
+  .nav-links a {
+    color: var(--muted); text-decoration: none; font-size: 13px; font-weight: 500;
+    white-space: nowrap; padding: 4px 2px;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover, .nav-links a.active { color: var(--accent); }
+
+  /* HERO */
+  .hero {
+    background: linear-gradient(150deg, #0D1E2C 0%, #2B4B8A 55%, #009C92 100%);
+    padding: 5rem 2rem 4rem;
+    text-align: center;
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse 70% 60% at 50% 0%, rgba(99,102,241,0.25) 0%, transparent 70%);
+  }
+  .hero h1 {
+    font-size: clamp(2rem, 5vw, 3.4rem);
+    font-weight: 800; position: relative;
+    background: linear-gradient(135deg, #C6F3F1 30%, #F5D870 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    line-height: 1.2; margin-bottom: 1.2rem;
+  }
+  .hero p {
+    font-size: 1.1rem; color: #C6F3F1; max-width: 620px;
+    margin: 0 auto 2rem; position: relative;
+  }
+  .hero-badges { display: flex; gap: 0.65rem; justify-content: center; flex-wrap: wrap; position: relative; }
+  .badge {
+    background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2);
+    padding: 5px 13px; border-radius: 100px;
+    font-size: 12px; font-weight: 600; color: #e0f2fe;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .badge.green { border-color: rgba(82,176,68,0.6); color: #A8DFAA; }
+  .badge.blue { border-color: rgba(67,114,195,0.6); color: #C6F3F1; }
+  .badge.purple { border-color: rgba(107,99,254,0.6); color: #C5C2FF; }
+
+  /* LAYOUT */
+  .container { max-width: 1080px; margin: 0 auto; padding: 0 2rem; }
+  .section { padding: 3.5rem 0; }
+  .section + .section { border-top: 1px solid var(--border); }
+  h2 {
+    font-size: 1.65rem; font-weight: 800; margin-bottom: 1rem;
+    display: flex; align-items: center; gap: 0.55rem;
+    color: var(--text);
+  }
+  h2 .icon { font-size: 1.4rem; }
+  h3 { font-size: 1.1rem; font-weight: 700; margin: 1.5rem 0 0.7rem; color: var(--accent2); }
+  h4 { font-size: 0.95rem; font-weight: 700; margin: 1rem 0 0.45rem; color: var(--muted); }
+  p { margin-bottom: 0.9rem; color: var(--text); }
+  a { color: var(--accent3); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.9rem; }
+  li { margin-bottom: 0.3rem; }
+  strong { font-weight: 700; }
+
+  /* CODE */
+  pre {
+    background: var(--code-bg); color: var(--code-text);
+    border-radius: var(--radius-sm); padding: 1.15rem 1.4rem;
+    overflow-x: auto; margin: 1rem 0; font-size: 13px;
+    font-family: 'JetBrains Mono', monospace; line-height: 1.65;
+    box-shadow: var(--shadow);
+  }
+  code {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.875em;
+    background: #EEF8F7; color: #009C92;
+    padding: 2px 6px; border-radius: 4px;
+  }
+  pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+
+  /* SYNTAX */
+  .kw { color: #c084fc; }
+  .fn { color: #7dd3fc; }
+  .str { color: #86efac; }
+  .cm { color: #64748b; font-style: italic; }
+  .num { color: #fdba74; }
+  .cls { color: #fde68a; }
+  .dec { color: #67e8f9; }
+
+  /* CARDS */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 1.4rem; margin-bottom: 1rem;
+    box-shadow: var(--shadow);
+  }
+  .card-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+    gap: 1rem; margin: 1.5rem 0;
+  }
+  .card-grid .card { margin: 0; }
+  .card h3 { margin-top: 0; }
+  .card-icon { font-size: 1.75rem; margin-bottom: 0.65rem; }
+
+  /* CALLOUT */
+  .callout {
+    border-radius: var(--radius-sm); padding: 0.9rem 1.15rem;
+    margin: 1rem 0; display: flex; gap: 0.7rem; align-items: flex-start;
+  }
+  .callout.info { background: #E5FAF8; border: 1px solid #A8E9E5; }
+  .callout.tip { background: #EDFAEB; border: 1px solid #A8DFAA; }
+  .callout.warn { background: #FFFAEC; border: 1px solid #F0DC8A; }
+  .callout.danger { background: #fef2f2; border: 1px solid #fecaca; }
+  .callout-icon { font-size: 1.05rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-body { flex: 1; }
+  .callout-body p { color: inherit; }
+  .callout-body p:last-child { margin-bottom: 0; }
+
+  /* TABLE */
+  .table-wrap { overflow-x: auto; margin: 1rem 0; border-radius: var(--radius-sm); box-shadow: var(--shadow); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; background: var(--surface); }
+  th {
+    background: var(--surface2); text-align: left;
+    padding: 9px 13px; font-weight: 700; font-size: 11.5px;
+    text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted);
+    border-bottom: 2px solid var(--border);
+  }
+  td { padding: 9px 13px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--surface2); }
+
+  /* STEPS */
+  .steps { counter-reset: step; list-style: none; padding: 0; }
+  .steps li {
+    counter-increment: step;
+    display: flex; gap: 1rem; align-items: flex-start;
+    padding: 1rem 0; border-bottom: 1px solid var(--border);
+  }
+  .steps li:last-child { border-bottom: none; }
+  .step-num {
+    flex-shrink: 0; width: 30px; height: 30px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 13px; color: white;
+  }
+  .step-content h4 { margin-top: 3px; color: var(--text); }
+
+  /* DETAILS */
+  details {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); margin: 0.75rem 0;
+    overflow: hidden; box-shadow: var(--shadow);
+  }
+  summary {
+    padding: 0.8rem 1.2rem; cursor: pointer;
+    font-weight: 700; list-style: none;
+    display: flex; align-items: center; gap: 0.5rem;
+    user-select: none; color: var(--text);
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: '▶'; font-size: 0.6rem; transition: transform 0.2s; color: var(--accent);
+  }
+  details[open] summary::before { transform: rotate(90deg); }
+  .details-body { padding: 0 1.2rem 1.2rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+
+  /* TABS */
+  .tabs { margin: 1.5rem 0; }
+  .tab-headers {
+    display: flex; gap: 0; border-bottom: 2px solid var(--border);
+    background: var(--surface2); border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+    overflow: hidden;
+  }
+  .tab-btn {
+    background: none; border: none; color: var(--muted);
+    padding: 0.6rem 1.1rem; font-size: 13px; font-weight: 700;
+    cursor: pointer; border-bottom: 2px solid transparent;
+    margin-bottom: -2px; transition: all 0.2s; font-family: 'Inter', sans-serif;
+  }
+  .tab-btn:hover { color: var(--accent); background: rgba(1,190,178,0.06); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); background: white; }
+  .tab-panel { display: none; padding-top: 1rem; }
+  .tab-panel.active { display: block; }
+
+  /* PILL */
+  .pill {
+    display: inline-block; padding: 2px 9px; border-radius: 100px;
+    font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em;
+  }
+  .pill.new   { background: #E8F7E5; color: #3A8030; }
+  .pill.avail { background: #E8F7E5; color: #3A8030; }
+  .pill.soon  { background: #FFF8DC; color: #C89A10; }
+  .pill.beta  { background: #EBEBFF; color: #3A38A0; }
+  .pill.partial { background: #E0F5F8; color: #0E5E6A; }
+
+  /* SVG wrappers */
+  .svg-wrap {
+    background: #EEF8F7; border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden;
+    margin: 1.5rem 0; box-shadow: var(--shadow);
+  }
+  .svg-wrap svg { display: block; width: 100%; }
+
+  /* FOOTER */
+  footer {
+    text-align: center; padding: 3rem 1rem;
+    color: var(--muted); font-size: 13px;
+    border-top: 1px solid var(--border); background: var(--surface);
+  }
+
+  /* COMING SOON */
+  .coming-soon-banner {
+    background: linear-gradient(135deg, #FFF8DC, #E5FAF8);
+    border: 1px solid #F0DC8A; border-radius: var(--radius); padding: 1.75rem;
+    text-align: center; margin: 1.5rem 0;
+  }
+  .coming-soon-banner h3 { color: #C89A10; margin-top: 0; }
+
+  /* RESPONSIVE */
+  @media (max-width: 640px) {
+    .nav-links { display: none; }
+    .card-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <span class="nav-brand">🧊 KDCube Bundles</span>
+  <div class="nav-links">
+    <a href="#overview">Overview</a>
+    <a href="#install">Install</a>
+    <a href="#anatomy">Anatomy</a>
+    <a href="#interface">Interface</a>
+    <a href="#storage">Storage</a>
+    <a href="#config">Config</a>
+    <a href="#workflow">Workflow</a>
+    <a href="#tools">Tools</a>
+    <a href="#skills">Skills</a>
+    <a href="#react-agent">ReAct Agent</a>
+    <a href="#exec">Exec Runtime</a>
+    <a href="#knowledge">Knowledge</a>
+    <a href="#context">Context &amp; RAG</a>
+    <a href="#hosting">Hosting</a>
+    <a href="#citations">Citations</a>
+    <a href="#feedback">Feedback</a>
+    <a href="#economics">Economics</a>
+    <a href="#widgets">Widgets / UI</a>
+    <a href="#deploy">Deploy</a>
+    <a href="#examples">Examples</a>
+    <a href="#coming-soon">Coming Soon</a>
+  </div>
+</nav>
+
+<!-- HERO -->
+<div class="hero">
+  <h1>Bundle Developer Portal</h1>
+  <p>Everything you need to build, deploy, and extend AI-powered bundles on the KDCube platform — from zero to production.</p>
+  <div class="hero-badges">
+    <span class="badge green">● Python 3.11+</span>
+    <span class="badge blue">● SSE Streaming</span>
+    <span class="badge purple">● ReAct Agent</span>
+    <span class="badge blue">● Multi-Tenant</span>
+    <span class="badge green">● Distributed Storage</span>
+    <span class="badge purple">● Isolated Execution</span>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ═══════════════════════════════════════ OVERVIEW -->
+<div class="section" id="overview">
+  <h2><span class="icon">🗺️</span> Platform Overview</h2>
+  <p>KDCube is a <strong>multi-tenant AI application platform</strong>. It provides the infrastructure for deploying conversational AI agents at scale — with streaming, storage, economics, tooling, and extensibility all built in.</p>
+  <p>A <strong>Bundle</strong> is your unit of deployment. It's a Python package that plugs into the platform and defines how your AI agent thinks, what tools it uses, how it stores data, what UI widgets it exposes, and how it bills users.</p>
+
+  <div class="callout info">
+    <span class="callout-icon">💡</span>
+    <div class="callout-body">
+      <strong>Think of a Bundle as a self-contained AI product</strong> — it can include its own agent logic, knowledge base, custom tools, UI dashboards, billing configuration, and more. The platform provides everything else (auth, routing, scaling, storage backends, rate limiting).
+    </div>
+  </div>
+
+  <h3>Big Picture: How It All Fits Together</h3>
+  <div class="svg-wrap">
+  <svg viewBox="0 0 980 540" xmlns="http://www.w3.org/2000/svg" style="max-width:980px;">
+    <defs>
+      <marker id="arr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#01BEB2"/>
+      </marker>
+      <marker id="arr2" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#4372C3"/>
+      </marker>
+      <marker id="arrgr" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#52B044"/>
+      </marker>
+      <marker id="arror" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#F0BC2E"/>
+      </marker>
+    </defs>
+    <rect width="980" height="520" fill="#F6FAFA"/>
+
+    <!-- User -->
+    <rect x="24" y="190" width="110" height="65" rx="10" fill="white" stroke="#01BEB2" stroke-width="1.5"/>
+    <text x="79" y="217" text-anchor="middle" fill="#0D1E2C" font-size="13" font-family="Inter" font-weight="700">User</text>
+    <text x="79" y="235" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Browser / App</text>
+    <text x="79" y="249" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">SSE + REST</text>
+
+    <!-- SSE arrow user→ingress -->
+    <line x1="134" y1="218" x2="176" y2="218" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#arr)"/>
+    <text x="155" y="210" text-anchor="middle" fill="#01BEB2" font-size="10" font-family="Inter" font-weight="600">SSE/WS</text>
+
+    <!-- REST arrow user→proc (routes below storage boxes, then up to proc) -->
+    <path d="M 79 255 L 79 500 L 577 500 L 577 285" stroke="#F0BC2E" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arror)"/>
+    <text x="328" y="518" text-anchor="middle" fill="#F0BC2E" font-size="10" font-family="Inter" font-weight="600">REST POST /bundles/{t}/{p}/operations/{op}</text>
+
+    <!-- Ingress box -->
+    <rect x="176" y="172" width="130" height="100" rx="10" fill="white" stroke="#38B8C8" stroke-width="1.5"/>
+    <text x="241" y="196" text-anchor="middle" fill="#38B8C8" font-size="12" font-family="Inter" font-weight="700">Ingress</text>
+    <text x="241" y="213" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Auth &amp; Rate Limit</text>
+    <text x="241" y="229" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Bundle Routing</text>
+    <text x="241" y="245" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">SSE Emitter</text>
+    <text x="241" y="261" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Task Enqueueing</text>
+
+    <!-- Ingress→Queue -->
+    <line x1="306" y1="222" x2="354" y2="222" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#arr)"/>
+    <text x="330" y="214" text-anchor="middle" fill="#01BEB2" font-size="10" font-family="Inter" font-weight="600">enqueue</text>
+
+    <!-- Queue box -->
+    <rect x="354" y="192" width="105" height="60" rx="10" fill="white" stroke="#F0BC2E" stroke-width="1.5"/>
+    <text x="406" y="217" text-anchor="middle" fill="#F0BC2E" font-size="12" font-family="Inter" font-weight="700">Redis Queue</text>
+    <text x="406" y="235" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Task Buffer</text>
+
+    <!-- Queue→Proc -->
+    <line x1="459" y1="222" x2="507" y2="222" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#arr)"/>
+    <text x="483" y="214" text-anchor="middle" fill="#01BEB2" font-size="10" font-family="Inter" font-weight="600">dequeue</text>
+
+    <!-- Proc box -->
+    <rect x="507" y="160" width="140" height="125" rx="10" fill="white" stroke="#6B63FE" stroke-width="1.5"/>
+    <text x="577" y="184" text-anchor="middle" fill="#6B63FE" font-size="12" font-family="Inter" font-weight="700">Processor (proc)</text>
+    <text x="577" y="202" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Bundle Loader</text>
+    <text x="577" y="218" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">LangGraph Exec</text>
+    <text x="577" y="234" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">Communicator (async)</text>
+    <text x="577" y="250" text-anchor="middle" fill="#F0BC2E" font-size="10.5" font-family="Inter" font-weight="600">Operations API (REST)</text>
+    <text x="577" y="274" text-anchor="middle" fill="#3A5672" font-size="9" font-family="Inter">POST /bundles/{t}/{p}/operations/{op}</text>
+
+    <!-- Proc→Bundle -->
+    <line x1="647" y1="222" x2="695" y2="222" stroke="#52B044" stroke-width="1.5" marker-end="url(#arrgr)"/>
+    <text x="671" y="214" text-anchor="middle" fill="#52B044" font-size="10" font-family="Inter" font-weight="600">invoke</text>
+
+    <!-- Bundle outer box -->
+    <rect x="695" y="100" width="260" height="250" rx="12" fill="#F6FAFA" stroke="#52B044" stroke-width="2"/>
+    <text x="825" y="124" text-anchor="middle" fill="#52B044" font-size="13" font-family="Inter" font-weight="800">YOUR BUNDLE</text>
+
+    <!-- Bundle inner items -->
+    <rect x="712" y="135" width="105" height="32" rx="7" fill="white" stroke="#01BEB2" stroke-width="1"/>
+    <text x="764" y="155" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">Entrypoint</text>
+
+    <rect x="828" y="135" width="105" height="32" rx="7" fill="white" stroke="#01BEB2" stroke-width="1"/>
+    <text x="880" y="155" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">Workflow</text>
+
+    <rect x="712" y="180" width="105" height="32" rx="7" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="764" y="200" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">Tools</text>
+
+    <rect x="828" y="180" width="105" height="32" rx="7" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="880" y="200" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">Skills</text>
+
+    <rect x="712" y="225" width="105" height="32" rx="7" fill="white" stroke="#F0BC2E" stroke-width="1"/>
+    <text x="764" y="245" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">ReAct Agent</text>
+
+    <rect x="828" y="225" width="105" height="32" rx="7" fill="white" stroke="#F0BC2E" stroke-width="1"/>
+    <text x="880" y="245" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">Widgets / UI</text>
+
+    <rect x="712" y="270" width="221" height="28" rx="7" fill="white" stroke="#6B63FE" stroke-width="1"/>
+    <text x="822" y="288" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="600">Storage · Config · Economics</text>
+
+    <!-- SSE back arrow: ingress → user -->
+    <path d="M 176 248 Q 120 310 79 265" stroke="#38B8C8" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr2)"/>
+    <text x="105" y="313" text-anchor="middle" fill="#38B8C8" font-size="10" font-family="Inter" font-weight="600">SSE stream</text>
+
+    <!-- Communicator back arrow: proc → ingress → user -->
+    <path d="M 577 285 Q 577 370 241 370 Q 176 370 176 272" stroke="#38B8C8" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#arr2)"/>
+    <text x="380" y="388" text-anchor="middle" fill="#38B8C8" font-size="10" font-family="Inter" font-weight="600">Communicator (async streaming → client)</text>
+
+    <!-- Postgres -->
+    <rect x="24" y="420" width="115" height="48" rx="8" fill="white" stroke="#94a3b8" stroke-width="1"/>
+    <text x="81" y="441" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="700">PostgreSQL</text>
+    <text x="81" y="457" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Conversations</text>
+
+    <!-- Redis Store -->
+    <rect x="150" y="420" width="105" height="48" rx="8" fill="white" stroke="#94a3b8" stroke-width="1"/>
+    <text x="202" y="441" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="700">Redis</text>
+    <text x="202" y="457" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Props / Cache</text>
+
+    <!-- S3 -->
+    <rect x="266" y="420" width="115" height="48" rx="8" fill="white" stroke="#94a3b8" stroke-width="1"/>
+    <text x="323" y="441" text-anchor="middle" fill="#0D1E2C" font-size="11" font-family="Inter" font-weight="700">S3 / Local FS</text>
+    <text x="323" y="457" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Artifacts / Files</text>
+
+    <!-- Platform persistence label -->
+    <text x="200" y="497" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="Inter">Platform-managed persistence layer</text>
+  </svg>
+  </div>
+
+  <h3>Two Services, One Platform</h3>
+  <div class="card-grid">
+    <div class="card">
+      <div class="card-icon">🚪</div>
+      <h3>Ingress (<code>chat-ingress</code>)</h3>
+      <p>Handles all inbound traffic. Authenticates users, enforces rate limits, validates the bundle, enqueues the task, and opens an SSE stream back to the client. Your bundle rarely needs to know about this — the platform wires it up automatically.</p>
+    </div>
+    <div class="card">
+      <div class="card-icon">⚙️</div>
+      <h3>Processor (<code>chat-proc</code>)</h3>
+      <p>Dequeues tasks, loads your bundle singleton, and calls <code>execute_core()</code>. It also hosts the <strong>Operations API</strong> — the REST endpoint that your UI widgets call directly (no SSE needed for widget interactions).</p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ INSTALL -->
+<div class="section" id="install">
+  <h2><span class="icon">⚡</span> Getting Started in 3 Steps</h2>
+
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <h4>Install the KDCube CLI</h4>
+        <pre><code><span class="cm"># Recommended: pipx (isolated installation)</span>
+pipx install kdcube-cli
+
+<span class="cm"># Alternative</span>
+python -m pip install --user kdcube-cli</code></pre>
+        <p>Prerequisites: Python 3.9+, Git, Docker Desktop.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <h4>Run the setup wizard</h4>
+        <pre><code>kdcube-setup</code></pre>
+        <p>Choose <strong>release-latest</strong> → answer <strong>yes</strong> to "Run docker compose now?" — no local build needed. The wizard creates <code>~/.kdcube/kdcube-runtime/</code> with all config, data, and log folders.</p>
+        <div style="margin: 1rem 0; border-radius: 8px; overflow: hidden; border: 1px solid #D8ECEB; box-shadow: 0 1px 4px rgba(0,0,0,0.07);">
+          <img src="assets/cli-setup.png" alt="KDCube CLI setup wizard" style="display:block; width:100%; max-width:760px;">
+        </div>
+        <div class="callout tip">
+          <span class="callout-icon">💡</span>
+          <div class="callout-body">Using a local repo checkout? <code>kdcube-setup --path /path/to/kdcube-ai-app</code> skips the install-source menu and uses your local templates.</div>
+        </div>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <h4>Open the UI</h4>
+        <pre><code>http://localhost:${KDCUBE_UI_PORT}/chatbot/chat</code></pre>
+        <p>You're now running a full KDCube stack with the built-in example bundles.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h3>Workdir Layout</h3>
+  <pre><code>~/.kdcube/kdcube-runtime/
+├─ config/
+│  ├─ .env                        <span class="cm"># Base Docker Compose env</span>
+│  ├─ .env.ingress / .env.proc    <span class="cm"># Per-service config</span>
+│  ├─ bundles.yaml                <span class="cm"># Your bundle definitions  ← you edit this</span>
+│  ├─ bundles.secrets.yaml        <span class="cm"># Bundle secrets           ← you edit this</span>
+│  ├─ gateway.yaml                <span class="cm"># Rate limits, circuit breaker</span>
+│  └─ frontend.config.*.json      <span class="cm"># UI auth config</span>
+├─ data/
+│  ├─ kdcube-storage/             <span class="cm"># Conversations, artifacts, files</span>
+│  ├─ exec-workspace/             <span class="cm"># Isolated execution scratch space</span>
+│  └─ bundle-storage/             <span class="cm"># Per-bundle persistent storage</span>
+└─ logs/</code></pre>
+
+  <p>See the full CLI reference: <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md" target="_blank">kdcube_cli/README.md</a></p>
+</div>
+
+<!-- ═══════════════════════════════════════ ANATOMY -->
+<div class="section" id="anatomy">
+  <h2><span class="icon">🫀</span> Bundle Anatomy</h2>
+  <p>A bundle is a Python package with a required <code>entrypoint.py</code> and optional supporting files:</p>
+
+  <div class="svg-wrap">
+  <svg viewBox="0 0 860 420" xmlns="http://www.w3.org/2000/svg" style="max-width:860px;">
+    <rect width="860" height="420" fill="#F6FAFA"/>
+    <text x="40" y="40" fill="#52B044" font-size="14" font-family="JetBrains Mono" font-weight="700">my-bundle@1-0/</text>
+    <line x1="55" y1="45" x2="55" y2="390" stroke="#D8ECEB" stroke-width="1.5"/>
+
+    <line x1="55" y1="72" x2="78" y2="72" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="77" fill="#6B63FE" font-size="13" font-family="JetBrains Mono">entrypoint.py</text>
+    <rect x="310" y="62" width="215" height="22" rx="4" fill="#ede9fe" stroke="#a78bfa" stroke-width="1"/>
+    <text x="320" y="77" fill="#5b21b6" font-size="11" font-family="Inter" font-weight="700">REQUIRED — @agentic_workflow</text>
+
+    <line x1="55" y1="108" x2="78" y2="108" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="113" fill="#1d4ed8" font-size="13" font-family="JetBrains Mono">orchestrator/workflow.py</text>
+    <text x="370" y="113" fill="#3A5672" font-size="11" font-family="Inter">BaseWorkflow subclass</text>
+
+    <line x1="55" y1="144" x2="78" y2="144" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="149" fill="#1d4ed8" font-size="13" font-family="JetBrains Mono">agents/gate.py</text>
+    <text x="283" y="149" fill="#3A5672" font-size="11" font-family="Inter">Optional: custom intent gate (demo pattern)</text>
+
+    <line x1="55" y1="180" x2="78" y2="180" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="185" fill="#0e7490" font-size="13" font-family="JetBrains Mono">tools/my_tools.py</text>
+    <text x="283" y="185" fill="#3A5672" font-size="11" font-family="Inter">Custom tool implementations</text>
+
+    <line x1="55" y1="216" x2="78" y2="216" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="221" fill="#0e7490" font-size="13" font-family="JetBrains Mono">tools_descriptor.py</text>
+    <text x="283" y="221" fill="#3A5672" font-size="11" font-family="Inter">Register which tools are enabled</text>
+
+    <line x1="55" y1="252" x2="78" y2="252" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="257" fill="#b45309" font-size="13" font-family="JetBrains Mono">skills/my_skill/SKILL.md</text>
+    <text x="310" y="257" fill="#3A5672" font-size="11" font-family="Inter">Agent instruction sets</text>
+
+    <line x1="55" y1="288" x2="78" y2="288" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="293" fill="#b45309" font-size="13" font-family="JetBrains Mono">skills_descriptor.py</text>
+    <text x="283" y="293" fill="#3A5672" font-size="11" font-family="Inter">Which skills are visible to which agents</text>
+
+    <line x1="55" y1="324" x2="78" y2="324" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="329" fill="#065f46" font-size="13" font-family="JetBrains Mono">knowledge/resolver.py</text>
+    <text x="283" y="329" fill="#3A5672" font-size="11" font-family="Inter">Optional: docs/code knowledge space</text>
+
+    <line x1="55" y1="360" x2="78" y2="360" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="365" fill="#64748b" font-size="13" font-family="JetBrains Mono">resources.py</text>
+    <text x="233" y="365" fill="#3A5672" font-size="11" font-family="Inter">User-facing error messages</text>
+
+    <line x1="55" y1="396" x2="78" y2="396" stroke="#D8ECEB" stroke-width="1.5"/>
+    <text x="83" y="401" fill="#64748b" font-size="13" font-family="JetBrains Mono">event_filter.py</text>
+    <text x="233" y="401" fill="#3A5672" font-size="11" font-family="Inter">Optional: filter/transform events</text>
+  </svg>
+  </div>
+
+  <h3>Minimal Entrypoint</h3>
+  <pre><code><span class="kw">from</span> kdcube_ai_app.infra.plugin.agentic_loader <span class="kw">import</span> agentic_workflow
+<span class="kw">from</span> kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint <span class="kw">import</span> BaseEntrypoint
+<span class="kw">from</span> langgraph.graph <span class="kw">import</span> StateGraph, START, END
+<span class="kw">from</span> typing <span class="kw">import</span> Dict, Any
+
+BUNDLE_ID = <span class="str">"my-bundle"</span>
+
+<span class="dec">@agentic_workflow</span>(bundle_id=BUNDLE_ID)
+<span class="kw">class</span> <span class="cls">MyBundle</span>(BaseEntrypoint):
+
+    <span class="dec">@property</span>
+    <span class="kw">def</span> <span class="fn">configuration</span>(self) -> Dict[str, Any]:
+        <span class="kw">return</span> {
+            <span class="str">"role_models"</span>: {
+                <span class="str">"solver.react.v2.decision.v2.strong"</span>: {
+                    <span class="str">"provider"</span>: <span class="str">"anthropic"</span>,
+                    <span class="str">"model"</span>: <span class="str">"claude-sonnet-4-6"</span>
+                }
+            }
+        }
+
+    <span class="kw">def</span> <span class="fn">on_bundle_load</span>(self, **kwargs):
+        <span class="cm"># Called ONCE per process when bundle first loads.</span>
+        self.logger.info(<span class="str">"Bundle loaded!"</span>)
+
+    <span class="kw">async def</span> <span class="fn">execute_core</span>(self, state, thread_id, params):
+        graph = StateGraph(dict)
+        graph.add_node(<span class="str">"run"</span>, self._run_node)
+        graph.add_edge(START, <span class="str">"run"</span>); graph.add_edge(<span class="str">"run"</span>, END)
+        <span class="kw">return await</span> graph.compile().ainvoke(state)
+
+    <span class="kw">async def</span> <span class="fn">_run_node</span>(self, state):
+        <span class="kw">await</span> self.comm.delta(text=<span class="str">"Hello from my bundle!"</span>, index=<span class="num">0</span>, marker=<span class="str">"answer"</span>)
+        <span class="kw">return</span> {<span class="str">"final_answer"</span>: <span class="str">"Done"</span>, <span class="str">"followups"</span>: []}</code></pre>
+
+  <h3>BaseEntrypoint Lifecycle</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Method / Property</th><th>When Called</th><th>Typical Use</th></tr></thead>
+      <tbody>
+        <tr><td><code>configuration</code> (property)</td><td>On bundle load</td><td>Declare defaults: role_models, embedding, knowledge, economics, execution</td></tr>
+        <tr><td><code>on_bundle_load(**kwargs)</code></td><td>Once per process, per tenant/project</td><td>Build knowledge index, connect external services, warm caches</td></tr>
+        <tr><td><code>pre_run_hook(state)</code></td><td>Before each turn</td><td>Re-reconcile knowledge space if config changed</td></tr>
+        <tr><td><code>execute_core(state, thread_id, params)</code></td><td>Every turn</td><td>Build + invoke your LangGraph workflow</td></tr>
+        <tr><td><code>rebind_request_context(...)</code></td><td>On cached singleton reuse</td><td>Refresh request-bound state (comm, user, etc.)</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ INTERFACE -->
+<div class="section" id="interface">
+  <h2><span class="icon">📡</span> Interface: In &amp; Out</h2>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>📥 Inbound: ChatTaskPayload</h3>
+      <p>Every turn arrives as a <code>ChatTaskPayload</code> (Pydantic). Key fields:</p>
+      <ul>
+        <li><code>request.message</code> — user's text</li>
+        <li><code>request.chat_history</code> — prior messages</li>
+        <li><code>request.payload</code> — arbitrary JSON (for REST ops)</li>
+        <li><code>actor</code> — tenant_id, project_id</li>
+        <li><code>routing</code> — conversation_id, turn_id, bundle_id</li>
+        <li><code>user</code> — user_id, user_type, roles, timezone</li>
+        <li><code>continuation</code> — follow-up or steer type</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>📤 Outbound: SSE Streaming</h3>
+      <p>Your bundle streams back via the <strong>Communicator</strong>. The client receives <code>ChatEnvelope</code> events in real time.</p>
+      <ul>
+        <li><strong>delta</strong> — streaming text chunks (thinking / answer)</li>
+        <li><strong>step</strong> — tool calls, status updates, timeline events</li>
+        <li><strong>complete</strong> — turn finished with final data</li>
+        <li><strong>error</strong> — propagate errors cleanly</li>
+        <li><strong>event</strong> — custom events (artifacts, reactions, etc.)</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Using the Communicator</h3>
+  <pre><code><span class="cm"># Stream answer text</span>
+<span class="kw">await</span> self.comm.delta(text=<span class="str">"chunk..."</span>, index=<span class="num">0</span>, marker=<span class="str">"answer"</span>)
+
+<span class="cm"># Announce a step</span>
+<span class="kw">await</span> self.comm.step(step=<span class="str">"web_search"</span>, status=<span class="str">"started"</span>, title=<span class="str">"Searching the web..."</span>)
+<span class="kw">await</span> self.comm.step(step=<span class="str">"web_search"</span>, status=<span class="str">"completed"</span>)
+
+<span class="cm"># Emit follow-up suggestions</span>
+<span class="kw">await</span> self.comm.followups([<span class="str">"Tell me more"</span>, <span class="str">"Show examples"</span>])
+
+<span class="cm"># Final complete signal</span>
+<span class="kw">await</span> self.comm.complete(data={<span class="str">"answer"</span>: <span class="str">"..."</span>})</code></pre>
+
+  <h3>REST Operations (for UI Widgets)</h3>
+  <p>Your bundle exposes additional REST operations via the <strong>Operations API</strong> hosted by the Processor:</p>
+  <pre><code>POST /bundles/{tenant}/{project}/operations/{operation}</code></pre>
+  <p>The platform calls <code>your_workflow.{operation}(**request_body)</code>. Define operations as async methods in your workflow or entrypoint. This is how UI widgets communicate back to your bundle (see <a href="#widgets">Widgets / UI</a>).</p>
+
+  <h3>Continuation Types</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>regular</code></td><td>Normal new message</td></tr>
+        <tr><td><code>followup</code></td><td>User clicked a suggested follow-up</td></tr>
+        <tr><td><code>steer</code></td><td>User is redirecting the ongoing turn</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ STORAGE -->
+<div class="section" id="storage">
+  <h2><span class="icon">🗄️</span> Storage</h2>
+  <p>KDCube is a <strong>distributed, multi-tenant</strong> system. Three storage tiers are available to your bundle:</p>
+
+  <div class="svg-wrap">
+  <svg viewBox="0 0 860 200" xmlns="http://www.w3.org/2000/svg" style="max-width:860px;">
+    <rect width="860" height="200" fill="#F6FAFA"/>
+    <!-- Cloud Storage -->
+    <rect x="28" y="20" width="255" height="160" rx="10" fill="white" stroke="#38B8C8" stroke-width="1.5"/>
+    <text x="155" y="52" text-anchor="middle" fill="#38B8C8" font-size="13" font-family="Inter" font-weight="700">☁️ Cloud Storage</text>
+    <text x="155" y="72" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter">AIBundleStorage</text>
+    <text x="155" y="92" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter">file:// or s3://</text>
+    <text x="155" y="112" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Survives restarts &amp; scaling</text>
+    <text x="155" y="132" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Per tenant / project / bundle</text>
+    <text x="155" y="152" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Read/write arbitrary keys</text>
+    <text x="155" y="170" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">CB_BUNDLE_STORAGE_URL</text>
+
+    <!-- Local FS -->
+    <rect x="303" y="20" width="255" height="160" rx="10" fill="white" stroke="#52B044" stroke-width="1.5"/>
+    <text x="430" y="52" text-anchor="middle" fill="#52B044" font-size="13" font-family="Inter" font-weight="700">📁 Local FS (Shared)</text>
+    <text x="430" y="72" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter">bundle_storage_root()</text>
+    <text x="430" y="92" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter">BUNDLE_STORAGE_ROOT env</text>
+    <text x="430" y="112" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Per bundle version namespace</text>
+    <text x="430" y="132" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Knowledge indexes, caches</text>
+    <text x="430" y="152" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">EFS in production</text>
+    <text x="430" y="170" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">pathlib.Path (filesystem)</text>
+
+    <!-- Redis -->
+    <rect x="578" y="20" width="255" height="160" rx="10" fill="white" stroke="#F0BC2E" stroke-width="1.5"/>
+    <text x="705" y="52" text-anchor="middle" fill="#F0BC2E" font-size="13" font-family="Inter" font-weight="700">⚡ Redis Cache</text>
+    <text x="705" y="72" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter">self.kv_cache / self.redis</text>
+    <text x="705" y="92" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter">In-memory, fast</text>
+    <text x="705" y="112" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Bundle props &amp; config</text>
+    <text x="705" y="132" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Session state, rate limits</text>
+    <text x="705" y="152" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter">Pub/sub for bundle updates</text>
+    <text x="705" y="170" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">aioredis client</text>
+  </svg>
+  </div>
+
+  <h3>Cloud Storage (AIBundleStorage)</h3>
+  <pre><code><span class="kw">from</span> kdcube_ai_app.apps.chat.sdk.storage.ai_bundle_storage <span class="kw">import</span> AIBundleStorage
+
+storage = AIBundleStorage(
+    tenant=<span class="str">"my-tenant"</span>, project=<span class="str">"my-project"</span>,
+    ai_bundle_id=<span class="str">"my-bundle@1-0"</span>,
+    storage_uri=<span class="str">"s3://my-bucket"</span>  <span class="cm"># or file:///data/bundle-storage</span>
+)
+
+storage.write(<span class="str">"reports/latest.json"</span>, data=<span class="str">'{"count": 42}'</span>)
+content = storage.read(<span class="str">"reports/latest.json"</span>, as_text=<span class="kw">True</span>)
+keys = storage.list(<span class="str">"reports/"</span>)</code></pre>
+
+  <h3>Local FS (Shared Bundle Storage)</h3>
+  <pre><code><span class="cm"># In entrypoint or workflow</span>
+root = self.bundle_storage_root()  <span class="cm"># pathlib.Path</span>
+index_path = root / <span class="str">"knowledge_index"</span>
+index_path.mkdir(exist_ok=<span class="kw">True</span>)</code></pre>
+  <p>Path namespaced: <code>{BUNDLE_STORAGE_ROOT}/{tenant}/{project}/{bundle_id}/</code>. Ideal for knowledge indexes, model weights, large caches. In production, mount an EFS volume.</p>
+
+  <h3>Redis Cache</h3>
+  <pre><code><span class="cm"># Low-level Redis client (aioredis)</span>
+<span class="kw">await</span> self.redis.set(<span class="str">"my:key"</span>, <span class="str">"value"</span>, ex=<span class="num">3600</span>)
+val = <span class="kw">await</span> self.redis.get(<span class="str">"my:key"</span>)
+
+<span class="cm"># KVCache wrapper</span>
+<span class="kw">await</span> self.kv_cache.set(<span class="str">"user_prefs"</span>, {<span class="str">"theme"</span>: <span class="str">"dark"</span>}, ttl=<span class="num">86400</span>)</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════ CONFIG -->
+<div class="section" id="config">
+  <h2><span class="icon">⚙️</span> Configuration &amp; Secrets</h2>
+
+  <h3>bundles.yaml — Your Bundle Definition</h3>
+  <pre><code><span class="kw">bundles</span>:
+  <span class="kw">version</span>: <span class="str">"1"</span>
+  <span class="kw">default_bundle_id</span>: <span class="str">"my-bundle@1-0"</span>
+  <span class="kw">items</span>:
+    - <span class="kw">id</span>: <span class="str">"my-bundle@1-0"</span>
+      <span class="kw">name</span>: <span class="str">"My Bundle"</span>
+      <span class="kw">repo</span>: <span class="str">"git@github.com:org/my-bundle-repo.git"</span>   <span class="cm"># optional git source</span>
+      <span class="kw">ref</span>: <span class="str">"v1.0.0"</span>
+      <span class="kw">subdir</span>: <span class="str">"src/my_bundle"</span>
+      <span class="kw">module</span>: <span class="str">"my-bundle@1-0.entrypoint"</span>
+      <span class="kw">config</span>:
+        <span class="kw">embedding</span>:
+          <span class="kw">provider</span>: <span class="str">"openai"</span>
+          <span class="kw">model</span>: <span class="str">"text-embedding-3-small"</span>
+        <span class="kw">role_models</span>:
+          <span class="kw">solver.react.v2.decision.v2.strong</span>:
+            <span class="kw">provider</span>: <span class="str">"anthropic"</span>
+            <span class="kw">model</span>: <span class="str">"claude-sonnet-4-6"</span>
+        <span class="kw">economics</span>:
+          <span class="kw">reservation_amount_dollars</span>: <span class="num">2.0</span>
+        <span class="kw">execution</span>:
+          <span class="kw">runtime</span>:
+            <span class="kw">mode</span>: <span class="str">"docker"</span>   <span class="cm"># docker is default — see Exec Runtime section</span>
+            <span class="kw">enabled</span>: <span class="kw">true</span></code></pre>
+
+  <h3>bundles.secrets.yaml — Secrets (Never Committed)</h3>
+  <pre><code><span class="kw">bundles</span>:
+  <span class="kw">version</span>: <span class="str">"1"</span>
+  <span class="kw">items</span>:
+    - <span class="kw">id</span>: <span class="str">"my-bundle@1-0"</span>
+      <span class="kw">secrets</span>:
+        <span class="kw">openai</span>:
+          <span class="kw">api_key</span>: <span class="kw">null</span>          <span class="cm"># null = resolve from env OPENAI_API_KEY</span>
+        <span class="kw">my_service</span>:
+          <span class="kw">api_key</span>: <span class="str">"sk-live-..."</span>  <span class="cm"># or inline value</span>
+          <span class="kw">webhook_url</span>: <span class="str">"env:MY_WEBHOOK_URL"</span>  <span class="cm"># or env: reference</span></code></pre>
+
+  <h3>Reading Config &amp; Secrets in Code</h3>
+  <pre><code>value = self.bundle_prop(<span class="str">"some.nested.key"</span>)   <span class="cm"># dot-path navigation</span>
+all_props = self.bundle_props                    <span class="cm"># full merged dict</span>
+
+<span class="kw">from</span> kdcube_ai_app.apps.chat.sdk.config <span class="kw">import</span> get_secret
+api_key = get_secret(<span class="str">"bundles.my-bundle@1-0.secrets.my_service.api_key"</span>)</code></pre>
+
+  <h3>Configuration Resolution Order</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Priority</th><th>Source</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td>1 (highest)</td><td>Admin UI / runtime overrides</td><td>Stored in Redis, applied per tenant/project</td></tr>
+        <tr><td>2</td><td><code>bundles.yaml</code> config section</td><td>Loaded at startup, seeded into Redis</td></tr>
+        <tr><td>3 (lowest)</td><td><code>entrypoint.configuration</code></td><td>Bundle code defaults</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Reserved Property Paths</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Path</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>role_models</code></td><td>Maps logical agent roles → concrete LLM (provider + model)</td></tr>
+        <tr><td><code>embedding</code></td><td>Embedding provider/model for RAG and vector search</td></tr>
+        <tr><td><code>economics.reservation_amount_dollars</code></td><td>Pre-run cost reservation floor (default 2.0)</td></tr>
+        <tr><td><code>execution.runtime</code></td><td>Code exec configuration (Docker, Fargate)</td></tr>
+        <tr><td><code>knowledge</code></td><td>Knowledge space repo/paths configuration</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>See full config docs: <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/configuration/bundle-configuration-README.md" target="_blank">bundle-configuration-README.md</a></p>
+</div>
+
+<!-- ═══════════════════════════════════════ WORKFLOW -->
+<div class="section" id="workflow">
+  <h2><span class="icon">🔀</span> Workflow Orchestration</h2>
+  <p>The platform uses <strong>LangGraph</strong> for workflow orchestration. Your <code>execute_core</code> builds and invokes a <code>StateGraph</code>. For common patterns, use <code>BaseWorkflow</code>:</p>
+
+  <pre><code><span class="kw">from</span> kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow <span class="kw">import</span> BaseWorkflow
+
+<span class="kw">class</span> <span class="cls">MyWorkflow</span>(BaseWorkflow):
+    <span class="kw">def</span> <span class="fn">__init__</span>(self, *args, bundle_props=<span class="kw">None</span>, **kwargs):
+        <span class="kw">super</span>().__init__(*args, bundle_props=bundle_props, **kwargs)
+
+    <span class="kw">async def</span> <span class="fn">process</span>(self, payload):
+        scratchpad = self.start_turn(payload)
+        <span class="kw">try</span>:
+            react = <span class="kw">await</span> self.build_react(
+                scratchpad=scratchpad,
+                tools_module=<span class="str">"my_bundle.tools_descriptor"</span>,
+                skills_module=<span class="str">"my_bundle.skills_descriptor"</span>,
+            )
+            result = <span class="kw">await</span> react.run(payload)
+            self.finish_turn(scratchpad, ok=<span class="kw">True</span>)
+            <span class="kw">return</span> result
+        <span class="kw">except</span> Exception <span class="kw">as</span> e:
+            self.finish_turn(scratchpad, ok=<span class="kw">False</span>); <span class="kw">raise</span></code></pre>
+
+  <div class="callout tip">
+    <span class="callout-icon">🚀</span>
+    <div class="callout-body">
+      <strong>Use <code>BaseWorkflow</code> for the quickest path.</strong> It wires up ConvMemories, TurnStatus, ContextRAG, ApplicationHosting, and gives you <code>build_react()</code> which assembles the full ReAct agent with all tools and skills resolved.
+    </div>
+  </div>
+
+  <h3>BaseWorkflow Key Parameters</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Parameter</th><th>Type</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>conv_idx</code></td><td>ConvIndex</td><td>Conversation vector index for semantic search</td></tr>
+        <tr><td><code>store</code></td><td>ConversationStore</td><td>File/S3-backed conversation storage</td></tr>
+        <tr><td><code>comm</code></td><td>ChatCommunicator</td><td>SSE streaming channel</td></tr>
+        <tr><td><code>model_service</code></td><td>ModelServiceBase</td><td>LLM registry / router</td></tr>
+        <tr><td><code>ctx_client</code></td><td>ContextRAGClient</td><td>Context retrieval and RAG</td></tr>
+        <tr><td><code>bundle_props</code></td><td>Dict</td><td>Bundle runtime configuration</td></tr>
+        <tr><td><code>graph</code></td><td>GraphCtx</td><td>Optional knowledge graph context</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Simplest Agentic Workflow Pattern</h3>
+  <p>A bundle can use any orchestration pattern — it is <strong>not required to use the ReAct agent</strong>. This is one common pattern that combines a Gate agent with the ReAct agent:</p>
+
+  <div class="svg-wrap">
+  <svg viewBox="0 0 860 280" xmlns="http://www.w3.org/2000/svg" style="max-width:860px;">
+    <defs>
+      <marker id="wa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#01BEB2"/>
+      </marker>
+    </defs>
+    <rect width="860" height="280" fill="#F6FAFA"/>
+    <text x="430" y="24" text-anchor="middle" fill="#3A5672" font-size="12" font-family="Inter" font-weight="600" font-style="italic">Simplest Agentic Workflow Pattern (optional gate + react layers)</text>
+
+    <rect x="20" y="100" width="100" height="50" rx="8" fill="white" stroke="#01BEB2" stroke-width="1.5"/>
+    <text x="70" y="121" text-anchor="middle" fill="#0D1E2C" font-size="12" font-family="Inter" font-weight="700">User</text>
+    <text x="70" y="139" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Message</text>
+
+    <line x1="120" y1="125" x2="158" y2="125" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wa)"/>
+
+    <rect x="158" y="80" width="130" height="90" rx="8" fill="white" stroke="#6B63FE" stroke-width="1.5"/>
+    <text x="223" y="108" text-anchor="middle" fill="#6B63FE" font-size="12" font-family="Inter" font-weight="700">Gate Agent</text>
+    <text x="223" y="126" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">(Optional layer)</text>
+    <text x="223" y="142" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Intent classify</text>
+    <text x="223" y="158" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Route decision</text>
+
+    <line x1="288" y1="125" x2="326" y2="125" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wa)"/>
+
+    <rect x="326" y="80" width="130" height="90" rx="8" fill="white" stroke="#38B8C8" stroke-width="1.5"/>
+    <text x="391" y="108" text-anchor="middle" fill="#38B8C8" font-size="12" font-family="Inter" font-weight="700">ReAct Agent</text>
+    <text x="391" y="126" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Decision loop</text>
+    <text x="391" y="142" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Tool calls</text>
+    <text x="391" y="158" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Self-planning</text>
+
+    <line x1="456" y1="125" x2="494" y2="125" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wa)"/>
+
+    <rect x="494" y="80" width="130" height="90" rx="8" fill="white" stroke="#F0BC2E" stroke-width="1.5"/>
+    <text x="559" y="108" text-anchor="middle" fill="#F0BC2E" font-size="12" font-family="Inter" font-weight="700">Answer Gen</text>
+    <text x="559" y="126" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">(Optional layer)</text>
+    <text x="559" y="142" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Final answer</text>
+    <text x="559" y="158" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Follow-ups</text>
+
+    <rect x="158" y="210" width="466" height="45" rx="8" fill="white" stroke="#D8ECEB" stroke-width="1"/>
+    <text x="391" y="230" text-anchor="middle" fill="#0D1E2C" font-size="12" font-family="Inter" font-weight="700">📜 Timeline — streamed to client in real time</text>
+    <text x="391" y="248" text-anchor="middle" fill="#3A5672" font-size="10.5" font-family="Inter">tool_calls · answer · thinking · artifacts · plan blocks — all streaming</text>
+
+    <line x1="391" y1="170" x2="391" y2="210" stroke="#D8ECEB" stroke-width="1" stroke-dasharray="4,4"/>
+    <line x1="559" y1="170" x2="559" y2="210" stroke="#D8ECEB" stroke-width="1" stroke-dasharray="4,4"/>
+  </svg>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ TOOLS -->
+<div class="section" id="tools">
+  <h2><span class="icon">🔧</span> Tools System</h2>
+
+  <div class="tabs">
+    <div class="tab-headers">
+      <button class="tab-btn active" onclick="switchTab(event,'built-in')">Built-in Tools</button>
+      <button class="tab-btn" onclick="switchTab(event,'custom')">Custom Tools</button>
+      <button class="tab-btn" onclick="switchTab(event,'mcp')">MCP Tools</button>
+    </div>
+    <div class="tab-panel active" id="tab-built-in">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tool</th><th>Namespace</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><code>web_search</code></td><td><code>web_tools</code></td><td>Neural web search with ranking (Brave / DuckDuckGo)</td></tr>
+            <tr><td><code>web_fetch</code></td><td><code>web_tools</code></td><td>Fetch + parse web pages (readability-enabled)</td></tr>
+            <tr><td><code>execute_code_python</code></td><td><code>exec_tools</code></td><td>Isolated Python code execution — Docker (default), Fargate, or in-process per bundle config</td></tr>
+            <tr><td><code>write_pdf</code></td><td><code>rendering_tools</code></td><td>Generate PDF from Markdown + table of contents</td></tr>
+            <tr><td><code>write_png</code></td><td><code>rendering_tools</code></td><td>Render HTML/SVG to PNG image</td></tr>
+            <tr><td><code>write_docx</code></td><td><code>rendering_tools</code></td><td>Generate DOCX from Markdown</td></tr>
+            <tr><td><code>write_pptx</code></td><td><code>rendering_tools</code></td><td>Generate PPTX slide deck</td></tr>
+            <tr><td><code>write_html</code></td><td><code>rendering_tools</code></td><td>Generate standalone HTML artifact</td></tr>
+            <tr><td><code>fetch_ctx</code></td><td><code>ctx_tools</code></td><td>Fetch artifacts by logical path (ar:/fi:/ks: addresses)</td></tr>
+            <tr><td><code>read</code></td><td><code>react</code> → <code>react.read</code></td><td>Load artifact into timeline (fi:/ar:/ks:/so: paths)</td></tr>
+            <tr><td><code>write</code></td><td><code>react</code> → <code>react.write</code></td><td>Author content and stream to canvas/timeline_text/internal channel; optionally share as file</td></tr>
+            <tr><td><code>plan</code></td><td><code>react</code> → <code>react.plan</code></td><td>Create / update / close the current turn plan (shown in ANNOUNCE)</td></tr>
+            <tr><td><code>patch</code></td><td><code>react</code> → <code>react.patch</code></td><td>Patch an existing artifact (unified diff or full replacement)</td></tr>
+            <tr><td><code>memsearch</code></td><td><code>react</code> → <code>react.memsearch</code></td><td>Semantic search in past conversation turns</td></tr>
+            <tr><td><code>search_files</code></td><td><code>react</code> → <code>react.search_files</code></td><td>Search files in execution workspace</td></tr>
+            <tr><td><code>hide</code></td><td><code>react</code> → <code>react.hide</code></td><td>Replace timeline snippet with placeholder</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="tab-panel" id="tab-custom">
+      <p>Bundle-local tools use <code>@kernel_function</code> from Semantic Kernel and are registered in <code>tools_descriptor.py</code>.</p>
+      <pre><code><span class="cm"># tools/my_tools.py</span>
+<span class="kw">from</span> typing <span class="kw">import</span> Annotated
+<span class="kw">import</span> semantic_kernel <span class="kw">as</span> sk
+<span class="kw">from</span> semantic_kernel.functions <span class="kw">import</span> kernel_function
+
+<span class="kw">class</span> <span class="cls">MyTools</span>:
+    <span class="dec">@kernel_function</span>(name=<span class="str">"search"</span>, description=<span class="str">"Search product catalog"</span>)
+    <span class="kw">async def</span> <span class="fn">search</span>(self,
+        query: Annotated[str, <span class="str">"Search query"</span>],
+        limit: Annotated[int, <span class="str">"Max results"</span>] = <span class="num">5</span>
+    ) -> str:
+        <span class="cm"># your logic here</span>
+        <span class="kw">return</span> <span class="str">"results..."</span></code></pre>
+      <pre><code><span class="cm"># tools_descriptor.py</span>
+TOOLS_SPECS = [
+    <span class="cm"># SDK built-in tool modules (installed package)</span>
+    {<span class="str">"module"</span>: <span class="str">"kdcube_ai_app.apps.chat.sdk.tools.web_tools"</span>, <span class="str">"alias"</span>: <span class="str">"web_tools"</span>, <span class="str">"use_sk"</span>: <span class="kw">True</span>},
+    {<span class="str">"module"</span>: <span class="str">"kdcube_ai_app.apps.chat.sdk.tools.exec_tools"</span>, <span class="str">"alias"</span>: <span class="str">"exec_tools"</span>, <span class="str">"use_sk"</span>: <span class="kw">True</span>},
+    <span class="cm"># Bundle-local tools ("ref" = path relative to bundle root, works in Docker too)</span>
+    {<span class="str">"ref"</span>: <span class="str">"tools/my_tools.py"</span>, <span class="str">"alias"</span>: <span class="str">"my_tools"</span>, <span class="str">"use_sk"</span>: <span class="kw">True</span>},
+]
+<span class="cm"># Tool IDs: web_tools.web_search, exec_tools.execute_code_python, my_tools.search</span>
+
+<span class="cm"># Optional: per-tool runtime overrides</span>
+TOOL_RUNTIME = {
+    <span class="str">"web_tools.web_search"</span>: <span class="str">"local"</span>,       <span class="cm"># subprocess sandbox</span>
+    <span class="str">"exec_tools.execute_code_python"</span>: <span class="str">"docker"</span>,  <span class="cm"># Docker container</span>
+}</code></pre>
+      <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/custom-tools-README.md" target="_blank">custom-tools-README.md</a> and the example bundle <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc%402026-03-02-22-10/tools_descriptor.py" target="_blank">react.doc tools_descriptor.py</a>.</p>
+    </div>
+    <div class="tab-panel" id="tab-mcp">
+      <p>MCP (Model Context Protocol) servers are declared in <code>MCP_TOOL_SPECS</code> and configured in bundle props.</p>
+      <pre><code><span class="cm"># tools_descriptor.py</span>
+MCP_TOOL_SPECS = [
+    {<span class="str">"server_id"</span>: <span class="str">"web_search"</span>, <span class="str">"alias"</span>: <span class="str">"web_search"</span>, <span class="str">"tools"</span>: [<span class="str">"web_search"</span>]},
+    {<span class="str">"server_id"</span>: <span class="str">"docs"</span>, <span class="str">"alias"</span>: <span class="str">"docs"</span>, <span class="str">"tools"</span>: [<span class="str">"*"</span>]},  <span class="cm"># all tools</span>
+    {<span class="str">"server_id"</span>: <span class="str">"stack"</span>, <span class="str">"alias"</span>: <span class="str">"stack"</span>, <span class="str">"tools"</span>: [<span class="str">"*"</span>]},
+]
+<span class="cm"># Tool IDs: mcp.docs.some_tool, mcp.stack.some_tool</span></code></pre>
+      <pre><code><span class="cm"># bundles.yaml config section — how to connect</span>
+<span class="kw">config</span>:
+  <span class="kw">mcp</span>:
+    <span class="kw">services</span>:
+      <span class="kw">mcpServers</span>:
+        <span class="kw">docs</span>:
+          <span class="kw">transport</span>: <span class="str">http</span>
+          <span class="kw">url</span>: <span class="str">https://mcp.example.com</span>
+          <span class="kw">auth</span>:
+            <span class="kw">type</span>: <span class="str">bearer</span>
+            <span class="kw">secret</span>: <span class="str">bundles.my-bundle.secrets.docs.token</span>
+        <span class="kw">stack</span>:
+          <span class="kw">transport</span>: <span class="str">stdio</span>
+          <span class="kw">command</span>: <span class="str">npx</span>
+          <span class="kw">args</span>: [<span class="str">"mcp-remote"</span>, <span class="str">"mcp.stackoverflow.com"</span>]</code></pre>
+      <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/mcp-README.md" target="_blank">mcp-README.md</a> for all transports (stdio, http, streamable-http, sse) and auth modes.</p>
+    </div>
+  </div>
+
+  <h3>Artifact Path Families</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Prefix</th><th>Resolves To</th><th>Example</th></tr></thead>
+      <tbody>
+        <tr><td><code>fi:</code></td><td>File artifact (output or attachment)</td><td><code>fi:turn_123.files/report.pdf</code></td></tr>
+        <tr><td><code>ar:</code></td><td>Artifact from timeline</td><td><code>ar:turn_123.artifacts.summary</code></td></tr>
+        <tr><td><code>ks:</code></td><td>Knowledge space (read-only, docs/src)</td><td><code>ks:docs/architecture.md</code></td></tr>
+        <tr><td><code>sk:</code></td><td>Skills space (skill instruction files)</td><td><code>sk:public.pdf-press/SKILL.md</code></td></tr>
+        <tr><td><code>so:</code></td><td>Sources from context pool</td><td><code>so:sources_pool[1-5]</code></td></tr>
+        <tr><td><code>tc:</code></td><td>Tool call block</td><td><code>tc:turn_123.abc.call</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ SKILLS -->
+<div class="section" id="skills">
+  <h2><span class="icon">🎯</span> Skills System</h2>
+  <p>Skills are <strong>reusable instruction sets</strong> that give agents specialized capabilities. A skill bundles a natural-language instruction (SKILL.md), tool references, and source references.</p>
+
+  <h3>Built-in Platform Skills</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Skill ID</th><th>Namespace</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>url-gen</code></td><td>public</td><td>Generate hosted URLs for file artifacts</td></tr>
+        <tr><td><code>pdf-press</code></td><td>public</td><td>PDF generation and manipulation</td></tr>
+        <tr><td><code>docx-press</code></td><td>public</td><td>DOCX document generation</td></tr>
+        <tr><td><code>pptx-press</code></td><td>public</td><td>PPTX presentation generation</td></tr>
+        <tr><td><code>png-press</code></td><td>public</td><td>PNG image rendering from HTML/SVG</td></tr>
+        <tr><td><code>mermaid</code></td><td>public</td><td>Mermaid diagram generation</td></tr>
+        <tr><td><code>link-evidence</code></td><td>internal</td><td>Citation and evidence linking</td></tr>
+        <tr><td><code>sources-section</code></td><td>internal</td><td>Automatic sources section generation</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>Custom Bundle Skill</h3>
+  <pre><code><span class="cm"># skills/my_skill/SKILL.md</span>
+You are an expert in our product catalog.
+When asked about products, use the `product_search` tool to find relevant items.
+Always include pricing and availability.</code></pre>
+  <pre><code><span class="cm"># skills/my_skill/tools.yaml</span>
+tools:
+  - id: product_search
+    role: search
+    why: Search the product catalog</code></pre>
+  <pre><code><span class="cm"># skills_descriptor.py</span>
+AGENTS_CONFIG = {
+    <span class="str">"solver"</span>: {
+        <span class="str">"enabled_skills"</span>: [<span class="str">"my_skill"</span>, <span class="str">"pdf-press"</span>, <span class="str">"url-gen"</span>],
+        <span class="str">"disabled_skills"</span>: []
+    }
+}</code></pre>
+</div>
+
+<!-- ═══════════════════════════════════════ REACT AGENT -->
+<div class="section" id="react-agent">
+  <h2><span class="icon">🤖</span> ReAct Agent (V2)</h2>
+  <p>The ReAct V2 agent is a <strong>single autonomous loop</strong> — no separate planner, no gate. It starts in <code>runtime.py</code> as a <code>ReactStateV2</code> with up to <code>max_iterations=6</code> rounds. In each round the agent makes a decision (LLM call) then executes one or more tools. Planning is available as a <strong>tool</strong> the agent can call on itself — not a separate orchestration layer.</p>
+
+  <div class="callout info">
+    <span class="callout-icon">🔁</span>
+    <div class="callout-body">
+      <strong>Plan is a tool, not a component.</strong> When the agent calls the plan tool, it creates a <code>PlanSnapshot</code> that is tracked as a <code>react.plan</code> block in the timeline. On subsequent rounds the agent can update step statuses (✓ done, ✗ failed, … in-progress). This is all within the same loop — no coordinator needed, and no cache miss from a different system prompt.
+    </div>
+  </div>
+
+  <h3>ReAct Agent V2 — Loop &amp; Tool Integration</h3>
+  <div class="svg-wrap">
+  <svg viewBox="0 0 920 360" xmlns="http://www.w3.org/2000/svg" style="max-width:920px;">
+    <defs>
+      <marker id="ra" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#01BEB2"/>
+      </marker>
+      <marker id="ra2" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#52B044"/>
+      </marker>
+      <marker id="ra3" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#4372C3"/>
+      </marker>
+    </defs>
+    <rect width="920" height="360" fill="#F6FAFA"/>
+
+    <!-- Context input -->
+    <rect x="18" y="140" width="115" height="80" rx="9" fill="white" stroke="#01BEB2" stroke-width="1.5"/>
+    <text x="75" y="165" text-anchor="middle" fill="#0D1E2C" font-size="12" font-family="Inter" font-weight="700">Context</text>
+    <text x="75" y="183" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">user message</text>
+    <text x="75" y="199" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">timeline history</text>
+    <text x="75" y="215" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">plan state</text>
+
+    <line x1="133" y1="180" x2="168" y2="180" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#ra)"/>
+
+    <!-- Main loop box -->
+    <rect x="168" y="60" width="270" height="240" rx="12" fill="#E5FAF8" stroke="#01BEB2" stroke-width="2"/>
+    <text x="303" y="88" text-anchor="middle" fill="#1e40af" font-size="13" font-family="Inter" font-weight="800">ReAct Loop (max 6 rounds)</text>
+
+    <!-- Decision node -->
+    <rect x="188" y="100" width="230" height="55" rx="8" fill="white" stroke="#6B63FE" stroke-width="1.5"/>
+    <text x="303" y="123" text-anchor="middle" fill="#5b21b6" font-size="12" font-family="Inter" font-weight="700">① Decision (LLM call)</text>
+    <text x="303" y="142" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">react_decision_stream_v2 → tool selection or answer</text>
+
+    <line x1="303" y1="155" x2="303" y2="175" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#ra)"/>
+
+    <!-- Tool execution node -->
+    <rect x="188" y="175" width="230" height="45" rx="8" fill="white" stroke="#38B8C8" stroke-width="1.5"/>
+    <text x="303" y="197" text-anchor="middle" fill="#0e7490" font-size="12" font-family="Inter" font-weight="700">② Tool Execution</text>
+    <text x="303" y="213" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">execute selected tool(s), stream results</text>
+
+    <line x1="303" y1="220" x2="303" y2="240" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#ra)"/>
+
+    <!-- Observe node -->
+    <rect x="188" y="240" width="230" height="45" rx="8" fill="white" stroke="#52B044" stroke-width="1.5"/>
+    <text x="303" y="262" text-anchor="middle" fill="#065f46" font-size="12" font-family="Inter" font-weight="700">③ Observe &amp; Update State</text>
+    <text x="303" y="278" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">append to timeline, update plan status</text>
+
+    <!-- Loop back arrow -->
+    <path d="M 438 260 Q 480 260 480 180 Q 480 100 438 100" stroke="#94a3b8" stroke-width="1.5" fill="none" stroke-dasharray="5,3" marker-end="url(#ra)"/>
+    <text x="490" y="185" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">next</text>
+    <text x="490" y="200" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">round</text>
+
+    <!-- Exit line -->
+    <line x1="438" y1="180" x2="560" y2="180" stroke="#52B044" stroke-width="1.5" marker-end="url(#ra2)"/>
+    <text x="499" y="170" text-anchor="middle" fill="#52B044" font-size="10" font-family="Inter" font-weight="600">answer ready</text>
+
+    <!-- Output box -->
+    <rect x="560" y="140" width="120" height="80" rx="9" fill="white" stroke="#52B044" stroke-width="1.5"/>
+    <text x="620" y="168" text-anchor="middle" fill="#065f46" font-size="12" font-family="Inter" font-weight="700">Answer</text>
+    <text x="620" y="186" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">final_answer</text>
+    <text x="620" y="202" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">followups</text>
+    <text x="620" y="218" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">timeline</text>
+
+    <!-- Tools on the right side -->
+    <text x="740" y="30" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter" font-weight="700">Available Tools</text>
+
+    <!-- web search -->
+    <rect x="700" y="44" width="200" height="36" rx="7" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="710" y="64" fill="#0e7490" font-size="11" font-family="Inter" font-weight="700">🔍 web_search / web_fetch</text>
+    <line x1="700" y1="62" x2="438" y2="130" stroke="#38B8C8" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ra3)"/>
+
+    <!-- exec -->
+    <rect x="700" y="92" width="200" height="52" rx="7" fill="white" stroke="#6B63FE" stroke-width="1"/>
+    <text x="710" y="113" fill="#5b21b6" font-size="11" font-family="Inter" font-weight="700">⚡ exec_tools.execute_code_python</text>
+    <text x="720" y="131" fill="#3A5672" font-size="10" font-family="Inter">→ Docker (default, fast)</text>
+    <line x1="700" y1="115" x2="438" y2="155" stroke="#6B63FE" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ra3)"/>
+
+    <!-- react.write / stream -->
+    <rect x="700" y="158" width="200" height="52" rx="7" fill="white" stroke="#52B044" stroke-width="1"/>
+    <text x="710" y="178" fill="#065f46" font-size="11" font-family="Inter" font-weight="700">✍️ react.write (canvas / timeline_text)</text>
+    <text x="720" y="196" fill="#3A5672" font-size="10" font-family="Inter">→ multi-channel stream, file, hosting</text>
+    <line x1="700" y1="184" x2="438" y2="194" stroke="#52B044" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ra3)"/>
+
+    <!-- react.patch -->
+    <rect x="700" y="224" width="200" height="36" rx="7" fill="white" stroke="#F0BC2E" stroke-width="1"/>
+    <text x="710" y="247" fill="#92400e" font-size="11" font-family="Inter" font-weight="700">🩹 react.patch / .read</text>
+    <line x1="700" y1="242" x2="438" y2="220" stroke="#F0BC2E" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ra3)"/>
+
+    <!-- plan tool -->
+    <rect x="700" y="274" width="200" height="36" rx="7" fill="white" stroke="#01BEB2" stroke-width="1"/>
+    <text x="710" y="297" fill="#009C92" font-size="11" font-family="Inter" font-weight="700">📋 plan (self-planning)</text>
+    <line x1="700" y1="292" x2="438" y2="240" stroke="#01BEB2" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#ra3)"/>
+
+    <!-- Timeline footer -->
+    <rect x="18" y="320" width="660" height="32" rx="8" fill="white" stroke="#D8ECEB" stroke-width="1"/>
+    <text x="350" y="341" text-anchor="middle" fill="#0D1E2C" font-size="11.5" font-family="Inter" font-weight="700">📜 Timeline — streamed block-by-block as the loop progresses</text>
+    <line x1="303" y1="300" x2="303" y2="320" stroke="#D8ECEB" stroke-width="1" stroke-dasharray="3,3"/>
+  </svg>
+  </div>
+
+  <h3>Creating and Running the ReAct Agent</h3>
+  <pre><code><span class="cm"># In your workflow (BaseWorkflow subclass)</span>
+react = <span class="kw">await</span> self.build_react(
+    scratchpad=scratchpad,
+    tools_module=<span class="str">"my_bundle.tools_descriptor"</span>,
+    skills_module=<span class="str">"my_bundle.skills_descriptor"</span>,
+    knowledge_space_fn=self._search_knowledge,   <span class="cm"># optional</span>
+    knowledge_read_fn=self._read_knowledge,      <span class="cm"># optional</span>
+)
+result = <span class="kw">await</span> react.run(payload)</code></pre>
+
+  <h3>Timeline</h3>
+  <p>The timeline (<code>timeline.py</code>) is the single source of truth for turn context. It is persisted as <code>artifact:conv.timeline.v1</code> and loaded at the start of each turn. A separate <code>artifact:conv:sources_pool</code> tracks all sources referenced in the conversation.</p>
+
+  <div class="svg-wrap">
+  <svg viewBox="0 0 860 200" xmlns="http://www.w3.org/2000/svg" style="max-width:860px;">
+    <rect width="860" height="200" fill="#F6FAFA"/>
+    <!-- Left label -->
+    <text x="14" y="25" fill="#3A5672" font-size="11" font-family="Inter" font-weight="700">Timeline blocks (ordered, streamed to client)</text>
+
+    <!-- ANNOUNCE bar at top -->
+    <rect x="14" y="35" width="830" height="22" rx="5" fill="#FFF8DC" stroke="#F0BC2E" stroke-width="1"/>
+    <text x="429" y="50" text-anchor="middle" fill="#C89A10" font-size="10.5" font-family="Inter" font-weight="700">ANNOUNCE — in-memory only (plan state, tool steps, status) — not persisted to disk</text>
+
+    <!-- Turn N-1 cache point -->
+    <rect x="14" y="64" width="100" height="28" rx="5" fill="#E5FAF8" stroke="#01BEB2" stroke-width="1"/>
+    <text x="64" y="82" text-anchor="middle" fill="#009C92" font-size="10" font-family="Inter" font-weight="700">Cache pt 1</text>
+    <text x="64" y="93" text-anchor="middle" fill="#3A5672" font-size="9" font-family="Inter">(prev turn end)</text>
+
+    <!-- Blocks -->
+    <rect x="122" y="64" width="90" height="28" rx="5" fill="white" stroke="#6B63FE" stroke-width="1"/>
+    <text x="167" y="82" text-anchor="middle" fill="#5b21b6" font-size="10" font-family="Inter">user.prompt</text>
+
+    <rect x="220" y="64" width="90" height="28" rx="5" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="265" y="82" text-anchor="middle" fill="#0e7490" font-size="10" font-family="Inter">react.plan</text>
+
+    <!-- Cache point 2 -->
+    <rect x="318" y="64" width="90" height="28" rx="5" fill="#E5FAF8" stroke="#01BEB2" stroke-width="1"/>
+    <text x="363" y="82" text-anchor="middle" fill="#009C92" font-size="10" font-family="Inter" font-weight="700">Cache pt 2</text>
+    <text x="363" y="93" text-anchor="middle" fill="#3A5672" font-size="9" font-family="Inter">(mid-turn)</text>
+
+    <rect x="416" y="64" width="100" height="28" rx="5" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="466" y="82" text-anchor="middle" fill="#0e7490" font-size="10" font-family="Inter">react.tool.call</text>
+
+    <rect x="524" y="64" width="110" height="28" rx="5" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="579" y="82" text-anchor="middle" fill="#0e7490" font-size="10" font-family="Inter">react.tool.result</text>
+
+    <!-- Cache point 3 -->
+    <rect x="642" y="64" width="90" height="28" rx="5" fill="#E5FAF8" stroke="#01BEB2" stroke-width="1"/>
+    <text x="687" y="82" text-anchor="middle" fill="#009C92" font-size="10" font-family="Inter" font-weight="700">Cache pt 3</text>
+    <text x="687" y="93" text-anchor="middle" fill="#3A5672" font-size="9" font-family="Inter">(tail)</text>
+
+    <rect x="740" y="64" width="104" height="28" rx="5" fill="white" stroke="#52B044" stroke-width="1"/>
+    <text x="792" y="82" text-anchor="middle" fill="#065f46" font-size="10" font-family="Inter">asst.completion</text>
+
+    <!-- Sources pool -->
+    <rect x="14" y="108" width="200" height="36" rx="6" fill="white" stroke="#F0BC2E" stroke-width="1.5"/>
+    <text x="114" y="125" text-anchor="middle" fill="#C89A10" font-size="11" font-family="Inter" font-weight="700">Sources Pool</text>
+    <text x="114" y="140" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">artifact:conv:sources_pool (persisted separately)</text>
+
+    <!-- Persist note -->
+    <rect x="230" y="108" width="614" height="36" rx="6" fill="white" stroke="#D8ECEB" stroke-width="1"/>
+    <text x="537" y="125" text-anchor="middle" fill="#3A5672" font-size="11" font-family="Inter" font-weight="600">Persisted: artifact:conv.timeline.v1 (compacted on budget overflow)</text>
+    <text x="537" y="140" text-anchor="middle" fill="#94a3b8" font-size="10" font-family="Inter">Compaction: older blocks summarized → conv.range.summary block inserted at cut point</text>
+
+    <!-- Legend -->
+    <rect x="14" y="158" width="12" height="12" rx="2" fill="#E5FAF8" stroke="#01BEB2" stroke-width="1"/>
+    <text x="32" y="169" fill="#3A5672" font-size="10" font-family="Inter">Cache checkpoint</text>
+    <rect x="160" y="158" width="12" height="12" rx="2" fill="white" stroke="#38B8C8" stroke-width="1"/>
+    <text x="178" y="169" fill="#3A5672" font-size="10" font-family="Inter">Tool / agent block</text>
+    <rect x="310" y="158" width="12" height="12" rx="2" fill="#FFF8DC" stroke="#F0BC2E" stroke-width="1"/>
+    <text x="328" y="169" fill="#3A5672" font-size="10" font-family="Inter">Announce (in-memory)</text>
+  </svg>
+  </div>
+
+  <p>Cache checkpoints are computed by rounds (tool call rounds + final completion). They allow LLM context caching to skip retokenizing earlier parts of long conversations. See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/timeline-README.md" target="_blank">timeline-README.md</a>, <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/source-pool-README.md" target="_blank">source-pool-README.md</a>, and <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-announce-README.md" target="_blank">react-announce-README.md</a>.</p>
+
+  <h3>Multi-Channel Streaming</h3>
+  <div class="callout info">
+    <span class="callout-icon">📡</span>
+    <div class="callout-body">
+      <strong>The ReAct agent supports multiple streaming channels simultaneously.</strong>
+      The <strong>canvas</strong> channel streams large content (HTML, Markdown, JSON) for display in a widget panel.
+      The <strong>timeline_text</strong> channel streams short text visible in the main chat.
+      The <strong>internal</strong> channel captures agent notes invisible to the user.
+      This is what enables <strong>live-updating widget dashboards</strong> while the agent is still running.
+      See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md" target="_blank">channeled-streamer-README.md</a> and <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/streaming/streaming-widget-README.md" target="_blank">streaming-widget-README.md</a>.
+    </div>
+  </div>
+
+  <h3>ReAct Agent Documentation</h3>
+  <p>Full docs live in <a href="https://github.com/kdcube/kdcube-ai-app/tree/main/app/ai-app/docs/sdk/agents/react" target="_blank"><code>docs/sdk/agents/react/</code></a>. Key files:</p>
+  <div class="card-grid">
+    <div class="card">
+      <h3>Architecture &amp; Flow</h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/flow-README.md" target="_blank">flow-README.md</a> — turn execution flow</li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-context-README.md" target="_blank">react-context-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md" target="_blank">react-turn-workspace-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md" target="_blank">agent-workspace-collaboration-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md" target="_blank">runtime-configuration-README.md</a></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Timeline &amp; Artifacts</h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/timeline-README.md" target="_blank">timeline-README.md</a> — blocks, cache points, compaction</li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-announce-README.md" target="_blank">react-announce-README.md</a> — announce channel</li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/source-pool-README.md" target="_blank">source-pool-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md" target="_blank">artifact-storage-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md" target="_blank">artifact-discovery-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md" target="_blank">conversation-artifacts-README.md</a></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Tools &amp; Execution</h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/external-exec-README.md" target="_blank">external-exec-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md" target="_blank">tool-call-blocks-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/event-blocks-README.md" target="_blank">event-blocks-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/turn-log-README.md" target="_blank">turn-log-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/turn-data-README.md" target="_blank">turn-data-README.md</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ EXEC RUNTIME -->
+<div class="section" id="exec">
+  <h2><span class="icon">🏃</span> Isolated Execution Runtime</h2>
+  <p>The platform provides a <strong>sandboxed code execution runtime</strong> — your agent can generate and run arbitrary Python code in complete isolation. Two execution backends are practical:</p>
+
+  <div class="callout tip">
+    <span class="callout-icon">🐳</span>
+    <div class="callout-body">
+      <strong>Docker is the default and recommended mode — even in production.</strong> Each Processor instance runs on an EC2-backed ECS task, so Docker exec is local and fast. The Processor has a bounded number of in-flight requests and can run Docker containers synchronously within its capacity. Use Docker for live agentic loops.
+    </div>
+  </div>
+
+  <div class="card-grid">
+    <div class="card">
+      <h3>🐳 Docker <span class="pill new">Default</span></h3>
+      <p>Runs code in an isolated Docker container on the same EC2 host as the Processor. <strong>Low latency, ideal for interactive agentic loops.</strong> The container shares the host's Docker daemon — fast spin-up, full isolation.</p>
+      <pre><code><span class="kw">execution</span>:
+  <span class="kw">runtime</span>:
+    <span class="kw">mode</span>: <span class="str">"docker"</span>
+    <span class="kw">enabled</span>: <span class="kw">true</span>  <span class="cm"># default</span></code></pre>
+    </div>
+    <div class="card">
+      <h3>☁️ AWS Fargate <span class="pill partial">Async only</span></h3>
+      <p>Serverless container on a separate compute plane. <strong>Recommended for long-running, non-live workloads</strong> — batch data processing, heavy computation, report generation — where startup latency (10–30s) is acceptable. Not suitable for fast interactive agentic loops.</p>
+      <pre><code><span class="kw">execution</span>:
+  <span class="kw">runtime</span>:
+    <span class="kw">mode</span>: <span class="str">"fargate"</span>
+    <span class="kw">cluster</span>: <span class="str">"arn:aws:ecs:..."</span>
+    <span class="kw">task_definition</span>: <span class="str">"exec-task"</span></code></pre>
+    </div>
+  </div>
+
+  <h3>Exec Environment Variables (Inside Executed Code)</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Variable</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>WORKDIR</code></td><td>Working directory (source, helpers)</td></tr>
+        <tr><td><code>OUTPUT_DIR</code></td><td>Output directory (write files here)</td></tr>
+        <tr><td><code>EXECUTION_ID</code></td><td>Unique execution identifier</td></tr>
+        <tr><td><code>RUNTIME_GLOBALS_JSON</code></td><td>Serialized runtime context (tools, state)</td></tr>
+        <tr><td><code>RUNTIME_TOOL_MODULES</code></td><td>Tool module names available</td></tr>
+        <tr><td><code>BUNDLE_ROOT</code></td><td>Bundle root path (access your bundle files)</td></tr>
+        <tr><td><code>BUNDLE_ID</code></td><td>Current bundle ID</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/external-exec-README.md" target="_blank">external-exec-README.md</a></p>
+</div>
+
+<!-- ═══════════════════════════════════════ KNOWLEDGE -->
+<div class="section" id="knowledge">
+  <h2><span class="icon">📚</span> Knowledge Space</h2>
+  <p>Bundles can expose a <strong>searchable knowledge space</strong> built from a Git repository's docs, source code, deployment configs, and tests.</p>
+
+  <pre><code><span class="kw">return</span> {
+    <span class="str">"knowledge"</span>: {
+        <span class="str">"repo"</span>: <span class="str">"https://github.com/org/repo.git"</span>,  <span class="cm"># "" = local repo</span>
+        <span class="str">"ref"</span>: <span class="str">"main"</span>,
+        <span class="str">"docs_root"</span>: <span class="str">"app/docs"</span>,
+        <span class="str">"src_root"</span>: <span class="str">"app/src"</span>,
+        <span class="str">"deploy_root"</span>: <span class="str">"app/deploy"</span>,
+        <span class="str">"tests_root"</span>: <span class="str">"app/tests"</span>,
+        <span class="str">"validate_refs"</span>: <span class="kw">True</span>
+    }
+}</code></pre>
+
+  <ul>
+    <li><strong><code>on_bundle_load()</code></strong> — Builds the index once per process (file-locked, signature-cached)</li>
+    <li><strong><code>pre_run_hook()</code></strong> — Reconciles if config changed</li>
+  </ul>
+
+  <p>Agent access via <code>ks:</code> paths: <code>react.search_knowledge(query=..., limit=5)</code> and <code>react.read(["ks:docs/architecture.md"])</code></p>
+</div>
+
+<!-- ═══════════════════════════════════════ CONTEXT & RAG -->
+<div class="section" id="context">
+  <h2><span class="icon">🧠</span> Context, RAG &amp; Conversations</h2>
+
+  <h3>Context RAG Client</h3>
+  <pre><code><span class="cm"># self.ctx_client is ContextRAGClient</span>
+results = <span class="kw">await</span> self.ctx_client.search(
+    query=<span class="str">"previous analysis of sales data"</span>,
+    kind=<span class="str">"assistant"</span>,   <span class="cm"># or "user" | "attachment"</span>
+    limit=<span class="num">5</span>
+)
+artifact = <span class="kw">await</span> self.ctx_client.fetch_ctx([<span class="str">"ar:turn_abc.artifacts.summary"</span>])</code></pre>
+
+  <h3>Conversations API Endpoints</h3>
+  <pre><code>GET  /conversations/{tenant}/{project}
+POST /conversations/{tenant}/{project}/fetch
+POST /conversations/{tenant}/{project}/{conv_id}/turns-with-feedbacks
+POST /conversations/{tenant}/{project}/feedback/conversations-in-period</code></pre>
+
+  <p>The <code>react.memsearch</code> tool provides vector search in past turns directly inside the agent loop. The <code>ConversationStore</code> (accessible via <code>BaseWorkflow.store</code>) manages turn payloads, timelines, and artifacts.</p>
+</div>
+
+<!-- ═══════════════════════════════════════ HOSTING -->
+<div class="section" id="hosting">
+  <h2><span class="icon">🌐</span> Hosting &amp; File Resources</h2>
+  <p>Your bundle can produce files (PDFs, PNGs, data exports) and make them available via hosted URLs. The platform handles upload, serving, and access control automatically.</p>
+
+  <pre><code><span class="cm"># ApplicationHostingService (via BaseWorkflow.hosting_service)</span>
+url = hosting.get_artifact_url(<span class="str">"fi:turn_123.files/report.pdf"</span>)
+
+<span class="cm"># Resource Name format</span>
+<span class="cm"># ef:{tenant}:{project}:chatbot:{stage}:{user_id}:{conv_id}:{turn_id}:{role}:{path}</span>
+<span class="cm"># Resolved by POST /by-rn with authentication enforced by platform</span></code></pre>
+
+  <p>Files written to <code>OUTPUT_DIR/turn_{id}/files/</code> during exec are automatically tracked and can be served. User attachments appear as <code>fi:{turn_id}.user.attachments/{filename}</code>.</p>
+</div>
+
+<!-- ═══════════════════════════════════════ CITATIONS -->
+<div class="section" id="citations">
+  <h2><span class="icon">🔗</span> Citations &amp; Sources</h2>
+
+  <h3>Citation Tokens</h3>
+  <pre><code>The company was founded in 2015 [[S:1]] and expanded by 2020 [[S:2,3]].
+According to multiple sources [[S:1-4]], the trend is clear.</code></pre>
+
+  <h3>Sources Pool Fields</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Field</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>sid</code></td><td>Source ID (integer, per-conversation, deduplicated)</td></tr>
+        <tr><td><code>title</code></td><td>Page or file title</td></tr>
+        <tr><td><code>url</code></td><td>URL or file path</td></tr>
+        <tr><td><code>source_type</code></td><td>web | file | attachment | manual</td></tr>
+        <tr><td><code>objective_relevance</code></td><td>Semantic relevance score (0–1)</td></tr>
+        <tr><td><code>published_time_iso</code></td><td>Publication timestamp</td></tr>
+        <tr><td><code>favicon_url</code></td><td>Source favicon for UI display</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/citations-system.md" target="_blank">citations-system.md</a> and <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/source-pool-README.md" target="_blank">source-pool-README.md</a></p>
+</div>
+
+<!-- ═══════════════════════════════════════ FEEDBACK -->
+<div class="section" id="feedback">
+  <h2><span class="icon">👍</span> Feedback System</h2>
+
+  <pre><code>POST /conversations/{tenant}/{project}/{conv_id}/turns/{turn_id}/feedback
+
+{ <span class="str">"reaction"</span>: <span class="str">"ok"</span>, <span class="str">"text"</span>: <span class="str">"Very helpful!"</span>, <span class="str">"ts"</span>: <span class="str">"2026-03-21T10:00:00Z"</span> }
+<span class="cm"># reaction: ok | not_ok | neutral | null</span></code></pre>
+
+  <p>Your bundle can also emit <strong>machine feedback</strong> (<code>origin: "machine"</code>) for confidence scores or quality checks — additive, not replacing user feedback. Satisfaction rate: <code>ok / (ok + not_ok + neutral)</code>.</p>
+  <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/feedback-system.md" target="_blank">feedback-system.md</a></p>
+</div>
+
+<!-- ═══════════════════════════════════════ ECONOMICS -->
+<div class="section" id="economics">
+  <h2><span class="icon">💰</span> Economics &amp; Rate Limiting</h2>
+
+  <pre><code><span class="kw">from</span> kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic <span class="kw">import</span> (
+    BaseEntrypointWithEconomics
+)
+
+<span class="dec">@agentic_workflow</span>(bundle_id=BUNDLE_ID)
+<span class="kw">class</span> <span class="cls">MyBundle</span>(BaseEntrypointWithEconomics):
+    <span class="dec">@property</span>
+    <span class="kw">def</span> <span class="fn">configuration</span>(self):
+        <span class="kw">return</span> {<span class="str">"economics"</span>: {<span class="str">"reservation_amount_dollars"</span>: <span class="num">2.0</span>}, <span class="cm">...</span>}</code></pre>
+
+  <h3>Default Quota Policies</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>User Type</th><th>Concurrent</th><th>Req/Day</th><th>Req/Month</th><th>Tokens/Hour</th></tr></thead>
+      <tbody>
+        <tr><td><code>anonymous</code></td><td>1</td><td>2</td><td>60</td><td>150k</td></tr>
+        <tr><td><code>free</code></td><td>2</td><td>100</td><td>30k</td><td>500k</td></tr>
+        <tr><td><code>payasyougo</code></td><td>2</td><td>200</td><td>6k</td><td>1.5M</td></tr>
+        <tr><td><code>admin</code></td><td>10</td><td>unlimited</td><td>unlimited</td><td>unlimited</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="callout warn">
+    <span class="callout-icon">⚠️</span>
+    <div class="callout-body">Always re-raise <code>EconomicsLimitException</code> unchanged. The base <code>report_turn_error()</code> handles this correctly — never catch it silently.</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ WIDGETS -->
+<div class="section" id="widgets">
+  <h2><span class="icon">🖼️</span> Widgets &amp; Custom UI</h2>
+  <p>Your bundle can expose <strong>React SPA widgets</strong> embedded in the platform UI. Define an operation that returns HTML (a React app), and the UI renders it. The React app can in turn call back to <code>POST /operations/{op}</code> for any further interactions.</p>
+
+  <div class="svg-wrap">
+  <svg viewBox="0 0 780 150" xmlns="http://www.w3.org/2000/svg" style="max-width:780px;">
+    <defs>
+      <marker id="wwa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#01BEB2"/>
+      </marker>
+      <marker id="wwa2" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="#4372C3"/>
+      </marker>
+    </defs>
+    <rect width="780" height="150" fill="#F6FAFA"/>
+
+    <rect x="18" y="45" width="125" height="55" rx="8" fill="white" stroke="#01BEB2" stroke-width="1.5"/>
+    <text x="80" y="68" text-anchor="middle" fill="#0D1E2C" font-size="12" font-family="Inter" font-weight="700">UI Panel</text>
+    <text x="80" y="87" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Renders widget</text>
+
+    <line x1="143" y1="72" x2="185" y2="72" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wwa)"/>
+    <text x="164" y="63" text-anchor="middle" fill="#01BEB2" font-size="9.5" font-family="Inter" font-weight="600">POST /operations/{op}</text>
+
+    <rect x="185" y="35" width="170" height="75" rx="8" fill="white" stroke="#6B63FE" stroke-width="1.5"/>
+    <text x="270" y="60" text-anchor="middle" fill="#5b21b6" font-size="12" font-family="Inter" font-weight="700">Proc Operations API</text>
+    <text x="270" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">/bundles/{t}/{p}/</text>
+    <text x="270" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">operations/{op}</text>
+
+    <line x1="355" y1="72" x2="397" y2="72" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wwa)"/>
+
+    <rect x="397" y="35" width="145" height="75" rx="8" fill="white" stroke="#52B044" stroke-width="1.5"/>
+    <text x="469" y="60" text-anchor="middle" fill="#065f46" font-size="12" font-family="Inter" font-weight="700">Your Bundle</text>
+    <text x="469" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">workflow.{op}()</text>
+    <text x="469" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">returns HTML/SPA</text>
+
+    <line x1="542" y1="72" x2="584" y2="72" stroke="#38B8C8" stroke-width="1.5" marker-end="url(#wwa2)"/>
+
+    <rect x="584" y="35" width="170" height="75" rx="8" fill="white" stroke="#38B8C8" stroke-width="1.5"/>
+    <text x="669" y="60" text-anchor="middle" fill="#0e7490" font-size="12" font-family="Inter" font-weight="700">React SPA</text>
+    <text x="669" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Rendered in UI panel</text>
+    <text x="669" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Calls back /operations</text>
+
+    <!-- loop arrow from SPA back to UI panel -->
+    <path d="M 669 110 Q 669 135 80 135 Q 18 135 18 100" stroke="#94a3b8" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#wwa)"/>
+    <text x="380" y="132" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-family="Inter">SPA can POST to /operations for further actions</text>
+  </svg>
+  </div>
+
+  <h3>Example: Return a React SPA</h3>
+  <pre><code><span class="kw">async def</span> <span class="fn">my_dashboard</span>(self, **kwargs) -> dict:
+    <span class="str">"""My Dashboard widget — loaded by UI when user clicks the button."""</span>
+    html = <span class="str">"""&lt;!DOCTYPE html&gt;&lt;html&gt;&lt;body&gt;
+      &lt;div id="root"&gt;&lt;/div&gt;
+      &lt;script&gt;
+        // Your bundled React app
+        // Can POST back to /bundles/{tenant}/{project}/operations/my_api
+      &lt;/script&gt;
+    &lt;/body&gt;&lt;/html&gt;"""</span>
+    <span class="kw">return</span> {<span class="str">"html"</span>: html, <span class="str">"content_type"</span>: <span class="str">"text/html"</span>}</code></pre>
+
+  <h3>Platform Built-in Operations</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Operation</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr><td><code>ai_bundle</code></td><td>Bundle admin dashboard (props editor, status) — all bundles inherit this</td></tr>
+        <tr><td><code>control_plane</code></td><td>Economics dashboard (usage, billing) — via BaseEntrypointWithEconomics</td></tr>
+        <tr><td><code>suggestions</code></td><td>Suggested prompts for new conversations</td></tr>
+        <tr><td><code>news</code></td><td>News/updates from the bundle</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ DEPLOY -->
+<div class="section" id="deploy">
+  <h2><span class="icon">🚀</span> Deploying Your Bundle</h2>
+
+  <h3>Option A: With the KDCube Platform</h3>
+  <ol class="steps">
+    <li>
+      <div class="step-num">1</div>
+      <div class="step-content">
+        <h4>Push your bundle to Git</h4>
+        <pre><code>git push origin v1.0.0</code></pre>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">2</div>
+      <div class="step-content">
+        <h4>Add to bundles.yaml</h4>
+        <pre><code>- <span class="kw">id</span>: <span class="str">"my-bundle@1-0"</span>
+  <span class="kw">repo</span>: <span class="str">"git@github.com:org/my-bundle.git"</span>
+  <span class="kw">ref</span>: <span class="str">"v1.0.0"</span>
+  <span class="kw">module</span>: <span class="str">"my_bundle.entrypoint"</span></code></pre>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">3</div>
+      <div class="step-content">
+        <h4>Inject secrets and apply</h4>
+        <pre><code>kdcube-setup --secrets-set GIT_HTTP_TOKEN=ghp_...
+kdcube-setup --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
+        <p>The bundle config is applied immediately via Redis — no restart needed. Change the <code>ref</code> and re-run to switch bundle versions on the fly.</p>
+      </div>
+    </li>
+    <li>
+      <div class="step-num">4</div>
+      <div class="step-content">
+        <h4>Set as default bundle via the Admin Dashboard</h4>
+        <p>Open the <strong>AI Bundle Dashboard</strong> (<code>/api/integrations/bundles/{tenant}/{project}/operations/ai_bundle</code>). Your registered bundle appears in the list. Set it as the <code>default_bundle_id</code> for the tenant/project. The change is applied immediately via Redis — no restart needed.</p>
+      </div>
+    </li>
+  </ol>
+
+  <h3>Option B: Standalone (Without Platform)</h3>
+  <p>Bundles can run outside the platform. The SDK is a plain Python package — build your own FastAPI app that imports and invokes it directly. Or build a custom Docker image that runs just your bundle with its own server. The platform's value is in hosting, auth, SSE, storage, economics, and UI — none of that is required for the core agent logic.</p>
+
+  <h3>Bundle Git Auth</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Mode</th><th>bundles.yaml</th><th>Secret</th></tr></thead>
+      <tbody>
+        <tr><td>SSH key</td><td><code>git@github.com:org/repo.git</code></td><td>SSH key mounted in container</td></tr>
+        <tr><td>HTTPS token</td><td><code>https://github.com/org/repo.git</code></td><td><code>GIT_HTTP_TOKEN</code> secret</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ EXAMPLES -->
+<div class="section" id="examples">
+  <h2><span class="icon">💡</span> Example Bundles</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Bundle ID</th><th>What It Shows</th><th>Key Features</th></tr></thead>
+      <tbody>
+        <tr><td><code>react@2026-02-10-02-44</code></td><td>Basic ReAct + economics</td><td>BaseEntrypointWithEconomics, quota policies, web search, news, suggestions</td></tr>
+        <tr><td><code>react.doc@2026-03-02-22-10</code></td><td>Docs reader with knowledge space</td><td>Knowledge space (docs/src/deploy), file locking, signature caching</td></tr>
+        <tr><td><code>react.mcp@2026-03-09</code></td><td>ReAct with MCP tools</td><td>MCP server integration, custom tool namespacing</td></tr>
+        <tr><td><code>openrouter-data@2026-03-11</code></td><td>OpenRouter LLM provider</td><td>OpenRouter integration, model switching, data analysis</td></tr>
+        <tr><td><code>with-isoruntime@2026-02-16</code></td><td>Isolated exec runtime</td><td>Docker exec, code generation + execution, file output</td></tr>
+        <tr><td><code>customer@marketing</code></td><td>Real-world external bundle</td><td>Economics, complex orchestration, custom widgets, news API operation</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <details>
+    <summary>react.doc — Knowledge Space pattern deep-dive</summary>
+    <div class="details-body">
+      <p>Builds the index in <code>on_bundle_load()</code> with file locking (multi-worker safe) and signature-based caching (skip rebuilds when nothing changed). Reconciles on config change in <code>pre_run_hook()</code>. The agent searches with <code>ks:</code> paths via <code>react.search_knowledge</code> and <code>react.read</code>.</p>
+      <p><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc%402026-03-02-22-10/entrypoint.py" target="_blank">View entrypoint.py on GitHub →</a></p>
+    </div>
+  </details>
+</div>
+
+<!-- ═══════════════════════════════════════ DOCS -->
+<div class="section">
+  <h2>Documentation Reference</h2>
+  <div class="card-grid">
+    <div class="card">
+      <h3>SDK &amp; Bundle</h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-dev-README.md" target="_blank">bundle-dev-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/configuration/bundle-configuration-README.md" target="_blank">bundle-configuration-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-ops-README.md" target="_blank">bundle-ops-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/tool-subsystem-README.md" target="_blank">tool-subsystem-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/custom-tools-README.md" target="_blank">custom-tools-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/mcp-README.md" target="_blank">mcp-README.md</a></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Deployment Descriptors</h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/cicd/assembly-descriptor-README.md" target="_blank">assembly-descriptor-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/cicd/secrets-descriptor-README.md" target="_blank">secrets-descriptor-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/cicd/gateway-descriptor-README.md" target="_blank">gateway-descriptor-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/configuration/bundle-configuration-README.md" target="_blank">bundles.yaml descriptor</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/ops/local/local-setup-README.md" target="_blank">local-setup-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md" target="_blank">kdcube-cli README</a></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>ReAct Agent <a href="https://github.com/kdcube/kdcube-ai-app/tree/main/app/ai-app/docs/sdk/agents/react" target="_blank" style="font-weight:400;font-size:12px;">[full folder →]</a></h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/flow-README.md" target="_blank">flow-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-context-README.md" target="_blank">react-context-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/timeline-README.md" target="_blank">timeline-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-turn-workspace-README.md" target="_blank">react-turn-workspace-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-discovery-README.md" target="_blank">artifact-discovery-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/artifact-storage-README.md" target="_blank">artifact-storage-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/runtime-configuration-README.md" target="_blank">runtime-configuration-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/source-pool-README.md" target="_blank">source-pool-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/turn-log-README.md" target="_blank">turn-log-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/turn-data-README.md" target="_blank">turn-data-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/external-exec-README.md" target="_blank">external-exec-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/event-blocks-README.md" target="_blank">event-blocks-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/tool-call-blocks-README.md" target="_blank">tool-call-blocks-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/conversation-artifacts-README.md" target="_blank">conversation-artifacts-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/agent-workspace-collboration-README.md" target="_blank">agent-workspace-collaboration-README.md</a></li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Systems</h3>
+      <ul>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/citations-system.md" target="_blank">citations-system.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/feedback-system.md" target="_blank">feedback-system.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/streaming/channeled-streamer-README.md" target="_blank">channeled-streamer-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/streaming/streaming-widget-README.md" target="_blank">streaming-widget-README.md</a></li>
+        <li><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/agents/react/react-announce-README.md" target="_blank">react-announce-README.md</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════ COMING SOON -->
+<div class="section" id="coming-soon">
+  <h2><span class="icon">🚧</span> Coming Soon &amp; Current Status</h2>
+  <p>Here's the current state of platform capabilities and what's next on the roadmap:</p>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Dynamic widget buttons</strong></td>
+          <td><span class="pill soon">Soon</span></td>
+          <td>Bundle declares widget list in props (<code>widgets: [{id, label, icon}]</code>); UI reads it and renders buttons dynamically — no hardcoding on the platform side needed. Requires adding <code>widgets</code> to the bundle props schema and updating the frontend bundle selector.</td>
+        </tr>
+        <tr>
+          <td><strong>Custom main view</strong></td>
+          <td><span class="pill soon">Soon</span></td>
+          <td>Bundle can override the default chat view with a custom HTML/SPA — ideal for dashboards and data-driven UIs that don't need SSE. Requires <code>main_view.operation</code> in bundle props and frontend reading it to render an operation result instead of the chat panel.</td>
+        </tr>
+        <tr>
+          <td><strong>Static asset serving from bundle</strong></td>
+          <td><span class="pill partial">Available now</span></td>
+          <td>A bundle can already serve static files (CSS, JS, images) by encoding them in an operation endpoint that reads from its own package. Adding a GET variant to the Operations API (alongside the existing POST) would make this cleaner — a small extension that can be done now.</td>
+        </tr>
+        <tr>
+          <td><strong>Bundle marketplace</strong></td>
+          <td><span class="pill soon">Soon</span></td>
+          <td>Browse and install community bundles from a registry.</td>
+        </tr>
+        <tr>
+          <td><strong>Live bundle reload</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundle code is loaded per-process and cached as a singleton. Config updates (bundle props, role_models, etc.) propagate immediately via Redis pub/sub. Restarting the processor picks up any code changes.</td>
+        </tr>
+        <tr>
+          <td><strong>Bundle versioning</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Update the <code>ref</code> (branch/tag/commit) in <code>bundles.yaml</code> or via the Admin API and the change applies immediately to new requests — no downtime. The bundle registry is stored in Redis and updated atomically.</td>
+        </tr>
+        <tr>
+          <td><strong>Multi-bundle conversations</strong></td>
+          <td><span class="pill partial">Partial</span></td>
+          <td>Technically possible today via routing, but both bundles must understand and agree on the shared conversation format (timeline structure, artifact paths, turn state). Requires alignment between bundle developers on the protocol.</td>
+        </tr>
+        <tr>
+          <td><strong>Streaming SSE for operations</strong></td>
+          <td><span class="pill soon">Soon</span></td>
+          <td>Today, widget operations are synchronous REST POST. Adding an SSE channel for operations would allow widgets to stream responses back — enabling live-updating dashboards and progress indicators from widget calls.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="coming-soon-banner">
+    <h3>🎯 Priority: Dynamic Widget Registry + Custom Main View</h3>
+    <p>These two features together unlock fully self-describing bundles — a bundle that declares its own UI surface, widgets, and main view without any platform-side configuration. We're reviewing the cleanest implementation path now.</p>
+  </div>
+
+  <div class="callout info">
+    <span class="callout-icon">💬</span>
+    <div class="callout-body">Have feedback or want to prioritize something? Open an issue on the <a href="https://github.com/kdcube/kdcube-ai-app/issues" target="_blank">GitHub repo</a>.</div>
+  </div>
+</div>
+
+</div><!-- /container -->
+
+<footer>
+  <p>KDCube Bundle Developer Portal &nbsp;·&nbsp; <a href="https://github.com/kdcube/kdcube-ai-app" target="_blank">GitHub</a> &nbsp;·&nbsp; MIT License</p>
+  <p style="margin-top:0.5rem;color:#94a3b8;">Built with care for bundle developers.</p>
+</footer>
+
+<script>
+function switchTab(e, panelId) {
+  const tabs = e.target.closest('.tabs');
+  tabs.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  tabs.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  e.target.classList.add('active');
+  tabs.querySelector('#tab-' + panelId).classList.add('active');
+}
+// Active nav highlight on scroll
+const sections = document.querySelectorAll('.section[id]');
+const navLinks = document.querySelectorAll('.nav-links a');
+window.addEventListener('scroll', () => {
+  let current = '';
+  sections.forEach(s => { if (window.scrollY >= s.offsetTop - 80) current = s.id; });
+  navLinks.forEach(a => {
+    a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+  });
+}, { passive: true });
+</script>
+</body>
+</html>

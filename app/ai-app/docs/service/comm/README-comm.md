@@ -207,6 +207,22 @@ For the client-facing contract and examples, see:
 - [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
 - [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
 
+### Which method owns which concept
+
+| Method | Main purpose | `marker` | `broadcast` |
+| --- | --- | --- | --- |
+| `comm.step(...)` | progress/status event | no | not exposed by the helper |
+| `comm.delta(...)` | stream chunk | yes | not exposed by the helper |
+| `comm.event(...)` | custom typed event | no | yes |
+| `comm.service_event(...)` | service-level event | no | yes |
+| `comm.emit(...)` | low-level socket route control | N/A | yes |
+
+Rule of thumb:
+
+- if you are asking “which marker should I use?”, you almost certainly want `comm.delta(...)`
+- if you are asking “should this be broadcast?”, you probably want `comm.event(...)`,
+  `comm.service_event(...)`, or the low-level `comm.emit(...)`
+
 ---
 
 ## 7) Bundle‑level outbound firewall
@@ -220,35 +236,33 @@ See: [docs/sdk/bundle/bundle-firewall-README.md](../../sdk/bundle/bundle-firewal
 ### Examples (per marker)
 
 ```python
-from kdcube_ai_app.apps.chat.sdk.comm.emitters import AIBEmitters
-emit = AIBEmitters(self.comm)
-
 # thinking
-await emit.delta(text="Working it out…", index=0, marker="thinking", agent="gate")
+await self.comm.delta(text="Working it out…", index=0, marker="thinking", agent="gate")
 
 # answer
-await emit.delta(text="Here is the answer.", index=0, marker="answer", agent="answer.generator")
+await self.comm.delta(text="Here is the answer.", index=0, marker="answer", agent="answer.generator")
 
 # subsystem (widget stream)
-await emit.delta(text='{"status":"running"}', index=0, marker="subsystem", agent="tool.exec")
+await self.comm.delta(text='{"status":"running"}', index=0, marker="subsystem", agent="tool.exec")
 
 # canvas (inline artifact stream)
-await emit.delta(text='{"type":"chart","data":{...}}', index=0, marker="canvas", agent="viz")
+await self.comm.delta(text='{"type":"chart","data":{...}}', index=0, marker="canvas", agent="viz")
 
 # timeline_text (compact timeline entries)
-await emit.delta(text="Loaded 3 prior turns", index=0, marker="timeline_text", agent="orchestrator")
+await self.comm.delta(text="Loaded 3 prior turns", index=0, marker="timeline_text", agent="orchestrator")
 ```
 
 Custom typed event example:
 
 ```python
-await emit.event(
+await self.comm.event(
     type="bundle.preferences.updated",
     step="preferences.updated",
     status="completed",
     title="Preferences updated",
     data={"keys": ["city", "diet"]},
     agent="preferences",
+    broadcast=True,
 )
 ```
 
