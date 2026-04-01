@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from pydantic import BaseModel
 
 from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without_pressure
+from kdcube_ai_app.apps.middleware.gateway import STATE_STREAM_ID, extract_stream_id
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
@@ -84,6 +85,23 @@ def _get_app_redis(request: Request):
     if redis is None:
         raise RuntimeError("redis_async is not initialized on app.state")
     return redis
+
+
+def _request_stream_id(request: Request) -> Optional[str]:
+    value = getattr(request.state, STATE_STREAM_ID, None)
+    if isinstance(value, str):
+        value = value.strip()
+    if value:
+        return value
+    return extract_stream_id(request)
+
+
+def _build_rest_bundle_routing(*, request: Request, session_id: str, bundle_id: str) -> ChatTaskRouting:
+    return ChatTaskRouting(
+        session_id=session_id,
+        bundle_id=bundle_id,
+        socket_id=_request_stream_id(request),
+    )
 
 
 router = APIRouter()
@@ -214,8 +232,6 @@ async def _load_bundle_props_defaults(
         request: Request,
         session: UserSession,
 ) -> Dict[str, Any]:
-    from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle_async
-
     spec_resolved = await resolve_bundle_async(bundle_id, override=None)
     if not spec_resolved:
         raise HTTPException(status_code=404, detail=f"Bundle {bundle_id} not found")
@@ -236,7 +252,8 @@ async def _load_bundle_props_defaults(
         evict_spec(spec)
     except Exception:
         pass
-    routing = ChatTaskRouting(
+    routing = _build_rest_bundle_routing(
+        request=request,
         session_id=session.session_id,
         bundle_id=spec_resolved.id,
     )
@@ -988,7 +1005,8 @@ async def _call_bundle_op_inner(
         module=spec_resolved.module,
         singleton=bool(spec_resolved.singleton),
     )
-    routing = ChatTaskRouting(
+    routing = _build_rest_bundle_routing(
+        request=request,
         session_id=session.session_id,
         bundle_id=spec_resolved.id,
     )

@@ -68,7 +68,12 @@ from kdcube_ai_app.infra.rendering.shared_browser import close_shared_browser
 
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
 
-from kdcube_ai_app.apps.middleware.gateway import STATE_FLAG, STATE_SESSION, STATE_USER_TYPE
+from kdcube_ai_app.apps.middleware.gateway import (
+    STATE_FLAG,
+    STATE_SESSION,
+    STATE_USER_TYPE,
+    bind_stream_id_to_request_state,
+)
 from kdcube_ai_app.apps.middleware.token_extract import extract_auth_tokens_from_query_params
 from starlette.datastructures import MutableHeaders
 from kdcube_ai_app.infra.gateway.backpressure import create_atomic_chat_queue_manager
@@ -473,6 +478,8 @@ async def gateway_middleware(request: Request, call_next):
         return await call_next(request)
 
     try:
+        bind_stream_id_to_request_state(request)
+
         # FOR SSE: Check query params for auth tokens if headers are missing
         if request.url.path.startswith("/sse/"):
             bearer_token, id_token = extract_auth_tokens_from_query_params(request.query_params)

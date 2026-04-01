@@ -44,7 +44,12 @@ if not _IN_CONTAINER:
 os.environ.setdefault("INSTANCE_ID", f"proc-{uuid.uuid4().hex[:8]}")
 
 from kdcube_ai_app.apps.utils.cors import configure_cors
-from kdcube_ai_app.apps.middleware.gateway import STATE_FLAG, STATE_SESSION, STATE_USER_TYPE
+from kdcube_ai_app.apps.middleware.gateway import (
+    STATE_FLAG,
+    STATE_SESSION,
+    STATE_USER_TYPE,
+    bind_stream_id_to_request_state,
+)
 from kdcube_ai_app.apps.middleware.token_extract import extract_auth_tokens_from_query_params
 from kdcube_ai_app.infra.gateway.config import (
     get_gateway_config,
@@ -683,6 +688,8 @@ async def gateway_middleware(request: Request, call_next):
         return await call_next(request)
 
     try:
+        bind_stream_id_to_request_state(request)
+
         # Inject auth tokens from query params if needed
         if request.url.path.startswith("/api/integrations/"):
             bearer_token, id_token = extract_auth_tokens_from_query_params(request.query_params)

@@ -57,6 +57,21 @@ class CircuitBreakersResponse(BaseModel):
 STATE_FLAG = "_gw_processed"
 STATE_SESSION = "user_session"
 STATE_USER_TYPE = "user_type"
+STATE_STREAM_ID = "stream_id"
+STREAM_ID_HEADER = "KDC-Stream-ID"
+
+
+def extract_stream_id(request: Request) -> Optional[str]:
+    value = request.headers.get(STREAM_ID_HEADER) or request.headers.get(STREAM_ID_HEADER.lower())
+    if value:
+        value = value.strip()
+    return value or None
+
+
+def bind_stream_id_to_request_state(request: Request) -> Optional[str]:
+    stream_id = extract_stream_id(request)
+    setattr(request.state, STATE_STREAM_ID, stream_id)
+    return stream_id
 
 class FastAPIGatewayAdapter:
     """FastAPI adapter for the request gateway"""
