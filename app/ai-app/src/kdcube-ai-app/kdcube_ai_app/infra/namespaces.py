@@ -104,6 +104,7 @@ class CONFIG:
         CLEANUP_CHANNEL = "kdcube:config:bundles:cleanup:{tenant}:{project}"
         ACTIVE_REFS_KEY_FMT = "kdcube:config:bundles:refs:{tenant}:{project}"
         ENV_SYNC_LOCK_FMT = "kdcube:config:bundles:env-sync-lock:{tenant}:{project}"
+        PRELOAD_LOCK_FMT = "kdcube:config:bundles:preload-lock:{tenant}:{project}"
 
     class GATEWAY:
         NAMESPACE = "kdcube:config:gateway"

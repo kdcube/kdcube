@@ -688,17 +688,11 @@ def get_workflow_instance(
 
     # Track active bundle references (best-effort, non-blocking)
     try:
-        from kdcube_ai_app.infra.plugin.bundle_refs import touch_bundle_ref
+        from kdcube_ai_app.infra.plugin.bundle_refs import touch_bundle_ref_best_effort
 
-        if redis is not None and spec.path:
+        if spec.path:
             t, p = _tp_from_ctx(comm_context)
-            coro = touch_bundle_ref(redis, path=spec.path, tenant=t, project=p)
-            if asyncio.iscoroutine(coro):
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(coro)
-                except RuntimeError:
-                    pass
+            touch_bundle_ref_best_effort(redis, path=spec.path, tenant=t, project=p)
     except Exception:
         pass
     # singleton cache hit?

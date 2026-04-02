@@ -3,6 +3,7 @@
 # kdcube_ai_app/infra/plugin/bundle_refs.py
 
 from __future__ import annotations
+import asyncio
 import os
 import time
 from typing import Optional, Iterable, Set, Dict, Any
@@ -41,6 +42,60 @@ def _touch_local(path: str) -> None:
     _LOCAL_ACTIVE[path] = time.time()
 
 
+async def _touch_bundle_ref_remote(
+    redis: Any,
+    *,
+    path: str,
+    tenant: Optional[str] = None,
+    project: Optional[str] = None,
+    ttl_seconds: Optional[int] = None,
+) -> None:
+    if not path or redis is None:
+        return
+    ttl = _ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
+    key = refs_key(tenant, project)
+    ts = time.time()
+    try:
+        await redis.zadd(key, {path: ts})
+        if ttl > 0:
+            await redis.expire(key, ttl * 2)
+    except Exception:
+        # best-effort tracking only
+        return
+
+
+def touch_bundle_ref_best_effort(
+    redis: Any,
+    *,
+    path: str,
+    tenant: Optional[str] = None,
+    project: Optional[str] = None,
+    ttl_seconds: Optional[int] = None,
+) -> None:
+    """
+    Update local active refs immediately and schedule Redis tracking only when
+    called from a thread that currently owns a running event loop.
+    """
+    if not path:
+        return
+    _touch_local(path)
+    if redis is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(
+        _touch_bundle_ref_remote(
+            redis,
+            path=path,
+            tenant=tenant,
+            project=project,
+            ttl_seconds=ttl_seconds,
+        )
+    )
+
+
 def get_local_active_paths(*, ttl_seconds: Optional[int] = None) -> Set[str]:
     ttl = _ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
     now = time.time()
@@ -62,18 +117,13 @@ async def touch_bundle_ref(
     if not path:
         return
     _touch_local(path)
-    if redis is None:
-        return
-    ttl = _ttl_seconds() if ttl_seconds is None else int(ttl_seconds)
-    key = refs_key(tenant, project)
-    ts = time.time()
-    try:
-        await redis.zadd(key, {path: ts})
-        if ttl > 0:
-            await redis.expire(key, ttl * 2)
-    except Exception:
-        # best-effort tracking only
-        return
+    await _touch_bundle_ref_remote(
+        redis,
+        path=path,
+        tenant=tenant,
+        project=project,
+        ttl_seconds=ttl_seconds,
+    )
 
 
 async def get_active_paths(
