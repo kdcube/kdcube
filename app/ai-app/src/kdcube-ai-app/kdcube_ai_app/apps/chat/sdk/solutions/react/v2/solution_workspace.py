@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     _safe_relpath,
     extract_code_file_paths,
     extract_fetch_ctx_paths,
+    extract_workspace_turn_roots,
     hydrate_workspace_paths,
 )
 
@@ -603,15 +604,36 @@ def build_exec_snapshot_workspace(
                 if phys:
                     file_paths.append(phys)
             continue
+    git_turn_roots: set[str] = set()
+    for turn_id in extract_workspace_turn_roots(code):
+        if (outdir / turn_id / ".git").exists():
+            git_turn_roots.add(turn_id)
+    for phys in file_paths:
+        if not isinstance(phys, str) or not phys.strip() or phys.startswith("fi:"):
+            continue
+        root_name = phys.split("/", 1)[0]
+        if root_name and (outdir / root_name / ".git").exists():
+            git_turn_roots.add(root_name)
+
+    copied_git_roots: set[str] = set()
+    for turn_id in sorted(git_turn_roots):
+        src_root = outdir / turn_id
+        if not src_root.exists():
+            continue
+        _copy_tree(src_root, snap_out / turn_id)
+        copied_git_roots.add(turn_id)
+
     try:
         (snap_out / "exec_snapshot_manifest.json").write_text(json.dumps({
             "filtered_paths": fetch_paths,
             "included_files": file_paths,
+            "copied_git_roots": sorted(copied_git_roots),
             "timeline_blocks_total": len(tl_blocks),
             "timeline_blocks_filtered": len(filtered_blocks),
         }, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
+
     seen = set()
     for phys in file_paths:
         if not isinstance(phys, str) or not phys.strip():
@@ -621,6 +643,9 @@ def build_exec_snapshot_workspace(
         if phys in seen:
             continue
         seen.add(phys)
+        root_name = phys.split("/", 1)[0]
+        if root_name in copied_git_roots:
+            continue
         src = outdir / phys
         if src.exists():
             if src.is_dir():

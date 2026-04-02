@@ -31,7 +31,6 @@ Data spaces (quick guide)
 - Knowledge Space (`ks:`): read-only reference files prepared by the system (docs, indexes, repos).
 - OUT_DIR (`fi:`): per‑turn output artifacts (read/write during the turn).
 - Versioned snapshot refs (`fi:<turn_id>...`): historical artifacts and workspace slices.
-- Conversation Workspace (future): shared writable workspace across turns (not implemented yet).
 
 Accepted path families (built-in react tools)
 - `react.read` accepts logical paths, not raw host/runtime paths:
@@ -87,6 +86,8 @@ react.pull
 - Backend semantics depend on `RuntimeCtx.workspace_implementation`:
   - `custom`: hydrate from conversation artifact history / hosting-backed snapshot state
   - `git`: hydrate `fi:<turn>.files/...` from the git-backed workspace lineage snapshot for that version
+- In `git` mode, runtime also bootstraps `out/<current_turn>/` as a local repo so exec/code may use local git inspection/history/edit commands there, but not pull/push/fetch.
+- That current-turn repo keeps lineage history/refs available without eagerly checking out the project tree; explicit file materialization is still required.
 - Path contract:
   - `fi:<turn_id>.files/<path>` may be an exact file or a subtree/prefix.
   - `fi:<turn_id>.user.attachments/<file>` and legacy `fi:<turn_id>.attachments/<file>` must be exact file refs.

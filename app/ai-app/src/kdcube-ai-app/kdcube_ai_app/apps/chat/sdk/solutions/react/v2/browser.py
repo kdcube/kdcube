@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import (
     extract_turn_ids_from_blocks,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import get_workspace_implementation
 
 PROJECT_LOG_SLOTS = { "project_log" }
 SOURCES_POOL_ARTIFACT_TAG = f"artifact:{SOURCES_POOL_KIND}"
@@ -285,6 +286,17 @@ class ContextBrowser:
         Ensure per-turn workspace directories exist and are bound to OUTDIR_CV/WORKDIR_CV.
         Returns (workdir, outdir).
         """
+        def _bootstrap_git_workspace_if_needed() -> None:
+            if get_workspace_implementation(self._runtime_ctx) != "git":
+                return
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import ensure_current_turn_git_workspace
+
+            ensure_current_turn_git_workspace(
+                runtime_ctx=self._runtime_ctx,
+                outdir=outdir,
+                logger=self.log,
+            )
+
         workdir_raw = (self._runtime_ctx.workdir or "").strip()
         outdir_raw = (self._runtime_ctx.outdir or "").strip()
         workdir = pathlib.Path(workdir_raw) if workdir_raw else pathlib.Path("")
@@ -297,6 +309,7 @@ class ContextBrowser:
                 pass
             os.environ["OUTPUT_DIR"] = str(outdir)
             os.environ["WORKDIR"] = str(workdir)
+            _bootstrap_git_workspace_if_needed()
             return workdir, outdir
 
         try:
@@ -327,6 +340,7 @@ class ContextBrowser:
 
         os.environ["OUTPUT_DIR"] = str(outdir)
         os.environ["WORKDIR"] = str(workdir)
+        _bootstrap_git_workspace_if_needed()
         return workdir, outdir
 
     def _write_timeline_file(self, *, conversation_id: Optional[str], turn_id: Optional[str]) -> None:

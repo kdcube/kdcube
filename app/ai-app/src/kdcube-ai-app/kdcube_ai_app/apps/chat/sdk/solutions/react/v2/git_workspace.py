@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import asyncio
 import pathlib
-import shutil
 import subprocess
 from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     _guess_mime_from_path,
     _is_text_mime,
+    workspace_lineage_branch_ref,
     workspace_lineage_segments,
     workspace_version_ref,
 )
@@ -77,6 +77,18 @@ def _ensure_workspace_repo(
     return repo_root
 
 
+def _git_has_ref(*, repo_root: pathlib.Path, ref_name: str) -> bool:
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_root), "show-ref", "--verify", "--quiet", ref_name],
+            check=True,
+            capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def _ensure_local_version_ref(*, repo_root: pathlib.Path, runtime_ctx: Any, version_id: str) -> str:
     env = _build_git_env()
     remote_ref = workspace_version_ref(runtime_ctx, version_id)
@@ -90,6 +102,120 @@ def _ensure_local_version_ref(*, repo_root: pathlib.Path, runtime_ctx: Any, vers
         env=env,
     )
     return local_ref
+
+
+def _ensure_local_lineage_branch_ref(*, repo_root: pathlib.Path, runtime_ctx: Any) -> str:
+    env = _build_git_env()
+    remote_ref = workspace_lineage_branch_ref(runtime_ctx)
+    if not remote_ref:
+        return ""
+    segs = workspace_lineage_segments(runtime_ctx)
+    local_ref = (
+        "refs/kdcube-local/lineages/"
+        f"{segs['tenant']}/{segs['project']}/{segs['user_id']}/{segs['conversation_id']}"
+    )
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_root), "fetch", "origin", f"+{remote_ref}:{local_ref}"],
+            check=True,
+            capture_output=True,
+            env=env,
+        )
+    except subprocess.CalledProcessError:
+        if _git_has_ref(repo_root=repo_root, ref_name=local_ref):
+            return local_ref
+        return ""
+    return local_ref
+
+
+def _workspace_commit_identity(runtime_ctx: Any) -> tuple[str, str]:
+    user_id = str(getattr(runtime_ctx, "user_id", "") or "").strip() or "react"
+    safe_user = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in user_id).strip("-") or "react"
+    name = f"React Workspace ({user_id})"
+    email = f"{safe_user}@local.invalid"
+    return name, email
+
+
+def ensure_current_turn_git_workspace(
+    *,
+    runtime_ctx: Any,
+    outdir: pathlib.Path,
+    logger: Optional[AgentLogger] = None,
+) -> pathlib.Path:
+    turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+    if not turn_id:
+        raise ValueError("missing_turn_id")
+    log = logger or AgentLogger("react.workspace.git")
+    repo_root = _ensure_workspace_repo(runtime_ctx=runtime_ctx, outdir=outdir, logger=log)
+    lineage_ref = _ensure_local_lineage_branch_ref(repo_root=repo_root, runtime_ctx=runtime_ctx)
+
+    turn_root = pathlib.Path(outdir) / turn_id
+    git_dir = turn_root / ".git"
+    if git_dir.exists():
+        return turn_root
+
+    turn_root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", str(turn_root)],
+        check=True,
+        capture_output=True,
+    )
+    name, email = _workspace_commit_identity(runtime_ctx)
+    subprocess.run(
+        ["git", "-C", str(turn_root), "config", "user.name", name],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(turn_root), "config", "user.email", email],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(turn_root), "config", "advice.detachedHead", "false"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(turn_root), "config", "core.sparseCheckout", "true"],
+        check=True,
+        capture_output=True,
+    )
+    try:
+        subprocess.run(
+            ["git", "-C", str(turn_root), "remote", "add", "origin", str(repo_root)],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        subprocess.run(
+            ["git", "-C", str(turn_root), "remote", "set-url", "origin", str(repo_root)],
+            check=True,
+            capture_output=True,
+        )
+    sparse_file = turn_root / ".git" / "info" / "sparse-checkout"
+    sparse_file.parent.mkdir(parents=True, exist_ok=True)
+    sparse_file.write_text("", encoding="utf-8")
+
+    if lineage_ref:
+        subprocess.run(
+            ["git", "-C", str(turn_root), "fetch", "origin", f"+{lineage_ref}:refs/heads/workspace"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(turn_root), "checkout", "-f", "workspace"],
+            check=True,
+            capture_output=True,
+        )
+    else:
+        subprocess.run(
+            ["git", "-C", str(turn_root), "checkout", "--orphan", "workspace"],
+            check=True,
+            capture_output=True,
+        )
+
+    return turn_root
 
 
 def _git_path_is_file(*, repo_root: pathlib.Path, ref_name: str, tree_path: str) -> bool:

@@ -4,6 +4,9 @@ import subprocess
 
 import pytest
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import (
+    ensure_current_turn_git_workspace,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
     build_exec_snapshot_workspace,
@@ -162,6 +165,18 @@ def _init_git_workspace_repo(tmp_path):
             "-C",
             str(repo),
             "update-ref",
+            "refs/heads/kdcube/demo-tenant/demo-project/admin-user/conversation-1",
+            "HEAD",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "update-ref",
             "refs/kdcube/demo-tenant/demo-project/admin-user/conversation-1/versions/turn_prev",
             "HEAD",
         ],
@@ -169,6 +184,71 @@ def _init_git_workspace_repo(tmp_path):
         capture_output=True,
     )
     return repo
+
+
+def test_build_exec_snapshot_workspace_copies_git_turn_root_when_repo_file_is_referenced(tmp_path):
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    (workdir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+
+    turn_root = outdir / "turn_ctx"
+    (turn_root / "files" / "projectA" / "src").mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", str(turn_root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(turn_root), "config", "user.name", "Test User"], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(turn_root), "config", "user.email", "test@example.com"], check=True, capture_output=True)
+    (turn_root / "files" / "projectA" / "src" / "app.py").write_text("print('ctx')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(turn_root), "add", "."], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(turn_root), "commit", "-m", "init"], check=True, capture_output=True)
+
+    ws = build_exec_snapshot_workspace(
+        workdir=workdir,
+        outdir=outdir,
+        timeline={},
+        code='from pathlib import Path\napp = Path(OUTPUT_DIR) / "turn_ctx/files/projectA/src/app.py"\nprint(app.read_text())\n',
+    )
+
+    snap_out = ws["outdir"]
+    assert (snap_out / "turn_ctx" / ".git").exists()
+    assert (snap_out / "turn_ctx" / "files" / "projectA" / "src" / "app.py").read_text(encoding="utf-8") == "print('ctx')\n"
+
+
+def test_ensure_current_turn_git_workspace_bootstraps_lineage_branch(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
+    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
+    )
+
+    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+
+    assert (turn_root / ".git").exists()
+    assert not (turn_root / "files" / "projectA" / "src" / "app.py").exists()
+    proc_show = subprocess.run(
+        ["git", "-C", str(turn_root), "show", "workspace:files/projectA/src/app.py"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (proc_show.stdout or "") == "print('git')\n"
+    proc = subprocess.run(
+        ["git", "-C", str(turn_root), "status", "--short"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (proc.stdout or "").strip() == ""
 
 
 @pytest.mark.asyncio

@@ -80,7 +80,9 @@ This is the only React workspace paradigm switch:
 - `git`
   - agent uses `fi:` + `react.pull(...)`
   - `.files/...` pulls are hydrated from git-backed lineage snapshots
-  - agent is instructed that the activated workspace can be explored locally with git commands except pull/push
+  - current turn root `out/<current_turn>/` is bootstrapped as a local repo
+  - that repo keeps lineage history available but does not eagerly populate the worktree
+  - agent is instructed that the activated current-turn workspace can be explored locally with git commands except pull/push/fetch
 
 Exact attachment/binary pulls remain point-wise and hosting-backed in both modes.
 

@@ -73,7 +73,9 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
 - `git`
   - the agent is taught to use `fi:` plus `react.pull(paths=[...])`
   - `.files/...` pulls hydrate from git-backed lineage snapshots
-  - the agent may use local git inspection/history/edit commands inside the activated workspace, except pull/push
+  - the current turn root `out/<current_turn>/` is bootstrapped as a local git repo
+  - that current-turn repo keeps lineage history available but does not eagerly populate the worktree
+  - the agent may use local git inspection/history/edit commands inside that current-turn repo, except pull/push/fetch
 - in both modes:
   - `fi:<turn_id>.files/<scope-or-subtree>` may be pulled as a subtree
   - `fi:<turn_id>.user.attachments/<name>` may be pulled only as an exact file ref
@@ -96,12 +98,6 @@ When such a resolver exists, the generated code flow is:
 5. emit discovered logical refs like `ks:<bundle-defined-root>/foo/bar.py` back into OUT_DIR artifacts or logs so the agent can later call `react.read` on them
 
 If the bundle does **not** expose a resolver for directory-style browsing, then `ks:` remains readable only by exact logical path or by bundle-specific search tools. It is not a normal browseable filesystem from standard React tools.
-
-### Future collaborative workspaces
-
-The current React agent does **not** yet have a shared mutable workspace that overwrites files across turns.
-
-The planned future model is a named collaborative workspace under something like `out/workspaces/<name>/...`, potentially git-backed. Until tooling explicitly exposes that surface, treat it as future design only.
 
 ## Lifecycle at a glance
 
@@ -133,6 +129,13 @@ Runtime bindings set immediately:
 - `RuntimeCtx.workdir` / `RuntimeCtx.outdir`
 - env vars: `WORKDIR`, `OUTPUT_DIR`
 - context vars: `WORKDIR_CV`, `OUTDIR_CV`
+
+When `workspace_implementation=git`:
+- runtime also bootstraps `out/turn_<current_turn>/` as a local git repo
+- if the lineage branch already exists, that repo is seeded from the latest lineage head
+- runtime keeps the repo history/refs available but leaves the worktree empty until the agent explicitly materializes files
+- if the lineage branch does not exist yet, runtime creates an empty orphan repo for the turn
+- engineering, not exec, is responsible for later remote synchronization
 
 ## Phase 2: What is populated during a normal turn
 
@@ -229,6 +232,7 @@ Before remote execution, host builds a reduced workspace (`build_exec_snapshot_w
 - copy full `work/`
 - create filtered `out/timeline.json`
 - include only referenced files required by code (`fetch_ctx`/file refs)
+- if any referenced file belongs to a git-backed turn root, copy the whole `out/turn_<id>/` tree so `.git` survives in isolated exec
 - write `out/exec_snapshot_manifest.json`
 
 Temporary snapshot tree:

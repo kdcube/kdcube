@@ -20,6 +20,8 @@ def test_get_workspace_implementation_guide_git_mentions_git_backed_mode():
     assert "binary descendants" in guide
     assert "GIT mode" in guide
     assert "git-backed workspace lineage snapshot" in guide
+    assert "local git repo" in guide
+    assert "git pull" in guide
 
 
 def test_build_decision_system_text_uses_selected_workspace_implementation():
@@ -31,3 +33,4 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert "react.pull(paths=[...])" in text
     assert "EXACT file ref" in text
     assert "binary descendants" in text
+    assert "local git repo" in text

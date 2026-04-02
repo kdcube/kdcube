@@ -230,6 +230,14 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 - In this GIT mode, `fi:<turn_id>.files/...` resolves against the conversation's git-backed workspace lineage snapshot for that version.
 - Pulling `fi:<turn_id>.user.attachments/...` or `fi:<turn_id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
+- The current turn root `turn_<current_turn>/` is bootstrapped as a local git repo in OUT_DIR.
+- The repo root path is `Path(OUTPUT_DIR) / "turn_<current_turn>"`.
+- Runtime keeps git history/refs available there, but it does NOT eagerly populate the worktree with project files.
+- Only bring files in when you actually need them:
+  - use `react.pull(paths=[fi:...])` for versioned snapshot materialization
+  - or use local git checkout/restore commands against the current-turn repo when you intentionally want files from the lineage head
+- Use local git commands against that current-turn repo root when they help you inspect history, diff, status, or create local commits.
+- Do NOT use `git pull`, `git fetch`, or `git push` from exec/code. Networked git synchronization is handled by engineering outside exec.
 - After `react.pull`, the materialized local paths are available under OUT_DIR using their physical form, for example:
   - `turn_123/files/projectA/src/app.py`
   - `turn_123/attachments/template.xlsx`
