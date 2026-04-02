@@ -28,8 +28,15 @@ class FakeBrowser:
     def unhide_paths(self, paths=None):
         return None
 
+    def timeline_visible_paths(self):
+        return self.timeline.visible_paths()
+
     def bind_params_with_refs(self, base_params, tool_id=None, visible_paths=None):
-        return base_params, [], []
+        return self.timeline.bind_params_with_refs(
+            base_params=base_params,
+            tool_id=tool_id,
+            visible_paths=visible_paths,
+        )
 
     async def get_turn_log(self, turn_id: str):
         return self._turn_logs.get(turn_id, {})

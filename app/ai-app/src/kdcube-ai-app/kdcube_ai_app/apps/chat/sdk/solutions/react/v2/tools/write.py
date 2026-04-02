@@ -65,7 +65,27 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
     last_decision = state.get("last_decision") or {}
     tool_call = last_decision.get("tool_call") or {}
     tool_id = "react.write"
-    params = tool_call.get("params") or {}
+    base_params = tool_call.get("params") or {}
+    visible_paths = None
+    try:
+        visible_paths = ctx_browser.timeline_visible_paths()
+    except Exception:
+        visible_paths = None
+    params, content_lineage, violations = ctx_browser.bind_params_with_refs(
+        base_params=base_params,
+        tool_id=tool_id,
+        visible_paths=visible_paths,
+    )
+    if violations:
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="protocol_violation.param_ref_not_visible",
+            message="One or more ref: bindings are not visible",
+            extra={"violations": violations, "tool_id": tool_id, "protocol_violation": True},
+        )
+        state["retry_decision"] = True
+        return state
     artifact_name = str(params.get("path") or "").strip()
     fmt = infer_format_from_path(artifact_name)
     generated_data = params.get("content")
@@ -214,11 +234,11 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         description="",
         channel=channel,
         sources_used=sources_used,
-        inputs=tool_call.get("params") or {},
+        inputs=params or {},
         call_record_rel=None,
         call_record_abs=None,
         error=None,
-        content_lineage=[],
+        content_lineage=content_lineage or [],
         tool_call_id=tool_call_id,
         artifact_stats=None,
     )
