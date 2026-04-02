@@ -65,6 +65,13 @@ Current behavior:
   - runtime folders like `logs/` are part of OUT_DIR but are not part of the turn-versioned file namespace
   - `ks:` is not inside OUT_DIR at all; it is a bundle-owned read-only virtual space
 
+Alternate prompt mode (`RuntimeCtx.workspace_model="git_pull"`):
+- older `fi:<turn_id>...` snapshot content is treated as logical first, not assumed local
+- the agent is taught to call `react.pull(paths=[...])` before code/execution needs local files
+- `fi:<turn_id>.files/<scope-or-subtree>` may be pulled as a subtree
+- `fi:<turn_id>.user.attachments/<name>` may be pulled only as an exact file ref
+- folder pulls do not imply hosted binaries; binary files must be named point-wise
+
 ### Knowledge space and exec-time path resolution
 
 `ks:` is readable by logical path, for example `react.read(["ks:<bundle-defined-path>"])`.
@@ -181,6 +188,9 @@ Other logical paths (`ar:`, `tc:`, `so:`) resolve from timeline state and are no
 Workspace/read-write summary:
 - `react.write`, `react.patch`, rendering tools, and exec outputs write to the current turn file namespace.
 - `react.read` can load any readable OUT_DIR file through `fi:...`.
+- `react.pull` materializes selected `fi:` snapshot refs locally under OUT_DIR for later exec/code use.
+- in `git_pull` mode, `react.pull` is the explicit way to activate older versioned workspace slices before execution
+- `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; attachment/binary pulls must be exact file refs
 - `react.search_files` can search all of OUT_DIR and returns `logical_path` for OUT_DIR hits so the agent can immediately call `react.read`.
 - workdir is searchable but is still not a general-purpose readable namespace for `react.read`.
 

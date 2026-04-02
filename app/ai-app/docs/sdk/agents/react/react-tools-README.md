@@ -3,7 +3,7 @@ id: ks:docs/sdk/agents/react/react-tools-README.md
 title: "React Tools"
 summary: "React‑only tools catalog injected into the decision runtime."
 tags: ["sdk", "agents", "react", "tools"]
-keywords: ["react.read", "react.write", "react.search_files", "react.memsearch", "react.search_knowledge"]
+keywords: ["react.read", "react.pull", "react.write", "react.search_files", "react.memsearch", "react.search_knowledge"]
 see_also:
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
   - ks:docs/sdk/agents/react/event-blocks-README.md
@@ -30,6 +30,7 @@ Common behaviors
 Data spaces (quick guide)
 - Knowledge Space (`ks:`): read-only reference files prepared by the system (docs, indexes, repos).
 - OUT_DIR (`fi:`): per‑turn output artifacts (read/write during the turn).
+- Versioned snapshot refs (`fi:<turn_id>...`): historical artifacts and workspace slices.
 - Conversation Workspace (future): shared writable workspace across turns (not implemented yet).
 
 Accepted path families (built-in react tools)
@@ -40,6 +41,9 @@ Accepted path families (built-in react tools)
   - `su:...`
   - `tc:...`
   - bundle-provided logical namespaces such as `ks:...` when the active bundle supports them
+- `react.pull` accepts logical `fi:` paths only:
+  - `fi:<turn_id>.files/<path-or-subtree>` for versioned files/workspace slices
+  - `fi:<turn_id>.user.attachments/<file>` or legacy `fi:<turn_id>.attachments/<file>` for exact attachment/binary pulls
 - `react.file`, `react.patch`, and `react.stream` accept OUT_DIR-relative file targets under the current turn's `files/` area. They do not accept logical `fi:` paths.
 - `react.search_files` accepts only rooted search prefixes:
   - `outdir`
@@ -75,6 +79,28 @@ Behavior by path:
 Example result (simplified):
 ```json
 { "type": "react.tool.result", "path": "ar:turn_123.artifacts.notes", "mime": "text/markdown", "text": "..." }
+```
+
+react.pull
+- Purpose: materialize selected `fi:` snapshot refs locally under OUT_DIR so code/execution can use them by physical path.
+- Use this when `fi:` data must exist as a local file, not just as visible timeline content.
+- Path contract:
+  - `fi:<turn_id>.files/<path>` may be an exact file or a subtree/prefix.
+  - `fi:<turn_id>.user.attachments/<file>` and legacy `fi:<turn_id>.attachments/<file>` must be exact file refs.
+- Binary rule:
+  - folder pulls do not imply hosted binaries/attachments under that subtree
+  - if you need a binary file, name that exact `fi:` file in `paths`
+- Result:
+  - `pulled[]` rows contain `logical_path`, `physical_path`, and `kind`
+  - those `physical_path` values are OUT_DIR-relative local paths you can use in exec code
+Example result (simplified):
+```json
+{
+  "type": "react.tool.result",
+  "path": "tc:turn_123.abc.result",
+  "mime": "application/json",
+  "text": "{ \"pulled\": [{\"logical_path\": \"fi:turn_120.files/projectA/src/app.py\", \"physical_path\": \"turn_120/files/projectA/src/app.py\", \"kind\": \"files\"}] }"
+}
 ```
 
 react.stream

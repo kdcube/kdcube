@@ -148,6 +148,16 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
   - `logical_path` for OUT_DIR hits, suitable for `react.read`
 - This is the bridge from filesystem discovery to content loading.
 
+**react.pull**
+- Accepts `fi:` refs only.
+- For `fi:<turn>.files/<prefix>` folder pulls, the current implementation does **not** scan all hosted storage.
+- It inspects artifact metadata for the referenced turn from timeline/turn-log state, expands the matching descendants, and fetches only the exact matched blobs.
+- Folder pulls currently imply:
+  - textual/tree content backed by turn artifacts
+  - no implicit hosted-binary descendants
+- Hosted binaries are allowed only by exact logical ref, for example:
+  - `fi:<turn>.user.attachments/template.xlsx`
+
 **bundle_data.resolve_namespace** (bundle-defined, exec-only)
 - Not a general artifact-discovery tool.
 - Not driven by timeline blocks.

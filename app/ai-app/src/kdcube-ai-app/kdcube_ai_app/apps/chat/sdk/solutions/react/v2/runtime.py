@@ -520,6 +520,7 @@ class ReactSolverV2:
         else:
             react_tool_ids = {
                 "react.read",
+                "react.pull",
                 "react.write",
                 "react.plan",
                 "react.hide",
@@ -536,6 +537,7 @@ class ReactSolverV2:
         allowed_params: set[str] = set()
         if tool_id in {
             "react.read",
+            "react.pull",
             "react.write",
             "react.plan",
             "react.hide",
@@ -544,6 +546,8 @@ class ReactSolverV2:
             "react.search_files",
         }:
             if tool_id == "react.read":
+                allowed_params.update({"paths"})
+            elif tool_id == "react.pull":
                 allowed_params.update({"paths"})
             elif tool_id == "react.plan":
                 allowed_params.update({"mode", "steps", "plan_id"})
@@ -916,10 +920,12 @@ class ReactSolverV2:
             if exec_streamer_widget is not None:
                 subs = subs.subscribe("ReactDecisionOutV2", exec_streamer_widget.feed_json)
                 subs = subs.subscribe("code", exec_streamer_widget.feed_code)
+            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
             return await react_decision_stream_v2(
                 svc=self.svc,
                 adapters=announced_adapters,
                 infra_adapters=extra_adapters_for_decision,
+                workspace_model=getattr(runtime_ctx, "workspace_model", "legacy") if runtime_ctx else "legacy",
                 on_progress_delta=mainstream,
                 subscribers=subs,
                 agent_name=role,
@@ -938,6 +944,7 @@ class ReactSolverV2:
             system_text_fn=lambda: build_decision_system_text(
                 adapters=announced_adapters,
                 infra_adapters=extra_adapters_for_decision,
+                workspace_model=getattr(getattr(self.ctx_browser, "runtime_ctx", None), "workspace_model", "legacy"),
             ),
             render_params=render_params,
             agent_fn=_decision_agent,

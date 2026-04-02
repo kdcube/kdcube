@@ -311,6 +311,48 @@ async def read_artifact_for_react(
         "missing": False,
     }
 
+
+async def resolve_logical_artifact(
+        *,
+        ctx_browser: Any,
+        path: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Resolve a logical artifact path from the live timeline first, then from the
+    historical turn log if needed.
+    """
+    raw_path = str(path or "").strip()
+    if not raw_path:
+        return None
+    try:
+        artifact = ctx_browser.timeline.resolve_artifact(raw_path)
+        if isinstance(artifact, dict):
+            return artifact
+    except Exception:
+        pass
+
+    if not raw_path.startswith("fi:"):
+        return None
+    tid = ""
+    p = raw_path[len("fi:"):]
+    if ".files/" in p:
+        tid = p.split(".files/", 1)[0]
+    elif ".user.attachments/" in p:
+        tid = p.split(".user.attachments/", 1)[0]
+    elif ".attachments/" in p:
+        tid = p.split(".attachments/", 1)[0]
+    if not tid:
+        return None
+    try:
+        turn_log = await ctx_browser.get_turn_log(turn_id=tid)
+    except Exception:
+        turn_log = {}
+    contrib_log = (turn_log.get("blocks") or []) if isinstance(turn_log, dict) else []
+    if not contrib_log:
+        return None
+    artifact = resolve_artifact_from_timeline({"blocks": contrib_log, "sources_pool": []}, raw_path)
+    return artifact if isinstance(artifact, dict) else None
+
 async def rehost_files_from_timeline(
         *,
         ctx_browser: Any,

@@ -29,7 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     ELABORATION_NO_CLARIFY,
     CITATION_TOKENS,
     USER_GENDER_ASSUMPTIONS,
-    WORKSPACE_MODEL_GUIDE,
+    get_workspace_model_guide,
     SCENARIO_FAILURE_STRICTNESS,
     PATHS_EXTENDED_GUIDE,
     INTERNAL_NOTES_PRODUCER,
@@ -195,7 +195,9 @@ def build_decision_system_text(
     *,
     adapters: List[Dict[str, Any]],
     infra_adapters: Optional[List[Dict[str, Any]]] = None,
+    workspace_model: str = "legacy",
 ) -> str:
+    workspace_model_guide = get_workspace_model_guide(workspace_model)
     json_hint = (
         "{\n"
         "  \"action\": \"call_tool | complete | exit\",\n"
@@ -286,7 +288,7 @@ You are the Decision module inside a ReAct loop.
 {ELABORATION_NO_CLARIFY}
 {CITATION_TOKENS}
 {SUGGESTED_FOLLOWUPS_GUIDE}
-{WORKSPACE_MODEL_GUIDE}
+{workspace_model_guide}
 {SCENARIO_FAILURE_STRICTNESS}
 {PATHS_EXTENDED_GUIDE}
 {USER_GENDER_ASSUMPTIONS}
@@ -550,6 +552,7 @@ async def react_decision_stream_v2(
     agent_name: str,
     adapters: List[Dict[str, Any]],
     infra_adapters: Optional[List[Dict[str, Any]]] = None,
+    workspace_model: str = "legacy",
     on_progress_delta=None,
     subscribers: Optional[Dict[str, List[Any]]] = None,
     max_tokens: int = 6000,
@@ -558,6 +561,7 @@ async def react_decision_stream_v2(
     system_text = build_decision_system_text(
         adapters=adapters,
         infra_adapters=infra_adapters,
+        workspace_model=workspace_model,
     )
     system_msg = create_cached_system_message([
         {"text": system_text, "cache": True},

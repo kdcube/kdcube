@@ -158,6 +158,8 @@ class ReactRound:
         ctx_browser = react.ctx_browser
         if tool_id == "react.read":
             return await react_tools.handle_react_read(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
+        if tool_id == "react.pull":
+            return await react_tools.handle_react_pull(ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
         if tool_id == "react.patch":
             return await react_tools.handle_react_patch(react=react, ctx_browser=ctx_browser, state=state, tool_call_id=tool_call_id)
         if tool_id == "react.memsearch":

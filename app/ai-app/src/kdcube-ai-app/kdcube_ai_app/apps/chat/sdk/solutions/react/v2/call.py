@@ -7,6 +7,7 @@ from typing import Dict, Any, List
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools import (
     READ_SPEC,
+    PULL_SPEC,
     WRITE_SPEC,
     PATCH_SPEC,
     MEMSEARCH_SPEC,
@@ -14,6 +15,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools import (
     SEARCH_FILES_SPEC,
     PLAN_SPEC,
     handle_react_read,
+    handle_react_pull,
     handle_react_write,
     handle_react_patch,
     handle_react_memsearch,
@@ -27,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools import (
 def get_react_tools_catalog() -> List[Dict[str, object]]:
     return [
         READ_SPEC,
+        PULL_SPEC,
         WRITE_SPEC,
         PATCH_SPEC,
         MEMSEARCH_SPEC,
@@ -39,6 +42,7 @@ def get_react_tools_catalog() -> List[Dict[str, object]]:
 __all__ = [
     "get_react_tools_catalog",
     "handle_react_read",
+    "handle_react_pull",
     "handle_react_write",
     "handle_react_patch",
     "handle_react_memsearch",

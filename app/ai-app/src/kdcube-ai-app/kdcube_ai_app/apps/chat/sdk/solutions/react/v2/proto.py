@@ -96,6 +96,7 @@ class RuntimeCtx:
     workdir: Optional[str] = None
     outdir: Optional[str] = None
     bundle_storage: Optional[str] = None
+    workspace_git_repo: Optional[str] = None
     exec_runtime: Dict[str, Any] = field(default_factory=dict)
     # Expected signature:
     #   (query: str, root: str = "", max_hits: int = 20, keywords: Optional[List[str]] = None, **kwargs) -> List[Dict]
@@ -114,6 +115,7 @@ class RuntimeCtx:
     debug_log_sources_pool: bool = False
     debug_timeline: bool = False # if set, dump the timeline rendered view on render() to  rendered-YYYYMMDD-HHMMSS-<turn_id>-src|nosrc-ann|noann.txt
     announce_mode: str = "full"  # "full" or "budget"
+    workspace_model: str = "legacy"  # "legacy" or "git_pull"
     render_decision_raw: bool = False
     render_react_state: bool = False
     render_react_exit: bool = False
@@ -148,11 +150,13 @@ class RuntimeCtx:
             "workdir": self.workdir,
             "outdir": self.outdir,
             "bundle_storage": self.bundle_storage,
+            "workspace_git_repo": self.workspace_git_repo,
             "exec_runtime": copy.deepcopy(self.exec_runtime or {}),
             "started_at": self.started_at,
             "debug_log_announce": bool(self.debug_log_announce),
             "debug_log_sources_pool": bool(self.debug_log_sources_pool),
             "announce_mode": self.announce_mode,
+            "workspace_model": self.workspace_model,
             "render_decision_raw": bool(self.render_decision_raw),
             "render_react_state": bool(self.render_react_state),
             "render_react_exit": bool(self.render_react_exit),
