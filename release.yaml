@@ -1,27 +1,33 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.3.01.259"
+  ref: "2026.4.02.357"
   description: |
-    This release focuses on bundle frontend integration, shared bundle state, and more reliable
-    bundle-aware conversation APIs.
+    This release focuses on bundle platform ergonomics, declarative bundle interfaces, and the
+    versatile reference bundle as the primary end-to-end example for bundle authors.
 
-    The platform now supports loading bundle-provided frontend surfaces more directly, including a
-    separate entrypoint for a bundle main index page and the custom bundle UI loader used by the
-    new frontend work. The versatile reference bundle was expanded accordingly and now demonstrates
-    a real widget wired through the integrations operations API, including request-context-aware
-    widget patching, an editable collaborative preferences canvas, and an exec-backed report action.
+    The platform now supports declarative bundle interface metadata through bundle entrypoint
+    decorators. Bundles can describe API methods, widgets, message entrypoints, and UI surfaces in
+    code, and the integrations controller can expose bundle manifests, widgets, and API operations
+    from that metadata while remaining backward compatible with legacy method lookup.
 
-    Durable user preference data in the versatile bundle now lives in shared bundle storage via
-    `AIBundleStorage` instead of the local bundle filesystem. That makes preference capture, canvas
-    editing, and bundle-local preference tools compatible with distributed deployment.
+    Bundle runtime and client communication were also clarified and improved. The processor now
+    accepts a configurable stream-id header so REST-originated bundle operations can target a
+    specific connected peer instead of only broadcasting to the whole session. Runtime bootstrap for
+    bundle tools was standardized across in-process and isolated execution, and the SDK docs now
+    explain communicator usage, SSE/Socket.IO delivery semantics, headers, cookies, and bundle
+    client integration much more explicitly.
 
-    Bundle builder documentation was also strengthened. The bundle platform integration design is
-    now documented explicitly, the versatile bundle is positioned as the primary full-feature
-    reference bundle, and `react.doc` was further tuned as a bundle-authoring copilot.
+    The versatile reference bundle was expanded substantially. It now demonstrates shared
+    bundle-storage-backed user preferences, a much simpler notebook-style collaborative preferences
+    widget, Excel import/export, exec-backed report generation, downloadable report payloads, bundle
+    props and secrets usage, built-in web tools, and stronger preference-memory guidance for agent
+    behavior. The reference widget and tool tests were moved into the bundle itself, and the SDK now
+    includes a runner that combines the shared bundle harness with bundle-local tests.
 
-    On the API side, conversation routes no longer infer a default bundle id when the caller did
-    not provide one. Instead, bundle identity is inferred from stored conversation data, which is
-    the correct behavior for tenant-unique conversations and cross-bundle fetch/detail/feedback
-    flows.
+    Bundle delivery and UI loading were also hardened. Static bundle UI can now build on first
+    request, bundle-specific frontend code receives the resolved bundle id during build, and bundle
+    operations routes support both explicit bundle-id paths and the backward-compatible default form.
+    Git-backed bundle synchronization is now stricter for both exact refs and branch refs, avoiding
+    invalid detached-HEAD pull behavior and making fetch/reset failures fatal.
 config:
-    version: "2026.3.01.259"
+    version: "2026.4.02.357"
