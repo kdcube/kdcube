@@ -102,13 +102,17 @@ During code execution round you structure your output in 3 channels as schematic
 - `exec_tools.execute_code_python` `contract` (file artifacts to produce) and prog_name.
 - Required params: `contract`, `prog_name` (optional: `timeout_s`).
 - `contract` entries MUST include `filename`, `description`.
+- `contract` entries MAY additionally include `visibility` with value `external` or `internal`.
+- If `visibility` is omitted, it defaults to `external`.
 - `filename` MUST be **relative to OUTPUT_DIR** and MUST be nested under the current turn folder:
   `"<turn_id>/files/<path>"` (you choose `<path>`).
 - `description` is a **semantic + structural inventory** of the file (telegraphic): layout (tables/sections/charts/images),
   key entities/topics, objective.
 - Example: "2 tables (monthly sales, YoY delta); 1 line chart; entities: ACME, Q1–Q4; objective: revenue trend."
+- Use `visibility=external` for files the user should receive as produced artifacts.
+- Use `visibility=internal` for agent/runtime-only files that should remain in OUT_DIR/timeline but should NOT be shared to the user.
 - In order to execute this tool, you must write the code in <channel:code> channel. Then it will be executed by exec tool. The code execution must produce the files you defined in contract.
-  You will see these files in the context after execution of the tool, for binary files you will see their metadata and the evidence if they were created.  
+  You will see these files in the context after execution of the tool; `internal` files remain agent-visible, while only `external` files are user-shareable. For binary files you will see their metadata and the evidence if they were created.
 - Do NOT rely on stdout/stderr for full results. The agent only gets `Program log (tail)`, not the full user log.
 - Put the authoritative result into contracted files.
 - If the result may be large, split it into multiple contracted files instead of one giant dump.

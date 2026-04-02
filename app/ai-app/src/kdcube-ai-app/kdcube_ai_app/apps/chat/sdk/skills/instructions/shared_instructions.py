@@ -414,6 +414,9 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
   - `rendering_tools.write_pdf(path="turn_<id>/files/report.pdf", content=...)`
 - exec code uses PHYSICAL OUTPUT_DIR-relative paths:
   - `Path(OUTPUT_DIR) / "<turn_id>/files/report.pdf"`
+- Exec contract files may declare optional `visibility="external"|"internal"`:
+  - `external` (default): user-shareable produced artifact
+  - `internal`: agent/runtime-only file kept in OUT_DIR/timeline, not sent to the user
 - If `react.search_files` returns `logical_path`, prefer that for react.read.
 
 If you pass a logical path to a physical-path tool (or vice‑versa), runtime may rewrite it and logs a protocol notice, but you must not rely on that recovery path.
