@@ -164,6 +164,7 @@ class Settings(BaseSettings):
     REDIS_DB: int = Field(default=0)
 
     STORAGE_PATH: str | None = Field(default=None, alias="KDCUBE_STORAGE_PATH")
+    REACT_WORKSPACE_IMPLEMENTATION: str = Field(default="custom")
     REACT_WORKSPACE_GIT_REPO: str | None = None
 
     TENANT: str = Field(default="home", alias="TENANT_ID")
@@ -272,7 +273,7 @@ class Settings(BaseSettings):
         if not self.GIT_HTTP_TOKEN:
             self.GIT_HTTP_TOKEN = _fetch_secret("services.git.http_token") or _fetch_secret("GIT_HTTP_TOKEN")
         if not self.GIT_HTTP_USER and self.GIT_HTTP_TOKEN:
-            self.GIT_HTTP_USER = _fetch_secret("services.git.http_user") or _fetch_secret("GIT_HTTP_USER") or "x-access-token"
+            self.GIT_HTTP_USER = _fetch_secret("services.git.http_user") or "x-access-token"
         if not self.OPENROUTER_API_KEY:
             self.OPENROUTER_API_KEY = _fetch_secret("services.openrouter.api_key") or _fetch_secret("OPENROUTER_API_KEY")
         if not self.OPENROUTER_BASE_URL:

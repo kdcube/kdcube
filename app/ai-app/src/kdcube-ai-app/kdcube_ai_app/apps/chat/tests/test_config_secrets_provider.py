@@ -6,6 +6,7 @@ class _FakeSecretsManager:
         values = {
             "services.openai.api_key": "sk-openai-test",
             "services.anthropic.api_key": "sk-anthropic-test",
+            "services.git.http_token": "gh-token-test",
         }
         return values.get(key)
 
@@ -25,3 +26,5 @@ def test_settings_reads_secrets_through_provider(monkeypatch):
     assert settings.OPENAI_API_KEY == "sk-openai-test"
     assert settings.ANTHROPIC_API_KEY == "sk-anthropic-test"
     assert settings.secret("services.openai.api_key") == "sk-openai-test"
+    assert settings.GIT_HTTP_TOKEN == "gh-token-test"
+    assert settings.GIT_HTTP_USER == "x-access-token"
