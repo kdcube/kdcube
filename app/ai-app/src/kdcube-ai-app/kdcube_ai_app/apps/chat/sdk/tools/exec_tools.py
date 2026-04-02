@@ -32,7 +32,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
-from kdcube_ai_app.apps.chat.sdk.util import guess_mime_type
+from kdcube_ai_app.apps.chat.sdk.util import guess_mime_type, normalize_artifact_visibility
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 try:
@@ -151,6 +151,12 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
                 "code": "invalid_artifact_spec",
                 "message": "Each artifact requires filename and description",
             }
+        visibility = normalize_artifact_visibility(item.get("visibility"), default="")
+        if item.get("visibility") is not None and not visibility:
+            return None, {
+                "code": "invalid_artifact_spec",
+                "message": "visibility must be either 'external' or 'internal'",
+            }
         safe_filename = _safe_relpath(filename)
         if not safe_filename:
             return None, {
@@ -187,6 +193,7 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
                 "filename": safe_filename,
                 "mime": mime,
                 "description": description,
+                "visibility": visibility or "external",
             }
         )
     if not normalized:
@@ -258,6 +265,12 @@ def normalize_exec_contract_for_turn(
                 "code": "invalid_artifact_spec",
                 "message": "Each artifact requires filename and description",
             }
+        visibility = normalize_artifact_visibility(item.get("visibility"), default="")
+        if item.get("visibility") is not None and not visibility:
+            return None, [], {
+                "code": "invalid_artifact_spec",
+                "message": "visibility must be either 'external' or 'internal'",
+            }
         if "/attachments/" in filename or filename.startswith("attachments/") or filename.startswith(f"{turn_id}/attachments/"):
             return None, [], {
                 "code": "invalid_filename",
@@ -279,7 +292,13 @@ def normalize_exec_contract_for_turn(
             rewrites.append({"original": filename, "rewritten": rewritten})
             filename = rewritten
 
-        updated.append({"filename": filename, "description": description})
+        updated.append(
+            {
+                "filename": filename,
+                "description": description,
+                "visibility": visibility or "external",
+            }
+        )
 
     normalized, err = _normalize_artifacts_spec(updated)
     if err:
@@ -341,6 +360,7 @@ def build_exec_output_contract(
             "filename": a["filename"],
             "mime": a["mime"],
             "description": a["description"],
+            "visibility": a.get("visibility") or "external",
         }
     return contract, normalized, None
 
@@ -457,6 +477,7 @@ class ExecTools:
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
             "   - filename (OUTPUT_DIR‑relative; MUST start with turn_<id>/files/)\n"
             "   - description (what this file contains / why it was produced)\n"
+            "   - visibility (optional: `external` or `internal`; default `external`)\n"
             "   These are outputs of this program that it promises to produce.\n"
             "2) `prog_name` (string, optional): short name of the program for UI labeling.\n"
             "\n"
@@ -506,7 +527,7 @@ class ExecTools:
     )
     async def execute_code_python(
         self,
-        contract: Annotated[Any, "List or JSON string of artifact specs (filename, description) that you plan your future code to produce."],
+        contract: Annotated[Any, "List or JSON string of artifact specs (filename, description, optional visibility=external|internal) that you plan your future code to produce."],
         prog_name: Annotated[Optional[str], "Short name of the program for UI labeling."] = None,
         timeout_s: Annotated[Optional[int], "Execution timeout seconds (default: 600)."] = None,
     ) -> Annotated[dict, "Envelope: ok/out_dyn/out/error/summary."]:
@@ -738,6 +759,7 @@ async def run_exec_tool(
             "mime": a["mime"],
             "text": text_content if is_text else "",
             "description": a["description"],
+            "visibility": a.get("visibility") or "external",
             "size_bytes": stats.get("size_bytes") if isinstance(stats, dict) else None,
             "write_warning": stats.get("write_warning") if isinstance(stats, dict) else None,
         }
@@ -888,6 +910,7 @@ async def run_exec_tool(
                 "artifact_kind": artifact.get("type") or "file",
                 "summary": "",
                 "filepath": artifact.get("path") or "",
+                "visibility": artifact.get("visibility") or "external",
             })
     except Exception:
         items_list = []
@@ -928,6 +951,7 @@ async def run_exec_tool(
             "mime": artifact.get("mime"),
             "format": artifact.get("format"),
             "description": artifact.get("description"),
+            "visibility": artifact.get("visibility") or "external",
             "sources_used": artifact.get("sources_used"),
             "draft": artifact.get("draft"),
         }

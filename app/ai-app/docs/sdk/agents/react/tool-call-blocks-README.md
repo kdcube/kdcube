@@ -203,6 +203,9 @@ Exec tools produce:
 - Per‑file blocks **only for produced artifacts** (meta + optional binary/text).
 - For **text files**, exec will embed up to **20 KB** of file content in the content block
   (larger files are truncated with a `...[truncated]` suffix).
+- Each contracted output may optionally declare `visibility=external|internal`.
+  - `external` is the default and is user-shareable.
+  - `internal` remains agent-visible in timeline/OUT_DIR but is not hosted or sent to the user.
 
 ### How the model *sees* file blocks (rendered)
 

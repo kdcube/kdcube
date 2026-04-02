@@ -42,6 +42,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.sources import (
 )
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.tools.content_type import is_text_mime_type
+from kdcube_ai_app.apps.chat.sdk.util import normalize_artifact_visibility
 
 
 def _format_sources_pool_path(sids: List[int]) -> str:
@@ -469,6 +470,11 @@ async def handle_external_tool(*,
         if tools_insights.is_search_tool(tool_id) or tools_insights.is_fetch_uri_content_tool(tool_id):
             artifact_kind = "file"
         visibility = "external" if (tools_insights.is_write_tool(tool_id) or tools_insights.is_exec_tool(tool_id)) else "internal"
+        if tools_insights.is_exec_tool(tool_id):
+            candidate_visibility = tr.get("visibility")
+            if candidate_visibility is None and isinstance(output, dict):
+                candidate_visibility = output.get("visibility")
+            visibility = normalize_artifact_visibility(candidate_visibility, default="external")
         summary = tr.get("summary") or ""
         tr_error = _strip_managed(tr.get("error")) if tr.get("error") else None
 
@@ -624,7 +630,8 @@ async def handle_external_tool(*,
 
         phys_path = ""
         rel_path = ""
-        if visibility == "external":
+        should_resolve_file_path = visibility == "external" or tools_insights.is_exec_tool(tool_id)
+        if should_resolve_file_path:
             if phys_path_override or rel_path_override:
                 phys_path = phys_path_override
                 rel_path = rel_path_override
@@ -656,12 +663,13 @@ async def handle_external_tool(*,
                             message="Artifact path contained a turn/files prefix; rewritten to current-turn relative path.",
                             extra={"original": original_path, "normalized": phys_path},
                         )
+        expose_internal_exec_file = bool(tools_insights.is_exec_tool(tool_id) and visibility == "internal" and phys_path)
         artifact_path = (
             physical_path_to_logical_path(phys_path)
-            if (phys_path and visibility == "external")
+            if (phys_path and (visibility == "external" or expose_internal_exec_file))
             else tc_result_path(turn_id=turn_id, call_id=tool_call_id)
         )
-        physical_path = phys_path if (phys_path and visibility == "external") else ""
+        physical_path = phys_path if (phys_path and (visibility == "external" or expose_internal_exec_file)) else ""
         if tools_insights.is_search_tool(tool_id) or tools_insights.is_fetch_uri_content_tool(tool_id):
             try:
                 sids = remapped_source_sids

@@ -12,6 +12,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     _build_exec_error_payload,
     _build_exec_loader_wrapper,
     _normalize_artifacts_spec,
+    build_exec_output_contract,
     run_exec_tool,
 )
 
@@ -120,6 +121,58 @@ def test_normalize_artifacts_spec_marks_markdown_as_text():
     assert err is None
     assert artifacts is not None
     assert artifacts[0]["mime"] == "text/markdown"
+
+
+def test_build_exec_output_contract_preserves_visibility_and_defaults_external():
+    contract, normalized, err = build_exec_output_contract([
+        {
+            "filename": "turn_1/files/public.md",
+            "description": "User-visible report.",
+        },
+        {
+            "filename": "turn_1/files/internal.json",
+            "description": "Agent-only scratch output.",
+            "visibility": "internal",
+        },
+    ])
+
+    assert err is None
+    assert normalized is not None
+    assert normalized[0]["visibility"] == "external"
+    assert normalized[1]["visibility"] == "internal"
+    assert contract == {
+        "public": {
+            "type": "file",
+            "filename": "turn_1/files/public.md",
+            "mime": "text/markdown",
+            "description": "User-visible report.",
+            "visibility": "external",
+        },
+        "internal": {
+            "type": "file",
+            "filename": "turn_1/files/internal.json",
+            "mime": "application/json",
+            "description": "Agent-only scratch output.",
+            "visibility": "internal",
+        },
+    }
+
+
+def test_build_exec_output_contract_rejects_invalid_visibility():
+    contract, normalized, err = build_exec_output_contract([
+        {
+            "filename": "turn_1/files/public.md",
+            "description": "User-visible report.",
+            "visibility": "public",
+        },
+    ])
+
+    assert contract is None
+    assert normalized is None
+    assert err == {
+        "code": "invalid_artifact_spec",
+        "message": "visibility must be either 'external' or 'internal'",
+    }
 
 
 @pytest.mark.asyncio

@@ -59,6 +59,13 @@ def guess_mime_type(path: str, content: Optional[bytes] = None, default: str = "
     ext = pathlib.Path(path).suffix.lower().lstrip(".")
     return FALLBACK_MIME_BY_EXT.get(ext, default)
 
+
+def normalize_artifact_visibility(value: Any, *, default: str = "internal") -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"external", "internal"}:
+        return raw
+    return default
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 

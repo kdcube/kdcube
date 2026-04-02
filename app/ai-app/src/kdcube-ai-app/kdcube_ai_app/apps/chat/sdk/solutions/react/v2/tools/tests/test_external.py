@@ -19,6 +19,29 @@ class _FakeExecStreamer:
         self._code = code
 
 
+class _HostingRecorder:
+    def __init__(self):
+        self.host_calls = []
+        self.emit_calls = []
+
+    async def host_files_to_conversation(self, **kwargs):
+        self.host_calls.append(kwargs)
+        files = kwargs.get("files") or []
+        if not files:
+            return []
+        artifact = files[0]
+        value = artifact.get("value") if isinstance(artifact.get("value"), dict) else {}
+        return [{
+            "rn": "ef:test:artifact:secret.txt",
+            "hosted_uri": "s3://bucket/secret.txt",
+            "key": "artifact/secret.txt",
+            "physical_path": value.get("path") or "",
+        }]
+
+    async def emit_solver_artifacts(self, *, files, citations):
+        self.emit_calls.append({"files": files, "citations": citations})
+
+
 @pytest.mark.asyncio
 async def test_external_exec_path_rewrite_notice(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
@@ -85,5 +108,80 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
     )
     assert not any(
         b.get("type") == "react.notice" and "path_rewritten" in (b.get("text") or "")
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_exec_internal_file_is_not_hosted_but_keeps_file_path(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/secret.txt",
+                        "description": "Agent-only output.",
+                        "visibility": "internal",
+                    }],
+                    "prog_name": "secret_exec",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer("print('ok')"),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        target = tmp_path / "turn_exec" / "files" / "secret.txt"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("top secret\n", encoding="utf-8")
+        return {
+            "items": [{
+                "artifact_id": "secret",
+                "output": {
+                    "type": "file",
+                    "path": "turn_exec/files/secret.txt",
+                    "filename": "secret.txt",
+                    "mime": "text/plain",
+                    "text": "top secret\n",
+                    "description": "Agent-only output.",
+                    "visibility": "internal",
+                },
+                "artifact_kind": "file",
+                "summary": "",
+                "filepath": "turn_exec/files/secret.txt",
+                "visibility": "internal",
+            }]
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting)
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e3")
+
+    assert hosting.host_calls == []
+    assert hosting.emit_calls == []
+    meta_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result"
+        and b.get("path") == "tc:turn_exec.e3.result"
+        and (b.get("mime") or "").strip() == "application/json"
+    ]
+    assert meta_blocks
+    meta_text = meta_blocks[-1].get("text") or ""
+    assert "\"visibility\": \"internal\"" in meta_text
+    assert "\"artifact_path\": \"fi:turn_exec.files/secret.txt\"" in meta_text
+    assert "\"physical_path\": \"turn_exec/files/secret.txt\"" in meta_text
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.files/secret.txt"
+        and (b.get("text") or "") == "top secret\n"
         for b in ctx.timeline.blocks
     )

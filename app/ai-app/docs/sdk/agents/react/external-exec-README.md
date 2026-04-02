@@ -66,6 +66,10 @@ Current public contract:
 - `contract` is required
 - `contract` must be a non-empty list (or JSON string) of files to produce
 - each contract file must live under `turn_<id>/files/...`
+- each contract item supports:
+  - `filename`
+  - `description`
+  - optional `visibility` = `external|internal` (default: `external`)
 
 Important current limitation:
 
@@ -105,6 +109,16 @@ So even in the normal file-producing mode, the agent already receives a hybrid r
 - plus log/diagnostic text from the execution
 
 That means the tool is not "files only". It is "contracted files, with logs folded into the textual result".
+
+Visibility rules for contracted files:
+
+- `visibility=external`
+  - eligible for hosting / RN emission
+  - shown to the user as a produced file artifact
+- `visibility=internal`
+  - kept in OUT_DIR and timeline for agent/runtime use
+  - not hosted
+  - not emitted to the user as a file attachment
 
 ### Exactly how the agent should write code if it wants logs to appear
 

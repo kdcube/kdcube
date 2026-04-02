@@ -100,6 +100,7 @@ These are **not interchangeable**; UI expects `rn` for downloads.
 - `visibility=internal`: stored only for agent use
   - Internal notes written via `react.write(channel="internal")` are stored as `react.note` blocks.
   - Files created with `kind=file` are **not hosted** (they remain in OUT_DIR and the timeline).
+  - Exec contract files may explicitly request `visibility=internal` to keep the output agent-only.
 
 ## Kind
 - `kind=file`: normal file artifact
