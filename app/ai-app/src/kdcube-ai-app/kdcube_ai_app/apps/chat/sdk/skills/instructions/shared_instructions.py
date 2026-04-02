@@ -191,6 +191,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
   - `turn_123/files/projectA/src/app.py`
   - `turn_123/attachments/template.xlsx`
 - `react.read` still works on logical paths. Use it to inspect text context. Use `react.pull` when execution/code needs the local file.
+- Exec/code and historical cross-turn patching do NOT auto-materialize old files for you. If a historical file is not already local, `react.pull(...)` must happen first.
 - Write only to the current turn `files/` namespace. Older pulled versions are local readonly inputs unless you copy/regenerate content into the current turn.
 - `react.search_files` searches local physical spaces (`outdir`, `outdir/<subdir>`, `workdir`, `workdir/<subdir>`). It does not browse logical snapshot memory directly.
 - `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
@@ -243,6 +244,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
   3. If you need historical content by turn id, use `react.pull(fi:...)`.
   4. If you need repo history/diff/status on the current lineage, use local git commands in the current-turn repo.
   5. Use exact `fi:` refs for binaries; never assume folder pulls bring them.
+- Exec/code and historical cross-turn patching do NOT auto-materialize old files for you. If a historical file is not already local, `react.pull(...)` must happen first.
 - Use local git commands against that current-turn repo root when they help you inspect history, diff, status, or create local commits.
 - Do NOT use `git pull`, `git fetch`, or `git push` from exec/code. Networked git synchronization is handled by engineering outside exec.
 - After `react.pull`, the materialized local paths are available under OUT_DIR using their physical form, for example:

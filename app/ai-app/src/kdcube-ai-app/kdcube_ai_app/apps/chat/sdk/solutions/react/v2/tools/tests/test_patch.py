@@ -224,3 +224,37 @@ async def test_patch_failure_emits_result_block(tmp_path):
     payload = json.loads(json_blocks[-1]["text"])
     assert payload["ok"] is False
     assert payload["error"] == "patch_target_missing"
+
+
+@pytest.mark.asyncio
+async def test_patch_requires_pull_for_unmaterialized_historical_file(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_new", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "path": "turn_old/files/a.txt",
+                    "channel": "canvas",
+                    "patch": "new",
+                    "kind": "display",
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+    }
+
+    out = await handle_react_patch(react=FakeReact(), ctx_browser=ctx, state=state, tool_call_id="p_pull")
+
+    assert "exit_reason" not in out
+    assert "error" not in out
+    json_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"
+    ]
+    assert json_blocks
+    payload = json.loads(json_blocks[-1]["text"])
+    assert payload["ok"] is False
+    assert payload["error"] == "patch_requires_pull"
+    assert payload["logical_path"] == "fi:turn_old.files/a.txt"

@@ -185,3 +185,50 @@ async def test_external_exec_internal_file_is_not_hosted_but_keeps_file_path(mon
         and (b.get("text") or "") == "top secret\n"
         for b in ctx.timeline.blocks
     )
+
+
+@pytest.mark.asyncio
+async def test_external_exec_requires_pull_for_unmaterialized_historical_file(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/out.txt",
+                        "description": "test output",
+                    }],
+                    "prog_name": "snippet.py",
+                },
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer("print(open('turn_old/files/a.txt').read())"),
+    }
+
+    called = {"execute": False}
+
+    async def _fake_execute_tool(**kwargs):
+        called["execute"] = True
+        return {"items": []}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_pull")
+
+    assert called["execute"] is False
+    assert out.get("retry_decision") is True
+    notices = [b for b in ctx.timeline.blocks if b.get("type") == "react.notice"]
+    assert any("exec_requires_pull" in (b.get("text") or "") for b in notices)
+    result_blocks = [
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("mime") == "application/json"
+    ]
+    assert result_blocks
+    assert "pre_exec_pull_required" in (result_blocks[-1].get("text") or "")

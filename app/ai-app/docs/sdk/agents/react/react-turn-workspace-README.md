@@ -206,6 +206,7 @@ Workspace/read-write summary:
 - exact attachment pulls still come from hosted artifact storage in both modes
 - exact non-text `.files/...` refs also stay on the hosted/artifact path when timeline metadata says the file is a hosted binary artifact
 - `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; attachment/binary pulls must be exact file refs
+- exec/code and historical cross-turn patching no longer auto-materialize historical workspace files; if the file is not already local, React must `react.pull(...)` it first
 - `react.search_files` can search all of OUT_DIR and returns `logical_path` for OUT_DIR hits so the agent can immediately call `react.read`.
 - workdir is searchable but is still not a general-purpose readable namespace for `react.read`.
 

@@ -27,7 +27,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     tc_result_path,
     infer_format_from_path,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import hydrate_workspace_paths
 
 TOOL_SPEC = {
     "id": "react.patch",
@@ -156,14 +155,16 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
         if old_turn and old_turn != turn_id:
             old_abs = outdir / old_turn / "files" / old_rel
             if not old_abs.exists():
-                try:
-                    await hydrate_workspace_paths(
-                        ctx_browser=ctx_browser,
-                        paths=[original_path],
-                        outdir=outdir,
-                    )
-                except Exception:
-                    pass
+                logical_old = physical_path_to_logical_path(original_path) or original_path
+                return _fail(
+                    "patch_requires_pull",
+                    "react.patch cannot patch a historical file until it is materialized locally. Use react.pull(paths=[...]) first.",
+                    extra={
+                        "path": artifact_name,
+                        "logical_path": logical_old,
+                        "pull_hint": f"react.pull(paths={json.dumps([logical_old], ensure_ascii=False)})",
+                    },
+                )
             if old_abs.exists() and not abs_path.exists():
                 abs_path.parent.mkdir(parents=True, exist_ok=True)
                 try:

@@ -34,3 +34,5 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert "EXACT file ref" in text
     assert "binary descendants" in text
     assert "local git repo" in text
+    assert "Workspace activation is explicit" in text
+    assert "do NOT auto-materialize old files" in text

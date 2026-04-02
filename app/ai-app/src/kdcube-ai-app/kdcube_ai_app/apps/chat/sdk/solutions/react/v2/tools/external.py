@@ -31,7 +31,6 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     extract_code_file_paths,
-    hydrate_workspace_paths,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.sources import (
     ensure_rendering_assets,
@@ -293,34 +292,39 @@ async def handle_external_tool(*,
             except Exception:
                 pass
         if paths:
-            try:
-                rehost = await hydrate_workspace_paths(
+            outdir = pathlib.Path(state["outdir"])
+            missing_local = [p for p in paths if not (outdir / p).exists()]
+            if missing_local:
+                logical_missing = [physical_path_to_logical_path(p) or p for p in missing_local]
+                pull_hint = f"react.pull(paths={json.dumps(logical_missing, ensure_ascii=False)})"
+                notice_block(
                     ctx_browser=ctx_browser,
-                    paths=paths,
-                    outdir=pathlib.Path(state["outdir"]),
+                    tool_call_id=tool_call_id,
+                    code="protocol_violation.exec_requires_pull",
+                    message="Exec code referenced historical files that are not materialized locally. Use react.pull(paths=[...]) first.",
+                    extra={
+                        "missing": missing_local,
+                        "logical_missing": logical_missing,
+                        "pull_hint": pull_hint,
+                        "tool_id": tool_id,
+                    },
                 )
-                if rehost.get("missing"):
-                    notice_block(
-                        ctx_browser=ctx_browser,
-                        tool_call_id=tool_call_id,
-                        code="tool_call_error.pre_exec_missing_paths",
-                        message="Exec code referenced files that were not found in timeline.",
-                        extra={"missing": rehost.get("missing"), "tool_id": tool_id},
-                    )
-                    from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import build_tool_result_error_block
-                    add_block(ctx_browser, build_tool_result_error_block(
-                        turn_id=ctx_browser.runtime_ctx.turn_id,
-                        tool_call_id=tool_call_id,
-                        code="pre_exec_missing_paths",
-                        message="Exec code referenced files that were not found in timeline.",
-                        details={"missing": rehost.get("missing")},
-                    ))
-                    state["retry_decision"] = True
-                    state["last_tool_result"] = []
-                    state["last_tool_id"] = tool_id
-                    return state
-            except Exception:
-                pass
+                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import build_tool_result_error_block
+                add_block(ctx_browser, build_tool_result_error_block(
+                    turn_id=ctx_browser.runtime_ctx.turn_id,
+                    tool_call_id=tool_call_id,
+                    code="pre_exec_pull_required",
+                    message="Exec code referenced historical files that are not materialized locally. Use react.pull(paths=[...]) first.",
+                    details={
+                        "missing": missing_local,
+                        "logical_missing": logical_missing,
+                        "pull_hint": pull_hint,
+                    },
+                ))
+                state["retry_decision"] = True
+                state["last_tool_result"] = []
+                state["last_tool_id"] = tool_id
+                return state
 
     tool_call_block(
         ctx_browser=ctx_browser,
