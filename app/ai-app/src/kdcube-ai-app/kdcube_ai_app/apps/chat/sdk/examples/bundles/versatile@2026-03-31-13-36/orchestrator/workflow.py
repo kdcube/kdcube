@@ -209,21 +209,15 @@ class VersatileWorkflow(BaseWorkflow):
                     scratchpad.answer = answer_text
                     scratchpad.suggested_followups = list(suggested_followups or [])
                     await self.emit_suggested_followups(suggested_followups=suggested_followups)
-                    try:
-                        await self.finish_turn(scratchpad, ok=True)
-                    except Exception:
-                        pass
+                    await self.finish_turn(scratchpad, ok=True)
                     state["result"] = {
                         "answer": answer_text,
                         "suggested_followups": suggested_followups,
                     }
                     state["short_circuit"] = True
                 else:
-                    try:
-                        ok = getattr(scratchpad, "solver_status", None) != "failed"
-                        await self.finish_turn(scratchpad, ok=ok)
-                    except Exception:
-                        pass
+                    ok = getattr(scratchpad, "solver_status", None) != "failed"
+                    await self.finish_turn(scratchpad, ok=ok)
                 return state
 
             graph = StateGraph(dict)

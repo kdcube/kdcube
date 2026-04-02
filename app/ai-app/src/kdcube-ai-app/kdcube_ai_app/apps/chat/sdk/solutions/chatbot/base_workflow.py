@@ -3,6 +3,7 @@
 
 # chat/sdk/solutions/chatbot/base_workflow.py
 
+import asyncio
 import os, time, datetime, json, re
 import pathlib
 import random
@@ -709,6 +710,35 @@ class BaseWorkflow():
             "title": step_title,
             "elapsed_ms": timing_assist_persist["elapsed_ms"]
         })
+
+    async def _publish_git_workspace_if_needed(self) -> Optional[Dict[str, Any]]:
+        runtime_ctx = getattr(self, "runtime_ctx", None)
+        if runtime_ctx is None:
+            return None
+        impl = str(getattr(runtime_ctx, "workspace_implementation", "custom") or "custom").strip().lower()
+        if impl != "git":
+            return None
+        outdir_raw = str(getattr(runtime_ctx, "outdir", "") or "").strip()
+        if not outdir_raw:
+            return None
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import publish_current_turn_git_workspace
+        try:
+            return await asyncio.to_thread(
+                publish_current_turn_git_workspace,
+                runtime_ctx=runtime_ctx,
+                outdir=pathlib.Path(outdir_raw),
+                logger=self.logger,
+            )
+        except Exception as exc:
+            self.logger.log(traceback.format_exc(), level="ERROR")
+            raise TurnPhaseError(
+                "Failed to save git workspace progress.",
+                code="workspace_publish_failed",
+                data={
+                    "workspace_implementation": "git",
+                    "turn_id": str(getattr(runtime_ctx, "turn_id", "") or ""),
+                },
+            ) from exc
 
     async def _summarize_user_attachments(self, scratchpad: CTurnScratchpad) -> None:
         if not (scratchpad.user_attachments or []):
@@ -1462,6 +1492,7 @@ class BaseWorkflow():
         if ok:
             if on_flush_completed_hook:
                 await on_flush_completed_hook(scratchpad)
+            await self._publish_git_workspace_if_needed()
         tl_blocks = 0
         sp_len = 0
         if self.ctx_browser and self.ctx_browser.timeline:

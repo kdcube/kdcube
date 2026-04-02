@@ -336,10 +336,7 @@ class WithIsoRuntimeWorkflow(BaseWorkflow):
                 scratchpad.answer = answer_text
                 await self.emit_suggested_followups(suggested_followups=scenarios())
 
-                try:
-                    await self.finish_turn(scratchpad, ok=ok)
-                except Exception:
-                    pass
+                await self.finish_turn(scratchpad, ok=ok)
                 state["result"] = {"answer": answer_text, "suggested_followups": []}
                 state["short_circuit"] = True
                 return state

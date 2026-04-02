@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/agents/react/design/git-based-isolated-workspace-README.md
 title: "Draft: Git-Based Isolated Workspace"
-summary: "Draft design for git-backed React workspaces, immutable per-turn version refs, explicit workspace pull, and point-wise hosted binary hydration."
+summary: "Draft design and implementation notes for git-backed React workspaces, immutable per-turn version refs, explicit workspace pull, sparse current-turn repos, and point-wise hosted binary hydration."
 draft: true
 status: draft
 tags: ["sdk", "agents", "react", "design", "workspace", "git", "artifacts"]
@@ -42,6 +42,16 @@ The main design choices in this draft are:
 The intent is to give React a natural local git workspace it can inspect,
 diff, and commit against, while keeping network, pull, and push out of the
 isolated execution runtime.
+
+Current implementation status:
+- `REACT_WORKSPACE_IMPLEMENTATION=custom|git` is implemented and wired through `RuntimeCtx`
+- `react.pull(paths=[fi:...])` is implemented for both workspace backends
+- `git` mode bootstraps the current turn as a sparse local git repo
+- successful `git` turns publish the lineage branch and immutable per-turn version ref on host-side turn finish
+- git publish failure is treated as turn failure
+- exact non-text `.files/...` refs are treated as hosted/custom artifacts, not as git blobs
+- folder pulls remain text-only
+- hosted artifacts and execution snapshots remain available through ConversationStore/RN flows
 
 ---
 
@@ -288,6 +298,12 @@ For each conversation lineage:
 - every turn that publishes textual workspace state creates a commit on that branch
 - immediately after commit, engineering creates the immutable version ref for that turn id
 
+This is already partially implemented:
+- on successful turn finish in `git` mode, runtime stages the current-turn text workspace
+- host-side code creates or reuses the turn commit
+- the lineage branch and immutable version ref for the current `turn_...` are published
+- if publication fails, the turn is failed because the canonical text workspace state was not fully saved
+
 That gives two useful lookup modes:
 
 - latest state:
@@ -325,6 +341,12 @@ Exec properties:
 - selected historical version refs available locally
 - workspace content is hydrated explicitly, not eagerly
 - hosted binaries are not pulled automatically with workspace slices
+
+Current implemented behavior:
+- the current turn root `out/turn_<current_turn>/` is bootstrapped as a sparse local git repo
+- if the lineage branch already exists, its history is available locally there
+- the sparse worktree starts empty; runtime does not eagerly materialize project files
+- isolated exec preserves `.git` when referenced paths come from a git-backed turn root
 
 The agent can:
 - inspect repository structure
@@ -433,6 +455,11 @@ refs/kdcube/<tenant>/<project>/<user_id>/<conversation_id>/versions/<turn_id>
 
 So `fi:` does not change syntax, only resolution semantics.
 
+Important implemented split in `git` mode:
+- text-like `.files/...` refs are resolved from git snapshots
+- non-text exact `.files/...` refs are routed through the hosted/custom artifact path
+- attachments remain hosted/custom artifacts only
+
 ### 6.1 `react.pull` contract
 
 Initial contract should stay small:
@@ -506,6 +533,11 @@ fi:<turn_id>.files/rendered/report.pdf
 
 Engineering/runtime may then hydrate that exact binary locally when allowed.
 
+Current implemented rule:
+- exact non-text `.files/...` refs are routed through the artifact/hosting path
+- if no hosted/custom artifact exists for that exact binary ref, the pull remains missing
+- runtime does not silently read non-text `.files/...` blobs from git in `git` mode
+
 This keeps the first implementation simple and honest:
 - no inference
 - no hidden binary-membership protocol
@@ -525,6 +557,20 @@ User downloads and previews still remain handled through hosted resources, e.g.:
 
 Engineering should prefer internal storage resolution for hydration rather than
 loopback HTTP, but the same logical artifact model remains relevant.
+
+Important storage split:
+- git is the canonical store for non-binary workspace text state in `git` mode
+- hosted storage remains the canonical store for:
+  - attachments
+  - explicit hosted file artifacts
+  - execution snapshots when `react.persist_workspace()` / `REACT_PERSIST_WORKSPACE` is enabled
+
+This means the RN-based resource API continues to work for hosted artifacts and
+execution snapshots even when the workspace backend is `git`.
+
+Not every git-backed workspace file automatically gets an RN. A text workspace
+file is available through RN/download flows only if it is also hosted as an
+artifact or included in a persisted execution snapshot.
 
 ---
 
@@ -636,6 +682,12 @@ sequenceDiagram
     E->>G: create immutable version ref for current turn id
 ```
 
+Current implemented publication seam:
+- host-side publish happens from `BaseWorkflow.finish_turn(...)`
+- it runs only when turn completion is successful
+- it is skipped for `custom` workspace mode
+- publish failure now fails the turn instead of being logged and ignored
+
 ---
 
 ## 10) Integration Points
@@ -656,6 +708,19 @@ Key functions likely to evolve:
 - `rehost_files_from_timeline(...)`
 - `rehost_previous_files(...)`
 - `build_exec_snapshot_workspace(...)`
+
+### 10.1a `workspace.py` and `git_workspace.py`
+
+Current role:
+- dispatch workspace hydration by implementation (`custom` vs `git`)
+- resolve lineage branch/version ref naming
+- hydrate git-backed text slices
+- bootstrap sparse current-turn repos
+- publish lineage/version refs on successful git-mode turn finish
+
+Important implemented rule:
+- non-text `.files/...` exact refs stay on the hosted/custom artifact path
+- git hydration is text-first and folder pulls stay text-only
 
 ### 10.2 `external.py`
 
@@ -702,6 +767,16 @@ Future role:
 - optionally expose current top-level workspace scopes in ANNOUNCE
 - support alternate instructions that explain the new workspace pull model
 - finalize commit/publication handoff to engineering after local commit is produced
+
+### 10.5a `base_workflow.py`
+
+Current role:
+- owns successful turn finalization
+- now performs host-side git workspace publication when `workspace_implementation=git`
+
+Important rule:
+- publication is part of successful turn finish, not isolated exec
+- publish failure fails the turn because canonical git-backed workspace progress was not fully saved
 
 ### 10.6 `resources.py`
 
@@ -770,38 +845,25 @@ This keeps the agent contract simple and close to what React already knows.
 
 ---
 
-## 12) Rollout Plan
+## 12) Rollout Status and Remaining Work
 
-### Phase 1: Define lineage and immutable version refs
+### Implemented slices
 
-- finalize ref naming
-- preserve `turn_...` as public version id
-- create commit + immutable version ref on turn publication
+- lineage branch naming and immutable per-turn version refs
+- `react.pull(...)` for both `custom` and `git`
+- sparse current-turn local git repo bootstrap in `git` mode
+- historical snapshot hydration through immutable version refs
+- `.git` preservation for isolated exec when git-backed turn roots are referenced
+- point-wise hosted-binary hydration with non-text `.files/...` kept off the git path
+- alternate instruction set behind runtime config
+- host-side publication of lineage branch and per-turn version ref on successful git-mode turn finish
 
-### Phase 2: Add `react.pull(...)` and current-turn slice materialization
+### Remaining hardening / follow-up work
 
-- add `react.pull(...)`
-- replace scan-based current project reconstruction with git-based slice materialization
-- keep current-turn filesystem shape for compatibility
-
-### Phase 3: Add historical snapshot hydration
-
-- resolve `fi:<older_turn>...` through immutable version refs
-- materialize historical trees lazily only when requested by `react.pull(...)`
-
-### Phase 4: Add point-wise hosted-binary hydration
-
-- support exact logical-ref binary hydration
-- keep binaries out of folder pull semantics
-- defer implicit workspace binary membership
-
-### Phase 5: Teach React and tighten tooling
-
-- add alternate instruction set behind config
-- update instructions
-- adjust prefetch logic in tool execution flow
-- ensure git history inspection works smoothly from exec
-- keep fast rollback to the old model available
+- surface workspace publish metadata more explicitly in turn observability if needed
+- define retry/repair policy for remote publish failures
+- document operational expectations for the remote workspace repo lifecycle more explicitly
+- add optional later pointer metadata only if binary membership must become implicit in workspace snapshots
 
 ---
 
@@ -819,26 +881,27 @@ Recommended answer:
 
 ### 13.3 Should every turn create a version ref even when no textual files changed?
 
-Not yet decided.
+Current implemented answer:
+- yes, each successful git-mode turn publishes the immutable version ref for its `turn_...`
+- if there were no new staged text changes, that version ref may point at the existing lineage HEAD commit
 
-This affects:
-- continuity semantics
-- cost/noise in the version graph
-- how strongly turn identity should imply git snapshot identity
+This keeps turn identity stable without forcing a synthetic extra commit every time.
 
 ---
 
 ## 14) Recommended Next Step
 
-Start implementation planning from:
-1. [solution_workspace.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py)
-2. [external.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/external.py)
-3. [read.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/read.py)
-4. [runtime.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/runtime.py)
-5. [resources.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/resources/resources.py)
+Continue from the already implemented foundation:
+1. [git_workspace.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/git_workspace.py)
+2. [workspace.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/workspace.py)
+3. [solution_workspace.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py)
+4. [base_workflow.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py)
+5. [shared_instructions.py](/Users/elenaviter/src/kdcube/kdcube-ai-app/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/skills/instructions/shared_instructions.py)
 
-Then convert this design into:
-- ref naming implementation
+Priority follow-up items:
+- harden publish failure handling and recovery
+- decide whether to expose publish metadata into turn logs / timeline
+- keep validating parity with `custom` mode while `git` mode stabilizes
 - `react.pull(...)` implementation
 - current-turn slice materialization
 - immutable per-turn ref publication

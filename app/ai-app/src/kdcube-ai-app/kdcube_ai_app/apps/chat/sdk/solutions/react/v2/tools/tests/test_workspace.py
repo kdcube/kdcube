@@ -7,6 +7,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import (
     ensure_current_turn_git_workspace,
+    publish_current_turn_git_workspace,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
@@ -252,6 +253,60 @@ def test_ensure_current_turn_git_workspace_bootstraps_lineage_branch(tmp_path, m
     assert (proc.stdout or "").strip() == ""
 
 
+def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
+    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    remote_repo = _init_git_workspace_repo(tmp_path)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo=str(remote_repo),
+    )
+
+    turn_root = ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+    (turn_root / "files" / "projectA" / "src").mkdir(parents=True, exist_ok=True)
+    (turn_root / "files" / "projectA" / "src" / "new.py").write_text("print('new')\n", encoding="utf-8")
+
+    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+
+    assert result["version_ref"].endswith("/versions/turn_ctx")
+    assert result["committed"] is True
+    show_branch = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(remote_repo),
+            "show",
+            "refs/heads/kdcube/demo-tenant/demo-project/admin-user/conversation-1:files/projectA/src/new.py",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (show_branch.stdout or "") == "print('new')\n"
+    show_version = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(remote_repo),
+            "show",
+            "refs/kdcube/demo-tenant/demo-project/admin-user/conversation-1/versions/turn_ctx:files/projectA/src/new.py",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (show_version.stdout or "") == "print('new')\n"
+
+
 @pytest.mark.asyncio
 async def test_hydrate_workspace_paths_git_folder_pull_materializes_text_only(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
@@ -284,7 +339,7 @@ async def test_hydrate_workspace_paths_git_folder_pull_materializes_text_only(tm
 
 
 @pytest.mark.asyncio
-async def test_hydrate_workspace_paths_git_exact_binary_pull_materializes_binary(tmp_path, monkeypatch):
+async def test_hydrate_workspace_paths_git_exact_binary_pull_requires_hosting_artifact(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -307,10 +362,10 @@ async def test_hydrate_workspace_paths_git_exact_binary_pull_materializes_binary
         outdir=outdir,
     )
 
-    assert result["missing"] == []
+    assert result["missing"] == ["turn_prev/files/projectA/assets/logo.bin"]
     assert result["errors"] == []
-    assert result["rehosted"] == ["turn_prev/files/projectA/assets/logo.bin"]
-    assert (outdir / "turn_prev" / "files" / "projectA" / "assets" / "logo.bin").read_bytes() == b"\x00PNG"
+    assert result["rehosted"] == []
+    assert not (outdir / "turn_prev" / "files" / "projectA" / "assets" / "logo.bin").exists()
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot import base_workflow as workflow_mod
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.base_workflow import BaseWorkflow
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
@@ -115,3 +117,84 @@ def test_runtime_ctx_carries_workspace_git_repo(monkeypatch, tmp_path):
         assert wf.runtime_ctx.bundle_storage == str(resolved_storage)
     finally:
         workflow_mod.get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_publish_git_workspace_if_needed_calls_publisher_in_git_mode(monkeypatch, tmp_path):
+    calls = {}
+
+    def _fake_publish_current_turn_git_workspace(*, runtime_ctx, outdir, logger=None):
+        calls["turn_id"] = runtime_ctx.turn_id
+        calls["outdir"] = str(outdir)
+        return {"commit_sha": "abc123"}
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace.publish_current_turn_git_workspace",
+        _fake_publish_current_turn_git_workspace,
+    )
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+    wf.runtime_ctx = RuntimeCtx(
+        turn_id="turn-42",
+        outdir=str(tmp_path / "out"),
+        workspace_implementation="git",
+    )
+
+    result = await wf._publish_git_workspace_if_needed()
+
+    assert result == {"commit_sha": "abc123"}
+    assert calls == {"turn_id": "turn-42", "outdir": str(tmp_path / "out")}
+
+
+@pytest.mark.asyncio
+async def test_publish_git_workspace_if_needed_skips_custom_mode(monkeypatch, tmp_path):
+    def _unexpected_publish_current_turn_git_workspace(**kwargs):
+        raise AssertionError("publisher should not be called")
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace.publish_current_turn_git_workspace",
+        _unexpected_publish_current_turn_git_workspace,
+    )
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+    wf.runtime_ctx = RuntimeCtx(
+        turn_id="turn-42",
+        outdir=str(tmp_path / "out"),
+        workspace_implementation="custom",
+    )
+
+    result = await wf._publish_git_workspace_if_needed()
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_publish_git_workspace_if_needed_raises_turn_phase_error_on_publish_failure(monkeypatch, tmp_path):
+    def _failing_publish_current_turn_git_workspace(**kwargs):
+        raise RuntimeError("push failed")
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace.publish_current_turn_git_workspace",
+        _failing_publish_current_turn_git_workspace,
+    )
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    logs = []
+    wf.logger = SimpleNamespace(log=lambda *args, **kwargs: logs.append((args, kwargs)))
+    wf.runtime_ctx = RuntimeCtx(
+        turn_id="turn-42",
+        outdir=str(tmp_path / "out"),
+        workspace_implementation="git",
+    )
+
+    with pytest.raises(workflow_mod.TurnPhaseError) as exc_info:
+        await wf._publish_git_workspace_if_needed()
+
+    assert exc_info.value.code == "workspace_publish_failed"
+    assert exc_info.value.data == {
+        "workspace_implementation": "git",
+        "turn_id": "turn-42",
+    }
+    assert logs

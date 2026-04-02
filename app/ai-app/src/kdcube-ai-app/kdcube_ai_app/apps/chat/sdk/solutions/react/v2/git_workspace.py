@@ -268,6 +268,146 @@ def _write_blob(target: pathlib.Path, data: bytes) -> None:
     target.write_bytes(data)
 
 
+def _git_has_head(*, repo_root: pathlib.Path) -> bool:
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD"],
+            check=True,
+            capture_output=True,
+        )
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def _git_head_sha(*, repo_root: pathlib.Path) -> str:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return (proc.stdout or "").strip()
+
+
+def _git_has_staged_changes(*, repo_root: pathlib.Path) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "diff", "--cached", "--quiet", "--exit-code"],
+        check=False,
+        capture_output=True,
+    )
+    return proc.returncode != 0
+
+
+def _file_is_text_like(path: pathlib.Path) -> bool:
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return False
+    return _blob_is_text_like(data=data, path_hint=str(path))
+
+
+def _stage_current_turn_text_workspace(*, turn_root: pathlib.Path) -> None:
+    subprocess.run(
+        ["git", "-C", str(turn_root), "add", "--sparse", "-u", "--", "."],
+        check=True,
+        capture_output=True,
+    )
+    files_root = turn_root / "files"
+    if not files_root.exists():
+        return
+    text_paths: List[str] = []
+    for path in files_root.rglob("*"):
+        if not path.is_file():
+            continue
+        if not _file_is_text_like(path):
+            continue
+        text_paths.append(str(path.relative_to(turn_root)))
+    if not text_paths:
+        return
+    for idx in range(0, len(text_paths), 128):
+        chunk = text_paths[idx: idx + 128]
+        subprocess.run(
+            ["git", "-C", str(turn_root), "add", "--sparse", "--", *chunk],
+            check=True,
+            capture_output=True,
+        )
+
+
+def publish_current_turn_git_workspace(
+    *,
+    runtime_ctx: Any,
+    outdir: pathlib.Path,
+    logger: Optional[AgentLogger] = None,
+) -> Dict[str, Any]:
+    turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+    if not turn_id:
+        raise ValueError("missing_turn_id")
+    log = logger or AgentLogger("react.workspace.git")
+    turn_root = ensure_current_turn_git_workspace(
+        runtime_ctx=runtime_ctx,
+        outdir=outdir,
+        logger=log,
+    )
+    repo_root = _ensure_workspace_repo(
+        runtime_ctx=runtime_ctx,
+        outdir=outdir,
+        logger=log,
+    )
+    lineage_ref = workspace_lineage_branch_ref(runtime_ctx)
+    version_ref = workspace_version_ref(runtime_ctx, turn_id)
+    if not lineage_ref or not version_ref:
+        raise ValueError("missing_workspace_refs")
+
+    _stage_current_turn_text_workspace(turn_root=turn_root)
+    has_head = _git_has_head(repo_root=turn_root)
+    committed = False
+    if not has_head:
+        commit_args = ["git", "-C", str(turn_root), "commit", "--allow-empty", "-m", f"React workspace snapshot {turn_id}"]
+        subprocess.run(commit_args, check=True, capture_output=True)
+        committed = True
+    elif _git_has_staged_changes(repo_root=turn_root):
+        subprocess.run(
+            ["git", "-C", str(turn_root), "commit", "-m", f"React workspace snapshot {turn_id}"],
+            check=True,
+            capture_output=True,
+        )
+        committed = True
+
+    head_sha = _git_head_sha(repo_root=turn_root)
+    subprocess.run(
+        ["git", "-C", str(turn_root), "push", "origin", f"HEAD:{lineage_ref}"],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(turn_root), "push", "origin", f"{head_sha}:{version_ref}"],
+        check=True,
+        capture_output=True,
+    )
+
+    env = _build_git_env()
+    subprocess.run(
+        ["git", "-C", str(repo_root), "push", "origin", f"{lineage_ref}:{lineage_ref}"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo_root), "push", "origin", f"{version_ref}:{version_ref}"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    return {
+        "turn_root": str(turn_root),
+        "commit_sha": head_sha,
+        "lineage_ref": lineage_ref,
+        "version_ref": version_ref,
+        "committed": committed,
+    }
+
+
 async def hydrate_files_from_git_workspace(
     *,
     ctx_browser: Any,

@@ -293,16 +293,7 @@ async def hydrate_workspace_paths(
                     if isinstance(artifact, dict)
                     else _guess_mime_from_path(physical)
                 )
-                has_hosted_or_inline_blob = bool(
-                    isinstance(artifact, dict)
-                    and (
-                        artifact.get("hosted_uri")
-                        or artifact.get("rn")
-                        or artifact.get("key")
-                        or artifact.get("base64")
-                    )
-                )
-                if isinstance(artifact, dict) and not _is_text_mime(mime) and has_hosted_or_inline_blob:
+                if mime and not _is_text_mime(mime):
                     custom_candidate_paths.append(physical)
                     continue
                 git_candidate_paths.append(physical)
