@@ -11,6 +11,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.exec_tools import (
     _build_exec_context_from_comm_spec,
     _build_exec_error_payload,
     _build_exec_loader_wrapper,
+    _normalize_artifacts_spec,
     run_exec_tool,
 )
 
@@ -106,6 +107,19 @@ def test_build_exec_context_from_comm_spec_preserves_identity_fields():
         "codegen_run_id": "exec-1",
         "exec_runtime": {"mode": "fargate"},
     }
+
+
+def test_normalize_artifacts_spec_marks_markdown_as_text():
+    artifacts, err = _normalize_artifacts_spec([
+        {
+            "filename": "turn_1/files/preferences_exec_report.md",
+            "description": "Markdown report generated from bundle-local preference history.",
+        }
+    ])
+
+    assert err is None
+    assert artifacts is not None
+    assert artifacts[0]["mime"] == "text/markdown"
 
 
 @pytest.mark.asyncio

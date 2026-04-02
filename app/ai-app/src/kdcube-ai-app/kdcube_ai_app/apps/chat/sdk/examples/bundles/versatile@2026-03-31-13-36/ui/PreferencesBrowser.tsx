@@ -61,6 +61,9 @@ interface ExecReportPayload {
     report_text?: string;
     items?: ExecArtifact[];
     out_dyn?: Record<string, ExecOutputFile | unknown>;
+    report_filename?: string;
+    report_mime?: string;
+    report_content_b64?: string;
 }
 
 interface ExcelExportPayload {
@@ -419,6 +422,24 @@ function findExecReportFile(payload: ExecReportPayload): ExecOutputFile | null {
     return null;
 }
 
+function downloadExecReport(payload: ExecReportPayload): void {
+    if (payload.report_content_b64) {
+        const blob = decodeBase64ToBlob(
+            payload.report_content_b64,
+            payload.report_mime || 'text/markdown;charset=utf-8',
+        );
+        downloadBlob(blob, payload.report_filename || 'preferences_exec_report.md');
+        return;
+    }
+    const reportFile = findExecReportFile(payload);
+    if (reportFile) {
+        downloadBlob(
+            new Blob([reportFile.text || ''], { type: reportFile.mime || 'text/markdown;charset=utf-8' }),
+            reportFile.filename || 'preferences_exec_report.md',
+        );
+    }
+}
+
 async function fileToBase64(file: File): Promise<string> {
     const buffer = await file.arrayBuffer();
     const bytes = new Uint8Array(buffer);
@@ -546,13 +567,7 @@ function PreferencesBrowser() {
         try {
             const payload = await fetchPreferencesExecReport();
             setReport(payload);
-            const reportFile = findExecReportFile(payload);
-            if (reportFile) {
-                downloadBlob(
-                    new Blob([reportFile.text || ''], { type: reportFile.mime || 'text/markdown;charset=utf-8' }),
-                    reportFile.filename || 'preferences_exec_report.md',
-                );
-            }
+            downloadExecReport(payload);
         } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
         } finally {

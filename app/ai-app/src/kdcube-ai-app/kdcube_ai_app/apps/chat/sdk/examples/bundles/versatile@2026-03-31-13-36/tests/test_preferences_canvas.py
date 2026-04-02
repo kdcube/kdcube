@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +27,11 @@ def _load_preferences_store_module():
 
 def _load_preference_tools_module():
     _mod_name, module = load_dynamic_module_for_path(_bundle_root() / "tools" / "preference_tools.py")
+    return module
+
+
+def _load_entrypoint_module():
+    _mod_name, module = load_dynamic_module_for_path(_bundle_root() / "entrypoint.py")
     return module
 
 
@@ -401,3 +408,44 @@ async def test_export_preferences_snapshot_uses_bundle_secret_for_signature(tmp_
     assert signature_doc["secret_key"] == result["ret"]["signature_secret_key"]
     assert signature_doc["signed_key"] == result["ret"]["key"]
     assert signature_doc["signature"]
+
+
+@pytest.mark.asyncio
+async def test_preferences_exec_report_returns_downloadable_report_content(tmp_path, monkeypatch):
+    entrypoint_mod = _load_entrypoint_module()
+
+    async def _fake_run_exec_tool(**kwargs):
+        report_path = kwargs["outdir"] / "turn_preferences_exec/files/preferences_exec_report.md"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text("# Preferences Exec Report\n\n- location: Wuppertal\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "report_text": "Status: success",
+            "items": [],
+            "out_dyn": {},
+            "error": None,
+        }
+
+    monkeypatch.setattr(entrypoint_mod, "run_exec_tool", _fake_run_exec_tool)
+    monkeypatch.setattr(entrypoint_mod, "create_tool_subsystem_with_mcp", lambda **_: (object(), None))
+    monkeypatch.setattr(entrypoint_mod, "get_preferences_snapshot", lambda **_: {"current": {}, "items": []})
+    monkeypatch.setattr(entrypoint_mod, "normalize_exec_runtime_config", lambda value: value)
+
+    entrypoint = object.__new__(entrypoint_mod.VersatileEntrypoint)
+    entrypoint.models_service = object()
+    entrypoint._comm = SimpleNamespace(user_id="user-1")
+    entrypoint.ctx_client = None
+    entrypoint.logger = SimpleNamespace(log=lambda *args, **kwargs: None)
+    entrypoint.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="versatile@2026-03-31-13-36"))
+    entrypoint.bundle_prop = lambda *args, **kwargs: {"mode": "docker"}
+    entrypoint.bundle_storage_root = lambda: None
+    entrypoint._preferences_storage = lambda: _make_storage(tmp_path)
+
+    result = await entrypoint.preferences_exec_report(user_id="user-1")
+
+    assert result["ok"] is True
+    assert result["report_filename"] == "preferences_exec_report.md"
+    assert result["report_mime"] == "text/markdown"
+    assert base64.b64decode(result["report_content_b64"]).decode("utf-8") == (
+        "# Preferences Exec Report\n\n- location: Wuppertal\n"
+    )

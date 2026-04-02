@@ -9,7 +9,6 @@ import re
 import pathlib
 import traceback
 import uuid
-import mimetypes
 from typing import Any, Dict, Optional, Annotated, Tuple, List
 
 import semantic_kernel as sk
@@ -33,6 +32,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.snapshot import build_portable_spec
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
+from kdcube_ai_app.apps.chat.sdk.util import guess_mime_type
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 try:
@@ -180,7 +180,7 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
             name = f"{name}_{seen_names[name]}"
         else:
             seen_names[name] = 1
-        mime = mimetypes.guess_type(leaf)[0] or "application/octet-stream"
+        mime = guess_mime_type(leaf)
         normalized.append(
             {
                 "name": name,

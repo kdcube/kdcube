@@ -515,6 +515,14 @@ print(f"wrote {{report_path}}")
             exec_runtime=normalize_exec_runtime_config(self.bundle_prop("execution.runtime")),
             bundle_storage_dir=str(self.bundle_storage_root()) if self.bundle_storage_root() else None,
         )
+        report_relpath = "turn_preferences_exec/files/preferences_exec_report.md"
+        report_abspath = outdir / report_relpath
+        report_content_b64 = None
+        if report_abspath.exists():
+            try:
+                report_content_b64 = base64.b64encode(report_abspath.read_bytes()).decode("ascii")
+            except Exception:
+                report_content_b64 = None
         return {
             "ok": bool(envelope.get("ok")),
             "report_text": envelope.get("report_text"),
@@ -523,6 +531,9 @@ print(f"wrote {{report_path}}")
             "error": envelope.get("error"),
             "recency": report_recency,
             "keywords": report_keywords,
+            "report_filename": "preferences_exec_report.md",
+            "report_mime": "text/markdown",
+            "report_content_b64": report_content_b64,
         }
 
     @property

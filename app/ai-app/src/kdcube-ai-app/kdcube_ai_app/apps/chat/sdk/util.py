@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 # chat/sdk/util.py
-import time, orjson, hashlib, re, json, unicodedata
+import time, orjson, hashlib, re, json, unicodedata, mimetypes
 from typing import Any, List, Dict, Optional, Union, Tuple
 from datetime import datetime, timezone
 import datetime as dt
@@ -19,6 +19,45 @@ from pydantic import BaseModel
 
 
 # ---------- small general helpers ----------
+
+FALLBACK_MIME_BY_EXT: Dict[str, str] = {
+    "cfg": "text/plain",
+    "css": "text/css",
+    "csv": "text/csv",
+    "html": "text/html",
+    "ini": "text/plain",
+    "json": "application/json",
+    "js": "text/javascript",
+    "jsx": "text/plain",
+    "markdown": "text/markdown",
+    "md": "text/markdown",
+    "py": "text/x-python",
+    "rst": "text/plain",
+    "sh": "text/x-shellscript",
+    "toml": "text/plain",
+    "ts": "text/plain",
+    "tsx": "text/plain",
+    "txt": "text/plain",
+    "xml": "application/xml",
+    "yaml": "application/x-yaml",
+    "yml": "application/x-yaml",
+}
+
+
+def guess_mime_type(path: str, content: Optional[bytes] = None, default: str = "application/octet-stream") -> str:
+    guess, _ = mimetypes.guess_type(path)
+    if guess:
+        return guess
+    if content:
+        try:
+            import magic  # type: ignore
+            detected = magic.from_buffer(content, mime=True)
+            if detected and detected != "application/octet-stream":
+                return str(detected)
+        except Exception:
+            pass
+    ext = pathlib.Path(path).suffix.lower().lstrip(".")
+    return FALLBACK_MIME_BY_EXT.get(ext, default)
 
 def now_ms() -> int:
     return int(time.time() * 1000)
