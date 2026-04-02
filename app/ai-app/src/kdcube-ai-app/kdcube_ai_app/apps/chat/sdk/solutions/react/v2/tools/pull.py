@@ -14,6 +14,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     _infer_physical_from_fi,
     hydrate_workspace_paths,
+    physical_to_logical_artifact_path,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     tool_call_block,
@@ -47,18 +48,7 @@ TOOL_SPEC = {
 
 
 def _physical_to_logical(path: str) -> str:
-    raw = str(path or "").strip().strip("/")
-    if not raw:
-        return ""
-    if "/files/" in raw:
-        turn_id, rel = raw.split("/files/", 1)
-        if turn_id and rel:
-            return f"fi:{turn_id}.files/{rel}"
-    if "/attachments/" in raw:
-        turn_id, rel = raw.split("/attachments/", 1)
-        if turn_id and rel:
-            return f"fi:{turn_id}.user.attachments/{rel}"
-    return ""
+    return physical_to_logical_artifact_path(path)
 
 
 def _kind_for_physical(path: str) -> str:

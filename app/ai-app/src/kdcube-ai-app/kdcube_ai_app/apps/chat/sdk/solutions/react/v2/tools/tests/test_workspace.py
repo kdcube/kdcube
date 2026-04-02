@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 
+import base64
 import subprocess
 
 import pytest
@@ -310,3 +311,59 @@ async def test_hydrate_workspace_paths_git_exact_binary_pull_materializes_binary
     assert result["errors"] == []
     assert result["rehosted"] == ["turn_prev/files/projectA/assets/logo.bin"]
     assert (outdir / "turn_prev" / "files" / "projectA" / "assets" / "logo.bin").read_bytes() == b"\x00PNG"
+
+
+@pytest.mark.asyncio
+async def test_hydrate_workspace_paths_git_exact_binary_pull_falls_back_to_hosting_artifact(tmp_path, monkeypatch):
+    outdir = tmp_path / "out"
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo="",
+    )
+    ctx = FakeBrowser(runtime)
+    png_b64 = base64.b64encode(b"\x89PNG\r\n").decode("ascii")
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "react.tool.result",
+                "mime": "application/json",
+                "text": (
+                    '{"artifact_path":"fi:turn_prev.files/dev-lifecycle.png",'
+                    '"physical_path":"turn_prev/files/dev-lifecycle.png",'
+                    '"mime":"image/png","hosted_uri":"hosted://artifact/dev-lifecycle.png"}'
+                ),
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "image/png",
+                "path": "fi:turn_prev.files/dev-lifecycle.png",
+                "base64": png_b64,
+                "turn_id": "turn_prev",
+            },
+        ]
+    }
+
+    class _Settings:
+        STORAGE_PATH = str(tmp_path)
+
+    import kdcube_ai_app.apps.chat.sdk.config as cfg
+    cfg.get_settings = lambda: _Settings()
+
+    result = await hydrate_workspace_paths(
+        ctx_browser=ctx,
+        paths=["turn_prev/files/dev-lifecycle.png"],
+        outdir=outdir,
+    )
+
+    assert result["errors"] == []
+    assert result["missing"] == []
+    assert result["rehosted"] == ["turn_prev/files/dev-lifecycle.png"]
+    assert (outdir / "turn_prev" / "files" / "dev-lifecycle.png").read_bytes() == b"\x89PNG\r\n"

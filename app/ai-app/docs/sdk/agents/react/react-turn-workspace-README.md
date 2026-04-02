@@ -80,6 +80,7 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
   - `fi:<turn_id>.files/<scope-or-subtree>` may be pulled as a subtree
   - `fi:<turn_id>.user.attachments/<name>` may be pulled only as an exact file ref
   - folder pulls do not imply hosted binaries; binary files must be named point-wise
+  - in `git` mode, exact non-text `.files/...` refs that resolve to hosted artifacts are still hydrated from artifact/hosting history, not from git
 
 ### Knowledge space and exec-time path resolution
 
@@ -203,6 +204,7 @@ Workspace/read-write summary:
   - artifact/timeline/hosting-backed snapshot state in `custom`
   - git-backed lineage snapshots in `git`
 - exact attachment pulls still come from hosted artifact storage in both modes
+- exact non-text `.files/...` refs also stay on the hosted/artifact path when timeline metadata says the file is a hosted binary artifact
 - `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; attachment/binary pulls must be exact file refs
 - `react.search_files` can search all of OUT_DIR and returns `logical_path` for OUT_DIR hits so the agent can immediately call `react.read`.
 - workdir is searchable but is still not a general-purpose readable namespace for `react.read`.

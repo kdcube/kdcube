@@ -88,13 +88,15 @@ react.pull
   - `git`: hydrate `fi:<turn>.files/...` from the git-backed workspace lineage snapshot for that version
 - In `git` mode, runtime also bootstraps `out/<current_turn>/` as a local repo so exec/code may use local git inspection/history/edit commands there, but not pull/push/fetch.
 - That current-turn repo keeps lineage history/refs available without eagerly checking out the project tree; explicit file materialization is still required.
+- In `git` mode, an exact `.files/...` ref that resolves to a hosted/non-text artifact stays on the artifact/hosting path instead of going through git.
 - Path contract:
   - `fi:<turn_id>.files/<path>` may be an exact file or a subtree/prefix.
   - `fi:<turn_id>.user.attachments/<file>` and legacy `fi:<turn_id>.attachments/<file>` must be exact file refs.
 - Binary rule:
   - folder pulls do not imply hosted binaries/attachments under that subtree
   - if you need a binary file, name that exact `fi:` file in `paths`
-- Exact attachment/binary pulls stay on the artifact/hosting path even when the workspace implementation is `git`.
+- Exact attachment pulls stay on the artifact/hosting path even when the workspace implementation is `git`.
+- Exact binary `.files/...` pulls also stay on the artifact/hosting path when the referenced file is a hosted/non-text artifact in timeline history.
 - Result:
   - `pulled[]` rows contain `logical_path`, `physical_path`, and `kind`
   - those `physical_path` values are OUT_DIR-relative local paths you can use in exec code

@@ -227,6 +227,21 @@ def workspace_lineage_branch_ref(runtime_ctx: Any) -> str:
     )
 
 
+def physical_to_logical_artifact_path(path: str) -> str:
+    raw = str(path or "").strip().strip("/")
+    if not raw:
+        return ""
+    if "/files/" in raw:
+        turn_id, rel = raw.split("/files/", 1)
+        if turn_id and rel:
+            return f"fi:{turn_id}.files/{rel}"
+    if "/attachments/" in raw:
+        turn_id, rel = raw.split("/attachments/", 1)
+        if turn_id and rel:
+            return f"fi:{turn_id}.user.attachments/{rel}"
+    return ""
+
+
 async def hydrate_workspace_paths(
     *,
     ctx_browser: Any,
@@ -262,13 +277,48 @@ async def hydrate_workspace_paths(
 
     if files_paths:
         if impl == WORKSPACE_IMPLEMENTATION_GIT:
+            from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
+                resolve_logical_artifact,
+                rehost_files_from_timeline,
+            )
             from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import hydrate_files_from_git_workspace
 
-            await _merge(await hydrate_files_from_git_workspace(
-                ctx_browser=ctx_browser,
-                paths=files_paths,
-                outdir=outdir,
-            ))
+            git_candidate_paths: List[str] = []
+            custom_candidate_paths: List[str] = []
+            for physical in files_paths:
+                logical = physical_to_logical_artifact_path(physical)
+                artifact = await resolve_logical_artifact(ctx_browser=ctx_browser, path=logical) if logical else None
+                mime = (
+                    (artifact.get("mime") or "").strip()
+                    if isinstance(artifact, dict)
+                    else _guess_mime_from_path(physical)
+                )
+                has_hosted_or_inline_blob = bool(
+                    isinstance(artifact, dict)
+                    and (
+                        artifact.get("hosted_uri")
+                        or artifact.get("rn")
+                        or artifact.get("key")
+                        or artifact.get("base64")
+                    )
+                )
+                if isinstance(artifact, dict) and not _is_text_mime(mime) and has_hosted_or_inline_blob:
+                    custom_candidate_paths.append(physical)
+                    continue
+                git_candidate_paths.append(physical)
+
+            if git_candidate_paths:
+                await _merge(await hydrate_files_from_git_workspace(
+                    ctx_browser=ctx_browser,
+                    paths=git_candidate_paths,
+                    outdir=outdir,
+                ))
+            if custom_candidate_paths:
+                await _merge(await rehost_files_from_timeline(
+                    ctx_browser=ctx_browser,
+                    paths=custom_candidate_paths,
+                    outdir=outdir,
+                ))
         else:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import rehost_files_from_timeline
 
