@@ -2644,6 +2644,9 @@ def gather_configuration(
         update_env_value(env_proc, "KDCUBE_STORAGE_PATH", "/kdcube-storage")
     if is_placeholder(env_proc.entries.get("CB_BUNDLE_STORAGE_URL", (None, None))[1]):
         update_env_value(env_proc, "CB_BUNDLE_STORAGE_URL", "/kdcube-storage")
+    workspace_type = _get_nested(assembly_data, "storage", "workspace", "type")
+    if workspace_type and not is_placeholder(str(workspace_type)):
+        update_env_value(env_proc, "REACT_WORKSPACE_IMPLEMENTATION", str(workspace_type))
     workspace_git_repo = _get_nested(assembly_data, "storage", "workspace", "repo")
     if workspace_git_repo and not is_placeholder(str(workspace_git_repo)):
         update_env_value(env_proc, "REACT_WORKSPACE_GIT_REPO", str(workspace_git_repo))

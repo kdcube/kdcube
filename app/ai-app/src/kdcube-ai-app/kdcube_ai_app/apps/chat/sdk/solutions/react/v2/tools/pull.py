@@ -9,9 +9,11 @@ import json
 import pathlib
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
-    _infer_physical_from_fi,
-    rehost_files_from_timeline,
     resolve_logical_artifact,
+)
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
+    _infer_physical_from_fi,
+    hydrate_workspace_paths,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     tool_call_block,
@@ -129,7 +131,7 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "errors": ["missing_outdir"],
         }
     elif accepted_physical:
-        rehost_result = await rehost_files_from_timeline(
+        rehost_result = await hydrate_workspace_paths(
             ctx_browser=ctx_browser,
             paths=accepted_physical,
             outdir=outdir,

@@ -29,9 +29,9 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     emit_hosted_files,
     tc_result_path,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import (
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     extract_code_file_paths,
-    rehost_files_from_timeline,
+    hydrate_workspace_paths,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.sources import (
     ensure_rendering_assets,
@@ -293,7 +293,7 @@ async def handle_external_tool(*,
                 pass
         if paths:
             try:
-                rehost = await rehost_files_from_timeline(
+                rehost = await hydrate_workspace_paths(
                     ctx_browser=ctx_browser,
                     paths=paths,
                     outdir=pathlib.Path(state["outdir"]),

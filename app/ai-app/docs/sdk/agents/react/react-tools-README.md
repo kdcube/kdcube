@@ -84,12 +84,16 @@ Example result (simplified):
 react.pull
 - Purpose: materialize selected `fi:` snapshot refs locally under OUT_DIR so code/execution can use them by physical path.
 - Use this when `fi:` data must exist as a local file, not just as visible timeline content.
+- Backend semantics depend on `RuntimeCtx.workspace_implementation`:
+  - `custom`: hydrate from conversation artifact history / hosting-backed snapshot state
+  - `git`: hydrate `fi:<turn>.files/...` from the git-backed workspace lineage snapshot for that version
 - Path contract:
   - `fi:<turn_id>.files/<path>` may be an exact file or a subtree/prefix.
   - `fi:<turn_id>.user.attachments/<file>` and legacy `fi:<turn_id>.attachments/<file>` must be exact file refs.
 - Binary rule:
   - folder pulls do not imply hosted binaries/attachments under that subtree
   - if you need a binary file, name that exact `fi:` file in `paths`
+- Exact attachment/binary pulls stay on the artifact/hosting path even when the workspace implementation is `git`.
 - Result:
   - `pulled[]` rows contain `logical_path`, `physical_path`, and `kind`
   - those `physical_path` values are OUT_DIR-relative local paths you can use in exec code

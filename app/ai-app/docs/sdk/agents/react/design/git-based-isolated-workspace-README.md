@@ -33,6 +33,7 @@ The main design choices in this draft are:
 
 - **keep `fi:` unchanged**
 - **keep `<version>` equal to `turn_...`**
+- **keep both workspace implementations supported (`custom` and `git`)**
 - **make git the authoritative version-control layer for textual project trees**
 - **keep hosted storage as the authoritative layer for binary artifacts**
 - **do not eagerly materialize whole projects**
@@ -86,9 +87,11 @@ Another important constraint:
 ### Proposed Solution
 
 Use git as the authoritative state manager for textual project trees, while
-keeping hosted storage for binaries.
+keeping hosted storage for binaries. Keep the existing custom artifact-backed
+workspace path available as an alternative backend.
 
 The model is:
+- `REACT_WORKSPACE_IMPLEMENTATION=custom|git` selects the backend
 - one workspace lineage branch per user conversation
 - one immutable named git ref per turn version
 - the public version id remains the existing `turn_...`
@@ -102,6 +105,18 @@ The model is:
 - exact binary refs may also be pulled point-wise when explicitly named
 - the agent can inspect history and commit locally, but cannot pull/push
 - engineering later publishes branch/ref updates outside exec
+
+There are only two supported workspace paradigms:
+- `custom`
+- `git`
+
+Both paradigms keep the same user-facing contract:
+- `fi:...`
+- `react.pull(paths=[...])`
+
+But the agent is instructed differently:
+- in `custom`, it does not reason about the activated workspace as git
+- in `git`, it is explicitly taught that the activated workspace can be explored with local git commands except pull/push
 
 ### Acceptance Criteria
 
@@ -123,6 +138,7 @@ The model is:
 - Shared multi-user project evolution across conversations
 - Automatic eager full-workspace activation for every turn
 - Implicit inference of binary membership in a pulled folder
+- Removing the custom non-git workspace backend
 
 ---
 

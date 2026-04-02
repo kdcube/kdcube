@@ -151,9 +151,10 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
 **react.pull**
 - Accepts `fi:` refs only.
 - For `fi:<turn>.files/<prefix>` folder pulls, the current implementation does **not** scan all hosted storage.
-- It inspects artifact metadata for the referenced turn from timeline/turn-log state, expands the matching descendants, and fetches only the exact matched blobs.
+- In `workspace_implementation=custom`, it inspects artifact metadata for the referenced turn from timeline/turn-log state, expands the matching descendants, and fetches only the exact matched blobs.
+- In `workspace_implementation=git`, `fi:<turn>.files/...` resolves against the git-backed lineage snapshot for that version instead of scanning artifact history.
 - Folder pulls currently imply:
-  - textual/tree content backed by turn artifacts
+  - textual/tree content backed by turn artifacts (`custom`) or a git snapshot tree (`git`)
   - no implicit hosted-binary descendants
 - Hosted binaries are allowed only by exact logical ref, for example:
   - `fi:<turn>.user.attachments/template.xlsx`

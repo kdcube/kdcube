@@ -151,6 +151,7 @@ class BaseWorkflow():
                 bundle_id=self.config.ai_bundle_spec.id,
                 max_tokens=getattr(self.config, "max_tokens", None),
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
+                workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
                 continuation_source=self.continuation_source,
             )
@@ -162,7 +163,10 @@ class BaseWorkflow():
             )
             self._sync_runtime_ctx_bundle_props()
         except Exception:
-            self.runtime_ctx = RuntimeCtx(workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO)
+            self.runtime_ctx = RuntimeCtx(
+                workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
+                workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
+            )
             self.runtime_ctx.continuation_source = self.continuation_source
             self.ctx_browser = ContextBrowser(
                 ctx_client=self.ctx_client,

@@ -203,6 +203,8 @@ Token TTL/uses:
 | `KDCUBE_STORAGE_PATH` | Storage backend root (file:///... or s3://...). |
 | `CB_BUNDLE_STORAGE_URL` | n/a |
 | `BUNDLE_STORAGE_ROOT` | Shared bundle local storage (used by ks: resolvers). Must match docker-compose mount. |
+| `REACT_WORKSPACE_IMPLEMENTATION` | React workspace backend. `custom` keeps artifact/hosting-backed hydration. `git` enables git-backed `fi:<turn>.files/...` slice hydration. Default is `custom`. |
+| `REACT_WORKSPACE_GIT_REPO` | Remote repo used by the git workspace backend. Required when `REACT_WORKSPACE_IMPLEMENTATION=git`. Auth reuses `GIT_HTTP_TOKEN`, `GIT_HTTP_USER`, `GIT_SSH_KEY_PATH`, `GIT_SSH_KNOWN_HOSTS`, and `GIT_SSH_STRICT_HOST_KEY_CHECKING`. |
 | `OPENAI_API_KEY` | Services credentials Ext services |
 | `HUGGING_FACE_API_TOKEN` | n/a |
 | `ANTHROPIC_API_KEY` | n/a |
@@ -283,6 +285,24 @@ Token TTL/uses:
 | `AWS_SDK_LOAD_CONFIG` | optional: make boto3 read ~/.aws/config if present (harmless) |
 | `NO_PROXY` | EC2 stuff. If you run dockercompose on EC2. Running with managed services don't proxy IMDS |
 | `AWS_EC2_METADATA_DISABLED` | make sure SDKs don’t disable IMDS accidentally |
+
+### Assembly -> React workspace env mapping
+
+The reference assembly descriptor may declare:
+
+```yaml
+storage:
+  workspace:
+    type: git      # or custom
+    repo: https://github.com/org/private-workspace.git
+```
+
+The CLI installer maps that to:
+
+- `REACT_WORKSPACE_IMPLEMENTATION`
+- `REACT_WORKSPACE_GIT_REPO`
+
+`repo` is only meaningful when `type=git`.
 
 ### `.env.metrics`
 | Key | Description |

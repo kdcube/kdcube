@@ -27,7 +27,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
     tc_result_path,
     infer_format_from_path,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import rehost_files_from_timeline
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import hydrate_workspace_paths
 
 TOOL_SPEC = {
     "id": "react.patch",
@@ -157,7 +157,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
             old_abs = outdir / old_turn / "files" / old_rel
             if not old_abs.exists():
                 try:
-                    await rehost_files_from_timeline(
+                    await hydrate_workspace_paths(
                         ctx_browser=ctx_browser,
                         paths=[original_path],
                         outdir=outdir,

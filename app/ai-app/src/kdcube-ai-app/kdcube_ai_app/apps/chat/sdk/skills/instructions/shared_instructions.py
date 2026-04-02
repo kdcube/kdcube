@@ -154,54 +154,9 @@ SUGGESTED_FOLLOWUPS_GUIDE = """
 - Keep them brief, specific, and mutually distinct.
 """
 
-WORKSPACE_MODEL_GUIDE_LEGACY = """
-[WORKSPACE MODEL]
-The agent should reason about FOUR distinct spaces, not one flat filesystem:
-
-```text
-VISIBLE / ADDRESSABLE WORKSPACE MODEL
-
-1) CURRENT TURN OUT_DIR (physical; current-turn execution surface)
-   out/
-     turn_<current_turn>/
-       files/           # only normal writable namespace for react tools
-       attachments/     # current-turn attachments and rehosted copies pulled into this turn
-     logs/              # runtime logs and diagnostics
-     timeline.json
-     ...
-   work/                # exec scratch only; not stable collaboration state
-
-2) CONVERSATION ARTIFACT MEMORY (logical; cross-turn; not a browsable folder)
-   ar:...  tc:...  so:...  su:...
-   fi:<older_turn>.files/...
-   fi:<older_turn>.user.attachments/...
-
-3) BUNDLE KNOWLEDGE SPACE `ks:` (logical; read-only virtual folder)
-   ks:<bundle-defined-path>/...
-   ...
-
-4) FUTURE COLLABORATIVE WORKSPACES (planned; not active in current React agent)
-   out/workspaces/<name>/...
-```
-
-- Current turn OUT_DIR starts small and grows only with current-turn outputs, logs, current-turn attachments, and artifacts explicitly rehosted into this turn.
-- Conversation artifact memory is broader than the current turn workspace. Historical artifacts live in timeline blocks, turn logs, sources pool, summaries, and hosting, and are pulled into the current turn only when needed.
-- `fi:` is a logical artifact reference and retrieval handle. It is not a general browsable filesystem for the whole conversation history.
-- `ks:` belongs to the loaded bundle, is read-only, and is separate from turn OUT_DIR. Use exact `ks:` paths with `react.read` when you already know the path. Do not treat `ks:` as part of OUT_DIR.
-- `react.search_files` is only for current-turn physical spaces such as `outdir`, `outdir/<subdir>`, `workdir`, and `workdir/<subdir>`. It does not browse conversation artifact memory and does not browse `ks:`.
-- Some bundles may expose exec-only namespace resolver helpers for browseable spaces such as `ks:`. Those helpers are for generated code inside isolated exec only, not for normal planning-time tool use.
-- If exec code uses a namespace resolver, treat the resolver input `logical_ref` as the logical base. The returned `physical_path` is exec-local only.
-- If exec code browses a resolved `ks:` root and finds descendants, emit the corresponding logical refs such as `ks:<bundle-defined-root>/foo/bar.py` so the agent can later read them normally.
-- If the bundle does not expose a resolver for directory-style `ks:` browsing, then `ks:` is still readable by exact path with `react.read`, but it is not browseable as a directory tree from normal react tools.
-- Write only to the current turn `files/` namespace. Do not treat older turn files as mutable in place.
-- `workdir` is scratch for isolated execution, not stable collaboration state.
-- Future collaborative workspaces may later live under `out/workspaces/<name>/...`, but the current React agent does not have that writable/shared workspace model yet. Do not assume it exists unless the runtime/tooling explicitly exposes it.
-- If you need deeper filesystem-style exploration than the current tools expose, use isolated code or bundle-specific helpers when available. Never assume host shell access.
-"""
-
-WORKSPACE_MODEL_GUIDE_GIT_PULL = """
-[WORKSPACE MODEL — EXPLICIT PULL / GIT-BACKED SNAPSHOT MODE]
-The agent should reason about FOUR distinct spaces, with EXPLICIT workspace activation:
+WORKSPACE_IMPLEMENTATION_GUIDE_CUSTOM = """
+[WORKSPACE MODEL — EXPLICIT PULL / CUSTOM SNAPSHOT MODE]
+The agent should reason about THREE distinct spaces, with EXPLICIT workspace activation:
 
 ```text
 VISIBLE / ADDRESSABLE WORKSPACE MODEL
@@ -223,15 +178,13 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 
 3) BUNDLE KNOWLEDGE SPACE `ks:` (logical; read-only virtual folder)
    ks:<bundle-defined-path>/...
-
-4) FUTURE SHARED COLLABORATIVE WORKSPACES (not active in this mode yet)
-   out/workspaces/<name>/...
 ```
 
 - `fi:` is the versioned snapshot namespace. It is the main way to refer to older turn outputs and attachments.
 - Older snapshot files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
 - `react.pull` accepts `fi:` refs only.
-- Pulling a folder/slice is supported ONLY for `fi:<turn_id>.files/<scope-or-subtree>`. This is the versioned textual project/workspace area.
+- Pulling a folder/slice is supported ONLY for `fi:<turn_id>.files/<scope-or-subtree>`.
+- In this CUSTOM mode, folder pulls are resolved from conversation artifact history / hosting-backed snapshot state, not from git.
 - Pulling `fi:<turn_id>.user.attachments/...` or `fi:<turn_id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
 - After `react.pull`, the materialized local paths are available under OUT_DIR using their physical form, for example:
@@ -242,17 +195,56 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 - `react.search_files` searches local physical spaces (`outdir`, `outdir/<subdir>`, `workdir`, `workdir/<subdir>`). It does not browse logical snapshot memory directly.
 - `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
 - `workdir` is scratch, not durable collaboration state.
-- Future shared workspaces may later live under `out/workspaces/<name>/...`, but they are not active in this mode yet.
 """
 
-WORKSPACE_MODEL_GUIDE = WORKSPACE_MODEL_GUIDE_LEGACY
+WORKSPACE_IMPLEMENTATION_GUIDE_GIT = """
+[WORKSPACE MODEL — EXPLICIT PULL / GIT-BACKED SNAPSHOT MODE]
+The agent should reason about THREE distinct spaces, with EXPLICIT workspace activation:
 
+```text
+VISIBLE / ADDRESSABLE WORKSPACE MODEL
 
-def get_workspace_model_guide(mode=None) -> str:
-    normalized = str(mode or "legacy").strip().lower().replace("-", "_")
-    if normalized in {"git_pull", "git", "pull"}:
-        return WORKSPACE_MODEL_GUIDE_GIT_PULL
-    return WORKSPACE_MODEL_GUIDE_LEGACY
+1) CURRENT TURN OUT_DIR (physical; current-turn execution surface)
+   out/
+     turn_<current_turn>/
+       files/           # current-turn writable namespace
+       attachments/     # current-turn attachments only
+     logs/
+     timeline.json
+     ...
+   work/                # exec scratch only
+
+2) VERSIONED CONVERSATION SNAPSHOTS (logical first, local only after pull)
+   fi:<turn_id>.files/<scope>/<path>
+   fi:<turn_id>.user.attachments/<name>
+   ...
+
+3) BUNDLE KNOWLEDGE SPACE `ks:` (logical; read-only virtual folder)
+   ks:<bundle-defined-path>/...
+```
+
+- `fi:` is the versioned snapshot namespace. It is the main way to refer to older turn outputs and attachments.
+- Older snapshot files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
+- `react.pull` accepts `fi:` refs only.
+- Pulling a folder/slice is supported ONLY for `fi:<turn_id>.files/<scope-or-subtree>`.
+- In this GIT mode, `fi:<turn_id>.files/...` resolves against the conversation's git-backed workspace lineage snapshot for that version.
+- Pulling `fi:<turn_id>.user.attachments/...` or `fi:<turn_id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
+- If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
+- After `react.pull`, the materialized local paths are available under OUT_DIR using their physical form, for example:
+  - `turn_123/files/projectA/src/app.py`
+  - `turn_123/attachments/template.xlsx`
+- `react.read` still works on logical paths. Use it to inspect text context. Use `react.pull` when execution/code needs the local file.
+- Write only to the current turn `files/` namespace. Older pulled versions are local readonly inputs unless you copy/regenerate content into the current turn.
+- `react.search_files` searches local physical spaces (`outdir`, `outdir/<subdir>`, `workdir`, `workdir/<subdir>`). It does not browse logical snapshot memory directly.
+- `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
+- `workdir` is scratch, not durable collaboration state.
+"""
+
+def get_workspace_implementation_guide(implementation: str | None = None) -> str:
+    impl = str(implementation or "custom").strip().lower().replace("-", "_")
+    if impl == "git":
+        return WORKSPACE_IMPLEMENTATION_GUIDE_GIT
+    return WORKSPACE_IMPLEMENTATION_GUIDE_CUSTOM
 
 SCENARIO_FAILURE_STRICTNESS = """
 [SCENARIO / SKILL FAILURE HANDLING (HARD)]:

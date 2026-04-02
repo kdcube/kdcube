@@ -925,7 +925,7 @@ class ReactSolverV2:
                 svc=self.svc,
                 adapters=announced_adapters,
                 infra_adapters=extra_adapters_for_decision,
-                workspace_model=getattr(runtime_ctx, "workspace_model", "legacy") if runtime_ctx else "legacy",
+                workspace_implementation=getattr(runtime_ctx, "workspace_implementation", "custom") if runtime_ctx else "custom",
                 on_progress_delta=mainstream,
                 subscribers=subs,
                 agent_name=role,
@@ -944,7 +944,7 @@ class ReactSolverV2:
             system_text_fn=lambda: build_decision_system_text(
                 adapters=announced_adapters,
                 infra_adapters=extra_adapters_for_decision,
-                workspace_model=getattr(getattr(self.ctx_browser, "runtime_ctx", None), "workspace_model", "legacy"),
+                workspace_implementation=getattr(getattr(self.ctx_browser, "runtime_ctx", None), "workspace_implementation", "custom"),
             ),
             render_params=render_params,
             agent_fn=_decision_agent,

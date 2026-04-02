@@ -28,7 +28,7 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     ATTACHMENT_AWARENESS_COORDINATOR,
     ELABORATION_NO_CLARIFY,
     CITATION_TOKENS,
-    get_workspace_model_guide,
+    get_workspace_implementation_guide,
     SCENARIO_FAILURE_STRICTNESS,
     PATHS_EXTENDED_GUIDE,
     USER_GENDER_ASSUMPTIONS,
@@ -97,7 +97,7 @@ async def coordinator_planner_stream_v2(
     svc: ModelServiceBase,
     *,
     timezone: str,
-    workspace_model: str = "legacy",
+    workspace_implementation: str = "custom",
     context_blocks: Optional[List[Dict[str, Any]]] = None,
     ctx_browser: Any = None,
     emit_status: Optional[Callable[[List[str]], Any]] = None,
@@ -112,7 +112,7 @@ async def coordinator_planner_stream_v2(
     today = _today_str()
     now = _now_up_to_minutes()
     thinking_budget_tokens = min(220, max(80, int(0.12 * (max_tokens or 1200))))
-    workspace_model_guide = get_workspace_model_guide(workspace_model)
+    workspace_guide = get_workspace_implementation_guide(workspace_implementation)
 
     sys_1 = (
         "[ROLE]\n"
@@ -134,7 +134,7 @@ async def coordinator_planner_stream_v2(
         f"{INTERNAL_NOTES_CONSUMER}\n"
         f"{ATTACHMENT_AWARENESS_COORDINATOR}\n"
         f"{CITATION_TOKENS}\n"
-        f"{workspace_model_guide}\n"
+        f"{workspace_guide}\n"
         f"{SCENARIO_FAILURE_STRICTNESS}\n"
         f"{PATHS_EXTENDED_GUIDE}\n"
         f"{USER_GENDER_ASSUMPTIONS}\n"

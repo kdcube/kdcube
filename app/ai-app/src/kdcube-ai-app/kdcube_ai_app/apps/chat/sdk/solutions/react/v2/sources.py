@@ -16,7 +16,7 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import (
     _get_physical_path,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import SOURCE_ID_CV
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import rehost_files_from_timeline
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import hydrate_workspace_paths
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,7 @@ async def ensure_rendering_assets(
                 if physical_path and physical_path.startswith("turn_") and ("/files/" in physical_path or "/attachments/" in physical_path):
                     sid_rehost.append(physical_path)
             if sid_rehost:
-                rehost = await rehost_files_from_timeline(
+                rehost = await hydrate_workspace_paths(
                     ctx_browser=ctx_browser,
                     paths=sid_rehost,
                     outdir=outdir,
@@ -274,7 +274,7 @@ async def ensure_rendering_assets(
         if p.startswith("turn_") and ("/files/" in p or "/attachments/" in p):
             rehost_paths.append(p)
     if rehost_paths:
-        rehost = await rehost_files_from_timeline(
+        rehost = await hydrate_workspace_paths(
             ctx_browser=ctx_browser,
             paths=rehost_paths,
             outdir=outdir,

@@ -2,10 +2,8 @@
 # Copyright (c) 2025 Elena Viter
 import tempfile
 
-import json
 import os
-import asyncio
-import re
+import json
 # kdcube_ai_app/apps/chat/sdk/runtime/solution/solution_workspace.py
 
 import traceback, pathlib, logging
@@ -15,166 +13,20 @@ from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import resolve_artifact_from_timeline
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
+    _guess_mime_from_path,
+    _infer_physical_from_fi,
+    _is_text_mime,
+    _safe_relpath,
+    extract_code_file_paths,
+    extract_fetch_ctx_paths,
+    hydrate_workspace_paths,
+)
 
 logger = logging.getLogger(__name__)
 
-_TEXT_MIMES = {
-    "text/plain", "text/markdown", "text/x-markdown", "text/html", "text/css",
-    "text/csv", "text/tab-separated-values", "text/xml",
-    "application/json", "application/xml",
-    "application/yaml", "application/x-yaml",
-    "application/javascript", "application/x-javascript",
-    "application/x-python", "text/x-python",
-    "application/sql", "text/x-sql",
-}
-
-_CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|attachments)/[^\s'\"\)\];,]+)")
-_REL_FILES_RE = re.compile(r"(?<![A-Za-z0-9_])files/[^\s'\"\)\];,]+")
-_REL_ATTACHMENTS_RE = re.compile(r"(?<![A-Za-z0-9_])attachments/[^\s'\"\)\];,]+")
-_FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
-
 _ALLOWED_READ_BASE64_MIMES = {"application/pdf"}
 _ALLOWED_READ_BASE64_PREFIXES = ("image/",)
-
-
-def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str], List[str]]:
-    """
-    Return (paths, rewritten_paths). Paths are physical (turn_id/files/rel).
-    Relative "files/<rel>" are rewritten to current turn_id.
-    """
-    if not isinstance(code, str) or not code.strip():
-        return [], []
-    found = [m.group(1) for m in _CODE_PATH_RE.finditer(code)]
-    rewritten: List[str] = []
-    def _has_turn_prefix(start_idx: int) -> bool:
-        if start_idx <= 0:
-            return False
-        prefix = code[max(0, start_idx - 64):start_idx]
-        return bool(re.search(r"turn_[A-Za-z0-9_]+/$", prefix))
-
-    for m in _REL_FILES_RE.finditer(code):
-        raw = m.group(0)
-        if _has_turn_prefix(m.start()):
-            continue
-        if turn_id:
-            rewritten.append(f"{turn_id}/{raw}")
-        else:
-            rewritten.append(raw)
-    for m in _REL_ATTACHMENTS_RE.finditer(code):
-        raw = m.group(0)
-        if _has_turn_prefix(m.start()):
-            continue
-        if turn_id:
-            rewritten.append(f"{turn_id}/{raw}")
-        else:
-            rewritten.append(raw)
-    # Strip common trailing punctuation
-    cleaned: List[str] = []
-    for p in found + rewritten:
-        cleaned.append(p.rstrip(")];,"))
-    # de-dup preserve order; exclude current-turn outputs from rehost
-    seen = set()
-    out: List[str] = []
-    current_files_prefix = f"{turn_id}/files/" if turn_id else ""
-    current_att_prefix = f"{turn_id}/attachments/" if turn_id else ""
-    for p in cleaned:
-        if p in seen:
-            continue
-        seen.add(p)
-        if (current_files_prefix and p.startswith(current_files_prefix)) or (
-            current_att_prefix and p.startswith(current_att_prefix)
-        ):
-            continue
-        out.append(p)
-    return out, rewritten
-
-
-def extract_fetch_ctx_paths(code: str) -> List[str]:
-    """
-    Best-effort extraction of logical artifact paths referenced in code for fetch_ctx.
-    Looks for strings like fi:<...>, ar:<...>, so:<...>, tc:<...>.
-    """
-    if not isinstance(code, str) or not code.strip():
-        return []
-    found = [m.group(1) for m in _FETCH_CTX_PATH_RE.finditer(code)]
-    out: List[str] = []
-    seen = set()
-    for p in found:
-        if not p or ":" not in p:
-            continue
-        if p in seen:
-            continue
-        seen.add(p)
-        out.append(p)
-    return out
-
-
-def _safe_relpath(path_value: str) -> bool:
-    try:
-        p = pathlib.PurePosixPath(path_value)
-        if path_value.startswith(("/", "\\")):
-            return False
-        if any(part == ".." for part in p.parts):
-            return False
-        return True
-    except Exception:
-        return False
-
-
-def _infer_physical_from_fi(path: str) -> str:
-    if not isinstance(path, str) or not path.strip():
-        return ""
-    p = path.strip()
-    if p.startswith("fi:"):
-        p = p[len("fi:"):]
-    if ".files/" in p:
-        tid, rel = p.split(".files/", 1)
-        if tid and rel:
-            return f"{tid}/files/{rel}"
-    if ".user.attachments/" in p:
-        tid, rel = p.split(".user.attachments/", 1)
-        if tid and rel:
-            return f"{tid}/attachments/{rel}"
-    if ".attachments/" in p:
-        tid, rel = p.split(".attachments/", 1)
-        if tid and rel:
-            return f"{tid}/attachments/{rel}"
-    if p and _safe_relpath(p):
-        return p
-    return ""
-
-
-def _guess_mime_from_path(path: str) -> str:
-    try:
-        import mimetypes
-        guess, _ = mimetypes.guess_type(path)
-        if guess:
-            return guess.strip()
-        # Fallback for common text formats (mimetypes is often incomplete on macOS).
-        ext = pathlib.Path(path).suffix.lower().lstrip(".")
-        text_exts = {
-            "md": "text/markdown",
-            "markdown": "text/markdown",
-            "txt": "text/plain",
-            "rst": "text/plain",
-            "yaml": "text/plain",
-            "yml": "text/plain",
-            "json": "application/json",
-            "toml": "text/plain",
-            "ini": "text/plain",
-            "cfg": "text/plain",
-            "py": "text/x-python",
-            "js": "text/javascript",
-            "ts": "text/plain",
-            "tsx": "text/plain",
-            "jsx": "text/plain",
-            "html": "text/html",
-            "css": "text/css",
-            "sh": "text/x-shellscript",
-        }
-        return text_exts.get(ext, "")
-    except Exception:
-        return ""
 
 
 def _is_base64_allowed_mime(mime: str) -> bool:
@@ -276,7 +128,7 @@ async def read_artifact_for_react(
         }
     if physical_path:
         try:
-            await rehost_files_from_timeline(
+            await hydrate_workspace_paths(
                 ctx_browser=ctx_browser,
                 paths=[physical_path],
                 outdir=outdir,
@@ -784,12 +636,6 @@ def _is_hosted_path(path: str) -> bool:
     p = path.strip()
     return p.startswith("cb/") or "://" in p
 
-
-def _is_text_mime(m: str | None) -> bool:
-    m = (m or "").lower().strip()
-    if m in _TEXT_MIMES:
-        return True
-    return m.startswith("text/")
 
 def _unique_target(base_dir: pathlib.Path, basename: str) -> pathlib.Path:
     """

@@ -52,6 +52,7 @@ PLATFORM_ENV_GROUPS: dict[str, tuple[str, ...]] = {
         "KDCUBE_STORAGE_PATH",
         "NO_PROXY",
         "PROJECT_ID",
+        "REACT_WORKSPACE_IMPLEMENTATION",
         "REACT_WORKSPACE_GIT_REPO",
         "STREAM_ID_HEADER_NAME",
         "TENANT_ID",

@@ -28,6 +28,7 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
 - `workdir`: working directory for this run.
 - `outdir`: output directory for this run.
 - `bundle_storage`: optional per-bundle managed storage directory for bundle-owned data such as cloned repos, built indexes, and other readonly data prepared by the bundle.
+- `workspace_implementation`: workspace backend selector. `custom` uses the existing artifact/timeline rehost model. `git` resolves `fi:<turn>.files/...` slices from the configured git-backed lineage snapshots. This does not by itself force the prompt into explicit-pull mode.
 - `workspace_git_repo`: optional remote git repo URL used as the authoritative backup/version-control store for React's git-backed workspace lineage snapshots.
 - `model_service`: model service handle.
 - `knowledge_search_fn`: bundle‑supplied search function for `react.search_knowledge`.
@@ -39,7 +40,7 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
 - `debug_log_announce`: emit announce blocks in debug logs.
 - `debug_log_sources_pool`: emit sources pool in debug logs.
 - `debug_timeline`: when `true`, write the fully rendered model context to `debug/rendering/` (one file per render).
-- `workspace_model`: workspace prompt mode. `legacy` keeps the current implicit/rehost model. `git_pull` teaches the agent to activate versioned `fi:` workspace slices explicitly with `react.pull(...)`.
+- `workspace_implementation`: workspace paradigm selector. `custom` keeps artifact/timeline/hosting-backed slice hydration. `git` enables git-backed `fi:<turn>.files/...` slice hydration and the corresponding git-aware agent instructions.
 - `session`: session-level configuration (see below).
 - `cache`: cache-related limits (see below).
 
@@ -56,6 +57,7 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
 
 ### `workspace_git_repo` semantics
 
+- `workspace_git_repo` matters only when `workspace_implementation=git`.
 - `workspace_git_repo` is a runtime hint, not a local filesystem path.
 - It should come from `REACT_WORKSPACE_GIT_REPO`.
 - It identifies the remote repo engineering uses to persist conversation-scoped workspace lineage history.
@@ -66,6 +68,21 @@ This document summarizes runtime configuration fields for the React runtime (`Ru
   - `GIT_SSH_KEY_PATH`
   - `GIT_SSH_KNOWN_HOSTS`
   - `GIT_SSH_STRICT_HOST_KEY_CHECKING`
+
+### `workspace_implementation`
+
+This is the only React workspace paradigm switch:
+
+- `custom`
+  - agent uses `fi:` + `react.pull(...)`
+  - `.files/...` pulls are hydrated from artifact/timeline/hosting-backed snapshot state
+  - agent is not instructed to reason about the workspace as git
+- `git`
+  - agent uses `fi:` + `react.pull(...)`
+  - `.files/...` pulls are hydrated from git-backed lineage snapshots
+  - agent is instructed that the activated workspace can be explored locally with git commands except pull/push
+
+Exact attachment/binary pulls remain point-wise and hosting-backed in both modes.
 
 ## RuntimeSessionConfig (RuntimeCtx.session)
 
