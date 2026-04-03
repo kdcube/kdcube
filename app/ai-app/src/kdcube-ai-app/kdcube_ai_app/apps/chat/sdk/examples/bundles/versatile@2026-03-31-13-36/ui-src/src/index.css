@@ -1,0 +1,80 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light;
+  --ink: #16232f;
+  --muted: #5e6b78;
+  --paper: rgba(255, 251, 244, 0.82);
+  --paper-strong: rgba(255, 255, 255, 0.92);
+  --line: rgba(24, 42, 58, 0.12);
+  --accent: #1d6d73;
+  --accent-soft: rgba(29, 109, 115, 0.12);
+  --gold-soft: rgba(190, 136, 72, 0.14);
+  --danger: #a53f32;
+  --warning: #a46721;
+  --success: #23724f;
+  --shadow: 0 20px 60px rgba(20, 32, 44, 0.1);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  color: var(--ink);
+  font-family: "IBM Plex Sans", "Avenir Next", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(29, 109, 115, 0.14), transparent 26%),
+    radial-gradient(circle at bottom right, rgba(190, 136, 72, 0.16), transparent 32%),
+    linear-gradient(145deg, #f4eddc 0%, #f2f8f6 46%, #fcf8ef 100%);
+}
+
+code,
+pre,
+textarea {
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+a {
+  color: inherit;
+}
+
+.shell-grid {
+  min-height: 100vh;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.2) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.18) 1px, transparent 1px);
+  background-size: 36px 36px;
+}
+
+.glass-panel {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.markdown-body p:first-child,
+.markdown-body ul:first-child,
+.markdown-body ol:first-child,
+.markdown-body pre:first-child,
+.markdown-body blockquote:first-child {
+  margin-top: 0;
+}
+
+.markdown-body p:last-child,
+.markdown-body ul:last-child,
+.markdown-body ol:last-child,
+.markdown-body pre:last-child,
+.markdown-body blockquote:last-child {
+  margin-bottom: 0;
+}

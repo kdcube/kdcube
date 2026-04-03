@@ -130,9 +130,11 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
         return g.compile()
 
     def on_bundle_load(self, **kwargs) -> None:
+        super().on_bundle_load(**kwargs)
         storage_root = self.bundle_storage_root()
         if storage_root:
             (storage_root / "_ops").mkdir(parents=True, exist_ok=True)
+
         return None
 
     def _preferences_storage(self) -> Optional[AIBundleStorage]:
@@ -566,6 +568,16 @@ print(f"wrote {{report_path}}")
         subsystems = dict(config.get("subsystems") or {})
         subsystems.setdefault("preferences_browser", {"dashboard": "ui/PreferencesBrowser.tsx"})
         config["subsystems"] = subsystems
+
+        ui_cfg = dict(config.get("ui") or {})
+        main_view_cfg = dict(ui_cfg.get("main_view") or {})
+        main_view_cfg.setdefault("src_folder", "ui-src")
+        main_view_cfg.setdefault(
+            "build_command",
+            "npm install && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+        )
+        ui_cfg["main_view"] = main_view_cfg
+        config["ui"] = ui_cfg
 
         mcp = dict(config.get("mcp") or {})
         mcp.setdefault("services", {})
