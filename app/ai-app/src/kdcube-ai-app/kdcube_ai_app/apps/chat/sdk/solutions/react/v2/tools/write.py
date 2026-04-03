@@ -9,11 +9,15 @@ import json
 import pathlib
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import (
+    ARTIFACT_NAMESPACE_FILES,
+    build_logical_artifact_path,
     build_artifact_meta_block,
     materialize_inline_artifact_to_file,
     build_artifact_view,
     normalize_physical_path,
     detect_edit,
+    infer_artifact_namespace,
+    physical_path_to_logical_path,
 )
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
@@ -99,7 +103,10 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         return state
     ext_notice = None
     rewrite_notice = None
-    if artifact_name.startswith("fi:") and ".files/" not in artifact_name[len("fi:"):]:
+    if artifact_name.startswith("fi:") and all(
+        marker not in artifact_name[len("fi:"):]
+        for marker in (".files/", ".outputs/")
+    ):
         state["exit_reason"] = "error"
         state["error"] = {"where": "tool_execution", "error": "invalid_write_logical_path", "managed": True}
         return state
@@ -133,6 +140,8 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         state["error"] = {"where": "tool_execution", "error": "unsafe_path", "managed": True}
         return state
     artifact_name = phys_path
+    artifact_namespace = infer_artifact_namespace(artifact_name, default=ARTIFACT_NAMESPACE_FILES)
+    artifact_display_path = f"{artifact_namespace}/{rel_path}" if rel_path else artifact_name
 
     text = None
     if isinstance(generated_data, str):
@@ -145,7 +154,11 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
 
     turn_id = (ctx_browser.runtime_ctx.turn_id or "")
     artifact_rel = (rel_path or "").strip()
-    artifact_path = f"fi:{turn_id}.files/{artifact_rel}" if (turn_id and artifact_rel) else ""
+    artifact_path = (
+        build_logical_artifact_path(turn_id=turn_id, namespace=artifact_namespace, relpath=artifact_rel)
+        if (turn_id and artifact_rel)
+        else ""
+    )
     display_params = dict(tool_call.get("params") or {})
     if "content" in display_params:
         raw_content = display_params.get("content")
@@ -224,9 +237,8 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
     artifact_view = build_artifact_view(
         turn_id=turn_id,
         is_current=True,
-        artifact_id=rel_path or artifact_name,
+        artifact_id=artifact_display_path or artifact_name,
         tool_id=tool_id,
-        # Use rel_path for saving inline content under outdir/<turn_id>/files.
         value={"format": fmt or "markdown", "content": text, "path": (rel_path or artifact_name), "text": text},
         summary="",
         artifact_kind="display" if kind == "display" else "file",
@@ -246,7 +258,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
         artifact=artifact_view,
         outdir=pathlib.Path(state["outdir"]),
         turn_id=turn_id,
-        filename_hint=rel_path or artifact_name,
+        filename_hint=artifact_display_path or artifact_name,
         mime_hint=None,
         visibility=visibility,
         scratchpad=None,
@@ -301,8 +313,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
                     message="Hosting failed (no hosted result). User will not receive a downloadable file.",
                     rel="result",
                 )
-    artifact_rel = (rel_path or "").strip()
-    artifact_path = f"fi:{turn_id}.files/{artifact_rel}" if (turn_id and artifact_rel) else ""
+    artifact_path = physical_path_to_logical_path(artifact_name)
     physical_path = artifact_name
     edited = detect_edit(
         timeline=getattr(ctx_browser, "timeline", None),

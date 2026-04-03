@@ -8,6 +8,13 @@ import pathlib
 import re
 from typing import Any, Dict, List, Optional
 
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import (
+    ARTIFACT_NAMESPACE_ATTACHMENTS,
+    ARTIFACT_NAMESPACE_FILES,
+    ARTIFACT_NAMESPACE_OUTPUTS,
+    physical_path_to_logical_path,
+    split_logical_artifact_path,
+)
 
 WORKSPACE_IMPLEMENTATION_CUSTOM = "custom"
 WORKSPACE_IMPLEMENTATION_GIT = "git"
@@ -22,8 +29,9 @@ _TEXT_MIMES = {
     "application/sql", "text/x-sql",
 }
 
-_CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|attachments)/[^\s'\"\)\];,]+)")
+_CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|outputs|attachments)/[^\s'\"\)\];,]+)")
 _REL_FILES_RE = re.compile(r"(?<![A-Za-z0-9_])files/[^\s'\"\)\];,]+")
+_REL_OUTPUTS_RE = re.compile(r"(?<![A-Za-z0-9_])outputs/[^\s'\"\)\];,]+")
 _REL_ATTACHMENTS_RE = re.compile(r"(?<![A-Za-z0-9_])attachments/[^\s'\"\)\];,]+")
 _FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
 _TURN_ROOT_RE = re.compile(r"\b(turn_[A-Za-z0-9_]+)\b")
@@ -61,6 +69,11 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
         if _has_turn_prefix(m.start()):
             continue
         rewritten.append(f"{turn_id}/{raw}" if turn_id else raw)
+    for m in _REL_OUTPUTS_RE.finditer(code):
+        raw = m.group(0)
+        if _has_turn_prefix(m.start()):
+            continue
+        rewritten.append(f"{turn_id}/{raw}" if turn_id else raw)
     for m in _REL_ATTACHMENTS_RE.finditer(code):
         raw = m.group(0)
         if _has_turn_prefix(m.start()):
@@ -74,12 +87,15 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
     seen = set()
     out: List[str] = []
     current_files_prefix = f"{turn_id}/files/" if turn_id else ""
+    current_outputs_prefix = f"{turn_id}/outputs/" if turn_id else ""
     current_att_prefix = f"{turn_id}/attachments/" if turn_id else ""
     for p in cleaned:
         if p in seen:
             continue
         seen.add(p)
         if (current_files_prefix and p.startswith(current_files_prefix)) or (
+            current_outputs_prefix and p.startswith(current_outputs_prefix)
+        ) or (
             current_att_prefix and p.startswith(current_att_prefix)
         ):
             continue
@@ -131,19 +147,13 @@ def _infer_physical_from_fi(path: str) -> str:
     if not isinstance(path, str) or not path.strip():
         return ""
     p = path.strip()
-    if p.startswith("fi:"):
-        p = p[len("fi:"):]
-    if ".files/" in p:
-        tid, rel = p.split(".files/", 1)
-        if tid and rel:
+    tid, namespace, rel = split_logical_artifact_path(p)
+    if tid and rel:
+        if namespace == ARTIFACT_NAMESPACE_FILES:
             return f"{tid}/files/{rel}"
-    if ".user.attachments/" in p:
-        tid, rel = p.split(".user.attachments/", 1)
-        if tid and rel:
-            return f"{tid}/attachments/{rel}"
-    if ".attachments/" in p:
-        tid, rel = p.split(".attachments/", 1)
-        if tid and rel:
+        if namespace == ARTIFACT_NAMESPACE_OUTPUTS:
+            return f"{tid}/outputs/{rel}"
+        if namespace == ARTIFACT_NAMESPACE_ATTACHMENTS:
             return f"{tid}/attachments/{rel}"
     if p and _safe_relpath(p):
         return p
@@ -308,18 +318,7 @@ def latest_workspace_publish_event(
 
 
 def physical_to_logical_artifact_path(path: str) -> str:
-    raw = str(path or "").strip().strip("/")
-    if not raw:
-        return ""
-    if "/files/" in raw:
-        turn_id, rel = raw.split("/files/", 1)
-        if turn_id and rel:
-            return f"fi:{turn_id}.files/{rel}"
-    if "/attachments/" in raw:
-        turn_id, rel = raw.split("/attachments/", 1)
-        if turn_id and rel:
-            return f"fi:{turn_id}.user.attachments/{rel}"
-    return ""
+    return physical_path_to_logical_path(path)
 
 
 async def hydrate_workspace_paths(
@@ -331,7 +330,7 @@ async def hydrate_workspace_paths(
     """
     Materialize requested physical workspace paths using the configured implementation.
     Files under <turn>/files may come from custom timeline rehost or git-backed snapshots.
-    Attachments always use the custom artifact/hosting path.
+    Outputs and attachments always use the custom artifact/hosting path.
     """
     normalized = [str(p).strip() for p in (paths or []) if isinstance(p, str) and str(p).strip()]
     if not normalized:

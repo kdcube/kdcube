@@ -53,6 +53,44 @@ async def test_rehost_files_from_timeline_base64(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_rehost_outputs_from_timeline_exact_file(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_ctx", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "react.tool.result",
+                "mime": "application/json",
+                "text": '{"artifact_path":"fi:turn_prev.outputs/test_results.txt","physical_path":"turn_prev/outputs/test_results.txt"}',
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "text/plain",
+                "path": "fi:turn_prev.outputs/test_results.txt",
+                "text": "ok\n",
+                "turn_id": "turn_prev",
+            },
+        ]
+    }
+
+    class _Settings:
+        STORAGE_PATH = str(tmp_path)
+
+    import kdcube_ai_app.apps.chat.sdk.config as cfg
+    cfg.get_settings = lambda: _Settings()
+
+    res = await rehost_files_from_timeline(
+        ctx_browser=ctx,
+        paths=["turn_prev/outputs/test_results.txt"],
+        outdir=tmp_path,
+    )
+
+    assert "turn_prev/outputs/test_results.txt" in res.get("rehosted", [])
+    assert (tmp_path / "turn_prev" / "outputs" / "test_results.txt").read_text(encoding="utf-8") == "ok\n"
+
+
+@pytest.mark.asyncio
 async def test_rehost_files_from_timeline_expands_directory_prefix(tmp_path):
     runtime = RuntimeCtx(turn_id="turn_ctx", outdir=str(tmp_path), workdir=str(tmp_path))
     ctx = FakeBrowser(runtime)

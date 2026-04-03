@@ -8,11 +8,17 @@ see_also:
   - ks:docs/sdk/agents/react/conversation-artifacts-README.md
   - ks:docs/sdk/agents/react/turn-log-README.md
   - ks:docs/sdk/agents/react/react-context-README.md
+  - ks:docs/sdk/agents/react/design/files-vs-outputs-README.md
 ---
 # Turn Data (Conversation Fetch)
 
 This document describes the `/conversations/{id}/fetch` payload and how it is constructed from
 turn logs and stream artifacts. It reflects the current UI expectations in the reference client.
+
+Scope:
+- this document is about fetch/UI payload shape
+- it does not define workspace-membership semantics
+- `outputs/...` artifacts already surface through the same external file artifact path unless UI needs a stronger distinction
 
 ## Fetch flow (server)
 Endpoint: `POST /api/cb/conversations/{tenant}/{project}/{conversation_id}/fetch`
@@ -108,6 +114,10 @@ From the reconstructed turn view:
 - **Display artifacts** (`kind=display`) are not emitted as `artifact:assistant.file`.
   If UI needs them, they must be surfaced via stream artifacts (conv.timeline_text.stream)
   or by adding a new artifact type.
+- Future namespace note:
+  - assistant artifact paths are now split into durable workspace `files/...` and non-workspace `outputs/...`
+  - fetch does not need a new top-level artifact family immediately
+  - both still surface as external assistant files, with the namespace preserved in metadata/path
 - Stream artifacts `conv.thinking.stream` and `conv.timeline_text.stream` are now **synthesized**
   from the turn log timeline (no longer persisted blobs).
 

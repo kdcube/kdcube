@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/agents/react/source-pool-README.md
   - ks:docs/sdk/agents/react/external-exec-README.md
   - ks:docs/exec/distributed-exec-README.md
+  - ks:docs/sdk/agents/react/design/files-vs-outputs-README.md
 ---
 # ReAct Turn Workspace
 
@@ -22,6 +23,10 @@ This document defines the **actual workspace structure** used by ReAct and how i
 
 The workspace is execution state. Canonical conversation state still lives in timeline/sources/turn-log artifacts.
 
+Scope:
+- this document describes the concrete workspace filesystem and lifecycle
+- the current namespace separation between workspace files and non-workspace outputs is tracked in `design/files-vs-outputs-README.md`
+
 ## Effective agent workspace model
 
 The agent does **not** perceive one flat filesystem. It reasons across several surfaces:
@@ -32,7 +37,8 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 1) CURRENT TURN OUT_DIR (physical; current-turn execution surface)
    out/
      turn_<current_turn>/
-       files/           # only normal writable namespace for react tools
+       files/           # durable workspace/project namespace
+       outputs/         # non-workspace produced artifacts
        attachments/     # current-turn attachments and rehosted copies pulled into this turn
      logs/              # runtime logs and diagnostics
      timeline.json
@@ -48,13 +54,13 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    ks:<bundle-defined-path>/...
    ...
 
-4) FUTURE COLLABORATIVE WORKSPACES (planned; not active in current React agent)
-   out/workspaces/<name>/...
 ```
 
 Current behavior:
-- History is preserved physically under `out/turn_<id>/files/...` and `out/turn_<id>/attachments/...`.
-- Writes for the current turn go only to `out/<current_turn>/files/...`.
+- History is preserved physically under `out/turn_<id>/files/...`, `out/turn_<id>/outputs/...`, and `out/turn_<id>/attachments/...`.
+- Writes for the current turn go to:
+  - `out/<current_turn>/files/...` for durable workspace/project state
+  - `out/<current_turn>/outputs/...` for non-workspace produced artifacts
 - Reads can target:
   - versioned turn artifacts and attachments
   - any readable file already present under `out/` (for example `out/logs/docker.err.log`)
@@ -78,6 +84,7 @@ Workspace implementation (`RuntimeCtx.workspace_implementation`):
   - the agent may use local git inspection/history/edit commands inside that current-turn repo, except pull/push/fetch
 - in both modes:
   - `fi:<turn_id>.files/<scope-or-subtree>` may be pulled as a subtree
+  - `fi:<turn_id>.outputs/<file>` may be pulled as an exact file ref
   - `fi:<turn_id>.user.attachments/<name>` may be pulled only as an exact file ref
   - folder pulls do not imply hosted binaries; binary files must be named point-wise
   - in `git` mode, exact non-text `.files/...` refs that resolve to hosted artifacts are still hydrated from artifact/hosting history, not from git
@@ -197,15 +204,18 @@ Logical `fi:` paths map to physical `out/` paths by convention:
 Other logical paths (`ar:`, `tc:`, `so:`) resolve from timeline state and are not always direct files.
 
 Workspace/read-write summary:
-- `react.write`, `react.patch`, rendering tools, and exec outputs write to the current turn file namespace.
+- `react.write`, `react.patch`, rendering tools, and exec outputs may write to either:
+  - `turn_<id>/files/...` for durable workspace state
+  - `turn_<id>/outputs/...` for non-workspace produced artifacts
 - `react.read` can load any readable OUT_DIR file through `fi:...`.
 - `react.pull` materializes selected `fi:` snapshot refs locally under OUT_DIR for later exec/code use.
 - `.files/...` pulls come from:
   - artifact/timeline/hosting-backed snapshot state in `custom`
   - git-backed lineage snapshots in `git`
+- `.outputs/...` pulls always come from artifact/timeline/hosting-backed snapshot state
 - exact attachment pulls still come from hosted artifact storage in both modes
 - exact non-text `.files/...` refs also stay on the hosted/artifact path when timeline metadata says the file is a hosted binary artifact
-- `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; attachment/binary pulls must be exact file refs
+- `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; `fi:<turn_id>.outputs/...` and attachment/binary pulls must be exact file refs
 - exec/code and historical cross-turn patching no longer auto-materialize historical workspace files; if the file is not already local, React must `react.pull(...)` it first
 - `react.search_files` can search all of OUT_DIR and returns `logical_path` for OUT_DIR hits so the agent can immediately call `react.read`.
 - workdir is searchable but is still not a general-purpose readable namespace for `react.read`.

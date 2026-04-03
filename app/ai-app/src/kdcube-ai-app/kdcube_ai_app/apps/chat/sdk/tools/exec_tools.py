@@ -166,14 +166,14 @@ def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, A
         if "/attachments/" in safe_filename:
             return None, {
                 "code": "invalid_filename",
-                "message": "Contract filename must be under turn_<id>/files/ (attachments not allowed)",
+                "message": "Contract filename must be under turn_<id>/files/ or turn_<id>/outputs/ (attachments not allowed)",
             }
-        if not re.match(r"^turn_[^/]+/files/", safe_filename):
+        if not re.match(r"^turn_[^/]+/(files|outputs)/", safe_filename):
             return None, {
                 "code": "invalid_filename",
                 "message": (
                     "filename must be OUTPUT_DIR-relative and start with "
-                    "'turn_<id>/files/': "
+                    "'turn_<id>/files/' or 'turn_<id>/outputs/': "
                     f"{filename}"
                 ),
             }
@@ -235,7 +235,7 @@ def normalize_exec_contract_for_turn(
 ) -> Tuple[Optional[List[Dict[str, Any]]], List[Dict[str, str]], Optional[Dict[str, Any]]]:
     """
     Normalize exec contract to current turn:
-    - contract entries must target turn_<id>/files/<name>
+    - contract entries must target turn_<id>/files/<name> or turn_<id>/outputs/<name>
     - if turn_id is missing in filename, rewrite to current turn
     - attachments are forbidden in contract
     Returns (normalized_list, rewrites, error)
@@ -274,18 +274,24 @@ def normalize_exec_contract_for_turn(
         if "/attachments/" in filename or filename.startswith("attachments/") or filename.startswith(f"{turn_id}/attachments/"):
             return None, [], {
                 "code": "invalid_filename",
-                "message": "Contract filename must be under turn_<id>/files/ (attachments not allowed)",
+                "message": "Contract filename must be under turn_<id>/files/ or turn_<id>/outputs/ (attachments not allowed)",
             }
         rewritten = None
         if filename.startswith("turn_"):
-            if not filename.startswith(f"{turn_id}/files/"):
+            if not (
+                filename.startswith(f"{turn_id}/files/")
+                or filename.startswith(f"{turn_id}/outputs/")
+            ):
                 return None, [], {
                     "code": "invalid_filename",
-                    "message": "Contract filename must use current turn_id and files/ path",
+                    "message": "Contract filename must use current turn_id and files/ or outputs/ path",
                 }
         elif filename.startswith("files/"):
             rel = filename[len("files/") :]
             rewritten = f"{turn_id}/files/{rel}"
+        elif filename.startswith("outputs/"):
+            rel = filename[len("outputs/") :]
+            rewritten = f"{turn_id}/outputs/{rel}"
         else:
             rewritten = f"{turn_id}/files/{filename}"
         if rewritten:
@@ -306,8 +312,8 @@ def normalize_exec_contract_for_turn(
     return normalized, rewrites, None
 
 
-_QUALIFIED_PATH_RE = re.compile(r"turn_[A-Za-z0-9_]+/(files|attachments)/[^\s'\"\)\];,]+")
-_UNQUALIFIED_PATH_RE = re.compile(r"(files|attachments)/[^\s'\"\)\];,]+")
+_QUALIFIED_PATH_RE = re.compile(r"turn_[A-Za-z0-9_]+/(files|outputs|attachments)/[^\s'\"\)\];,]+")
+_UNQUALIFIED_PATH_RE = re.compile(r"(files|outputs|attachments)/[^\s'\"\)\];,]+")
 
 
 def rewrite_exec_code_paths(
@@ -316,8 +322,8 @@ def rewrite_exec_code_paths(
     turn_id: str,
 ) -> Tuple[str, List[Dict[str, str]]]:
     """
-    Rewrite unqualified files/ or attachments/ paths in code to current turn_id.
-    Leaves already qualified turn_<id>/files|attachments paths intact.
+    Rewrite unqualified files/, outputs/, or attachments/ paths in code to current turn_id.
+    Leaves already qualified turn_<id>/files|outputs|attachments paths intact.
     Returns (rewritten_code, rewrites).
     """
     if not isinstance(code, str) or not code.strip() or not turn_id:
@@ -475,7 +481,7 @@ class ExecTools:
             "[INPUTS]\n"
             "- When called from React decision, the code is provided in <channel:code> (not in params).\n"
             "1) `contract` (list or JSON string, REQUIRED): list of output files specs with fields:\n"
-            "   - filename (OUTPUT_DIR‑relative; MUST start with turn_<id>/files/)\n"
+            "   - filename (OUTPUT_DIR‑relative; MUST start with turn_<id>/files/ or turn_<id>/outputs/)\n"
             "   - description (what this file contains / why it was produced)\n"
             "   - visibility (optional: `external` or `internal`; default `external`)\n"
             "   These are outputs of this program that it promises to produce.\n"
@@ -500,11 +506,13 @@ class ExecTools:
             "FILES & PATHS\n"
             "- `OUTPUT_DIR` is the runtime output root.\n"
             "- `OUT_DIR` is also available as `Path(OUTPUT_DIR)` if you prefer Path operations.\n"
-            "- Input artifacts from context are available by their filenames under OUTPUT_DIR/<turn_id>/files/.\n"
+            "- Input workspace artifacts from context are available by their filenames under OUTPUT_DIR/<turn_id>/files/.\n"
+            "- Historical or generated non-workspace artifacts may also be under OUTPUT_DIR/<turn_id>/outputs/.\n"
             "- User attachments are available under OUTPUT_DIR/<turn_id>/attachments/.\n"
-            "- Write your outputs to the provided `filename` paths under OUTPUT_DIR/<turn_id>/files/.\n"
+            "- Write durable project/workspace state to OUTPUT_DIR/<turn_id>/files/.\n"
+            "- Write reports, test results, and other non-workspace deliverables to OUTPUT_DIR/<turn_id>/outputs/.\n"
             "- Build paths like:\n"
-            "  `Path(OUTPUT_DIR) / \"<turn_id>/files/my_file.ext\"`.\n"
+            "  `Path(OUTPUT_DIR) / \"<turn_id>/files/my_file.ext\"` or `Path(OUTPUT_DIR) / \"<turn_id>/outputs/report.txt\"`.\n"
             "- Network access is disabled in the sandbox; any network calls will fail.\n"
             "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
             "- File MIME is inferred from filename extension (no mime in contract).\n"

@@ -29,12 +29,13 @@ TOOL_SPEC = {
         "Materialize selected fi: snapshot refs locally under OUT_DIR so later exec/code can use them by physical path. "
         "Use this for versioned files/folders you need locally. "
         "Folder pulls are supported only for fi:<turn_id>.files/<scope-or-subtree>. "
-        "Attachment/binary pulls must name exact fi:<turn_id>.user.attachments/<name> refs."
+        "Non-workspace outputs and attachment/binary pulls must name exact refs."
     ),
     "args": {
         "paths": (
             "list[str] of fi: refs to materialize locally. "
             "Allowed: fi:<turn_id>.files/<path> (exact file or subtree), "
+            "fi:<turn_id>.outputs/<file> (exact file only), "
             "fi:<turn_id>.user.attachments/<file> (exact file only), "
             "and legacy fi:<turn_id>.attachments/<file> (exact file only)."
         ),
@@ -55,6 +56,8 @@ def _kind_for_physical(path: str) -> str:
     raw = str(path or "").strip()
     if "/attachments/" in raw:
         return "attachment"
+    if "/outputs/" in raw:
+        return "output"
     return "files"
 
 
@@ -100,12 +103,12 @@ async def handle_react_pull(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 "reason": "unresolvable_fi_ref",
             })
             continue
-        if "/attachments/" in physical:
+        if "/attachments/" in physical or "/outputs/" in physical:
             artifact = await resolve_logical_artifact(ctx_browser=ctx_browser, path=raw)
             if not isinstance(artifact, dict):
                 invalid.append({
                     "path": raw,
-                    "reason": "attachment_pulls_require_exact_file_ref",
+                    "reason": "exact_artifact_pull_requires_exact_file_ref",
                 })
                 continue
         if physical in seen_physical:

@@ -11,6 +11,7 @@ import pathlib
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import (
     build_artifact_meta_block,
     build_artifact_view,
+    infer_artifact_namespace,
     normalize_physical_path,
     physical_path_to_logical_path,
     detect_edit,
@@ -139,6 +140,7 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
     if not phys_path or not is_safe_relpath(rel_path):
         return _fail("unsafe_path", "react.patch path is unsafe or invalid.", extra={"path": params.get("path")})
     artifact_name = phys_path
+    artifact_namespace = infer_artifact_namespace(artifact_name)
     if not isinstance(patch_text, str) or not patch_text.strip():
         return _fail("missing_patch", "react.patch requires non-empty params.patch.")
 
@@ -146,14 +148,16 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
     abs_path = outdir / artifact_name
     source_abs = abs_path
     target_preexisting = abs_path.exists()
-    # If patch referenced an older turn file, copy it into current turn namespace
-    if original_path.startswith("turn_") and "/files/" in original_path:
+    # If patch referenced an older turn artifact, copy it into current turn namespace
+    if original_path.startswith("turn_") and any(marker in original_path for marker in ("/files/", "/outputs/")):
         try:
-            old_turn, old_rel = original_path.split("/files/", 1)
+            marker = "/outputs/" if "/outputs/" in original_path else "/files/"
+            old_turn, old_rel = original_path.split(marker, 1)
         except Exception:
             old_turn, old_rel = "", ""
         if old_turn and old_turn != turn_id:
-            old_abs = outdir / old_turn / "files" / old_rel
+            historical_namespace = "outputs" if marker == "/outputs/" else "files"
+            old_abs = outdir / old_turn / historical_namespace / old_rel
             if not old_abs.exists():
                 logical_old = physical_path_to_logical_path(original_path) or original_path
                 return _fail(
@@ -210,9 +214,9 @@ async def handle_react_patch(*, react: Any, ctx_browser: Any, state: Dict[str, A
     artifact_view = build_artifact_view(
         turn_id=turn_id,
         is_current=True,
-        artifact_id=rel_path or artifact_name,
+        artifact_id=(f"{artifact_namespace}/{rel_path}" if rel_path else artifact_name),
         tool_id=tool_id,
-        value={"format": "patch", "content": display_patch_text, "path": (rel_path or artifact_name), "text": display_patch_text},
+        value={"format": "patch", "content": display_patch_text, "path": (f"{artifact_namespace}/{rel_path}" if rel_path else artifact_name), "text": display_patch_text},
         summary="",
         artifact_kind="display" if kind == "display" else "file",
         visibility="external",

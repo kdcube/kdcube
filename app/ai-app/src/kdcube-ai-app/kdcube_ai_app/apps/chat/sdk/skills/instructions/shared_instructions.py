@@ -165,6 +165,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    out/
      turn_<current_turn>/
        files/           # current-turn writable namespace
+       outputs/         # current-turn produced artifacts, not workspace history
        attachments/     # current-turn attachments only
      logs/
      timeline.json
@@ -173,6 +174,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 
 2) VERSIONED CONVERSATION SNAPSHOTS (logical first, local only after pull)
    fi:<turn_id>.files/<scope>/<path>
+   fi:<turn_id>.outputs/<scope>/<path>
    fi:<turn_id>.user.attachments/<name>
    ...
 
@@ -180,10 +182,11 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    ks:<bundle-defined-path>/...
 ```
 
-- `fi:` is the versioned snapshot namespace. It is the main way to refer to older turn outputs and attachments.
+- `fi:` is the versioned snapshot namespace. It is the main way to refer to older workspace files, non-workspace outputs, and attachments.
 - Older snapshot files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
 - `react.pull` accepts `fi:` refs only.
 - Pulling a folder/slice is supported ONLY for `fi:<turn_id>.files/<scope-or-subtree>`.
+- Pulling `fi:<turn_id>.outputs/...` is allowed only as an EXACT file ref.
 - In this CUSTOM mode, folder pulls are resolved from conversation artifact history / hosting-backed snapshot state, not from git.
 - Pulling `fi:<turn_id>.user.attachments/...` or `fi:<turn_id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
@@ -192,14 +195,19 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
   - `turn_123/attachments/template.xlsx`
 - `react.read` still works on logical paths. Use it to inspect text context. Use `react.pull` when execution/code needs the local file.
 - Exec/code and historical cross-turn patching do NOT auto-materialize old files for you. If a historical file is not already local, `react.pull(...)` must happen first.
-- Write only to the current turn `files/` namespace. Older pulled versions are local readonly inputs unless you copy/regenerate content into the current turn.
-- For current-turn writes, patches, render outputs, and exec-produced files, prefer the concise current-turn form:
-  - `files/<scope>/<path>`
-  Runtime binds that to the current turn automatically.
+- Write durable project/workspace state only to the current turn `files/` namespace.
+- Use `outputs/<scope>/<path>` for reports, test results, exports, and other produced artifacts that should NOT become workspace history.
+- For current-turn writes, patches, render outputs, and exec-produced files, prefer these concise forms:
+  - `files/<scope>/<path>` for durable workspace/project state
+  - `outputs/<scope>/<path>` for non-workspace produced artifacts
+  Runtime binds both to the current turn automatically.
 - Keep the workspace tidy by choosing a meaningful scope and reusing it across turns for the same project:
   - `files/bookbot/...`
   - `files/demo_proj/...`
-- Reserve `files/tmp/...` only for disposable scratch outputs.
+- Keep produced artifacts equally tidy:
+  - `outputs/bookbot/report.md`
+  - `outputs/demo_proj/test_results.txt`
+- Reserve `outputs/tmp/...` only for disposable scratch outputs.
 - `react.search_files` searches local physical spaces (`outdir`, `outdir/<subdir>`, `workdir`, `workdir/<subdir>`). It does not browse logical snapshot memory directly.
 - `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
 - `workdir` is scratch, not durable collaboration state.
@@ -216,6 +224,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    out/
      turn_<current_turn>/
        files/           # current-turn writable namespace
+       outputs/         # current-turn produced artifacts, not workspace history
        attachments/     # current-turn attachments only
      logs/
      timeline.json
@@ -224,6 +233,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 
 2) VERSIONED CONVERSATION SNAPSHOTS (logical first, local only after pull)
    fi:<turn_id>.files/<scope>/<path>
+   fi:<turn_id>.outputs/<scope>/<path>
    fi:<turn_id>.user.attachments/<name>
    ...
 
@@ -231,11 +241,12 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
    ks:<bundle-defined-path>/...
 ```
 
-- `fi:` is the versioned snapshot namespace. It is the main way to refer to older turn outputs and attachments.
+- `fi:` is the versioned snapshot namespace. It is the main way to refer to older workspace files, non-workspace outputs, and attachments.
 - Older snapshot files are NOT assumed to be present locally by default. If you need them for code/execution, pull them explicitly with `react.pull(paths=[...])`.
 - `react.pull` accepts `fi:` refs only.
 - Pulling a folder/slice is supported ONLY for `fi:<turn_id>.files/<scope-or-subtree>`.
 - In this GIT mode, `fi:<turn_id>.files/...` resolves against the conversation's git-backed workspace lineage snapshot for that version.
+- Pulling `fi:<turn_id>.outputs/...` is allowed only as an EXACT file ref and is always resolved through hosted/custom artifact history, not git.
 - Pulling `fi:<turn_id>.user.attachments/...` or `fi:<turn_id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
 - The current turn root `turn_<current_turn>/` is bootstrapped as a local git repo in OUT_DIR.
@@ -243,6 +254,7 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 - Runtime keeps git history/refs available there, but it does NOT eagerly populate the worktree with project files.
 - In git mode, that current-turn repo is the active lineage workspace for ongoing project work.
 - Your main workspace, as you should mentally organize and inspect it, is `turn_<current_turn>/files/...`.
+- `turn_<current_turn>/outputs/...` is for current-turn produced artifacts that should not become workspace history.
 - Treat `turn_<current_turn>/files/...` as the authoritative project tree for the turn.
 - `react.pull(fi:<older_turn>.files/...)` creates a version-scoped historical snapshot view under `turn_<older_turn>/files/...`; it does NOT implicitly replace or activate the current-turn worktree.
 - Use `react.checkout(version="<turn_id>")` only in the rare case when you intentionally want to replace the whole active current-turn workspace with a historical version.
@@ -264,14 +276,19 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
   - `turn_123/files/projectA/src/app.py`
   - `turn_123/attachments/template.xlsx`
 - `react.read` still works on logical paths. Use it to inspect text context. Use `react.pull` when execution/code needs the local file.
-- Write only to the current turn `files/` namespace. Older pulled versions are local readonly inputs unless you copy/regenerate content into the current turn.
-- For current-turn writes, patches, render outputs, and exec-produced files, prefer the concise current-turn form:
-  - `files/<scope>/<path>`
-  Runtime binds that to the current turn automatically.
+- Write durable project/workspace state only to the current turn `files/` namespace. Older pulled versions are local readonly inputs unless you copy/regenerate content into the current turn.
+- Use `outputs/<scope>/<path>` for reports, test results, exports, and other produced artifacts that should NOT become workspace history or git lineage state.
+- For current-turn writes, patches, render outputs, and exec-produced files, prefer these concise current-turn forms:
+  - `files/<scope>/<path>` for durable workspace/project state
+  - `outputs/<scope>/<path>` for non-workspace produced artifacts
+  Runtime binds both to the current turn automatically.
 - Keep the workspace tidy by choosing a meaningful scope and reusing it across turns for the same project:
   - `files/bookbot/...`
   - `files/demo_proj/...`
-- Reserve `files/tmp/...` only for disposable scratch outputs.
+- Keep produced artifacts equally tidy:
+  - `outputs/bookbot/report.md`
+  - `outputs/demo_proj/test_results.txt`
+- Reserve `outputs/tmp/...` only for disposable scratch outputs.
 - `react.search_files` searches local physical spaces (`outdir`, `outdir/<subdir>`, `workdir`, `workdir/<subdir>`). It does not browse logical snapshot memory directly.
 - `ks:` remains read-only and separate from OUT_DIR. Use `react.read` or bundle-specific tools for it.
 - `workdir` is scratch, not durable collaboration state.
@@ -381,10 +398,13 @@ PATHS_EXTENDED_GUIDE = """
 - Files produced by react in that turn:
     - `fi:<turn_id>.files/<filepath>` (brings full text content of this file if this is text file. This also works for files produced by react.write with kind='display'.
       For pdf/image files, they will be attached as multimodal attachments. Filepath can be / and . delimited. relative path)
+    - `fi:<turn_id>.outputs/<filepath>` (brings full text content of this non-workspace artifact if this is text file.
+      For pdf/image files, they will be attached as multimodal attachments. Filepath can be / and . delimited. relative path)
       Other binary files such as xlsx/xls/pptx/docx are not decoded by `react.read`; if you created them yourself,
       inspect the generating `tc:` tool call/result and any related text/code `fi:` source artifacts from that step,
       not the binary `fi:` file itself. Otherwise inspect the file with code and exec tool.
       Example (nested path): `fi:<turn_id>.files/reports/weekly/summary.v2.md`
+      Example non-workspace output: `fi:<turn_id>.outputs/reports/test_results.txt`
 - Other files already present inside OUT_DIR:
     - `fi:<outdir-relative-path>` (brings full text/base64 content of any readable file already present under OUT_DIR)
       Readable here means text, plus PDF/image payloads. Unsupported binary formats should be examined with code and exec tool.
@@ -440,9 +460,10 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - react.patch uses PHYSICAL paths:
   - `react.patch(path="turn_<id>/files/draft.md", patch="...")`
 - rendering_tools.write_* use PHYSICAL paths:
-  - `rendering_tools.write_pdf(path="turn_<id>/files/report.pdf", content=...)`
+  - `rendering_tools.write_pdf(path="turn_<id>/outputs/report.pdf", content=...)`
 - exec code uses PHYSICAL OUTPUT_DIR-relative paths:
-  - `Path(OUTPUT_DIR) / "<turn_id>/files/report.pdf"`
+  - `Path(OUTPUT_DIR) / "<turn_id>/files/app.py"`
+  - `Path(OUTPUT_DIR) / "<turn_id>/outputs/report.pdf"`
 - Exec contract files may declare optional `visibility="external"|"internal"`:
   - `external` (default): user-shareable produced artifact
   - `internal`: agent/runtime-only file kept in OUT_DIR/timeline, not sent to the user

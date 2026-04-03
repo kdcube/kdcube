@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/agents/react/artifact-storage-README.md
   - ks:docs/sdk/agents/react/react-tools-README.md
   - ks:docs/sdk/agents/react/timeline-README.md
+  - ks:docs/sdk/agents/react/design/files-vs-outputs-README.md
 ---
 # Artifact Discovery (Logical/Physical Paths)
 
@@ -17,6 +18,7 @@ are resolved for tools (`react.read`, `fetch_ctx`, `react.patch`, exec code).
 Important distinction:
 - this document is about artifact discovery and OUT_DIR-relative artifact paths
 - it is not the contract for bundle namespace resolution inside isolated exec
+- it describes the current artifact path model, including the phase-1 `files/...` vs `outputs/...` namespace split
 
 For bundle namespace browsing such as `ks:` via generated exec code, the relevant model is:
 - a bundle may expose an exec-only namespace resolver tool
@@ -31,6 +33,7 @@ Stable identifier used in `react.read` / `fetch_ctx`. Examples:
 - `ar:<turn_id>.assistant.completion`
 - `ar:plan.latest:<plan_id>` (stable latest snapshot of a plan lineage)
 - `fi:<turn_id>.files/<relpath>`
+- `fi:<turn_id>.outputs/<relpath>`
 - `fi:<turn_id>.user.attachments/<name>`
 - `fi:logs/docker.err.log`
 - `so:sources_pool[...]`
@@ -41,6 +44,7 @@ Stable identifier used in `react.read` / `fetch_ctx`. Examples:
 OUT_DIR‑relative path used for `react.patch`, rendering tools, and exec code file I/O.
 Common forms:
 - `<turn_id>/files/<relpath>` (files; current or historical)
+- `<turn_id>/outputs/<relpath>` (non-workspace produced artifacts)
 - `<turn_id>/attachments/<name>` (attachments)
 - `logs/<name>` and other runtime-managed files already present in OUT_DIR
 
@@ -158,6 +162,9 @@ The rewrite is recorded as a **protocol notice** in the timeline so the agent ca
   - no implicit hosted-binary descendants
 - Hosted binaries are allowed only by exact logical ref, for example:
   - `fi:<turn>.user.attachments/template.xlsx`
+- Future design note:
+  - `fi:<turn>.outputs/...` is the explicit non-workspace artifact retrieval namespace
+  - unlike `fi:<turn>.files/...`, it does not participate in workspace history semantics
 
 **bundle_data.resolve_namespace** (bundle-defined, exec-only)
 - Not a general artifact-discovery tool.

@@ -216,12 +216,17 @@ async def ensure_rendering_assets(
                     if ap.startswith("fi:") and ".files/" in ap:
                         tid, rel = ap.split(".files/", 1)
                         physical_path = f"{tid[3:]}/files/{rel}" if tid.startswith("fi:") else ""
+                    elif ap.startswith("fi:") and ".outputs/" in ap:
+                        tid, rel = ap.split(".outputs/", 1)
+                        physical_path = f"{tid[3:]}/outputs/{rel}" if tid.startswith("fi:") else ""
                     elif ap.startswith("fi:") and ".user.attachments/" in ap:
                         tid, rel = ap.split(".user.attachments/", 1)
                         physical_path = f"{tid[3:]}/attachments/{rel}" if tid.startswith("fi:") else ""
                     elif ap.startswith("fi:"):
                         physical_path = ap[len("fi:"):].lstrip("/")
-                if physical_path and physical_path.startswith("turn_") and ("/files/" in physical_path or "/attachments/" in physical_path):
+                if physical_path and physical_path.startswith("turn_") and (
+                    "/files/" in physical_path or "/outputs/" in physical_path or "/attachments/" in physical_path
+                ):
                     sid_rehost.append(physical_path)
             if sid_rehost:
                 rehost = await hydrate_workspace_paths(
@@ -271,7 +276,7 @@ async def ensure_rendering_assets(
             continue
         if p.startswith(("/", "\\")):
             continue
-        if p.startswith("turn_") and ("/files/" in p or "/attachments/" in p):
+        if p.startswith("turn_") and ("/files/" in p or "/outputs/" in p or "/attachments/" in p):
             rehost_paths.append(p)
     if rehost_paths:
         rehost = await hydrate_workspace_paths(

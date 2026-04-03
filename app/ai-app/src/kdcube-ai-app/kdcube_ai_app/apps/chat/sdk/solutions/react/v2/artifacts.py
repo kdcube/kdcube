@@ -14,6 +14,10 @@ from kdcube_ai_app.apps.chat.sdk.util import _truncate, token_count
 import kdcube_ai_app.apps.chat.sdk.tools.tools_insights as tools_insights
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import tc_result_path
 
+ARTIFACT_NAMESPACE_FILES = "files"
+ARTIFACT_NAMESPACE_OUTPUTS = "outputs"
+ARTIFACT_NAMESPACE_ATTACHMENTS = "attachments"
+
 
 def _is_safe_outdir_relpath(path_value: str) -> bool:
     try:
@@ -27,18 +31,91 @@ def _is_safe_outdir_relpath(path_value: str) -> bool:
         return False
 
 
+def build_physical_artifact_path(*, turn_id: str, namespace: str, relpath: str) -> str:
+    rel = (relpath or "").strip().lstrip("/")
+    if not turn_id or not namespace or not rel:
+        return ""
+    return f"{turn_id}/{namespace}/{rel}"
+
+
+def build_logical_artifact_path(*, turn_id: str, namespace: str, relpath: str) -> str:
+    rel = (relpath or "").strip().lstrip("/")
+    if not turn_id or not namespace or not rel:
+        return ""
+    if namespace == ARTIFACT_NAMESPACE_FILES:
+        return f"fi:{turn_id}.files/{rel}"
+    if namespace == ARTIFACT_NAMESPACE_OUTPUTS:
+        return f"fi:{turn_id}.outputs/{rel}"
+    if namespace == ARTIFACT_NAMESPACE_ATTACHMENTS:
+        return f"fi:{turn_id}.user.attachments/{rel}"
+    return ""
+
+
+def split_physical_artifact_path(path_value: str) -> tuple[str, str, str]:
+    raw = (path_value or "").strip().lstrip("/")
+    if not raw or not raw.startswith("turn_"):
+        return "", "", ""
+    for namespace in (
+        ARTIFACT_NAMESPACE_FILES,
+        ARTIFACT_NAMESPACE_OUTPUTS,
+        ARTIFACT_NAMESPACE_ATTACHMENTS,
+    ):
+        marker = f"/{namespace}/"
+        if marker not in raw:
+            continue
+        turn_id, rel = raw.split(marker, 1)
+        if turn_id and rel:
+            return turn_id, namespace, rel
+    return "", "", ""
+
+
+def split_logical_artifact_path(path_value: str) -> tuple[str, str, str]:
+    raw = (path_value or "").strip()
+    if raw.startswith("fi:"):
+        raw = raw[len("fi:"):]
+    if not raw:
+        return "", "", ""
+    if ".files/" in raw:
+        turn_id, rel = raw.split(".files/", 1)
+        return turn_id, ARTIFACT_NAMESPACE_FILES, rel
+    if ".outputs/" in raw:
+        turn_id, rel = raw.split(".outputs/", 1)
+        return turn_id, ARTIFACT_NAMESPACE_OUTPUTS, rel
+    if ".user.attachments/" in raw:
+        turn_id, rel = raw.split(".user.attachments/", 1)
+        return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
+    if ".attachments/" in raw:
+        turn_id, rel = raw.split(".attachments/", 1)
+        return turn_id, ARTIFACT_NAMESPACE_ATTACHMENTS, rel
+    return "", "", ""
+
+
+def infer_artifact_namespace(path_value: str, *, default: str = ARTIFACT_NAMESPACE_FILES) -> str:
+    raw = (path_value or "").strip()
+    if not raw:
+        return default
+    _, namespace, _ = split_logical_artifact_path(raw)
+    if namespace:
+        return namespace
+    _, namespace, _ = split_physical_artifact_path(raw)
+    if namespace:
+        return namespace
+    if raw.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/"):
+        return ARTIFACT_NAMESPACE_OUTPUTS
+    if raw.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/"):
+        return ARTIFACT_NAMESPACE_ATTACHMENTS
+    if raw.startswith(f"{ARTIFACT_NAMESPACE_FILES}/"):
+        return ARTIFACT_NAMESPACE_FILES
+    return default
+
+
 def physical_path_to_logical_path(path_value: str) -> str:
     raw = (path_value or "").strip().lstrip("/")
     if not raw:
         return ""
-    if raw.startswith("turn_") and "/files/" in raw:
-        turn_id, rel = raw.split("/files/", 1)
-        if turn_id and rel:
-            return f"fi:{turn_id}.files/{rel}"
-    if raw.startswith("turn_") and "/attachments/" in raw:
-        turn_id, rel = raw.split("/attachments/", 1)
-        if turn_id and rel:
-            return f"fi:{turn_id}.user.attachments/{rel}"
+    turn_id, namespace, rel = split_physical_artifact_path(raw)
+    if turn_id and namespace and rel:
+        return build_logical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel)
     if _is_safe_outdir_relpath(raw):
         return f"fi:{raw}"
     return ""
@@ -63,19 +140,11 @@ def normalize_physical_path(
     # Accept logical paths and convert to physical
     if raw.startswith("fi:"):
         logical = raw[len("fi:"):]
-        # fi:<turn_id>.files/<relpath>
-        if ".files/" in logical:
-            tid, rel = logical.split(".files/", 1)
+        tid, namespace, rel = split_logical_artifact_path(logical)
+        if tid and namespace and rel:
             rel = rel.lstrip("/")
             use_turn = turn_id or tid
-            physical = f"{use_turn}/files/{rel}"
-            return physical, rel, True
-        # fi:<turn_id>.user.attachments/<name>
-        if ".user.attachments/" in logical:
-            tid, rel = logical.split(".user.attachments/", 1)
-            rel = rel.lstrip("/")
-            use_turn = turn_id or tid
-            physical = f"{use_turn}/attachments/{rel}"
+            physical = build_physical_artifact_path(turn_id=use_turn, namespace=namespace, relpath=rel)
             return physical, rel, True
         if allow_generic_fi:
             logical = logical.lstrip("/")
@@ -85,23 +154,30 @@ def normalize_physical_path(
         return raw, raw, False
     rel = raw
     rewritten = False
-    if raw.startswith("files/"):
-        rel = raw[len("files/"):]
+    namespace = infer_artifact_namespace(raw, default=ARTIFACT_NAMESPACE_FILES)
+    if raw.startswith(f"{ARTIFACT_NAMESPACE_FILES}/"):
+        rel = raw[len(f"{ARTIFACT_NAMESPACE_FILES}/"):]
         rewritten = True
-    elif raw.startswith("attachments/"):
-        rel = raw[len("attachments/"):]
-        physical = f"{turn_id}/attachments/{rel}" if turn_id else rel
+    elif raw.startswith(f"{ARTIFACT_NAMESPACE_OUTPUTS}/"):
+        rel = raw[len(f"{ARTIFACT_NAMESPACE_OUTPUTS}/"):]
+        rewritten = True
+    elif raw.startswith(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/"):
+        rel = raw[len(f"{ARTIFACT_NAMESPACE_ATTACHMENTS}/"):]
+        physical = build_physical_artifact_path(turn_id=turn_id, namespace=ARTIFACT_NAMESPACE_ATTACHMENTS, relpath=rel) if turn_id else rel
         if physical != raw:
             rewritten = True
         return physical, rel, rewritten
-    if "/files/" in raw and raw.startswith("turn_"):
-        rel = raw.split("/files/", 1)[1]
-        rewritten = True
-    prefix = f"{turn_id}/files/"
+    else:
+        _, raw_namespace, raw_rel = split_physical_artifact_path(raw)
+        if raw_namespace:
+            namespace = raw_namespace
+            rel = raw_rel
+            rewritten = True
+    prefix = f"{turn_id}/{namespace}/"
     if turn_id and raw.startswith(prefix):
         rel = raw[len(prefix):]
         rewritten = True
-    physical = f"{turn_id}/files/{rel}" if turn_id else rel
+    physical = build_physical_artifact_path(turn_id=turn_id, namespace=namespace, relpath=rel) if turn_id else rel
     if physical != raw:
         rewritten = True
     return physical, rel, rewritten
@@ -273,11 +349,21 @@ def materialize_inline_artifact_to_file(
     scratchpad=None,
 ) -> None:
     workdir = outdir
+    save_hint = filename_hint
     if turn_id:
-        workdir = workdir / turn_id / "files"
+        hint = str(filename_hint or getattr(artifact, "path", "") or getattr(artifact, "filename", "") or "").strip()
+        physical_hint, rel_hint, _ = normalize_physical_path(
+            hint,
+            turn_id=turn_id,
+            allow_generic_fi=True,
+        )
+        _, namespace, rel = split_physical_artifact_path(physical_hint)
+        namespace = namespace or infer_artifact_namespace(hint, default=ARTIFACT_NAMESPACE_FILES)
+        save_hint = rel or rel_hint or filename_hint
+        workdir = workdir / turn_id / namespace
     updated, produced = artifact.save_inline(
         workdir=workdir,
-        filename_hint=filename_hint,
+        filename_hint=save_hint,
         mime_hint=mime_hint,
         visibility=visibility,
     )
@@ -661,19 +747,57 @@ class ArtifactView:
             return pathlib.Path(run_outdir) / self.path
         return pathlib.Path("")
 
+    def _namespace_and_rel(self) -> tuple[str, str]:
+        candidates = [
+            self.path,
+            ((self.raw.get("value") or {}) if isinstance(self.raw.get("value"), dict) else {}).get("path") or "",
+            ((self.raw.get("inputs") or {}) if isinstance(self.raw.get("inputs"), dict) else {}).get("path") or "",
+        ]
+        for candidate in candidates:
+            candidate = str(candidate or "").strip()
+            if not candidate:
+                continue
+            _, namespace, rel = split_logical_artifact_path(candidate)
+            if namespace and rel:
+                return namespace, rel
+            _, namespace, rel = split_physical_artifact_path(candidate)
+            if namespace and rel:
+                return namespace, rel
+            namespace = infer_artifact_namespace(candidate, default="")
+            if namespace and candidate.startswith(f"{namespace}/"):
+                return namespace, candidate[len(namespace) + 1:].lstrip("/")
+        fallback_rel = (self.path or self.filename or "").strip().lstrip("/")
+        return (
+            infer_artifact_namespace(
+                ((self.raw.get("inputs") or {}) if isinstance(self.raw.get("inputs"), dict) else {}).get("path") or "",
+                default=ARTIFACT_NAMESPACE_FILES,
+            ),
+            fallback_rel,
+        )
+
     def artifact_path(self) -> str:
-        if self.turn_id and self.path:
-            return f"fi:{self.turn_id}.files/{self.path}"
+        namespace, rel = self._namespace_and_rel()
+        if self.turn_id and namespace and rel:
+            return build_logical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
         return ""
 
     def to_historical_format(self, *, max_tokens: int = 200) -> List[str]:
         lines: List[str] = []
         name = self.path or self.filename or "artifact"
         lines.append(f"- {name}")
-        art_path = self.artifact_path() or (f"fi:{self.turn_id}.files" if self.turn_id else "")
+        namespace, rel = self._namespace_and_rel()
+        art_path = self.artifact_path() or (
+            build_logical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
+            if self.turn_id and namespace and rel
+            else ""
+        )
         if art_path:
             lines.append(f"    artifact_path: {art_path}")
-        phys = f"{self.turn_id}/files/{self.path}" if self.turn_id and self.path else ""
+        phys = (
+            build_physical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
+            if self.turn_id and namespace and rel
+            else ""
+        )
         if phys:
             lines.append(f"    physical_path: {phys}")
         meta = []
@@ -724,11 +848,21 @@ class ArtifactView:
         lines: List[str] = []
         name = self.path or self.filename or (fallback_name or "artifact")
         lines.append(f"- {name}")
-        art_path = self.artifact_path() or (f"fi:{self.turn_id}.files" if self.turn_id else "")
+        namespace, rel = self._namespace_and_rel()
+        art_path = self.artifact_path() or (
+            build_logical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
+            if self.turn_id and namespace and rel
+            else ""
+        )
         if art_path:
             lines.append(f"    artifact_path: {art_path}")
-        if self.turn_id and self.path:
-            lines.append(f"    physical_path: {self.turn_id}/files/{self.path}")
+        phys = (
+            build_physical_artifact_path(turn_id=self.turn_id, namespace=namespace, relpath=rel)
+            if self.turn_id and namespace and rel
+            else ""
+        )
+        if phys:
+            lines.append(f"    physical_path: {phys}")
         meta = []
         if self.tool_id:
             meta.append(f"tool={self.tool_id}")

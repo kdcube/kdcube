@@ -8,11 +8,17 @@ see_also:
   - ks:docs/sdk/agents/react/react-turn-workspace-README.md
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
   - ks:docs/sdk/agents/react/react-tools-README.md
+  - ks:docs/sdk/agents/react/design/files-vs-outputs-README.md
 ---
 # Agent Workspace Collaboration
 
 This document explains the working model the React agent should use when combining the filesystem tools.
 It is about the **current** agent model, not the future shared mutable workspace design.
+
+Scope:
+- this doc is about the agent mental model and tool cooperation
+- the actual filesystem lifecycle is covered by `react-turn-workspace-README.md`
+- the current `files/...` vs `outputs/...` split is tracked in `design/files-vs-outputs-README.md`
 
 ## Core model
 
@@ -21,6 +27,7 @@ The agent does **not** work against one mutable flat directory. It reasons acros
 ```text
 1) CURRENT TURN OUT_DIR (physical)
    out/turn_<id>/files/...
+   out/turn_<id>/outputs/...   # produced artifacts, not workspace members
    out/turn_<id>/attachments/...
    out/logs/...
 
@@ -31,9 +38,6 @@ The agent does **not** work against one mutable flat directory. It reasons acros
 
 3) BUNDLE KNOWLEDGE SPACE (logical, read-only)
    ks:<bundle-defined-path>/...
-
-4) FUTURE COLLABORATIVE WORKSPACES (not active yet)
-   out/workspaces/<name>/...
 ```
 
 This gives two properties at once:
@@ -42,6 +46,7 @@ This gives two properties at once:
 
 The logical workspace view is:
 - for `files/<subpath>`: the latest relevant turn version
+- for `outputs/<subpath>`: a produced artifact area, not part of the workspace tree
 - for `attachments/<subpath>`: the attached artifact under its original turn namespace
 - for non-versioned OUT_DIR folders like `logs/`: the physical OUT_DIR file itself
 - for `ks:`: a read-only logical namespace owned by the bundle, not a directory under OUT_DIR
@@ -52,6 +57,7 @@ The logical workspace view is:
 - reads by logical path only
 - supports the established turn-scoped forms:
   - `fi:<turn_id>.files/<subpath>`
+  - `fi:<turn_id>.outputs/<subpath>`
   - `fi:<turn_id>.user.attachments/<subpath>`
 - also supports any readable OUT_DIR file via:
   - `fi:<outdir-relative-path>`
@@ -73,8 +79,9 @@ The logical workspace view is:
   - `logical_path` for OUT_DIR hits
 
 `react.write`
-- creates or replaces files in the current turn file namespace
-- the effective target is always under `<current_turn>/files/...`
+- creates or replaces files in the current turn namespaces
+- `files/...` means durable workspace/project state
+- `outputs/...` means artifacts that should be kept/shared but should not become durable workspace state
 
 `react.patch`
 - updates an existing file in the current turn file namespace
@@ -105,16 +112,12 @@ The intended cooperation pattern is:
 2. If the hit is under OUT_DIR, take its `logical_path`.
 3. Use `react.read` on that `logical_path` to load content into context.
 4. If editing is needed, write or patch into `<current_turn>/files/...`.
+5. If producing a report/export/result that should not become workspace state, write it into `<current_turn>/outputs/...`.
 
 This keeps:
 - discovery separate from loading
 - loading separate from mutation
 - turn history preserved
-
-## Not current yet
-
-The current React agent does **not** yet have a shared mutable multi-turn workspace under `out/workspaces/<name>/...`.
-That collaborative or git-backed workspace model is future design, not current behavior.
 
 ## Current limitations
 

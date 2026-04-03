@@ -158,6 +158,28 @@ def test_build_exec_output_contract_preserves_visibility_and_defaults_external()
     }
 
 
+def test_build_exec_output_contract_accepts_outputs_namespace():
+    contract, normalized, err = build_exec_output_contract([
+        {
+            "filename": "turn_1/outputs/test_results.txt",
+            "description": "Non-workspace test results.",
+        },
+    ])
+
+    assert err is None
+    assert normalized is not None
+    assert normalized[0]["filename"] == "turn_1/outputs/test_results.txt"
+    assert contract == {
+        "test_results": {
+            "type": "file",
+            "filename": "turn_1/outputs/test_results.txt",
+            "mime": "text/plain",
+            "description": "Non-workspace test results.",
+            "visibility": "external",
+        }
+    }
+
+
 def test_build_exec_output_contract_rejects_invalid_visibility():
     contract, normalized, err = build_exec_output_contract([
         {

@@ -8,8 +8,14 @@ see_also:
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
   - ks:docs/sdk/agents/react/conversation-artifacts-README.md
   - ks:docs/sdk/agents/react/react-tools-README.md
+  - ks:docs/sdk/agents/react/design/files-vs-outputs-README.md
 ---
 # Artifact Storage Rules
+
+Scope:
+- this document describes current artifact persistence and hosting behavior
+- it does not define workspace-membership semantics by itself
+- the current namespace split between durable workspace `files/...` and non-workspace `outputs/...` is described in `design/files-vs-outputs-README.md`
 
 ## Files vs Tool Results
 Tool results are stored in the **event log blocks** (timeline), not on disk.
@@ -82,8 +88,10 @@ Both artifacts are indexed in `conv_messages` with:
   - `ar:<turn_id>.assistant.completion`
 - `fi:<turn_id>.user.attachments/<name>`
 - `fi:<turn_id>.files/<relative_path>`
+- `fi:<turn_id>.outputs/<relative_path>`
 - Physical paths (OUT_DIR‑relative):
   - Files: `turn_<id>/files/<relative_path>`
+  - Outputs: `turn_<id>/outputs/<relative_path>`
   - Attachments: `turn_<id>/attachments/<filename>`
 
 Artifacts never use `current_turn` in their paths. Always use the concrete `turn_id`.
@@ -101,6 +109,11 @@ These are **not interchangeable**; UI expects `rn` for downloads.
   - Internal notes written via `react.write(channel="internal")` are stored as `react.note` blocks.
   - Files created with `kind=file` are **not hosted** (they remain in OUT_DIR and the timeline).
   - Exec contract files may explicitly request `visibility=internal` to keep the output agent-only.
+
+Important:
+- `visibility` answers who receives the artifact
+- it does **not** answer whether the artifact is part of the durable workspace/project tree
+- that distinction lives at the namespace level (`files/...` vs `outputs/...`), not in `visibility`
 
 ## Kind
 - `kind=file`: normal file artifact
