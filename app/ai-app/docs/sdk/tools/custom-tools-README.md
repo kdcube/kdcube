@@ -211,4 +211,4 @@ For MCP transport/auth/runtime details, see [MCP Integration](./mcp-README.md).
 - [with-isoruntime bundle](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00)
 - [with-isoruntime `tools_descriptor.py`](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools_descriptor.py)
 - [with-isoruntime `tools/local_tools.py`](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00/tools/local_tools.py)
-- [react.doc `tools_descriptor.py`](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10/tools_descriptor.py)
+- [kdcube.copilot `tools_descriptor.py`](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05/tools_descriptor.py)

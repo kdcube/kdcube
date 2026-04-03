@@ -92,7 +92,7 @@ BUNDLE_STORAGE_DIR
 ```
 
 That path points at the per-bundle readonly storage dir physically available inside isolated exec.
-Example: `react.doc` reads its built knowledge space from `BUNDLE_STORAGE_DIR`.
+Example: `kdcube.copilot` reads its built knowledge space from `BUNDLE_STORAGE_DIR`.
 
 ---
 

@@ -32,10 +32,10 @@ def _payload(*, tenant: str, project: str, user_id: str = "u1", turn_id: str = "
 
 
 def test_rebind_request_context_refreshes_runtime_ctx_bundle_storage(monkeypatch, tmp_path):
-    resolved_storage = tmp_path / "bundle-storage" / "tenant-b" / "project-b" / "react.doc__main"
+    resolved_storage = tmp_path / "bundle-storage" / "tenant-b" / "project-b" / "kdcube.copilot__main"
 
     def _fake_storage_for_spec(*, spec, tenant=None, project=None, ensure=True):
-        assert getattr(spec, "id", None) == "react.doc@2026-03-02-22-10"
+        assert getattr(spec, "id", None) == "kdcube.copilot@2026-04-03-19-05"
         assert tenant == "tenant-b"
         assert project == "project-b"
         if ensure:
@@ -50,7 +50,7 @@ def test_rebind_request_context_refreshes_runtime_ctx_bundle_storage(monkeypatch
     monkeypatch.setattr(workflow_mod, "build_relay_from_env", lambda: None)
 
     wf = BaseWorkflow.__new__(BaseWorkflow)
-    wf.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="react.doc@2026-03-02-22-10"))
+    wf.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="kdcube.copilot@2026-04-03-19-05"))
     wf.bundle_props = {}
     wf.comm_context = _payload(tenant="tenant-a", project="project-a")
     wf._continuation_source = None
@@ -98,7 +98,7 @@ def test_resolve_mcp_services_config_prefers_bundle_props_over_env(monkeypatch):
 
 
 def test_runtime_ctx_carries_workspace_git_repo(monkeypatch, tmp_path):
-    resolved_storage = tmp_path / "bundle-storage" / "tenant-a" / "project-a" / "react.doc__main"
+    resolved_storage = tmp_path / "bundle-storage" / "tenant-a" / "project-a" / "kdcube.copilot__main"
 
     def _fake_storage_for_spec(*, spec, tenant=None, project=None, ensure=True):
         if ensure:
@@ -122,7 +122,7 @@ def test_runtime_ctx_carries_workspace_git_repo(monkeypatch, tmp_path):
             model_service=SimpleNamespace(),
             conv_ticket_store=SimpleNamespace(),
             config=SimpleNamespace(
-                ai_bundle_spec=SimpleNamespace(id="react.doc@2026-03-02-22-10"),
+                ai_bundle_spec=SimpleNamespace(id="kdcube.copilot@2026-04-03-19-05"),
                 max_tokens=512,
             ),
             comm_context=_payload(tenant="tenant-a", project="project-a", turn_id="turn-3"),

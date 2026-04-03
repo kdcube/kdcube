@@ -76,6 +76,7 @@ Key files:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools/preference_tools.py` — custom tools
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/preferences_store.py` — shared local bundle storage model
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx` — TSX widget example
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx` — custom main-view iframe SPA using the platform chat REST/SSE contract
 
 Current shared bundle test suite:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
@@ -91,7 +92,7 @@ Bundle-local tests:
 - Those tests are not auto-collected by plain `pytest sdk/tests/bundle`; use the runner above for combined validation
 
 Specialized examples only when the task is narrower than the full reference:
-- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05`
   - bundle-defined `ks:` knowledge space and namespace resolution
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
   - stripped-down direct isolated-exec harness

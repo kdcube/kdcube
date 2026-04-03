@@ -41,8 +41,9 @@ Use this as the **docs start point** when building, repairing, or reviewing a bu
 | Custom skills | [[docs/sdk/skills/custom-skills-README.md](../skills/custom-skills-README.md)](../skills/custom-skills-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills_descriptor.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills/product/preferences/SKILL.md` |
 | Storage, cache, bundle state | [[docs/sdk/bundle/bundle-storage-cache-README.md](bundle-storage-cache-README.md)](bundle-storage-cache-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/preferences_store.py` |
 | Widgets + operations | [[docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)](bundle-platform-integration-README.md), [[docs/sdk/bundle/bundle-interfaces-README.md](bundle-interfaces-README.md)](bundle-interfaces-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
+| Custom main-view UI | [[docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)](bundle-lifecycle-README.md), [[docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)](bundle-reference-versatile-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | Direct isolated exec from bundle code | [[docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)](bundle-reference-versatile-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
-| Bundle-defined `ks:` knowledge space | [[docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)](bundle-knowledge-space-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10` |
+| Bundle-defined `ks:` knowledge space | [[docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)](bundle-knowledge-space-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05` |
 | Validation | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle` | read the exact relevant pytest files, then run the smallest relevant subset |
 
 ## Primary reference bundle
@@ -62,6 +63,7 @@ Why this is the primary reference:
 - it demonstrates storage-backend export through `AIBundleStorage`
 - it includes MCP connector examples
 - it includes a TSX widget
+- it includes a custom iframe main view built through `ui.main_view`
 - it includes a direct isolated-exec operation
 
 ## Core bundle docs
@@ -108,10 +110,10 @@ Why this is the primary reference:
 
 These are useful when the primary reference bundle is too broad for the question:
 
-- `react.doc@2026-03-02-22-10`
+- `kdcube.copilot@2026-04-03-19-05`
   - use when the question is specifically about bundle-defined `ks:` knowledge space, local docs indexing, or namespace resolution
   - root:
-    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10`
+    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05`
 - `with-isoruntime@2026-02-16-14-00`
   - use when the question is specifically about direct isolated exec and scenario-driven runtime diagnostics
   - root:

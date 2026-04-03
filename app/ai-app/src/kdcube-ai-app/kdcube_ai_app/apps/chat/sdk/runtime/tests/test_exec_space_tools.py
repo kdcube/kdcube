@@ -9,12 +9,12 @@ from kdcube_ai_app.apps.chat.sdk.runtime.external.base import is_isolated_exec_p
 
 
 def _load_exec_space_tools_module():
-    module_name = "_test_react_doc_exec_space_tools"
+    module_name = "_test_kdcube_copilot_exec_space_tools"
     tool_path = (
         pathlib.Path(__file__).resolve().parents[2]
         / "examples"
         / "bundles"
-        / "react.doc@2026-03-02-22-10"
+        / "kdcube.copilot@2026-04-03-19-05"
         / "tools"
         / "exec_space_tools.py"
     )
@@ -41,12 +41,12 @@ def test_is_isolated_exec_process_requires_runtime_globals(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_react_doc_exec_space_tool_rejects_non_exec_runtime(monkeypatch):
+async def test_kdcube_copilot_exec_space_tool_rejects_non_exec_runtime(monkeypatch):
     monkeypatch.delenv("RUNTIME_GLOBALS_JSON", raising=False)
     monkeypatch.delenv("OUTPUT_DIR", raising=False)
     monkeypatch.delenv("WORKDIR", raising=False)
     monkeypatch.delenv("BUNDLE_STORAGE_DIR", raising=False)
-    sys.modules.pop("_kdcube_react_doc_knowledge_resolver", None)
+    sys.modules.pop("_kdcube_copilot_knowledge_resolver", None)
 
     module = _load_exec_space_tools_module()
     result = await module.tools.resolve_namespace("ks:docs")
@@ -60,8 +60,8 @@ async def test_react_doc_exec_space_tool_rejects_non_exec_runtime(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_react_doc_exec_space_tool_resolves_docs_dir_in_exec(tmp_path, monkeypatch):
-    knowledge_root = tmp_path / "bundle-storage" / "tenant" / "project" / "react.doc__main"
+async def test_kdcube_copilot_exec_space_tool_resolves_docs_dir_in_exec(tmp_path, monkeypatch):
+    knowledge_root = tmp_path / "bundle-storage" / "tenant" / "project" / "kdcube.copilot__main"
     docs_root = knowledge_root / "docs"
     docs_root.mkdir(parents=True)
     (docs_root / "intro.md").write_text("# Intro\n", encoding="utf-8")
@@ -71,7 +71,7 @@ async def test_react_doc_exec_space_tool_resolves_docs_dir_in_exec(tmp_path, mon
     monkeypatch.setenv("OUTPUT_DIR", "/workspace/out")
     monkeypatch.setenv("WORKDIR", "/workspace/work")
     monkeypatch.setenv("BUNDLE_STORAGE_DIR", str(knowledge_root))
-    sys.modules.pop("_kdcube_react_doc_knowledge_resolver", None)
+    sys.modules.pop("_kdcube_copilot_knowledge_resolver", None)
 
     module = _load_exec_space_tools_module()
     result = await module.tools.resolve_namespace("ks:docs")
@@ -84,15 +84,15 @@ async def test_react_doc_exec_space_tool_resolves_docs_dir_in_exec(tmp_path, mon
 
 
 @pytest.mark.asyncio
-async def test_react_doc_exec_space_tool_returns_managed_error_for_missing_namespace(tmp_path, monkeypatch):
-    knowledge_root = tmp_path / "bundle-storage" / "tenant" / "project" / "react.doc__main"
+async def test_kdcube_copilot_exec_space_tool_returns_managed_error_for_missing_namespace(tmp_path, monkeypatch):
+    knowledge_root = tmp_path / "bundle-storage" / "tenant" / "project" / "kdcube.copilot__main"
     knowledge_root.mkdir(parents=True)
 
     monkeypatch.setenv("RUNTIME_GLOBALS_JSON", "{}")
     monkeypatch.setenv("OUTPUT_DIR", "/workspace/out")
     monkeypatch.setenv("WORKDIR", "/workspace/work")
     monkeypatch.setenv("BUNDLE_STORAGE_DIR", str(knowledge_root))
-    sys.modules.pop("_kdcube_react_doc_knowledge_resolver", None)
+    sys.modules.pop("_kdcube_copilot_knowledge_resolver", None)
 
     module = _load_exec_space_tools_module()
     result = await module.tools.resolve_namespace("ks:docs")
@@ -107,12 +107,12 @@ async def test_react_doc_exec_space_tool_returns_managed_error_for_missing_names
 
 
 @pytest.mark.asyncio
-async def test_react_doc_exec_space_tool_explains_missing_bundle_storage(monkeypatch):
+async def test_kdcube_copilot_exec_space_tool_explains_missing_bundle_storage(monkeypatch):
     monkeypatch.setenv("RUNTIME_GLOBALS_JSON", "{}")
     monkeypatch.setenv("OUTPUT_DIR", "/workspace/out")
     monkeypatch.setenv("WORKDIR", "/workspace/work")
     monkeypatch.delenv("BUNDLE_STORAGE_DIR", raising=False)
-    sys.modules.pop("_kdcube_react_doc_knowledge_resolver", None)
+    sys.modules.pop("_kdcube_copilot_knowledge_resolver", None)
 
     module = _load_exec_space_tools_module()
     result = await module.tools.resolve_namespace("ks:src")

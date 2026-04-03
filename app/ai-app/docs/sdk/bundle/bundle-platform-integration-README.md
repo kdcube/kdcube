@@ -458,6 +458,7 @@ This phase is already live for widgets.
 Widgets should use the same auth/config handshake already shown in:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
 
 ---
 
@@ -538,7 +539,7 @@ The reference bundle already demonstrates:
 - `@api`
 - `@ui_widget`
 - widget → operations calls
-- future `@ui_main` if defined
+- a built `ui.main_view` custom panel under `ui-src/`
 - future message handler declaration if different from `run()`
 
 ---
@@ -579,3 +580,4 @@ data. This makes:
 - Current widget/API integration examples:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/AIBundleDashboard.tsx`
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`
+  `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`

@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-reference-versatile-README.md
 title: "Versatile Reference Bundle"
-summary: "Primary full-feature bundle reference for bundle builders: React workflow, economics, props, secrets, custom tools, custom skills, storage, MCP, widget, and isolated exec."
-tags: ["sdk", "bundle", "reference", "example", "react", "economics", "configuration", "secrets", "mcp", "storage", "widget", "exec"]
-keywords: ["versatile bundle", "reference bundle", "bundle example", "bundle props", "bundle secrets", "get_secret", "custom tools", "custom skills", "preferences", "isolated exec", "AIBundleStorage"]
+summary: "Primary full-feature bundle reference for bundle builders: React workflow, economics, props, secrets, custom tools, custom skills, storage, MCP, widget, custom main view, and isolated exec."
+tags: ["sdk", "bundle", "reference", "example", "react", "economics", "configuration", "secrets", "mcp", "storage", "widget", "ui", "exec"]
+keywords: ["versatile bundle", "reference bundle", "bundle example", "bundle props", "bundle secrets", "get_secret", "custom tools", "custom skills", "preferences", "isolated exec", "AIBundleStorage", "ui.main_view", "custom bundle ui"]
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
@@ -49,6 +49,7 @@ That is still useful for narrow investigation, but it is a poor starting point f
 | Storage backend snapshot | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools/preference_tools.py` |
 | MCP connector surface | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools_descriptor.py` |
 | Widget surface | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx` |
+| Custom main view (iframe SPA) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | Direct isolated exec from bundle code | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 
 ## Minimal vs versatile
@@ -68,6 +69,7 @@ That is still useful for narrow investigation, but it is a poor starting point f
 | Storage backend export | optional | yes |
 | MCP connectors | optional | yes |
 | Widget / operations | optional | yes |
+| Custom main view UI | optional | yes |
 | Direct isolated exec from bundle code | optional | yes |
 
 ## How to study it
@@ -82,15 +84,16 @@ Recommended reading order:
 6. `preferences_store.py`
 7. the “Bundle props and secrets” section in the bundle README
 8. `ui/PreferencesBrowser.tsx`
-9. bundle pytest files under:
+9. `ui-src/src/App.tsx`
+10. bundle pytest files under:
    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle`
-10. bundle-local tests under:
+11. bundle-local tests under:
    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tests`
 
 ## When to branch to specialized examples
 
 - For bundle-defined `ks:` and namespace resolution:
-  use `react.doc@2026-03-02-22-10`
+  use `kdcube.copilot@2026-04-03-19-05`
 - For stripped-down isolated-exec scaffolding:
   use `with-isoruntime@2026-02-16-14-00`
 

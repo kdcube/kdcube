@@ -519,7 +519,7 @@ async def test_fargate_runtime_snapshots_bundle_storage_when_present(monkeypatch
     workdir = tmp_path / "work"
     outdir = tmp_path / "out"
     bundle_root = tmp_path / "bundle"
-    bundle_storage_dir = tmp_path / "bundle-storage" / "tenant" / "project" / "react.doc__main"
+    bundle_storage_dir = tmp_path / "bundle-storage" / "tenant" / "project" / "kdcube.copilot__main"
     workdir.mkdir()
     outdir.mkdir()
     bundle_root.mkdir()
@@ -531,7 +531,7 @@ async def test_fargate_runtime_snapshots_bundle_storage_when_present(monkeypatch
         bundle_root=pathlib.Path(bundle_root),
         runtime_globals={
             "BUNDLE_SPEC": {
-                "id": "react.doc",
+                "id": "kdcube.copilot",
                 "module": "entrypoint",
                 "version": "main",
             },

@@ -177,7 +177,7 @@ Example result block (simplified):
 
 react.search_knowledge (bundle‑provided)
 - Purpose: search knowledge space (read‑only reference materials).
-- Availability: only when the active bundle registers this tool (e.g., `react.doc`).
+- Availability: only when the active bundle registers this tool (e.g., `kdcube.copilot`).
 - Use when you need docs/KB, not conversation history.
 - This is a logical bundle tool surface, separate from exec-only namespace resolver tools.
 Params:

@@ -3,7 +3,7 @@ id: ks:docs/next/sdk/react-agent-tools-completeness-workspace-awareness-README.m
 title: "React Agent Tools Completeness & Workspace Awareness"
 summary: "Current state and near-term plan for React agent turn workspace, conversation artifact memory, knowledge space, and isolated browsing via exec."
 tags: ["next", "sdk", "react", "workspace", "knowledge-space", "copilot", "tools"]
-keywords: ["turn workspace", "artifact memory", "knowledge space", "react.doc", "resolver", "isolated exec", "fi namespace", "ks namespace"]
+keywords: ["turn workspace", "artifact memory", "knowledge space", "kdcube.copilot", "resolver", "isolated exec", "fi namespace", "ks namespace"]
 see_also:
   - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
   - ks:docs/sdk/agents/react/artifact-discovery-README.md
@@ -42,7 +42,7 @@ This document records the current state and the recommended near-term boundary.
 | What is the current turn workspace? | Temporary `out/` working set for this turn | Easy to confuse with the whole conversation artifact memory | State explicitly that turn OUT_DIR is ephemeral and hydrated on demand |
 | What is `fi:`? | Logical addressing into conversation artifact memory, plus current-turn materializations | Looks filesystem-like but is not a browsable tree | Keep `fi:` as artifact addressing and retrieval, not browsing |
 | Where is browsing actually needed? | In `ks:` today and future named workspaces later | We do not yet have a fluent, safe way to inspect browseable roots from code | Use isolated exec plus an explicit namespace resolver, not a generic `list_space` tool |
-| How does `react.doc` look to the agent today? | Docs and deployment are searchable; `src` is readable only by exact path; test fixtures are exposed as exact `ks:src/kdcube-ai-app/.../examples/tests/...` reads plus `sk:tests.bundles` guidance | Source-first and test-first browsing still require resolver + exec, and `src` still has no search surface | Keep test fixtures as exact-read only; improve source discovery separately |
+| How does `kdcube.copilot` look to the agent today? | Docs and deployment are searchable; `src` is readable only by exact path; test fixtures are exposed as exact `ks:src/kdcube-ai-app/.../examples/tests/...` reads plus `sk:tests.bundles` guidance | Source-first and test-first browsing still require resolver + exec, and `src` still has no search surface | Keep test fixtures as exact-read only; improve source discovery separately |
 | Is public exec enough for scripted inspection? | Partially; it still requires a non-empty file contract | Probe tasks are awkward but still possible | Short-term: use a tiny summary artifact plus program log; later maybe expose a separate probe tool |
 | Where should semantics live? | Repeated across docs, tool docs, shared instructions, decision prompt, skill | Drift risk | Keep tool args in tool modules, keep mental model in shared instructions, keep bundle-specific entry points in skills |
 
@@ -191,11 +191,11 @@ So for `fi:` the main value is:
 not:
 - generic directory browsing
 
-## What `react.doc` looks like to the agent today
+## What `kdcube.copilot` looks like to the agent today
 
 ### Current entry points
 
-The `react.doc` bundle currently tells the agent to:
+The `kdcube.copilot` bundle currently tells the agent to:
 - read `ks:index.md`
 - use `react.search_knowledge(query=..., root="ks:docs")`
 - open docs with `react.read(["ks:docs/<path>"])`
@@ -215,7 +215,7 @@ It does not currently index:
 
 This means the agent currently sees this shape:
 
-| Surface in `react.doc` | Listed in `ks:index.md` | Searchable via `react.search_knowledge` | Readable via `react.read` if exact path is known | Comment |
+| Surface in `kdcube.copilot` | Listed in `ks:index.md` | Searchable via `react.search_knowledge` | Readable via `react.read` if exact path is known | Comment |
 | --- | --- | --- | --- | --- |
 | `ks:docs/...` | yes | yes | yes | good |
 | `ks:deployment/...` | yes | yes | yes | good |
@@ -254,7 +254,7 @@ Recommended split:
 
 ## What is missing
 
-### 1. Better source and test discovery in `react.doc`
+### 1. Better source and test discovery in `kdcube.copilot`
 
 Today the doc bundle is:
 - doc-searchable
@@ -345,7 +345,7 @@ So the near-term abstraction should be:
 The physical bundle-local data root remains an important implementation detail,
 but it should stay behind the resolver boundary.
 
-For example, in `react.doc` today, `knowledge/resolver.py` knows how `ks:` is
+For example, in `kdcube.copilot` today, `knowledge/resolver.py` knows how `ks:` is
 implemented for that bundle. That does **not** mean the platform should teach the
 agent that `ks:` always means one fixed physical root.
 
@@ -449,7 +449,7 @@ Not browseable as a directory:
 
 ### Important bundle-specific example
 
-For `react.doc`, a selector like:
+For `kdcube.copilot`, a selector like:
 - `ks:docs`
 - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk`
 - `ks:deployment`
@@ -485,7 +485,7 @@ flowchart LR
     EX --> OUT[Write summary artifact plus short logs]
 ```
 
-## What `react.doc` should become for copilot use
+## What `kdcube.copilot` should become for copilot use
 
 ### Recommended next index shape
 
@@ -526,7 +526,7 @@ That preserves token economy and keeps navigation deliberate.
 2. Remove repeated param-level tool docs from decision prompt.
 3. Keep tool-parameter details inside tool modules.
 
-### Phase 2: make `react.doc` copilot-capable
+### Phase 2: make `kdcube.copilot` copilot-capable
 
 1. Improve `ks:src` discovery without forcing full source-tree indexing.
 2. Keep test fixtures as exact-read content under `ks:src/kdcube-ai-app/.../examples/tests/...`.
@@ -589,7 +589,7 @@ What it did not yet cover is:
 - the distinction between current turn working set and conversation artifact memory
 - rehydration of historical artifacts into the current turn
 - the distinction between logical namespaces and exec-visible browse roots
-- `react.doc` limits around `src` and tests
+- `kdcube.copilot` limits around `src` and tests
 - future named collaborative workspaces
 
 ## Candidate engineering direction
@@ -611,7 +611,7 @@ Practical rule for generated code:
 - if code resolves `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk` and finds a useful file `runtime/execution.py` under the returned `physical_path`, it should emit logical ref `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py` in an `OUTPUT_DIR` file or short `user.log` note
 - the agent can then use `react.read(["ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/execution.py"])` in a later step
 
-For `react.doc`, this could be a bundle-local tool under:
+For `kdcube.copilot`, this could be a bundle-local tool under:
 - `tools/`
 
 and registered in:

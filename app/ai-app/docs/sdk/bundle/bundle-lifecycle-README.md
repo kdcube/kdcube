@@ -196,6 +196,10 @@ for client-side routing.
 - That UI is a normal platform client. If it needs bundle-originated progress or
   step events to target one exact connected peer, it must follow the client
   communication contract and propagate the connected peer id on REST requests.
+- Reference implementation:
+  - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`
+  - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
+  That example shows a lightweight chat main view with bundle-scoped conversation browsing on top of the standard iframe handshake plus chat REST/SSE endpoints.
 - See:
   [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
   and [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)

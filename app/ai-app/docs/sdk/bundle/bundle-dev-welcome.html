@@ -1007,7 +1007,7 @@ TOOL_RUNTIME = {
     <span class="str">"web_tools.web_search"</span>: <span class="str">"local"</span>,       <span class="cm"># subprocess sandbox</span>
     <span class="str">"exec_tools.execute_code_python"</span>: <span class="str">"docker"</span>,  <span class="cm"># Docker container</span>
 }</code></pre>
-      <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/custom-tools-README.md" target="_blank">custom-tools-README.md</a> and the example bundle <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc%402026-03-02-22-10/tools_descriptor.py" target="_blank">react.doc tools_descriptor.py</a>.</p>
+      <p>See <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/tools/custom-tools-README.md" target="_blank">custom-tools-README.md</a> and the example bundle <a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot%402026-04-03-19-05/tools_descriptor.py" target="_blank">kdcube.copilot tools_descriptor.py</a>.</p>
     </div>
     <div class="tab-panel" id="tab-mcp">
       <p>MCP (Model Context Protocol) servers are declared in <code>MCP_TOOL_SPECS</code> and configured in bundle props.</p>
@@ -1658,7 +1658,7 @@ kdcube-setup --secrets-prompt  <span class="cm"># for LLM keys</span></code></pr
       <thead><tr><th>Bundle ID</th><th>What It Shows</th><th>Key Features</th></tr></thead>
       <tbody>
         <tr><td><code>react@2026-02-10-02-44</code></td><td>Basic ReAct + economics</td><td>BaseEntrypointWithEconomics, quota policies, web search, news, suggestions</td></tr>
-        <tr><td><code>react.doc@2026-03-02-22-10</code></td><td>Docs reader with knowledge space</td><td>Knowledge space (docs/src/deploy), file locking, signature caching</td></tr>
+        <tr><td><code>kdcube.copilot@2026-04-03-19-05</code></td><td>Docs reader with knowledge space</td><td>Knowledge space (docs/src/deploy), file locking, signature caching</td></tr>
         <tr><td><code>react.mcp@2026-03-09</code></td><td>ReAct with MCP tools</td><td>MCP server integration, custom tool namespacing</td></tr>
         <tr><td><code>openrouter-data@2026-03-11</code></td><td>OpenRouter LLM provider</td><td>OpenRouter integration, model switching, data analysis</td></tr>
         <tr><td><code>with-isoruntime@2026-02-16</code></td><td>Isolated exec runtime</td><td>Docker exec, code generation + execution, file output</td></tr>
@@ -1668,10 +1668,10 @@ kdcube-setup --secrets-prompt  <span class="cm"># for LLM keys</span></code></pr
   </div>
 
   <details>
-    <summary>react.doc — Knowledge Space pattern deep-dive</summary>
+    <summary>kdcube.copilot — Knowledge Space pattern deep-dive</summary>
     <div class="details-body">
       <p>Builds the index in <code>on_bundle_load()</code> with file locking (multi-worker safe) and signature-based caching (skip rebuilds when nothing changed). Reconciles on config change in <code>pre_run_hook()</code>. The agent searches with <code>ks:</code> paths via <code>react.search_knowledge</code> and <code>react.read</code>.</p>
-      <p><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc%402026-03-02-22-10/entrypoint.py" target="_blank">View entrypoint.py on GitHub →</a></p>
+      <p><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot%402026-04-03-19-05/entrypoint.py" target="_blank">View entrypoint.py on GitHub →</a></p>
     </div>
   </details>
 </div>

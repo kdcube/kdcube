@@ -104,7 +104,7 @@ Expected role:
 Expose a bundle-local exec-only helper, for example:
 - `bundle_data.resolve_namespace(logical_ref)`
 
-This helper is not a platform-wide mandatory name. The `react.doc` bundle uses that pattern, but other bundles may choose a different helper or no helper at all.
+This helper is not a platform-wide mandatory name. The `kdcube.copilot` bundle uses that pattern, but other bundles may choose a different helper or no helper at all.
 
 ## Where `ks:` can be backed from
 
@@ -141,7 +141,7 @@ The usual pattern is:
 ## Example bundle
 
 Reference example:
-`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/react.doc@2026-03-02-22-10`
+`src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05`
 
 That bundle exposes one particular `ks:` layout for its own use case, but that layout is **example-specific**, not part of the general bundle contract.
 

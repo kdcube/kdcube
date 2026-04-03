@@ -49,9 +49,9 @@ Current transport behavior:
   - bundle code root is snapshotted and restored
   - `BUNDLE_STORAGE_DIR` is snapshotted and restored
 
-Example: `react.doc`
+Example: `kdcube.copilot`
 
-- bundle code lives under `/bundles/react.doc@...`
+- bundle code lives under `/bundles/kdcube.copilot@...`
 - its built knowledge space lives under the per-bundle storage dir
 - `react.search_knowledge(...)` reads that physical knowledge space through `knowledge/resolver.py`
 - if isolated exec loads the resolver without having run the bundle entrypoint first, the resolver falls back to `BUNDLE_STORAGE_DIR`

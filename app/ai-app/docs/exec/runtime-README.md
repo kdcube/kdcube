@@ -388,5 +388,5 @@ cb/tenants/<tenant>/projects/<project>/ai-bundle-storage-snapshots/
 - Tool call files are timestamp-suffixed; index file is still used for grouping.
 - Bundle code snapshot is restored when tools are bundle-local.
 - Bundle readonly data snapshot is restored to `BUNDLE_STORAGE_DIR` when the bundle needs prepared local data.
-- Example: `react.doc` keeps its built knowledge space in per-bundle storage and reads it in isolated exec via `BUNDLE_STORAGE_DIR`.
+- Example: `kdcube.copilot` keeps its built knowledge space in per-bundle storage and reads it in isolated exec via `BUNDLE_STORAGE_DIR`.
 - Additional implementation notes: [external-exec-README.md](../sdk/agents/react/external-exec-README.md)

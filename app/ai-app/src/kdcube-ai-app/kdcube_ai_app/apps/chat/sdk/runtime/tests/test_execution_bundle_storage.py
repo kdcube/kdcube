@@ -17,7 +17,7 @@ class _Logger:
 
 
 def test_resolve_bundle_storage_dir_uses_runtime_ctx_value(tmp_path):
-    bundle_storage = tmp_path / "bundle-storage" / "tenant" / "project" / "react.doc__main"
+    bundle_storage = tmp_path / "bundle-storage" / "tenant" / "project" / "kdcube.copilot__main"
     bundle_storage.mkdir(parents=True)
 
     runtime_ctx = RuntimeCtx(bundle_storage=str(bundle_storage))
@@ -34,10 +34,10 @@ def test_resolve_bundle_storage_dir_uses_runtime_ctx_value(tmp_path):
 
 
 def test_resolve_bundle_storage_dir_derives_from_bundle_spec(tmp_path, monkeypatch):
-    expected = tmp_path / "derived" / "tenant" / "project" / "react.doc__main"
+    expected = tmp_path / "derived" / "tenant" / "project" / "kdcube.copilot__main"
 
     def _fake_storage_for_spec(*, spec, tenant, project, ensure):
-        assert spec.id == "react.doc@2026-03-02-22-10"
+        assert spec.id == "kdcube.copilot@2026-04-03-19-05"
         assert tenant == "tenant"
         assert project == "project"
         assert ensure is True
@@ -52,7 +52,7 @@ def test_resolve_bundle_storage_dir_derives_from_bundle_spec(tmp_path, monkeypat
     runtime_ctx = RuntimeCtx(tenant="tenant", project="project", bundle_storage=None)
     tool_manager = SimpleNamespace(
         comm=SimpleNamespace(tenant="tenant", project="project"),
-        bundle_spec=SimpleNamespace(id="react.doc@2026-03-02-22-10"),
+        bundle_spec=SimpleNamespace(id="kdcube.copilot@2026-04-03-19-05"),
     )
     logger = _Logger()
 

@@ -232,11 +232,11 @@ async def test_run_exec_tool_forwards_bundle_storage_dir_to_runtime(tmp_path, mo
         timeout_s=30,
         workdir=tmp_path / "work",
         outdir=tmp_path / "out",
-        bundle_storage_dir="/bundle-storage/demo-tenant/demo-project/react.doc__test",
+        bundle_storage_dir="/bundle-storage/demo-tenant/demo-project/kdcube.copilot__test",
     )
 
     assert result["ok"] is True
-    assert captured["globals"]["BUNDLE_STORAGE_DIR"] == "/bundle-storage/demo-tenant/demo-project/react.doc__test"
+    assert captured["globals"]["BUNDLE_STORAGE_DIR"] == "/bundle-storage/demo-tenant/demo-project/kdcube.copilot__test"
 
 
 @pytest.mark.asyncio

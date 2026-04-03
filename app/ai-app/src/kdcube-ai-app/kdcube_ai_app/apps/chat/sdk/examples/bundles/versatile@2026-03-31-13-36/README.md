@@ -19,6 +19,7 @@ It intentionally demonstrates the main SDK bundle surfaces together in one place
 | MCP tools                              | `tools_descriptor.py`                                                                      |
 | Direct isolated exec from bundle code  | `entrypoint.py:preferences_exec_report`                                                    |
 | Custom TSX widget                      | `ui/PreferencesBrowser.tsx`, `entrypoint.py:preferences_widget`                            |
+| Custom iframe main view                | `ui-src/src/App.tsx`, `ui-src/src/settings.ts`, `entrypoint.py`                            |
 
 ## Bundle behavior
 
@@ -207,6 +208,26 @@ This bundle exposes four entrypoint operations:
   - is wired to the widget's `Run Exec Report` button through the same integrations
 operations API
 
+## Custom main view UI
+
+This bundle also ships a standalone iframe main view configured through `ui.main_view`
+in `entrypoint.py`.
+
+The source lives under `ui-src/`, and `ui-src/src/App.tsx` is the current lightweight
+reference implementation for a custom bundle chat surface.
+
+It intentionally covers the minimal but real platform contract:
+
+- parent-frame config handshake via `CONFIG_REQUEST`
+- authenticated bootstrap via `GET /profile`
+- live streaming over `GET /sse/stream` and `POST /sse/chat`
+- bundle-scoped conversation list + historical conversation load via `/api/cb/conversations/...`
+- assistant file download resolution through `POST /api/cb/resources/by-rn`
+- attachments, rate-limit/service banners, streamed markdown, followups, tool widgets, and separate timeline/steps/downloads tabs
+
+The main view also includes a chats panel for the current bundle and can load an
+existing conversation back into the same turn UI used for live streaming.
+
 ## Widget integration contract
 
 The widget is not a static mockup. It follows the real platform integration pattern:
@@ -234,6 +255,16 @@ The widget uses the platform iframe config handshake and then calls:
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_export_excel`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_canvas_import_excel`
 - `POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/preferences_exec_report`
+
+The custom main view follows the same handshake and auth model, but it talks to the
+chat runtime directly once mounted:
+
+- `GET /profile`
+- `GET /sse/stream`
+- `POST /sse/chat`
+- `GET /api/cb/conversations/{tenant}/{project}?bundle_id={bundle_id}`
+- `POST /api/cb/conversations/{tenant}/{project}/{conversation_id}/fetch`
+- `POST /api/cb/resources/by-rn`
 
 Important request shape:
 
@@ -302,6 +333,7 @@ The bundle ships one bundle-local skill:
 | Storage backend snapshot/export | optional | yes |
 | Direct isolated exec from bundle code | optional | yes |
 | Widget / operations | optional | yes |
+| Custom main view UI | optional | yes |
 
 ## Running the shared bundle test suite
 

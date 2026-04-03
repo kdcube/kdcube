@@ -2,7 +2,7 @@
 id: ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/tests/bundles/README.md
 title: "Bundle Tests"
 summary: "Draft reusable pytest smoke tests for validating a generated bundle before handoff."
-tags: ["tests", "bundles", "pytest", "react-doc"]
+tags: ["tests", "bundles", "pytest", "kdcube-copilot"]
 keywords: ["BUNDLE_UNDER_TEST", "generated bundle", "smoke tests", "entrypoint", "descriptor"]
 ---
 # Bundle Tests

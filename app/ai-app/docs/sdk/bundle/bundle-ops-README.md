@@ -389,7 +389,7 @@ kdcube:config:bundles:props:<tenant>:<project>:<bundle_id>
 
 Example:
 ```bash
-redis-cli GET "kdcube:config:bundles:props:demo-tenant:demo-project:react.doc@2026-03-02-22-10"
+redis-cli GET "kdcube:config:bundles:props:demo-tenant:demo-project:kdcube.copilot@2026-04-03-19-05"
 ```
 
 ---

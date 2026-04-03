@@ -132,7 +132,7 @@ async def test_run_py_in_docker_skips_opaque_host_path_preflight_inside_proc(tmp
     workdir = tmp_path / "work"
     outdir = tmp_path / "out"
     bundle_root = tmp_path / "bundle"
-    bundle_storage_dir = tmp_path / "bundle-storage" / "tenant" / "project" / "react.doc@2026-03-02-22-10"
+    bundle_storage_dir = tmp_path / "bundle-storage" / "tenant" / "project" / "kdcube.copilot@2026-04-03-19-05"
     workdir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
     bundle_root.mkdir(parents=True, exist_ok=True)
@@ -162,11 +162,11 @@ async def test_run_py_in_docker_skips_opaque_host_path_preflight_inside_proc(tmp
         if p == outdir.resolve():
             return pathlib.Path("/Users/elenaviter/.kdcube/kdcube-runtime/data/exec-workspace/ctx/out")
         if p == bundle_root.resolve():
-            return pathlib.Path("/Users/elenaviter/.kdcube/kdcube-runtime/data/bundles/react.doc@2026-03-02-22-10")
+            return pathlib.Path("/Users/elenaviter/.kdcube/kdcube-runtime/data/bundles/kdcube.copilot@2026-04-03-19-05")
         if p == bundle_storage_dir.resolve():
             return pathlib.Path(
                 "/Users/elenaviter/.kdcube/kdcube-runtime/data/bundle-storage/"
-                "tenant/project/react.doc@2026-03-02-22-10"
+                "tenant/project/kdcube.copilot@2026-04-03-19-05"
             )
         return p
 
