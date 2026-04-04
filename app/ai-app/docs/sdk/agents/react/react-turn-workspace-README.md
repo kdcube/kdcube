@@ -73,15 +73,15 @@ Current behavior:
 
 Workspace implementation (`RuntimeCtx.workspace_implementation`):
 - `custom`
-  - the agent is taught to use `fi:` plus `react.pull(paths=[...])`
+  - the agent is taught to use `fi:` plus `react.pull(paths=[...])` for historical materialization and `react.checkout(paths=[...])` for active workspace seeding
   - `.files/...` pulls hydrate from artifact/timeline/hosting-backed snapshot state
   - the agent is not instructed to treat the activated workspace as git
 - `git`
-  - the agent is taught to use `fi:` plus `react.pull(paths=[...])`
+  - the agent is taught to use `fi:` plus `react.pull(paths=[...])` for historical materialization and `react.checkout(paths=[...])` for active workspace seeding
   - `.files/...` pulls hydrate from git-backed lineage snapshots
   - the current turn root `out/<current_turn>/` is bootstrapped as a local git repo
   - that current-turn repo keeps lineage history available but does not eagerly populate the worktree
-  - ANNOUNCE may show `lineage_workspace_scopes` so React can see the existing top-level project folders already established in the conversation workspace
+  - ANNOUNCE may show `ls workspace` so React can see the existing top-level project folders already established in the conversation workspace
   - the agent may use local git inspection/history/edit commands inside that current-turn repo, except pull/push/fetch
 - in both modes:
   - `fi:<turn_id>.files/<scope-or-subtree>` may be pulled as a subtree
@@ -209,7 +209,8 @@ Workspace/read-write summary:
   - `turn_<id>/files/...` for durable workspace state
   - `turn_<id>/outputs/...` for non-workspace produced artifacts
 - `react.read` can load any readable OUT_DIR file through `fi:...`.
-- `react.pull` materializes selected `fi:` snapshot refs locally under OUT_DIR for later exec/code use.
+- `react.pull` materializes selected `fi:` snapshot refs locally under OUT_DIR as historical/reference material.
+- `react.checkout` defines what is materialized into the active current-turn `files/` workspace.
 - `.files/...` pulls come from:
   - artifact/timeline/hosting-backed snapshot state in `custom`
   - git-backed lineage snapshots in `git`
@@ -217,6 +218,7 @@ Workspace/read-write summary:
 - exact attachment pulls still come from hosted artifact storage in both modes
 - exact non-text `.files/...` refs also stay on the hosted/artifact path when timeline metadata says the file is a hosted binary artifact
 - `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; `fi:<turn_id>.outputs/...` and attachment/binary pulls must be exact file refs
+- `react.checkout` accepts ordered `fi:<turn_id>.files/...` refs and replaces `turn_<current>/files/` before applying them
 - exec/code and historical cross-turn patching no longer auto-materialize historical workspace files; if the file is not already local, React must `react.pull(...)` it first
 - when continuing the same project, React is expected to reuse the existing top-level `files/<scope>/...` folder rather than inventing a sibling scope
 - if the old scope name is clearly weak or misleading, React may intentionally rename/migrate the project tree to a better canonical scope

@@ -73,7 +73,7 @@ class ReactStateV2:
     suggested_followups: Optional[List[str]] = None
 
     last_decision: Optional[Dict[str, Any]] = None
-    last_tool_result: Optional[List[Dict[str, Any]]] = None
+    last_tool_result: Optional[Any] = None
 
     pending_tool_skills: Optional[List[str]] = None
 

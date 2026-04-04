@@ -490,10 +490,16 @@ It returns `logical_path` for OUT_DIR hits so the agent can immediately reopen c
 
 Use to materialize historical workspace/file memory locally.
 
-This is the explicit activation tool for workspace slices:
+This is the historical materialization tool for workspace/file memory:
 
 - subtree pulls for `.files/...`
 - exact file pulls for `.outputs/...` and attachments
+
+### `react.checkout`
+
+Use to materialize the active current-turn workspace itself under
+`turn_<current_turn>/files/...` when React needs a runnable/searchable/testable
+project snapshot.
 
 ### Generated code / exec
 

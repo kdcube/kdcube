@@ -27,7 +27,8 @@ TOOL_SPEC = {
     "id": "react.pull",
     "purpose": (
         "Materialize selected fi: snapshot refs locally under OUT_DIR so later exec/code can use them by physical path. "
-        "Use this for versioned files/folders you need locally. "
+        "Use this for versioned files/folders you need locally as historical reference material. "
+        "Pulled content stays under its historical turn root and does not seed the active current-turn workspace. "
         "Folder pulls are supported only for fi:<turn_id>.files/<scope-or-subtree>. "
         "Non-workspace outputs and attachment/binary pulls must name exact refs."
     ),

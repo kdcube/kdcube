@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.plan import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     get_workspace_implementation,
     list_materialized_turn_roots,
+    latest_workspace_checkout_event,
     summarize_current_turn_scopes,
     latest_workspace_publish_event,
 )
@@ -249,7 +250,7 @@ def build_timeline_render_directive(
     formatting or should stay internal.
     """
     btype = (block.get("type") or "").strip()
-    if btype in {"react.plan", "react.plan.ack", "react.workspace.publish"}:
+    if btype in {"react.plan", "react.plan.ack", "react.workspace.publish", "react.workspace.checkout"}:
         return {"skip": True}
 
     if btype == "react.notice":
@@ -309,6 +310,22 @@ def build_announce_workspace_lines(
     else:
         lines.append("  current_turn_scopes: none")
 
+    current_checkout = latest_workspace_checkout_event(timeline_blocks, turn_id=turn_id) if turn_id else None
+    if current_checkout:
+        checked_out_from = [
+            str(item).strip()
+            for item in (current_checkout.get("checked_out_from") or [])
+            if str(item).strip()
+        ]
+        if checked_out_from:
+            lines.append("  checked_out_from:")
+            for item in checked_out_from[:6]:
+                lines.append(f"    - {item}")
+        else:
+            lines.append("  checked_out_from: current-turn only")
+    else:
+        lines.append("  checked_out_from: none")
+
     if impl == "git":
         try:
             from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import describe_current_turn_git_repo
@@ -337,7 +354,7 @@ def build_announce_workspace_lines(
                 scope = str(item.get("scope") or "").strip()
                 files = int(item.get("files") or 0)
                 lines.append(f"    - {scope} ({files} file{'s' if files != 1 else ''})")
-            lines.append("  continue_one_by_writing_to: files/<that_scope>/... in current turn")
+            lines.append("  continue_one_by_checkout: react.checkout(paths=[\"fi:<turn>.files/<that_scope>\"])")
         else:
             lines.append("  ls workspace: none")
 

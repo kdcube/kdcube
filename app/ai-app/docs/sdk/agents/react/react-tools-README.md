@@ -82,7 +82,7 @@ Example result (simplified):
 
 react.pull
 - Purpose: materialize selected `fi:` snapshot refs locally under OUT_DIR so code/execution can use them by physical path.
-- Use this when `fi:` data must exist as a local file, not just as visible timeline content.
+- Use this when `fi:` data must exist as a local file as historical/reference material, not just as visible timeline content.
 - Backend semantics depend on `RuntimeCtx.workspace_implementation`:
   - `custom`: hydrate from conversation artifact history / hosting-backed snapshot state
   - `git`: hydrate `fi:<turn>.files/...` from the git-backed workspace lineage snapshot for that version
@@ -97,6 +97,7 @@ react.pull
   - if you need a binary file, name that exact `fi:` file in `paths`
 - Exact attachment pulls stay on the artifact/hosting path even when the workspace implementation is `git`.
 - Exact binary `.files/...` pulls also stay on the artifact/hosting path when the referenced file is a hosted/non-text artifact in timeline history.
+- `react.pull(...)` does not seed or replace `turn_<current_turn>/files/...`; use `react.checkout(...)` when the active current-turn workspace itself must be materialized from historical refs.
 - Result:
   - `pulled[]` rows contain `logical_path`, `physical_path`, and `kind`
   - those `physical_path` values are OUT_DIR-relative local paths you can use in exec code
@@ -107,6 +108,27 @@ Example result (simplified):
   "path": "tc:turn_123.abc.result",
   "mime": "application/json",
   "text": "{ \"pulled\": [{\"logical_path\": \"fi:turn_120.files/projectA/src/app.py\", \"physical_path\": \"turn_120/files/projectA/src/app.py\", \"kind\": \"files\"}] }"
+}
+```
+
+react.checkout
+- Purpose: build the active current-turn workspace under `turn_<current_turn>/files/...` from ordered historical `fi:<turn_id>.files/...` refs.
+- Use this when the current workspace itself must contain a runnable/searchable/testable project snapshot.
+- Contract:
+  - `params.paths`: ordered list of `fi:<turn_id>.files/<scope-or-path>` refs
+  - later entries override earlier ones if they overlap
+  - legacy `params.version` is still accepted as a compatibility form meaning a whole-tree checkout of `fi:<turn_id>.files/`
+- Effect:
+  - replaces the current-turn `files/` tree
+  - applies the requested refs in order
+  - leaves historical pulled trees under their original turn roots
+Example result (simplified):
+```json
+{
+  "type": "react.tool.result",
+  "path": "tc:turn_123.xyz.result",
+  "mime": "application/json",
+  "text": "{ \"checked_out_from\": [\"fi:turn_120.files/projectA\"], \"materialized\": [{\"logical_path\": \"fi:turn_123.files/projectA/src/app.py\", \"physical_path\": \"turn_123/files/projectA/src/app.py\", \"source_logical_path\": \"fi:turn_120.files/projectA\"}] }"
 }
 ```
 

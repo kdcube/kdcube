@@ -38,6 +38,16 @@ def test_build_announce_text_includes_git_workspace_summary(tmp_path):
             "status": "succeeded",
         }),
     }
+    checkout_block = {
+        "type": "react.workspace.checkout",
+        "turn_id": "turn_123",
+        "path": "ar:turn_123.react.workspace.checkout",
+        "mime": "application/json",
+        "text": json.dumps({
+            "turn_id": "turn_123",
+            "checked_out_from": ["fi:turn_122.files/projectA"],
+        }),
+    }
 
     announce_text = build_announce_text(
         iteration=1,
@@ -45,7 +55,7 @@ def test_build_announce_text_includes_git_workspace_summary(tmp_path):
         started_at="2026-04-02T10:00:00Z",
         timezone="UTC",
         runtime_ctx=runtime,
-        timeline_blocks=[publish_block],
+        timeline_blocks=[publish_block, checkout_block],
         constraints=None,
         feedback_updates=None,
         feedback_incorporated=False,
@@ -58,11 +68,13 @@ def test_build_announce_text_includes_git_workspace_summary(tmp_path):
     assert "materialized_turn_roots: turn_122, turn_123 (current)" in announce_text
     assert "current_turn_scopes:" in announce_text
     assert "- projectA/ (1 file)" in announce_text
+    assert "checked_out_from:" in announce_text
+    assert "- fi:turn_122.files/projectA" in announce_text
     assert "repo_mode: sparse git repo" in announce_text
     assert "repo_status: clean" in announce_text
     assert "ls workspace:" in announce_text
     assert "- projectA/ (1 file)" in announce_text
-    assert "continue_one_by_writing_to: files/<that_scope>/... in current turn" in announce_text
+    assert "continue_one_by_checkout: react.checkout(paths=[\"fi:<turn>.files/<that_scope>\"])" in announce_text
     assert "current_turn_publish: pending" in announce_text
     assert "last_published_turn: turn_122 (succeeded)" in announce_text
 

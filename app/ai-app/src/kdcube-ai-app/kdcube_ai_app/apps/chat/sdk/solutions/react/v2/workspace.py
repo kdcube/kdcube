@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import pathlib
 import re
+import shutil
 from typing import Any, Dict, List, Optional
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.artifacts import (
@@ -238,11 +240,33 @@ def workspace_lineage_branch_ref(runtime_ctx: Any) -> str:
 
 
 def workspace_turn_root(*, runtime_ctx: Any) -> pathlib.Path:
-    outdir = pathlib.Path(str(getattr(runtime_ctx, "outdir", "") or "").strip())
+    outdir_raw = str(getattr(runtime_ctx, "outdir", "") or "").strip()
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
-    if not outdir or not turn_id:
+    if not outdir_raw or not turn_id:
         return pathlib.Path("")
+    outdir = pathlib.Path(outdir_raw)
     return outdir / turn_id
+
+
+def current_turn_files_root(*, runtime_ctx: Any) -> pathlib.Path:
+    outdir_raw = str(getattr(runtime_ctx, "outdir", "") or "").strip()
+    turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+    if not outdir_raw or not turn_id:
+        return pathlib.Path("")
+    return pathlib.Path(outdir_raw) / turn_id / "files"
+
+
+def current_turn_files_nonempty(*, runtime_ctx: Any) -> bool:
+    files_root = current_turn_files_root(runtime_ctx=runtime_ctx)
+    if not files_root.exists():
+        return False
+    try:
+        next(files_root.iterdir())
+        return True
+    except StopIteration:
+        return False
+    except Exception:
+        return True
 
 
 def list_materialized_turn_roots(*, runtime_ctx: Any) -> List[str]:
@@ -317,6 +341,34 @@ def latest_workspace_publish_event(
     return None
 
 
+def latest_workspace_checkout_event(
+    blocks: List[Dict[str, Any]],
+    *,
+    turn_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    for blk in reversed(blocks or []):
+        if not isinstance(blk, dict):
+            continue
+        if (blk.get("type") or "").strip() != "react.workspace.checkout":
+            continue
+        blk_turn = str(blk.get("turn_id") or blk.get("turn") or "").strip()
+        if turn_id and blk_turn != turn_id:
+            continue
+        payload: Dict[str, Any] = {}
+        text = blk.get("text")
+        if isinstance(text, str) and text.strip():
+            try:
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    payload.update(parsed)
+            except Exception:
+                pass
+        if "turn_id" not in payload and blk_turn:
+            payload["turn_id"] = blk_turn
+        return payload or {"turn_id": blk_turn}
+    return None
+
+
 def physical_to_logical_artifact_path(path: str) -> str:
     return physical_path_to_logical_path(path)
 
@@ -339,7 +391,7 @@ async def hydrate_workspace_paths(
     files_paths: List[str] = []
     other_paths: List[str] = []
     for path in normalized:
-        if "/files/" in path:
+        if "/files/" in path or path.endswith("/files"):
             files_paths.append(path)
         else:
             other_paths.append(path)
@@ -411,3 +463,195 @@ async def hydrate_workspace_paths(
     result["missing"] = list(dict.fromkeys(result["missing"]))
     result["errors"] = list(dict.fromkeys(result["errors"]))
     return result
+
+
+def _parse_checkout_file_ref(path: str) -> Optional[Dict[str, str]]:
+    raw = str(path or "").strip()
+    if not raw.startswith("fi:"):
+        return None
+    turn_id, namespace, rel = split_logical_artifact_path(raw)
+    if turn_id and namespace == ARTIFACT_NAMESPACE_FILES and rel:
+        return {
+            "logical_path": raw,
+            "turn_id": turn_id,
+            "rel": rel.strip("/"),
+            "physical_path": f"{turn_id}/files/{rel.strip('/')}",
+        }
+    logical = raw[len("fi:"):].strip()
+    if logical.endswith(".files"):
+        turn_id = logical[: -len(".files")].strip()
+        if turn_id:
+            return {
+                "logical_path": raw,
+                "turn_id": turn_id,
+                "rel": "",
+                "physical_path": f"{turn_id}/files",
+            }
+    if logical.endswith(".files/"):
+        turn_id = logical[: -len(".files/")].strip()
+        if turn_id:
+            return {
+                "logical_path": raw,
+                "turn_id": turn_id,
+                "rel": "",
+                "physical_path": f"{turn_id}/files",
+            }
+    return None
+
+
+def normalize_checkout_requests(
+    *,
+    raw_paths: List[Any] | None,
+    legacy_version: str = "",
+    current_turn_id: str = "",
+) -> tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    accepted: List[Dict[str, str]] = []
+    invalid: List[Dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _accept(entry: Dict[str, str]) -> None:
+        key = (entry["turn_id"], entry["rel"])
+        if key in seen:
+            return
+        seen.add(key)
+        accepted.append(entry)
+
+    requested = [str(p).strip() for p in (raw_paths or []) if str(p).strip()]
+    if requested:
+        for raw in requested:
+            parsed = _parse_checkout_file_ref(raw)
+            if not parsed:
+                invalid.append({
+                    "path": raw,
+                    "reason": "react.checkout accepts fi:<turn_id>.files/<scope-or-path> refs only",
+                })
+                continue
+            if current_turn_id and parsed["turn_id"] == current_turn_id:
+                invalid.append({
+                    "path": raw,
+                    "reason": "react.checkout cannot use current-turn fi: refs as checkout sources",
+                })
+                continue
+            _accept(parsed)
+        return accepted, invalid
+
+    version = str(legacy_version or "").strip()
+    if version:
+        if current_turn_id and version == current_turn_id:
+            invalid.append({
+                "path": version,
+                "reason": "react.checkout cannot use current-turn fi: refs as checkout sources",
+            })
+        else:
+            _accept({
+                "logical_path": f"fi:{version}.files/",
+                "turn_id": version,
+                "rel": "",
+                "physical_path": f"{version}/files",
+            })
+    return accepted, invalid
+
+
+async def checkout_workspace_paths(
+    *,
+    ctx_browser: Any,
+    requests: List[Dict[str, str]],
+    outdir: pathlib.Path,
+) -> Dict[str, Any]:
+    runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
+    if runtime_ctx is None:
+        return {"checked_out_from": [], "materialized": [], "missing": [], "errors": ["missing_runtime_ctx"]}
+    turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+    if not turn_id:
+        return {"checked_out_from": [], "materialized": [], "missing": [], "errors": ["missing_turn_id"]}
+
+    impl = get_workspace_implementation(runtime_ctx)
+    if impl == WORKSPACE_IMPLEMENTATION_GIT:
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import ensure_current_turn_git_workspace
+
+        await asyncio.to_thread(
+            ensure_current_turn_git_workspace,
+            runtime_ctx=runtime_ctx,
+            outdir=outdir,
+        )
+
+    files_root = outdir / turn_id / "files"
+    if current_turn_files_nonempty(runtime_ctx=runtime_ctx):
+        return {
+            "checked_out_from": [str(item.get("logical_path") or "").strip() for item in requests],
+            "materialized": [],
+            "missing": [],
+            "errors": ["workspace_checkout_nonempty"],
+        }
+
+    staged_sources: List[Dict[str, str]] = []
+    missing: List[Dict[str, str]] = []
+    errors: List[str] = []
+
+    for req in requests:
+        source_physical = str(req.get("physical_path") or "").strip()
+        logical_path = str(req.get("logical_path") or "").strip()
+        rel = str(req.get("rel") or "").strip().strip("/")
+        if not source_physical or not logical_path:
+            continue
+        payload = await hydrate_workspace_paths(
+            ctx_browser=ctx_browser,
+            paths=[source_physical],
+            outdir=outdir,
+        )
+        errors.extend(list(payload.get("errors") or []))
+        source_prefix = source_physical.rstrip("/")
+        matched = []
+        for item in payload.get("rehosted") or []:
+            cleaned = str(item or "").strip().rstrip("/")
+            if cleaned == source_prefix or cleaned.startswith(source_prefix + "/"):
+                matched.append(cleaned)
+        if not matched:
+            missing.append({
+                "logical_path": logical_path,
+                "physical_path": source_physical,
+                "kind": "files",
+            })
+            continue
+        for matched_physical in matched:
+            rel_after = matched_physical.split("/files/", 1)[1] if "/files/" in matched_physical else rel
+            staged_sources.append({
+                "source_physical": matched_physical,
+                "target_physical": f"{turn_id}/files/{rel_after}",
+                "logical_path": logical_path,
+            })
+
+    if missing or errors:
+        return {
+            "checked_out_from": [str(item.get("logical_path") or "").strip() for item in requests],
+            "materialized": [],
+            "missing": missing,
+            "errors": list(dict.fromkeys(errors)),
+        }
+
+    if files_root.exists():
+        shutil.rmtree(files_root)
+    files_root.mkdir(parents=True, exist_ok=True)
+
+    materialized: List[Dict[str, str]] = []
+    for item in staged_sources:
+        source_physical = item["source_physical"]
+        target_physical = item["target_physical"]
+        src = outdir / source_physical
+        dst = outdir / target_physical
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        materialized.append({
+            "logical_path": physical_to_logical_artifact_path(target_physical),
+            "physical_path": target_physical,
+            "source_logical_path": item["logical_path"],
+            "source_physical_path": source_physical,
+            "kind": "files",
+        })
+
+    return {
+        "checked_out_from": [str(item.get("logical_path") or "").strip() for item in requests],
+        "materialized": materialized,
+        "missing": [],
+        "errors": [],
+    }

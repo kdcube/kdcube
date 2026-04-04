@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import base64
+import json
 import subprocess
 
 import pytest
@@ -505,7 +506,7 @@ def test_checkout_current_turn_git_workspace_materializes_requested_version(tmp_
 
 
 @pytest.mark.asyncio
-async def test_react_checkout_rejects_dirty_workspace(tmp_path, monkeypatch):
+async def test_react_checkout_rejects_nonempty_current_workspace(tmp_path, monkeypatch):
     monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
     monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
     outdir = tmp_path / "out"
@@ -540,7 +541,110 @@ async def test_react_checkout_rejects_dirty_workspace(tmp_path, monkeypatch):
     await handle_react_checkout(ctx_browser=ctx, state=state, tool_call_id="checkout1")
 
     assert state.get("retry_decision") is True
-    assert any((b.get("text") or "").startswith("react.checkout.dirty:") for b in ctx.timeline.blocks if b.get("type") == "react.notice")
+    assert any((b.get("text") or "").startswith("react.checkout.nonempty:") for b in ctx.timeline.blocks if b.get("type") == "react.notice")
+
+
+@pytest.mark.asyncio
+async def test_react_checkout_materializes_requested_paths_into_current_turn_custom(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_ctx", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "react.tool.result",
+                "mime": "application/json",
+                "text": '{"artifact_path":"fi:turn_prev.files/projectA/src/app.py","physical_path":"turn_prev/files/projectA/src/app.py"}',
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "text/plain",
+                "path": "fi:turn_prev.files/projectA/src/app.py",
+                "text": "print(\"old\")\n",
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "application/json",
+                "text": '{"artifact_path":"fi:turn_prev.files/projectA/docs/readme.md","physical_path":"turn_prev/files/projectA/docs/readme.md"}',
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "text/plain",
+                "path": "fi:turn_prev.files/projectA/docs/readme.md",
+                "text": "# readme\n",
+                "turn_id": "turn_prev",
+            },
+        ]
+    }
+
+    class _Settings:
+        STORAGE_PATH = str(tmp_path)
+
+    import kdcube_ai_app.apps.chat.sdk.config as cfg
+
+    cfg.get_settings = lambda: _Settings()
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "paths": ["fi:turn_prev.files/projectA"],
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+    }
+
+    await handle_react_checkout(ctx_browser=ctx, state=state, tool_call_id="checkout_custom")
+
+    assert (tmp_path / "turn_ctx" / "files" / "projectA" / "src" / "app.py").read_text(encoding="utf-8") == 'print("old")\n'
+    assert (tmp_path / "turn_ctx" / "files" / "projectA" / "docs" / "readme.md").read_text(encoding="utf-8") == "# readme\n"
+    checkout_events = [b for b in ctx.timeline.blocks if b.get("type") == "react.workspace.checkout"]
+    assert checkout_events
+
+
+@pytest.mark.asyncio
+async def test_react_checkout_materializes_requested_paths_into_current_turn_git(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
+    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
+    )
+    ctx = FakeBrowser(runtime)
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "paths": ["fi:turn_prev.files/projectA"],
+                }
+            }
+        },
+        "outdir": str(outdir),
+    }
+
+    await handle_react_checkout(ctx_browser=ctx, state=state, tool_call_id="checkout_git")
+
+    assert (outdir / "turn_ctx" / "files" / "projectA" / "src" / "app.py").read_text(encoding="utf-8") == "print('git')\n"
+    assert (outdir / "turn_ctx" / "files" / "projectA" / "docs" / "readme.md").read_text(encoding="utf-8") == "# readme\n"
+    payload = next(
+        json.loads(b["text"])
+        for b in ctx.timeline.blocks
+        if b.get("type") == "react.workspace.checkout"
+    )
+    assert payload["checked_out_from"] == ["fi:turn_prev.files/projectA"]
 
 
 @pytest.mark.asyncio

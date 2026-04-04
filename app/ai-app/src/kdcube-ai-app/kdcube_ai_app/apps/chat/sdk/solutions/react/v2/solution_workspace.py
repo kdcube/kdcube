@@ -245,12 +245,16 @@ async def rehost_files_from_timeline(
     for p in paths:
         if not isinstance(p, str):
             continue
-        if "/files/" in p:
+        if "/files/" in p or p.endswith("/files"):
             if not _safe_relpath(p):
                 errors.append(f"unsafe_path:{p}")
                 continue
-            tid, rel = p.split("/files/", 1)
-            if not tid or not rel:
+            if p.endswith("/files"):
+                tid = p[: -len("/files")].rstrip("/")
+                rel = ""
+            else:
+                tid, rel = p.split("/files/", 1)
+            if not tid:
                 continue
             by_turn.setdefault(tid, []).append(rel)
         elif "/outputs/" in p:

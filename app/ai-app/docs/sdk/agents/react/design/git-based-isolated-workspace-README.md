@@ -18,6 +18,7 @@ keywords:
   ]
 see_also:
   - ks:docs/sdk/agents/react/design/note-keeping-and-working-summary-README.md
+  - ks:docs/sdk/agents/react/design/workspace-checkout-model-README.md
   - ks:docs/sdk/agents/react/react-announce-README.md
   - ks:docs/sdk/agents/react/session-view-README.md
   - ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/solution_workspace.py
@@ -54,7 +55,7 @@ Current implementation status:
 - exact non-text `.files/...` refs are treated as hosted/custom artifacts, not as git blobs
 - folder pulls remain text-only
 - ANNOUNCE exposes a compact `[WORKSPACE]` operational summary
-- in `git` mode that summary may expose `lineage_workspace_scopes` so React can see the existing top-level project folders before it decides where to write
+- in `git` mode that summary may expose `ls workspace` so React can see the existing top-level project folders before it decides what to check out or where to write
 - detailed publish metadata is persisted as an internal `react.workspace.publish` block
 - hosted artifacts and execution snapshots remain available through ConversationStore/RN flows
 - exec-visible git metadata is lineage-only by construction: the turn repo has no configured remote and no other-user refs are fetched into it
@@ -421,15 +422,13 @@ This keeps large projects and long conversations manageable.
 `react.pull(...)` does not replace the active current-turn workspace. It creates
 explicit historical compatibility views under the referenced version path.
 
-If React intentionally wants to replace the active current-turn workspace so
-that `files/...` now begins from a specific historical version, it should use:
+`react.checkout(...)` is the tool that defines what gets materialized into the
+active current-turn workspace. The fuller cross-backend rationale is captured in
+`design/workspace-checkout-model-README.md`:
 
-```json
-{"tool_id":"react.checkout","params":{"version":"<turn_id>"}}
-```
-
-`react.checkout(...)` is available only in `git` mode and requires a clean
-current-turn repo.
+- keep `react.pull(...)` strictly historical
+- make checkout define the contents of `turn_<current>/files/`
+- let checkout accept an ordered list of `fi:...files...` refs
 
 ### 5.3 Current-turn writable root stays familiar
 
@@ -454,12 +453,10 @@ pulled lazily as compatibility views under:
 Those historical trees are read-only compatibility hydrations, not the primary
 editable workspace.
 
-`react.checkout(...)` is a rare whole-workspace replacement operation. The
-normal mental model is:
+The current mental model should be:
 - keep working in `<current_turn>/files/...`
-- pull historical slices explicitly when needed
-- avoid resetting the whole workspace unless the task really requires starting
-  the active tree from a historical version
+- use checkout to define what is materialized into `<current_turn>/files/...`
+- pull historical slices explicitly when needed as side views
 
 ### 5.4 Top-level scopes
 
@@ -491,7 +488,7 @@ Current content includes:
 - `current_turn_root`
 - `materialized_turn_roots`
 - `current_turn_scopes`
-- `lineage_workspace_scopes`
+- `ls workspace`
 - in `git` mode:
   - `repo_mode`
   - `repo_status`

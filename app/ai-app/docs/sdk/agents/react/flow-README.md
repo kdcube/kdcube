@@ -94,7 +94,9 @@ Important fields include:
 
 No special git bootstrap happens here.
 
-The workspace remains the normal turn-local execution tree and historical files are activated explicitly through `react.pull(...)`.
+The workspace remains the normal turn-local execution tree.
+Historical files are materialized explicitly through `react.pull(...)`.
+The active current-turn workspace is seeded explicitly through `react.checkout(...)`.
 
 #### `git` workspace mode
 
@@ -116,7 +118,8 @@ Important semantic rule:
 - the repo shell/history may exist at turn start
 - the worktree is still sparse
 - project content is not eagerly materialized
-- React must still activate historical/project slices explicitly with `react.pull(...)`
+- React must still materialize historical/reference slices explicitly with `react.pull(...)`
+- React must explicitly seed the active current-turn workspace with `react.checkout(...)` when it needs a runnable/searchable/testable project tree
 
 ### 3. Timeline and sources pool are loaded
 
@@ -150,7 +153,7 @@ Current `[WORKSPACE]` content is compact and may include:
 - `current_turn_root`
 - `materialized_turn_roots`
 - `current_turn_scopes`
-- in `git` mode, `lineage_workspace_scopes`
+- in `git` mode, `ls workspace`
 - in `git` mode:
   - `repo_mode`
   - `repo_status`
@@ -159,10 +162,11 @@ Current `[WORKSPACE]` content is compact and may include:
 The intended sparse-workspace behavior is:
 1. read `[WORKSPACE]` first
 2. if already-local files are enough, work directly there
-3. if historical/project files are needed, call `react.pull(...)`
-4. in `git` mode, use local git commands only after understanding that the worktree may still be sparse
-5. when continuing an existing project, keep working inside the established top-level scope unless you are intentionally renaming the project scope
-6. if `[WORKSPACE]` shows existing top-level scopes for the project you are continuing, keep editing inside that established scope instead of inventing a sibling folder
+3. if historical/reference files are needed, call `react.pull(...)`
+4. if the active project tree is needed in `turn_<current>/files/...`, call `react.checkout(...)`
+5. in `git` mode, use local git commands only after understanding that the worktree may still be sparse
+6. when continuing an existing project, keep working inside the established top-level scope unless you are intentionally renaming the project scope
+7. if `[WORKSPACE]` shows existing top-level scopes for the project you are continuing, keep editing inside that established scope instead of inventing a sibling folder
 
 ## Gate and decision loop
 
@@ -194,7 +198,7 @@ Plans and notices are also added as timeline blocks when relevant.
 
 Historical/project content is not assumed to be present locally.
 
-The canonical activation tool is:
+The historical-materialization tool is:
 
 ```json
 {"tool_id":"react.pull","params":{"paths":["fi:<turn_id>.files/<scope>/<path-or-prefix>"]}}
@@ -215,17 +219,17 @@ Important distinction:
   - `out/<current_turn>/files/...`
 - React should treat `out/<current_turn>/files/...` as its main project tree for the turn.
 
-If React intentionally wants the active current-turn workspace itself to start
-from a historical version, it should use:
+If React wants the active current-turn workspace itself to contain a runnable,
+searchable, or testable project snapshot, it should use:
 
 ```json
-{"tool_id":"react.checkout","params":{"version":"<turn_id>"}}
+{"tool_id":"react.checkout","params":{"paths":["fi:<turn_id>.files/<scope-or-path>"]}}
 ```
 
-`react.checkout(...)` replaces the active current-turn `workspace` branch state
-with the requested version and requires a clean repo.
-This is a rare whole-workspace reset operation, not the normal way to use
-history.
+`react.checkout(...)` replaces `out/<current_turn>/files/`, then applies the
+requested `fi:<turn_id>.files/...` refs in order.
+This is the normal way to seed the active workspace from historical/project
+state; `react.pull(...)` remains historical side materialization only.
 
 ## Exec tool branch
 
@@ -334,7 +338,8 @@ At the end of a successful turn:
 ## Key operational rules
 
 - React must not assume historical/project files are already local
-- `react.pull(...)` is the explicit activation tool
+- `react.pull(...)` is the historical materialization tool
+- `react.checkout(...)` is the active workspace materialization tool
 - in `git` mode, the turn repo is sparse by default
 - git tools in exec can only operate on lineage-scoped metadata
 - source pool is loaded at turn start and persisted again at turn finish
