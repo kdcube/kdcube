@@ -531,6 +531,7 @@ async def test_react_checkout_rejects_nonempty_current_workspace(tmp_path, monke
         "last_decision": {
             "tool_call": {
                 "params": {
+                    "mode": "replace",
                     "version": "turn_prev",
                 }
             }
@@ -590,6 +591,7 @@ async def test_react_checkout_materializes_requested_paths_into_current_turn_cus
         "last_decision": {
             "tool_call": {
                 "params": {
+                    "mode": "replace",
                     "paths": ["fi:turn_prev.files/projectA"],
                 }
             }
@@ -628,6 +630,7 @@ async def test_react_checkout_materializes_requested_paths_into_current_turn_git
         "last_decision": {
             "tool_call": {
                 "params": {
+                    "mode": "replace",
                     "paths": ["fi:turn_prev.files/projectA"],
                 }
             }
@@ -644,7 +647,67 @@ async def test_react_checkout_materializes_requested_paths_into_current_turn_git
         for b in ctx.timeline.blocks
         if b.get("type") == "react.workspace.checkout"
     )
+    assert payload["mode"] == "replace"
     assert payload["checked_out_from"] == ["fi:turn_prev.files/projectA"]
+
+
+@pytest.mark.asyncio
+async def test_react_checkout_overlay_overwrites_selected_file_without_clearing_workspace(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_ctx", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "react.tool.result",
+                "mime": "application/json",
+                "text": '{"artifact_path":"fi:turn_prev.files/projectA/src/app.py","physical_path":"turn_prev/files/projectA/src/app.py"}',
+                "turn_id": "turn_prev",
+            },
+            {
+                "type": "react.tool.result",
+                "mime": "text/plain",
+                "path": "fi:turn_prev.files/projectA/src/app.py",
+                "text": "print(\"old\")\n",
+                "turn_id": "turn_prev",
+            },
+        ]
+    }
+
+    class _Settings:
+        STORAGE_PATH = str(tmp_path)
+
+    import kdcube_ai_app.apps.chat.sdk.config as cfg
+
+    cfg.get_settings = lambda: _Settings()
+
+    current_root = tmp_path / "turn_ctx" / "files" / "projectA" / "src"
+    current_root.mkdir(parents=True, exist_ok=True)
+    (current_root / "app.py").write_text('print("new")\n', encoding="utf-8")
+    (current_root / "extra.py").write_text('print("keep")\n', encoding="utf-8")
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "mode": "overlay",
+                    "paths": ["fi:turn_prev.files/projectA/src/app.py"],
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+    }
+
+    await handle_react_checkout(ctx_browser=ctx, state=state, tool_call_id="checkout_overlay")
+
+    assert (current_root / "app.py").read_text(encoding="utf-8") == 'print("old")\n'
+    assert (current_root / "extra.py").read_text(encoding="utf-8") == 'print("keep")\n'
+    payload = next(
+        json.loads(b["text"])
+        for b in ctx.timeline.blocks
+        if b.get("type") == "react.workspace.checkout"
+    )
+    assert payload["mode"] == "overlay"
+    assert payload["checked_out_from"] == ["fi:turn_prev.files/projectA/src/app.py"]
 
 
 @pytest.mark.asyncio

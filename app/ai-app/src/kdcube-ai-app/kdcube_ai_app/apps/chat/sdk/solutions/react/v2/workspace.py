@@ -552,18 +552,27 @@ def normalize_checkout_requests(
     return accepted, invalid
 
 
+def normalize_checkout_mode(value: Any) -> str:
+    raw = str(value or "replace").strip().lower()
+    if raw == "overlay":
+        return "overlay"
+    return "replace"
+
+
 async def checkout_workspace_paths(
     *,
     ctx_browser: Any,
     requests: List[Dict[str, str]],
     outdir: pathlib.Path,
+    mode: str = "replace",
 ) -> Dict[str, Any]:
     runtime_ctx = getattr(ctx_browser, "runtime_ctx", None)
     if runtime_ctx is None:
-        return {"checked_out_from": [], "materialized": [], "missing": [], "errors": ["missing_runtime_ctx"]}
+        return {"mode": mode, "checked_out_from": [], "materialized": [], "missing": [], "errors": ["missing_runtime_ctx"]}
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
     if not turn_id:
-        return {"checked_out_from": [], "materialized": [], "missing": [], "errors": ["missing_turn_id"]}
+        return {"mode": mode, "checked_out_from": [], "materialized": [], "missing": [], "errors": ["missing_turn_id"]}
+    mode = normalize_checkout_mode(mode)
 
     impl = get_workspace_implementation(runtime_ctx)
     if impl == WORKSPACE_IMPLEMENTATION_GIT:
@@ -576,8 +585,9 @@ async def checkout_workspace_paths(
         )
 
     files_root = outdir / turn_id / "files"
-    if current_turn_files_nonempty(runtime_ctx=runtime_ctx):
+    if mode == "replace" and current_turn_files_nonempty(runtime_ctx=runtime_ctx):
         return {
+            "mode": mode,
             "checked_out_from": [str(item.get("logical_path") or "").strip() for item in requests],
             "materialized": [],
             "missing": [],
@@ -623,13 +633,14 @@ async def checkout_workspace_paths(
 
     if missing or errors:
         return {
+            "mode": mode,
             "checked_out_from": [str(item.get("logical_path") or "").strip() for item in requests],
             "materialized": [],
             "missing": missing,
             "errors": list(dict.fromkeys(errors)),
         }
 
-    if files_root.exists():
+    if mode == "replace" and files_root.exists():
         shutil.rmtree(files_root)
     files_root.mkdir(parents=True, exist_ok=True)
 
@@ -650,6 +661,7 @@ async def checkout_workspace_paths(
         })
 
     return {
+        "mode": mode,
         "checked_out_from": [str(item.get("logical_path") or "").strip() for item in requests],
         "materialized": materialized,
         "missing": [],

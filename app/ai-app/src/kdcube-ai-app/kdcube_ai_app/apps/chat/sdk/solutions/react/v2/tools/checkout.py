@@ -16,6 +16,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.common import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     checkout_workspace_paths,
+    latest_workspace_checkout_event,
+    normalize_checkout_mode,
     normalize_checkout_requests,
 )
 
@@ -29,6 +31,11 @@ TOOL_SPEC = {
         "rather than only materializing historical side views with react.pull."
     ),
     "args": {
+        "mode": (
+            "optional str: replace|overlay. "
+            "replace clears current-turn files/ before applying refs. "
+            "overlay keeps existing current-turn files/ and overwrites only the selected files."
+        ),
         "paths": (
             "ordered list[str] of fi:<turn_id>.files refs to apply into the current-turn workspace. "
             "Later entries override earlier ones if they overlap. "
@@ -36,8 +43,9 @@ TOOL_SPEC = {
         ),
     },
     "returns": (
-        "JSON object {checked_out_from, materialized, missing, errors}. "
-        "Checkout replaces the current-turn files/ tree, then applies the requested refs in order. "
+        "JSON object {mode, checked_out_from, materialized, missing, errors}. "
+        "replace clears current-turn files/ before applying refs. "
+        "overlay keeps current-turn files/ and applies refs on top. "
         "Historical refs remain available separately via react.pull."
     ),
 }
@@ -51,6 +59,18 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
     raw_paths = params.get("paths")
     if raw_paths is None and isinstance(params, list):
         raw_paths = params
+    raw_mode = str(params.get("mode") or "").strip().lower()
+    if raw_mode and raw_mode not in {"replace", "overlay"}:
+        notice_block(
+            ctx_browser=ctx_browser,
+            tool_call_id=tool_call_id,
+            code="protocol_violation.checkout_invalid_mode",
+            message='react.checkout params.mode must be "replace" or "overlay".',
+            extra={"tool_id": tool_id, "mode": raw_mode},
+        )
+        state["retry_decision"] = True
+        return state
+    mode = normalize_checkout_mode(raw_mode)
     turn_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "turn_id", "") or "").strip()
 
     tool_call_block(
@@ -95,6 +115,7 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
         ctx_browser=ctx_browser,
         requests=requests,
         outdir=pathlib.Path(str(state["outdir"])),
+        mode=mode,
     )
 
     if "workspace_checkout_nonempty" in set(result.get("errors") or []):
@@ -104,9 +125,10 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
             code="react.checkout.nonempty",
             message=(
                 "Current turn workspace already contains files. "
-                "Use react.checkout before current-turn edits/writes when you want to seed the active workspace."
+                "Use react.checkout(mode=\"replace\") before current-turn edits/writes when you want to seed the active workspace, "
+                "or react.checkout(mode=\"overlay\") to import selected historical files into the existing workspace."
             ),
-            extra={"checked_out_from": result.get("checked_out_from") or []},
+            extra={"checked_out_from": result.get("checked_out_from") or [], "mode": mode},
         )
         state["retry_decision"] = True
         return state
@@ -118,6 +140,7 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
             code="react.checkout.failed",
             message="Failed to fully materialize the requested workspace checkout.",
             extra={
+                "mode": mode,
                 "checked_out_from": result.get("checked_out_from") or [],
                 "missing": result.get("missing") or [],
                 "errors": result.get("errors") or [],
@@ -137,13 +160,27 @@ async def handle_react_checkout(*, ctx_browser: Any, state: Dict[str, Any], tool
             "tool_call_id": tool_call_id,
         },
     })
+    prev_checkout = latest_workspace_checkout_event(getattr(getattr(ctx_browser, "timeline", None), "blocks", []) or [], turn_id=turn_id)
+    if mode == "overlay":
+        merged_sources = []
+        seen = set()
+        for item in list((prev_checkout or {}).get("checked_out_from") or []) + list(result.get("checked_out_from") or []):
+            raw = str(item or "").strip()
+            if not raw or raw in seen:
+                continue
+            seen.add(raw)
+            merged_sources.append(raw)
+    else:
+        merged_sources = [str(item).strip() for item in (result.get("checked_out_from") or []) if str(item).strip()]
+    checkout_event_payload = dict(result)
+    checkout_event_payload["checked_out_from"] = merged_sources
     add_block(ctx_browser, {
         "turn": turn_id,
         "turn_id": turn_id,
         "type": "react.workspace.checkout",
         "mime": "application/json",
         "path": f"ar:{turn_id}.react.workspace.checkout",
-        "text": json.dumps(result, ensure_ascii=False, indent=2),
+        "text": json.dumps(checkout_event_payload, ensure_ascii=False, indent=2),
         "meta": {
             "tool_call_id": tool_call_id,
         },

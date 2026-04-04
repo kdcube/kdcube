@@ -191,8 +191,10 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 - Pulling `fi:<turn_id>.user.attachments/...` or `fi:<turn_id>.attachments/...` is allowed only as an EXACT file ref. Do not expect binary descendants to appear automatically when you pull a folder.
 - If you need a binary file from hosting (xlsx, pptx, pdf, image, zip, etc.), name that exact `fi:` file in `react.pull`.
 - `react.pull(...)` is for historical side materialization only. Pulled content stays under its historical turn root and should be treated as readonly reference material.
-- Use `react.checkout(paths=[...])` when the active current-turn workspace itself must contain a runnable/searchable/testable project snapshot under `turn_<current_turn>/files/...`.
-- `react.checkout(...)` replaces the current-turn `files/` tree, then applies the requested `fi:<turn_id>.files/...` refs in order.
+- Use `react.checkout(mode="replace", paths=[...])` when the active current-turn workspace itself must contain a runnable/searchable/testable project snapshot under `turn_<current_turn>/files/...`.
+- Use `react.checkout(mode="overlay", paths=[...])` when you want to import or overwrite selected historical files into an already materialized current-turn workspace.
+- `react.checkout(mode="replace", ...)` replaces the current-turn `files/` tree, then applies the requested `fi:<turn_id>.files/...` refs in order.
+- `react.checkout(mode="overlay", ...)` keeps the current-turn `files/` tree and applies the requested refs on top without deleting unspecified files.
 - After `react.pull`, the materialized local paths are available under OUT_DIR using their physical form, for example:
   - `turn_123/files/projectA/src/app.py`
   - `turn_123/attachments/template.xlsx`
@@ -264,21 +266,25 @@ VISIBLE / ADDRESSABLE WORKSPACE MODEL
 - `turn_<current_turn>/outputs/...` is for current-turn produced artifacts that should not become workspace history.
 - Treat `turn_<current_turn>/files/...` as the authoritative project tree for the turn.
 - `react.pull(fi:<older_turn>.files/...)` creates a version-scoped historical snapshot view under `turn_<older_turn>/files/...`; it does NOT implicitly replace or activate the current-turn worktree.
-- Use `react.checkout(paths=[...])` when the current-turn workspace itself must contain a runnable/searchable/testable project snapshot under `turn_<current_turn>/files/...`.
-- `react.checkout(...)` replaces the current-turn `files/` tree, then applies the requested `fi:<turn_id>.files/...` refs in order.
+- Use `react.checkout(mode="replace", paths=[...])` when the current-turn workspace itself must contain a runnable/searchable/testable project snapshot under `turn_<current_turn>/files/...`.
+- Use `react.checkout(mode="overlay", paths=[...])` when you want to import or overwrite selected historical files into an already materialized current-turn workspace.
+- `react.checkout(mode="replace", ...)` replaces the current-turn `files/` tree, then applies the requested `fi:<turn_id>.files/...` refs in order.
+- `react.checkout(mode="overlay", ...)` keeps the current-turn `files/` tree and applies the requested refs on top without deleting unspecified files.
 - Read the `[WORKSPACE]` section in ANNOUNCE first. It tells you what is already materialized locally and whether the current sparse repo is clean/dirty.
 - In ANNOUNCE, `ls workspace` is the list of existing top-level project scopes already present in this conversation workspace.
-- To continue one of them as the active workspace, use `react.checkout(paths=["fi:<turn>.files/<that_scope>"])`, then write into the current turn as `files/<that_scope>/...`.
+- To continue one of them as the active workspace, use `react.checkout(mode="replace", paths=["fi:<turn>.files/<that_scope>"])`, then write into the current turn as `files/<that_scope>/...`.
 - Only bring files in when you actually need them:
   - use `react.pull(paths=[fi:...])` when you need a specific historical version by turn id as reference material
-  - use `react.checkout(paths=[fi:...])` when you want the active current-turn workspace to be built from selected versioned files/scopes
+  - use `react.checkout(mode="replace", paths=[fi:...])` when you want the active current-turn workspace to be built from selected versioned files/scopes
+  - use `react.checkout(mode="overlay", paths=[fi:...])` when you want to import or overwrite selected historical files into the existing current-turn workspace
 - Efficient sparse-workspace pattern:
   1. Read ANNOUNCE workspace status first.
   2. If the current-turn local files are already enough, work directly there.
   3. If you need historical content by turn id for comparison or explicit reuse, use `react.pull(fi:...)`.
-  4. If you need the active project tree in `turn_<current_turn>/files/...`, use `react.checkout(paths=[...])` early in the turn.
-  5. After checkout, work directly in `files/<scope>/...` and use local git commands in the current-turn repo when they help.
-  6. Use exact `fi:` refs for binaries; never assume folder pulls bring them.
+  4. If you need the active project tree in `turn_<current_turn>/files/...`, use `react.checkout(mode="replace", paths=[...])` early in the turn.
+  5. If you later need to import or overwrite only part of that workspace from an older version, use `react.checkout(mode="overlay", paths=[...])`.
+  6. After checkout, work directly in `files/<scope>/...` and use local git commands in the current-turn repo when they help.
+  7. Use exact `fi:` refs for binaries; never assume folder pulls bring them.
 - Exec/code and historical cross-turn patching do NOT auto-materialize old files for you. If a historical file is not already local, `react.pull(...)` must happen first.
 - Use local git commands against that current-turn repo root when they help you inspect history, diff, status, or create local commits.
 - Do NOT use `git pull`, `git fetch`, or `git push` from exec/code. Networked git synchronization is handled by engineering outside exec.

@@ -312,6 +312,9 @@ def build_announce_workspace_lines(
 
     current_checkout = latest_workspace_checkout_event(timeline_blocks, turn_id=turn_id) if turn_id else None
     if current_checkout:
+        checkout_mode = str(current_checkout.get("mode") or "").strip()
+        if checkout_mode:
+            lines.append(f"  checkout_mode: {checkout_mode}")
         checked_out_from = [
             str(item).strip()
             for item in (current_checkout.get("checked_out_from") or [])
@@ -354,7 +357,7 @@ def build_announce_workspace_lines(
                 scope = str(item.get("scope") or "").strip()
                 files = int(item.get("files") or 0)
                 lines.append(f"    - {scope} ({files} file{'s' if files != 1 else ''})")
-            lines.append("  continue_one_by_checkout: react.checkout(paths=[\"fi:<turn>.files/<that_scope>\"])")
+            lines.append("  continue_one_by_checkout: react.checkout(mode=\"replace\", paths=[\"fi:<turn>.files/<that_scope>\"])")
         else:
             lines.append("  ls workspace: none")
 

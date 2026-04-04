@@ -163,10 +163,11 @@ The intended sparse-workspace behavior is:
 1. read `[WORKSPACE]` first
 2. if already-local files are enough, work directly there
 3. if historical/reference files are needed, call `react.pull(...)`
-4. if the active project tree is needed in `turn_<current>/files/...`, call `react.checkout(...)`
-5. in `git` mode, use local git commands only after understanding that the worktree may still be sparse
-6. when continuing an existing project, keep working inside the established top-level scope unless you are intentionally renaming the project scope
-7. if `[WORKSPACE]` shows existing top-level scopes for the project you are continuing, keep editing inside that established scope instead of inventing a sibling folder
+4. if the active project tree is needed in `turn_<current>/files/...`, call `react.checkout(mode="replace", ...)`
+5. if only selected historical files need to be imported or overwritten into the existing workspace, call `react.checkout(mode="overlay", ...)`
+6. in `git` mode, use local git commands only after understanding that the worktree may still be sparse
+7. when continuing an existing project, keep working inside the established top-level scope unless you are intentionally renaming the project scope
+8. if `[WORKSPACE]` shows existing top-level scopes for the project you are continuing, keep editing inside that established scope instead of inventing a sibling folder
 
 ## Gate and decision loop
 
@@ -226,10 +227,13 @@ searchable, or testable project snapshot, it should use:
 {"tool_id":"react.checkout","params":{"paths":["fi:<turn_id>.files/<scope-or-path>"]}}
 ```
 
-`react.checkout(...)` replaces `out/<current_turn>/files/`, then applies the
-requested `fi:<turn_id>.files/...` refs in order.
-This is the normal way to seed the active workspace from historical/project
-state; `react.pull(...)` remains historical side materialization only.
+`react.checkout(mode="replace", ...)` replaces `out/<current_turn>/files/`,
+then applies the requested `fi:<turn_id>.files/...` refs in order.
+`react.checkout(mode="overlay", ...)` keeps `out/<current_turn>/files/` and
+imports or overwrites only the selected historical files/scopes on top.
+This is the normal way to seed or selectively extend the active workspace from
+historical/project state; `react.pull(...)` remains historical side
+materialization only.
 
 ## Exec tool branch
 

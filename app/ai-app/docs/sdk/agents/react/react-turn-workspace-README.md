@@ -218,7 +218,8 @@ Workspace/read-write summary:
 - exact attachment pulls still come from hosted artifact storage in both modes
 - exact non-text `.files/...` refs also stay on the hosted/artifact path when timeline metadata says the file is a hosted binary artifact
 - `react.pull` supports subtree pulls only for `fi:<turn_id>.files/...`; `fi:<turn_id>.outputs/...` and attachment/binary pulls must be exact file refs
-- `react.checkout` accepts ordered `fi:<turn_id>.files/...` refs and replaces `turn_<current>/files/` before applying them
+- `react.checkout(mode="replace")` accepts ordered `fi:<turn_id>.files/...` refs and replaces `turn_<current>/files/` before applying them
+- `react.checkout(mode="overlay")` accepts ordered `fi:<turn_id>.files/...` refs and applies them into the existing current workspace without deleting unspecified files
 - exec/code and historical cross-turn patching no longer auto-materialize historical workspace files; if the file is not already local, React must `react.pull(...)` it first
 - when continuing the same project, React is expected to reuse the existing top-level `files/<scope>/...` folder rather than inventing a sibling scope
 - if the old scope name is clearly weak or misleading, React may intentionally rename/migrate the project tree to a better canonical scope

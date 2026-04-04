@@ -622,9 +622,15 @@ async def hydrate_files_from_git_workspace(
     version_errors: Dict[str, str] = {}
 
     for physical in paths:
-        if not isinstance(physical, str) or "/files/" not in physical:
+        if not isinstance(physical, str):
             continue
-        turn_id, rel = physical.split("/files/", 1)
+        if physical.endswith("/files"):
+            turn_id = physical[: -len("/files")].rstrip("/")
+            rel = ""
+        elif "/files/" in physical:
+            turn_id, rel = physical.split("/files/", 1)
+        else:
+            continue
         tree_path = f"files/{rel}".strip("/")
         if turn_id in version_errors:
             missing.append(physical)

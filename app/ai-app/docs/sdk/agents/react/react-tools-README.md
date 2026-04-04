@@ -115,12 +115,15 @@ react.checkout
 - Purpose: build the active current-turn workspace under `turn_<current_turn>/files/...` from ordered historical `fi:<turn_id>.files/...` refs.
 - Use this when the current workspace itself must contain a runnable/searchable/testable project snapshot.
 - Contract:
+  - `params.mode`: `replace` (default) or `overlay`
+  - `replace` clears current-turn `files/` before applying refs
+  - `overlay` keeps current-turn `files/` and applies refs on top, overwriting overlapping files without deleting unspecified files
   - `params.paths`: ordered list of `fi:<turn_id>.files/<scope-or-path>` refs
   - later entries override earlier ones if they overlap
   - legacy `params.version` is still accepted as a compatibility form meaning a whole-tree checkout of `fi:<turn_id>.files/`
 - Effect:
-  - replaces the current-turn `files/` tree
-  - applies the requested refs in order
+  - `replace`: replaces the current-turn `files/` tree, then applies the requested refs in order
+  - `overlay`: keeps the current-turn `files/` tree and applies the requested refs in order on top
   - leaves historical pulled trees under their original turn roots
 Example result (simplified):
 ```json

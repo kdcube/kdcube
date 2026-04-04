@@ -37,6 +37,13 @@ This draft addresses a semantic gap in the current React workspace model:
 
 That missing answer is the reason project continuation still feels indirect.
 
+Current status:
+
+- `react.pull(...)` is implemented as historical side materialization
+- `react.checkout(...)` is implemented as current-workspace materialization
+- `react.checkout(mode="replace")` replaces `turn_<current>/files/...`
+- `react.checkout(mode="overlay")` imports/overwrites selected historical files into the existing current workspace without deleting unspecified files
+
 ---
 
 ## 1) The Problem
@@ -183,6 +190,7 @@ Proposed contract:
 {
   "tool_id": "react.checkout",
   "params": {
+    "mode": "replace | overlay",
     "paths": [
       "fi:<turn_id>.files/<scope-or-subtree>",
       "fi:<turn_id>.files/<scope-or-file>"
@@ -194,7 +202,8 @@ Proposed contract:
 Semantics:
 
 - accepts `fi:...files...` refs only
-- applies them into `turn_<current_turn>/files/...`
+- in `replace` mode, clears and rebuilds `turn_<current_turn>/files/...`
+- in `overlay` mode, applies them on top of the existing `turn_<current_turn>/files/...`
 - applies them in the order given
 - later entries override earlier entries if they overlap
 
@@ -204,7 +213,8 @@ This gives a deterministic answer to:
 
 Answer:
 
-- the result of the latest checkout application order
+- the result of the latest `replace` checkout
+- plus any later `overlay` checkouts
 - plus later current-turn writes/patches/exec outputs under `files/`
 
 ---
@@ -230,16 +240,16 @@ The whole benefit of checkout is:
 
 - it defines the current workspace deterministically
 
-So the normal rule should be:
+So the normal deterministic rule should be:
 
-- checkout replaces the current workspace view
+- `checkout(mode="replace")` replaces the current workspace view
 - then applies the requested refs in order
 
-Potential future extension:
+Overlay is now a separate explicit mode:
 
-- an explicit overlay/import mode
-
-But the default should be full replacement.
+- `checkout(mode="overlay")` keeps the current workspace view
+- then applies the requested refs in order on top
+- unspecified current-turn files remain present
 
 ---
 
