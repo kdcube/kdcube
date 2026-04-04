@@ -64,7 +64,7 @@ class ReactStateV2:
 
     # Loop control
     iteration: int = 0
-    max_iterations: int = 6
+    max_iterations: int = 15
     decision_retries: int = 0
     max_decision_retries: int = 2
 
