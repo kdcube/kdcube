@@ -1,33 +1,26 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.02.357"
+  ref: "2026.4.04.318"
   description: |
-    This release focuses on bundle platform ergonomics, declarative bundle interfaces, and the
-    versatile reference bundle as the primary end-to-end example for bundle authors.
+    This release focuses on making React a much stronger coding and bundle-building agent while
+    continuing the broader bundle-interface and custom-UI rollout.
 
-    The platform now supports declarative bundle interface metadata through bundle entrypoint
-    decorators. Bundles can describe API methods, widgets, message entrypoints, and UI surfaces in
-    code, and the integrations controller can expose bundle manifests, widgets, and API operations
-    from that metadata while remaining backward compatible with legacy method lookup.
+    React now supports explicit workspace activation through `react.pull(...)`, split workspace
+    backends (`custom` and `git`), sparse git-backed current-turn repositories, lineage-isolated git
+    history, exact hosted binary fallback, turn-end workspace publish, and clearer ANNOUNCE guidance
+    around continuing project scopes cleanly. The workspace model now separates durable
+    `files/...` state from non-workspace `outputs/...` artifacts, and isolated exec supports
+    internal-only artifacts that remain agent-visible without being emitted to the user.
 
-    Bundle runtime and client communication were also clarified and improved. The processor now
-    accepts a configurable stream-id header so REST-originated bundle operations can target a
-    specific connected peer instead of only broadcasting to the whole session. Runtime bootstrap for
-    bundle tools was standardized across in-process and isolated execution, and the SDK docs now
-    explain communicator usage, SSE/Socket.IO delivery semantics, headers, cookies, and bundle
-    client integration much more explicitly.
+    The bundle platform and UI surface also moved forward. The versatile reference bundle now has a
+    modularized main-view service layer, KDCube copilot bundle naming was clarified, and the
+    gateway/integrations path around guarded widgets and bundle-facing UI workflows was tightened.
+    Static and custom bundle UI support remain a first-class path, with decorator-discovered bundle
+    interfaces and richer frontend-facing manifests.
 
-    The versatile reference bundle was expanded substantially. It now demonstrates shared
-    bundle-storage-backed user preferences, a much simpler notebook-style collaborative preferences
-    widget, Excel import/export, exec-backed report generation, downloadable report payloads, bundle
-    props and secrets usage, built-in web tools, and stronger preference-memory guidance for agent
-    behavior. The reference widget and tool tests were moved into the bundle itself, and the SDK now
-    includes a runner that combines the shared bundle harness with bundle-local tests.
-
-    Bundle delivery and UI loading were also hardened. Static bundle UI can now build on first
-    request, bundle-specific frontend code receives the resolved bundle id during build, and bundle
-    operations routes support both explicit bundle-id paths and the backward-compatible default form.
-    Git-backed bundle synchronization is now stricter for both exact refs and branch refs, avoiding
-    invalid detached-HEAD pull behavior and making fetch/reset failures fatal.
+    On the documentation side, the React architecture story was expanded substantially. We now have
+    design docs for git-backed isolated workspace management, memory architecture, and why React is
+    not modeled as pure provider-native tool calling, alongside updated website/docs materials for
+    bundle authors and platform users.
 config:
-    version: "2026.4.02.357"
+    version: "2026.4.04.318"
