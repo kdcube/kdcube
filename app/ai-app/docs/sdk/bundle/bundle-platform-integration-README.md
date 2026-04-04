@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/bundle-platform-integration-README.md
 title: "Bundle Platform Integration"
 summary: "Design for declarative bundle integration points: API methods, widgets, UI main entrypoint, and message entrypoint discovery."
 tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "streaming", "design"]
-keywords: ["agentic_workflow", "api decorator", "ui_widget", "ui_main", "on_message", "bundle manifest", "integrations widgets", "integrations operations"]
+keywords: ["agentic_workflow", "bundle_id decorator", "api decorator", "ui_widget", "ui_main", "on_message", "bundle manifest", "integrations widgets", "integrations operations"]
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
@@ -115,6 +115,26 @@ These decorators should live in the same module as `@agentic_workflow`:
 - `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py`
 
 That keeps all bundle entrypoint discovery metadata in one place.
+
+### 3.0 `@bundle_id(...)`
+
+Declares the bundle's canonical ID from within the entrypoint class.
+
+```python
+@agentic_workflow(name="My Bundle")
+@bundle_id("my-bundle@1.0.0")
+class MyBundle(BaseEntrypoint):
+    ...
+```
+
+Rules:
+- class-level decorator; applies before `@agentic_workflow`
+- the declared ID overrides the directory name when the example bundle
+  registry is built at startup
+- if both `@bundle_id` and a registry config entry exist, the registry
+  config entry takes precedence (external deployment config wins)
+- the value is stored as `cls.__bundle_id__` and is read by
+  `discover_bundle_interface_manifest` and `get_declared_bundle_id`
 
 ### 3.1 `@ui_widget(...)`
 
@@ -272,6 +292,7 @@ Discovery should happen after the bundle entrypoint class is resolved through
 `@agentic_workflow`.
 
 The loader should inspect the decorated entrypoint class and collect:
+- the bundle ID from `@bundle_id` (falls back to registry config or directory name)
 - all `@api` methods
 - all `@ui_widget` methods
 - zero or one `@ui_main`
