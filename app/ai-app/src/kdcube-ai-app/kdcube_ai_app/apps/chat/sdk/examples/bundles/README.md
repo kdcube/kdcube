@@ -13,3 +13,4 @@ This folder contains versioned, runnable bundle examples.
 - [ReAct Agent](react%402026-02-10-02-44): older focused React bundle example.
 - [ReAct + MCP](react.mcp%402026-03-09): older focused MCP example.
 - [App with economics](eco%402026-02-18-15-06): older focused economics example.
+- [Referent Bundle](versatile%402026-03-31-13-36): referent bundle demonstrating a wide variety of features, intended as a starting point for builders.
