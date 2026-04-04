@@ -206,8 +206,12 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
             continue
         if not (item / "entrypoint.py").exists():
             continue
-        bid = item.name
         bundle_path = _ensure_example_bundle_shared(item)
+        try:
+            from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+            bid = get_declared_bundle_id(bundle_path, "entrypoint") or item.name
+        except Exception:
+            bid = item.name
         bundles[bid] = BundleEntry(
             id=bid,
             name=bid,
@@ -230,7 +234,13 @@ def _discover_example_bundle_ids() -> Set[str]:
             continue
         if not (item / "entrypoint.py").exists():
             continue
-        ids.add(item.name)
+        bundle_path = _ensure_example_bundle_shared(item)
+        try:
+            from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+            bid = get_declared_bundle_id(bundle_path, "entrypoint") or item.name
+        except Exception:
+            bid = item.name
+        ids.add(bid)
     return ids
 
 @lru_cache(maxsize=1)
@@ -249,20 +259,39 @@ def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
     root = _examples_root()
     if not root.exists():
         return None
+    # First try direct directory match (bid == dir name, no @bundle_id decorator).
     candidate = root / bid
-    if not candidate.is_dir():
-        return None
-    if not (candidate / "entrypoint.py").exists():
-        return None
-    candidate = _ensure_example_bundle_shared(candidate)
-    return BundleEntry(
-        id=bid,
-        name=bid,
-        path=str(candidate),
-        module="entrypoint",
-        singleton=False,
-        description="Built-in example bundle",
-    )
+    if candidate.is_dir() and (candidate / "entrypoint.py").exists():
+        candidate = _ensure_example_bundle_shared(candidate)
+        return BundleEntry(
+            id=bid,
+            name=bid,
+            path=str(candidate),
+            module="entrypoint",
+            singleton=False,
+            description="Built-in example bundle",
+        )
+    # Fallback: scan all example dirs and check declared @bundle_id.
+    try:
+        from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
+        for item in root.iterdir():
+            if not item.is_dir() or item.name in {"data", "__pycache__"}:
+                continue
+            if not (item / "entrypoint.py").exists():
+                continue
+            bundle_path = _ensure_example_bundle_shared(item)
+            if get_declared_bundle_id(bundle_path, "entrypoint") == bid:
+                return BundleEntry(
+                    id=bid,
+                    name=bid,
+                    path=str(bundle_path),
+                    module="entrypoint",
+                    singleton=False,
+                    description="Built-in example bundle",
+                )
+    except Exception:
+        pass
+    return None
 
 def _norm_str(val: Optional[str]) -> Optional[str]:
     if val is None:
@@ -459,6 +488,16 @@ def _merge_example_bundles(reg: "BundlesRegistry") -> tuple["BundlesRegistry", b
         default_bundle_id=reg.default_bundle_id,
         bundles=dict(reg.bundles),
     )
+    # Evict stale registry entries whose path matches a current example bundle
+    # but whose id differs (e.g. bundle was renamed via @bundle_id decorator).
+    example_paths = {entry.path for entry in examples.values()}
+    example_ids = set(examples.keys())
+    for bid in list(merged.bundles.keys()):
+        if bid in example_ids:
+            continue
+        if merged.bundles[bid].path in example_paths:
+            del merged.bundles[bid]
+            updated = True
     for bid, entry in examples.items():
         existing = merged.bundles.get(bid)
         if existing is None:

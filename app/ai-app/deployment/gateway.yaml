@@ -13,6 +13,7 @@ gateway:
     proc:
       - "^.*/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$"
       - "^.*/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$"
+      - "^.*/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$"
       - "^.*/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$"
       - "^.*/integrations/static/[^/]+/[^/]+/[^/]+/.*$"
 

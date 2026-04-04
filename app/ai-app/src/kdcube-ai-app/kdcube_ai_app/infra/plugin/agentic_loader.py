@@ -27,6 +27,7 @@ _log = logging.getLogger("kdcube.plugin.loader")
 
 AGENTIC_ROLE_ATTR = "__agentic_role__"
 AGENTIC_META_ATTR = "__agentic_meta__"
+BUNDLE_ID_ATTR = "__bundle_id__"
 API_METHOD_ATTR = "__bundle_api_method__"
 UI_WIDGET_ATTR = "__bundle_ui_widget__"
 ON_MESSAGE_ATTR = "__bundle_on_message__"
@@ -154,6 +155,28 @@ def agentic_workflow(
         setattr(cls, AGENTIC_META_ATTR, {
             "name": name, "version": version, "priority": priority
         })
+        return cls
+    return _wrap
+
+
+def bundle_id(id: str):
+    """
+    Declare the bundle's ID from within the class definition.
+
+    Usage::
+
+        @agentic_workflow(name="My Bundle")
+        @bundle_id("my-bundle@1.0.0")
+        class MyBundle:
+            ...
+
+    The decorated value is stored as ``cls.__bundle_id__`` and is picked up
+    by ``discover_bundle_interface_manifest`` when no external bundle_id is
+    supplied by the caller.  An explicit ``bundle_id`` passed to the
+    discovery function always takes precedence.
+    """
+    def _wrap(cls):
+        setattr(cls, BUNDLE_ID_ATTR, str(id).strip())
         return cls
     return _wrap
 
@@ -575,7 +598,14 @@ def _iter_bundle_callable_members(target: Any):
 
 def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = None) -> BundleInterfaceManifest:
     cls = target if isinstance(target, type) else target.__class__
-    resolved_bundle_id = str(bundle_id or getattr(cls, "BUNDLE_ID", None) or getattr(target, "BUNDLE_ID", None) or "").strip()
+    resolved_bundle_id = str(
+        bundle_id
+        or getattr(cls, BUNDLE_ID_ATTR, None)
+        or getattr(target, BUNDLE_ID_ATTR, None)
+        or getattr(cls, "BUNDLE_ID", None)
+        or getattr(target, "BUNDLE_ID", None)
+        or ""
+    ).strip()
 
     api_endpoints: list[APIEndpointSpec] = []
     ui_widgets: list[UIWidgetSpec] = []
@@ -838,6 +868,24 @@ def clear_agentic_caches() -> None:
 def get_cached_manifest(spec: AgenticBundleSpec) -> "BundleInterfaceManifest | None":
     """Return the cached BundleInterfaceManifest for spec, or None if not yet loaded."""
     return _manifest_cache.get(_cache_key(spec))
+
+
+def get_declared_bundle_id(path: "Path | str", module: str) -> "str | None":
+    """
+    Load the bundle module at ``path/module`` without instantiation and return
+    the bundle ID declared via ``@bundle_id``, or ``None`` if the decorator is
+    absent or the module cannot be loaded.
+    """
+    try:
+        mod = _load_module_from_dir(Path(path), module)
+        chosen = _discover_decorated(mod)
+        if chosen:
+            _, _, symbol = chosen
+            declared = str(getattr(symbol, BUNDLE_ID_ATTR, None) or "").strip()
+            return declared or None
+    except Exception:
+        return None
+    return None
 
 
 def load_bundle_manifest(

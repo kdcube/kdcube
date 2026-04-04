@@ -380,6 +380,7 @@ Notes:
     "^/conversations/[^/]+/[^/]+/feedback/conversations-in-period$",
     "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
     "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
+    "^/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$",
     "^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$",
     "^/api/cb/conversations/[^/]+/[^/]+$",
     "^/api/opex/total$"
@@ -457,6 +458,7 @@ GATEWAY_CONFIG_JSON='{
     "^/conversations/[^/]+/[^/]+/feedback/conversations-in-period$",
     "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
     "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
+    "^/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$",
     "^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$",
     "^/api/cb/conversations/[^/]+/[^/]+$",
     "^/api/opex/total$"
@@ -529,6 +531,7 @@ Use these if you want client-side boot calls to count toward the gateway limits.
   "guarded_rest_patterns": [
     "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
     "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
+    "^/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$",
     "^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$",
     "^/api/cb/conversations/[^/]+/[^/]+$",
     "^/api/opex/total$"

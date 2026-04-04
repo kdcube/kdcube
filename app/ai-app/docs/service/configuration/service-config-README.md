@@ -388,6 +388,7 @@ treated as ingress (rate limit + backpressure) vs read‑only (session only).
 **Processor (integrations)**
 - `^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$`
 - `^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$`
+- `^/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$`
 - `^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$`
 
 These defaults are used when no `guarded_rest_patterns` are provided in
@@ -471,6 +472,7 @@ Pattern styles (strict vs prefix‑tolerant) are documented in
     "proc": [
       "^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
       "^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
+      "^/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$",
       "^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$"
     ]
   },

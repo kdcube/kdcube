@@ -22,13 +22,14 @@ from langgraph.graph import StateGraph, START, END
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api
+from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, bundle_id
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 BUNDLE_ID = "echo.ui"
 
 
 @agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=10)
+@bundle_id(id="echo.ui@2026-03-30")
 class EchoUIBundle(BaseEntrypoint):
     """
     Minimal echo bundle that reflects the user's message back unchanged.

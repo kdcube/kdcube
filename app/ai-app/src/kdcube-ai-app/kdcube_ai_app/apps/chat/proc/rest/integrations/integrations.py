@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, Set
 from fastapi import APIRouter, Depends, HTTPException, Request, Body
 from pydantic import BaseModel
 
-from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without_pressure
+from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without_pressure, get_user_session_dependency
 from kdcube_ai_app.apps.middleware.gateway import STATE_STREAM_ID, extract_stream_id
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
@@ -1095,6 +1095,52 @@ async def bundle_static_asset(
 ):
     return await serve_static_asset(tenant=tenant, project=project, bundle_id=bundle_id, path=path, request=request,
                                     session=session)
+
+
+@router.post("/bundles/{tenant}/{project}/{bundle_id}/public/{operation}")
+async def call_bundle_op_public(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        operation: str,
+        request: Request,
+        payload: BundleSuggestionsRequest = Body(default_factory=BundleSuggestionsRequest),
+        session: UserSession = Depends(get_user_session_dependency()),
+):
+    """
+    Public (no authentication required) bundle operation endpoint.
+    The bundle method must declare the caller's role in @api(roles=(...)) to be accessible.
+    """
+    return await _call_bundle_op_limited(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        payload=payload,
+        request=request,
+        operation=operation,
+        session=session,
+    )
+
+
+@router.get("/bundles/{tenant}/{project}/{bundle_id}/public/{operation}")
+async def call_bundle_op_public_get(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        operation: str,
+        request: Request,
+        session: UserSession = Depends(get_user_session_dependency()),
+):
+    payload = BundleSuggestionsRequest()
+    return await _call_bundle_op_limited(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        payload=payload,
+        request=request,
+        operation=operation,
+        session=session,
+    )
 
 
 @router.post("/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}")

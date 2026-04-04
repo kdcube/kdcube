@@ -139,13 +139,12 @@ Entrypoint uses `@agentic_workflow` and typically extends `BaseEntrypoint`.
 
 Minimal pattern:
 ```python
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow
+from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, bundle_id
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from langgraph.graph import StateGraph, START, END
 
-BUNDLE_ID = "my.bundle"
-
-@agentic_workflow(name=BUNDLE_ID, version="1.0.0", priority=100)
+@agentic_workflow(name="My Bundle", version="1.0.0", priority=100)
+@bundle_id("my.bundle@1.0.0")
 class MyWorkflow(BaseEntrypoint):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
