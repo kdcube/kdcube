@@ -181,6 +181,9 @@ The current bundle interface surface is explicit and decorator-driven:
 - `@api(...)` exposes a method through the integrations HTTP surface
   - `route="operations"` is the default
   - use `route="public"` only for operations intentionally reachable from the public route
+  - `route="public"` must also declare `public_auth`
+    - `public_auth="none"` means explicitly unauthenticated public endpoint
+    - `public_auth={"mode":"header_secret","header":"X-Telegram-Bot-Api-Secret-Token","secret_key":"telegram.webhook_secret"}` means the platform verifies the header against `bundles.<bundle_id>.secrets.telegram.webhook_secret`
 - `@ui_widget(...)` declares a widget for `/widgets`
 - `@ui_main` declares the main iframe UI entrypoint for `/static/...`
 - `@on_message` marks the turn handler metadata used by the processor path
@@ -190,6 +193,7 @@ Important rules:
 - only methods decorated with `@api(...)` are remotely callable through `/operations` or `/public`
 - same-name undeclared methods are not part of the HTTP contract
 - if a widget method is still called through `/operations/...`, decorate it with both `@ui_widget(...)` and `@api(..., route="operations")`
+- `public_auth` is invalid on `route="operations"` methods
 
 Full contract:
 - [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
@@ -543,6 +547,7 @@ Operation inputs:
   - `POST /bundles/{tenant}/{project}/{bundle_id}/public/{operation}`
 - `/operations/...` resolves only declared `@api(..., route="operations")` methods
 - `/public/...` resolves only declared `@api(..., route="public")` methods
+- `/public/...` methods must also declare `public_auth`
 - `POST` forwards `payload.data` as kwargs
 - `GET` forwards query params as kwargs
 - legacy `POST /bundles/{tenant}/{project}/operations/{operation}` still exists and still resolves the default bundle when `bundle_id` is omitted, but it still calls only declared `@api(..., route="operations")` methods
@@ -733,6 +738,7 @@ Bundles can expose **React panels** and **operations**:
   - `GET /bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}` fetches a decorated widget
   - `GET|POST /bundles/{tenant}/{project}/{bundle_id}/operations/{operation}` resolves only declared `@api(..., route="operations")`
   - `GET|POST /bundles/{tenant}/{project}/{bundle_id}/public/{operation}` resolves only declared `@api(..., route="public")`
+    - public methods must also declare `public_auth`
   - legacy `POST /bundles/{tenant}/{project}/operations/{operation}` still exists for compatibility
 
 Docs:

@@ -41,6 +41,14 @@ class APIEndpointSpec:
     http_method: str = "POST"
     route: str = "operations"
     roles: tuple[str, ...] = ()
+    public_auth: "PublicAPIAuthSpec | None" = None
+
+
+@dataclass(frozen=True)
+class PublicAPIAuthSpec:
+    mode: str = "none"
+    header: str | None = None
+    secret_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +110,38 @@ def _normalize_api_route(value: str | None) -> str:
     if route not in {"operations", "public"}:
         raise ValueError(f"Unsupported bundle api route: {route}")
     return route
+
+
+def _normalize_public_api_auth(route: str, value: Any) -> PublicAPIAuthSpec | None:
+    resolved_route = _normalize_api_route(route)
+    if resolved_route != "public":
+        if value is None:
+            return None
+        raise ValueError("Bundle api public_auth is only supported for route='public'")
+
+    if value is None:
+        return None
+    if isinstance(value, str):
+        mode = str(value).strip().lower()
+        if mode == "none":
+            return PublicAPIAuthSpec(mode="none")
+        raise ValueError(f"Unsupported public bundle api auth mode: {value}")
+    if not isinstance(value, dict):
+        raise ValueError("Bundle api public_auth must be a string or dict")
+
+    mode = str(value.get("mode") or "header_secret").strip().lower()
+    if mode == "none":
+        return PublicAPIAuthSpec(mode="none")
+    if mode != "header_secret":
+        raise ValueError(f"Unsupported public bundle api auth mode: {mode}")
+
+    header = str(value.get("header") or "X-KDCUBE-Public-Secret").strip()
+    if not header:
+        raise ValueError("Bundle api public_auth.header must be a non-empty HTTP header name")
+    secret_key = str(value.get("secret_key") or "").strip()
+    if not secret_key:
+        raise ValueError("Bundle api public_auth.secret_key is required for mode='header_secret'")
+    return PublicAPIAuthSpec(mode="header_secret", header=header, secret_key=secret_key)
 
 
 def _normalize_icon_spec(value: Any) -> dict[str, str]:
@@ -195,9 +235,11 @@ def api(
         alias: str | None = None,
         route: str = "operations",
         roles: List[str] | Tuple[str, ...] | None = None,
+        public_auth: str | Dict[str, Any] | None = None,
 ):
     http_method = _normalize_http_method(method)
     resolved_route = _normalize_api_route(route)
+    resolved_public_auth = _normalize_public_api_auth(resolved_route, public_auth)
 
     def _wrap(fn):
         setattr(
@@ -209,6 +251,7 @@ def api(
                 http_method=http_method,
                 route=resolved_route,
                 roles=_tuple_str(roles),
+                public_auth=resolved_public_auth,
             ),
         )
         return fn
@@ -634,6 +677,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 http_method=api_spec.http_method,
                 route=api_spec.route,
                 roles=tuple(api_spec.roles or ()),
+                public_auth=api_spec.public_auth,
             )
             api_key = (resolved.alias, resolved.http_method, resolved.route)
             if api_key in seen_api:

@@ -242,6 +242,9 @@ Current rule:
 - `/public/{op}` resolves only methods decorated with
   `@api(..., route="public")`
 - `route` defaults to `"operations"` when omitted
+- `route="public"` methods must also declare `public_auth`
+  - `public_auth="none"` means explicitly unauthenticated public endpoint
+  - `public_auth={"mode":"header_secret","header":"X-Telegram-Bot-Api-Secret-Token","secret_key":"telegram.webhook_secret"}` verifies the incoming header against the bundle secret
 - undecorated same-name methods are not invokable through HTTP
 
 Preferred rule:

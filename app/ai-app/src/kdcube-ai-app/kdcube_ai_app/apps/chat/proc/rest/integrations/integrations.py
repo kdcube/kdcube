@@ -3,6 +3,7 @@
 
 # chat/proc/rest/integrations/integrations.py
 import asyncio
+import hmac
 import inspect
 import json
 import logging
@@ -1305,6 +1306,7 @@ async def get_bundle_interface(
                 "http_method": spec.http_method,
                 "route": spec.route,
                 "roles": list(spec.roles),
+                "public_auth_mode": (spec.public_auth.mode if spec.public_auth else None),
             }
             for spec in visible_apis
         ],
@@ -1497,6 +1499,65 @@ def _get_query_kwargs(request: Request) -> Dict[str, Any]:
     return out
 
 
+def _resolve_bundle_secret_key(*, bundle_id: str, secret_key: str) -> str:
+    key = str(secret_key or "").strip()
+    if not key:
+        raise ValueError("Bundle public endpoint secret key is empty")
+    if key.startswith("bundles."):
+        return key
+    return f"bundles.{bundle_id}.secrets.{key}"
+
+
+def _enforce_public_api_auth(
+        *,
+        endpoint_spec: APIEndpointSpec,
+        bundle_id: str,
+        operation: str,
+        request: Request,
+) -> None:
+    if endpoint_spec.route != "public":
+        return
+
+    public_auth = endpoint_spec.public_auth
+    if public_auth is None:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Bundle public operation {operation} is not configured for public auth",
+        )
+
+    if public_auth.mode == "none":
+        return
+
+    if public_auth.mode != "header_secret":
+        logger.error(
+            "Unsupported public auth mode for bundle %s operation %s: %s",
+            bundle_id,
+            operation,
+            public_auth.mode,
+        )
+        raise HTTPException(status_code=500, detail="Unsupported public auth mode")
+
+    header_name = str(public_auth.header or "").strip()
+    provided_secret = str(request.headers.get(header_name) or "")
+    if not provided_secret:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    resolved_secret_key = _resolve_bundle_secret_key(
+        bundle_id=bundle_id,
+        secret_key=str(public_auth.secret_key or ""),
+    )
+    expected_secret = get_secret(resolved_secret_key)
+    if not expected_secret:
+        logger.warning(
+            "Bundle public operation %s requires missing secret %s",
+            operation,
+            resolved_secret_key,
+        )
+        raise HTTPException(status_code=503, detail="Public endpoint is not configured")
+    if not hmac.compare_digest(provided_secret, expected_secret):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 async def _load_bundle_workflow(
         *,
         tenant: str,
@@ -1626,6 +1687,12 @@ async def _call_bundle_op_inner(
                 detail=f"Bundle operation {operation} does not support {request_method}. Allowed: {', '.join(allowed_methods)}",
             )
         raise HTTPException(status_code=404, detail=f"Bundle does not support operation {operation}")
+    _enforce_public_api_auth(
+        endpoint_spec=endpoint_spec,
+        bundle_id=spec_resolved.id,
+        operation=operation,
+        request=request,
+    )
     if not _roles_visible(endpoint_spec.roles, session):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
 

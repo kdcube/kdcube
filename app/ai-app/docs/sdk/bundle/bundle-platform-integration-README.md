@@ -67,6 +67,7 @@ Current signature:
     alias="preferences_exec_report",
     route="operations",
     roles=("registered",),
+    public_auth=None,
 )
 async def preferences_exec_report(self, **kwargs):
     ...
@@ -86,6 +87,13 @@ Current fields:
 - `roles`
   - tuple/list of visible roles
   - empty means visible to any caller that can reach that route
+- `public_auth`
+  - used only with `route="public"`
+  - current built-in modes:
+    - `"none"`: explicitly unauthenticated public endpoint
+    - `{"mode": "header_secret", "header": "<Header-Name>", "secret_key": "<bundle-secret-path>"}`:
+      request must present the expected header value
+  - default: required for `route="public"`, invalid for `route="operations"`
 
 Important current rule:
 
@@ -93,6 +101,7 @@ Important current rule:
   operation routes
 - same-name fallback for undecorated methods is no longer part of the HTTP
   contract
+- `route="public"` must also declare `public_auth`
 
 Route mapping:
 
@@ -318,6 +327,10 @@ Current rules:
 - only `@api(..., route="public")` methods are callable here
 - route matching is strict; an `operations` method is not callable through
   `/public/...`
+- public methods must also declare `public_auth`
+- current built-in public auth modes are:
+  - `public_auth="none"` for intentionally open public endpoints
+  - `public_auth={"mode":"header_secret", ...}` for shared-secret webhook headers
 
 ### 3.4 Legacy no-bundle-id operations route
 
@@ -433,7 +446,15 @@ async def preferences_exec_report(self, **kwargs):
 ### 7.2 Public webhook-style operation
 
 ```python
-@api(alias="telegram_webhook", route="public")
+@api(
+    alias="telegram_webhook",
+    route="public",
+    public_auth={
+        "mode": "header_secret",
+        "header": "X-Telegram-Bot-Api-Secret-Token",
+        "secret_key": "telegram.webhook_secret",
+    },
+)
 async def telegram_webhook(self, **kwargs):
     ...
 ```
@@ -455,4 +476,3 @@ This pattern is appropriate when:
 
 - the platform should list/fetch the method as a widget by widget alias
 - an existing client still calls the same method through `/operations/...`
-
