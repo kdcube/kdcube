@@ -39,10 +39,22 @@ class GatewayPolicyResolver:
         r"^/conversations/[^/]+/[^/]+/[^/]+/fetch$",
         r"^/conversations/[^/]+/[^/]+/turns-with-feedbacks$",
         r"^/conversations/[^/]+/[^/]+/feedback/conversations-in-period$",
+        r"^/integrations/bundles/[^/]+/[^/]+/[^/]+$",
+        r"^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets$",
+        r"^/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$",
+        r"^/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$",
         r"^/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
         r"^/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
+        r"^/integrations/static/[^/]+/[^/]+/[^/]+$",
+        r"^/integrations/static/[^/]+/[^/]+/[^/]+/.*$",
+        r"^/api/integrations/bundles/[^/]+/[^/]+/[^/]+$",
+        r"^/api/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets$",
+        r"^/api/integrations/bundles/[^/]+/[^/]+/[^/]+/public/[^/]+$",
+        r"^/api/integrations/bundles/[^/]+/[^/]+/[^/]+/widgets/[^/]+$",
         r"^/api/integrations/bundles/[^/]+/[^/]+/operations/[^/]+$",
         r"^/api/integrations/bundles/[^/]+/[^/]+/[^/]+/operations/[^/]+$",
+        r"^/api/integrations/static/[^/]+/[^/]+/[^/]+$",
+        r"^/api/integrations/static/[^/]+/[^/]+/[^/]+/.*$",
     )
 
     def __init__(self, guarded_rest_patterns: Optional[Iterable[str]] = None):

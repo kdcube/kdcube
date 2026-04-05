@@ -373,11 +373,15 @@ class AccountingContextBinder:
         Use in FastAPI endpoints:
             session: UserSession = Depends(binder.http_dependency("chat-rest"))
         """
-        # base_dep = self.gateway_adapter.get_session(bypass_gate=True)
-        base_dep = self.gateway_adapter.get_session_light()
         comp = component or self.default_component
 
-        async def dep(request: Request, session: UserSession = Depends(base_dep)) -> UserSession:
+        async def dep(request: Request) -> UserSession:
+            session: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
+            if session is None:
+                session = await self.gateway_adapter.process_by_policy(request)
+                setattr(request.state, STATE_SESSION, session)
+                setattr(request.state, STATE_USER_TYPE, session.user_type.value)
+                setattr(request.state, STATE_FLAG, True)
             AccountingSystem.set_context(
                 user_id=getattr(session, "user_id", None),
                 session_id=getattr(session, "session_id", None),
