@@ -21,7 +21,7 @@ export const bundlesApiSlice = createApi({
         getBundlesList: builder.query<BundlesInfo, GetBundlesListRequest>({
             query: ({tenant, project}: GetBundlesListRequest) => {
                 return {
-                    url: `/admin/integrations/bundles?tenant=${tenant}&project=${project}`,
+                    url: `/api/integrations/bundles?tenant=${tenant}&project=${project}`,
                     method: 'GET',
                     headers: [
                         ["Content-Type", "application/json"]

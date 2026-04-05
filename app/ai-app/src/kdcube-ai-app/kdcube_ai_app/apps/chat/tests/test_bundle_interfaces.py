@@ -352,3 +352,80 @@ async def test_call_bundle_op_inner_enforces_public_vs_operations_route(monkeypa
         )
 
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_load_bundle_workflow_rejects_config_scope_override(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _resolve_bundle_async(*args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(id="bundle.demo", path="bundle.py", module=None, singleton=False)
+
+    def _create_workflow_config(cfg_req):
+        captured["cfg_req"] = cfg_req
+        return SimpleNamespace(ai_bundle_spec=None)
+
+    def _get_workflow_instance(spec, config, *, comm_context, redis):
+        captured["spec"] = spec
+        captured["config"] = config
+        captured["comm_context"] = comm_context
+        captured["redis"] = redis
+        return _DecoratedWorkflow(), SimpleNamespace()
+
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(
+            TENANT="tenant-a",
+            PROJECT="project-a",
+            OPENAI_API_KEY="openai-key",
+            ANTHROPIC_API_KEY="claude-key",
+        ),
+    )
+    monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
+    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "_get_app_redis", lambda request: "redis-client")
+
+    with pytest.raises(integrations.HTTPException) as exc:
+        await integrations._load_bundle_workflow(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="bundle.demo",
+            payload=integrations.BundleSuggestionsRequest(
+                config_request=integrations.ConfigRequest(tenant="tenant-b", project="project-a")
+            ),
+            request=_request(),
+            session=_session(),
+        )
+
+    assert exc.value.status_code == 400
+    assert "config_request.tenant" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_load_bundle_workflow_rejects_scope_not_served_by_proc(monkeypatch):
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(
+            TENANT="tenant-a",
+            PROJECT="project-a",
+            OPENAI_API_KEY="openai-key",
+            ANTHROPIC_API_KEY="claude-key",
+        ),
+    )
+
+    with pytest.raises(integrations.HTTPException) as exc:
+        await integrations._load_bundle_workflow(
+            tenant="tenant-b",
+            project="project-a",
+            bundle_id="bundle.demo",
+            payload=integrations.BundleSuggestionsRequest(),
+            request=_request(),
+            session=_session(),
+        )
+
+    assert exc.value.status_code == 403
+    assert "tenant" in str(exc.value.detail).lower()

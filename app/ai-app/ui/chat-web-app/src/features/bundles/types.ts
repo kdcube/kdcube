@@ -1,7 +1,7 @@
 export interface BundleEntry {
     id: string;
     name?: string | null;
-    path: string;
+    path?: string | null;
     module?: string | null;
     singleton?: boolean | null;
     description?: string | null;

@@ -110,6 +110,45 @@ def _request_stream_id(request: Request) -> Optional[str]:
     return extract_stream_id(request)
 
 
+def _clean_scope_value(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _resolve_path_scope(*, tenant: str, project: str) -> tuple[str, str]:
+    settings = get_settings()
+    tenant_id = _clean_scope_value(tenant)
+    project_id = _clean_scope_value(project)
+    if not tenant_id or not project_id:
+        raise HTTPException(status_code=400, detail="Tenant/project scope is required")
+
+    expected_tenant = _clean_scope_value(getattr(settings, "TENANT", None))
+    expected_project = _clean_scope_value(getattr(settings, "PROJECT", None))
+    if expected_tenant and tenant_id != expected_tenant:
+        raise HTTPException(status_code=403, detail="Requested tenant is not served by this proc")
+    if expected_project and project_id != expected_project:
+        raise HTTPException(status_code=403, detail="Requested project is not served by this proc")
+    return tenant_id, project_id
+
+
+def _bind_route_scope_to_config_request(
+        cfg_req: ConfigRequest,
+        *,
+        tenant: str,
+        project: str,
+) -> None:
+    requested_tenant = _clean_scope_value(getattr(cfg_req, "tenant", None))
+    requested_project = _clean_scope_value(getattr(cfg_req, "project", None))
+    if requested_tenant and requested_tenant != tenant:
+        raise HTTPException(status_code=400, detail="config_request.tenant must match the route tenant")
+    if requested_project and requested_project != project:
+        raise HTTPException(status_code=400, detail="config_request.project must match the route project")
+    cfg_req.tenant = tenant
+    cfg_req.project = project
+
+
 def _build_rest_bundle_routing(*, request: Request, session_id: str, bundle_id: str) -> ChatTaskRouting:
     return ChatTaskRouting(
         session_id=session_id,
@@ -1036,6 +1075,7 @@ async def serve_static_asset(
     from fastapi.responses import FileResponse
     from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
 
+    tenant_id, project_id = _resolve_path_scope(tenant=tenant, project=project)
     spec = await resolve_bundle_async(bundle_id, override=None)
     if not spec:
         raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
@@ -1057,7 +1097,7 @@ async def serve_static_asset(
     except Exception:
         pass
 
-    storage_root = storage_for_spec(spec=spec, tenant=tenant, project=project, ensure=False)
+    storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
     ui_root = storage_root / "ui" if storage_root else None
 
     if not ui_root or not ui_root.exists():
@@ -1066,12 +1106,12 @@ async def serve_static_asset(
         # turn calls BaseEntrypoint._ensure_ui_build().
         await _load_bundle_props_defaults(
             bundle_id=bundle_id,
-            tenant=tenant,
-            project=project,
+            tenant=tenant_id,
+            project=project_id,
             request=request,
             session=session,
         )
-        storage_root = storage_for_spec(spec=spec, tenant=tenant, project=project, ensure=False)
+        storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
         ui_root = storage_root / "ui" if storage_root else None
         if not ui_root or not ui_root.exists():
             raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' does not have a UI defined")
@@ -1468,6 +1508,8 @@ async def _load_bundle_workflow(
 ) -> tuple[Any, Any, str, str, ChatTaskPayload]:
     settings = get_settings()
     cfg_req = payload.config_request or ConfigRequest()
+    tenant_id, project_id = _resolve_path_scope(tenant=tenant, project=project)
+    _bind_route_scope_to_config_request(cfg_req, tenant=tenant_id, project=project_id)
 
     if not cfg_req.selected_model:
         cfg_req.selected_model = (namespaces.CONFIG.AGENTIC.DEFAULT_LLM_MODEL_CONFIG or {}).get("model_name",
@@ -1482,9 +1524,6 @@ async def _load_bundle_workflow(
 
     requested_bundle_id = _resolve_requested_bundle_id(path_bundle_id=bundle_id, payload=payload)
     cfg_req.agentic_bundle_id = requested_bundle_id
-
-    tenant_id = cfg_req.tenant or tenant or settings.TENANT
-    project_id = cfg_req.project or project or settings.PROJECT
     request_id = str(uuid.uuid4())
 
     spec_resolved = await resolve_bundle_async(cfg_req.agentic_bundle_id, override=None)

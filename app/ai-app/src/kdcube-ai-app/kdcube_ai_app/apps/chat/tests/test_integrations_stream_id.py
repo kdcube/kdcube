@@ -298,6 +298,11 @@ async def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_pa
         (ui_root / "index.html").write_text("<html><head></head><body>Echo UI</body></html>", encoding="utf-8")
         return {"ui": {"main_view": {"src_folder": "ui-src"}}}
 
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"),
+    )
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "_load_bundle_props_defaults", _load_bundle_props_defaults)
     monkeypatch.setattr(bundle_storage, "storage_for_spec", lambda **kwargs: storage_root)
