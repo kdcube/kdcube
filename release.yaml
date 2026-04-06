@@ -1,6 +1,6 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.06.2358"
+  ref: "2026.4.07.101"
   description: |
     This release focuses on hardening the hosted bundle platform and making full custom applications
     more deployable inside KDCube without separate infrastructure.
@@ -27,4 +27,4 @@ platform:
     that keep runtime data outside the code snapshot. Documentation was updated throughout the
     service and bundle docs to reflect the new secrets, hosting, and runtime behavior.
 config:
-    version: "2026.4.06.2358"
+    version: "2026.4.07.101"
