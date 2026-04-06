@@ -1,39 +1,30 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.04.318"
+  ref: "2026.4.06.2358"
   description: |
-    This release focuses on making React a much stronger coding and bundle-building agent while
-    continuing the broader bundle-interface and custom-UI rollout.
+    This release focuses on hardening the hosted bundle platform and making full custom applications
+    more deployable inside KDCube without separate infrastructure.
 
-    A major part of this release is the new React SDK workspace model. React now supports two
-    explicit workspace backends (`custom` and `git`) behind one stable agent contract based on
-    logical refs and explicit activation. Historical or cross-turn workspace content is no longer
-    assumed to be present locally: the agent must pull what it needs intentionally through
-    `react.pull(...)`, and the runtime enforces that model instead of auto-hydrating old files for
-    exec or patch operations.
+    The bundle gateway and integrations surface were tightened substantially. Bundle HTTP routes now
+    use explicit route declarations, clamp tenant and project scope consistently, and route public
+    bundle ingress through the gateway pressure path. Public operations can now declare explicit
+    webhook-style authentication, including header-secret verification suitable for integrations such
+    as Telegram.
 
-    The git backend is now a real coding workspace, not just snapshot copying. Current turns start
-    as sparse git-backed repos with lineage-isolated history, exact version-ref hydration, end-of-
-    turn publish, and branch isolation designed so exec-visible code can only inspect the assigned
-    lineage. The workspace model also now distinguishes durable project state in `files/...` from
-    non-workspace artifacts in `outputs/...`, supports explicit checkout for rare whole-workspace
-    switches, routes hosted binary pulls outside git, and surfaces compact workspace status in
-    ANNOUNCE so the agent can continue project scopes more deliberately.
+    The runtime now supports richer hosted bundle execution. Bundle-local sidecars can be started
+    and reused per proc, typed HTTP bundle operations now support multipart uploads and binary/file
+    responses, and the chat web host now loads custom bundle UIs as real iframe documents instead of
+    inline `srcDoc`, which makes hosted frontend applications behave like normal web apps.
 
-    The surrounding runtime was tightened to match that model: ignored/transient files are excluded
-    from workspace publish, publish failures fail the turn, exact ref writes are resolved before
-    materialization, and isolated exec supports internal-only artifacts that remain agent-visible
-    without being emitted to the user.
+    Secrets handling also moved forward in a major way. In addition to the existing backends, the
+    platform now supports a storage-backed `secrets-file` provider that can read and write secrets
+    through `file://` or `s3://` YAML descriptors. User-scoped bundle secrets were added on top of
+    that model, with write-only REST management so users can configure per-user credentials without
+    the platform ever returning secret values through the API.
 
-    The bundle platform and UI surface also moved forward. The versatile reference bundle now has a
-    modularized main-view service layer, KDCube copilot bundle naming was clarified, and the
-    gateway/integrations path around guarded widgets and bundle-facing UI workflows was tightened.
-    Static and custom bundle UI support remain a first-class path, with decorator-discovered bundle
-    interfaces and richer frontend-facing manifests.
-
-    On the documentation side, the React architecture story was expanded substantially. We now have
-    design docs for git-backed isolated workspace management, memory architecture, and why React is
-    not modeled as pure provider-native tool calling, alongside updated website/docs materials for
-    bundle authors and platform users.
+    On the storage side, bundle local storage cleanup now removes stale versioned bundle roots while
+    preserving unversioned persistent state, which is important for long-lived hosted applications
+    that keep runtime data outside the code snapshot. Documentation was updated throughout the
+    service and bundle docs to reflect the new secrets, hosting, and runtime behavior.
 config:
-    version: "2026.4.04.318"
+    version: "2026.4.06.2358"
