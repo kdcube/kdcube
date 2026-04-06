@@ -131,6 +131,8 @@ class Settings(BaseSettings):
     SECRETS_ADMIN_TOKEN: str | None = None
     SECRETS_AWS_SM_PREFIX: str | None = None
     SECRETS_SM_PREFIX: str | None = None
+    GLOBAL_SECRETS_YAML: str | None = None
+    BUNDLE_SECRETS_YAML: str | None = None
     LINK_PREVIEW_ENABLED: bool = Field(default=True)
 
     # Postgres

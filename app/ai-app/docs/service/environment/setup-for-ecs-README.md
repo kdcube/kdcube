@@ -55,6 +55,17 @@ SECRETS_TOKEN_TTL_SECONDS=0
 SECRETS_TOKEN_MAX_USES=0
 ```
 
+For descriptor-backed secrets instead:
+
+```bash
+SECRETS_PROVIDER=secrets-file
+GLOBAL_SECRETS_YAML=s3://<bucket>/<prefix>/secrets.yaml
+BUNDLE_SECRETS_YAML=s3://<bucket>/<prefix>/bundles.secrets.yaml
+```
+
+`secrets-file` also supports `file://...` URIs when descriptors are mounted
+from EFS or baked into the image.
+
 After the first successful startup, set:
 
 ```bash
@@ -118,3 +129,6 @@ For git pulls, the bundles root must be writable:
 - To enforce gateway config from env on each deploy, set
   `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP=1` on ingress/proc/metrics tasks.
 - Public repos don’t require SSH key/known_hosts.
+- If you use `file://...` with `secrets-file`, mount those YAML files into the
+  task filesystem at the referenced paths with write access.
+- For `s3://...`, ensure the task role can both read and write the target objects.

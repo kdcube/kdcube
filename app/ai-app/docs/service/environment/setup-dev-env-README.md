@@ -45,7 +45,8 @@ BUNDLE_GIT_ATOMIC=1
 # Where bundles are stored on disk
 AGENTIC_BUNDLES_ROOT=/absolute/path/to/bundles
 
-# Secrets sidecar (bundle secrets via admin UI)
+# Option A: writable secrets sidecar
+SECRETS_PROVIDER=secrets-service
 SECRETS_URL=http://kdcube-secrets:7777
 SECRETS_ADMIN_TOKEN=<admin-token>   # required for admin UI to set secrets
 SECRETS_TOKEN=<read-token>          # used by get_secret()
@@ -53,6 +54,11 @@ SECRETS_TOKEN=<read-token>          # used by get_secret()
 # Keep tokens non-expiring if you use bundle secrets at runtime
 SECRETS_TOKEN_TTL_SECONDS=0
 SECRETS_TOKEN_MAX_USES=0
+
+# Option B: descriptor-backed secrets
+# SECRETS_PROVIDER=secrets-file
+# GLOBAL_SECRETS_YAML=file:///absolute/path/to/secrets.yaml
+# BUNDLE_SECRETS_YAML=file:///absolute/path/to/bundles.secrets.yaml
 
 # Optional (turn workspace snapshot; diagnostics only)
 # REACT_PERSIST_WORKSPACE=0
@@ -118,3 +124,7 @@ GIT_SSH_KNOWN_HOSTS=~/.ssh/known_hosts
   `BUNDLES_FORCE_ENV_ON_STARTUP=1`.
 - For gateway config enforcement in local dev, set
   `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP=1` in ingress/proc/metrics env.
+- `secrets-file` is useful when running `chat-proc` directly from IntelliJ or
+  the CLI without a `kdcube-secrets` sidecar.
+- admin/UI secret edits persist back into the referenced YAML descriptors, so
+  the local path must be writable.

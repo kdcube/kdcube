@@ -97,6 +97,32 @@ Each service has its own `.env.*` file. See the samples for the complete set:
 **Note (proc only):** Git‑defined bundles require `BUNDLE_GIT_*` and optional `GIT_SSH_*` or `GIT_HTTP_TOKEN`.
 env vars in `.env.proc`. See [docs/sdk/bundle/bundle-ops-README.md](../../sdk/bundle/bundle-ops-README.md).
 
+## Secrets Provider Options
+
+Supported runtime providers are:
+- `secrets-service`
+- `aws-sm`
+- `secrets-file`
+- `in-memory`
+
+For descriptor-backed secrets in compose, set:
+
+```bash
+SECRETS_PROVIDER=secrets-file
+GLOBAL_SECRETS_YAML=file:///config/secrets.yaml
+BUNDLE_SECRETS_YAML=file:///config/bundles.secrets.yaml
+```
+
+The runtime reads those URIs through the storage backend, so `file://...` and
+`s3://...` are both valid.
+
+For `file://...` in compose, make sure the referenced YAML files are mounted
+into the container at those same paths.
+
+`secrets-file` persists updates back into those YAML descriptors. For `file://...`,
+make sure the proc container has the files mounted read-write. For `s3://...`,
+the runtime identity must have object write permissions.
+
 ## Shared Requirements
 
 - **Same `GATEWAY_CONFIG_JSON`** for ingress/proc/metrics.

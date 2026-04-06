@@ -21,8 +21,11 @@ the wizard (or via `KDCUBE_SECRETS_DESCRIPTOR_PATH`).
 Bundle‑specific secrets live in **`bundles.secrets.yaml`** (separate file). See:
 [docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md).
 
-Secrets are keyed by **dot‑path** (e.g. `services.openai.api_key`) and are injected
-into the secrets sidecar using those names.
+Secrets are keyed by **dot‑path** (e.g. `services.openai.api_key`).
+
+There are two runtime consumption models:
+- CLI provisioning into a writable provider such as `secrets-service` or `aws-sm`
+- direct runtime loading via `SECRETS_PROVIDER=secrets-file`
 
 ## 1) Schema (recommended)
 
@@ -79,7 +82,28 @@ When `secrets.yaml` is provided:
 
 If a value is missing (or `null`), the wizard prompts you for it (unless you skip).
 
-## 3) Location & persistence
+## 3) Direct runtime use (`secrets-file`)
+
+Runtime can also read this descriptor directly:
+
+```bash
+SECRETS_PROVIDER=secrets-file
+GLOBAL_SECRETS_YAML=file:///absolute/path/to/secrets.yaml
+BUNDLE_SECRETS_YAML=file:///absolute/path/to/bundles.secrets.yaml
+```
+
+Supported URI schemes:
+- `file://...`
+- `s3://...`
+
+The runtime reads those files through the storage backend abstraction.
+
+Important:
+- `secrets-file` reads and writes the referenced descriptors through the storage backend
+- for `file://...`, the target path must be writable by the service
+- for `s3://...`, the runtime identity must have object write permissions
+
+## 4) Location & persistence
 
 - The CLI **does not copy** `secrets.yaml` into the workdir.
 - Provide a path at install time, or set `KDCUBE_SECRETS_DESCRIPTOR_PATH`.

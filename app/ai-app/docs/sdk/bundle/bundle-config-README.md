@@ -78,6 +78,18 @@ Use secrets for:
 - git credentials
 - external connector credentials
 
+`get_secret(...)` is backed by the configured runtime secrets provider. Current
+provider modes are:
+- `secrets-service`
+- `aws-sm`
+- `secrets-file`
+- `in-memory`
+
+`secrets-file` reads `secrets.yaml` and `bundles.secrets.yaml` directly through
+the storage backend (`file://...` or `s3://...`). It is useful for local
+debugging, static deployments, and descriptor-driven setups. Admin/UI secret
+updates persist back into those descriptors when the backing location is writable.
+
 Do not put secrets into:
 - `bundle_props`
 - `bundles.yaml` config blocks

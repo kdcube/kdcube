@@ -47,6 +47,29 @@ Use one of these credential sources:
 - To enforce env gateway config on every deploy, set `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP=1`
   on ingress/proc/metrics tasks.
 
+## Secrets providers on ECS
+
+Supported runtime providers are:
+- `aws-sm`
+- `secrets-service`
+- `secrets-file`
+- `in-memory`
+
+For descriptor-backed secrets on ECS:
+
+```bash
+SECRETS_PROVIDER=secrets-file
+GLOBAL_SECRETS_YAML=s3://<bucket>/<prefix>/secrets.yaml
+BUNDLE_SECRETS_YAML=s3://<bucket>/<prefix>/bundles.secrets.yaml
+```
+
+You can also use `file://...` when descriptors are mounted from EFS or baked
+into the image.
+
+`secrets-file` persists updates back into the configured descriptors. For `s3://...`,
+the task role needs object write permissions. For `file://...`, the mounted path
+must be writable by the service.
+
 ## Proc Git Bundles (ECS)
 
 If you use git‑defined bundles in **chat‑proc**:

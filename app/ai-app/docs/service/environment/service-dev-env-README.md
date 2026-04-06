@@ -41,6 +41,12 @@ to overwrite cached gateway config from env on each start.
 | `GATEWAY_CONFIG_JSON` | Shared gateway config (tenant+project required). See sample JSON in `.env.ingress`/`.env.proc`/`.env.metrics`. |
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | If `1`, overwrite cached gateway config from env on startup (CI/CD). |
 | `GATEWAY_COMPONENT` | Component identity: `ingress`, `proc`, or `metrics`. |
+| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, `secrets-file`, or `in-memory`. |
+| `SECRETS_URL` | Base URL for `secrets-service`. |
+| `SECRETS_TOKEN` | Read token for `secrets-service`. |
+| `SECRETS_ADMIN_TOKEN` | Write token for admin secret updates. Not used by `secrets-file`. |
+| `GLOBAL_SECRETS_YAML` | Read-only global secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
+| `BUNDLE_SECRETS_YAML` | Read-only bundle secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
 | `POSTGRES_HOST` | Postgres host |
 | `POSTGRES_PORT` | Postgres port |
 | `POSTGRES_DATABASE` | Database name |
@@ -115,6 +121,28 @@ to overwrite cached gateway config from env on each start.
 | Variable | Purpose |
 | --- | --- |
 | `CHAT_WEB_APP_CONFIG_FILE_PATH` | UI config JSON path |
+
+## Local secrets setups
+
+Writable sidecar-backed secrets:
+
+```bash
+SECRETS_PROVIDER=secrets-service
+SECRETS_URL=http://localhost:7777
+SECRETS_TOKEN=<read-token>
+SECRETS_ADMIN_TOKEN=<admin-token>
+```
+
+Read-only descriptor-backed secrets:
+
+```bash
+SECRETS_PROVIDER=secrets-file
+GLOBAL_SECRETS_YAML=file:///absolute/path/to/secrets.yaml
+BUNDLE_SECRETS_YAML=file:///absolute/path/to/bundles.secrets.yaml
+```
+
+If `SECRETS_PROVIDER` is omitted and either YAML env var is set, runtime
+auto-selects `secrets-file`.
 
 ## Minimal Gateway Config Example
 

@@ -36,6 +36,11 @@ Important:
 If proc runs with `BUNDLES_FORCE_ENV_ON_STARTUP=1`, the descriptor-backed props layer is rebuilt
 authoritatively from `bundles.yaml`, so removed keys are deleted from Redis on env reset.
 
+When a reserved property references a secret key, resolution still goes through
+`get_secret(...)`. That means the same property works with any configured
+runtime secrets provider: `secrets-service`, `aws-sm`, `secrets-file`, or
+`in-memory`.
+
 ## Reserved property paths
 
 | Path | Default source | Interpreted by | Effect |

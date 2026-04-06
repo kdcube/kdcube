@@ -74,8 +74,9 @@ BUNDLE_GIT_ATOMIC=1
 
 AGENTIC_BUNDLES_ROOT=/bundles
 
-# Secrets sidecar (bundle secrets)
+# Option A: writable secrets sidecar
 # Needed for admin UI to write secrets; values are sent to the sidecar.
+SECRETS_PROVIDER=secrets-service
 SECRETS_URL=http://kdcube-secrets:7777
 SECRETS_ADMIN_TOKEN=${SECRETS_ADMIN_TOKEN}
 
@@ -83,6 +84,11 @@ SECRETS_ADMIN_TOKEN=${SECRETS_ADMIN_TOKEN}
 # tokens non-expiring for local compose:
 SECRETS_TOKEN_TTL_SECONDS=0
 SECRETS_TOKEN_MAX_USES=0
+
+# Option B: descriptor-backed secrets
+# SECRETS_PROVIDER=secrets-file
+# GLOBAL_SECRETS_YAML=file:///config/secrets.yaml
+# BUNDLE_SECRETS_YAML=file:///config/bundles.secrets.yaml
 
 # Optional (branch refs)
 # BUNDLE_GIT_ALWAYS_PULL=1
@@ -125,3 +131,6 @@ BUNDLES_FORCE_ENV_ON_STARTUP=0
 - If using **public repos**, you can omit the SSH variables.
 - For `postgres-setup`, keep `TENANT_ID` / `PROJECT_ID` in `.env.postgres.setup`
   aligned with the tenant/project in `GATEWAY_CONFIG_JSON`.
+- If you use `file://...` with `secrets-file`, mount those YAML files into the
+  proc container at the referenced paths with write access.
+- `secrets-file` persists admin/UI secret edits back into the referenced YAMLs.

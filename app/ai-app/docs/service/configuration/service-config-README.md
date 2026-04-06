@@ -23,8 +23,9 @@ use the optional `secrets.yaml` workflow described in
 For **code usage guidelines** (how to read config/secrets in platform/bundles),
 see [docs/service/configuration/code-config-secrets-README.md](code-config-secrets-README.md).
 
-**Secrets note:** Secrets are injected via the secrets sidecar using **dot‑path keys**
-(for example, `services.openai.api_key`). Env vars are legacy compatibility only.
+**Secrets note:** Secrets are resolved by the configured runtime provider using
+**dot‑path keys** (for example, `services.openai.api_key`). Env vars are legacy
+compatibility only.
 
 **Sample env files (per service)**
 
@@ -89,6 +90,8 @@ Secrets resolution is provider-based:
 - `in-memory` for process-local operational values
 - `secrets-service` for the local `kdcube-secrets` sidecar
 - `aws-sm` for AWS Secrets Manager
+- `secrets-file` for descriptor-backed runtime loading from `secrets.yaml` and
+  `bundles.secrets.yaml` via the storage backend (`file://...` or `s3://...`)
 
 The local secrets sidecar provider supports two roles:
 
@@ -101,6 +104,13 @@ The local secrets sidecar provider supports two roles:
 `SECRETS_PROVIDER` is rendered from `assembly.yaml` (`secrets.provider`).
 Gateway config must not carry secrets backend settings.
 
+If `SECRETS_PROVIDER` is omitted and either `GLOBAL_SECRETS_YAML` or
+`BUNDLE_SECRETS_YAML` is set, runtime auto-selects `secrets-file`.
+
+`secrets-file` reads and writes the configured YAML descriptors through the
+storage backend. The service therefore needs write access to the referenced
+`file://...` path or `s3://...` object prefix if you want admin/UI updates to persist.
+
 Token TTL/uses:
 - `SECRETS_TOKEN_TTL_SECONDS=0` and `SECRETS_TOKEN_MAX_USES=0` mean **no expiry**.
 - This is required if bundle secrets can be updated and read long after startup.
@@ -110,10 +120,12 @@ Token TTL/uses:
 |---|---|
 | `CHAT_APP_PORT` | n/a |
 | `GATEWAY_COMPONENT` | n/a |
-| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
+| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, `secrets-file`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
 | `SECRETS_URL` | Base URL for the local `secrets-service` provider. |
 | `SECRETS_TOKEN` | Read token for secrets sidecar (runtime-only; injected by CLI). |
 | `SECRETS_ADMIN_TOKEN` | Admin token for **writing** secrets (bundle admin UI). Set to `${SECRETS_ADMIN_TOKEN}`. |
+| `GLOBAL_SECRETS_YAML` | Read-only global secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
+| `BUNDLE_SECRETS_YAML` | Read-only bundle secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
 | `SECRETS_TOKEN_TTL_SECONDS` | Token lifetime (seconds). `0` = no expiry. |
 | `SECRETS_TOKEN_MAX_USES` | Max uses per token. `0` = unlimited. |
 | `SECRETS_ADMIN_TOKEN` | Optional admin token for writing secrets via the bundle admin UI. |
@@ -182,9 +194,11 @@ Token TTL/uses:
 |---|---|
 | `CHAT_PROCESSOR_PORT` | n/a |
 | `GATEWAY_COMPONENT` | n/a |
-| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
+| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, `secrets-file`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
 | `SECRETS_URL` | Base URL for the local `secrets-service` provider. |
 | `SECRETS_TOKEN` | Read token for the configured `secrets-service` provider. |
+| `GLOBAL_SECRETS_YAML` | Read-only global secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
+| `BUNDLE_SECRETS_YAML` | Read-only bundle secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
 | `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
 | `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | n/a |
