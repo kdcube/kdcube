@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 import asyncpg
 
 from kdcube_ai_app.infra.namespaces import REDIS
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -127,14 +128,13 @@ class ProjectBudgetLimiter:
     │  - get_spending_by_bundle()
     """
 
-    CONTROL_PLANE_SCHEMA = "kdcube_control_plane"
-
     def __init__(self, redis: Redis, pg_pool: asyncpg.Pool, *, tenant: str, project: str, namespace: str = REDIS.ECONOMICS.PROJ_BUDGET):
         self.r = redis
         self.pg_pool = pg_pool
         self.tenant = tenant
         self.project = project
         self.ns = namespace
+        self._project_schema = _project_schema(tenant, project)
 
     # ---------------- Redis key helper ----------------
     def _k(self, bundle: str, provider: str, *parts: str) -> str:
@@ -147,7 +147,7 @@ class ProjectBudgetLimiter:
     # ---------------- DB helpers ----------------
     async def _ensure_budget_row(self, conn: asyncpg.Connection) -> None:
         await conn.execute(f"""
-            INSERT INTO {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget (tenant, project)
+            INSERT INTO {self._project_schema}.tenant_project_budget (tenant, project)
             VALUES ($1, $2)
             ON CONFLICT (tenant, project) DO NOTHING
         """, self.tenant, self.project)
@@ -166,7 +166,7 @@ class ProjectBudgetLimiter:
         request_id: Optional[str] = None,
     ) -> None:
         await conn.execute(f"""
-            INSERT INTO {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_ledger (
+            INSERT INTO {self._project_schema}.tenant_project_budget_ledger (
                 tenant, project, amount_cents, kind, note,
                 reservation_id, bundle_id, provider, user_id, request_id
             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
@@ -197,7 +197,7 @@ class ProjectBudgetLimiter:
     async def _active_reserved_cents(self, conn: asyncpg.Connection, now: datetime) -> int:
         row = await conn.fetchrow(f"""
             SELECT COALESCE(SUM(amount_cents), 0) AS reserved
-            FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+            FROM {self._project_schema}.tenant_project_budget_reservations
             WHERE tenant=$1 AND project=$2
               AND status='active' AND expires_at > $3
         """, self.tenant, self.project, now)
@@ -226,7 +226,7 @@ class ProjectBudgetLimiter:
                 lim_c = None if overdraft_limit_usd is None else _usd_to_cents(overdraft_limit_usd)
 
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET overdraft_limit_cents = $3,
                         notes = COALESCE($4, notes),
                         updated_at = NOW()
@@ -244,7 +244,7 @@ class ProjectBudgetLimiter:
             now = datetime.utcnow().replace(tzinfo=timezone.utc)
             row = await conn.fetchrow(f"""
                 SELECT *
-                FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                FROM {self._project_schema}.tenant_project_budget
                 WHERE tenant=$1 AND project=$2
             """, self.tenant, self.project)
 
@@ -288,7 +288,7 @@ class ProjectBudgetLimiter:
             await self._ensure_budget_row(c)
 
             row = await c.fetchrow(f"""
-                UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                UPDATE {self._project_schema}.tenant_project_budget
                 SET balance_cents = balance_cents + $3,
                     lifetime_added_cents = lifetime_added_cents + $3,
                     notes = COALESCE($4, notes),
@@ -352,7 +352,7 @@ class ProjectBudgetLimiter:
                 # Lock budget row
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    FROM {self._project_schema}.tenant_project_budget
                     WHERE tenant=$1 AND project=$2
                     FOR UPDATE
                 """, self.tenant, self.project)
@@ -369,7 +369,7 @@ class ProjectBudgetLimiter:
 
                 # Insert reservation (idempotent: if exists, fail fast)
                 inserted = await conn.execute(f"""
-                    INSERT INTO {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations (
+                    INSERT INTO {self._project_schema}.tenant_project_budget_reservations (
                         reservation_id, tenant, project,
                         bundle_id, provider, user_id, request_id,
                         amount_cents, status, expires_at, notes
@@ -382,7 +382,7 @@ class ProjectBudgetLimiter:
 
                 # Apply to budget
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET reserved_cents = $3,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2
@@ -415,7 +415,7 @@ class ProjectBudgetLimiter:
                 # Lock reservation
                 r = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+                    FROM {self._project_schema}.tenant_project_budget_reservations
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3
                     FOR UPDATE
                 """, reservation_id, self.tenant, self.project)
@@ -426,7 +426,7 @@ class ProjectBudgetLimiter:
                 if r["status"] != "active":
                     # no-op
                     b = await conn.fetchrow(f"""
-                        SELECT * FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                        SELECT * FROM {self._project_schema}.tenant_project_budget
                         WHERE tenant=$1 AND project=$2
                     """, self.tenant, self.project)
                     if not b:
@@ -436,14 +436,14 @@ class ProjectBudgetLimiter:
 
                 amount_cents = int(r["amount_cents"])
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+                    UPDATE {self._project_schema}.tenant_project_budget_reservations
                     SET status='released', released_at=$4
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3
                 """, reservation_id, self.tenant, self.project, now)
 
                 active_reserved = await self._active_reserved_cents(conn, now)
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET reserved_cents = $3,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2
@@ -489,7 +489,7 @@ class ProjectBudgetLimiter:
                 # Lock reservation
                 r = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+                    FROM {self._project_schema}.tenant_project_budget_reservations
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3
                     FOR UPDATE
                 """, reservation_id, self.tenant, self.project)
@@ -500,7 +500,7 @@ class ProjectBudgetLimiter:
                 if r["status"] != "active":
                     # already finalized; return snapshot
                     b = await conn.fetchrow(f"""
-                        SELECT * FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                        SELECT * FROM {self._project_schema}.tenant_project_budget
                         WHERE tenant=$1 AND project=$2
                     """, self.tenant, self.project)
                     if not b:
@@ -511,7 +511,7 @@ class ProjectBudgetLimiter:
                 # Lock budget row
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    FROM {self._project_schema}.tenant_project_budget
                     WHERE tenant=$1 AND project=$2
                     FOR UPDATE
                 """, self.tenant, self.project)
@@ -526,7 +526,7 @@ class ProjectBudgetLimiter:
                 overdraft_excess_cents: int | None = None
 
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+                    UPDATE {self._project_schema}.tenant_project_budget_reservations
                     SET status='committed',
                         committed_at=$4,
                         actual_spent_cents=$5
@@ -541,7 +541,7 @@ class ProjectBudgetLimiter:
                     overdraft_excess_cents = (-int(available_after)) - int(od_lim_c)
 
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET
                         reserved_cents = $3,
                         balance_cents = $4,
@@ -595,7 +595,7 @@ class ProjectBudgetLimiter:
                 # Grab a batch to expire and lock them
                 rows = await conn.fetch(f"""
                     SELECT reservation_id, amount_cents
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+                    FROM {self._project_schema}.tenant_project_budget_reservations
                     WHERE tenant=$1 AND project=$2 AND status='active' AND expires_at <= $3
                     ORDER BY expires_at ASC
                     LIMIT {int(limit)}
@@ -609,7 +609,7 @@ class ProjectBudgetLimiter:
                 ids = [r["reservation_id"] for r in rows]
 
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget_reservations
+                    UPDATE {self._project_schema}.tenant_project_budget_reservations
                     SET status='expired', released_at=$3
                     WHERE tenant=$1 AND project=$2 AND reservation_id = ANY($4::uuid[])
                 """, self.tenant, self.project, now, ids)
@@ -617,7 +617,7 @@ class ProjectBudgetLimiter:
                 await self._ensure_budget_row(conn)
 
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET reserved_cents = GREATEST(0, reserved_cents - $3),
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2
@@ -625,7 +625,7 @@ class ProjectBudgetLimiter:
 
                 active_reserved = await self._active_reserved_cents(conn, now)
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET reserved_cents = $3,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2
@@ -670,7 +670,7 @@ class ProjectBudgetLimiter:
 
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    FROM {self._project_schema}.tenant_project_budget
                     WHERE tenant=$1 AND project=$2
                     FOR UPDATE
                 """, self.tenant, self.project)
@@ -685,7 +685,7 @@ class ProjectBudgetLimiter:
                 self._check_overdraft(available_after_cents=available_after, overdraft_limit_cents=od_lim_c)
 
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET
                         balance_cents = balance_cents - $3,
                         lifetime_spent_cents = lifetime_spent_cents + $3,
@@ -879,14 +879,14 @@ class ProjectBudgetLimiter:
                 # Lock budget row
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    FROM {self._project_schema}.tenant_project_budget
                     WHERE tenant=$1 AND project=$2
                     FOR UPDATE
                 """, self.tenant, self.project)
 
                 # Apply delta (no overdraft guard)
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.tenant_project_budget
+                    UPDATE {self._project_schema}.tenant_project_budget
                     SET
                         balance_cents = balance_cents - $3,
                         lifetime_spent_cents = lifetime_spent_cents + $3,

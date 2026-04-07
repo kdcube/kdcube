@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import asyncpg
 
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import BudgetInsufficientFunds, ProjectBudgetLimiter
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,6 @@ class SubscriptionBudgetLimiter:
     with reservation support for in-flight requests.
     """
 
-    CONTROL_PLANE_SCHEMA = "kdcube_control_plane"
     BUDGET_TABLE = "user_subscription_period_budget"
     RESERVATIONS_TABLE = "user_subscription_period_reservations"
     LEDGER_TABLE = "user_subscription_period_ledger"
@@ -82,11 +82,12 @@ class SubscriptionBudgetLimiter:
         self.period_key = period_key
         self.period_start = period_start
         self.period_end = period_end
+        self._project_schema = _project_schema(tenant, project)
 
     # ---------------- DB helpers ----------------
     async def _ensure_budget_row(self, conn: asyncpg.Connection) -> None:
         await conn.execute(f"""
-            INSERT INTO {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE} (
+            INSERT INTO {self._project_schema}.{self.BUDGET_TABLE} (
                 tenant, project, user_id, period_key,
                 period_start, period_end
             ) VALUES ($1, $2, $3, $4, $5, $6)
@@ -110,7 +111,7 @@ class SubscriptionBudgetLimiter:
         request_id: Optional[str] = None,
     ) -> None:
         await conn.execute(f"""
-            INSERT INTO {self.CONTROL_PLANE_SCHEMA}.{self.LEDGER_TABLE} (
+            INSERT INTO {self._project_schema}.{self.LEDGER_TABLE} (
                 tenant, project, user_id, period_key,
                 amount_cents, kind, note,
                 reservation_id, bundle_id, provider, request_id
@@ -150,7 +151,7 @@ class SubscriptionBudgetLimiter:
     async def _active_reserved_cents(self, conn: asyncpg.Connection, now: datetime) -> int:
         row = await conn.fetchrow(f"""
             SELECT COALESCE(SUM(amount_cents), 0) AS reserved
-            FROM {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+            FROM {self._project_schema}.{self.RESERVATIONS_TABLE}
             WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
               AND status='active' AND expires_at > $5
         """, self.tenant, self.project, self.user_id, self.period_key, now)
@@ -174,7 +175,7 @@ class SubscriptionBudgetLimiter:
             now = datetime.utcnow().replace(tzinfo=timezone.utc)
             row = await conn.fetchrow(f"""
                 SELECT *
-                FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                FROM {self._project_schema}.{self.BUDGET_TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
             """, self.tenant, self.project, self.user_id, self.period_key)
 
@@ -234,7 +235,7 @@ class SubscriptionBudgetLimiter:
 
             row = await c.fetchrow(f"""
                 SELECT *
-                FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                FROM {self._project_schema}.{self.BUDGET_TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                 FOR UPDATE
             """, self.tenant, self.project, self.user_id, self.period_key)
@@ -249,7 +250,7 @@ class SubscriptionBudgetLimiter:
                 raise ValueError("subscription period already topped up")
 
             row = await c.fetchrow(f"""
-                UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                 SET balance_cents = balance_cents + $5,
                     topup_cents = topup_cents + $5,
                     notes = COALESCE($6, notes),
@@ -306,7 +307,7 @@ class SubscriptionBudgetLimiter:
 
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    FROM {self._project_schema}.{self.BUDGET_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     FOR UPDATE
                 """, self.tenant, self.project, self.user_id, self.period_key)
@@ -325,7 +326,7 @@ class SubscriptionBudgetLimiter:
                 self._check_overdraft(available_after_cents=available_after, overdraft_limit_cents=od_lim_c)
 
                 inserted = await conn.execute(f"""
-                    INSERT INTO {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE} (
+                    INSERT INTO {self._project_schema}.{self.RESERVATIONS_TABLE} (
                         reservation_id, tenant, project, user_id, period_key,
                         bundle_id, provider, request_id,
                         amount_cents, status, expires_at, notes
@@ -337,7 +338,7 @@ class SubscriptionBudgetLimiter:
                     raise ValueError(f"reservation_id already exists: {rid}")
 
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                     SET reserved_cents = $5,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
@@ -366,7 +367,7 @@ class SubscriptionBudgetLimiter:
             async with conn.transaction():
                 r = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+                    FROM {self._project_schema}.{self.RESERVATIONS_TABLE}
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3 AND user_id=$4 AND period_key=$5
                     FOR UPDATE
                 """, reservation_id, self.tenant, self.project, self.user_id, self.period_key)
@@ -379,7 +380,7 @@ class SubscriptionBudgetLimiter:
                 if r["status"] != "active":
                     b = await conn.fetchrow(f"""
                         SELECT *
-                        FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                        FROM {self._project_schema}.{self.BUDGET_TABLE}
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     """, self.tenant, self.project, self.user_id, self.period_key)
                     if not b:
@@ -398,21 +399,21 @@ class SubscriptionBudgetLimiter:
 
                 amount_cents = int(r["amount_cents"])
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+                    UPDATE {self._project_schema}.{self.RESERVATIONS_TABLE}
                     SET status='released', released_at=$6
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3 AND user_id=$4 AND period_key=$5
                 """, reservation_id, self.tenant, self.project, self.user_id, self.period_key, now)
 
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    FROM {self._project_schema}.{self.BUDGET_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     FOR UPDATE
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
                 active_reserved = await self._active_reserved_cents(conn, now)
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                     SET reserved_cents = $5,
                         updated_at = NOW()
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
@@ -433,7 +434,7 @@ class SubscriptionBudgetLimiter:
                         logger.warning("Subscription period closed but project_budget not provided; late release not rolled over")
                     else:
                         await conn.execute(f"""
-                            UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                            UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                             SET balance_cents = balance_cents - $5,
                                 rolled_over_cents = rolled_over_cents + $5,
                                 updated_at = NOW()
@@ -457,7 +458,7 @@ class SubscriptionBudgetLimiter:
 
                 row = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    FROM {self._project_schema}.{self.BUDGET_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
@@ -480,7 +481,7 @@ class SubscriptionBudgetLimiter:
             async with conn.transaction():
                 r = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+                    FROM {self._project_schema}.{self.RESERVATIONS_TABLE}
                     WHERE reservation_id=$1 AND tenant=$2 AND project=$3 AND user_id=$4 AND period_key=$5
                     FOR UPDATE
                 """, reservation_id, self.tenant, self.project, self.user_id, self.period_key)
@@ -493,7 +494,7 @@ class SubscriptionBudgetLimiter:
                 if r["status"] != "active":
                     b = await conn.fetchrow(f"""
                         SELECT *
-                        FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                        FROM {self._project_schema}.{self.BUDGET_TABLE}
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     """, self.tenant, self.project, self.user_id, self.period_key)
                     if not b:
@@ -514,7 +515,7 @@ class SubscriptionBudgetLimiter:
 
                 b = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    FROM {self._project_schema}.{self.BUDGET_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                     FOR UPDATE
                 """, self.tenant, self.project, self.user_id, self.period_key)
@@ -524,7 +525,7 @@ class SubscriptionBudgetLimiter:
                 overdraft_excess_cents: int | None = None
 
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+                    UPDATE {self._project_schema}.{self.RESERVATIONS_TABLE}
                     SET status='committed',
                         committed_at=$6,
                         actual_spent_cents=$7
@@ -538,7 +539,7 @@ class SubscriptionBudgetLimiter:
                     overdraft_excess_cents = (-int(available_after)) - int(od_lim_c)
 
                 row = await conn.fetchrow(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                     SET
                         reserved_cents = $5,
                         balance_cents = $6,
@@ -579,7 +580,7 @@ class SubscriptionBudgetLimiter:
                         logger.warning("Subscription period closed but project_budget not provided; late release not rolled over")
                     else:
                         await conn.execute(f"""
-                            UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                            UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                             SET balance_cents = balance_cents - $5,
                                 rolled_over_cents = rolled_over_cents + $5,
                                 updated_at = NOW()
@@ -603,7 +604,7 @@ class SubscriptionBudgetLimiter:
 
                 row = await conn.fetchrow(f"""
                     SELECT *
-                    FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    FROM {self._project_schema}.{self.BUDGET_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                 """, self.tenant, self.project, self.user_id, self.period_key)
 
@@ -627,7 +628,7 @@ class SubscriptionBudgetLimiter:
         async def _run(c: asyncpg.Connection) -> int:
             rows = await c.fetch(f"""
                 SELECT reservation_id, amount_cents
-                FROM {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+                FROM {self._project_schema}.{self.RESERVATIONS_TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                   AND status='active' AND expires_at <= $5
                 ORDER BY expires_at ASC
@@ -642,7 +643,7 @@ class SubscriptionBudgetLimiter:
             ids = [r["reservation_id"] for r in rows]
 
             await c.execute(f"""
-                UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.RESERVATIONS_TABLE}
+                UPDATE {self._project_schema}.{self.RESERVATIONS_TABLE}
                 SET status='expired', released_at=$5
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
                   AND reservation_id = ANY($6::uuid[])
@@ -651,7 +652,7 @@ class SubscriptionBudgetLimiter:
             await self._ensure_budget_row(c)
 
             row = await c.fetchrow(f"""
-                UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                 SET reserved_cents = GREATEST(0, reserved_cents - $5),
                     updated_at = NOW()
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
@@ -660,7 +661,7 @@ class SubscriptionBudgetLimiter:
 
             active_reserved = await self._active_reserved_cents(c, now)
             row = await c.fetchrow(f"""
-                UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                 SET reserved_cents = $5,
                     updated_at = NOW()
                 WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
@@ -672,7 +673,7 @@ class SubscriptionBudgetLimiter:
                     logger.warning("Subscription period closed but project_budget not provided; expired reservations not rolled over")
                 else:
                     await c.execute(f"""
-                        UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                        UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                         SET balance_cents = balance_cents - $5,
                             rolled_over_cents = rolled_over_cents + $5,
                             updated_at = NOW()
@@ -728,7 +729,7 @@ class SubscriptionBudgetLimiter:
                 await self._ensure_budget_row(conn)
 
                 await conn.execute(f"""
-                    UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+                    UPDATE {self._project_schema}.{self.BUDGET_TABLE}
                     SET
                         balance_cents = balance_cents - $5,
                         updated_at = NOW()
@@ -764,7 +765,7 @@ class SubscriptionBudgetLimiter:
 
         row = await conn.fetchrow(f"""
             SELECT *
-            FROM {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+            FROM {self._project_schema}.{self.BUDGET_TABLE}
             WHERE tenant=$1 AND project=$2 AND user_id=$3 AND period_key=$4
             FOR UPDATE
         """, self.tenant, self.project, self.user_id, self.period_key)
@@ -780,7 +781,7 @@ class SubscriptionBudgetLimiter:
         available = max(bal - res, 0)
 
         await conn.execute(f"""
-            UPDATE {self.CONTROL_PLANE_SCHEMA}.{self.BUDGET_TABLE}
+            UPDATE {self._project_schema}.{self.BUDGET_TABLE}
             SET status='closed',
                 closed_at=NOW(),
                 balance_cents = balance_cents - $5,

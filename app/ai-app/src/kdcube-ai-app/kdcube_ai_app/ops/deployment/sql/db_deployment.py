@@ -58,6 +58,19 @@ def safe_schema_name(name: str) -> str:
     return sanitized or '_schema'
 
 
+def project_schema(tenant: str, project: str) -> str:
+    """
+    Returns the PostgreSQL schema name for a given tenant/project.
+    All per-tenant/project tables (conversations, economics, policies, etc.) live here.
+    """
+    def _sanitize(name: str) -> str:
+        return re.sub(r"[^A-Za-z0-9_]", "_", name.replace("-", "_").replace(" ", "_"))
+    schema_name = f"{_sanitize(tenant)}_{_sanitize(project)}"
+    if not schema_name.startswith("kdcube_"):
+        schema_name = f"kdcube_{schema_name}"
+    return schema_name
+
+
 def run(op, component, tenant=None, project=None, app=None):
     """
     Execute SQL deployment/deletion for a given component.
@@ -105,18 +118,11 @@ def run(op, component, tenant=None, project=None, app=None):
         return
 
     # Handle tenant/project-specific components (existing logic)
-    schema_name = safe_schema_name(project or "default-project")
-    tenant_safe = safe_schema_name(tenant) if tenant else None
-    if tenant:
-        substitutions = {
-            "SCHEMA": f"kdcube_{tenant_safe}_{schema_name}",
-            "SYSTEM_SCHEMA": SYSTEM_SCHEMA
-        }
-    else:
-        substitutions = {
-            "SCHEMA": f"kdcube_{schema_name}",
-            "SYSTEM_SCHEMA": SYSTEM_SCHEMA
-        }
+    schema = project_schema(tenant or "default", project or "default-project")
+    substitutions = {
+        "SCHEMA": schema,
+        "SYSTEM_SCHEMA": SYSTEM_SCHEMA
+    }
 
     if op == "deploy":
         if app:
@@ -125,7 +131,20 @@ def run(op, component, tenant=None, project=None, app=None):
             schema_file = os.path.join(sql_location, f"deploy-{component}.sql")
         try:
             mgr.execute_sql_file(schema_file, substitutions=substitutions)
-            print(f"Schema deployed successfully: {substitutions['SCHEMA']}")
+            print(f"Schema deployed successfully: {schema}")
+            if tenant and project:
+                try:
+                    mgr.execute_sql(
+                        f"""
+                        INSERT INTO {CONTROL_PLANE_SCHEMA}.registered_projects (tenant, project, schema_name)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (tenant, project) DO UPDATE SET schema_name = EXCLUDED.schema_name
+                        """,
+                        data=(tenant, project, schema)
+                    )
+                    print(f"Registered project '{tenant}/{project}' in control plane.")
+                except Exception as reg_err:
+                    print(f"Warning: could not register project in control plane (deploy control plane first): {reg_err}")
         except Exception as e:
             error = f"Error deploying schema: {e}"
             print(error)
@@ -138,7 +157,16 @@ def run(op, component, tenant=None, project=None, app=None):
             delete_file = os.path.join(sql_location, f"drop-{component}.sql")
         try:
             mgr.execute_sql_file(delete_file, substitutions=substitutions)
-            print(f"Schema deleted successfully: {substitutions['SCHEMA']}")
+            print(f"Schema deleted successfully: {schema}")
+            if tenant and project:
+                try:
+                    mgr.execute_sql(
+                        f"DELETE FROM {CONTROL_PLANE_SCHEMA}.registered_projects WHERE tenant = %s AND project = %s",
+                        data=(tenant, project)
+                    )
+                    print(f"Deregistered project '{tenant}/{project}' from control plane.")
+                except Exception as reg_err:
+                    print(f"Warning: could not deregister project from control plane: {reg_err}")
         except Exception as e:
             error = f"Error deleting schema: {e}"
             print(error)

@@ -19,6 +19,7 @@ from kdcube_ai_app.infra.redis.client import get_async_redis_client
 from kdcube_ai_app.apps.chat.sdk.config import resolve_asyncpg_ssl
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import SubscriptionManager
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -129,9 +130,12 @@ class UserPlanBalanceSnapshotManager:
       - user_lifetime_credits
     and returns the flattened UserPlanBalance dataclass.
     """
-    CP = "kdcube_control_plane"
     OVERRIDE_TABLE = "user_plan_overrides"
     CREDITS_TABLE = "user_lifetime_credits"
+
+    @staticmethod
+    def _schema(tenant: str, project: str) -> str:
+        return _project_schema(tenant, project)
 
     def __init__(self, pg_pool: Optional[asyncpg.Pool] = None):
         self._pg_pool = pg_pool
@@ -163,14 +167,14 @@ class UserPlanBalanceSnapshotManager:
         WITH
           o AS (
             SELECT *
-            FROM {self.CP}.{self.OVERRIDE_TABLE}
+            FROM {self._schema(tenant, project)}.{self.OVERRIDE_TABLE}
             WHERE tenant=$1 AND project=$2 AND user_id=$3
               AND active=TRUE
             LIMIT 1
           ),
           c AS (
             SELECT *
-            FROM {self.CP}.{self.CREDITS_TABLE}
+            FROM {self._schema(tenant, project)}.{self.CREDITS_TABLE}
             WHERE tenant=$1 AND project=$2 AND user_id=$3
               AND active=TRUE
             LIMIT 1
@@ -240,8 +244,11 @@ class UserPlanBalanceSnapshotManager:
 # PlanOverrideManager  (table: user_plan_overrides)
 # -----------------------------------------------------------------------------
 class PlanOverrideManager:
-    CP = "kdcube_control_plane"
     TABLE = "user_plan_overrides"
+
+    @staticmethod
+    def _schema(tenant: str, project: str) -> str:
+        return _project_schema(tenant, project)
 
     def __init__(
             self,
@@ -325,7 +332,7 @@ class PlanOverrideManager:
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 SELECT *
-                FROM {self.CP}.{self.TABLE}
+                FROM {self._schema(tenant, project)}.{self.TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                   AND active=TRUE
                   {expired_filter}
@@ -372,7 +379,7 @@ class PlanOverrideManager:
 
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                INSERT INTO {self.CP}.{self.TABLE} (
+                INSERT INTO {self._schema(tenant, project)}.{self.TABLE} (
                     tenant, project, user_id,
                     max_concurrent, requests_per_day, requests_per_month, total_requests,
                     tokens_per_hour, tokens_per_day, tokens_per_month,
@@ -387,17 +394,17 @@ class PlanOverrideManager:
                 )
                 ON CONFLICT (tenant, project, user_id)
                 DO UPDATE SET
-                    max_concurrent     = COALESCE(EXCLUDED.max_concurrent, {self.CP}.{self.TABLE}.max_concurrent),
-                    requests_per_day   = COALESCE(EXCLUDED.requests_per_day, {self.CP}.{self.TABLE}.requests_per_day),
-                    requests_per_month = COALESCE(EXCLUDED.requests_per_month, {self.CP}.{self.TABLE}.requests_per_month),
-                    total_requests     = COALESCE(EXCLUDED.total_requests, {self.CP}.{self.TABLE}.total_requests),
-                    tokens_per_hour    = COALESCE(EXCLUDED.tokens_per_hour, {self.CP}.{self.TABLE}.tokens_per_hour),
-                    tokens_per_day     = COALESCE(EXCLUDED.tokens_per_day, {self.CP}.{self.TABLE}.tokens_per_day),
-                    tokens_per_month   = COALESCE(EXCLUDED.tokens_per_month, {self.CP}.{self.TABLE}.tokens_per_month),
-                    expires_at         = COALESCE(EXCLUDED.expires_at, {self.CP}.{self.TABLE}.expires_at),
-                    grant_id           = COALESCE(EXCLUDED.grant_id, {self.CP}.{self.TABLE}.grant_id),
-                    grant_amount_usd   = COALESCE(EXCLUDED.grant_amount_usd, {self.CP}.{self.TABLE}.grant_amount_usd),
-                    grant_notes        = COALESCE(EXCLUDED.grant_notes, {self.CP}.{self.TABLE}.grant_notes),
+                    max_concurrent     = COALESCE(EXCLUDED.max_concurrent, {self._schema(tenant, project)}.{self.TABLE}.max_concurrent),
+                    requests_per_day   = COALESCE(EXCLUDED.requests_per_day, {self._schema(tenant, project)}.{self.TABLE}.requests_per_day),
+                    requests_per_month = COALESCE(EXCLUDED.requests_per_month, {self._schema(tenant, project)}.{self.TABLE}.requests_per_month),
+                    total_requests     = COALESCE(EXCLUDED.total_requests, {self._schema(tenant, project)}.{self.TABLE}.total_requests),
+                    tokens_per_hour    = COALESCE(EXCLUDED.tokens_per_hour, {self._schema(tenant, project)}.{self.TABLE}.tokens_per_hour),
+                    tokens_per_day     = COALESCE(EXCLUDED.tokens_per_day, {self._schema(tenant, project)}.{self.TABLE}.tokens_per_day),
+                    tokens_per_month   = COALESCE(EXCLUDED.tokens_per_month, {self._schema(tenant, project)}.{self.TABLE}.tokens_per_month),
+                    expires_at         = COALESCE(EXCLUDED.expires_at, {self._schema(tenant, project)}.{self.TABLE}.expires_at),
+                    grant_id           = COALESCE(EXCLUDED.grant_id, {self._schema(tenant, project)}.{self.TABLE}.grant_id),
+                    grant_amount_usd   = COALESCE(EXCLUDED.grant_amount_usd, {self._schema(tenant, project)}.{self.TABLE}.grant_amount_usd),
+                    grant_notes        = COALESCE(EXCLUDED.grant_notes, {self._schema(tenant, project)}.{self.TABLE}.grant_notes),
                     active             = TRUE,
                     updated_at         = NOW()
                 RETURNING *
@@ -417,7 +424,7 @@ class PlanOverrideManager:
 
         async with self._pg_pool.acquire() as conn:
             await conn.execute(f"""
-                UPDATE {self.CP}.{self.TABLE}
+                UPDATE {self._schema(tenant, project)}.{self.TABLE}
                 SET active=FALSE, updated_at=NOW()
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
             """, tenant, project, user_id)
@@ -429,9 +436,12 @@ class PlanOverrideManager:
 # UserCreditsManager  (table: user_lifetime_credits + user_token_reservations)
 # -----------------------------------------------------------------------------
 class UserCreditsManager:
-    CP = "kdcube_control_plane"
     TABLE = "user_lifetime_credits"
     RESERVATIONS_TABLE = "user_token_reservations"
+
+    @staticmethod
+    def _schema(tenant: str, project: str) -> str:
+        return _project_schema(tenant, project)
 
     def __init__(
             self,
@@ -506,7 +516,7 @@ class UserCreditsManager:
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 SELECT *
-                FROM {self.CP}.{self.TABLE}
+                FROM {self._schema(tenant, project)}.{self.TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                   AND active=TRUE
                 LIMIT 1
@@ -552,7 +562,7 @@ class UserCreditsManager:
             }
 
         sql = f"""
-          INSERT INTO {self.CP}.{self.TABLE} (
+          INSERT INTO {self._schema(tenant, project)}.{self.TABLE} (
             tenant, project, user_id,
             lifetime_tokens_purchased,
             lifetime_tokens_consumed,
@@ -563,8 +573,8 @@ class UserCreditsManager:
           ) VALUES ($1,$2,$3,$4,0,$5,$6,$5,$7)
           ON CONFLICT (tenant, project, user_id)
           DO UPDATE SET
-            lifetime_tokens_purchased = {self.CP}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
-            lifetime_usd_purchased    = {self.CP}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
+            lifetime_tokens_purchased = {self._schema(tenant, project)}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
+            lifetime_usd_purchased    = {self._schema(tenant, project)}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
             last_purchase_id          = EXCLUDED.last_purchase_id,
             last_purchase_amount_usd  = EXCLUDED.last_purchase_amount_usd,
             last_purchase_notes       = EXCLUDED.last_purchase_notes,
@@ -611,7 +621,7 @@ class UserCreditsManager:
                 SELECT lifetime_tokens_purchased AS purchased,
                        lifetime_tokens_consumed AS consumed,
                        lifetime_usd_purchased AS usd_purchased
-                FROM {self.CP}.{self.TABLE}
+                FROM {self._schema(tenant, project)}.{self.TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                   AND active=TRUE
                 FOR UPDATE
@@ -627,7 +637,7 @@ class UserCreditsManager:
                 raise ValueError(f"insufficient refundable tokens: available={available}, requested={int(tokens)}")
 
             row = await c.fetchrow(f"""
-                UPDATE {self.CP}.{self.TABLE}
+                UPDATE {self._schema(tenant, project)}.{self.TABLE}
                 SET lifetime_tokens_purchased = lifetime_tokens_purchased - $4,
                     lifetime_usd_purchased = GREATEST(lifetime_usd_purchased - $5, 0),
                     updated_at = NOW()
@@ -671,7 +681,7 @@ class UserCreditsManager:
             }
 
         sql = f"""
-            INSERT INTO {self.CP}.{self.TABLE} (
+            INSERT INTO {self._schema(tenant, project)}.{self.TABLE} (
                 tenant, project, user_id,
                 lifetime_tokens_purchased,
                 lifetime_tokens_consumed,
@@ -680,8 +690,8 @@ class UserCreditsManager:
             ) VALUES ($1,$2,$3,$4,0,$5,TRUE)
             ON CONFLICT (tenant, project, user_id)
             DO UPDATE SET
-                lifetime_tokens_purchased = {self.CP}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
-                lifetime_usd_purchased    = {self.CP}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
+                lifetime_tokens_purchased = {self._schema(tenant, project)}.{self.TABLE}.lifetime_tokens_purchased + EXCLUDED.lifetime_tokens_purchased,
+                lifetime_usd_purchased    = {self._schema(tenant, project)}.{self.TABLE}.lifetime_usd_purchased + EXCLUDED.lifetime_usd_purchased,
                 active                    = TRUE,
                 updated_at                = NOW()
             RETURNING *
@@ -710,7 +720,7 @@ class UserCreditsManager:
 
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                UPDATE {self.CP}.{self.TABLE}
+                UPDATE {self._schema(tenant, project)}.{self.TABLE}
                 SET lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $4, lifetime_tokens_purchased),
                     updated_at = NOW()
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
@@ -749,7 +759,7 @@ class UserCreditsManager:
 
         v = await conn.fetchval(f"""
             SELECT COALESCE(SUM(tokens_reserved), 0)
-            FROM {self.CP}.{self.RESERVATIONS_TABLE}
+            FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
             WHERE tenant=$1 AND project=$2 AND user_id=$3
               AND status='reserved'
               AND expires_at > NOW()
@@ -771,10 +781,10 @@ class UserCreditsManager:
                     COALESCE(ulc.lifetime_tokens_purchased, 0) AS purchased,
                     COALESCE(ulc.lifetime_tokens_consumed, 0) AS consumed,
                     COALESCE(rsv.reserved, 0) AS reserved
-                FROM {self.CP}.{self.TABLE} ulc
+                FROM {self._schema(tenant, project)}.{self.TABLE} ulc
                 LEFT JOIN (
                     SELECT tenant, project, user_id, COALESCE(SUM(tokens_reserved), 0) AS reserved
-                    FROM {self.CP}.{self.RESERVATIONS_TABLE}
+                    FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND status='reserved'
                       AND expires_at > NOW()
@@ -814,7 +824,7 @@ class UserCreditsManager:
             async with conn.transaction():
                 res = await conn.fetchrow(f"""
                     SELECT tokens_reserved, status
-                    FROM {self.CP}.{self.RESERVATIONS_TABLE}
+                    FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
                     FOR UPDATE
                 """, tenant, project, user_id, reservation_id)
@@ -822,7 +832,7 @@ class UserCreditsManager:
                 bal = await conn.fetchrow(f"""
                     SELECT lifetime_tokens_purchased AS purchased,
                            lifetime_tokens_consumed AS consumed
-                    FROM {self.CP}.{self.TABLE}
+                    FROM {self._schema(tenant, project)}.{self.TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND active=TRUE
                     FOR UPDATE
@@ -842,7 +852,7 @@ class UserCreditsManager:
                     return False
 
                 await conn.execute(f"""
-                    INSERT INTO {self.CP}.{self.RESERVATIONS_TABLE} (
+                    INSERT INTO {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE} (
                         tenant, project, user_id,
                         reservation_id, bundle_id,
                         tokens_reserved, status, expires_at, notes
@@ -850,7 +860,7 @@ class UserCreditsManager:
                     VALUES ($1,$2,$3,$4,$5,$6,'reserved',$7,$8)
                     ON CONFLICT (tenant, project, user_id, reservation_id)
                     DO UPDATE SET
-                        tokens_reserved = GREATEST(EXCLUDED.tokens_reserved, {self.CP}.{self.RESERVATIONS_TABLE}.tokens_reserved),
+                        tokens_reserved = GREATEST(EXCLUDED.tokens_reserved, {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}.tokens_reserved),
                         status='reserved',
                         expires_at=EXCLUDED.expires_at,
                         bundle_id=EXCLUDED.bundle_id,
@@ -874,7 +884,7 @@ class UserCreditsManager:
 
         async with self._pg_pool.acquire() as conn:
             await conn.execute(f"""
-                UPDATE {self.CP}.{self.RESERVATIONS_TABLE}
+                UPDATE {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                 SET status='released',
                     released_at=NOW(),
                     notes = COALESCE(notes, '') || CASE WHEN $5::text IS NULL THEN '' ELSE (' | ' || $5::text) END,
@@ -906,7 +916,7 @@ class UserCreditsManager:
                 bal = await conn.fetchrow(f"""
                     SELECT lifetime_tokens_purchased AS purchased,
                            lifetime_tokens_consumed AS consumed
-                    FROM {self.CP}.{self.TABLE}
+                    FROM {self._schema(tenant, project)}.{self.TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND active=TRUE
                     FOR UPDATE
@@ -915,7 +925,7 @@ class UserCreditsManager:
                 if not bal:
                     # release reservation best-effort
                     await conn.execute(f"""
-                        UPDATE {self.CP}.{self.RESERVATIONS_TABLE}
+                        UPDATE {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                         SET status='released', released_at=NOW(), updated_at=NOW(),
                             notes=COALESCE(notes,'') || ' | commit: no_balance_row'
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
@@ -925,7 +935,7 @@ class UserCreditsManager:
 
                 res = await conn.fetchrow(f"""
                         SELECT status, tokens_reserved
-                        FROM {self.CP}.{self.RESERVATIONS_TABLE}
+                        FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND reservation_id=$4
                     """, tenant, project, user_id, reservation_id)
 
@@ -947,14 +957,14 @@ class UserCreditsManager:
 
                 if consume > 0:
                     await conn.execute(f"""
-                        UPDATE {self.CP}.{self.TABLE}
+                        UPDATE {self._schema(tenant, project)}.{self.TABLE}
                         SET lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $4, lifetime_tokens_purchased),
                             updated_at=NOW()
                         WHERE tenant=$1 AND project=$2 AND user_id=$3
                     """, tenant, project, user_id, int(consume))
 
                 await conn.execute(f"""
-                    UPDATE {self.CP}.{self.RESERVATIONS_TABLE}
+                    UPDATE {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                     SET status='committed',
                         tokens_used=$5,
                         committed_at=NOW(),
@@ -982,7 +992,7 @@ class UserCreditsManager:
                 bal = await conn.fetchrow(f"""
                     SELECT lifetime_tokens_purchased AS purchased,
                            lifetime_tokens_consumed AS consumed
-                    FROM {self.CP}.{self.TABLE}
+                    FROM {self._schema(tenant, project)}.{self.TABLE}
                     WHERE tenant=$1 AND project=$2 AND user_id=$3
                       AND active=TRUE
                     FOR UPDATE
@@ -1000,7 +1010,7 @@ class UserCreditsManager:
                 consume = min(int(tokens), int(available))
                 if consume > 0:
                     await conn.execute(f"""
-                        UPDATE {self.CP}.{self.TABLE}
+                        UPDATE {self._schema(tenant, project)}.{self.TABLE}
                         SET lifetime_tokens_consumed = LEAST(lifetime_tokens_consumed + $4, lifetime_tokens_purchased),
                             updated_at=NOW()
                         WHERE tenant=$1 AND project=$2 AND user_id=$3
@@ -1025,7 +1035,7 @@ class UserCreditsManager:
         async with self._pg_pool.acquire() as conn:
             v = await conn.fetchval(f"""
                 SELECT COALESCE(SUM(tokens_reserved), 0)
-                FROM {self.CP}.{self.RESERVATIONS_TABLE}
+                FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                   AND status='reserved'
                   AND expires_at > NOW()
@@ -1064,7 +1074,7 @@ class UserCreditsManager:
                     committed_at,
                     released_at,
                     notes
-                FROM {self.CP}.{self.RESERVATIONS_TABLE}
+                FROM {self._schema(tenant, project)}.{self.RESERVATIONS_TABLE}
                 WHERE tenant=$1 AND project=$2 AND user_id=$3
                   AND status='reserved'
                   AND expires_at > NOW()

@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure, get_pg_pool
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
@@ -56,15 +57,8 @@ class ConversationFetchRequest(BaseModel):
     days: int = Field(default=365, ge=1, le=3650)
 
 
-def _sanitize_name(name: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]", "_", name.replace("-", "_").replace(" ", "_"))
-
-
 def _schema_for(tenant: str, project: str) -> str:
-    schema_name = f"{_sanitize_name(tenant)}_{_sanitize_name(project)}"
-    if not schema_name.startswith("kdcube_"):
-        schema_name = f"kdcube_{schema_name}"
-    return schema_name
+    return _project_schema(tenant, project)
 
 
 async def _get_pg_pool_from_state():
@@ -352,21 +346,16 @@ async def list_tenant_projects(
             source=source,
         )
 
-    # Control plane sources
+    # Discover all registered tenant/project pairs from the central registry
     async with pool.acquire() as conn:
-        for table in ("plan_quota_policies", "application_budget_policies"):
-            try:
-                rows = await conn.fetch(
-                    f"""
-                    SELECT DISTINCT tenant, project
-                    FROM kdcube_control_plane.{table}
-                    WHERE tenant IS NOT NULL AND project IS NOT NULL
-                    """
-                )
-            except Exception:
-                rows = []
-            for row in rows:
-                _add(row["tenant"], row["project"], f"control_plane.{table}")
+        try:
+            rows = await conn.fetch(
+                "SELECT tenant, project FROM kdcube_control_plane.registered_projects ORDER BY tenant, project"
+            )
+        except Exception:
+            rows = []
+    for row in rows:
+        _add(row["tenant"], row["project"], "registered_projects")
 
     # Always include defaults as a fallback
     if settings.TENANT and settings.PROJECT:

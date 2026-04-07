@@ -61,6 +61,27 @@ DROP TABLE IF EXISTS <SCHEMA>.conv_prefs CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_memory CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_messages CASCADE;
 
+-- ---------- Economics tables ----------
+DROP VIEW IF EXISTS <SCHEMA>.tenant_project_budget_absorption_detail;
+DROP VIEW IF EXISTS <SCHEMA>.tenant_project_budget_absorption;
+DROP VIEW IF EXISTS <SCHEMA>.tenant_project_budget_status;
+DROP TABLE IF EXISTS <SCHEMA>.external_economics_events CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_subscriptions CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.subscription_plans CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_subscription_period_ledger CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_subscription_period_reservations CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_subscription_period_budget CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.tenant_project_budget_ledger CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.tenant_project_budget_reservations CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.tenant_project_budget CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.application_budget_policies CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.plan_quota_policies CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_token_reservations CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_lifetime_credits CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_plan_overrides CASCADE;
+DROP TYPE  IF EXISTS <SCHEMA>.budget_reservation_status;
+DROP FUNCTION IF EXISTS <SCHEMA>.update_updated_at();
+
 -- ---------- (Optional) Drop schema ----------
 -- Note: Extensions (pg_trgm, vector, pgcrypto) are shared and intentionally not dropped.
 -- Uncomment the line below if you want to remove the schema entirely.

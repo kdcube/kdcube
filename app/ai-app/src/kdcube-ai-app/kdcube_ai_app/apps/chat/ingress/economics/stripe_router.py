@@ -13,6 +13,7 @@ import stripe
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.infra.accounting.usage import anthropic, sonnet_45
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -114,16 +115,17 @@ async def _resolve_stripe_customer(mgr, stripe_client, tenant: str, project: str
 
         pg_pool = getattr(router.state, "pg_pool", None)
         if pg_pool:
+            _schema = _project_schema(tenant, project)
             async with pg_pool.acquire() as conn:
                 await conn.execute(f"""
-                    INSERT INTO kdcube_control_plane.user_subscriptions (
+                    INSERT INTO {_schema}.user_subscriptions (
                         tenant, project, user_id, status, provider, stripe_customer_id, updated_at
                     ) VALUES ($1, $2, $3, 'active', 'stripe', $4, NOW())
                     ON CONFLICT (tenant, project, user_id)
                     DO UPDATE SET
                         stripe_customer_id = EXCLUDED.stripe_customer_id,
                         updated_at = NOW()
-                    WHERE kdcube_control_plane.user_subscriptions.stripe_customer_id IS NULL
+                    WHERE {_schema}.user_subscriptions.stripe_customer_id IS NULL
                 """, tenant, project, user_id, stripe_customer_id)
 
     return stripe_customer_id

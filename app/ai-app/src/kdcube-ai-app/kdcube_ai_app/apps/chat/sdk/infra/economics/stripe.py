@@ -20,6 +20,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import Subs
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.infra.channel.email import send_admin_email
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -272,10 +273,11 @@ class StripeSubscriptionService:
         pi_id = str(pi.get("id") or "") or None
 
         # Store snapshot (best effort). Webhook invoice.paid will do the authoritative “charged” update.
+        _schema = _project_schema(tenant, project)
         async with self.pg_pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(f"""
-                    INSERT INTO {SubscriptionManager.CP}.{SubscriptionManager.TABLE} (
+                    INSERT INTO {_schema}.{SubscriptionManager.TABLE} (
                       tenant, project, user_id,
                       plan_id, status, monthly_price_cents,
                       started_at, next_charge_at, last_charged_at,
@@ -289,15 +291,15 @@ class StripeSubscriptionService:
                     ON CONFLICT (tenant, project, user_id)
                     DO UPDATE SET
                       provider='stripe',
-                      plan_id=COALESCE(EXCLUDED.plan_id, {SubscriptionManager.CP}.{SubscriptionManager.TABLE}.plan_id),
+                      plan_id=COALESCE(EXCLUDED.plan_id, {_schema}.{SubscriptionManager.TABLE}.plan_id),
                       status=EXCLUDED.status,
                       monthly_price_cents=CASE
                         WHEN EXCLUDED.monthly_price_cents > 0 THEN EXCLUDED.monthly_price_cents
-                        ELSE {SubscriptionManager.CP}.{SubscriptionManager.TABLE}.monthly_price_cents
+                        ELSE {_schema}.{SubscriptionManager.TABLE}.monthly_price_cents
                       END,
-                      next_charge_at=COALESCE(EXCLUDED.next_charge_at, {SubscriptionManager.CP}.{SubscriptionManager.TABLE}.next_charge_at),
-                      stripe_customer_id=COALESCE(EXCLUDED.stripe_customer_id, {SubscriptionManager.CP}.{SubscriptionManager.TABLE}.stripe_customer_id),
-                      stripe_subscription_id=COALESCE(EXCLUDED.stripe_subscription_id, {SubscriptionManager.CP}.{SubscriptionManager.TABLE}.stripe_subscription_id),
+                      next_charge_at=COALESCE(EXCLUDED.next_charge_at, {_schema}.{SubscriptionManager.TABLE}.next_charge_at),
+                      stripe_customer_id=COALESCE(EXCLUDED.stripe_customer_id, {_schema}.{SubscriptionManager.TABLE}.stripe_customer_id),
+                      stripe_subscription_id=COALESCE(EXCLUDED.stripe_subscription_id, {_schema}.{SubscriptionManager.TABLE}.stripe_subscription_id),
                       updated_at=NOW()
                 """, tenant, project, user_id, plan.plan_id, sub_status, price_cents, next_charge_at, customer_id, sub_id)
 
@@ -318,7 +320,7 @@ class StripeEconomicsWebhookHandler:
     """
     Stripe webhook handler that:
       - verifies Stripe signatures
-      - provides idempotency via kdcube_control_plane.external_economics_events
+      - provides idempotency via external_economics_events in the per-tenant/project schema
       - applies effects via managers:
           * UserCreditsManager (lifetime credits)
           * SubscriptionBudgetLimiter (per-user subscription balance)
@@ -328,8 +330,6 @@ class StripeEconomicsWebhookHandler:
       - payment_intent.succeeded -> add lifetime user tokens
       - invoice.paid -> if subscription invoice -> top up subscription balance + update user_subscriptions
     """
-
-    CP = "kdcube_control_plane"
 
     def __init__(
         self,
@@ -552,8 +552,9 @@ class StripeEconomicsWebhookHandler:
         stripe_event_id: Optional[str],
         metadata: Dict[str, str],
     ) -> str:
+        _schema = _project_schema(tenant, project)
         await conn.execute(f"""
-            INSERT INTO {self.CP}.external_economics_events (
+            INSERT INTO {_schema}.external_economics_events (
               source, kind, external_id,
               tenant, project, user_id,
               amount_cents, tokens, currency,
@@ -569,7 +570,7 @@ class StripeEconomicsWebhookHandler:
 
         row = await conn.fetchrow(f"""
             SELECT status
-            FROM {self.CP}.external_economics_events
+            FROM {_schema}.external_economics_events
             WHERE source='stripe' AND kind=$1 AND external_id=$2
             FOR UPDATE
         """, kind, external_id)
@@ -579,16 +580,16 @@ class StripeEconomicsWebhookHandler:
 
         return str(row["status"])
 
-    async def _mark_ext_event_applied(self, conn: asyncpg.Connection, *, kind: str, external_id: str) -> None:
+    async def _mark_ext_event_applied(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET status='applied', applied_at=NOW(), error=NULL, updated_at=NOW()
             WHERE source='stripe' AND kind=$1 AND external_id=$2
         """, kind, external_id)
 
-    async def _mark_ext_event_failed(self, conn: asyncpg.Connection, *, kind: str, external_id: str, error: str) -> None:
+    async def _mark_ext_event_failed(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str, error: str) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET status='failed', error=$3, updated_at=NOW()
             WHERE source='stripe' AND kind=$1 AND external_id=$2
         """, kind, external_id, error[:2000])
@@ -597,26 +598,28 @@ class StripeEconomicsWebhookHandler:
         self,
         *,
         conn: asyncpg.Connection,
+        tenant: str,
+        project: str,
         kind: str,
         external_id: str,
     ) -> Optional[asyncpg.Record]:
         return await conn.fetchrow(f"""
             SELECT *
-            FROM {self.CP}.external_economics_events
+            FROM {_project_schema(tenant, project)}.external_economics_events
             WHERE source='internal' AND kind=$1 AND external_id=$2
             FOR UPDATE
         """, kind, external_id)
 
-    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, kind: str, external_id: str) -> None:
+    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET status='applied', applied_at=NOW(), error=NULL, updated_at=NOW()
             WHERE source='internal' AND kind=$1 AND external_id=$2
         """, kind, external_id)
 
-    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, kind: str, external_id: str, error: str) -> None:
+    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str, error: str) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET status='failed', error=$3, updated_at=NOW()
             WHERE source='internal' AND kind=$1 AND external_id=$2
         """, kind, external_id, (error or "")[:2000])
@@ -658,7 +661,7 @@ class StripeEconomicsWebhookHandler:
 
                     # Update subscription snapshot with the real ID and plan_id
                     await conn.execute(f"""
-                        UPDATE {self.CP}.user_subscriptions
+                        UPDATE {_project_schema(tenant, project)}.user_subscriptions
                         SET stripe_subscription_id = COALESCE(stripe_subscription_id, $4),
                             stripe_customer_id = COALESCE(stripe_customer_id, $5),
                             plan_id = COALESCE(plan_id, $6),
@@ -667,7 +670,7 @@ class StripeEconomicsWebhookHandler:
                         WHERE tenant=$1 AND project=$2 AND user_id=$3
                     """, tenant, project, user_id, stripe_sub_id, stripe_cust_id, plan_id)
 
-                    await self._mark_ext_event_applied(conn, kind="checkout_completed", external_id=session_id)
+                    await self._mark_ext_event_applied(conn, tenant=tenant, project=project, kind="checkout_completed", external_id=session_id)
 
         return StripeHandleResult(
             status="ok", action="applied", message="Checkout session completed",
@@ -731,9 +734,9 @@ class StripeEconomicsWebhookHandler:
                         notes=notes,
                         conn=conn,
                     )
-                    await self._mark_ext_event_applied(conn, kind="user_credits", external_id=payment_intent_id)
+                    await self._mark_ext_event_applied(conn, tenant=tenant, project=project, kind="user_credits", external_id=payment_intent_id)
                 except Exception as e:
-                    await self._mark_ext_event_failed(conn, kind="user_credits", external_id=payment_intent_id, error=str(e))
+                    await self._mark_ext_event_failed(conn, tenant=tenant, project=project, kind="user_credits", external_id=payment_intent_id, error=str(e))
                     raise
 
         return StripeHandleResult(
@@ -936,9 +939,9 @@ class StripeEconomicsWebhookHandler:
                         conn=conn,
                     )
 
-                    await self._mark_ext_event_applied(conn, kind="subscription_topup", external_id=topup_external_id)
+                    await self._mark_ext_event_applied(conn, tenant=tenant, project=project, kind="subscription_topup", external_id=topup_external_id)
                 except Exception as e:
-                    await self._mark_ext_event_failed(conn, kind="subscription_topup", external_id=topup_external_id, error=str(e))
+                    await self._mark_ext_event_failed(conn, tenant=tenant, project=project, kind="subscription_topup", external_id=topup_external_id, error=str(e))
                     raise
 
         # Cancel the old Stripe subscription if the user switched plans via Checkout.
@@ -984,6 +987,8 @@ class StripeEconomicsWebhookHandler:
         refund_status = str(refund.get("status") or "")
         payment_intent_id = str(refund.get("payment_intent") or "")
         amount_cents = int(refund.get("amount") or 0)
+        tenant = meta.get("tenant") or self.default_tenant
+        project = meta.get("project") or self.default_project
 
         # record stripe event idempotently
         stripe_event_id = str(event.get("id") or "")
@@ -993,8 +998,8 @@ class StripeEconomicsWebhookHandler:
                     conn=conn,
                     kind="wallet_refund",
                     external_id=refund_id,
-                    tenant=meta.get("tenant") or self.default_tenant,
-                    project=meta.get("project") or self.default_project,
+                    tenant=tenant,
+                    project=project,
                     user_id=meta.get("user_id"),
                     amount_cents=amount_cents,
                     tokens=None,
@@ -1012,6 +1017,8 @@ class StripeEconomicsWebhookHandler:
                 if request_id:
                     internal = await self._fetch_internal_event_for_update(
                         conn=conn,
+                        tenant=tenant,
+                        project=project,
                         kind="wallet_refund",
                         external_id=request_id,
                     )
@@ -1020,7 +1027,7 @@ class StripeEconomicsWebhookHandler:
 
                 if internal and refund_status in ("succeeded",):
                     if str(internal["status"]) != "applied":
-                        await self._mark_internal_event_applied(conn, kind="wallet_refund", external_id=request_id)
+                        await self._mark_internal_event_applied(conn, tenant=tenant, project=project, kind="wallet_refund", external_id=request_id)
                 elif internal and refund_status in ("failed", "canceled"):
                     if str(internal["status"]) == "pending":
                         tokens = int(internal["tokens"] or 0)
@@ -1036,13 +1043,15 @@ class StripeEconomicsWebhookHandler:
                             )
                         await self._mark_internal_event_failed(
                             conn,
+                            tenant=tenant,
+                            project=project,
                             kind="wallet_refund",
                             external_id=request_id,
                             error=f"stripe refund status={refund_status}",
                         )
 
                 if refund_status in ("succeeded", "failed", "canceled"):
-                    await self._mark_ext_event_applied(conn, kind="wallet_refund", external_id=refund_id)
+                    await self._mark_ext_event_applied(conn, tenant=tenant, project=project, kind="wallet_refund", external_id=refund_id)
 
         if refund_status in ("succeeded", "failed", "canceled"):
             await send_admin_email(
@@ -1082,7 +1091,7 @@ class StripeEconomicsWebhookHandler:
 
         # fallback lookup by stripe id if metadata missing
         if not user_id:
-            existing = await self.subscription_mgr.get_subscription_by_stripe_id(stripe_subscription_id=stripe_sub_id)
+            existing = await self.subscription_mgr.get_subscription_by_stripe_id(tenant=tenant, project=project, stripe_subscription_id=stripe_sub_id)
             if existing:
                 tenant, project, user_id = existing.tenant, existing.project, existing.user_id
 
@@ -1114,6 +1123,8 @@ class StripeEconomicsWebhookHandler:
                 if cp_status == "canceled":
                     # Rollover logic before final cancellation
                     existing_sub = await self.subscription_mgr.get_subscription_by_stripe_id(
+                        tenant=tenant,
+                        project=project,
                         stripe_subscription_id=stripe_sub_id,
                         conn=conn,
                     )
@@ -1155,6 +1166,8 @@ class StripeEconomicsWebhookHandler:
                             logger.exception("Rollover failed during subscription cancellation for user %s", user_id)
 
                     await self.subscription_mgr.update_status_by_stripe_id(
+                        tenant=tenant,
+                        project=project,
                         stripe_subscription_id=stripe_sub_id,
                         status="canceled",
                         next_charge_at=None,
@@ -1163,24 +1176,28 @@ class StripeEconomicsWebhookHandler:
                     # mark cancel request (if any)
                     internal = await self._fetch_internal_event_for_update(
                         conn=conn,
+                        tenant=tenant,
+                        project=project,
                         kind="subscription_cancel",
                         external_id=stripe_sub_id,
                     )
                     if internal and str(internal["status"]) != "applied":
-                        await self._mark_internal_event_applied(conn, kind="subscription_cancel", external_id=stripe_sub_id)
+                        await self._mark_internal_event_applied(conn, tenant=tenant, project=project, kind="subscription_cancel", external_id=stripe_sub_id)
                 else:
                     # keep status updated for suspended/active.
                     # DO NOT update next_charge_at here! Advancing next_charge_at before
                     # invoice.paid tops up the new budget causes a "0 balance" gap.
                     # invoice.paid will definitively update next_charge_at.
                     await self.subscription_mgr.update_status_by_stripe_id(
+                        tenant=tenant,
+                        project=project,
                         stripe_subscription_id=stripe_sub_id,
                         status=cp_status,
                         next_charge_at=None,
                         conn=conn,
                     )
 
-                await self._mark_ext_event_applied(conn, kind="subscription_status", external_id=stripe_event_id or stripe_sub_id)
+                await self._mark_ext_event_applied(conn, tenant=tenant, project=project, kind="subscription_status", external_id=stripe_event_id or stripe_sub_id)
 
         if cp_status == "canceled":
             await send_admin_email(
@@ -1212,8 +1229,6 @@ class StripeEconomicsWebhookHandler:
 # =============================================================================
 
 class StripeEconomicsAdminService:
-    CP = "kdcube_control_plane"
-
     def __init__(
         self,
         *,
@@ -1252,8 +1267,9 @@ class StripeEconomicsAdminService:
         metadata: Dict[str, Any],
     ) -> Tuple[str, bool]:
         """Returns (status, was_created)"""
+        _schema = _project_schema(tenant, project)
         res = await conn.fetchval(f"""
-            INSERT INTO {self.CP}.external_economics_events (
+            INSERT INTO {_schema}.external_economics_events (
               source, kind, external_id,
               tenant, project, user_id,
               amount_cents, tokens, currency,
@@ -1272,7 +1288,7 @@ class StripeEconomicsAdminService:
 
         row = await conn.fetchrow(f"""
             SELECT status
-            FROM {self.CP}.external_economics_events
+            FROM {_schema}.external_economics_events
             WHERE source='internal' AND kind=$1 AND external_id=$2
             FOR UPDATE
         """, kind, external_id)
@@ -1286,27 +1302,29 @@ class StripeEconomicsAdminService:
         self,
         *,
         conn: asyncpg.Connection,
+        tenant: str,
+        project: str,
         kind: str,
         external_id: str,
         metadata: Dict[str, Any],
     ) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET metadata = COALESCE(metadata, '{{}}'::jsonb) || $3,
                 updated_at = NOW()
             WHERE source='internal' AND kind=$1 AND external_id=$2
         """, kind, external_id, metadata)
 
-    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, kind: str, external_id: str) -> None:
+    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET status='applied', applied_at=NOW(), error=NULL, updated_at=NOW()
             WHERE source='internal' AND kind=$1 AND external_id=$2
         """, kind, external_id)
 
-    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, kind: str, external_id: str, error: str) -> None:
+    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str, error: str) -> None:
         await conn.execute(f"""
-            UPDATE {self.CP}.external_economics_events
+            UPDATE {_project_schema(tenant, project)}.external_economics_events
             SET status='failed', error=$3, updated_at=NOW()
             WHERE source='internal' AND kind=$1 AND external_id=$2
         """, kind, external_id, (error or "")[:2000])
@@ -1442,7 +1460,7 @@ class StripeEconomicsAdminService:
                         usd_amount=refund_usd,
                         conn=conn,
                     )
-                    await self._mark_internal_event_failed(conn, kind="wallet_refund", external_id=external_id, error=str(e))
+                    await self._mark_internal_event_failed(conn, tenant=tenant, project=project, kind="wallet_refund", external_id=external_id, error=str(e))
             await send_admin_email(
                 subject="Wallet refund FAILED",
                 body=(
@@ -1464,6 +1482,8 @@ class StripeEconomicsAdminService:
             async with conn.transaction():
                 await self._update_internal_event_metadata(
                     conn=conn,
+                    tenant=tenant,
+                    project=project,
                     kind="wallet_refund",
                     external_id=external_id,
                     metadata={
@@ -1511,7 +1531,9 @@ class StripeEconomicsAdminService:
         sub = None
         if stripe_subscription_id:
             sub = await self.subscription_mgr.get_subscription_by_stripe_id(
-                stripe_subscription_id=stripe_subscription_id
+                tenant=tenant,
+                project=project,
+                stripe_subscription_id=stripe_subscription_id,
             )
         if not sub and user_id:
             sub = await self.subscription_mgr.get_subscription(tenant=tenant, project=project, user_id=user_id)
@@ -1569,7 +1591,7 @@ class StripeEconomicsAdminService:
         except Exception as e:
             async with self.pg_pool.acquire() as conn:
                 async with conn.transaction():
-                    await self._mark_internal_event_failed(conn, kind="subscription_cancel", external_id=external_id, error=str(e))
+                    await self._mark_internal_event_failed(conn, tenant=sub.tenant, project=sub.project, kind="subscription_cancel", external_id=external_id, error=str(e))
             await send_admin_email(
                 subject="Subscription cancel FAILED",
                 body=(
@@ -1589,6 +1611,8 @@ class StripeEconomicsAdminService:
             async with conn.transaction():
                 await self._update_internal_event_metadata(
                     conn=conn,
+                    tenant=sub.tenant,
+                    project=sub.project,
                     kind="subscription_cancel",
                     external_id=external_id,
                     metadata={
@@ -1623,6 +1647,8 @@ class StripeEconomicsAdminService:
     async def reconcile_pending_requests(
         self,
         *,
+        tenant: str,
+        project: str,
         kind: str = "all",
         limit: int = 200,
     ) -> Dict[str, Any]:
@@ -1631,10 +1657,11 @@ class StripeEconomicsAdminService:
         if kind not in ("all", "wallet_refund", "subscription_cancel"):
             raise ValueError("kind must be all|wallet_refund|subscription_cancel")
 
+        _schema = _project_schema(tenant, project)
         async with self.pg_pool.acquire() as conn:
             rows = await conn.fetch(f"""
                 SELECT kind, external_id, tenant, project, user_id, amount_cents, tokens, metadata
-                FROM {self.CP}.external_economics_events
+                FROM {_schema}.external_economics_events
                 WHERE source='internal' AND status='pending'
                   AND (CASE WHEN $1 = 'all' THEN TRUE ELSE kind = $1 END)
                 ORDER BY created_at ASC
@@ -1681,7 +1708,7 @@ class StripeEconomicsAdminService:
                 if status in ("succeeded",):
                     async with self.pg_pool.acquire() as conn:
                         async with conn.transaction():
-                            await self._mark_internal_event_applied(conn, kind="wallet_refund", external_id=external_id)
+                            await self._mark_internal_event_applied(conn, tenant=row["tenant"], project=row["project"], kind="wallet_refund", external_id=external_id)
                     applied += 1
                     reconciled += 1
                     await send_admin_email(
@@ -1709,7 +1736,7 @@ class StripeEconomicsAdminService:
                                 conn=conn,
                             )
                             await self._mark_internal_event_failed(
-                                conn, kind="wallet_refund", external_id=external_id,
+                                conn, tenant=row["tenant"], project=row["project"], kind="wallet_refund", external_id=external_id,
                                 error=f"stripe refund status={status}"
                             )
                     failed += 1
@@ -1739,7 +1766,7 @@ class StripeEconomicsAdminService:
                     async with self.pg_pool.acquire() as conn:
                         async with conn.transaction():
                             await self._mark_internal_event_failed(
-                                conn, kind="subscription_cancel", external_id=external_id,
+                                conn, tenant=row["tenant"], project=row["project"], kind="subscription_cancel", external_id=external_id,
                                 error="stripe subscription not found"
                             )
                     failed += 1
@@ -1754,12 +1781,14 @@ class StripeEconomicsAdminService:
                     async with self.pg_pool.acquire() as conn:
                         async with conn.transaction():
                             await self.subscription_mgr.update_status_by_stripe_id(
+                                tenant=row["tenant"],
+                                project=row["project"],
                                 stripe_subscription_id=stripe_sub_id,
                                 status="canceled",
                                 next_charge_at=None,
                                 conn=conn,
                             )
-                            await self._mark_internal_event_applied(conn, kind="subscription_cancel", external_id=external_id)
+                            await self._mark_internal_event_applied(conn, tenant=row["tenant"], project=row["project"], kind="subscription_cancel", external_id=external_id)
                     applied += 1
                     reconciled += 1
                     await send_admin_email(

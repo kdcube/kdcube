@@ -12,6 +12,7 @@ from calendar import monthrange
 
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -126,13 +127,16 @@ class InternalRenewOnceResult:
 
 
 class SubscriptionManager:
-    CP = "kdcube_control_plane"
     TABLE = "user_subscriptions"
     PLAN_TABLE = "subscription_plans"
     EXT_EVENTS_TABLE = "external_economics_events"
 
     def __init__(self, pg_pool: asyncpg.Pool):
         self.pg_pool = pg_pool
+
+    @staticmethod
+    def _schema(tenant: str, project: str) -> str:
+        return _project_schema(tenant, project)
 
     def _from_row(self, row: asyncpg.Record) -> Subscription:
         return Subscription(**dict(row))
@@ -154,7 +158,7 @@ class SubscriptionManager:
         active_clause = "" if include_inactive else "AND active = TRUE"
         sql = f"""
             SELECT *
-            FROM {self.CP}.{self.PLAN_TABLE}
+            FROM {self._schema(tenant, project)}.{self.PLAN_TABLE}
             WHERE tenant=$1 AND project=$2 AND plan_id=$3
               {active_clause}
             LIMIT 1
@@ -180,7 +184,7 @@ class SubscriptionManager:
         active_clause = "" if include_inactive else "AND active = TRUE"
         sql = f"""
             SELECT *
-            FROM {self.CP}.{self.PLAN_TABLE}
+            FROM {self._schema(tenant, project)}.{self.PLAN_TABLE}
             WHERE tenant=$1 AND project=$2
               AND provider='stripe' AND stripe_price_id=$3
               {active_clause}
@@ -216,7 +220,7 @@ class SubscriptionManager:
 
         sql = f"""
             SELECT *
-            FROM {self.CP}.{self.PLAN_TABLE}
+            FROM {self._schema(tenant, project)}.{self.PLAN_TABLE}
             WHERE {" AND ".join(clauses)}
             ORDER BY created_at DESC
             LIMIT ${idx} OFFSET ${idx + 1}
@@ -245,7 +249,7 @@ class SubscriptionManager:
         notes: Optional[str] = None,
         conn: Optional[asyncpg.Connection] = None,
     ) -> SubscriptionPlan:
-        tbl = f"{self.CP}.{self.PLAN_TABLE}"
+        tbl = f"{self._schema(tenant, project)}.{self.PLAN_TABLE}"
         sql = f"""
             INSERT INTO {tbl} (
               tenant, project, plan_id,
@@ -307,7 +311,7 @@ class SubscriptionManager:
         user_id: str,
         conn: Optional[asyncpg.Connection] = None,
     ) -> Optional[Subscription]:
-        sql = f"SELECT * FROM {self.CP}.{self.TABLE} WHERE tenant=$1 AND project=$2 AND user_id=$3"
+        sql = f"SELECT * FROM {self._schema(tenant, project)}.{self.TABLE} WHERE tenant=$1 AND project=$2 AND user_id=$3"
         if conn:
             row = await conn.fetchrow(sql, tenant, project, user_id)
         else:
@@ -318,12 +322,14 @@ class SubscriptionManager:
     async def get_subscription_by_stripe_id(
         self,
         *,
+        tenant: str,
+        project: str,
         stripe_subscription_id: str,
         conn: Optional[asyncpg.Connection] = None,
     ) -> Optional[Subscription]:
         if not stripe_subscription_id:
             return None
-        sql = f"SELECT * FROM {self.CP}.{self.TABLE} WHERE provider='stripe' AND stripe_subscription_id=$1"
+        sql = f"SELECT * FROM {self._schema(tenant, project)}.{self.TABLE} WHERE provider='stripe' AND stripe_subscription_id=$1"
         if conn:
             row = await conn.fetchrow(sql, stripe_subscription_id)
         else:
@@ -358,7 +364,7 @@ class SubscriptionManager:
 
         price = int(plan.monthly_price_cents)
 
-        tbl = f"{self.CP}.{self.TABLE}"
+        tbl = f"{self._schema(tenant, project)}.{self.TABLE}"
 
         sql = f"""
         INSERT INTO {tbl} (
@@ -446,7 +452,7 @@ class SubscriptionManager:
         charged_at = charged_at or _now()
 
         sql = f"""
-        INSERT INTO {self.CP}.{self.TABLE} (
+        INSERT INTO {self._schema(tenant, project)}.{self.TABLE} (
           tenant, project, user_id,
           plan_id, status, monthly_price_cents,
           started_at, next_charge_at, last_charged_at,
@@ -454,16 +460,16 @@ class SubscriptionManager:
         ) VALUES ($1,$2,$3, $4,'active',$5, NOW(), $6,$7, 'stripe', $8,$9)
         ON CONFLICT (tenant, project, user_id)
         DO UPDATE SET
-          plan_id=COALESCE(EXCLUDED.plan_id, {self.CP}.{self.TABLE}.plan_id),
+          plan_id=COALESCE(EXCLUDED.plan_id, {self._schema(tenant, project)}.{self.TABLE}.plan_id),
           status='active',
           monthly_price_cents=EXCLUDED.monthly_price_cents,
           -- keep started_at stable (don’t reset on renewals)
-          started_at={self.CP}.{self.TABLE}.started_at,
+          started_at={self._schema(tenant, project)}.{self.TABLE}.started_at,
           last_charged_at=EXCLUDED.last_charged_at,
-          next_charge_at=COALESCE(EXCLUDED.next_charge_at, {self.CP}.{self.TABLE}.next_charge_at),
+          next_charge_at=COALESCE(EXCLUDED.next_charge_at, {self._schema(tenant, project)}.{self.TABLE}.next_charge_at),
           provider='stripe',
-          stripe_customer_id=COALESCE(EXCLUDED.stripe_customer_id, {self.CP}.{self.TABLE}.stripe_customer_id),
-          stripe_subscription_id=COALESCE(EXCLUDED.stripe_subscription_id, {self.CP}.{self.TABLE}.stripe_subscription_id),
+          stripe_customer_id=COALESCE(EXCLUDED.stripe_customer_id, {self._schema(tenant, project)}.{self.TABLE}.stripe_customer_id),
+          stripe_subscription_id=COALESCE(EXCLUDED.stripe_subscription_id, {self._schema(tenant, project)}.{self.TABLE}.stripe_subscription_id),
           updated_at=NOW()
         RETURNING *
         """
@@ -484,6 +490,8 @@ class SubscriptionManager:
     async def update_status_by_stripe_id(
             self,
             *,
+            tenant: str,
+            project: str,
             stripe_subscription_id: str,
             status: str,
             next_charge_at: Optional[datetime] = None,
@@ -491,10 +499,10 @@ class SubscriptionManager:
     ) -> Optional[Subscription]:
         if not stripe_subscription_id:
             return None
-        # We use COALESCE($3, next_charge_at) to ensure we don't accidentally clear the period end 
+        # We use COALESCE($3, next_charge_at) to ensure we don't accidentally clear the period end
         # during intermediate status updates (like soft cancellation).
         sql = f"""
-            UPDATE {self.CP}.{self.TABLE}
+            UPDATE {self._schema(tenant, project)}.{self.TABLE}
             SET status=$2,
                 next_charge_at=COALESCE($3, next_charge_at),
                 updated_at=NOW()
@@ -520,7 +528,7 @@ class SubscriptionManager:
         now = now or _now()
         sql = f"""
         SELECT *
-        FROM {self.CP}.{self.TABLE}
+        FROM {self._schema(tenant, project)}.{self.TABLE}
         WHERE tenant=$1 AND project=$2
           AND provider='internal'
           AND monthly_price_cents > 0
@@ -548,7 +556,7 @@ class SubscriptionManager:
             offset: int = 0,
             conn: Optional[asyncpg.Connection] = None,
     ) -> List[Subscription]:
-        tbl = f"{self.CP}.{self.TABLE}"
+        tbl = f"{self._schema(tenant, project)}.{self.TABLE}"
         where = ["tenant=$1", "project=$2"]
         args = [tenant, project]
         i = 3
@@ -590,7 +598,7 @@ class SubscriptionManager:
     ) -> Subscription:
         charged_at = charged_at or _now()
         sql = f"""
-        UPDATE {self.CP}.{self.TABLE}
+        UPDATE {self._schema(tenant, project)}.{self.TABLE}
         SET last_charged_at=$4, next_charge_at=$5, updated_at=NOW()
         WHERE tenant=$1 AND project=$2 AND user_id=$3
         RETURNING *
@@ -620,7 +628,7 @@ class SubscriptionManager:
             metadata: Dict[str, Any],
     ) -> Tuple[str, bool]:
         """Returns (status, was_created)"""
-        tbl = f"{self.CP}.{self.EXT_EVENTS_TABLE}"
+        tbl = f"{self._schema(tenant, project)}.{self.EXT_EVENTS_TABLE}"
         res = await conn.fetchval(f"""
             INSERT INTO {tbl} (
               source, kind, external_id,
@@ -651,16 +659,16 @@ class SubscriptionManager:
 
         return str(row["status"]), was_created
 
-    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, kind: str, external_id: str) -> None:
-        tbl = f"{self.CP}.{self.EXT_EVENTS_TABLE}"
+    async def _mark_internal_event_applied(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str) -> None:
+        tbl = f"{self._schema(tenant, project)}.{self.EXT_EVENTS_TABLE}"
         await conn.execute(f"""
             UPDATE {tbl}
             SET status='applied', applied_at=NOW(), error=NULL, updated_at=NOW()
             WHERE source='internal' AND kind=$2 AND external_id=$1
         """, external_id, kind)
 
-    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, kind: str, external_id: str, error: str) -> None:
-        tbl = f"{self.CP}.{self.EXT_EVENTS_TABLE}"
+    async def _mark_internal_event_failed(self, conn: asyncpg.Connection, *, tenant: str, project: str, kind: str, external_id: str, error: str) -> None:
+        tbl = f"{self._schema(tenant, project)}.{self.EXT_EVENTS_TABLE}"
         await conn.execute(f"""
             UPDATE {tbl}
             SET status='failed', error=$2, updated_at=NOW()
@@ -718,14 +726,14 @@ class SubscriptionManager:
                     request_id=request_id,
                 )
 
-                await self._mark_internal_event_applied(c, kind="subscription_rollover", external_id=period_key)
+                await self._mark_internal_event_applied(c, tenant=tenant, project=project, kind="subscription_rollover", external_id=period_key)
                 return {
                     "status": "ok",
                     "action": "applied",
                     "moved_usd": float(moved_cents) / 100.0,
                 }
             except Exception as e:
-                await self._mark_internal_event_failed(c, kind="subscription_rollover", external_id=period_key, error=str(e))
+                await self._mark_internal_event_failed(c, tenant=tenant, project=project, kind="subscription_rollover", external_id=period_key, error=str(e))
                 raise
 
         if conn:
@@ -749,7 +757,7 @@ class SubscriptionManager:
         Sweep unused subscription balances for subscriptions whose next_charge_at <= now.
         """
         now = now or _now()
-        tbl = f"{self.CP}.{self.TABLE}"
+        tbl = f"{self._schema(tenant, project)}.{self.TABLE}"
 
         async with self.pg_pool.acquire() as c:
             rows = await c.fetch(f"""
@@ -966,11 +974,11 @@ class SubscriptionManager:
                     conn=c,
                 )
 
-                await self._mark_internal_event_applied(c, kind="subscription_topup", external_id=external_id)
+                await self._mark_internal_event_applied(c, tenant=tenant, project=project, kind="subscription_topup", external_id=external_id)
             except Exception as e:
                 # NOTE: if transaction rolls back, this "failed" mark also rolls back (same pattern as Stripe handler).
                 # That’s acceptable for now: next attempt will re-run since status remains pending/not-applied.
-                await self._mark_internal_event_failed(c, kind="subscription_topup", external_id=external_id, error=str(e))
+                await self._mark_internal_event_failed(c, tenant=tenant, project=project, kind="subscription_topup", external_id=external_id, error=str(e))
                 raise
 
             return InternalRenewOnceResult(

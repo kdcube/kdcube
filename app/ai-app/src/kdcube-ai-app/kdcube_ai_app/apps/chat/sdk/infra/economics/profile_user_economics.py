@@ -43,6 +43,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import (
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.user_budget import UserBudgetBreakdownService
 from kdcube_ai_app.infra.accounting.usage import llm_output_price_usd_per_token
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 from kdcube_ai_app.infra.redis.client import get_async_redis_client
 
@@ -555,9 +556,10 @@ async def _fetch_active_project_reservations(
     user_id: str,
     limit: int,
 ) -> list[dict[str, Any]]:
+    _schema = _project_schema(tenant, project)
     has_updated_at = await _table_has_column(
         pg_pool=pg_pool,
-        schema="kdcube_control_plane",
+        schema=_schema,
         table="tenant_project_budget_reservations",
         column="updated_at",
     )
@@ -566,7 +568,7 @@ async def _fetch_active_project_reservations(
         SELECT reservation_id, bundle_id, provider, user_id, request_id,
                amount_cents, actual_spent_cents, status,
                expires_at, created_at, {updated_at_expr}, released_at, committed_at, notes
-        FROM kdcube_control_plane.tenant_project_budget_reservations
+        FROM {_schema}.tenant_project_budget_reservations
         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND status='active'
         ORDER BY created_at DESC
         LIMIT $4
@@ -601,9 +603,10 @@ async def _fetch_active_subscription_reservations(
     user_id: str,
     limit: int,
 ) -> list[dict[str, Any]]:
+    _schema = _project_schema(tenant, project)
     has_updated_at = await _table_has_column(
         pg_pool=pg_pool,
-        schema="kdcube_control_plane",
+        schema=_schema,
         table="user_subscription_period_reservations",
         column="updated_at",
     )
@@ -612,7 +615,7 @@ async def _fetch_active_subscription_reservations(
         SELECT reservation_id, period_key, bundle_id, provider, request_id,
                amount_cents, actual_spent_cents, status,
                expires_at, created_at, {updated_at_expr}, released_at, committed_at, notes
-        FROM kdcube_control_plane.user_subscription_period_reservations
+        FROM {_schema}.user_subscription_period_reservations
         WHERE tenant=$1 AND project=$2 AND user_id=$3 AND status='active'
         ORDER BY created_at DESC
         LIMIT $4

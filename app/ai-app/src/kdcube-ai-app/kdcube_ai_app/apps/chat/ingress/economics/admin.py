@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.stripe import (
 )
 
 from .stripe_router import router, _get_control_plane_manager, _usd_from_cents, REF_PROVIDER, REF_MODEL
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -244,7 +245,7 @@ async def reconcile_stripe_requests(
     )
 
     try:
-        res = await svc.reconcile_pending_requests(kind=payload.kind, limit=payload.limit)
+        res = await svc.reconcile_pending_requests(tenant=settings.TENANT, project=settings.PROJECT, kind=payload.kind, limit=payload.limit)
         return res
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -269,7 +270,7 @@ async def list_pending_stripe_requests(
     if kind not in ("all", "wallet_refund", "subscription_cancel"):
         raise HTTPException(status_code=400, detail="kind must be all|wallet_refund|subscription_cancel")
 
-    schema = "kdcube_control_plane"
+    schema = _project_schema(settings.TENANT, settings.PROJECT)
     tbl = "external_economics_events"
     where = ["source='internal'", "status='pending'", "tenant=$1", "project=$2"]
     args: list = [settings.TENANT, settings.PROJECT]

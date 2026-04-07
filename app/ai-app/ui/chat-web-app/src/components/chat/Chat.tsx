@@ -84,7 +84,7 @@ const SingleChatApp: React.FC = () => {
             return;
         }
         const text = (doc.body?.innerText || "").trim();
-        if (text === '{"detail":"Not found"}' || text.includes('"detail":"Not found"')) {
+        if (text === '{"detail":"Not found"}' || text.includes('"detail":"Not found"') || text.includes('does not have a UI defined"')) {
             setBundleUiAvailable(false);
             return;
         }

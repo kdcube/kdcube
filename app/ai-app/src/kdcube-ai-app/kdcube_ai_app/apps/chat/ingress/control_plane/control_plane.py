@@ -27,6 +27,7 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import auth_without_pressure
 from kdcube_ai_app.auth.sessions import UserSession
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription_budget import SubscriptionBudgetLimiter
 from kdcube_ai_app.infra.accounting.usage import (
@@ -846,7 +847,7 @@ async def list_subscription_periods(
     if status and status not in ("open", "closed", "all"):
         raise HTTPException(status_code=400, detail="status must be open, closed, or all")
 
-    schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+    schema = _project_schema(settings.TENANT, settings.PROJECT)
     table = SubscriptionBudgetLimiter.BUDGET_TABLE
 
     clauses = ["tenant=$1", "project=$2", "user_id=$3"]
@@ -910,7 +911,7 @@ async def list_subscription_ledger(
     if not pg_pool:
         raise HTTPException(status_code=503, detail="PostgreSQL not available")
 
-    schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+    schema = _project_schema(settings.TENANT, settings.PROJECT)
     table = SubscriptionBudgetLimiter.LEDGER_TABLE
 
     sql = f"""
@@ -956,7 +957,7 @@ async def reap_subscription_reservations(
 
     period_desc = None
     if payload.period_key:
-        schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+        schema = _project_schema(settings.TENANT, settings.PROJECT)
         table = SubscriptionBudgetLimiter.BUDGET_TABLE
         sql = f"""
             SELECT period_key, period_start, period_end
@@ -1024,7 +1025,7 @@ async def reap_subscription_reservations_all(
     if not pg_pool:
         raise HTTPException(status_code=503, detail="PostgreSQL not available")
 
-    schema = SubscriptionBudgetLimiter.CONTROL_PLANE_SCHEMA
+    schema = _project_schema(settings.TENANT, settings.PROJECT)
     res_table = SubscriptionBudgetLimiter.RESERVATIONS_TABLE
     bud_table = SubscriptionBudgetLimiter.BUDGET_TABLE
 
@@ -1779,6 +1780,7 @@ async def get_app_budget_absorption_report(
     elif group_by == "bundle":
         group_sql = ", bundle_id"
         group_select = ", bundle_id AS group_key"
+    _schema = _project_schema(settings.TENANT, settings.PROJECT)
     sql = f"""
         SELECT
             {period_sql} AS period_start
@@ -1790,7 +1792,7 @@ async def get_app_budget_absorption_report(
             SUM(CASE WHEN note LIKE 'shortfall:free_plan%' THEN -amount_cents ELSE 0 END) AS free_plan_shortfall_cents,
             SUM(-amount_cents) AS total_shortfall_cents,
             COUNT(*) AS events
-        FROM kdcube_control_plane.tenant_project_budget_ledger
+        FROM {_schema}.tenant_project_budget_ledger
         WHERE tenant=$1 AND project=$2
           AND kind='spend'
           AND note LIKE 'shortfall:%'
@@ -1864,7 +1866,7 @@ async def get_request_lineage(
     if not pg_pool:
         raise HTTPException(status_code=503, detail="PostgreSQL not available")
 
-    schema = "kdcube_control_plane"
+    schema = _project_schema(settings.TENANT, settings.PROJECT)
     async with pg_pool.acquire() as conn:
         proj_resv = await conn.fetch(f"""
             SELECT reservation_id, amount_cents, actual_spent_cents, status,

@@ -34,6 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.infra.economics.user_budget import (
 from kdcube_ai_app.apps.chat.sdk.infra.economics.policy import QuotaPolicy, ProviderBudgetPolicy
 from kdcube_ai_app.apps.chat.sdk.infra.economics.subscription import SubscriptionManager
 from kdcube_ai_app.infra.accounting.usage import quote_tokens_for_usd
+from kdcube_ai_app.ops.deployment.sql.db_deployment import project_schema as _project_schema
 
 logger = logging.getLogger(__name__)
 
@@ -126,8 +127,6 @@ class ControlPlaneManager:
 
     All with PostgreSQL + Redis caching.
     """
-
-    CONTROL_PLANE_SCHEMA = "kdcube_control_plane"
 
     def __init__(
             self,
@@ -340,7 +339,7 @@ class ControlPlaneManager:
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
                 SELECT *
-                FROM {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies
+                FROM {_project_schema(tenant, project)}.plan_quota_policies
                 WHERE tenant = $1 AND project = $2 AND plan_id = $3
                   AND active = TRUE
                 LIMIT 1
@@ -389,7 +388,7 @@ class ControlPlaneManager:
 
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                INSERT INTO {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies (
+                INSERT INTO {_project_schema(tenant, project)}.plan_quota_policies (
                     tenant, project, plan_id,
                     max_concurrent, requests_per_day, requests_per_month, total_requests,
                     tokens_per_hour, tokens_per_day, tokens_per_month,
@@ -397,13 +396,13 @@ class ControlPlaneManager:
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT (tenant, project, plan_id)
                 DO UPDATE SET
-                    max_concurrent = COALESCE(EXCLUDED.max_concurrent, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.max_concurrent),
-                    requests_per_day = COALESCE(EXCLUDED.requests_per_day, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.requests_per_day),
-                    requests_per_month = COALESCE(EXCLUDED.requests_per_month, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.requests_per_month),
-                    total_requests = COALESCE(EXCLUDED.total_requests, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.total_requests),
-                    tokens_per_hour = COALESCE(EXCLUDED.tokens_per_hour, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.tokens_per_hour),
-                    tokens_per_day = COALESCE(EXCLUDED.tokens_per_day, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.tokens_per_day),
-                    tokens_per_month = COALESCE(EXCLUDED.tokens_per_month, {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies.tokens_per_month),
+                    max_concurrent = COALESCE(EXCLUDED.max_concurrent, {_project_schema(tenant, project)}.plan_quota_policies.max_concurrent),
+                    requests_per_day = COALESCE(EXCLUDED.requests_per_day, {_project_schema(tenant, project)}.plan_quota_policies.requests_per_day),
+                    requests_per_month = COALESCE(EXCLUDED.requests_per_month, {_project_schema(tenant, project)}.plan_quota_policies.requests_per_month),
+                    total_requests = COALESCE(EXCLUDED.total_requests, {_project_schema(tenant, project)}.plan_quota_policies.total_requests),
+                    tokens_per_hour = COALESCE(EXCLUDED.tokens_per_hour, {_project_schema(tenant, project)}.plan_quota_policies.tokens_per_hour),
+                    tokens_per_day = COALESCE(EXCLUDED.tokens_per_day, {_project_schema(tenant, project)}.plan_quota_policies.tokens_per_day),
+                    tokens_per_month = COALESCE(EXCLUDED.tokens_per_month, {_project_schema(tenant, project)}.plan_quota_policies.tokens_per_month),
                     created_by = EXCLUDED.created_by,
                     notes = EXCLUDED.notes,
                     updated_at = NOW()
@@ -447,7 +446,7 @@ class ControlPlaneManager:
         async with self._pg_pool.acquire() as conn:
             rows = await conn.fetch(f"""
                 SELECT *
-                FROM {self.CONTROL_PLANE_SCHEMA}.plan_quota_policies
+                FROM {_project_schema(tenant, project)}.plan_quota_policies
                 WHERE {where_sql}
                 ORDER BY created_at DESC
                 LIMIT {int(limit)}
@@ -602,16 +601,16 @@ class ControlPlaneManager:
 
         async with self._pg_pool.acquire() as conn:
             row = await conn.fetchrow(f"""
-                INSERT INTO {self.CONTROL_PLANE_SCHEMA}.application_budget_policies (
+                INSERT INTO {_project_schema(tenant, project)}.application_budget_policies (
                     tenant, project, provider,
                     usd_per_hour, usd_per_day, usd_per_month,
                     created_by, notes
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (tenant, project, provider)
                 DO UPDATE SET
-                    usd_per_hour = COALESCE(EXCLUDED.usd_per_hour, {self.CONTROL_PLANE_SCHEMA}.application_budget_policies.usd_per_hour),
-                    usd_per_day = COALESCE(EXCLUDED.usd_per_day, {self.CONTROL_PLANE_SCHEMA}.application_budget_policies.usd_per_day),
-                    usd_per_month = COALESCE(EXCLUDED.usd_per_month, {self.CONTROL_PLANE_SCHEMA}.application_budget_policies.usd_per_month),
+                    usd_per_hour = COALESCE(EXCLUDED.usd_per_hour, {_project_schema(tenant, project)}.application_budget_policies.usd_per_hour),
+                    usd_per_day = COALESCE(EXCLUDED.usd_per_day, {_project_schema(tenant, project)}.application_budget_policies.usd_per_day),
+                    usd_per_month = COALESCE(EXCLUDED.usd_per_month, {_project_schema(tenant, project)}.application_budget_policies.usd_per_month),
                     created_by = EXCLUDED.created_by,
                     notes = EXCLUDED.notes,
                     updated_at = NOW()
@@ -654,7 +653,7 @@ class ControlPlaneManager:
         async with self._pg_pool.acquire() as conn:
             rows = await conn.fetch(f"""
                 SELECT *
-                FROM {self.CONTROL_PLANE_SCHEMA}.application_budget_policies
+                FROM {_project_schema(tenant, project)}.application_budget_policies
                 WHERE {where_sql}
                 ORDER BY created_at DESC
                 LIMIT {int(limit)}
