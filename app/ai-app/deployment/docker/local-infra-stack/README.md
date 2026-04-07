@@ -52,6 +52,11 @@ chmod -R 0777 ./data
 docker compose up -d
 ```
 
+Or with rebuild
+```shell
+docker compose up --build --force-recreate -d
+```
+
 ---
 
 ## Postgres setup job (one‑shot)
