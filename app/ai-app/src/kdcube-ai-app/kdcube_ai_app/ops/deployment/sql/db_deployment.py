@@ -7,7 +7,6 @@ import argparse
 import os, sys, re
 
 # Add the directory to sys.path if it's not already there
-from kdcube_ai_app.infra.relational.psql.psql_base import PostgreSqlDbMgr
 
 SYSTEM_COMPONENT = "kdcube-system-schema"
 PROJECT_COMPONENT = "kdcube-proj-schema"
@@ -82,6 +81,7 @@ def run(op, component, tenant=None, project=None, app=None):
         project: Project name (not used for control-plane)
         app: App name (optional subdirectory)
     """
+    from kdcube_ai_app.infra.relational.psql.psql_base import PostgreSqlDbMgr
     mgr = PostgreSqlDbMgr()
 
     if not component:
