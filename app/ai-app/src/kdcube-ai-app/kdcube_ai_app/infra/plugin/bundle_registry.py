@@ -69,21 +69,20 @@ def _normalize(d: Dict[str, Any]) -> Dict[str, Any]:
     if any(k in d for k in unsupported_keys):
         raise ValueError("Use repo/ref/subdir only; git_* keys are not supported.")
     repo = d.get("repo")
-    if not d.get("path"):
-        if repo:
-            try:
-                from kdcube_ai_app.infra.plugin.git_bundle import compute_git_bundle_paths
-                paths = compute_git_bundle_paths(
-                    bundle_id=d["id"],
-                    git_url=repo,
-                    git_ref=d.get("ref"),
-                    git_subdir=d.get("subdir"),
-                )
-                d["path"] = str(paths.bundle_root)
-            except Exception:
-                d["path"] = d.get("path") or ""
-        else:
-            raise ValueError(f"BundleSpec '{d['id']}' missing 'path'")
+    if repo:
+        try:
+            from kdcube_ai_app.infra.plugin.git_bundle import compute_git_bundle_paths
+            paths = compute_git_bundle_paths(
+                bundle_id=d["id"],
+                git_url=repo,
+                git_ref=d.get("ref"),
+                git_subdir=d.get("subdir"),
+            )
+            d["path"] = str(paths.bundle_root)
+        except Exception:
+            d["path"] = ""
+    elif not d.get("path"):
+        raise ValueError(f"BundleSpec '{d['id']}' missing 'path'")
     if not d.get("version"):
         d["version"] = d.get("bundle_version")
     if not d.get("git_commit"):

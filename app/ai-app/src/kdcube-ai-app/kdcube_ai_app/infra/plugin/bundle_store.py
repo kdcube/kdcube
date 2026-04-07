@@ -740,7 +740,7 @@ def _to_entry(bid: str, v: Dict[str, Any]) -> BundleEntry:
     path_val = _norm_str(v.get("path")) or ""
     ref = _norm_str(v.get("ref"))
     subdir = _norm_str(v.get("subdir"))
-    if not path_val and repo:
+    if repo:
         try:
             from kdcube_ai_app.infra.plugin.git_bundle import compute_git_bundle_paths
             paths = compute_git_bundle_paths(

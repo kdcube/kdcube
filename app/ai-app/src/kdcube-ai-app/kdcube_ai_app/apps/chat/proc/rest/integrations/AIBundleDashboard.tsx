@@ -945,7 +945,12 @@ const AIBundleDashboard: React.FC = () => {
             return;
         }
         try {
-            const payload = { ...form, singleton: !!form.singleton };
+            const payload = {
+                ...form,
+                path: form.repo ? '' : form.path,
+                git_commit: undefined,
+                singleton: !!form.singleton
+            };
             await api.updateBundles({
                 op: 'merge',
                 bundles: { [payload.id]: payload },
