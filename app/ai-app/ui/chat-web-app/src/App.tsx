@@ -1,25 +1,25 @@
 import {useEffect, useMemo} from "react";
 import AppRouter from "./AppRouter.tsx";
 import './App.css'
-import {useAppDispatch, useAppSelector} from "./app/store.ts";
+import {useAppDispatch, useAppSelector, useAppStore} from "./app/store.ts";
 import {
     loadChatSettings,
     selectChatSettingsLoaded,
     selectChatSettingsLoading, selectChatSettingsLoadingError
 } from "./features/chat/chatSettingsSlice.ts";
-// import { initializeEventLogger } from "./services/eventLogger";
+import { initializeEventLogger } from "./services/eventLogger";
 
 const App = () => {
     const dispatch = useAppDispatch();
-    // const store = useAppStore();
+    const store = useAppStore();
     const settingsLoaded = useAppSelector(selectChatSettingsLoaded)
     const settingsLoading = useAppSelector(selectChatSettingsLoading)
     const settingsLoadingError = useAppSelector(selectChatSettingsLoadingError)
 
-    // useEffect(() => {
-    //     // Initialize event logger for error and log tracking
-    //     initializeEventLogger(store);
-    // }, [store]);
+    useEffect(() => {
+        // Initialize event logger for error and log tracking
+        initializeEventLogger(store);
+    }, [store]);
 
     useEffect(() => {
         if (!settingsLoaded && !settingsLoading && !settingsLoadingError) {
