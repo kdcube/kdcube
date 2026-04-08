@@ -1,6 +1,6 @@
 import logging
 from abc import ABC, abstractmethod
-from kdcube_ai_app.apps.chat.external_log_collector.event_type import EventBase, ExternalLogEvent
+from kdcube_ai_app.apps.metrics.rest.events.event_type import EventBase, ExternalLogEvent
 import kdcube_ai_app.apps.utils.logging_config as logging_config
 
 logging_config.configure_logging()

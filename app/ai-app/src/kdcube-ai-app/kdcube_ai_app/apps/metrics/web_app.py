@@ -33,6 +33,7 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 get_settings.cache_clear()
 
 from kdcube_ai_app.apps.utils.cors import configure_cors
+from kdcube_ai_app.apps.metrics.rest.events import mount_events_routers
 from kdcube_ai_app.apps.chat.ingress.resolvers import (
     get_fastapi_adapter,
     get_pg_pool,
@@ -492,6 +493,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Metrics API", description="Metrics aggregation service", lifespan=lifespan)
 configure_cors(app)
+mount_events_routers(app)
 
 
 @app.get("/health")

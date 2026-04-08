@@ -320,24 +320,6 @@ services:
     ports:
       - "127.0.0.1:${METRICS_PORT:-8090}:8090"
 
-  chat-frontend-logs-collector:
-    image: kdcube-chat-frontend-logs-collector:latest
-    build:
-      context: ../../..
-      dockerfile: deployment/docker/all_in_one_kdcube/Dockerfile_Collector
-    env_file:
-      - path: ${KDCUBE_CONFIG_DIR:-./config}/.env.collector
-        required: false
-    environment:
-      - LOG_FILE_PREFIX=chat-frontend-logs
-      - GATEWAY_COMPONENT=collector
-    volumes:
-      - ${KDCUBE_LOGS_DIR:-./logs}/chat-frontend-logs:/logs
-    networks:
-      - kdcube-internal
-    ports:
-      - "127.0.0.1:${EVENTS_COLLECTOR_PORT:-8080}:8080"
-
   web-ui:
     image: ${KDCUBE_UI_IMAGE:-kdcube-web-ui:latest}
     build:
