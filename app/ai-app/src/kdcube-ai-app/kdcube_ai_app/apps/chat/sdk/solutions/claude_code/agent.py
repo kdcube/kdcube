@@ -80,7 +80,7 @@ class ClaudeCodeAgent:
             comm=get_current_comm(),
         )
 
-    def build_args(self, prompt: str) -> list[str]:
+    def build_args(self, prompt: str, *, resume_existing: bool = False) -> list[str]:
         args = [
             "-p",
             "--verbose",
@@ -95,7 +95,10 @@ class ClaudeCodeAgent:
         for path in self.config.additional_directories:
             args.extend(["--add-dir", str(path)])
         args.extend(["--agent", self.config.agent_name])
-        args.extend(["--session-id", self.binding.claude_session_id])
+        if resume_existing:
+            args.extend(["--resume", self.binding.claude_session_id])
+        else:
+            args.extend(["--session-id", self.binding.claude_session_id])
         args.extend(list(self.config.extra_args))
         args.append(prompt)
         return args
@@ -105,6 +108,7 @@ class ClaudeCodeAgent:
         prompt: str,
         *,
         kind: ClaudeCodeTurnKind = "regular",
+        resume_existing: bool = False,
     ) -> ClaudeCodeRunResult:
         workspace_path = self.config.workspace_path
         if not workspace_path.exists() or not workspace_path.is_dir():
@@ -114,10 +118,11 @@ class ClaudeCodeAgent:
                 kind=kind,
                 exit_code=None,
                 stderr_lines=[],
+                resume_existing=resume_existing,
             )
             raise FileNotFoundError(message)
 
-        metadata = self._metadata(kind=kind)
+        metadata = self._metadata(kind=kind, resume_existing=resume_existing)
         await self._emit_step(
             step=self.config.step_name,
             status="started",
@@ -134,7 +139,7 @@ class ClaudeCodeAgent:
         try:
             process = await asyncio.create_subprocess_exec(
                 self.config.command,
-                *self.build_args(prompt),
+                *self.build_args(prompt, resume_existing=resume_existing),
                 cwd=str(workspace_path),
                 env=self._build_env(kind=kind),
                 stdout=asyncio.subprocess.PIPE,
@@ -146,6 +151,7 @@ class ClaudeCodeAgent:
                 kind=kind,
                 exit_code=None,
                 stderr_lines=[],
+                resume_existing=resume_existing,
             )
             raise
 
@@ -233,15 +239,16 @@ class ClaudeCodeAgent:
                 kind=kind,
                 exit_code=exit_code,
                 stderr_lines=stderr_lines,
+                resume_existing=resume_existing,
             )
 
         return result
 
     async def run_followup(self, prompt: str) -> ClaudeCodeRunResult:
-        return await self.run_turn(prompt, kind="followup")
+        return await self.run_turn(prompt, kind="followup", resume_existing=True)
 
     async def run_steer(self, prompt: str) -> ClaudeCodeRunResult:
-        return await self.run_turn(prompt, kind="steer")
+        return await self.run_turn(prompt, kind="steer", resume_existing=True)
 
     def _build_env(self, *, kind: ClaudeCodeTurnKind) -> dict[str, str]:
         env = dict(os.environ)
@@ -254,10 +261,11 @@ class ClaudeCodeAgent:
         env["KDCUBE_TURN_KIND"] = kind
         return env
 
-    def _metadata(self, *, kind: ClaudeCodeTurnKind) -> dict:
+    def _metadata(self, *, kind: ClaudeCodeTurnKind, resume_existing: bool = False) -> dict:
         return {
             "agent_name": self.config.agent_name,
             "turn_kind": kind,
+            "resume_existing": resume_existing,
             "claude_session_id": self.binding.claude_session_id,
             "workspace_path": str(self.config.workspace_path),
             "allowed_tools": list(self.config.allowed_tools),
@@ -296,13 +304,14 @@ class ClaudeCodeAgent:
         kind: ClaudeCodeTurnKind,
         exit_code: int | None,
         stderr_lines: list[str],
+        resume_existing: bool,
     ) -> None:
         await self._emit_step(
             step=self.config.step_name,
             status="error",
             title=f"{self.config.agent_name} failed",
             data={
-                **self._metadata(kind=kind),
+                **self._metadata(kind=kind, resume_existing=resume_existing),
                 "error": message,
                 "exit_code": exit_code,
                 "stderr_lines": list(stderr_lines),

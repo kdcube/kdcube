@@ -151,6 +151,7 @@ def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
     agent = ClaudeCodeAgent(config=_config(workspace), binding=binding, comm=None)
 
     args = agent.build_args("Explain the repo")
+    resume_args = agent.build_args("Explain the repo", resume_existing=True)
 
     assert "--allowedTools" in args
     assert "Read,Grep,WebSearch" in args
@@ -160,6 +161,9 @@ def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
     assert str(workspace / "repos" / "output") in args
     assert "--session-id" in args
     assert "claude-session-1" in args
+    assert "--resume" in resume_args
+    assert "claude-session-1" in resume_args
+    assert "--session-id" not in resume_args
     assert "--agent" in args
     assert "kb-writer" in args
     assert args[-1] == "Explain the repo"
@@ -245,7 +249,7 @@ async def test_run_turn_emits_stderr_and_failure_step(monkeypatch, tmp_path: Pat
 
 
 @pytest.mark.asyncio
-async def test_followup_and_steer_reuse_same_claude_session_id(monkeypatch, tmp_path: Path):
+async def test_followup_and_steer_resume_same_claude_session_id(monkeypatch, tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     comm, emitter = _make_comm()
@@ -271,7 +275,7 @@ async def test_followup_and_steer_reuse_same_claude_session_id(monkeypatch, tmp_
     assert captured
     session_ids = []
     for args in captured:
-        idx = args.index("--session-id")
+        idx = args.index("--resume")
         session_ids.append(args[idx + 1])
     assert len(set(session_ids)) == 1
 

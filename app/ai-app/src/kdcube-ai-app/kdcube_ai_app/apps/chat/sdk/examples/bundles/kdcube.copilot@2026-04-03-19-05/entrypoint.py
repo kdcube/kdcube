@@ -1187,12 +1187,18 @@ class ReactWorkflow(BaseEntrypoint):
             conversation_id=conversation_id,
             title_hint=text[:80],
         )
+        existing_messages = list(conversation.get("messages") or [])
+        resume_existing = any(
+            str(item.get("role") or "").strip() == "assistant"
+            and not bool((item.get("metadata") or {}).get("error"))
+            for item in existing_messages
+        )
         cid = str(conversation["conversation_id"])
         turn_id_value = f"kb_admin_turn_{uuid.uuid4().hex[:12]}"
         bound_comm = self._kb_admin_bound_comm(conversation_id=cid, turn_id=turn_id_value)
 
         history_lines: list[str] = []
-        for item in list(conversation.get("messages") or [])[-12:]:
+        for item in existing_messages[-12:]:
             role = str(item.get("role") or "assistant").capitalize()
             body = str(item.get("text") or "").strip()
             if body:
@@ -1233,7 +1239,11 @@ class ReactWorkflow(BaseEntrypoint):
         )
 
         try:
-            result = await agent.run_turn(full_prompt, kind=normalized_turn_kind)
+            result = await agent.run_turn(
+                full_prompt,
+                kind=normalized_turn_kind,
+                resume_existing=resume_existing or normalized_turn_kind in ("followup", "steer"),
+            )
         except Exception as exc:
             conversation_doc = append_conversation_message(
                 storage,
