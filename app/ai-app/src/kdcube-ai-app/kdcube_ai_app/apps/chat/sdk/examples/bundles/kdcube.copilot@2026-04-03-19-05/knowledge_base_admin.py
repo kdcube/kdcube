@@ -429,15 +429,21 @@ def _run_git(
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
 ) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd) if cwd else None,
-        env=dict(env or {}),
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return (proc.stdout or "").strip()
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd) if cwd else None,
+            env=dict(env or {}),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return (proc.stdout or "").strip()
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        stdout = (exc.stdout or "").strip()
+        detail = stderr or stdout or str(exc)
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}") from exc
 
 
 def _git_status(local_path: Path, *, env: Mapping[str, str]) -> str:
@@ -456,6 +462,22 @@ def _git_head(local_path: Path, *, env: Mapping[str, str]) -> str:
         return _run_git(["rev-parse", "HEAD"], cwd=local_path, env=env)
     except Exception:
         return ""
+
+
+def _git_remote_branch_exists(source: str, branch: str, *, env: Mapping[str, str]) -> bool:
+    try:
+        raw = _run_git(["ls-remote", "--heads", source, branch], env=env)
+    except Exception:
+        return False
+    return bool(str(raw or "").strip())
+
+
+def _git_local_branch_exists(local_path: Path, branch: str, *, env: Mapping[str, str]) -> bool:
+    try:
+        _run_git(["show-ref", "--verify", "--quiet", f"refs/heads/{branch}"], cwd=local_path, env=env)
+        return True
+    except Exception:
+        return False
 
 
 def _prepare_repo(
@@ -480,24 +502,43 @@ def _prepare_repo(
             shutil.rmtree(repo.local_path, ignore_errors=True)
 
     if not (repo.local_path / ".git").exists():
-        clone_args = ["clone"]
-        if repo.branch:
-            clone_args += ["--branch", repo.branch, "--single-branch"]
-        clone_args += [repo.source, str(repo.local_path)]
-        _run_git(clone_args, env=env)
-        action = "cloned"
+        if repo.branch and repo.repo_type == "output" and not _git_remote_branch_exists(repo.source, repo.branch, env=env):
+            _run_git(["clone", repo.source, str(repo.local_path)], env=env)
+            _run_git(["checkout", "-b", repo.branch], cwd=repo.local_path, env=env)
+            action = "cloned-local-branch"
+        else:
+            if repo.branch and not _git_remote_branch_exists(repo.source, repo.branch, env=env):
+                raise RuntimeError(
+                    f"Repo '{repo.label}' is configured for branch '{repo.branch}', but that branch does not exist on remote."
+                )
+            clone_args = ["clone"]
+            if repo.branch:
+                clone_args += ["--branch", repo.branch, "--single-branch"]
+            clone_args += [repo.source, str(repo.local_path)]
+            _run_git(clone_args, env=env)
+            action = "cloned"
     else:
         action = "present"
         if sync_existing:
             dirty = bool(_git_status(repo.local_path, env=env).strip())
             _run_git(["fetch", "--prune", "origin"], cwd=repo.local_path, env=env)
             if repo.branch:
-                _run_git(["checkout", repo.branch], cwd=repo.local_path, env=env)
+                if _git_local_branch_exists(repo.local_path, repo.branch, env=env):
+                    _run_git(["checkout", repo.branch], cwd=repo.local_path, env=env)
+                elif repo.repo_type == "output" and not _git_remote_branch_exists(repo.source, repo.branch, env=env):
+                    _run_git(["checkout", "-b", repo.branch], cwd=repo.local_path, env=env)
+                    action = "created-local-branch"
+                elif _git_remote_branch_exists(repo.source, repo.branch, env=env):
+                    _run_git(["checkout", "-B", repo.branch, f"origin/{repo.branch}"], cwd=repo.local_path, env=env)
+                else:
+                    raise RuntimeError(
+                        f"Repo '{repo.label}' is configured for branch '{repo.branch}', but that branch does not exist on remote."
+                    )
                 if not dirty:
                     try:
                         _run_git(["pull", "--ff-only", "origin", repo.branch], cwd=repo.local_path, env=env)
                         action = "updated"
-                    except subprocess.CalledProcessError:
+                    except RuntimeError:
                         action = "fetched"
                 else:
                     action = "dirty"
@@ -506,6 +547,15 @@ def _prepare_repo(
             else:
                 action = "dirty"
 
+    return _repo_status_payload(repo, env=env, action=action)
+
+
+def _repo_status_payload(
+    repo: ManagedRepo,
+    *,
+    env: Mapping[str, str],
+    action: str,
+) -> dict[str, Any]:
     return {
         "repo_type": repo.repo_type,
         "slot": repo.slot,
@@ -519,6 +569,55 @@ def _prepare_repo(
         "dirty": bool(_git_status(repo.local_path, env=env).strip()),
         "action": action,
     }
+
+
+def _resolve_output_repo(local_root: Path, user_id: str | None, config: Mapping[str, Any]) -> ManagedRepo:
+    config = validate_workspace_config(config)
+    repos = managed_repos_from_config(local_root, user_id, config)
+    for repo in repos:
+        if repo.repo_type == "output":
+            return repo
+    raise ValueError("Output repository is not configured.")
+
+
+def push_output_repo(
+    *,
+    local_root: Path,
+    user_id: str | None,
+    config: Mapping[str, Any],
+    git_http_token: str | None,
+    git_http_user: str | None,
+) -> dict[str, Any]:
+    env = _build_git_env(git_http_token=git_http_token, git_http_user=git_http_user)
+    repo = _resolve_output_repo(local_root, user_id, config)
+    _prepare_repo(repo, env=env, sync_existing=False)
+    if bool(_git_status(repo.local_path, env=env).strip()):
+        raise RuntimeError("Output repo has uncommitted changes. Commit them or reset the branch before pushing.")
+    branch = _git_current_branch(repo.local_path, env=env) or str(repo.branch or "").strip()
+    if not branch:
+        raise RuntimeError("Output repo does not have an active branch to push.")
+    _run_git(["push", "-u", "origin", branch], cwd=repo.local_path, env=env)
+    return _repo_status_payload(repo, env=env, action="pushed")
+
+
+def reset_output_repo(
+    *,
+    local_root: Path,
+    user_id: str | None,
+    config: Mapping[str, Any],
+    commit: str,
+    git_http_token: str | None,
+    git_http_user: str | None,
+) -> dict[str, Any]:
+    target = str(commit or "").strip()
+    if not target:
+        raise ValueError("commit is required")
+    env = _build_git_env(git_http_token=git_http_token, git_http_user=git_http_user)
+    repo = _resolve_output_repo(local_root, user_id, config)
+    _prepare_repo(repo, env=env, sync_existing=False)
+    _run_git(["fetch", "--prune", "origin"], cwd=repo.local_path, env=env)
+    _run_git(["reset", "--hard", target], cwd=repo.local_path, env=env)
+    return _repo_status_payload(repo, env=env, action="reset")
 
 
 def write_workspace_context(

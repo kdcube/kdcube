@@ -16,12 +16,14 @@ class ClaudeCodeAgentConfig:
     agent_name: str
     workspace_path: Path
     allowed_tools: Sequence[str] = field(default_factory=tuple)
+    additional_directories: Sequence[Path] = field(default_factory=tuple)
     extra_args: Sequence[str] = field(default_factory=tuple)
     env: Mapping[str, str] = field(default_factory=dict)
     step_name: str = "claude_code.agent"
     delta_marker: str = "answer"
     emit_stderr_steps: bool = True
     command: str = "claude"
+    permission_mode: str | None = "acceptEdits"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "workspace_path", Path(self.workspace_path))
@@ -29,6 +31,11 @@ class ClaudeCodeAgentConfig:
             self,
             "allowed_tools",
             tuple(tool.strip() for tool in self.allowed_tools if str(tool).strip()),
+        )
+        object.__setattr__(
+            self,
+            "additional_directories",
+            tuple(Path(path) for path in self.additional_directories if str(path).strip()),
         )
         object.__setattr__(
             self,
@@ -40,6 +47,8 @@ class ClaudeCodeAgentConfig:
             "env",
             {str(key): str(value) for key, value in dict(self.env or {}).items() if str(value).strip()},
         )
+        if self.permission_mode is not None:
+            object.__setattr__(self, "permission_mode", str(self.permission_mode).strip() or None)
 
 
 @dataclass(frozen=True)

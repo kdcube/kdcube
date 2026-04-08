@@ -109,6 +109,7 @@ def _config(workspace_path: Path) -> ClaudeCodeAgentConfig:
         agent_name="kb-writer",
         workspace_path=workspace_path,
         allowed_tools=("Read", "Grep", "WebSearch"),
+        additional_directories=(workspace_path / "repos" / "output",),
         extra_args=("--append-system-prompt", "Stay concise."),
         env={"EXTRA_ENV": "yes"},
     )
@@ -140,6 +141,7 @@ async def test_from_current_context_derives_deterministic_binding(tmp_path: Path
 
 def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
     workspace = tmp_path / "workspace"
+    (workspace / "repos" / "output").mkdir(parents=True)
     binding = ClaudeCodeBinding(
         user_id="admin-user-1",
         conversation_id="conv-claude",
@@ -152,6 +154,10 @@ def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
 
     assert "--allowedTools" in args
     assert "Read,Grep,WebSearch" in args
+    assert "--permission-mode" in args
+    assert "acceptEdits" in args
+    assert "--add-dir" in args
+    assert str(workspace / "repos" / "output") in args
     assert "--session-id" in args
     assert "claude-session-1" in args
     assert "--agent" in args

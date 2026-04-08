@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 type TurnKind = 'regular' | 'followup' | 'steer';
+type AdminSection = 'chat' | 'settings' | 'workspace' | 'conversations';
 
 interface AppSettings {
     baseUrl: string;
@@ -273,7 +274,7 @@ async function postOperation<T>(operation: string, payload: Record<string, unkno
         method: 'POST',
         credentials: 'include',
         headers,
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ data: payload }),
     });
     const text = await response.text();
     let parsed: unknown = {};
@@ -287,6 +288,9 @@ async function postOperation<T>(operation: string, payload: Record<string, unkno
             ? String((parsed as Record<string, unknown>).detail)
             : text || response.statusText;
         throw new Error(detail);
+    }
+    if (parsed && typeof parsed === 'object' && operation in (parsed as Record<string, unknown>)) {
+        return (parsed as Record<string, unknown>)[operation] as T;
     }
     return parsed as T;
 }
@@ -319,6 +323,15 @@ function shortText(value?: string, max = 120): string {
     return `${text.slice(0, max - 1)}…`;
 }
 
+function sectionNavClass(active: boolean): string {
+    return [
+        'w-full rounded-2xl border px-3 py-3 text-left transition',
+        active
+            ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50',
+    ].join(' ');
+}
+
 function messageBubbleClass(role?: string): string {
     if (role === 'user') return 'bg-slate-900 text-white ml-12';
     if (role === 'assistant') return 'bg-white text-slate-900 mr-12 border border-slate-200';
@@ -337,11 +350,15 @@ function App() {
     const [currentConversation, setCurrentConversation] = useState<ConversationDocument | null>(INITIAL_DATA.current_conversation || null);
     const [composerText, setComposerText] = useState('');
     const [turnKind, setTurnKind] = useState<TurnKind>('regular');
+    const [activeSection, setActiveSection] = useState<AdminSection>('chat');
     const [savingSettings, setSavingSettings] = useState(false);
     const [syncingWorkspace, setSyncingWorkspace] = useState(false);
+    const [pushingOutputRepo, setPushingOutputRepo] = useState(false);
+    const [resettingOutputRepo, setResettingOutputRepo] = useState(false);
     const [sending, setSending] = useState(false);
     const [statusText, setStatusText] = useState<string>('Ready');
     const [errorText, setErrorText] = useState<string>('');
+    const [resetCommit, setResetCommit] = useState('');
 
     const [contentRepos, setContentRepos] = useState<RepoConfig[]>(normalizeContentRepos(INITIAL_DATA.config?.content_repos));
     const [outputRepo, setOutputRepo] = useState<RepoConfig>({ id: 'output', label: '', source: '', branch: '', ...(INITIAL_DATA.config?.output_repo || {}) });
@@ -353,6 +370,7 @@ function App() {
     const currentMessages = currentConversation?.messages || [];
     const syncStatuses = data.config?.last_sync?.repo_statuses || [];
     const workspaceRoot = data.config?.last_sync?.workspace_root || data.workspace_root || '';
+    const outputRepoStatus = syncStatuses.find((item) => item.repo_type === 'output') || null;
 
     const currentConversationMap = useMemo(() => {
         const map = new Map<string, ConversationSummary>();
@@ -389,6 +407,7 @@ function App() {
             selectedConversationRef.current = conversationId;
             setSelectedConversationId(conversationId);
             setCurrentConversation(payload.conversation);
+            setActiveSection('chat');
         }
     }
 
@@ -520,6 +539,7 @@ function App() {
             setAnthropicApiKey('');
             setClaudeCodeKey('');
             setStatusText('Settings saved');
+            setActiveSection('workspace');
         } catch (err) {
             setErrorText(err instanceof Error ? err.message : String(err));
         } finally {
@@ -539,10 +559,57 @@ function App() {
             if (!payload.ok) throw new Error(payload.error || 'Workspace sync failed');
             await refreshWidgetData(selectedConversationId);
             setStatusText('Workspace synced');
+            setActiveSection('workspace');
         } catch (err) {
             setErrorText(err instanceof Error ? err.message : String(err));
         } finally {
             setSyncingWorkspace(false);
+        }
+    }
+
+    async function handlePushOutputRepo(): Promise<void> {
+        setPushingOutputRepo(true);
+        setErrorText('');
+        try {
+            const payload = await postOperation<{ ok?: boolean; error?: string }>(
+                'knowledge_base_admin_push_output_repo',
+                {},
+                streamId || undefined,
+            );
+            if (!payload.ok) throw new Error(payload.error || 'Output repo push failed');
+            await refreshWidgetData(selectedConversationId);
+            setStatusText('Output branch pushed');
+            setActiveSection('workspace');
+        } catch (err) {
+            setErrorText(err instanceof Error ? err.message : String(err));
+        } finally {
+            setPushingOutputRepo(false);
+        }
+    }
+
+    async function handleResetOutputRepo(): Promise<void> {
+        const commit = resetCommit.trim();
+        if (!commit) {
+            setErrorText('Enter a commit, ref, or remote branch before resetting the output repo.');
+            return;
+        }
+        setResettingOutputRepo(true);
+        setErrorText('');
+        try {
+            const payload = await postOperation<{ ok?: boolean; error?: string }>(
+                'knowledge_base_admin_reset_output_repo',
+                { commit },
+                streamId || undefined,
+            );
+            if (!payload.ok) throw new Error(payload.error || 'Output repo reset failed');
+            await refreshWidgetData(selectedConversationId);
+            setStatusText(`Output branch reset to ${shortText(commit, 16)}`);
+            setResetCommit('');
+            setActiveSection('workspace');
+        } catch (err) {
+            setErrorText(err instanceof Error ? err.message : String(err));
+        } finally {
+            setResettingOutputRepo(false);
         }
     }
 
@@ -552,6 +619,7 @@ function App() {
         setCurrentConversation(null);
         setStatusText('New conversation');
         setErrorText('');
+        setActiveSection('chat');
     }
 
     async function handleSend(): Promise<void> {
@@ -587,6 +655,7 @@ function App() {
         setSending(true);
         setStatusText(`Sending ${turnKind} turn`);
         setErrorText('');
+        setActiveSection('chat');
 
         try {
             const payload = await postOperation<{
@@ -630,249 +699,345 @@ function App() {
     }
 
     return (
-        <div className="min-h-screen bg-[radial-gradient(circle_at_top_left,_#f8fafc,_#e2e8f0_45%,_#dbeafe_100%)] text-slate-900">
-            <div className="mx-auto max-w-7xl p-6">
-                <div className="mb-6 overflow-hidden rounded-[28px] border border-slate-200 bg-white/80 shadow-[0_24px_80px_-36px_rgba(15,23,42,0.35)] backdrop-blur">
-                    <div className="grid gap-0 lg:grid-cols-[360px_minmax(0,1fr)]">
-                        <aside className="border-b border-slate-200 bg-slate-950 px-5 py-5 text-slate-100 lg:border-b-0 lg:border-r">
-                            <div className="mb-5">
-                                <div className="text-xs uppercase tracking-[0.32em] text-sky-300">Admin Widget</div>
-                                <h1 className="mt-2 text-2xl font-semibold tracking-tight">Knowledge Base Admin</h1>
-                                <p className="mt-2 text-sm leading-6 text-slate-300">
-                                    Connect up to three source repos and one output repo, then steer Claude Code inside the managed workspace.
-                                </p>
-                            </div>
+        <div className="flex h-full min-h-0 flex-col bg-[radial-gradient(circle_at_top_left,_#f8fafc,_#e2e8f0_45%,_#dbeafe_100%)] text-slate-900">
+            <div className="border-b border-slate-200 bg-white/90 px-4 py-4 backdrop-blur">
+                <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="text-[11px] uppercase tracking-[0.28em] text-sky-600">Admin Widget</div>
+                        <h1 className="mt-1 text-lg font-semibold tracking-tight">Knowledge Base Admin</h1>
+                        <p className="mt-1 text-sm leading-6 text-slate-600">
+                            Configure source repos, prepare the workspace, and steer Claude Code in a compact side-panel flow.
+                        </p>
+                    </div>
+                    <button
+                        className="shrink-0 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-700 transition hover:bg-slate-50"
+                        onClick={handleNewConversation}
+                    >
+                        New
+                    </button>
+                </div>
 
-                            <div className="mb-5 rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-                                <div className="text-xs uppercase tracking-[0.24em] text-slate-400">Workspace</div>
-                                <div className="mt-2 text-sm text-slate-200">{workspaceRoot || 'No workspace prepared yet.'}</div>
-                                <div className="mt-3 flex gap-2">
-                                    <button
-                                        className="rounded-full bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
-                                        onClick={handleSyncWorkspace}
-                                        disabled={!ready || syncingWorkspace}
-                                    >
-                                        {syncingWorkspace ? 'Syncing…' : 'Sync Workspace'}
-                                    </button>
-                                    <button
-                                        className="rounded-full border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:border-slate-500 hover:bg-slate-900"
-                                        onClick={handleNewConversation}
-                                    >
-                                        New Conversation
-                                    </button>
-                                </div>
-                                {syncStatuses.length > 0 && (
-                                    <div className="mt-4 space-y-2">
-                                        {syncStatuses.map((item) => (
-                                            <div key={item.slot} className="rounded-xl border border-slate-800 bg-slate-950/70 p-3">
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <div className="text-sm font-semibold text-white">{item.label || item.slot}</div>
-                                                    <div className="rounded-full bg-slate-800 px-2 py-1 text-[11px] uppercase tracking-[0.22em] text-sky-200">
-                                                        {item.action || 'present'}
-                                                    </div>
-                                                </div>
-                                                <div className="mt-2 text-xs leading-5 text-slate-400">
-                                                    {(item.current_branch || item.branch || 'default')} · {shortText(item.head, 10)} {item.dirty ? '· dirty' : ''}
-                                                </div>
-                                                <div className="mt-1 text-[11px] leading-5 text-slate-500">{shortText(item.local_path, 64)}</div>
-                                            </div>
-                                        ))}
+                <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3 text-sm text-slate-700">
+                    <div className="font-medium">{statusText}</div>
+                    {errorText && <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{errorText}</div>}
+                </div>
+
+            </div>
+
+            <div className="flex min-h-0 flex-1">
+                <aside className="hidden w-44 shrink-0 border-r border-slate-200 bg-white/70 p-3 lg:block">
+                    <div className="space-y-2">
+                        <button className={sectionNavClass(activeSection === 'chat')} onClick={() => setActiveSection('chat')}>
+                            <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">Claude</div>
+                            <div className="mt-1 text-sm font-semibold">Chat</div>
+                        </button>
+                        <button className={sectionNavClass(activeSection === 'settings')} onClick={() => setActiveSection('settings')}>
+                            <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">Config</div>
+                            <div className="mt-1 text-sm font-semibold">Settings</div>
+                        </button>
+                        <button className={sectionNavClass(activeSection === 'workspace')} onClick={() => setActiveSection('workspace')}>
+                            <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">Git</div>
+                            <div className="mt-1 text-sm font-semibold">Workspace</div>
+                        </button>
+                        <button className={sectionNavClass(activeSection === 'conversations')} onClick={() => setActiveSection('conversations')}>
+                            <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">State</div>
+                            <div className="mt-1 text-sm font-semibold">History</div>
+                        </button>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs leading-6 text-slate-600">
+                        <div className="font-semibold text-slate-900">Session</div>
+                        <div className="mt-1 break-all">{shortText(sessionId, 24) || '—'}</div>
+                        <div className="mt-3 font-semibold text-slate-900">Stream</div>
+                        <div className="mt-1 break-all">{shortText(streamId, 24) || '—'}</div>
+                    </div>
+                </aside>
+
+                <div className="flex min-h-0 flex-1 flex-col">
+                    <div className="border-b border-slate-200 bg-white/80 px-4 py-3 lg:hidden">
+                        <div className="grid grid-cols-2 gap-2">
+                            <button className={sectionNavClass(activeSection === 'chat')} onClick={() => setActiveSection('chat')}>
+                                <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">Claude</div>
+                                <div className="mt-1 text-sm font-semibold">Chat</div>
+                            </button>
+                            <button className={sectionNavClass(activeSection === 'settings')} onClick={() => setActiveSection('settings')}>
+                                <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">Config</div>
+                                <div className="mt-1 text-sm font-semibold">Settings</div>
+                            </button>
+                            <button className={sectionNavClass(activeSection === 'workspace')} onClick={() => setActiveSection('workspace')}>
+                                <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">Git</div>
+                                <div className="mt-1 text-sm font-semibold">Workspace</div>
+                            </button>
+                            <button className={sectionNavClass(activeSection === 'conversations')} onClick={() => setActiveSection('conversations')}>
+                                <div className="text-[11px] uppercase tracking-[0.22em] opacity-70">State</div>
+                                <div className="mt-1 text-sm font-semibold">History</div>
+                            </button>
+                        </div>
+                    </div>
+
+                    {activeSection === 'chat' && (
+                        <>
+                        <div className="border-b border-slate-200 bg-white px-4 py-4">
+                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Active conversation</div>
+                            <div className="mt-2 text-base font-semibold">
+                                {currentConversationMap.get(selectedConversationId || '')?.title || currentConversation?.title || 'New conversation'}
+                            </div>
+                            <div className="mt-3 flex flex-col gap-2">
+                                <div className="text-xs uppercase tracking-[0.22em] text-slate-500">Turn kind</div>
+                                <select
+                                    className="rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm"
+                                    value={turnKind}
+                                    onChange={(e) => setTurnKind(e.target.value as TurnKind)}
+                                >
+                                    <option value="regular">regular</option>
+                                    <option value="followup">followup</option>
+                                    <option value="steer">steer</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto px-4 py-4">
+                            <div className="space-y-3">
+                                {!currentMessages.length && (
+                                    <div className="rounded-[24px] border border-dashed border-slate-300 bg-white/80 p-6 text-center text-sm leading-7 text-slate-600">
+                                        Start a conversation to let Claude Code inspect the connected repos and plan or build the knowledge base.
                                     </div>
                                 )}
-                            </div>
-
-                            <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-                                <div className="mb-3 text-xs uppercase tracking-[0.24em] text-slate-400">Conversations</div>
-                                <div className="space-y-2">
-                                    {(data.conversations || []).map((conversation) => (
-                                        <button
-                                            key={conversation.conversation_id}
-                                            className={`w-full rounded-2xl border p-3 text-left transition ${
-                                                conversation.conversation_id === selectedConversationId
-                                                    ? 'border-sky-400 bg-sky-400/10'
-                                                    : 'border-slate-800 bg-slate-950/60 hover:border-slate-600'
-                                            }`}
-                                            onClick={() => loadConversation(conversation.conversation_id)}
-                                        >
-                                            <div className="text-sm font-semibold text-white">{conversation.title || 'Untitled conversation'}</div>
-                                            <div className="mt-1 text-xs text-slate-400">{formatTimestamp(conversation.updated_at)}</div>
-                                            <div className="mt-2 text-xs leading-5 text-slate-500">{shortText(conversation.last_preview, 100)}</div>
-                                        </button>
-                                    ))}
-                                    {!data.conversations?.length && (
-                                        <div className="rounded-2xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">
-                                            No stored conversations yet.
+                                {currentMessages.map((message) => (
+                                    <div key={message.message_id || `${message.role}-${message.created_at}`} className={`rounded-[24px] px-4 py-4 shadow-sm ${messageBubbleClass(message.role)}`}>
+                                        <div className="mb-2 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.22em] text-slate-500">
+                                            <span>{message.role || 'assistant'}</span>
+                                            <span>{formatTimestamp(message.created_at)}</span>
                                         </div>
-                                    )}
-                                </div>
+                                        <div className="whitespace-pre-wrap text-sm leading-7">{message.text || (message.metadata?.pending ? 'Streaming…' : '')}</div>
+                                    </div>
+                                ))}
                             </div>
-                        </aside>
+                        </div>
 
-                        <main className="grid gap-0 xl:grid-cols-[420px_minmax(0,1fr)]">
-                            <section className="border-b border-slate-200 bg-slate-50/80 px-5 py-5 xl:border-b-0 xl:border-r">
-                                <div className="mb-4">
-                                    <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Settings</div>
-                                    <h2 className="mt-2 text-xl font-semibold">Repository and secret configuration</h2>
-                                    <p className="mt-2 text-sm leading-6 text-slate-600">
-                                        Blank secret inputs keep the existing saved values. PAT auth expects <code>https://</code> remotes.
-                                    </p>
-                                </div>
+                        <div className="border-t border-slate-200 bg-white px-4 py-4">
+                            <textarea
+                                className="min-h-[132px] w-full rounded-[24px] border border-slate-200 bg-white px-4 py-4 text-sm leading-7 text-slate-900 shadow-inner focus:border-sky-400 focus:outline-none"
+                                value={composerText}
+                                onChange={(e) => setComposerText(e.target.value)}
+                                placeholder="Ask Claude Code to inspect the source repos, create a wiki structure, sync docs into the output repo, or continue an existing knowledge-base conversation."
+                            />
+                            <div className="mt-4 flex flex-col gap-3">
+                                <button
+                                    className="rounded-full bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    onClick={handleSend}
+                                    disabled={!ready || sending || !composerText.trim()}
+                                >
+                                    {sending ? 'Sending…' : 'Send to Claude'}
+                                </button>
+                            </div>
+                        </div>
+                        </>
+                    )}
 
-                                <div className="mb-4 grid gap-3 rounded-2xl border border-slate-200 bg-white p-4">
+                    {activeSection === 'settings' && (
+                        <div className="flex-1 overflow-y-auto px-4 py-4">
+                            <div className="space-y-4">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Saved secrets</div>
+                                <div className="mt-3 grid gap-3">
                                     <div className="flex items-center justify-between text-sm">
-                                        <span>Saved Git PAT</span>
+                                        <span>Git PAT</span>
                                         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${data.secrets?.has_git_pat ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
                                             {data.secrets?.has_git_pat ? 'present' : 'missing'}
                                         </span>
                                     </div>
                                     <div className="flex items-center justify-between text-sm">
-                                        <span>Saved Anthropic API key</span>
+                                        <span>Anthropic API key</span>
                                         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${data.secrets?.has_anthropic_api_key ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
                                             {data.secrets?.has_anthropic_api_key ? 'present' : 'missing'}
                                         </span>
                                     </div>
                                     <div className="flex items-center justify-between text-sm">
-                                        <span>Saved Claude Code key</span>
+                                        <span>Claude Code key</span>
                                         <span className={`rounded-full px-2 py-1 text-xs font-semibold ${data.secrets?.has_claude_code_key ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
                                             {data.secrets?.has_claude_code_key ? 'present' : 'missing'}
                                         </span>
                                     </div>
                                 </div>
+                            </div>
 
-                                <div className="space-y-4">
-                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                        <div className="mb-3 text-sm font-semibold text-slate-900">Git credentials</div>
-                                        <div className="grid gap-3">
-                                            <label className="grid gap-1">
-                                                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">HTTP user</span>
-                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={gitHttpUser} onChange={(e) => setGitHttpUser(e.target.value)} placeholder="x-access-token" />
-                                            </label>
-                                            <label className="grid gap-1">
-                                                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Git PAT</span>
-                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="password" value={gitHttpToken} onChange={(e) => setGitHttpToken(e.target.value)} placeholder="leave blank to keep current" />
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                        <div className="mb-3 text-sm font-semibold text-slate-900">Claude credentials</div>
-                                        <div className="grid gap-3">
-                                            <label className="grid gap-1">
-                                                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Anthropic API key</span>
-                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="password" value={anthropicApiKey} onChange={(e) => setAnthropicApiKey(e.target.value)} placeholder="leave blank to keep current" />
-                                            </label>
-                                            <label className="grid gap-1">
-                                                <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Claude Code key</span>
-                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="password" value={claudeCodeKey} onChange={(e) => setClaudeCodeKey(e.target.value)} placeholder="optional" />
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                        <div className="mb-3 text-sm font-semibold text-slate-900">Source repositories</div>
-                                        <div className="space-y-3">
-                                            {contentRepos.map((repo, idx) => (
-                                                <div key={repo.slot || idx} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
-                                                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Content repo {idx + 1}</div>
-                                                    <div className="grid gap-2">
-                                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={repo.label || ''} onChange={(e) => setContentRepos((prev) => prev.map((item, itemIdx) => itemIdx === idx ? { ...item, label: e.target.value } : item))} placeholder="Label" />
-                                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={repo.source || ''} onChange={(e) => setContentRepos((prev) => prev.map((item, itemIdx) => itemIdx === idx ? { ...item, source: e.target.value } : item))} placeholder="https://github.com/org/repo.git" />
-                                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={repo.branch || ''} onChange={(e) => setContentRepos((prev) => prev.map((item, itemIdx) => itemIdx === idx ? { ...item, branch: e.target.value } : item))} placeholder="branch (optional)" />
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                                        <div className="mb-3 text-sm font-semibold text-slate-900">Output repository</div>
-                                        <div className="grid gap-2">
-                                            <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={outputRepo.label || ''} onChange={(e) => setOutputRepo((prev) => ({ ...prev, label: e.target.value }))} placeholder="Label" />
-                                            <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={outputRepo.source || ''} onChange={(e) => setOutputRepo((prev) => ({ ...prev, source: e.target.value }))} placeholder="https://github.com/org/output-repo.git" />
-                                            <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={outputRepo.branch || ''} onChange={(e) => setOutputRepo((prev) => ({ ...prev, branch: e.target.value }))} placeholder="branch (optional)" />
-                                        </div>
-                                    </div>
-
-                                    <button
-                                        className="w-full rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                                        onClick={handleSaveSettings}
-                                        disabled={!ready || savingSettings}
-                                    >
-                                        {savingSettings ? 'Saving…' : 'Save settings'}
-                                    </button>
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="mb-3 text-sm font-semibold text-slate-900">Git credentials</div>
+                                <div className="grid gap-3">
+                                    <label className="grid gap-1">
+                                        <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">HTTP user</span>
+                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={gitHttpUser} onChange={(e) => setGitHttpUser(e.target.value)} placeholder="x-access-token" />
+                                    </label>
+                                    <label className="grid gap-1">
+                                        <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Git PAT</span>
+                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="password" value={gitHttpToken} onChange={(e) => setGitHttpToken(e.target.value)} placeholder="leave blank to keep current" />
+                                    </label>
                                 </div>
-                            </section>
+                            </div>
 
-                            <section className="flex min-h-[820px] flex-col bg-white">
-                                <div className="border-b border-slate-200 px-6 py-5">
-                                    <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                                        <div>
-                                            <div className="text-xs uppercase tracking-[0.28em] text-slate-500">Claude chat</div>
-                                            <h2 className="mt-2 text-xl font-semibold">
-                                                {currentConversationMap.get(selectedConversationId || '')?.title || currentConversation?.title || 'New conversation'}
-                                            </h2>
-                                            <div className="mt-2 text-sm text-slate-600">{statusText}</div>
-                                            {errorText && <div className="mt-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{errorText}</div>}
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <label className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Turn kind</label>
-                                            <select
-                                                className="rounded-full border border-slate-200 px-3 py-2 text-sm"
-                                                value={turnKind}
-                                                onChange={(e) => setTurnKind(e.target.value as TurnKind)}
-                                            >
-                                                <option value="regular">regular</option>
-                                                <option value="followup">followup</option>
-                                                <option value="steer">steer</option>
-                                            </select>
-                                        </div>
-                                    </div>
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="mb-3 text-sm font-semibold text-slate-900">Claude credentials</div>
+                                <div className="grid gap-3">
+                                    <label className="grid gap-1">
+                                        <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Anthropic API key</span>
+                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="password" value={anthropicApiKey} onChange={(e) => setAnthropicApiKey(e.target.value)} placeholder="leave blank to keep current" />
+                                    </label>
+                                    <label className="grid gap-1">
+                                        <span className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Claude Code key</span>
+                                        <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" type="password" value={claudeCodeKey} onChange={(e) => setClaudeCodeKey(e.target.value)} placeholder="optional" />
+                                    </label>
                                 </div>
+                            </div>
 
-                                <div className="flex-1 overflow-y-auto bg-[linear-gradient(180deg,_rgba(248,250,252,0.9),_rgba(255,255,255,1))] px-6 py-6">
-                                    <div className="mx-auto max-w-3xl space-y-4">
-                                        {!currentMessages.length && (
-                                            <div className="rounded-[24px] border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm leading-7 text-slate-600">
-                                                Start a conversation to let Claude Code inspect the connected repos and build the knowledge base plan.
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="mb-3 text-sm font-semibold text-slate-900">Source repositories</div>
+                                <div className="space-y-3">
+                                    {contentRepos.map((repo, idx) => (
+                                        <div key={repo.slot || idx} className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                                            <div className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">Content repo {idx + 1}</div>
+                                            <div className="grid gap-2">
+                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={repo.label || ''} onChange={(e) => setContentRepos((prev) => prev.map((item, itemIdx) => itemIdx === idx ? { ...item, label: e.target.value } : item))} placeholder="Label" />
+                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={repo.source || ''} onChange={(e) => setContentRepos((prev) => prev.map((item, itemIdx) => itemIdx === idx ? { ...item, source: e.target.value } : item))} placeholder="https://github.com/org/repo.git" />
+                                                <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={repo.branch || ''} onChange={(e) => setContentRepos((prev) => prev.map((item, itemIdx) => itemIdx === idx ? { ...item, branch: e.target.value } : item))} placeholder="branch (optional)" />
                                             </div>
-                                        )}
-                                        {currentMessages.map((message) => (
-                                            <div key={message.message_id || `${message.role}-${message.created_at}`} className={`rounded-[24px] px-5 py-4 shadow-sm ${messageBubbleClass(message.role)}`}>
-                                                <div className="mb-2 flex items-center justify-between gap-3 text-xs uppercase tracking-[0.22em] text-slate-500">
-                                                    <span>{message.role || 'assistant'}</span>
-                                                    <span>{formatTimestamp(message.created_at)}</span>
-                                                </div>
-                                                <div className="whitespace-pre-wrap text-sm leading-7">{message.text || (message.metadata?.pending ? 'Streaming…' : '')}</div>
-                                            </div>
-                                        ))}
-                                    </div>
+                                        </div>
+                                    ))}
                                 </div>
+                            </div>
 
-                                <div className="border-t border-slate-200 bg-slate-50 px-6 py-5">
-                                    <div className="mx-auto max-w-3xl">
-                                        <textarea
-                                            className="min-h-[120px] w-full rounded-[24px] border border-slate-200 bg-white px-4 py-4 text-sm leading-7 text-slate-900 shadow-inner focus:border-sky-400 focus:outline-none"
-                                            value={composerText}
-                                            onChange={(e) => setComposerText(e.target.value)}
-                                            placeholder="Ask Claude Code to inspect the source repos, create a wiki structure, sync docs into the output repo, or continue an existing knowledge-base conversation."
-                                        />
-                                        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                            <div className="text-xs uppercase tracking-[0.22em] text-slate-500">
-                                                Session {shortText(sessionId, 18)} · Stream {shortText(streamId, 18)}
-                                            </div>
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="mb-3 text-sm font-semibold text-slate-900">Output repository</div>
+                                <div className="grid gap-2">
+                                    <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={outputRepo.label || ''} onChange={(e) => setOutputRepo((prev) => ({ ...prev, label: e.target.value }))} placeholder="Label" />
+                                    <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={outputRepo.source || ''} onChange={(e) => setOutputRepo((prev) => ({ ...prev, source: e.target.value }))} placeholder="https://github.com/org/output-repo.git" />
+                                    <input className="rounded-xl border border-slate-200 px-3 py-2 text-sm" value={outputRepo.branch || ''} onChange={(e) => setOutputRepo((prev) => ({ ...prev, branch: e.target.value }))} placeholder="branch (optional)" />
+                                </div>
+                            </div>
+
+                            <button
+                                className="w-full rounded-full bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                onClick={handleSaveSettings}
+                                disabled={!ready || savingSettings}
+                            >
+                                {savingSettings ? 'Saving…' : 'Save settings'}
+                            </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'workspace' && (
+                        <div className="flex-1 overflow-y-auto px-4 py-4">
+                            <div className="space-y-4">
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Workspace root</div>
+                                <div className="mt-2 break-all text-sm text-slate-700">{workspaceRoot || 'No workspace prepared yet.'}</div>
+                                <button
+                                    className="mt-4 w-full rounded-full bg-sky-500 px-4 py-3 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    onClick={handleSyncWorkspace}
+                                    disabled={!ready || syncingWorkspace}
+                                >
+                                    {syncingWorkspace ? 'Syncing…' : 'Sync workspace'}
+                                </button>
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Output repo controls</div>
+                                {outputRepoStatus ? (
+                                    <>
+                                        <div className="mt-2 text-sm font-semibold text-slate-900">
+                                            {(outputRepoStatus.label || 'Output repo')} · {outputRepoStatus.current_branch || outputRepoStatus.branch || 'default'}
+                                        </div>
+                                        <div className="mt-1 text-xs leading-6 text-slate-600">
+                                            HEAD {shortText(outputRepoStatus.head, 12)} {outputRepoStatus.dirty ? '· dirty working tree' : '· clean'}
+                                        </div>
+                                        <div className="mt-4 grid gap-3">
                                             <button
-                                                className="rounded-full bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                                onClick={handleSend}
-                                                disabled={!ready || sending || !composerText.trim()}
+                                                className="w-full rounded-full bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                                onClick={handlePushOutputRepo}
+                                                disabled={!ready || pushingOutputRepo || resettingOutputRepo}
                                             >
-                                                {sending ? 'Sending…' : 'Send to Claude'}
+                                                {pushingOutputRepo ? 'Pushing…' : 'Push output branch'}
                                             </button>
+                                            <div className="grid gap-2">
+                                                <input
+                                                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                                                    value={resetCommit}
+                                                    onChange={(e) => setResetCommit(e.target.value)}
+                                                    placeholder="commit hash or ref (for example origin/main)"
+                                                />
+                                                <button
+                                                    className="w-full rounded-full border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-800 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                                    onClick={handleResetOutputRepo}
+                                                    disabled={!ready || resettingOutputRepo || pushingOutputRepo}
+                                                >
+                                                    {resettingOutputRepo ? 'Resetting…' : 'Reset output branch'}
+                                                </button>
+                                            </div>
                                         </div>
+                                    </>
+                                ) : (
+                                    <div className="mt-2 text-sm text-slate-600">
+                                        Sync the workspace first to prepare the output repo branch and enable push/reset controls.
                                     </div>
+                                )}
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="text-xs uppercase tracking-[0.24em] text-slate-500">Last sync</div>
+                                <div className="mt-2 text-sm text-slate-700">{formatTimestamp(data.config?.last_sync?.synced_at)}</div>
+                            </div>
+
+                            <div className="space-y-3">
+                                {syncStatuses.length > 0 ? syncStatuses.map((item) => (
+                                    <div key={item.slot} className="rounded-2xl border border-slate-200 bg-white p-4">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <div className="text-sm font-semibold text-slate-900">{item.label || item.slot}</div>
+                                            <div className="rounded-full bg-slate-100 px-2 py-1 text-[11px] uppercase tracking-[0.22em] text-slate-700">
+                                                {item.action || 'present'}
+                                            </div>
+                                        </div>
+                                        <div className="mt-3 text-xs leading-6 text-slate-600">
+                                            {(item.current_branch || item.branch || 'default')} · {shortText(item.head, 10)} {item.dirty ? '· dirty' : ''}
+                                        </div>
+                                        <div className="mt-1 break-all text-[11px] leading-5 text-slate-500">{item.local_path || '—'}</div>
+                                    </div>
+                                )) : (
+                                    <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-6 text-center text-sm text-slate-600">
+                                        Sync the workspace to clone and inspect the configured repositories.
+                                    </div>
+                                )}
+                            </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {activeSection === 'conversations' && (
+                        <div className="flex-1 overflow-y-auto px-4 py-4">
+                            <div className="space-y-3">
+                            {(data.conversations || []).map((conversation) => (
+                                <button
+                                    key={conversation.conversation_id}
+                                    className={`w-full rounded-2xl border p-4 text-left transition ${
+                                        conversation.conversation_id === selectedConversationId
+                                            ? 'border-sky-300 bg-sky-50'
+                                            : 'border-slate-200 bg-white hover:border-slate-300'
+                                    }`}
+                                    onClick={() => loadConversation(conversation.conversation_id)}
+                                >
+                                    <div className="text-sm font-semibold text-slate-900">{conversation.title || 'Untitled conversation'}</div>
+                                    <div className="mt-1 text-xs text-slate-500">{formatTimestamp(conversation.updated_at)}</div>
+                                    <div className="mt-3 text-sm leading-6 text-slate-600">{shortText(conversation.last_preview, 120)}</div>
+                                </button>
+                            ))}
+                            {!data.conversations?.length && (
+                                <div className="rounded-2xl border border-dashed border-slate-300 bg-white/80 p-6 text-center text-sm text-slate-600">
+                                    No stored conversations yet.
                                 </div>
-                            </section>
-                        </main>
-                    </div>
+                            )}
+                            </div>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

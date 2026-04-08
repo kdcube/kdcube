@@ -49,12 +49,14 @@ class ClaudeCodeAgent:
         agent_name: str,
         workspace_path: str | Path,
         allowed_tools: Sequence[str] = (),
+        additional_directories: Sequence[str | Path] = (),
         extra_args: Sequence[str] = (),
         env: Mapping[str, str] | None = None,
         step_name: str = "claude_code.agent",
         delta_marker: str = "answer",
         emit_stderr_steps: bool = True,
         command: str = "claude",
+        permission_mode: str | None = "acceptEdits",
     ) -> "ClaudeCodeAgent":
         request_context = get_current_request_context()
         if request_context is None:
@@ -65,12 +67,14 @@ class ClaudeCodeAgent:
                 agent_name=agent_name,
                 workspace_path=Path(workspace_path),
                 allowed_tools=allowed_tools,
+                additional_directories=tuple(Path(path) for path in additional_directories),
                 extra_args=extra_args,
                 env=env or {},
                 step_name=step_name,
                 delta_marker=delta_marker,
                 emit_stderr_steps=emit_stderr_steps,
                 command=command,
+                permission_mode=permission_mode,
             ),
             binding=_binding_from_request_context(request_context, agent_name=agent_name),
             comm=get_current_comm(),
@@ -86,6 +90,10 @@ class ClaudeCodeAgent:
         ]
         if self.config.allowed_tools:
             args.extend(["--allowedTools", ",".join(self.config.allowed_tools)])
+        if self.config.permission_mode:
+            args.extend(["--permission-mode", self.config.permission_mode])
+        for path in self.config.additional_directories:
+            args.extend(["--add-dir", str(path)])
         args.extend(["--agent", self.config.agent_name])
         args.extend(["--session-id", self.binding.claude_session_id])
         args.extend(list(self.config.extra_args))
@@ -253,6 +261,8 @@ class ClaudeCodeAgent:
             "claude_session_id": self.binding.claude_session_id,
             "workspace_path": str(self.config.workspace_path),
             "allowed_tools": list(self.config.allowed_tools),
+            "additional_directories": [str(path) for path in self.config.additional_directories],
+            "permission_mode": self.config.permission_mode,
             "user_id": self.binding.user_id,
             "conversation_id": self.binding.conversation_id,
             "session_id": self.binding.session_id,

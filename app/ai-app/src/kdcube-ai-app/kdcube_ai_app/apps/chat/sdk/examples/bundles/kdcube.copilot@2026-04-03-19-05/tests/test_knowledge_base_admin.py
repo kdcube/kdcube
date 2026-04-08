@@ -45,6 +45,11 @@ def _init_git_repo(path: Path, *, branch: str = "main", filename: str = "README.
     return path
 
 
+def _init_bare_remote_from_repo(source_repo: Path, bare_path: Path) -> Path:
+    subprocess.run(["git", "clone", "--bare", str(source_repo), str(bare_path)], check=True, capture_output=True, text=True)
+    return bare_path
+
+
 def test_validate_workspace_config_limits_to_three_content_repos():
     mod = _load_module()
 
@@ -199,3 +204,115 @@ def test_ensure_workspace_rejects_ssh_repo_when_pat_auth_is_used(tmp_path: Path)
             git_http_user="x-access-token",
             sync_existing=False,
         )
+
+
+def test_ensure_workspace_creates_missing_output_branch_locally(tmp_path: Path):
+    mod = _load_module()
+    source_repo = _init_git_repo(tmp_path / "source", filename="docs.md", content="# Source docs\n")
+    output_repo = _init_git_repo(tmp_path / "output", filename="README.md", content="# Output repo\n")
+
+    result = mod.ensure_workspace(
+        local_root=tmp_path / "local-storage",
+        user_id="alice",
+        config={
+            "content_repos": [{"source": str(source_repo), "label": "Source Docs", "branch": "main"}],
+            "output_repo": {
+                "source": str(output_repo),
+                "label": "Wiki Output",
+                "branch": "kdcube-copilot-admin",
+            },
+        },
+        git_http_token=None,
+        git_http_user=None,
+        sync_existing=True,
+    )
+
+    output_status = next(item for item in result["repo_statuses"] if item["repo_type"] == "output")
+    assert output_status["action"] == "cloned-local-branch"
+    assert output_status["current_branch"] == "kdcube-copilot-admin"
+
+
+def test_push_output_repo_creates_remote_branch(tmp_path: Path):
+    mod = _load_module()
+    source_repo = _init_git_repo(tmp_path / "source", filename="docs.md", content="# Source docs\n")
+    seed_output_repo = _init_git_repo(tmp_path / "output-seed", filename="README.md", content="# Output repo\n")
+    output_remote = _init_bare_remote_from_repo(seed_output_repo, tmp_path / "output-remote.git")
+    local_root = tmp_path / "local-storage"
+    config = {
+        "content_repos": [{"source": str(source_repo), "label": "Source Docs", "branch": "main"}],
+        "output_repo": {"source": str(output_remote), "label": "Wiki Output", "branch": "kdcube-copilot-admin"},
+    }
+
+    mod.ensure_workspace(
+        local_root=local_root,
+        user_id="alice",
+        config=config,
+        git_http_token=None,
+        git_http_user=None,
+        sync_existing=True,
+    )
+
+    status = mod.push_output_repo(
+        local_root=local_root,
+        user_id="alice",
+        config=config,
+        git_http_token=None,
+        git_http_user=None,
+    )
+
+    remote_heads = subprocess.run(
+        ["git", "ls-remote", "--heads", str(output_remote), "kdcube-copilot-admin"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert status["action"] == "pushed"
+    assert status["current_branch"] == "kdcube-copilot-admin"
+    assert remote_heads
+
+
+def test_reset_output_repo_resets_to_requested_commit(tmp_path: Path):
+    mod = _load_module()
+    source_repo = _init_git_repo(tmp_path / "source", filename="docs.md", content="# Source docs\n")
+    seed_output_repo = _init_git_repo(tmp_path / "output-seed", filename="README.md", content="# Output repo\n")
+    output_remote = _init_bare_remote_from_repo(seed_output_repo, tmp_path / "output-remote.git")
+    local_root = tmp_path / "local-storage"
+    config = {
+        "content_repos": [{"source": str(source_repo), "label": "Source Docs", "branch": "main"}],
+        "output_repo": {"source": str(output_remote), "label": "Wiki Output", "branch": "kdcube-copilot-admin"},
+    }
+
+    result = mod.ensure_workspace(
+        local_root=local_root,
+        user_id="alice",
+        config=config,
+        git_http_token=None,
+        git_http_user=None,
+        sync_existing=True,
+    )
+    output_status = next(item for item in result["repo_statuses"] if item["repo_type"] == "output")
+    output_local = Path(output_status["local_path"])
+    initial_head = output_status["head"]
+
+    (output_local / "wiki.md").write_text("# wiki\n", encoding="utf-8")
+    subprocess.run(["git", "add", "wiki.md"], cwd=output_local, check=True, capture_output=True, text=True)
+    subprocess.run(["git", "commit", "-m", "add wiki"], cwd=output_local, check=True, capture_output=True, text=True)
+
+    reset_status = mod.reset_output_repo(
+        local_root=local_root,
+        user_id="alice",
+        config=config,
+        commit=initial_head,
+        git_http_token=None,
+        git_http_user=None,
+    )
+
+    current_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=output_local,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert reset_status["action"] == "reset"
+    assert current_head == initial_head

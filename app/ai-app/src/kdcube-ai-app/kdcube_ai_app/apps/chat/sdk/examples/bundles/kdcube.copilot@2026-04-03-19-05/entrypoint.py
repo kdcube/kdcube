@@ -76,6 +76,8 @@ from .knowledge_base_admin import (
     ensure_workspace as kb_admin_ensure_workspace,
     load_conversation as kb_admin_load_conversation,
     load_user_config as kb_admin_load_user_config,
+    push_output_repo as kb_admin_push_output_repo,
+    reset_output_repo as kb_admin_reset_output_repo,
     save_user_config as kb_admin_save_user_config,
     update_last_sync as kb_admin_update_last_sync,
     validate_workspace_config as kb_admin_validate_workspace_config,
@@ -572,12 +574,36 @@ class ReactWorkflow(BaseEntrypoint):
             return None
 
     def _kb_admin_local_root(self) -> Optional[pathlib.Path]:
-        storage_root = self.bundle_storage_root()
-        if not storage_root:
+        try:
+            from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+            actor = getattr(self.comm_context, "actor", None)
+            bundle_spec = getattr(getattr(self, "config", None), "ai_bundle_spec", None)
+            tenant = getattr(actor, "tenant_id", None) or getattr(self.comm, "tenant", None) or self.settings.TENANT
+            project = getattr(actor, "project_id", None) or getattr(self.comm, "project", None) or self.settings.PROJECT
+            bundle_id = getattr(bundle_spec, "id", None) or BUNDLE_ID
+            unversioned_root = bundle_storage_dir(
+                bundle_id=str(bundle_id or BUNDLE_ID),
+                version=None,
+                tenant=str(tenant or "unknown"),
+                project=str(project or "unknown"),
+                ensure=True,
+            ) / "_knowledge_base_admin"
+            if not unversioned_root.exists():
+                legacy_root = self.bundle_storage_root()
+                if legacy_root:
+                    legacy_root = legacy_root / "_knowledge_base_admin"
+                    if legacy_root.exists() and legacy_root.resolve() != unversioned_root.resolve():
+                        shutil.copytree(legacy_root, unversioned_root, dirs_exist_ok=True)
+                        self.logger.log(
+                            f"[knowledge_base_admin.workspace] migrated local workspace root from {legacy_root} to {unversioned_root}",
+                            "INFO",
+                        )
+            unversioned_root.mkdir(parents=True, exist_ok=True)
+            return unversioned_root
+        except Exception:
+            self.logger.log(traceback.format_exc(), "ERROR")
             return None
-        root = storage_root / "_knowledge_base_admin"
-        root.mkdir(parents=True, exist_ok=True)
-        return root
 
     def _kb_admin_user_id(
         self,
@@ -609,6 +635,51 @@ class ReactWorkflow(BaseEntrypoint):
                 get_user_secret("anthropic.claude_code_key", user_id=user_id, bundle_id=bundle_id)
                 or get_secret("services.anthropic.claude_code_key")
             ),
+        }
+
+    @staticmethod
+    def _kb_admin_repo_source_kind(source: Optional[str]) -> str:
+        text = str(source or "").strip()
+        if not text:
+            return "missing"
+        if text.startswith("git@"):
+            return "ssh"
+        if text.startswith("http://") or text.startswith("https://"):
+            return "https"
+        if text.startswith("/") or text.startswith("./") or text.startswith("../"):
+            return "local"
+        return "other"
+
+    def _kb_admin_config_summary(
+        self,
+        *,
+        content_repos: Optional[list[dict[str, Any]]] = None,
+        output_repo: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        normalized_content: list[dict[str, Any]] = []
+        for idx, item in enumerate(list(content_repos or [])[:3], start=1):
+            repo = dict(item or {})
+            normalized_content.append(
+                {
+                    "slot": str(repo.get("slot") or f"content-{idx}"),
+                    "id": str(repo.get("id") or "").strip() or None,
+                    "label": str(repo.get("label") or "").strip() or None,
+                    "branch": str(repo.get("branch") or "").strip() or None,
+                    "has_source": bool(str(repo.get("source") or "").strip()),
+                    "source_kind": self._kb_admin_repo_source_kind(repo.get("source")),
+                }
+            )
+        output = dict(output_repo or {})
+        return {
+            "content_repo_count": len(normalized_content),
+            "content_repos": normalized_content,
+            "output_repo": {
+                "id": str(output.get("id") or "").strip() or None,
+                "label": str(output.get("label") or "").strip() or None,
+                "branch": str(output.get("branch") or "").strip() or None,
+                "has_source": bool(str(output.get("source") or "").strip()),
+                "source_kind": self._kb_admin_repo_source_kind(output.get("source")),
+            },
         }
 
     def _kb_admin_claude_env(self, *, user_id: str) -> dict[str, str]:
@@ -820,47 +891,108 @@ class ReactWorkflow(BaseEntrypoint):
         del kwargs
         storage = self._kb_admin_storage()
         if not storage:
+            self.logger.log("[knowledge_base_admin.save_settings] storage backend is unavailable", "WARNING")
             return {"ok": False, "error": "Bundle storage backend is not configured for this bundle."}
         target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
         bundle_id = getattr(getattr(self.config, "ai_bundle_spec", None), "id", None) or BUNDLE_ID
-
-        if clear_git_http_token:
-            delete_user_secret("git.http_token", user_id=target_user, bundle_id=bundle_id)
-            delete_user_secret("git.http_user", user_id=target_user, bundle_id=bundle_id)
-        else:
-            if str(git_http_token or "").strip():
-                set_user_secret("git.http_token", str(git_http_token).strip(), user_id=target_user, bundle_id=bundle_id)
-            if str(git_http_user or "").strip():
-                set_user_secret("git.http_user", str(git_http_user).strip(), user_id=target_user, bundle_id=bundle_id)
-
-        if clear_anthropic_api_key:
-            delete_user_secret("anthropic.api_key", user_id=target_user, bundle_id=bundle_id)
-        elif str(anthropic_api_key or "").strip():
-            set_user_secret("anthropic.api_key", str(anthropic_api_key).strip(), user_id=target_user, bundle_id=bundle_id)
-
-        if clear_claude_code_key:
-            delete_user_secret("anthropic.claude_code_key", user_id=target_user, bundle_id=bundle_id)
-        elif str(claude_code_key or "").strip():
-            set_user_secret("anthropic.claude_code_key", str(claude_code_key).strip(), user_id=target_user, bundle_id=bundle_id)
-
-        config = kb_admin_save_user_config(
-            storage,
-            target_user,
-            content_repos=content_repos or [],
-            output_repo=output_repo or {},
-            last_sync=kb_admin_load_user_config(storage, target_user).get("last_sync"),
+        requested_summary = self._kb_admin_config_summary(
+            content_repos=content_repos,
+            output_repo=output_repo,
         )
-        flags = self._kb_admin_secret_flags(user_id=target_user)
-        payload = build_kb_admin_widget_payload(
-            storage,
-            target_user,
-            has_git_pat=flags["has_git_pat"],
-            has_anthropic_api_key=flags["has_anthropic_api_key"],
-            has_claude_code_key=flags["has_claude_code_key"],
+        self.logger.log(
+            "[knowledge_base_admin.save_settings] request "
+            + json.dumps(
+                {
+                    "bundle_id": bundle_id,
+                    "user_id": target_user,
+                    "storage_root": getattr(storage, "root_uri", None),
+                    "requested": requested_summary,
+                    "secret_updates": {
+                        "set_git_http_token": bool(str(git_http_token or "").strip()),
+                        "set_git_http_user": bool(str(git_http_user or "").strip()),
+                        "set_anthropic_api_key": bool(str(anthropic_api_key or "").strip()),
+                        "set_claude_code_key": bool(str(claude_code_key or "").strip()),
+                        "clear_git_http_token": bool(clear_git_http_token),
+                        "clear_anthropic_api_key": bool(clear_anthropic_api_key),
+                        "clear_claude_code_key": bool(clear_claude_code_key),
+                    },
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            "INFO",
         )
-        payload["ok"] = True
-        payload["config"] = config
-        return payload
+        try:
+            if clear_git_http_token:
+                delete_user_secret("git.http_token", user_id=target_user, bundle_id=bundle_id)
+                delete_user_secret("git.http_user", user_id=target_user, bundle_id=bundle_id)
+            else:
+                if str(git_http_token or "").strip():
+                    set_user_secret("git.http_token", str(git_http_token).strip(), user_id=target_user, bundle_id=bundle_id)
+                if str(git_http_user or "").strip():
+                    set_user_secret("git.http_user", str(git_http_user).strip(), user_id=target_user, bundle_id=bundle_id)
+
+            if clear_anthropic_api_key:
+                delete_user_secret("anthropic.api_key", user_id=target_user, bundle_id=bundle_id)
+            elif str(anthropic_api_key or "").strip():
+                set_user_secret("anthropic.api_key", str(anthropic_api_key).strip(), user_id=target_user, bundle_id=bundle_id)
+
+            if clear_claude_code_key:
+                delete_user_secret("anthropic.claude_code_key", user_id=target_user, bundle_id=bundle_id)
+            elif str(claude_code_key or "").strip():
+                set_user_secret("anthropic.claude_code_key", str(claude_code_key).strip(), user_id=target_user, bundle_id=bundle_id)
+
+            config = kb_admin_save_user_config(
+                storage,
+                target_user,
+                content_repos=content_repos or [],
+                output_repo=output_repo or {},
+                last_sync=kb_admin_load_user_config(storage, target_user).get("last_sync"),
+            )
+            flags = self._kb_admin_secret_flags(user_id=target_user)
+            self.logger.log(
+                "[knowledge_base_admin.save_settings] persisted "
+                + json.dumps(
+                    {
+                        "bundle_id": bundle_id,
+                        "user_id": target_user,
+                        "persisted": self._kb_admin_config_summary(
+                            content_repos=list(config.get("content_repos") or []),
+                            output_repo=dict(config.get("output_repo") or {}),
+                        ),
+                        "secret_flags": flags,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                "INFO",
+            )
+            payload = build_kb_admin_widget_payload(
+                storage,
+                target_user,
+                has_git_pat=flags["has_git_pat"],
+                has_anthropic_api_key=flags["has_anthropic_api_key"],
+                has_claude_code_key=flags["has_claude_code_key"],
+            )
+            payload["ok"] = True
+            payload["config"] = config
+            return payload
+        except Exception:
+            self.logger.log(
+                "[knowledge_base_admin.save_settings] failed "
+                + json.dumps(
+                    {
+                        "bundle_id": bundle_id,
+                        "user_id": target_user,
+                        "requested": requested_summary,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                "ERROR",
+            )
+            self.logger.log(traceback.format_exc(), "ERROR")
+            raise
 
     @api(alias="knowledge_base_admin_sync_workspace", roles=("super-admin",))
     def knowledge_base_admin_sync_workspace(
@@ -897,6 +1029,110 @@ class ReactWorkflow(BaseEntrypoint):
         kb_admin_update_last_sync(storage, target_user, sync_payload)
         return {
             "ok": True,
+            **sync_payload,
+        }
+
+    @api(alias="knowledge_base_admin_push_output_repo", roles=("super-admin",))
+    def knowledge_base_admin_push_output_repo(
+        self,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs,
+    ):
+        del kwargs
+        storage = self._kb_admin_storage()
+        local_root = self._kb_admin_local_root()
+        if not storage or not local_root:
+            return {"ok": False, "error": "Bundle storage root is unavailable for Knowledge Base Admin."}
+        target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
+        config = kb_admin_load_user_config(storage, target_user)
+        token, http_user = self._kb_admin_git_credentials(user_id=target_user)
+        try:
+            output_status = kb_admin_push_output_repo(
+                local_root=local_root,
+                user_id=target_user,
+                config=config,
+                git_http_token=token,
+                git_http_user=http_user,
+            )
+            workspace = kb_admin_ensure_workspace(
+                local_root=local_root,
+                user_id=target_user,
+                config=config,
+                git_http_token=token,
+                git_http_user=http_user,
+                sync_existing=False,
+            )
+        except Exception as exc:
+            self.logger.log(traceback.format_exc(), "ERROR")
+            return {"ok": False, "error": str(exc)}
+
+        repo_statuses = [
+            output_status if item.get("repo_type") == "output" else item
+            for item in workspace["repo_statuses"]
+        ]
+        sync_payload = {
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "repo_statuses": repo_statuses,
+            "workspace_root": workspace["workspace_root"],
+        }
+        kb_admin_update_last_sync(storage, target_user, sync_payload)
+        return {
+            "ok": True,
+            "repo_status": output_status,
+            **sync_payload,
+        }
+
+    @api(alias="knowledge_base_admin_reset_output_repo", roles=("super-admin",))
+    def knowledge_base_admin_reset_output_repo(
+        self,
+        commit: str,
+        user_id: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        **kwargs,
+    ):
+        del kwargs
+        storage = self._kb_admin_storage()
+        local_root = self._kb_admin_local_root()
+        if not storage or not local_root:
+            return {"ok": False, "error": "Bundle storage root is unavailable for Knowledge Base Admin."}
+        target_user = self._kb_admin_user_id(user_id=user_id, fingerprint=fingerprint)
+        config = kb_admin_load_user_config(storage, target_user)
+        token, http_user = self._kb_admin_git_credentials(user_id=target_user)
+        try:
+            output_status = kb_admin_reset_output_repo(
+                local_root=local_root,
+                user_id=target_user,
+                config=config,
+                commit=commit,
+                git_http_token=token,
+                git_http_user=http_user,
+            )
+            workspace = kb_admin_ensure_workspace(
+                local_root=local_root,
+                user_id=target_user,
+                config=config,
+                git_http_token=token,
+                git_http_user=http_user,
+                sync_existing=False,
+            )
+        except Exception as exc:
+            self.logger.log(traceback.format_exc(), "ERROR")
+            return {"ok": False, "error": str(exc)}
+
+        repo_statuses = [
+            output_status if item.get("repo_type") == "output" else item
+            for item in workspace["repo_statuses"]
+        ]
+        sync_payload = {
+            "synced_at": datetime.now(timezone.utc).isoformat(),
+            "repo_statuses": repo_statuses,
+            "workspace_root": workspace["workspace_root"],
+        }
+        kb_admin_update_last_sync(storage, target_user, sync_payload)
+        return {
+            "ok": True,
+            "repo_status": output_status,
             **sync_payload,
         }
 
@@ -982,8 +1218,14 @@ class ReactWorkflow(BaseEntrypoint):
                 agent_name=KB_ADMIN_AGENT_NAME,
                 workspace_path=pathlib.Path(workspace["workspace_root"]),
                 allowed_tools=("Read", "Grep", "Bash", "WebFetch", "WebSearch"),
+                additional_directories=tuple(
+                    pathlib.Path(str(item.get("local_path")))
+                    for item in (workspace.get("repo_statuses") or [])
+                    if str(item.get("local_path") or "").strip()
+                ),
                 env=self._kb_admin_claude_env(user_id=target_user),
                 step_name="knowledge_base_admin.agent",
+                permission_mode="acceptEdits",
             ),
             binding=self._kb_admin_binding(user_id=target_user, conversation_id=cid),
             comm=bound_comm,
