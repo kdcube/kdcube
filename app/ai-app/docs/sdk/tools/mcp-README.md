@@ -137,6 +137,13 @@ dev experiments only.
 4. In isolated runtime, executor still calls `io_tools.tool_call(...)`; tool calls are delegated to supervisor, and MCP routing still happens there.
 5. For isolated exec, the current MCP service config is exported from the live tool subsystem into runtime globals; it is not expected to be rebuilt from a fresh process env.
 
+Dependency note:
+- MCP server dependencies live with the MCP server itself, not with the bundle
+  tool module that calls it
+- that is different from bundle-local Python tools, where direct imports still
+  depend on packages being present in the executing KDCube runtime unless the
+  tool delegates into a bundle `@venv(...)` helper
+
 ## Tool ID format
 
 - Format: `mcp.<alias>.<tool_id>`

@@ -184,6 +184,21 @@ class ClientSideTSXTranspiler:
 
         import re
 
+        # Prefer the explicitly exported component over the first helper component
+        # found in the file. Many widgets define helper components (Card, Button,
+        # etc.) before the main exported component.
+        export_default_match = re.search(
+            r'export\s+default\s+function\s+([A-Z][a-zA-Z0-9_]*)\s*\(',
+            tsx_code,
+        )
+        export_default_name = export_default_match.group(1) if export_default_match else None
+        if not export_default_name:
+            export_ref_match = re.search(
+                r'export\s+default\s+([A-Z][a-zA-Z0-9_]*)\s*;',
+                tsx_code,
+            )
+            export_default_name = export_ref_match.group(1) if export_ref_match else None
+
         # Remove React hook declarations from TSX code (we provide them in the wrapper)
         tsx_code = re.sub(r'const\s*\{[^}]*\}\s*=\s*React\s*;?\s*\n?', '', tsx_code)
 
@@ -199,8 +214,8 @@ class ClientSideTSXTranspiler:
             r'(?:const\s+([A-Z][a-zA-Z0-9]*)\s*[=:]|function\s+([A-Z][a-zA-Z0-9]*)\s*\()',
             tsx_code,
         )
-        main_component = None
-        if component_match:
+        main_component = export_default_name
+        if not main_component and component_match:
             main_component = component_match.group(1) or component_match.group(2)
 
         # Check if already has render logic

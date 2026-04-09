@@ -195,6 +195,36 @@ TOOL_RUNTIME = {
 
 If a tool is not listed, default runtime policy applies.
 
+## 6.1 Custom dependencies for bundle-local tools
+
+Bundle-local tools do not currently get their own `requirements.txt` install
+step from the tool subsystem.
+
+Current behavior:
+- a custom tool module is imported into the current execution runtime
+- for in-process execution, that means the proc interpreter
+- for isolated execution, that means the isolated runtime / supervisor
+- therefore any third-party package imported directly by the tool module must
+  already be installed in that runtime
+
+What is supported today:
+- if the tool needs a package-heavy leaf operation, keep the tool function
+  lightweight and call a bundle-local helper marked with `@venv(...)`
+- that helper can then use a bundle-managed cached subprocess venv derived from
+  the runtime plus the bundle's `requirements.txt`
+
+What is **not** supported today:
+- automatic per-tool dependency installation from `tools_descriptor.py`
+- automatic bundle-tool `requirements.txt` resolution separate from
+  `@venv(...)`
+
+Practical recommendation:
+- direct imports in the tool module only for dependencies already present in
+  the runtime image
+- use `@venv(...)` only for dependency-heavy leaf work
+- keep request-bound objects such as communicator, DB pools, and Redis clients
+  outside that helper boundary
+
 ## 7) Optional MCP tool sources
 
 ```python

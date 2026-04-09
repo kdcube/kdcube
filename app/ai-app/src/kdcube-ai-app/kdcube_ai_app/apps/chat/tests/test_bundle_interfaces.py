@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -12,6 +14,12 @@ from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
 from kdcube_ai_app.infra.plugin.agentic_loader import (
+    _BUNDLE_VENV_EXEC_ENV,
+    _BUNDLE_VENV_STAMP_FILE,
+    _bundle_venv_base_python,
+    _bundle_venv_build_env,
+    _load_module_from_dir,
+    BUNDLE_VENV_ATTR,
     api,
     discover_bundle_interface_manifest,
     on_message,
@@ -20,6 +28,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     resolve_bundle_widget,
     ui_main,
     ui_widget,
+    venv,
 )
 
 
@@ -167,6 +176,158 @@ def test_string_widget_icon_is_normalized_to_tailwind_provider():
 
     manifest = discover_bundle_interface_manifest(_LegacyWidgetWorkflow(), bundle_id="bundle.demo")
     assert manifest.ui_widgets[0].icon == {"tailwind": "heroicons-outline:swatch"}
+
+
+def test_venv_decorator_records_metadata_without_changing_function_behavior(monkeypatch):
+    monkeypatch.setenv(_BUNDLE_VENV_EXEC_ENV, "1")
+
+    @venv(requirements="requirements.txt", python="python3.11", timeout_seconds=30)
+    def _job(payload: dict[str, object]) -> dict[str, object]:
+        return payload
+
+    assert getattr(_job, BUNDLE_VENV_ATTR) == {
+        "requirements": "requirements.txt",
+        "python": "python3.11",
+        "timeout_seconds": 30,
+    }
+    assert _job({"ok": True}) == {"ok": True}
+
+
+def test_venv_decorator_executes_in_cached_bundle_subprocess(monkeypatch, tmp_path):
+    storage_root = tmp_path / "bundle-storage"
+    monkeypatch.setenv("BUNDLE_SHARED_STORAGE_ROOT", str(storage_root))
+
+    bundle_dir = tmp_path / "demo-bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "requirements.txt").write_text("", encoding="utf-8")
+    (bundle_dir / "entrypoint.py").write_text(
+        "\n".join(
+            [
+                "from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, bundle_id",
+                "",
+                "@agentic_workflow(name='Demo Bundle')",
+                "@bundle_id('bundle.demo')",
+                "class DemoBundle:",
+                "    pass",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (bundle_dir / "service.py").write_text(
+        "\n".join(
+            [
+                "import os",
+                "import sys",
+                "from kdcube_ai_app.infra.plugin.agentic_loader import venv",
+                "",
+                "@venv(requirements='requirements.txt')",
+                "def run_job(payload):",
+                "    return {",
+                "        'pid': os.getpid(),",
+                "        'python': sys.executable,",
+                "        'payload': payload,",
+                "    }",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module_from_dir(bundle_dir, "service")
+    first = mod.run_job({"ok": True})
+    assert first["payload"] == {"ok": True}
+    assert first["pid"] != os.getpid()
+    assert str(storage_root.resolve()) in first["python"]
+
+    venv_dir = storage_root / "_bundle_venvs" / "bundle.demo"
+    stamp_path = venv_dir / _BUNDLE_VENV_STAMP_FILE
+    stamp_1 = json.loads(stamp_path.read_text(encoding="utf-8"))
+    assert stamp_1["bundle_id"] == "bundle.demo"
+
+    second = mod.run_job({"ok": False})
+    assert second["payload"] == {"ok": False}
+    stamp_2 = json.loads(stamp_path.read_text(encoding="utf-8"))
+    assert stamp_2["build_id"] == stamp_1["build_id"]
+
+    (bundle_dir / "requirements.txt").write_text("# change\n", encoding="utf-8")
+    third = mod.run_job({"changed": True})
+    assert third["payload"] == {"changed": True}
+    stamp_3 = json.loads(stamp_path.read_text(encoding="utf-8"))
+    assert stamp_3["build_id"] != stamp_2["build_id"]
+
+
+def test_venv_decorator_supports_bundle_local_dataclass_arguments(monkeypatch, tmp_path):
+    storage_root = tmp_path / "bundle-storage"
+    monkeypatch.setenv("BUNDLE_SHARED_STORAGE_ROOT", str(storage_root))
+
+    bundle_dir = tmp_path / "dataclass-bundle"
+    bundle_dir.mkdir()
+    (bundle_dir / "requirements.txt").write_text("", encoding="utf-8")
+    (bundle_dir / "entrypoint.py").write_text(
+        "\n".join(
+            [
+                "from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, bundle_id",
+                "",
+                "@agentic_workflow(name='Dataclass Bundle')",
+                "@bundle_id('bundle.dataclass')",
+                "class DataclassBundle:",
+                "    pass",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (bundle_dir / "service.py").write_text(
+        "\n".join(
+            [
+                "from dataclasses import dataclass",
+                "from kdcube_ai_app.infra.plugin.agentic_loader import venv",
+                "",
+                "@dataclass",
+                "class SheetUser:",
+                "    email: str",
+                "    status: str",
+                "",
+                "@venv(requirements='requirements.txt')",
+                "def echo_user(user: SheetUser) -> SheetUser:",
+                "    return SheetUser(email=user.email.upper(), status=user.status)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    mod = _load_module_from_dir(bundle_dir, "service")
+    result = mod.echo_user(mod.SheetUser(email="alpha@example.com", status="new"))
+
+    assert isinstance(result, mod.SheetUser)
+    assert result.email == "ALPHA@EXAMPLE.COM"
+    assert result.status == "new"
+
+
+def test_bundle_venv_build_env_strips_nested_runtime_and_debugger_vars(monkeypatch):
+    monkeypatch.setenv("VIRTUAL_ENV", "/tmp/current-venv")
+    monkeypatch.setenv("PYTHONPATH", "/tmp/pythonpath")
+    monkeypatch.setenv("PYCHARM_HOSTED", "1")
+    monkeypatch.setenv("PYDEVD_USE_CYTHON", "YES")
+    monkeypatch.setenv("IDE_PROJECT_ROOTS", "/tmp/project")
+
+    env = _bundle_venv_build_env()
+
+    assert "VIRTUAL_ENV" not in env
+    assert "PYTHONPATH" not in env
+    assert "PYCHARM_HOSTED" not in env
+    assert "PYDEVD_USE_CYTHON" not in env
+    assert "IDE_PROJECT_ROOTS" not in env
+
+
+def test_bundle_venv_base_python_prefers_base_executable(monkeypatch):
+    monkeypatch.setattr("sys._base_executable", "/tmp/base-python", raising=False)
+    monkeypatch.setattr("sys.executable", "/tmp/runtime-python")
+
+    assert _bundle_venv_base_python({}) == "/tmp/base-python"
+    assert _bundle_venv_base_python({"python": "/tmp/requested-python"}) == "/tmp/requested-python"
 
 
 def test_base_entrypoints_expose_run_as_on_message():

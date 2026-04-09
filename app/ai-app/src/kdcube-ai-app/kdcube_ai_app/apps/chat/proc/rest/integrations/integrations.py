@@ -123,6 +123,20 @@ def _request_stream_id(request: Request) -> Optional[str]:
     return extract_stream_id(request)
 
 
+def _with_implicit_bundle_kwargs(
+        extra: Optional[Dict[str, Any]],
+        *,
+        user_id: Optional[str],
+        fingerprint: Optional[str],
+) -> Dict[str, Any]:
+    merged = dict(extra or {})
+    if "user_id" not in merged:
+        merged["user_id"] = user_id
+    if "fingerprint" not in merged:
+        merged["fingerprint"] = fingerprint
+    return merged
+
+
 def _clean_scope_value(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -1682,14 +1696,17 @@ async def fetch_bundle_widget(
         raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
 
     fn = getattr(workflow, widget_spec.method_name)
-    extra = _get_query_kwargs(request)
-    user_id = session.user_id or session.fingerprint
+    extra = _with_implicit_bundle_kwargs(
+        _get_query_kwargs(request),
+        user_id=session.user_id or session.fingerprint,
+        fingerprint=session.fingerprint,
+    )
     runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
     with bind_current_request_context(comm_context, comm=runtime_comm):
         if inspect.iscoroutinefunction(fn):
-            result = await fn(user_id=user_id, fingerprint=session.fingerprint, **extra)
+            result = await fn(**extra)
         else:
-            result = fn(user_id=user_id, fingerprint=session.fingerprint, **extra)
+            result = fn(**extra)
     return {
         "status": "ok",
         "tenant": tenant_id,
@@ -2000,7 +2017,6 @@ async def _call_bundle_op_inner(
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
 
     try:
-        user_id = session.user_id or session.fingerprint
         fn = getattr(workflow, endpoint_spec.method_name)
         extra = payload.data or {}
         if request_method == "GET":
@@ -2008,12 +2024,17 @@ async def _call_bundle_op_inner(
         elif uploaded_files:
             extra = dict(extra or {})
             extra["uploaded_files"] = uploaded_files
+        extra = _with_implicit_bundle_kwargs(
+            extra,
+            user_id=session.user_id or session.fingerprint,
+            fingerprint=session.fingerprint,
+        )
         runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
         with bind_current_request_context(comm_context, comm=runtime_comm):
             if inspect.iscoroutinefunction(fn):
-                result = await fn(user_id=user_id, fingerprint=session.fingerprint, **extra)
+                result = await fn(**extra)
             else:
-                result = fn(user_id=user_id, fingerprint=session.fingerprint, **extra)
+                result = fn(**extra)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"{operation}() failed: {e}")
 

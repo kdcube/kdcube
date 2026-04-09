@@ -257,6 +257,30 @@ On terminal completion:
   - set conversation state to `error`
   - emit `conv_status` with `completion="error"`
 
+### 4.4.1 Tool execution inside proc-owned turns
+
+For ReAct-style and similar bundle workflows, tool execution still belongs to
+the proc-owned turn lifecycle even when the concrete tool call runs outside the
+main proc interpreter.
+
+Current shape:
+- proc owns the chat turn, request context, communicator, accounting scope, and
+  bundle/workflow instance
+- bundle/workflow code may invoke tools through the tool subsystem
+- tool execution can happen:
+  - in-memory in the proc runtime
+  - in an isolated runtime / supervisor path
+  - through external execution backends for the execution mode that supports them
+
+Important current dependency rule:
+- bundle-local tool modules do not currently get an automatic per-tool custom
+  dependency installation step
+- direct tool imports must resolve in the runtime image/interpreter that is
+  executing the tool
+- if a bundle needs package-heavy custom Python work, the supported current
+  pattern is to keep the tool lightweight and delegate the heavy leaf operation
+  into a bundle-local helper marked with `@venv(...)`
+
 ### 4.5 Continuation processing diagram
 
 ```mermaid

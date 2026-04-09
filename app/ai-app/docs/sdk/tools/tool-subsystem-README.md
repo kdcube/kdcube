@@ -154,6 +154,48 @@ process. It reconstructs a narrow portable runtime:
 The point is to make a tool module see the same canonical binding contract in
 both proc and isolated execution, while still keeping the runtime portable.
 
+## Custom dependencies in tool modules
+
+Tool modules do **not** currently get an automatic per-tool or per-bundle
+dependency installation step analogous to bundle `@venv(...)`.
+
+Current practical rule:
+- bundle-local tools loaded through `TOOLS_SPECS` are imported into the current
+  interpreter for that execution mode
+- in-memory tool execution means imports must resolve in the proc runtime
+- isolated tool execution means imports must resolve in the isolated runtime /
+  supervisor environment
+- restoring bundle files into the isolated runtime does **not** by itself
+  install Python dependencies from a bundle-local `requirements.txt`
+
+So today, if a custom tool module imports a third-party package directly, that
+package must already exist in the runtime image/interpreter that will execute
+the tool.
+
+Current workaround for dependency-heavy leaf work:
+- keep the tool itself lightweight
+- move the package-heavy operation into a bundle-local helper marked with
+  `@venv(...)`
+- call that helper from the tool
+
+That pattern is workable because `@venv(...)` is just a Python execution
+boundary, not an HTTP-only surface, but it should still be treated as a leaf
+helper boundary:
+- pass serializable inputs/outputs only
+- do not move communicator / DB / Redis / request-bound runtime objects across
+  that boundary
+- do not assume proc-side tool bindings exist in the child; `TOOL_SUBSYSTEM`,
+  `COMMUNICATOR`, `KV_CACHE`, `CTX_CLIENT`, and similar bound module globals are
+  not provided inside the `@venv(...)` subprocess
+- expect the helper to create or reuse its own cached subprocess venv
+
+So the current support matrix is:
+- direct tool imports of custom deps: supported only when those deps are
+  installed in the executing runtime already
+- tool-internal calls into bundle `@venv(...)` helpers: supported pattern for
+  package-heavy leaf work
+- automatic per-tool dependency install from `requirements.txt`: not supported
+
 ## Related docs
 
 - [Custom Tools](./custom-tools-README.md)

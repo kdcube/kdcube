@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
+  - ks:docs/sdk/bundle/design/bundle-custom-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/clients/client-communication-README.md
   - ks:docs/clients/sse-events-README.md
@@ -19,6 +20,7 @@ This doc describes how a bundle connects to clients:
 - **Widgets + React panels** returned by bundles
 - **Operations API** to invoke bundle methods over REST
 - **Artifacts & attachments** surfaced in the timeline and SSE events
+- **Execution boundaries** when selected helper functions run through `@venv(...)`
 
 ```mermaid
 graph LR
@@ -129,6 +131,20 @@ Client rule:
   platform client
 - custom markers or custom event types are allowed, but client code must opt in
   to render them specially
+
+Important for `@venv(...)` helpers:
+- the subprocess venv does not own the SSE/Socket.IO stream
+- communicator use should stay in proc
+- if a venv-backed job needs progress, emit step/delta events in proc before or after the call, or split the work into multiple proc-orchestrated calls
+- the venv child does **not** receive proc-bound runtime bindings such as communicator instances, request context helpers, tool bindings, KV cache bindings, or DB/Redis clients
+
+Important for bundle REST/public API methods:
+- proc binds the request communicator into runtime context for the duration of the call
+- proc does not pass a separate `communicator=` kwarg to bundle API methods by default
+- use `self.comm` / `self.comm_context` in `BaseEntrypoint`-style bundles
+- otherwise use:
+  - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_comm()`
+  - `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx.get_current_request_context()`
 
 ---
 
@@ -247,6 +263,14 @@ Current rule:
   - `public_auth={"mode":"header_secret","header":"X-Telegram-Bot-Api-Secret-Token","secret_key":"telegram.webhook_secret"}` verifies the incoming header against the bundle secret
 - undecorated same-name methods are not invokable through HTTP
 
+Bundle operations may call helpers marked with `@venv(...)`, but the HTTP contract still belongs to proc:
+- request parsing, auth, and route dispatch stay in proc
+- the decorated helper receives serialized arguments and returns serialized output
+- the cached venv is per bundle id and is rebuilt only when that helper's referenced `requirements.txt` content changes
+- live request-bound objects such as communicator instances, DB pools, Redis clients, or framework request objects must not cross the `@venv(...)` boundary
+- proc-only bundle/runtime bindings such as `get_current_comm()`, `get_current_request_context()`, `TOOL_SUBSYSTEM`, `COMMUNICATOR`, `KV_CACHE`, and `CTX_CLIENT` are not provided inside the venv child
+- normal bundle code reload is still a separate step; changing Python source does not by itself rebuild the cached venv
+
 Preferred rule:
 - bundle-specific clients and widgets should use the explicit `/{bundle_id}/operations/{op}` route
 - generic platform callers may still use the legacy route without `bundle_id`
@@ -307,6 +331,33 @@ class MyEntrypoint(BaseEntrypoint):
 ```
 
 This allows UI → backend → bundle round-trips without exposing a separate service.
+
+Recommended pattern for dependency-heavy operations:
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import api, venv
+
+@venv(requirements="requirements.txt")
+def _build_sheet_snapshot(payload: dict) -> dict:
+    ...
+
+class MyEntrypoint(BaseEntrypoint):
+    @api(alias="sync_sheet", route="operations")
+    async def sync_sheet(self, **kwargs):
+        result = _build_sheet_snapshot(kwargs)
+        await self.comm.event(
+            type="bundle.sync.completed",
+            step="sync_sheet",
+            status="completed",
+            title="Sync finished",
+            data={"rows": result.get("row_count", 0)},
+        )
+        return result
+```
+
+This keeps:
+- routing and client communication in proc
+- dependency-heavy Python execution in the cached bundle venv
 
 Important:
 - the explicit `/{bundle_id}/operations/{op}` route supports both `GET` and `POST`

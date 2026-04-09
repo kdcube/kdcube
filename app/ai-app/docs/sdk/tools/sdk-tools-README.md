@@ -47,6 +47,12 @@ Common built-in families include:
 
 Apps can use these directly, combine them with MCP tools, or add their own app-local tools.
 
+Important runtime boundary for custom bundle tools:
+- built-in SDK tools are shipped with the platform runtime and therefore assume
+  their dependencies are already present in the executing image/interpreter
+- custom bundle-local tools currently follow the same rule unless they delegate
+  heavy dependency work into a bundle-local `@venv(...)` helper
+
 ## Multimodal runtime integration
 
 The SDK tool model sits inside a runtime that already understands attachments and hosted files.

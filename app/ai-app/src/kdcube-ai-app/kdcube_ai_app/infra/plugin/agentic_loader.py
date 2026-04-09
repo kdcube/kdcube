@@ -7,12 +7,20 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import os
 import sys
 import inspect
 import types
 import asyncio
+import functools
+import hashlib
+import json
+import pickle
+import shutil
+import subprocess
 import threading
 import traceback
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Tuple, Any, Dict, List
@@ -32,6 +40,24 @@ API_METHOD_ATTR = "__bundle_api_method__"
 UI_WIDGET_ATTR = "__bundle_ui_widget__"
 ON_MESSAGE_ATTR = "__bundle_on_message__"
 UI_MAIN_ATTR = "__bundle_ui_main__"
+BUNDLE_VENV_ATTR = "__bundle_venv__"
+_BUNDLE_VENV_EXEC_ENV = "KDCUBE_BUNDLE_VENV_EXEC"
+_BUNDLE_VENV_STAMP_FILE = ".kdcube_venv_stamp.json"
+_BUNDLE_VENV_RUNTIME_PTH = "kdcube_runtime_overlay.pth"
+_bundle_venv_locks: Dict[str, threading.Lock] = {}
+_bundle_venv_locks_guard = threading.Lock()
+_bundle_declared_id_cache: Dict[str, str] = {}
+_bundle_declared_id_lock = threading.Lock()
+_BUNDLE_VENV_STRIP_ENV_PREFIXES = ("PYCHARM", "PYDEVD", "IDE_")
+_BUNDLE_VENV_STRIP_ENV_KEYS = {
+    "VIRTUAL_ENV",
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "PYTHONSTARTUP",
+    "PYTHONINSPECT",
+    "PYTHONBREAKPOINT",
+    "__PYVENV_LAUNCHER__",
+}
 
 
 @dataclass(frozen=True)
@@ -308,6 +334,529 @@ def ui_main(fn):
     return fn
 
 
+def venv(
+        *,
+        requirements: str = "requirements.txt",
+        python: str | None = None,
+        timeout_seconds: int | None = None,
+):
+    """Run the decorated callable inside a cached per-bundle venv subprocess."""
+
+    meta = {
+        "requirements": str(requirements or "requirements.txt").strip() or "requirements.txt",
+        "python": str(python).strip() if python else None,
+        "timeout_seconds": int(timeout_seconds) if timeout_seconds is not None else None,
+    }
+
+    def _wrap(fn):
+        is_async = asyncio.iscoroutinefunction(fn)
+
+        if is_async:
+            @functools.wraps(fn)
+            async def _async_wrapper(*args, **kwargs):
+                if os.environ.get(_BUNDLE_VENV_EXEC_ENV) == "1":
+                    return await fn(*args, **kwargs)
+                return await asyncio.to_thread(_execute_in_bundle_venv, fn, meta, args, kwargs)
+
+            setattr(_async_wrapper, BUNDLE_VENV_ATTR, meta)
+            return _async_wrapper
+
+        @functools.wraps(fn)
+        def _sync_wrapper(*args, **kwargs):
+            if os.environ.get(_BUNDLE_VENV_EXEC_ENV) == "1":
+                return fn(*args, **kwargs)
+            return _execute_in_bundle_venv(fn, meta, args, kwargs)
+
+        setattr(_sync_wrapper, BUNDLE_VENV_ATTR, meta)
+        return _sync_wrapper
+
+    return _wrap
+
+
+def _sanitize_bundle_segment(raw: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".") else "-" for ch in (raw or ""))
+    safe = safe.strip("-_")
+    return safe or "default"
+
+
+def _resolve_bundle_root_for_callable(fn: Callable[..., Any]) -> Path:
+    file_path = Path(inspect.getsourcefile(fn) or inspect.getfile(fn)).resolve()
+    search_dir = file_path.parent
+    for candidate in (search_dir, *search_dir.parents):
+        if (candidate / "entrypoint.py").exists():
+            return candidate.resolve()
+    return search_dir.resolve()
+
+
+def _resolve_bundle_module_name(bundle_root: Path, fn: Callable[..., Any]) -> str:
+    file_path = Path(inspect.getsourcefile(fn) or inspect.getfile(fn)).resolve()
+    rel = file_path.relative_to(bundle_root.resolve())
+    if rel.name == "__init__.py":
+        parts = rel.parts[:-1]
+    else:
+        parts = rel.with_suffix("").parts
+    if not parts:
+        raise ValueError(f"Cannot derive bundle module name for {file_path}")
+    return ".".join(parts)
+
+
+def _resolve_bundle_id_for_root(bundle_root: Path) -> str:
+    key = str(bundle_root.resolve())
+    with _bundle_declared_id_lock:
+        cached = _bundle_declared_id_cache.get(key)
+        if cached:
+            return cached
+    declared = get_declared_bundle_id(bundle_root, "entrypoint") or bundle_root.name
+    resolved = str(declared or bundle_root.name).strip() or bundle_root.name
+    with _bundle_declared_id_lock:
+        _bundle_declared_id_cache[key] = resolved
+    return resolved
+
+
+def _bundle_venv_dir(bundle_id: str) -> Path:
+    from kdcube_ai_app.infra.plugin.bundle_storage import resolve_bundle_storage_root
+
+    return (resolve_bundle_storage_root() / "_bundle_venvs" / _sanitize_bundle_segment(bundle_id)).resolve()
+
+
+def _bundle_venv_python_path(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def _bundle_venv_stamp_path(venv_dir: Path) -> Path:
+    return venv_dir / _BUNDLE_VENV_STAMP_FILE
+
+
+def _bundle_requirements_hash(requirements_path: Path) -> str:
+    if not requirements_path.exists():
+        return "missing"
+    return hashlib.sha256(requirements_path.read_bytes()).hexdigest()
+
+
+def _read_bundle_venv_stamp(venv_dir: Path) -> dict[str, Any]:
+    stamp_path = _bundle_venv_stamp_path(venv_dir)
+    if not stamp_path.exists():
+        return {}
+    try:
+        return json.loads(stamp_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_bundle_venv_stamp(
+    *,
+    venv_dir: Path,
+    bundle_id: str,
+    requirements_path: Path,
+    requirements_hash: str,
+    base_python: str,
+) -> None:
+    stamp = {
+        "bundle_id": bundle_id,
+        "requirements_path": str(requirements_path),
+        "requirements_hash": requirements_hash,
+        "base_python": base_python,
+        "built_at": int(time.time()),
+        "build_id": time.time_ns(),
+    }
+    _bundle_venv_stamp_path(venv_dir).write_text(json.dumps(stamp, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _current_runtime_site_paths() -> list[str]:
+    try:
+        import site as _site
+    except Exception:
+        return []
+    paths: list[str] = []
+    for raw in list(_site.getsitepackages()) + [_site.getusersitepackages()]:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        candidate = Path(text).expanduser()
+        if candidate.exists():
+            paths.append(str(candidate.resolve()))
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in paths:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _runtime_support_pythonpath() -> str:
+    excluded = set(_current_runtime_site_paths())
+    preferred_roots: list[str] = []
+    package_root = str(Path(__file__).resolve().parents[3])
+    preferred_roots.append(package_root)
+    raw_env = os.environ.get("PYTHONPATH") or ""
+    if raw_env:
+        preferred_roots.extend([item for item in raw_env.split(os.pathsep) if item])
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for raw in preferred_roots:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        try:
+            resolved = str(Path(text).expanduser().resolve())
+        except Exception:
+            resolved = text
+        if resolved in excluded or resolved in seen:
+            continue
+        if resolved and Path(resolved).exists():
+            seen.add(resolved)
+            deduped.append(resolved)
+    return os.pathsep.join(deduped)
+
+
+def _bundle_venv_subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    pythonpath = _runtime_support_pythonpath()
+    if pythonpath:
+        env["PYTHONPATH"] = pythonpath
+    env.pop(_BUNDLE_VENV_EXEC_ENV, None)
+    return env
+
+
+def _bundle_venv_build_env() -> dict[str, str]:
+    """
+    Environment for creating the bundle venv itself.
+
+    Strip nested-venv and IDE/debugger variables so `python -m venv` and
+    ensurepip do not inherit a contaminated launch environment from proc.
+    """
+    env = os.environ.copy()
+    for key in list(env.keys()):
+        if key in _BUNDLE_VENV_STRIP_ENV_KEYS or key.startswith(_BUNDLE_VENV_STRIP_ENV_PREFIXES):
+            env.pop(key, None)
+    env.pop(_BUNDLE_VENV_EXEC_ENV, None)
+    return env
+
+
+def _bundle_venv_base_python(meta: dict[str, Any]) -> str:
+    requested = str(meta.get("python") or "").strip()
+    if requested:
+        return requested
+    base = str(getattr(sys, "_base_executable", "") or "").strip()
+    if base:
+        return base
+    return sys.executable
+
+
+def _query_site_packages_for_python(python_executable: Path) -> list[Path]:
+    proc = subprocess.run(
+        [str(python_executable), "-c", "import json, site; print(json.dumps(site.getsitepackages()))"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    data = json.loads(proc.stdout.strip() or "[]")
+    return [Path(item).expanduser().resolve() for item in data if item]
+
+
+def _write_runtime_overlay_pth(venv_python: Path) -> None:
+    site_packages = _query_site_packages_for_python(venv_python)
+    if not site_packages:
+        return
+    runtime_paths = _current_runtime_site_paths()
+    content = "\n".join(runtime_paths) + ("\n" if runtime_paths else "")
+    for site_dir in site_packages:
+        site_dir.mkdir(parents=True, exist_ok=True)
+        (site_dir / _BUNDLE_VENV_RUNTIME_PTH).write_text(content, encoding="utf-8")
+
+
+def _primary_site_packages_for_venv(venv_python: Path) -> Path:
+    site_packages = _query_site_packages_for_python(venv_python)
+    if not site_packages:
+        raise RuntimeError(f"Cannot resolve site-packages for bundle venv python: {venv_python}")
+    return site_packages[0]
+
+
+def _bundle_venv_lock(lock_key: str) -> threading.Lock:
+    with _bundle_venv_locks_guard:
+        lock = _bundle_venv_locks.get(lock_key)
+        if lock is None:
+            lock = threading.Lock()
+            _bundle_venv_locks[lock_key] = lock
+        return lock
+
+
+def _run_checked_subprocess(
+    cmd: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout: int | None = None,
+    label: str,
+) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=timeout,
+        check=False,
+    )
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        details = stderr or stdout or f"exit code {proc.returncode}"
+        _log.error(
+            "[bundle.venv] subprocess failed: label=%s returncode=%s cmd=%r\nstdout:\n%s\nstderr:\n%s",
+            label,
+            proc.returncode,
+            cmd,
+            stdout or "<empty>",
+            stderr or "<empty>",
+        )
+        raise RuntimeError(f"{label} failed: {details}")
+    return proc
+
+
+def _build_bundle_venv(
+    *,
+    venv_dir: Path,
+    bundle_id: str,
+    base_python: str,
+    requirements_path: Path,
+    requirements_hash: str,
+) -> None:
+    temp_dir = venv_dir.with_name(f"{venv_dir.name}.tmp-{os.getpid()}-{time.time_ns()}")
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    try:
+        _run_checked_subprocess(
+            [base_python, "-m", "venv", "--without-pip", str(temp_dir)],
+            env=_bundle_venv_build_env(),
+            label=f"create bundle venv for {bundle_id}",
+        )
+        venv_python = _bundle_venv_python_path(temp_dir)
+        _write_runtime_overlay_pth(venv_python)
+        requirements_text = requirements_path.read_text(encoding="utf-8").strip() if requirements_path.exists() else ""
+        if requirements_text:
+            target_site = _primary_site_packages_for_venv(venv_python)
+            _run_checked_subprocess(
+                [
+                    base_python,
+                    "-m",
+                    "pip",
+                    "install",
+                    "--disable-pip-version-check",
+                    "--upgrade",
+                    "--target",
+                    str(target_site),
+                    "-r",
+                    str(requirements_path),
+                ],
+                env=_bundle_venv_build_env(),
+                label=f"install bundle requirements for {bundle_id}",
+            )
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir, ignore_errors=True)
+        temp_dir.replace(venv_dir)
+        _write_bundle_venv_stamp(
+            venv_dir=venv_dir,
+            bundle_id=bundle_id,
+            requirements_path=requirements_path,
+            requirements_hash=requirements_hash,
+            base_python=base_python,
+        )
+    except Exception:
+        _log.exception("[bundle.venv] failed to build cached venv for bundle=%s path=%s", bundle_id, temp_dir)
+        raise
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _ensure_bundle_venv(
+    *,
+    bundle_id: str,
+    requirements_path: Path,
+    meta: dict[str, Any],
+) -> Path:
+    venv_dir = _bundle_venv_dir(bundle_id)
+    requirements_hash = _bundle_requirements_hash(requirements_path)
+    base_python = _bundle_venv_base_python(meta)
+    lock = _bundle_venv_lock(str(venv_dir))
+    with lock:
+        stamp = _read_bundle_venv_stamp(venv_dir)
+        venv_python = _bundle_venv_python_path(venv_dir)
+        should_rebuild = (
+            not venv_python.exists()
+            or stamp.get("requirements_hash") != requirements_hash
+        )
+        if should_rebuild:
+            venv_dir.parent.mkdir(parents=True, exist_ok=True)
+            _build_bundle_venv(
+                venv_dir=venv_dir,
+                bundle_id=bundle_id,
+                base_python=base_python,
+                requirements_path=requirements_path,
+                requirements_hash=requirements_hash,
+            )
+            venv_python = _bundle_venv_python_path(venv_dir)
+        else:
+            _write_runtime_overlay_pth(venv_python)
+        return venv_python
+
+
+def _resolve_bundle_callable_from_module(mod: types.ModuleType, qualname: str) -> Callable[..., Any]:
+    if "<locals>" in qualname:
+        raise ValueError(f"@venv does not support local nested callables: {qualname}")
+    target: Any = mod
+    for part in qualname.split("."):
+        target = getattr(target, part)
+    if not callable(target):
+        raise TypeError(f"Resolved venv target is not callable: {qualname}")
+    return target
+
+
+def _resolve_bundle_callable(bundle_root: Path, module_name: str, qualname: str) -> Callable[..., Any]:
+    mod = _load_module_from_dir(bundle_root, module_name)
+    return _resolve_bundle_callable_from_module(mod, qualname)
+
+
+def _bundle_venv_entry_main() -> int:
+    if len(sys.argv) != 5:
+        raise SystemExit("usage: python -c ... <request.json> <args.pkl> <kwargs.pkl> <response.pkl>")
+    request_path = Path(sys.argv[1]).resolve()
+    args_path = Path(sys.argv[2]).resolve()
+    kwargs_path = Path(sys.argv[3]).resolve()
+    response_path = Path(sys.argv[4]).resolve()
+    os.environ[_BUNDLE_VENV_EXEC_ENV] = "1"
+    try:
+        payload = json.loads(request_path.read_text(encoding="utf-8"))
+        bundle_root = Path(str(payload["bundle_root"])).resolve()
+        module_name = str(payload["module_name"])
+        module_root = str(payload.get("module_root") or "").strip() or None
+        mod = (
+            _load_module_from_dir_with_root(bundle_root, module_name, root_pkg=module_root)
+            if module_root
+            else _load_module_from_dir(bundle_root, module_name)
+        )
+        args = pickle.loads(args_path.read_bytes())
+        kwargs = pickle.loads(kwargs_path.read_bytes())
+        target = _resolve_bundle_callable_from_module(mod, str(payload["qualname"]))
+        result = target(*args, **kwargs)
+        if inspect.isawaitable(result):
+            result = asyncio.run(result)
+        envelope = {"ok": True, "result": result}
+    except Exception as exc:
+        envelope = {
+            "ok": False,
+            "error_type": exc.__class__.__name__,
+            "message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+    response_path.write_bytes(pickle.dumps(envelope, protocol=pickle.HIGHEST_PROTOCOL))
+    return 0
+
+
+def _execute_in_bundle_venv(
+    fn: Callable[..., Any],
+    meta: dict[str, Any],
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    bundle_root = _resolve_bundle_root_for_callable(fn)
+    module_name = _resolve_bundle_module_name(bundle_root, fn)
+    bundle_id = _resolve_bundle_id_for_root(bundle_root)
+    module_root = None
+    fn_module = str(getattr(fn, "__module__", "") or "").strip()
+    if fn_module.startswith("kdcube_bundle_"):
+        module_root = fn_module.split(".", 1)[0]
+    requirements_path = Path(str(meta.get("requirements") or "requirements.txt"))
+    if not requirements_path.is_absolute():
+        requirements_path = (bundle_root / requirements_path).resolve()
+    timeout_seconds = meta.get("timeout_seconds")
+    try:
+        venv_python = _ensure_bundle_venv(
+            bundle_id=bundle_id,
+            requirements_path=requirements_path,
+            meta=meta,
+        )
+    except Exception:
+        _log.exception(
+            "[bundle.venv] failed to prepare venv for bundle=%s callable=%s requirements=%s",
+            bundle_id,
+            fn.__qualname__,
+            requirements_path,
+        )
+        raise
+    try:
+        args_payload = pickle.dumps(args, protocol=pickle.HIGHEST_PROTOCOL)
+        kwargs_payload = pickle.dumps(kwargs, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as exc:
+        raise TypeError(f"Arguments for @venv callable {fn.__qualname__} are not serializable: {exc}") from exc
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="bundle-venv-", dir=str(_bundle_venv_dir(bundle_id))) as temp_dir:
+        temp_root = Path(temp_dir)
+        request_path = temp_root / "request.json"
+        args_path = temp_root / "args.pkl"
+        kwargs_path = temp_root / "kwargs.pkl"
+        response_path = temp_root / "response.pkl"
+        request_path.write_text(
+            json.dumps(
+                {
+                    "bundle_root": str(bundle_root),
+                    "module_name": module_name,
+                    "module_root": module_root,
+                    "qualname": fn.__qualname__,
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        args_path.write_bytes(args_payload)
+        kwargs_path.write_bytes(kwargs_payload)
+        env = _bundle_venv_subprocess_env()
+        env[_BUNDLE_VENV_EXEC_ENV] = "1"
+        cmd = [
+            str(venv_python),
+            "-c",
+            "from kdcube_ai_app.infra.plugin.agentic_loader import _bundle_venv_entry_main as _m; raise SystemExit(_m())",
+            str(request_path),
+            str(args_path),
+            str(kwargs_path),
+            str(response_path),
+        ]
+        try:
+            _run_checked_subprocess(
+                cmd,
+                env=env,
+                timeout=int(timeout_seconds) if timeout_seconds is not None else None,
+                label=f"run bundle venv callable {bundle_id}:{fn.__qualname__}",
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise TimeoutError(
+                f"Timed out running @venv callable {bundle_id}:{fn.__qualname__} after {timeout_seconds} seconds"
+            ) from exc
+        if not response_path.exists():
+            raise RuntimeError(f"No response produced by @venv callable {bundle_id}:{fn.__qualname__}")
+        response = pickle.loads(response_path.read_bytes())
+    if response.get("ok"):
+        return response.get("result")
+    _log.error(
+        "[bundle.venv] callable failed in child: bundle=%s qualname=%s error_type=%s message=%s\n%s",
+        bundle_id,
+        fn.__qualname__,
+        response.get("error_type"),
+        response.get("message"),
+        (response.get("traceback") or "").rstrip() or "<no traceback>",
+    )
+    raise RuntimeError(
+        f"@venv callable failed: {response.get('error_type')}: {response.get('message')}\n"
+        f"{response.get('traceback') or ''}".rstrip()
+    )
+
+
 # --------------------------------------------------------------------------------------
 # Spec & caches
 # --------------------------------------------------------------------------------------
@@ -470,8 +1019,12 @@ def _ensure_virtual_subpackages(root_name: str, path: Path, sub_pkg: str) -> Non
         pkg.__package__ = curr
         sys.modules[curr] = pkg
 
-def _load_module_from_dir(container_path: Path, module: str) -> types.ModuleType:
-    root_pkg = f"kdcube_bundle_{abs(hash(str(container_path.resolve())))}"
+def _bundle_virtual_root_package(container_path: Path) -> str:
+    digest = hashlib.sha256(str(container_path.resolve()).encode("utf-8")).hexdigest()[:16]
+    return f"kdcube_bundle_{digest}"
+
+
+def _load_module_from_dir_with_root(container_path: Path, module: str, *, root_pkg: str) -> types.ModuleType:
     _ensure_virtual_package(root_pkg, container_path)
     sub_pkg = module.rsplit(".", 1)[0] if "." in module else ""
     _ensure_virtual_subpackages(root_pkg, container_path, sub_pkg)
@@ -490,6 +1043,9 @@ def _load_module_from_dir(container_path: Path, module: str) -> types.ModuleType
         raise ImportError(f"Module file not found in bundle dir: {target}")
 
     full_name = f"{root_pkg}.{module}"
+    existing = sys.modules.get(full_name)
+    if isinstance(existing, types.ModuleType):
+        return existing
     spec = importlib.util.spec_from_file_location(full_name, str(target))
     if spec is None or spec.loader is None:
         raise ImportError(f"Cannot create module spec from file: {target}")
@@ -498,6 +1054,14 @@ def _load_module_from_dir(container_path: Path, module: str) -> types.ModuleType
     sys.modules[full_name] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _load_module_from_dir(container_path: Path, module: str) -> types.ModuleType:
+    return _load_module_from_dir_with_root(
+        container_path,
+        module,
+        root_pkg=_bundle_virtual_root_package(container_path),
+    )
 
 def _load_package_root(pkg_dir: Path) -> types.ModuleType:
     if not (pkg_dir / "__init__.py").exists():

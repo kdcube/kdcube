@@ -159,6 +159,62 @@ async def test_call_bundle_op_inner_preserves_request_stream_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_call_bundle_op_inner_preserves_explicit_user_id_payload(monkeypatch):
+    captured = {}
+
+    async def _resolve_bundle_async(bundle_id, override=None):
+        del override
+        return SimpleNamespace(id=bundle_id, path="/tmp/demo", module="entrypoint", singleton=False)
+
+    def _create_workflow_config(_cfg_req):
+        return SimpleNamespace(ai_bundle_spec=None)
+
+    class _Workflow:
+        @api(alias="manage_user")
+        async def manage_user(self, **kwargs):
+            captured["kwargs"] = dict(kwargs)
+            return {"ok": True, "target_user_id": kwargs.get("user_id")}
+
+    def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None):
+        del spec, wf_config, comm_context, redis
+        return _Workflow(), None
+
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(
+            OPENAI_API_KEY=None,
+            ANTHROPIC_API_KEY=None,
+            TENANT="tenant-a",
+            PROJECT="project-a",
+        ),
+    )
+    monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
+    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_default_id", lambda: None)
+
+    result = await integrations._call_bundle_op_inner(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id=None,
+        payload=integrations.BundleSuggestionsRequest(
+            bundle_id="bundle.demo",
+            data={"user_id": "target-user-77", "foo": "bar"},
+        ),
+        request=_request(stream_id="stream-xyz"),
+        operation="manage_user",
+        route="operations",
+        session=_session(),
+    )
+
+    assert captured["kwargs"]["user_id"] == "target-user-77"
+    assert captured["kwargs"]["fingerprint"] == "fp-1"
+    assert captured["kwargs"]["foo"] == "bar"
+    assert result["manage_user"] == {"ok": True, "target_user_id": "target-user-77"}
+
+
+@pytest.mark.asyncio
 async def test_call_bundle_op_inner_binds_runtime_request_context(monkeypatch):
     captured = {}
 

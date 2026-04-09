@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
+  - ks:docs/sdk/bundle/design/bundle-custom-venv-README.md
   - ks:docs/sdk/bundle/bundle-platform-properties-README.md
   - ks:docs/clients/client-communication-README.md
   - ks:docs/clients/sse-events-README.md
@@ -47,6 +48,9 @@ If you need the platform/source-of-truth config format (`bundles.yaml`, secrets 
 If you need the list of **platform-reserved bundle property paths** interpreted by
 base/economics entrypoints and exec runtime, see:
 [docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md).
+
+If you need the detailed design/runtime note for subprocess venv execution, see:
+[docs/sdk/bundle/design/bundle-custom-venv-README.md](design/bundle-custom-venv-README.md).
 
 ---
 
@@ -198,6 +202,82 @@ Important rules:
 Full contract:
 - [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 
+### `@venv(...)` for dependency-heavy helpers
+
+`@venv(...)` lets selected bundle callables run in a cached per-bundle subprocess venv while the rest of the bundle stays in the shared proc interpreter.
+
+Example:
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import venv
+
+@venv(requirements="requirements.txt", timeout_seconds=120)
+def sync_google_sheet(payload: dict) -> dict:
+    ...
+```
+
+Current runtime model:
+- the decorated callable is the subprocess boundary
+- arguments and return values are serialized across that boundary
+- the runtime resolves the bundle root and bundle id
+- the runtime creates or reuses a cached venv under bundle-managed local storage for that bundle id
+- the venv is built from the selected base Python and overlays the current runtime packages
+- the bundle's `requirements.txt` is installed on top of that runtime layer
+- the venv is rebuilt only when the requirements file content hash changes
+
+Important execution-boundary rule:
+- the `@venv(...)` child receives only the serialized function arguments plus normal Python import access to bundle code
+- it does **not** receive proc-bound runtime bindings such as `self.comm`, `self.comm_context`, `get_current_comm()`, `get_current_request_context()`, `TOOL_SUBSYSTEM`, `COMMUNICATOR`, `KV_CACHE`, `CTX_CLIENT`, DB pools, Redis clients, or framework request objects
+- if the bundle needs those surfaces, read or use them in proc and pass plain data into the decorated helper
+
+Good uses:
+- Google Sheets / Google API jobs
+- PDF / OCR / parsing helpers
+- report generation
+- package-heavy transformation jobs
+
+Bad uses:
+- methods that need `self.comm`, `self.comm_context`, `pg_pool`, `redis`, or other live proc-owned objects
+- methods that need to return live third-party Python objects
+- long-running logic that needs to emit continuous stream events from inside the helper
+
+Current boundary rule:
+- keep the public entrypoint/API/widget method in proc
+- move the dependency-heavy leaf operation into a plain helper function marked with `@venv(...)`
+- pass serializable data in and return serializable data out
+- bundle-local dataclasses are acceptable only when they live in normal importable bundle modules
+- changing Python source still needs the normal proc-side bundle reload path; changing `requirements.txt` triggers lazy venv rebuild on the next decorated call
+
+Request-bound runtime context rule for bundle APIs:
+- bundle API methods receive payload/query fields plus standard caller fields such as `user_id` and `fingerprint`
+- they do not receive a separate communicator kwarg from proc by default
+- if the bundle needs the live request communicator or the current request payload:
+  - in `BaseEntrypoint` / `BaseEntrypointWithEconomics`, use `self.comm` and `self.comm_context`
+  - otherwise use `get_current_comm()` and `get_current_request_context()` from `kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx`
+
+Good:
+
+```python
+@venv(requirements="requirements.txt")
+def build_sheet_result(payload: dict) -> dict:
+    ...
+```
+
+Risky / usually wrong:
+
+```python
+class MyEntrypoint(BaseEntrypoint):
+    @venv(requirements="requirements.txt")
+    async def sync_sheet(self, **kwargs):
+        ...
+```
+
+Why the second pattern is wrong in most cases:
+- bound methods carry `self`
+- `self` often contains non-serializable or request-bound proc state
+- singleton entrypoints may hold shared state that should not cross the subprocess boundary
+- even when it appears to work, it blurs the intended boundary between proc-owned orchestration and subprocess-owned dependency-heavy helpers
+
 ### Canonical turn error propagation
 
 For entrypoint-level turn failures, use the base helper:
@@ -287,6 +367,30 @@ class MyWorkflow(BaseWorkflow):
 
 Without that constructor wiring, entrypoint props are not automatically visible
 inside the workflow instance.
+
+## Local prototyping flow with `@venv(...)`
+
+The normal local bundle loop stays the same:
+
+1. install/start with descriptors
+2. edit the bundle under `HOST_BUNDLES_PATH`
+3. if Python source changed, run:
+   - `kdcube --workdir <runtime-workdir> --bundle-reload <bundle_id>`
+4. invoke the bundle again from UI or API
+
+For `@venv(...)`, add these rules:
+
+- if only `requirements.txt` changed, the next invocation of the decorated helper rebuilds the cached venv automatically
+- if Python source changed, proc still needs the normal reload so the updated module is imported
+- if both changed, do the reload first; the venv rebuild will then happen lazily on the next call
+- the helper still does not gain access to proc-side communicator/runtime bindings after rebuild; the execution boundary stays the same
+
+So the practical loop is:
+- edit code -> `--bundle-reload`
+- edit only `requirements.txt` -> call again
+- edit both -> `--bundle-reload`, then call again
+
+This is why `@venv(...)` is good for rapid local prototyping of dependency-heavy helpers without polluting the shared proc environment.
 
 ---
 

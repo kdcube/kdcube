@@ -7,6 +7,7 @@ keywords: ["agentic_workflow", "bundle_id decorator", "api decorator", "ui_widge
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
+  - ks:docs/sdk/bundle/design/bundle-custom-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
 ---
@@ -36,6 +37,7 @@ Bundles currently use these decorators:
 - `@ui_widget(...)`
 - `@ui_main`
 - `@on_message`
+- `@venv(...)`
 
 These decorators are metadata for the bundle interface surface. They are not
 deployment config.
@@ -137,6 +139,13 @@ Important current rule:
 - same-name fallback for undecorated methods is no longer part of the HTTP
   contract
 - `route="public"` must also declare `public_auth`
+- bundle API methods do not receive a separate communicator argument from proc
+  by default
+- if bundle code needs request-bound execution context, use runtime helpers:
+  - `get_current_comm()`
+  - `get_current_request_context()`
+- for entrypoints based on `BaseEntrypoint`, prefer `self.comm` /
+  `self.comm_context`
 
 Route mapping:
 
@@ -215,6 +224,52 @@ Current practical pattern:
 
 - base entrypoints already decorate `run()` with `@on_message`
 - manifest discovery reports the message handler method name
+
+### 1.6 `@venv(...)`
+
+Marks a callable to execute in a cached per-bundle subprocess venv.
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import venv
+
+@venv(requirements="requirements.txt", timeout_seconds=120)
+def parse_large_pdf(payload: dict) -> dict:
+    ...
+```
+
+Current fields:
+
+- `requirements`
+  - bundle-relative path to the requirements file
+  - default: `requirements.txt`
+- `python`
+  - optional base Python executable used to create the venv
+  - default: current runtime Python
+- `timeout_seconds`
+  - optional subprocess timeout for that callable
+
+Current behavior:
+
+- the decorated callable remains visible as a normal Python function to the rest of the bundle
+- when invoked from proc, the runtime:
+  - resolves the bundle root and bundle id
+  - creates or reuses a cached venv under bundle-managed local storage
+  - builds that venv from the selected base Python
+  - overlays current runtime packages into it
+  - installs the bundle's `requirements.txt` on top of that runtime layer
+  - rebuilds only when the requirements file hash changed
+  - executes the callable in a subprocess using that venv
+  - deserializes the result back into proc
+
+Important current rule:
+
+- `@venv(...)` is an execution decorator, not an HTTP/UI manifest decorator
+- it does **not** create routes, widgets, or manifest entries by itself
+- it is intended for dependency-heavy helper functions
+- prefer plain module-level helpers or other easily serializable callables
+- do not use it for methods that depend on live proc-owned objects or shared singleton state
+- the venv child does **not** receive proc-bound runtime bindings such as `self.comm`, `self.comm_context`, `get_current_comm()`, `get_current_request_context()`, `TOOL_SUBSYSTEM`, `COMMUNICATOR`, `KV_CACHE`, `CTX_CLIENT`, DB pools, Redis clients, or framework request objects
+- changing bundle Python source still requires the normal proc-side bundle reload path; `@venv(...)` only controls the helper execution environment
 
 ## 2) Metadata model
 

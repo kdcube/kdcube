@@ -62,6 +62,35 @@ Typical examples:
 - runtime profiles
 - knowledge-source selection
 
+Concrete bundle-defined example:
+
+```yaml
+bundles:
+  version: "1"
+  items:
+    - id: "user-mgmt@1-0"
+      config:
+        user_management:
+          spreadsheet_key: "1Ihmpo4Cpo-RxvRu2xY0uxV3yKVwHQbaL0Qjl_oibzwA"
+          worksheet_name: "Security LeaderMarketing.Users"
+          aws_profile: "cistoteria-dev"
+          aws_region: ""
+          ses_from_email: "noreply@example-product.com"
+          ses_template_name: "Example ProductNewUserWelcomeTemplate"
+          login_url: "https://ai.example-product.com/chatbot/demo/chat"
+          dry_run: false
+```
+
+This is the correct place for non-secret `user_management.*` props such as:
+- `spreadsheet_key`
+- `worksheet_name`
+- `aws_profile`
+- `aws_region`
+- `ses_from_email`
+- `ses_template_name`
+- `login_url`
+- `dry_run`
+
 ## Local prototyping loop
 
 For localhost bundle iteration, keep the split clear:
@@ -113,6 +142,8 @@ Use secrets for:
 - bearer tokens
 - git credentials
 - external connector credentials
+- JSON credentials content such as Google service-account files
+- sensitive identifiers such as Cognito pool ids when the bundle treats them as secrets
 
 `get_secret(...)` is backed by the configured runtime secrets provider. Current
 provider modes are:
@@ -130,6 +161,37 @@ Do not put secrets into:
 - `bundle_props`
 - `bundles.yaml` config blocks
 - long-lived logs or generated artifacts
+
+Concrete bundle secret example:
+
+```yaml
+bundles:
+  version: "1"
+  items:
+    - id: "user-mgmt@1-0"
+      secrets:
+        user_management:
+          cognito_user_pool_id: "eu-west-1_fjxddM0rj"
+          sheets_integration_credentials_file_content: |
+            {
+              "type": "service_account",
+              "...": "..."
+            }
+```
+
+For the `user-mgmt@1-0` bundle, the split is:
+- `bundles.yaml`:
+  - `user_management.spreadsheet_key`
+  - `user_management.worksheet_name`
+  - `user_management.aws_profile`
+  - `user_management.aws_region`
+  - `user_management.ses_from_email`
+  - `user_management.ses_template_name`
+  - `user_management.login_url`
+  - `user_management.dry_run`
+- `bundles.secrets.yaml`:
+  - `bundles.user-mgmt@1-0.secrets.user_management.cognito_user_pool_id`
+  - `bundles.user-mgmt@1-0.secrets.user_management.sheets_integration_credentials_file_content`
 
 ## Reserved platform properties
 

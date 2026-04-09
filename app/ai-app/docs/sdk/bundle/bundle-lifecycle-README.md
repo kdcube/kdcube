@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-storage-cache-README.md
   - ks:docs/sdk/bundle/bundle-knowledge-space-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/sdk/bundle/design/bundle-custom-venv-README.md
   - ks:docs/clients/client-communication-README.md
 ---
 # Bundle Lifecycle
@@ -33,6 +34,7 @@ Even if a deployment enables singleton reuse, durable bundle state should live i
 - Redis KV cache
 - bundle storage backend
 - shared local bundle storage
+- cached per-bundle venvs for decorated external Python callables
 
 Do **not** rely on Python instance fields as durable cross-request state.
 
@@ -47,7 +49,8 @@ flowchart TD
     Q --> B[Build request routing/comm_context + refresh bundle props]
     B --> P[pre_run_hook]
     P --> E[execute_core]
-    E --> O[post_run_hook]
+    E --> V[@venv boundary optional]
+    V --> O[post_run_hook]
 ```
 
 ## Main phases
@@ -59,6 +62,7 @@ flowchart TD
 | One-time init | Once per process per tenant/project | `on_bundle_load(...)` may prepare indexes, local caches, repos, or other bundle-local assets |
 | Request prep | Every invocation | Request-bound routing/identity is rebuilt, singleton instances are rebound, bundle props are loaded/merged, hooks can run |
 | Execution | Every invocation | `execute_core(...)` handles the chat turn or bundle operation |
+| Decorated external execution | On demand inside an invocation | `@venv(...)` functions run in a cached per-bundle subprocess venv; the venv is rebuilt only when its `requirements.txt` hash changes |
 | Completion | Every invocation | `post_run_hook(...)` can finalize bookkeeping |
 
 ## Instance lifetime
@@ -104,6 +108,16 @@ Important:
 - `on_bundle_load(...)` is intended to be deterministic and idempotent
 - do not store request-local state there
 - use storage for durable state, not instance fields
+
+`@venv(...)` is separate from `on_bundle_load(...)`:
+- it is not a one-time init hook
+- it is evaluated lazily when the decorated callable is invoked
+- it uses bundle-managed local storage for its cached venv
+- it should be treated as an execution boundary, not as part of the shared proc instance lifecycle
+- its cache key is effectively one venv per bundle id
+- code reload and venv rebuild are separate:
+  - Python source changes still require normal bundle reload in proc
+  - `requirements.txt` changes rebuild the cached venv on the next decorated call
 
 ## Request-bound communicator and REST operations
 
@@ -167,12 +181,50 @@ Three classes of changes matter during bundle development:
    - for local development, the intended path is:
      - `kdcube --workdir <runtime-workdir> --bundle-reload <bundle_id>`
 
+4. **`@venv` requirements changes**
+   - if only `requirements.txt` changed, the next call to the decorated function will rebuild the cached venv automatically
+   - if Python source code changed, proc still needs the normal bundle reload so the updated module is imported before the next request
+   - if both code and requirements changed, do the normal reload; the venv rebuild will then happen lazily on the next decorated call
+
 Practical rule:
 
 - current in-flight requests continue with the code/config they already loaded
 - new requests pick up:
   - Redis prop edits immediately
   - descriptor/code changes after proc cache clear + descriptor replay
+  - `requirements.txt` changes for `@venv` callables when that callable is next invoked
+
+## `@venv(...)` in the lifecycle
+
+`@venv(...)` allows selected bundle callables to run in a cached per-bundle subprocess venv while the rest of the bundle remains in the shared proc interpreter.
+
+Current runtime behavior:
+- the decorated callable is the boundary
+- proc serializes the call arguments and return value across the subprocess boundary
+- the runtime resolves the bundle id and bundle root
+- the runtime creates or reuses a cached venv under bundle-managed local storage at `_bundle_venvs/<bundle-id>`
+- the venv is created from the selected base Python (`python=` override when set, otherwise the current runtime base interpreter)
+- the venv reuses platform/runtime packages by writing a runtime overlay `.pth`
+- bundle-specific requirements are then installed on top of that runtime layer from the bundle's `requirements.txt`
+- the callable is executed in a subprocess using that venv's Python
+- the result is deserialized back into proc
+
+Current cache rule:
+- one cached venv per bundle id
+- rebuild only when the referenced `requirements.txt` content hash changes
+
+Practical implications:
+- use `@venv(...)` for dependency-heavy leaf jobs
+- keep communicator use, DB/Redis pooled access, and request-bound runtime objects in proc
+- pass serializable data into the decorated callable and return serializable data out
+- bundle-local dataclasses and similar bundle-defined types are acceptable only when they live in normal importable bundle modules
+- do not treat `@venv(...)` as a generic transport for framework request objects, DB pools, Redis clients, or live SDK runtime handles
+- do not assume proc-bound runtime helpers exist in the child; `self.comm`, `self.comm_context`, `get_current_comm()`, `get_current_request_context()`, `TOOL_SUBSYSTEM`, `COMMUNICATOR`, `KV_CACHE`, and `CTX_CLIENT` are proc-side surfaces, not venv-child surfaces
+
+See:
+- [Bundle Dev](bundle-dev-README.md)
+- [Bundle Interfaces](bundle-interfaces-README.md)
+- [Draft: Bundle Custom Venv](design/bundle-custom-venv-README.md)
 
 ## Storage and isolation surfaces
 
