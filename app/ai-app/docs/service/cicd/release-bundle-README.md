@@ -8,11 +8,20 @@ see_also:
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/custom-cicd-README.md
   - ks:docs/service/cicd/release-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
 ---
 ## Bundle Release Process
 
 This doc describes how to release a bundle and update the **bundles descriptor**
 (`bundles.yaml`). It applies to both **baked** bundles and **git‑defined** bundles.
+
+In current runtime setups, `bundles.yaml` may serve two different roles:
+
+- proc bundle-registry seed through `AGENTIC_BUNDLES_JSON`
+- plain runtime metadata source through `read_plain("b:...")`
+
+See:
+[docs/service/configuration/descriptor-plain-config-README.md](../configuration/descriptor-plain-config-README.md)
 
 ---
 

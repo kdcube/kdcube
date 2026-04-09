@@ -7,6 +7,7 @@ keywords: ["get_settings", "get_secret", "dot paths", "secrets sidecar", "assemb
 see_also:
   - ks:docs/service/configuration/service-config-README.md
   - ks:docs/service/configuration/bundle-configuration-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
 ---
@@ -19,6 +20,8 @@ configuration and secrets in code** and what to avoid.
 
 - **Do not use `os.getenv()` directly** for secrets in platform or bundle code.
 - **Use `get_settings()`** for non‑secret config values.
+- **Use `get_plain()` / `read_plain()`** when code must inspect mounted
+  `assembly.yaml` or `bundles.yaml` directly.
 - **Use `get_secret()`** for secrets (keys, tokens, passwords).
 - Secrets are stored in the secrets sidecar using **dot‑path keys** (see below).
 - Env vars are **legacy compatibility only** and should not be referenced directly in new code.
@@ -63,6 +66,24 @@ from kdcube_ai_app.apps.chat.sdk.config import get_settings
 settings = get_settings()
 tenant = settings.TENANT
 ```
+
+If code needs the descriptor value itself rather than the rendered env-backed
+runtime setting, use:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.config import read_plain
+
+workspace_type = read_plain("storage.workspace.type", default="custom")
+default_bundle_id = read_plain("b:default_bundle_id")
+```
+
+Namespace rules:
+
+- no prefix or `a:` -> `assembly.yaml`
+- `b:` -> `bundles.yaml`
+
+See:
+- [docs/service/configuration/descriptor-plain-config-README.md](descriptor-plain-config-README.md)
 
 ## 4) Where config comes from
 

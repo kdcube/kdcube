@@ -5,10 +5,13 @@
 from __future__ import annotations
 import os
 import logging
+from pathlib import Path
+from typing import Any
 from pydantic import Field
 from pydantic import BaseModel, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+import yaml
 
 from kdcube_ai_app.infra.secrets import get_secrets_manager
 
@@ -34,6 +37,8 @@ _LEGACY_SECRET_TO_CANON: dict[str, str] = {
     legacy: canon for canon, aliases in _SECRET_ALIASES.items() for legacy in aliases
 }
 _PG_SSL_MODES = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
+_ASSEMBLY_YAML_PATH = Path("/config/assembly.yaml")
+_BUNDLES_YAML_PATH = Path("/config/bundles.yaml")
 
 
 def _secret_candidates(key: str) -> list[str]:
@@ -69,6 +74,94 @@ def get_secret(key: str, default: str | None = None) -> str | None:
         if value:
             return value
     return default
+
+
+def read_secret(key: str, default: str | None = None) -> str | None:
+    return get_secret(key, default=default)
+
+
+def _parse_plain_key(key: str) -> tuple[Path, str]:
+    raw = str(key or "").strip()
+    if not raw:
+        return _ASSEMBLY_YAML_PATH, ""
+    for prefix, path in {
+        "a:": _ASSEMBLY_YAML_PATH,
+        "assembly:": _ASSEMBLY_YAML_PATH,
+        "b:": _BUNDLES_YAML_PATH,
+        "bundles:": _BUNDLES_YAML_PATH,
+    }.items():
+        if raw.startswith(prefix):
+            return path, raw[len(prefix):]
+    return _ASSEMBLY_YAML_PATH, raw
+
+
+def _descriptor_cache_token(path: Path) -> tuple[str, int, int] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return str(path), stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=8)
+def _load_plain_yaml_cached(path_str: str, _mtime_ns: int, _size: int) -> Any:
+    path = Path(path_str)
+    try:
+        return yaml.safe_load(path.read_text()) if path.exists() else None
+    except Exception:
+        return None
+
+
+def _load_plain_yaml(path: Path) -> Any:
+    token = _descriptor_cache_token(path)
+    if token is None:
+        return None
+    return _load_plain_yaml_cached(*token)
+
+
+def _resolve_dotted_value(data: Any, dotted_path: str) -> Any:
+    if not dotted_path:
+        return data
+    cur: Any = data
+    segments = [part for part in dotted_path.split(".") if part]
+    idx = 0
+    while idx < len(segments):
+        segment = segments[idx]
+        if isinstance(cur, dict):
+            if segment in cur:
+                cur = cur.get(segment)
+                idx += 1
+                continue
+            matched = False
+            for end in range(len(segments), idx, -1):
+                compound = ".".join(segments[idx:end])
+                if compound in cur:
+                    cur = cur.get(compound)
+                    idx = end
+                    matched = True
+                    break
+            if not matched:
+                return None
+            continue
+        if isinstance(cur, list):
+            if not segment.isdigit():
+                return None
+            list_idx = int(segment)
+            if list_idx < 0 or list_idx >= len(cur):
+                return None
+            cur = cur[list_idx]
+            idx += 1
+            continue
+        return None
+    return cur
+
+
+def get_plain(key: str, default: Any = None) -> Any:
+    return get_settings().plain(key, default=default)
+
+
+def read_plain(key: str, default: Any = None) -> Any:
+    return get_plain(key, default=default)
 
 
 def _resolve_current_user_bundle_scope(
@@ -386,6 +479,11 @@ class Settings(BaseSettings):
         except Exception:
             value = None
         return value or default
+
+    def plain(self, key: str, default: Any = None) -> Any:
+        path, dotted_path = _parse_plain_key(key)
+        value = _resolve_dotted_value(_load_plain_yaml(path), dotted_path)
+        return default if value is None else value
 
 @lru_cache()
 def get_settings() -> Settings:

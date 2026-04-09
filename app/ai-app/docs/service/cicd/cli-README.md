@@ -9,6 +9,7 @@ see_also:
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
   - ks:docs/service/configuration/bundle-configuration-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
   - ks:docs/service/cicd/gateway-config-README.md
   - ks:docs/service/environment/setup-dev-env-README.md
   - ks:docs/service/environment/setup-for-dockercompose-README.md
@@ -154,6 +155,16 @@ When an assembly descriptor is provided, the wizard writes non‑secret values
 back into `assembly.yaml` (tenant/project, auth, infra, paths) and then renders
 `.env*` from it. The assembly file becomes the source of truth for local config.
 
+The CLI also mounts descriptor files into runtime services so code can read
+plain non-secret descriptor values directly:
+
+- `/config/assembly.yaml`
+- `/config/bundles.yaml`
+
+This is the runtime contract behind `read_plain(...)` / `get_plain(...)`.
+See:
+[docs/service/configuration/descriptor-plain-config-README.md](../configuration/descriptor-plain-config-README.md)
+
 The same descriptor also controls workspace/session bootstrap settings for agent runtimes:
 
 - `storage.workspace.type` -> `REACT_WORKSPACE_IMPLEMENTATION`
@@ -181,6 +192,9 @@ When provided, the CLI:
 - mounts `bundles.yaml` as `/config/bundles.yaml`
 - sets `AGENTIC_BUNDLES_JSON=/config/bundles.yaml`
 - injects secrets from `bundles.secrets.yaml` into the secrets sidecar
+
+`AGENTIC_BUNDLES_JSON` controls proc bundle-registry seeding.
+It is separate from the broader descriptor mounts used by `read_plain(...)`.
 
 Templates:
 - [`deployment/bundles.yaml`](../../../deployment/bundles.yaml)

@@ -149,9 +149,19 @@ Important mounted areas include:
 In practice:
 
 - bundle registry config is written to EFS and consumed from `/config/bundles.yaml`
+- assembly descriptor may also be exposed under `/config/assembly.yaml`
 - proc uses `/bundles` as the bundle root
 - proc and nested exec containers share storage through EFS-backed paths
 - bundle config updates can be applied without full infrastructure reprovision
+
+If ingress, proc, or metrics code uses `read_plain(...)`, those services must
+receive the shared `/config` mount so runtime can read:
+
+- `/config/assembly.yaml`
+- `/config/bundles.yaml`
+
+See:
+- [docs/service/configuration/descriptor-plain-config-README.md](../../service/configuration/descriptor-plain-config-README.md)
 
 ## Autoscaling Model
 

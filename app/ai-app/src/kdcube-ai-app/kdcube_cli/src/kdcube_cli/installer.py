@@ -2494,54 +2494,46 @@ def gather_configuration(
     bundles_descriptor_selected = False
     assembly_descriptor_selected = False
 
+    # Mount descriptors independently from bundle-registry selection so runtime
+    # code can read /config/assembly.yaml and /config/bundles.yaml directly.
+    if bundles_path:
+        update_env_value(env_main, "HOST_BUNDLES_DESCRIPTOR_PATH", str(bundles_path))
+    else:
+        update_env_value(env_main, "HOST_BUNDLES_DESCRIPTOR_PATH", "/dev/null")
+
+    if release_descriptor_path:
+        update_env_value(env_main, "HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH", release_descriptor_path)
+    else:
+        update_env_value(env_main, "HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH", "/dev/null")
+
     if use_bundles_descriptor is None and bundles_path:
         use_bundles_descriptor = True
 
     # bundles.yaml descriptor (preferred when provided)
     if use_bundles_descriptor and bundles_path:
-        update_env_value(env_main, "HOST_BUNDLES_DESCRIPTOR_PATH", str(bundles_path))
         update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/bundles.yaml")
         bundles_descriptor_selected = True
-    else:
-        current_bundles_descriptor = env_main.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1]
-        descriptor_value = (current_bundles_descriptor or "").strip().strip("'\"")
-        if use_bundles_descriptor is False or force_prompt or is_placeholder(current_bundles_descriptor) or descriptor_value in {"", "/dev/null"}:
-            update_env_value(env_main, "HOST_BUNDLES_DESCRIPTOR_PATH", "/dev/null")
 
     # assembly.yaml bundles section (legacy / fallback)
     if not bundles_descriptor_selected:
-        current_descriptor = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
         if release_descriptor_path and use_descriptor_bundles is not False:
-            current_descriptor = release_descriptor_path
-            update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
             update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/assembly.yaml")
             assembly_descriptor_selected = True
-        descriptor_value = (current_descriptor or "").strip().strip("'\"")
         if use_descriptor_bundles is None:
             if release_descriptor_path:
-                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
                 update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/assembly.yaml")
                 assembly_descriptor_selected = True
-            elif force_prompt or is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
-                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
         elif use_descriptor_bundles:
             if release_descriptor_path:
-                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", release_descriptor_path)
                 update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "/config/assembly.yaml")
                 assembly_descriptor_selected = True
-            elif is_placeholder(current_descriptor) or descriptor_value in {"", "/dev/null"}:
-                update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
-        else:
-            update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
-    else:
-        # Disable assembly bundle descriptor mount when bundles.yaml is active.
-        update_env_value(env_main, "HOST_BUNDLE_DESCRIPTOR_PATH", "/dev/null")
 
     # If any descriptor is set, force a one-time registry sync on startup.
     if bundles_descriptor_selected or assembly_descriptor_selected:
         update_env_value(env_proc, "BUNDLES_FORCE_ENV_ON_STARTUP", "1")
         update_env_value(env_proc, "BUNDLE_GIT_RESOLUTION_ENABLED", "1")
     else:
+        update_env_value(env_proc, "AGENTIC_BUNDLES_JSON", "")
         update_env_value(env_proc, "BUNDLES_FORCE_ENV_ON_STARTUP", "0")
 
     # Bundle secrets can be requested long after startup. Disable sidecar token expiry
@@ -3069,7 +3061,9 @@ def run_setup(
         existing_mode = env_existing.entries.get("KDCUBE_COMPOSE_MODE", (None, None))[1]
         if existing_mode:
             compose_mode = existing_mode.strip()
-        existing_descriptor = env_existing.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
+        existing_descriptor = env_existing.entries.get("HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH", (None, None))[1]
+        if not existing_descriptor or is_placeholder(existing_descriptor):
+            existing_descriptor = env_existing.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
         if existing_descriptor and not is_placeholder(existing_descriptor):
             release_descriptor_path = existing_descriptor
         existing_bundles = env_existing.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1]
@@ -3244,9 +3238,9 @@ def run_setup(
     console.print(f"  PROXY_BUILD_CONTEXT={proxy_ctx}")
 
     bundles_host = env_main.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1]
-    assembly_host = env_main.entries.get("HOST_BUNDLE_DESCRIPTOR_PATH", (None, None))[1]
+    assembly_host = env_main.entries.get("HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH", (None, None))[1]
     if bundles_host or assembly_host:
-        console.print("\n[dim]Bundle descriptors (host -> container):[/dim]")
+        console.print("\n[dim]Descriptor files (host -> container):[/dim]")
         if bundles_host and not is_placeholder(bundles_host) and bundles_host not in {"", "/dev/null"}:
             exists = "exists" if Path(bundles_host).exists() else "missing"
             console.print(f"  bundles.yaml: {bundles_host} ({exists}) -> /config/bundles.yaml")

@@ -27,7 +27,8 @@ from descriptor data plus optional templates.
 Set these in the **compose `.env`** (paths on the host):
 
 ```bash
-# Bundles descriptor (mounted into /config/bundles.yaml)
+# Assembly + bundles descriptors (mounted into /config/*.yaml)
+HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH=/absolute/path/to/assembly.yaml
 HOST_BUNDLES_DESCRIPTOR_PATH=/absolute/path/to/bundles.yaml
 
 # Bundles root on host (mounted into /bundles)
@@ -39,7 +40,11 @@ HOST_GIT_SSH_KEY_PATH=/absolute/path/to/.ssh/id_ed25519
 HOST_GIT_KNOWN_HOSTS_PATH=/absolute/path/to/.ssh/known_hosts
 ```
 
-These are mounted by compose into the **chat‑proc** container.
+These are mounted by compose into the runtime services that need them.
+`read_plain(...)` uses:
+
+- `/config/assembly.yaml`
+- `/config/bundles.yaml`
 
 If you use `all_in_one_kdcube`, nginx configs are mounted from
 `KDCUBE_CONFIG_DIR` (defaults to `./config`). Copy these once:

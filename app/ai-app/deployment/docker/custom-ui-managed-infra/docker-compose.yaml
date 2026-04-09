@@ -69,6 +69,14 @@ services:
       - ${KDCUBE_DATA_DIR:-./data}/kdcube-storage:/kdcube-storage
       - ${KDCUBE_LOGS_DIR:-./logs}/chat-ingress:/logs
       - type: bind
+        source: ${HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/assembly.yaml
+        read_only: true
+      - type: bind
+        source: ${HOST_BUNDLES_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/bundles.yaml
+        read_only: true
+      - type: bind
         source: ${HOME}/.aws
         target: /home/appuser/.aws
         read_only: true
@@ -107,8 +115,9 @@ services:
       - ${KDCUBE_DATA_DIR:-./data}/exec-workspace:/exec-workspace
       - ${KDCUBE_LOGS_DIR:-./logs}/chat-proc:/logs
       - type: bind
-        source: ${HOST_BUNDLE_DESCRIPTOR_PATH:-/dev/null}
+        source: ${HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH:-/dev/null}
         target: /config/assembly.yaml
+        read_only: true
       - type: bind
         source: ${HOST_BUNDLES_DESCRIPTOR_PATH:-/dev/null}
         target: /config/bundles.yaml
@@ -150,6 +159,15 @@ services:
         required: false
     environment:
       - LOG_FILE_PREFIX=metrics
+    volumes:
+      - type: bind
+        source: ${HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/assembly.yaml
+        read_only: true
+      - type: bind
+        source: ${HOST_BUNDLES_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/bundles.yaml
+        read_only: true
     networks:
       - kdcube-internal
     ports:

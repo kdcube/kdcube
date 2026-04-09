@@ -9,6 +9,7 @@ see_also:
   - ks:docs/service/cicd/assembly-descriptor-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
   - ks:docs/service/cicd/release-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
 ---
 # Custom CI/CD (Open Source + Custom App Repo)
 
@@ -95,10 +96,20 @@ flowchart LR
 
 **Descriptor usage (CD/CLI):**
 - `assembly.yaml` → platform/frontend/auth/infra defaults (used by CLI/CI).
+- `assembly.yaml` may also be mounted into runtime services for plain reads via `read_plain(...)`.
 - `bundles.yaml` → bundle registry for proc (`AGENTIC_BUNDLES_JSON`).
+- `bundles.yaml` may also be mounted for plain reads via `read_plain("b:...")`.
 - `bundles.secrets.yaml` → bundle secrets (local/dev; injected into secrets sidecar).
 - `secrets.yaml` → platform/infra secrets (CI/ops; injected into secrets manager).
 - `gateway.yaml` → gateway policy JSON (rendered into `GATEWAY_CONFIG_JSON`).
+
+The bundle-registry source and the descriptor-mount contract are related but not the same:
+
+- proc may seed the bundle registry from `/config/bundles.yaml`
+- ingress, proc, or metrics may read `/config/assembly.yaml` and `/config/bundles.yaml` directly through `read_plain(...)`
+
+See:
+[docs/service/configuration/descriptor-plain-config-README.md](../configuration/descriptor-plain-config-README.md)
 
 **Runtime config (where env lives):**
 - ECS: task definitions (ingress/proc/metrics)

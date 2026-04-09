@@ -122,6 +122,11 @@ AGENTIC_BUNDLES_JSON=/config/bundles.yaml
 ```
 If `HOST_BUNDLES_DESCRIPTOR_PATH` is unset, compose mounts `/dev/null` and the loader
 falls back to inline `AGENTIC_BUNDLES_JSON` or Redis.
+Assembly is mounted separately via:
+```
+HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH=/path/to/assembly.yaml
+```
+and is available for plain runtime reads through `read_plain(...)`.
 Set `BUNDLE_GIT_RESOLUTION_ENABLED=0`.  
 Optionally set `BUNDLES_FORCE_ENV_ON_STARTUP=1` for one rollout.
 
@@ -210,6 +215,9 @@ If you use the CLI instead of managing `.env` files by hand, the recommended flo
 1. provide `assembly.yaml`, `secrets.yaml`, `gateway.yaml`, `bundles.yaml`, and optionally `bundles.secrets.yaml`
 2. let the CLI render `config/.env*`, runtime frontend config, and runtime nginx config
 3. run compose with the generated workdir
+
+For direct runtime descriptor reads, see:
+- [docs/service/configuration/descriptor-plain-config-README.md](../../service/configuration/descriptor-plain-config-README.md)
 
 ---
 

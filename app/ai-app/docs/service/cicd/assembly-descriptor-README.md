@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
   - ks:docs/service/configuration/bundle-configuration-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
 ---
 # Assembly Descriptor (assembly.yaml)
 
@@ -25,10 +26,15 @@ it into `config/assembly.yaml` and uses that file as the source of truth.
 Older setups may still use `release.yaml`; rename it if needed.
 
 The CLI uses this file to render `.env*` and compose settings.
-Runtime services do **not** read assembly.yaml directly.
+Runtime services may also read the mounted descriptor directly via
+`read_plain(...)` / `get_plain(...)` when the deployment mounts
+`/config/assembly.yaml`.
 Bundle configuration is handled via **`bundles.yaml`** (and secrets via
 `bundles.secrets.yaml`). See:
 [docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
+
+For the runtime code contract, see:
+[docs/service/configuration/descriptor-plain-config-README.md](../configuration/descriptor-plain-config-README.md)
 
 The **CLI** can use the `frontend` section to build and run a
 custom UI in the **custom‑ui‑managed‑infra** compose mode.
@@ -45,6 +51,12 @@ Non-secret secrets backend selection belongs in `assembly.yaml`:
 
 Bundles are not defined in assembly.yaml. Use `bundles.yaml` for bundle items
 and `bundles.secrets.yaml` for bundle secrets.
+
+Descriptor mount contract:
+
+- `/config/assembly.yaml` is for plain runtime reads from `assembly.yaml`
+- `/config/bundles.yaml` is for bundle registry input and plain runtime reads from `bundles.yaml`
+- `AGENTIC_BUNDLES_JSON` still separately selects which descriptor proc uses as the registry seed
 
 ---
 

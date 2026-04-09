@@ -152,6 +152,13 @@ Flow (order matters):
 6. CLI starts (or restarts) `chat-ingress` and `chat-proc` with their read tokens.
 7. Services fetch secrets from the sidecar during startup (and on demand).
 
+In addition to secrets, the CLI-generated compose setup mounts descriptor files
+under `/config` so runtime code can read non-secret descriptor values through
+`read_plain(...)` / `get_plain(...)`.
+
+See:
+- [docs/service/configuration/descriptor-plain-config-README.md](../../service/configuration/descriptor-plain-config-README.md)
+
 Important:
 - Keys are **not written to disk**.
 - Keys are **not stored in `.env`**.

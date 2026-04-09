@@ -6,6 +6,7 @@ tags: ["service", "secrets", "configuration", "aws", "runtime"]
 keywords: ["SECRETS_PROVIDER", "secrets-service", "aws-sm", "secrets-file", "in-memory", "user secrets", "bundle secrets"]
 see_also:
   - ks:docs/service/configuration/service-config-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
   - ks:docs/service/environment/service-dev-env-README.md
   - ks:docs/service/environment/service-ecs-env-README.md
@@ -20,6 +21,10 @@ supported by KDCube services and how they behave for:
 - user-scoped bundle secrets
 
 It also explains what survives service restart and what does not.
+
+This document is only about secrets. For non-secret descriptor-backed runtime
+reads from mounted `assembly.yaml` and `bundles.yaml`, see:
+[docs/service/configuration/descriptor-plain-config-README.md](../configuration/descriptor-plain-config-README.md)
 
 ## 1. Runtime contract
 

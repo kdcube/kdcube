@@ -10,6 +10,7 @@ see_also:
   - ks:docs/service/service-and-infrastructure-index-README.md
   - ks:docs/service/cicd/secrets-descriptor-README.md
   - ks:docs/service/configuration/code-config-secrets-README.md
+  - ks:docs/service/configuration/descriptor-plain-config-README.md
 ---
 # Service Configuration — Chat Platform
 
@@ -22,6 +23,10 @@ use the optional `secrets.yaml` workflow described in
 
 For **code usage guidelines** (how to read config/secrets in platform/bundles),
 see [docs/service/configuration/code-config-secrets-README.md](code-config-secrets-README.md).
+
+For **runtime reads from descriptor files themselves** (`assembly.yaml` and
+`bundles.yaml` mounted at `/config/...`), see
+[docs/service/configuration/descriptor-plain-config-README.md](descriptor-plain-config-README.md).
 
 **Secrets note:** Secrets are resolved by the configured runtime provider using
 **dot‑path keys** (for example, `services.openai.api_key`). Env vars are legacy
@@ -48,8 +53,8 @@ Descriptions are condensed from the comments in those sample files.
 | `HOST_KDCUBE_STORAGE_PATH` | Path on host to mount as a KDCUBE STORAGE (local filesystem or S3). If using S3 in KDCUBE_STORAGE_PATH, not needed |
 | `HOST_BUNDLES_PATH` | Host directory containing ALL custom agentic bundles (subfolders, wheels, zips) These extend the chat service with custom Python applications |
 | `HOST_BUNDLE_STORAGE_PATH` | Host directory for shared bundle local storage (bundle data; used by ks: resolvers). This is mounted into chat-proc at BUNDLE_STORAGE_ROOT. |
-| `HOST_BUNDLE_DESCRIPTOR_PATH` | Assembly descriptor (optional; mounted into chat-proc as /config/assembly.yaml). Runtime does not read this file; it is used by the CLI for platform/frontend config. |
-| `HOST_BUNDLES_DESCRIPTOR_PATH` | Bundles descriptor (optional; mounted into chat-proc as /config/bundles.yaml). When set, AGENTIC_BUNDLES_JSON should be `/config/bundles.yaml`. |
+| `HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH` | Assembly descriptor host path. Mounted as `/config/assembly.yaml`. Runtime code may read it via `read_plain(...)`; the CLI also uses it as the local source of truth. |
+| `HOST_BUNDLES_DESCRIPTOR_PATH` | Bundles descriptor host path. Mounted as `/config/bundles.yaml`. Proc may use it as `AGENTIC_BUNDLES_JSON`, and runtime code may read it via `read_plain("b:...")`. |
 | `HOST_GIT_SSH_KEY_PATH` | Optional SSH key + known_hosts for git bundle pulls (private repos) These files are mounted into the chat-proc container at: /run/secrets/git_ssh_key /run/secrets/git_known_hosts |
 | `HOST_GIT_KNOWN_HOSTS_PATH` | n/a |
 | `HOST_EXEC_WORKSPACE_PATH` | Temporary workspace for code execution (Docker-in-Docker) |
