@@ -1,30 +1,31 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.07.101"
+  ref: "2026.4.10.153"
   description: |
-    This release focuses on hardening the hosted bundle platform and making full custom applications
-    more deployable inside KDCube without separate infrastructure.
+    This release makes descriptor-driven local deployment and bundle development much more practical.
+    Runtime code can now read non-secret descriptor values directly through `get_plain(...)` and
+    `read_plain(...)`, with `assembly.yaml` and `bundles.yaml` mounted into the services as
+    first-class runtime inputs. Assembly-backed reads now cover actionable platform settings such as
+    storage roots, workspace and Claude session git stores, notifications, routine schedules, and
+    the selected secrets provider.
 
-    The bundle gateway and integrations surface were tightened substantially. Bundle HTTP routes now
-    use explicit route declarations, clamp tenant and project scope consistently, and route public
-    bundle ingress through the gateway pressure path. Public operations can now declare explicit
-    webhook-style authentication, including header-secret verification suitable for integrations such
-    as Telegram.
+    The local installer path was streamlined substantially. `kdcube-setup` now supports a
+    descriptor-complete non-interactive flow via `--descriptors-location`, honors `--latest` and
+    `--release` as explicit overrides for `assembly.platform.ref`, stages `secrets.yaml` and
+    `bundles.secrets.yaml` correctly for `secrets-file`, and starts the runtime without extra
+    prompting when the descriptor set is complete.
 
-    The runtime now supports richer hosted bundle execution. Bundle-local sidecars can be started
-    and reused per proc, typed HTTP bundle operations now support multipart uploads and binary/file
-    responses, and the chat web host now loads custom bundle UIs as real iframe documents instead of
-    inline `srcDoc`, which makes hosted frontend applications behave like normal web apps.
+    Bundle development on localhost also became faster. The platform now documents and supports a
+    clearer host-bundles-root flow, local and git bundle resolution under the same mounted bundles
+    storage, and targeted `--bundle-reload` hot reload for descriptor-backed prototyping. Proc-side
+    reload behavior was hardened so bundle code changes can be re-imported without flushing
+    unrelated bundles.
 
-    Secrets handling also moved forward in a major way. In addition to the existing backends, the
-    platform now supports a storage-backed `secrets-file` provider that can read and write secrets
-    through `file://` or `s3://` YAML descriptors. User-scoped bundle secrets were added on top of
-    that model, with write-only REST management so users can configure per-user credentials without
-    the platform ever returning secret values through the API.
-
-    On the storage side, bundle local storage cleanup now removes stale versioned bundle roots while
-    preserving unversioned persistent state, which is important for long-lived hosted applications
-    that keep runtime data outside the code snapshot. Documentation was updated throughout the
-    service and bundle docs to reflect the new secrets, hosting, and runtime behavior.
+    Finally, bundles can now mark dependency-heavy leaf helpers with `@venv(...)`. These helpers run
+    in a cached per-bundle subprocess virtual environment derived from the runtime Python and rebuilt
+    only when the bundle requirements file changes. The bundle and tools documentation was updated
+    to explain this execution boundary explicitly, including that proc-bound runtime surfaces such as
+    communicators, request context, DB pools, Redis clients, and tool bindings are not available
+    inside the `@venv` child process.
 config:
-    version: "2026.4.07.101"
+    version: "2026.4.10.153"
