@@ -48,7 +48,7 @@ def test_descriptor_fast_path_requires_platform_ref_without_latest():
         release=None,
     )
 
-    assert "assembly platform.ref is required unless --latest or --release is used" in reasons
+    assert "assembly platform.ref is required unless --latest, --upstream, or --release is used" in reasons
 
 
 def test_descriptor_fast_path_requires_cognito_fields():
@@ -93,6 +93,27 @@ def test_descriptor_fast_path_accepts_explicit_release_without_platform_ref():
         have_gateway=True,
         latest=False,
         release="2026.4.04.318",
+    )
+
+    assert reasons == []
+
+
+def test_descriptor_fast_path_accepts_upstream_without_platform_ref():
+    assembly = {
+        "context": {"tenant": "example-product", "project": "chatbot"},
+        "secrets": {"provider": "secrets-file"},
+        "paths": {"host_bundles_path": "/Users/demo/bundles"},
+        "auth": {"type": "simple"},
+        "proxy": {"ssl": False},
+    }
+
+    reasons = _descriptor_fast_path_reasons(
+        assembly,
+        have_secrets=True,
+        have_gateway=True,
+        latest=False,
+        upstream=True,
+        release=None,
     )
 
     assert reasons == []

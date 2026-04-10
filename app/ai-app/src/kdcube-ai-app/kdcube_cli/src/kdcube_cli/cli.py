@@ -648,6 +648,7 @@ def _descriptor_fast_path_reasons(
     have_secrets: bool,
     have_gateway: bool,
     latest: bool,
+    upstream: bool = False,
     release: str | None = None,
 ) -> list[str]:
     reasons: list[str] = []
@@ -663,8 +664,8 @@ def _descriptor_fast_path_reasons(
     if provider != "secrets-file":
         reasons.append("assembly secrets.provider must be secrets-file")
 
-    if not latest and not _has_value(release) and not _has_value(_get_nested(assembly, "platform", "ref")):
-        reasons.append("assembly platform.ref is required unless --latest or --release is used")
+    if not latest and not upstream and not _has_value(release) and not _has_value(_get_nested(assembly, "platform", "ref")):
+        reasons.append("assembly platform.ref is required unless --latest, --upstream, or --release is used")
 
     for field in (("context", "tenant"), ("context", "project")):
         if not _has_value(_get_nested(assembly, *field)):
@@ -820,6 +821,41 @@ def _checkout_repo_ref(console: Console, repo_root: Path, ref: str) -> None:
     raise SystemExit(f"Could not checkout release ref '{ref}' in {repo_root}.{(' ' + details) if details else ''}")
 
 
+def _checkout_repo_upstream(console: Console, repo_root: Path) -> str:
+    console.print("[dim]Checking out latest upstream repo state:[/dim] origin/main")
+    try:
+        subprocess.run(
+            ["git", "fetch", "origin", "main"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "checkout", "--detach", "origin/main"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        proc = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        details = (exc.stderr or exc.stdout or "").strip()
+        raise SystemExit(
+            f"Could not checkout upstream repo state in {repo_root}.{(' ' + details) if details else ''}"
+        ) from exc
+    value = (proc.stdout or "").strip()
+    if not value:
+        raise SystemExit(f"Could not resolve HEAD after checking out origin/main in {repo_root}.")
+    return value
+
+
 def _read_install_meta(workdir: Path) -> dict | None:
     meta_path = workdir / "config" / "install-meta.json"
     if not meta_path.exists():
@@ -915,6 +951,11 @@ def main() -> None:
         help="With --descriptors-location, use the latest platform release from the platform repo instead of assembly platform.ref",
     )
     parser.add_argument(
+        "--upstream",
+        action="store_true",
+        help="With --descriptors-location and --build, use the latest upstream repo state (origin/main) instead of a released platform ref",
+    )
+    parser.add_argument(
         "--release",
         default="",
         help="With --descriptors-location, use the given platform release instead of assembly platform.ref",
@@ -1002,8 +1043,13 @@ def main() -> None:
             return
         if args.remove_volumes and not args.stop:
             raise SystemExit("--remove-volumes can only be used together with --stop.")
-        if args.latest and args.release:
-            raise SystemExit("Choose only one of --latest or --release.")
+        selected_version_flags = int(bool(args.latest)) + int(bool(args.upstream)) + int(bool(str(args.release or "").strip()))
+        if selected_version_flags > 1:
+            raise SystemExit("Choose only one of --latest, --upstream, or --release.")
+        if args.upstream and not args.descriptors_location:
+            raise SystemExit("--upstream is only supported together with --descriptors-location.")
+        if args.upstream and not args.build:
+            raise SystemExit("--upstream requires --build because arbitrary upstream commits do not map to release images.")
         if args.proxy_ssl and args.no_proxy_ssl:
             raise SystemExit("Choose only one of --proxy-ssl or --no-proxy-ssl.")
         if args.proxy_ssl:
@@ -1078,6 +1124,7 @@ def main() -> None:
                 have_secrets=bool(descriptor_bootstrap["have_secrets"]),
                 have_gateway=bool(descriptor_bootstrap["have_gateway"]),
                 latest=bool(args.latest),
+                upstream=bool(args.upstream),
                 release=str(args.release or "").strip() or None,
             )
             if not reasons:
@@ -1088,7 +1135,11 @@ def main() -> None:
                     ensure_repo(console, platform_repo, repo_path)
 
                 release_ref = None
-                if args.latest:
+                install_mode = "release"
+                if args.upstream:
+                    release_ref = _checkout_repo_upstream(console, repo_path)
+                    install_mode = "upstream"
+                elif args.latest:
                     release_ref = _read_remote_ref(repo_path)
                     if not release_ref:
                         release_ref = _read_local_ref(repo_path)
@@ -1102,14 +1153,15 @@ def main() -> None:
                 else:
                     release_ref = str(_get_nested(assembly, "platform", "ref") or "").strip() or None
                     if not release_ref:
-                        raise SystemExit("assembly platform.ref is required unless --latest or --release is used.")
+                        raise SystemExit("assembly platform.ref is required unless --latest, --upstream, or --release is used.")
 
                 if args.build:
-                    _checkout_repo_ref(console, repo_path, release_ref)
-                    install_mode = "skip"
+                    if not args.upstream:
+                        _checkout_repo_ref(console, repo_path, release_ref)
+                    if install_mode != "upstream":
+                        install_mode = "skip"
                     console.print("[green]Descriptor set is complete. Running non-interactive source build install.[/green]")
                 else:
-                    install_mode = "release"
                     console.print("[green]Descriptor set is complete. Running non-interactive release-image install.[/green]")
                 os.environ["KDCUBE_CLI_NONINTERACTIVE"] = "1"
                 run_installer(console, repo_path, workdir, install_mode, release_ref, None, args.dry_run)
