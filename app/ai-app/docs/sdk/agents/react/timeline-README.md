@@ -13,6 +13,7 @@ see_also:
 
 The **timeline** is the single source of truth for turn context. It stores:
 - ordered **blocks** (user prompts, attachments, agent contributions, tool calls/results)
+- Internal Memory Beacons (`react.note`) and preserved beacons (`react.note.preserved`)
 - conversation metadata (title, started_at, last_activity_at)
 - transient **announce** blocks (in‑memory only, not persisted)
  - **plan history blocks** (`react.plan` / `react.plan.ack`) persisted in the block stream
@@ -47,10 +48,13 @@ The sources pool is persisted separately as `artifact:conv:sources_pool`.
 
 ### Persistence behavior
 If compaction occurred, the persisted timeline contains **only the post‑summary window** (summary + following blocks).
+Internal Memory Beacons from the compacted region are copied into that post-summary window as `react.note.preserved`
+so they remain visible as durable beacons.
 
 ### Compaction
 When the visible window exceeds the model budget, the timeline compacts earlier blocks into a single summary:
 - A `conv.range.summary` block is inserted at the cut point.
+- Internal Memory Beacons from the compacted region are cloned after the summary as `react.note.preserved`.
 - The compacted blocks before the summary are removed from the persisted payload.
 - Future renders start from the most recent summary block onward.
 
@@ -62,6 +66,7 @@ When the visible window exceeds the model budget, the timeline compacts earlier 
   user.attachment (optional binary)
   stage.gate [optional] / stage.react / ...
   react.tool.call / react.tool.result / ...
+  react.note [optional]
   assistant.completion
 
 [TURN <id> header]
@@ -94,6 +99,7 @@ When `RuntimeCtx.session.cache_ttl_seconds` is set, the timeline applies TTL-bas
   persistent `system.message` block is appended to the timeline to explain how to
   restore paths via `react.read(path)`. Hidden replacement blocks do **not**
   include per-block hints.
+- Internal Memory Beacons (`react.note`, `react.note.preserved`) are exempt from TTL hiding and remain visible.
 
 ### Pruned view (schematic)
 ```
@@ -171,6 +177,19 @@ Each block may include:
   (hosted fields are **not** rendered to the model; logical paths are surfaced instead)
 
 See `event-blocks-README.md` for concrete block examples.
+
+## Internal Memory Beacons
+
+Internal Memory Beacons are short user-invisible notes written with `react.write(channel="internal")`.
+They are intended for stable facts worth carrying forward, usually written near the end of a turn:
+- `[P]` preferences
+- `[D]` decisions
+- `[S]` technical/spec details
+- `[A]` achievements or milestones
+- `[K]` key artifacts with logical path and why they matter
+
+They enter the timeline as `react.note` and, if compaction later hides their original region, are preserved as
+`react.note.preserved` directly after the summary block.
 
 ## Plans in timeline
 - Plans are stored only as blocks:

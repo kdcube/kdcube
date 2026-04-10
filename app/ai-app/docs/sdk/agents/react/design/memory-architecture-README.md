@@ -38,6 +38,7 @@ It works with a **memory architecture** composed of several cooperating surfaces
 - the **workspace** as project/produced-file memory
 - the **conversation artifact store + index** as durable persisted memory
 - derived memory forms such as **summaries**, **replacement text**, **feedback**, and **plans**
+- a durable beacon lane of **Internal Memory Beacons** inside the timeline
 - adjacent readable memory realms exposed through **logical namespaces** such as `ks:` and `sk:`
 
 The key design choice is this:
@@ -105,6 +106,25 @@ Important semantic rule:
 - it sees a rendered, pruned, compacted slice of it
 
 So “in memory” and “currently visible” are not the same thing.
+
+### Internal Memory Beacons
+
+React also has a small, explicit memory-beacon mechanism inside the timeline.
+
+- Agents write them with `react.write(channel="internal")`
+- Fresh beacons are stored as `react.note`
+- After compaction, preserved copies are stored as `react.note.preserved`
+- TTL pruning keeps both visible
+
+This feature is called **Internal Memory Beacons**. It is meant for stable facts worth carrying forward:
+- `[P]` preferences
+- `[D]` decisions
+- `[S]` technical/spec context
+- `[A]` achievements or milestones
+- `[K]` key artifacts with logical path and why they matter
+
+The intended behavior is not “note every step.” The agent should usually write one or a few telegraphic beacons
+when it has something actionable and reusable to preserve, often near the end of the turn.
 
 ### Session view is a derived memory view
 

@@ -114,6 +114,8 @@ From the reconstructed turn view:
 - **Display artifacts** (`kind=display`) are not emitted as `artifact:assistant.file`.
   If UI needs them, they must be surfaced via stream artifacts (conv.timeline_text.stream)
   or by adding a new artifact type.
+- Internal Memory Beacons (`react.note` / `react.note.preserved`) are not exposed as fetch/UI artifacts.
+  They remain model-side timeline memory and turn-log reconstruction data.
 - Future namespace note:
   - assistant artifact paths are now split into durable workspace `files/...` and non-workspace `outputs/...`
   - fetch does not need a new top-level artifact family immediately

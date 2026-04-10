@@ -142,7 +142,9 @@ This cache window also bounds `react.hide`: paths **before** the pre‑tail cach
 
 ## Notes on compaction
 - `timeline(force_sanitize=True)` triggers compaction and inserts `conv.range.summary`.
+- Internal Memory Beacons from the compacted region are preserved after that summary as `react.note.preserved`.
 - Summaries are stored in the index and **not** in the turn log.
+- Beacons themselves remain ordinary timeline / turn-log blocks rather than standalone conversation artifacts.
 
 See also:
 - `context-layout.md`

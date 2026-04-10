@@ -814,7 +814,7 @@ def apply_cache_ttl_pruning(
         keep_image_paths.add(path)
         total_b64 += size
 
-    skip_types = {"turn.header", "conv.range.summary"}
+    skip_types = {"turn.header", "conv.range.summary", "react.note", "react.note.preserved"}
 
     # Build replacements for pruned turns (reverse order for most recent per path).
     path_replacements: Dict[str, str] = {}

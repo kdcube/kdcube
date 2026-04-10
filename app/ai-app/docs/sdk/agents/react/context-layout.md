@@ -17,6 +17,7 @@ assembled each turn.
 ## Block Stream (per agent call)
 1) **History blocks**
    - Built from timeline (including any `conv.range.summary` blocks).
+   - May include preserved Internal Memory Beacons (`react.note.preserved`) directly after a summary.
    - Includes prior turns (user → contributions → assistant → tool calls/results).
    - May include `turn.feedback` blocks injected as the **last block of a turn** (cache cold only).
 
@@ -24,7 +25,7 @@ assembled each turn.
    - Current user prompt + attachments.
 
 3) **Turn progress blocks**
-   - Added by downstream agents (e.g., `react.notes`, tool call/result blocks).
+   - Added by downstream agents (e.g., `react.notes`, `react.note`, tool call/result blocks).
    - Appended via `ContextBrowser.contribute(...)` and persisted into the turn log.
 
 4) **Sources pool block** (optional)
@@ -57,6 +58,7 @@ This ensures prompt caching is stable even when turns are edited or hidden.
 ┌──────────────────────────┐
 │ RANGE SUMMARIES          │
 │  - conv.range.summary    │
+│  - react.note.preserved  │
 └──────────────────────────┘
 ┌──────────────────────────┐
 │ HISTORY BLOCKS           │
@@ -73,6 +75,7 @@ This ensures prompt caching is stable even when turns are edited or hidden.
 ┌──────────────────────────┐
 │ TURN PROGRESS LOG        │
 │  - gate/react notes      │
+│  - internal beacons      │
 │  - tool call/result      │
 └──────────────────────────┘
 ┌──────────────────────────┐
@@ -88,7 +91,8 @@ This ensures prompt caching is stable even when turns are edited or hidden.
 ## Compaction Notes (high‑level)
 When compaction runs, a `conv.range.summary` block is inserted at a cut point.
 `timeline.render(...)` then slices the visible stream **from the latest summary onward**.
-Older blocks remain in storage but are hidden from the rendered context.
+Internal Memory Beacons are copied after the summary as `react.note.preserved`, so those anchors remain visible.
+Other older blocks remain in storage but are hidden from the rendered context.
 
 See `compaction-README.md` for exact cut‑point rules.
 
@@ -100,6 +104,7 @@ All paths use a concrete `turn_id` and standard `tool_call_id` (always `tc_<id>`
 - `ar:<turn_id>.user.prompt`
 - `ar:<turn_id>.assistant.completion`
 - `ar:<turn_id>.react.notes.<tool_call_id>`
+- `ar:<turn_id>.react.note.preserved.<idx>`
 - `fi:<turn_id>.user.attachments/<name>`
 - `fi:<turn_id>.files/<relative_path>`
 - `fi:<turn_id>.code.<tool_call_id>`
@@ -150,6 +155,7 @@ Notes:
 - For file artifacts, the content block uses `fi:<turn_id>.files/...`; hosted metadata stays in `meta`.
 - Feedback updates are fetched **only at turn start** (timeline load). If cache is cold, they are injected
   into the target turn and still announced once with “(incorporated into turn timeline)”.
+- Internal Memory Beacons render as `[INTERNAL NOTE]` blocks and are part of the model-visible timeline.
 
 ---
 

@@ -163,6 +163,22 @@ Important point:
 This is already a strong signal that the native tool-calling message model is
 too narrow for the behavior we need.
 
+The deeper distinction is this:
+- with provider-native tool calling, the model is still generating inside the
+  provider's tool-calling protocol shape
+- with React, the model is generating inside **our** protocol shape
+
+That means React can ask directly for:
+- raw code
+- validated decision JSON
+- progress/thinking text
+- subsystem/widget payloads
+
+without forcing those outputs to masquerade as:
+- tool-call arguments
+- assistant text
+- or the provider's own tool/result event schema
+
 ---
 
 ## 4) Why provider-native tool calling is not enough
@@ -266,8 +282,15 @@ It does not naturally give you:
 - a dedicated raw code stream
 - independent routing of different output layers
 - strict multi-channel streaming in one model pass
+- arbitrary runtime-defined channels with independent subscribers
 
 React needs exactly that.
+
+Put differently:
+- provider-native tool calling can certainly stream
+- but the streamed generation is still fundamentally tool-calling-shaped
+- React streams an SDK-owned generation contract that is **not** constrained to
+  assistant/tool/result framing
 
 ---
 
@@ -301,6 +324,10 @@ React's protocol is designed so that one agent round can:
 - then trigger isolated execution
 - then update the widget status again through the engineering layer
 
+Subscribers can act on those channels while the same round is still running.
+That is more than “the client saw some streamed tokens”.
+It is a real channel-delivery contract.
+
 This is much more naturally modeled as:
 - channeled generation
 - runtime validation
@@ -330,6 +357,8 @@ This separation matters because the code:
 - is streamable
 - needs its own consumer
 - must be validated independently from the tool signature
+- should stay natural as code instead of being squeezed into JSON tool params
+- should not lose shape for indentation-sensitive languages like Python
 
 That contract is simply better expressed in our own protocol than in native
 provider tool-call arguments.
@@ -530,6 +559,12 @@ The answer is:
 - React is designed to run turns safely anywhere in the cluster
 - not as a long-lived agent bound to one personal machine state
 
+There is also a protocol distinction:
+- Claude Code uses the model's tool-calling protocol, so generation remains in
+  that format even when Claude Code streams it very well
+- React does not use provider-native tool calling as the model contract, so we
+  are free to ask for our own channels directly
+
 That requires:
 - isolated exec
 - explicit workspace activation
@@ -587,6 +622,13 @@ Current workspace model:
 These are not side details.
 They are the practical reasons the orchestration layer cannot be “just native
 tool calling”.
+
+And they are the practical reason React differs from products like Claude Code:
+- Claude Code may stream beautifully, but the model contract is still native
+  tool calling
+- React owns the generation contract itself
+- therefore React can define its own channels, subscribers, and delivery
+  semantics without forcing everything through assistant/tool/result framing
 
 ---
 

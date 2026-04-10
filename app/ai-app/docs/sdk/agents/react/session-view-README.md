@@ -35,6 +35,7 @@ This document describes how the session view is derived from the timeline when c
 - The most recent M turns are guaranteed intact (no pruning).
 - Hidden blocks keep a short replacement text (no per-block `react.read` hint).
 - User/assistant blocks are eligible for pruning when they are older than `keep_recent_turns` (they remain intact in the recent windows).
+- Internal Memory Beacons (`react.note`, `react.note.preserved`) are not hidden by TTL pruning.
 - If compaction also ran, older plan history may still remain directly reopenable through stable `ar:plan.latest:<plan_id>` refs that sit behind the visible history summaries.
 - A system notice is appended when pruning runs:
   - Announce stack: `[SYSTEM MESSAGE] Context was pruned...`
@@ -88,7 +89,7 @@ Default replacement behavior:
 | Announce/system messages | On prune: add announce entry and a persistent `system.message` (`meta.kind=cache_ttl_pruned`) | Same |
 | Hidden vs visible semantics | Hidden blocks render `replacement_text` only; originals are kept on the timeline | Same |
 | Image/PDF budget rules | `cache_truncation_keep_recent_images` + `cache_truncation_max_image_pdf_b64_sum` enforce caps | Same; configurable via `RuntimeCtx.session` |
-| Skip rules | Always skip `turn.header`, `conv.range.summary`; others follow window rules | Same |
+| Skip rules | Always skip `turn.header`, `conv.range.summary`, `react.note`, `react.note.preserved`; others follow window rules | Same |
 | TTL bootstrap | First render uses stored `cache_last_ttl_seconds`, then sync to runtime | Same |
 | Size thresholds | Configurable: `cache_truncation_max_text_chars`, `cache_truncation_max_field_chars`, `cache_truncation_max_list_items`, `cache_truncation_max_dict_keys`, `cache_truncation_max_base64_chars` | Same |
 | Extensibility | Per-tool truncation views in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/session.py` | Same |

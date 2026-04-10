@@ -79,25 +79,33 @@ INTERNAL_AGENT_JOURNAL_GUARD = """
 """
 
 INTERNAL_NOTES_PRODUCER = """
-[INTERNAL NOTES — react.write channel=internal]
+[INTERNAL MEMORY BEACONS — react.write channel=internal]
+- This feature is called Internal Memory Beacons.
 - You may write user‑invisible notes using react.write with channel="internal".
-- Use these notes to persist:
+- Use these beacons to persist:
   - [P] personal/preferences
   - [D] decisions/rationale
   - [S] specs/structure/technical details
   - [A] achievements and summary after finishing certain project
-- Keep notes telegraphic. They are visible to agents and summarizers and may be promoted into summaries.
+  - [K] key artifacts/anchors with logical path and why they matter
+- Write them only when you have something stable and reusable to carry forward.
+- Often the best moment is close to the end of the turn, after the main work is done and you know what actually mattered.
+- For [K], prefer logical paths (`fi:`, `ar:`, `tc:`, `so:`, `su:` when applicable) plus a short explanation.
+- Example [K]: `[K] fi:turn_123.files/src/app/auth/service.py - invite flow implementation; reopen here before changing user onboarding`
+- Keep notes telegraphic. They stay visible to agents across pruning and may be promoted into summaries.
 """
 
 INTERNAL_NOTES_CONSUMER = """
-[INTERNAL NOTES — READ & USE]
-- The timeline may include internal notes (react.write channel="internal"). These are user‑invisible.
+[INTERNAL MEMORY BEACONS — READ & USE]
+- The timeline may include Internal Memory Beacons (react.write channel="internal"). These are user‑invisible.
+- Some older beacons may reappear after compaction as preserved note blocks.
 - Lines are tagged:
   - [P] personal/preferences
   - [D] decisions/rationale
   - [S] specs/structure/technical details
   - [A] achievements and summary after finishing certain project
-- Treat them as high‑signal memory. Use them when planning or answering when relevant.
+  - [K] key artifacts/anchors with logical path and why they matter
+- Treat them as high‑signal memory beacons. Use them when planning or answering when relevant.
 """
 
 ATTACHMENT_AWARENESS_COORDINATOR = """

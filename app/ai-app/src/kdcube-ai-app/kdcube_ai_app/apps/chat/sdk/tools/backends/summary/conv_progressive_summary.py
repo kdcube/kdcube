@@ -65,7 +65,14 @@ Internal notes may appear as `react.note` blocks and are tagged:
 - [P] personal/preferences
 - [D] decisions/rationale
 - [S] specs/structure/technical details
-Treat these as high-signal. Preserve them in the appropriate sections (Preferences, Decisions, Critical Context).
+- [A] achievements, completed milestones, or project-level accomplishment notes
+- [K] key artifacts/anchors with logical path and why they matter
+Treat these as high-signal. Preserve them in the appropriate sections:
+- [P] -> Constraints & Preferences
+- [D] -> Key Decisions
+- [S] -> Critical Context
+- [A] -> Progress (usually Done; if still relevant, also Next Steps or Critical Context)
+- [K] -> Critical Context (preserve the path and the one-line explanation)
 
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
@@ -114,7 +121,14 @@ Internal notes may appear as `react.note` blocks and are tagged:
 - [P] personal/preferences
 - [D] decisions/rationale
 - [S] specs/structure/technical details
-Treat these as high-signal. Preserve them in the appropriate sections (Preferences, Decisions, Critical Context).
+- [A] achievements, completed milestones, or project-level accomplishment notes
+- [K] key artifacts/anchors with logical path and why they matter
+Treat these as high-signal. Preserve them in the appropriate sections:
+- [P] -> Constraints & Preferences
+- [D] -> Key Decisions
+- [S] -> Critical Context
+- [A] -> Progress (usually Done; if still relevant, also Next Steps or Critical Context)
+- [K] -> Critical Context (preserve the path and the one-line explanation)
 
 Keep each section concise. Preserve exact file paths, function names, and error messages."""
 
@@ -131,7 +145,10 @@ Summarize the prefix to provide context for the retained suffix:
 ## Context for Suffix
 - [Information needed to understand the retained recent work]
 
-Internal notes may appear as `react.note` blocks and are tagged [P]/[D]/[S]. Preserve their substance if they are relevant.
+Internal notes may appear as `react.note` blocks and are tagged [P]/[D]/[S]/[A]/[K].
+[A] means achievements, completed milestones, or project-level accomplishment notes.
+[K] means key artifacts/anchors with logical path and why they matter.
+Preserve their substance if they are relevant, especially when they explain why the retained suffix exists, what was already completed earlier in the turn, or which artifact the future agent should reopen first.
 
 Be concise. Focus on what's needed to understand the kept suffix."""
 
@@ -214,7 +231,7 @@ def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
             else:
                 parts.append(f"[User]: ({' | '.join(header_parts)})")
             continue
-        if btype == "react.note":
+        if btype in {"react.note", "react.note.preserved"}:
             if isinstance(text, str) and text.strip():
                 parts.append(f"[Internal Note]: {text.strip()}")
             else:

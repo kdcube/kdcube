@@ -117,12 +117,21 @@ this is injected as a separate line:
 [sources_used: [1,2,3]]
 ```
 
-### Internal notes (react.note)
-`react.write(channel="internal")` emits:
+### Internal Memory Beacons (react.note / react.note.preserved)
+`react.write(channel="internal")` emits an Internal Memory Beacon:
 - a normal meta block (visibility=internal)
 - a `react.note` block with `meta.channel="internal"`
+- optionally later, after compaction, a preserved clone `react.note.preserved`
+
 These notes are visible to agents (not to end users). They should be short, telegraphic, and tagged
-with `[P]` / `[D]` / `[S]` per the shared instruction.
+with `[P]` / `[D]` / `[S]` / `[A]` / `[K]` per the shared instruction.
+They are best written when the agent has something stable and reusable to carry forward, usually near the end of the turn.
+
+Example:
+```text
+[INTERNAL NOTE]
+[K] fi:turn_123.files/src/app/auth/service.py - invite flow implementation; reopen here before changing user onboarding
+```
 
 ### Thinking blocks (react.thinking)
 Decision streaming captures the internal thinking section and stores it as a hidden block:

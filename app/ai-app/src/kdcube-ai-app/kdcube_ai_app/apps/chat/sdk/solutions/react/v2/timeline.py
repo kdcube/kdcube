@@ -1631,6 +1631,67 @@ class Timeline:
         idx = self._find_last_summary_index(blocks)
         return list(blocks[idx:]) if idx >= 0 else list(blocks)
 
+    def _clone_preserved_internal_note_block(
+        self,
+        *,
+        block: Dict[str, Any],
+        preserved_path: str,
+        source_path: str,
+    ) -> Dict[str, Any]:
+        cloned = dict(block or {})
+        meta = dict(cloned.get("meta") or {})
+        meta.pop("replacement_text", None)
+        meta["source_path"] = source_path
+        meta["preserved_by_compaction"] = True
+        cloned["type"] = "react.note.preserved"
+        cloned["path"] = preserved_path
+        cloned["hidden"] = False
+        cloned.pop("replacement_text", None)
+        cloned["meta"] = meta
+        return cloned
+
+    def _build_compacted_internal_note_blocks(
+        self,
+        *,
+        blocks: List[Dict[str, Any]],
+        turn_id: str,
+    ) -> List[Dict[str, Any]]:
+        entries: Dict[str, Dict[str, Any]] = {}
+        for order, blk in enumerate(blocks or []):
+            if not isinstance(blk, dict):
+                continue
+            btype = (blk.get("type") or "").strip()
+            if btype not in {"react.note", "react.note.preserved"}:
+                continue
+            text = (blk.get("text") or "").strip() if isinstance(blk.get("text"), str) else ""
+            if not text:
+                continue
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            source_path = (meta.get("source_path") or blk.get("path") or "").strip()
+            key = source_path or text
+            entries[key] = {
+                "order": order,
+                "block": blk,
+                "source_path": source_path,
+            }
+        if not entries:
+            return []
+        ordered = sorted(entries.values(), key=lambda item: int(item.get("order") or 0))
+        preserved: List[Dict[str, Any]] = []
+        for idx, entry in enumerate(ordered, start=1):
+            blk = entry.get("block") if isinstance(entry.get("block"), dict) else None
+            if not blk:
+                continue
+            preserved_path = f"ar:{turn_id}.react.note.preserved.{idx}" if turn_id else ""
+            preserved.append(
+                self._clone_preserved_internal_note_block(
+                    block=blk,
+                    preserved_path=preserved_path,
+                    source_path=str(entry.get("source_path") or "").strip(),
+                )
+            )
+        return preserved
+
     def _apply_hidden_replacements(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not blocks:
             return []
@@ -1923,6 +1984,11 @@ class Timeline:
             meta=meta,
         )
 
+        note_preserved_blocks = self._build_compacted_internal_note_blocks(
+            blocks=compacted_blocks,
+            turn_id=summary_turn_id or self.runtime.turn_id or "",
+        )
+
         active_plan_before = None
         if latest_current_plan_snapshot is not None:
             try:
@@ -1949,6 +2015,11 @@ class Timeline:
         inserted_blocks = 1
         updated_blocks.insert(cut_index, summary_block)
         insert_pos = cut_index + 1
+        if note_preserved_blocks:
+            for preserved_note in note_preserved_blocks:
+                updated_blocks.insert(insert_pos, preserved_note)
+                insert_pos += 1
+            inserted_blocks += len(note_preserved_blocks)
         if history_index_block:
             updated_blocks.insert(insert_pos, history_index_block)
             insert_pos += 1
@@ -2874,7 +2945,7 @@ class Timeline:
                         text = "\n".join([l for l in lines if l]).strip()
             base64 = b.get("base64") or b.get("data")
             mime = (b.get("mime") or b.get("media_type") or "").strip() or None
-            if btype == "react.note" and isinstance(text, str):
+            if btype in {"react.note", "react.note.preserved"} and isinstance(text, str):
                 text = "[INTERNAL NOTE]\n" + text
 
             emitted: List[Dict[str, Any]] = []

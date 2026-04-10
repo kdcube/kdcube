@@ -124,6 +124,11 @@ For write tools we also validate the output file and record:
 - `write_warning` if the file is unusually small
 - `tool_result_error` + meta `error` if the file is missing/empty
 
+When `channel="internal"`, `react.write` is used to leave **Internal Memory Beacons**:
+- user-invisible protocol notes for future turns
+- typically short `[P]` / `[D]` / `[S]` / `[A]` / `[K]` lines
+- usually written when there is something stable to carry forward, often near the end of the turn
+
 **Timeline sequence**
 
 1. `react.notes` (optional)
@@ -137,6 +142,18 @@ For write tools we also validate the output file and record:
 5. Rendered model view uses:
    - `[TOOL RESULT <id>].summary react.write` (status + artifact list)
    - `[TOOL RESULT <id>].artifact react.write` (logical path + optional physical path + content)
+
+### Internal Memory Beacon sequence
+
+If `react.write(channel="internal")` is used, the timeline still records the normal tool call and meta result,
+but the content block becomes `react.note` instead of a user-facing `react.tool.result`.
+Later compaction may preserve that note as `react.note.preserved` after the summary block.
+
+Typical sequence:
+1. `react.notes` (optional)
+2. `react.tool.call`
+3. `react.tool.result` (meta JSON, `visibility=internal`)
+4. `react.note`
 
 **Example (simplified)**
 ```json
@@ -155,6 +172,16 @@ For write tools we also validate the output file and record:
 { "type": "react.tool.result", "path": "fi:turn_1.files/report.md", "mime": "text/markdown", "text": "# Report..." }
 
 
+```
+
+Internal beacon example:
+```json
+{ "type": "react.tool.result", "path": "tc:turn_1.mem1.result",
+  "text": "{ \"artifact_path\": \"fi:turn_1.files/memory/key-artifacts.md\", \"visibility\": \"internal\" }" }
+
+{ "type": "react.note", "path": "fi:turn_1.files/memory/key-artifacts.md",
+  "text": "[K] fi:turn_1.files/src/app/auth/service.py - invite flow implementation; reopen here before changing user onboarding",
+  "meta": { "channel": "internal" } }
 ```
 
 ---

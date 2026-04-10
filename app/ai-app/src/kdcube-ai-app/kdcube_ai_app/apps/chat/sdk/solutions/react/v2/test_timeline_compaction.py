@@ -12,6 +12,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import (
     resolve_artifact_from_timeline,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.session import apply_cache_ttl_pruning
 
 
 def _blk(*, btype: str, text: str, turn_id: str) -> dict:
@@ -384,3 +385,98 @@ async def test_compaction_carries_historical_plan_refs(monkeypatch):
 
     assert snapshot_art and old_snap.plan_id in (snapshot_art.get("text") or "")
     assert "latest_note_preview: Need to revisit the trend break later." in history_text
+
+
+@pytest.mark.asyncio
+async def test_compaction_preserves_internal_notes_after_summary(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "SUMMARY"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "PREFIX"
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_live", max_tokens=80)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = [
+        _blk(btype="turn.header", text="[TURN turn_old]", turn_id="turn_old"),
+        _blk(btype="user.prompt", text="old ask" * 20, turn_id="turn_old"),
+        {
+            "type": "react.note",
+            "author": "react",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:01:00Z",
+            "path": "fi:turn_old.files/memory/key-artifacts.md",
+            "text": "[K] fi:turn_old.files/src/app/auth/service.py - invite flow implementation",
+            "meta": {"channel": "internal"},
+        },
+        _blk(btype="assistant.completion", text="old reply" * 20, turn_id="turn_old"),
+        _blk(btype="turn.header", text="[TURN turn_live]", turn_id="turn_live"),
+        _blk(btype="user.prompt", text="new ask" * 5, turn_id="turn_live"),
+    ]
+
+    updated = await tl.sanitize_context_blocks(
+        system_text="sys",
+        blocks=blocks,
+        max_tokens=30,
+        keep_recent_turns=0,
+        force=True,
+    )
+
+    summary_idx = next(i for i, b in enumerate(updated) if b.get("type") == "conv.range.summary")
+    preserved_notes = [
+        b for i, b in enumerate(updated)
+        if i > summary_idx and isinstance(b, dict) and b.get("type") == "react.note.preserved"
+    ]
+    assert preserved_notes, "internal notes should be preserved after summary"
+    assert "[K]" in (preserved_notes[0].get("text") or "")
+    assert (preserved_notes[0].get("meta") or {}).get("preserved_by_compaction") is True
+
+    persisted = tl._blocks_for_persist()
+    assert any(b.get("type") == "react.note.preserved" for b in persisted)
+
+
+def test_cache_ttl_pruning_keeps_internal_notes_visible():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    tl.blocks = [
+        {
+            "type": "turn.header",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "text": "[TURN turn_old]",
+        },
+        {
+            "type": "react.note",
+            "author": "react",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:01:00Z",
+            "path": "fi:turn_old.files/memory/key-artifacts.md",
+            "text": "[K] fi:turn_old.files/src/app/auth/service.py - invite flow implementation",
+            "meta": {"channel": "internal"},
+        },
+        {
+            "type": "assistant.completion",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:02:00Z",
+            "path": "ar:turn_old.assistant.completion",
+            "text": "done",
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+    )
+
+    assert res.get("status") in {"pruned", "pruned_light", "no_effect"}
+    note_block = next(b for b in tl.blocks if b.get("type") == "react.note")
+    assert not note_block.get("hidden")
+    assert "fi:turn_old.files/memory/key-artifacts.md" not in (res.get("hidden_paths") or [])

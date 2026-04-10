@@ -42,6 +42,12 @@ Reference implementations:
 | `conv.timeline_text.stream`                 | Yes             | No      | `artifact:conv.timeline_text.stream`, `turn:<turn_id>`, `conversation`, `stream` | End of turn (stream aggregation).         | No                               | Aggregated timeline text blocks. |
 
 ## Notes
+- Internal Memory Beacons are **not** a separate conversation artifact kind.
+  They live inside:
+  - `conv.timeline.v1` as `react.note` / `react.note.preserved` blocks
+  - `artifact:turn.log` as ordinary per-turn blocks
+- Compaction may also absorb beacon content into `conv.range.summary`, but the timeline now preserves visible
+  beacon copies after the summary as `react.note.preserved`.
 - Display artifacts (`kind=display`) are **not** emitted as `artifact:assistant.file`.
   They are surfaced through stream artifacts (timeline/artifacts streams).
 - Turn log blocks are stored and used by ContextBrowser; they are not
