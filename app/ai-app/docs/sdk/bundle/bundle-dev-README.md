@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/bundle-dev-README.md
 title: "Bundle Dev"
 summary: "Bundle developer guide: entrypoint setup, layout, tools/skills, ops API, and one‑time bundle init."
 tags: ["sdk", "bundle", "development", "workflow", "entrypoint", "tools", "skills", "ui", "operations"]
-keywords: ["agentic_workflow", "BaseEntrypoint", "tools_descriptor", "skills_descriptor", "operations API", "on_bundle_load", "knowledge space", "event_filter"]
+keywords: ["agentic_workflow", "BaseEntrypoint", "tools_descriptor", "skills_descriptor", "operations API", "on_bundle_load", "knowledge space", "event_filter", "BundleState", "with_accounting", "track_llm", "followups", "final_answer"]
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
@@ -660,6 +660,25 @@ Outputs:
 - Streaming events (deltas, steps, widgets) via `ChatCommunicator`.
 - Final JSON response (`final_answer`, `suggested_followups`, etc.) returned by the workflow.
 
+### BundleState fields
+
+`BundleState` carries the full request context through LangGraph. Fields available to every bundle:
+
+| Field | Direction | Description |
+|-------|-----------|-------------|
+| `request_id` | read | Unique ID for the current request |
+| `tenant` | read | Tenant identifier |
+| `project` | read | Project identifier |
+| `user` | read | User identifier |
+| `user_type` | read | User role (`privileged`, `registered`, `anonymous`) |
+| `session_id` | read | Session identifier |
+| `conversation_id` | read | Conversation identifier |
+| `turn_id` | read | Current turn identifier |
+| `text` | read | User message content |
+| `attachments` | read | Optional file/image attachments |
+| `final_answer` | write | LLM response text returned to the platform |
+| `followups` | write | Optional list of suggested follow-up actions shown in the UI |
+
 Code references:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/protocol.py`
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/base_workflow.py`
@@ -682,6 +701,40 @@ Use `AGENTS_CONFIG` to enable or hide skills per role.
 
 `event_filter.py` lets you restrict what events are visible to non-privileged users.
 If you don’t need filtering, omit it or pass no filter to `BaseEntrypoint`.
+
+---
+
+## Accounting integration (LLM cost tracking)
+
+Any bundle that makes direct LLM calls (outside the React agent) can track token usage
+and associate costs with roles using the accounting context manager.
+
+```python
+from kdcube_ai_app.infra.accounting import with_accounting
+
+with with_accounting("my-role", metadata={"model": model}):
+    result = await some_llm_call(model, messages, ...)
+```
+
+If the LLM call function is decorated with `@track_llm`, token usage is captured
+automatically from the API response. The `with_accounting` context associates the usage
+with a named role and attaches metadata for cost attribution.
+
+Fields captured per call:
+
+| Field | Value |
+|-------|-------|
+| `role` | The role name passed to `with_accounting` |
+| `input_tokens` | From LLM response usage |
+| `output_tokens` | From LLM response usage |
+| `total_tokens` | Sum of input + output |
+| `model` | Model slug |
+| `metadata` | Arbitrary dict (e.g. provider, model slug) |
+
+Data is stored in `accounting.cost_events` (PostgreSQL) and can be queried by
+`request_id`, `tenant`, `project`, `user`, and `role` for billing and analytics.
+
+Code reference: `src/kdcube-ai-app/kdcube_ai_app/infra/accounting.py`
 
 ---
 
