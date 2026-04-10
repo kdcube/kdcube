@@ -37,8 +37,8 @@ _LEGACY_SECRET_TO_CANON: dict[str, str] = {
     legacy: canon for canon, aliases in _SECRET_ALIASES.items() for legacy in aliases
 }
 _PG_SSL_MODES = {"disable", "allow", "prefer", "require", "verify-ca", "verify-full"}
-_ASSEMBLY_YAML_PATH = Path("/config/assembly.yaml")
-_BUNDLES_YAML_PATH = Path("/config/bundles.yaml")
+_ASSEMBLY_YAML_PATH = Path(os.getenv("ASSEMBLY_YAML_DESCRIPTOR_PATH") or "/config/assembly.yaml")
+_BUNDLES_YAML_PATH = Path(os.getenv("BUNDLES_YAML_DESCRIPTOR_PATH") or "/config/bundles.yaml")
 
 
 def _secret_candidates(key: str) -> list[str]:

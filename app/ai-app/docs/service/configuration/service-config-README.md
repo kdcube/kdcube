@@ -25,12 +25,26 @@ For **code usage guidelines** (how to read config/secrets in platform/bundles),
 see [docs/service/configuration/code-config-secrets-README.md](code-config-secrets-README.md).
 
 For **runtime reads from descriptor files themselves** (`assembly.yaml` and
-`bundles.yaml` mounted at `/config/...`), see
+`bundles.yaml` mounted at `/config/...` or explicitly pointed to by descriptor-path
+env vars), see
 [docs/service/configuration/descriptor-plain-config-README.md](descriptor-plain-config-README.md).
 
 **Secrets note:** Secrets are resolved by the configured runtime provider using
 **dot‑path keys** (for example, `services.openai.api_key`). Env vars are legacy
 compatibility only.
+
+**Plain descriptor note:** `read_plain(...)` / `get_plain(...)` default to:
+
+- `/config/assembly.yaml`
+- `/config/bundles.yaml`
+
+When a service is run directly on the host without those mounts, you can override
+them with:
+
+- `ASSEMBLY_YAML_DESCRIPTOR_PATH`
+- `BUNDLES_YAML_DESCRIPTOR_PATH`
+
+Those env vars are read at process startup by `kdcube_ai_app.apps.chat.sdk.config`.
 
 **Sample env files (per service)**
 
@@ -138,6 +152,8 @@ Token TTL/uses:
 | `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
 | `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | n/a |
+| `ASSEMBLY_YAML_DESCRIPTOR_PATH` | Optional override for the assembly descriptor used by `read_plain(...)`. Default: `/config/assembly.yaml`. Use this when ingress runs directly on the host without the `/config` mount. |
+| `BUNDLES_YAML_DESCRIPTOR_PATH` | Optional override for the bundles descriptor used by `read_plain("b:...")`. Default: `/config/bundles.yaml`. Use this when ingress runs directly on the host without the `/config` mount. |
 | `POSTGRES_HOST` | n/a |
 | `POSTGRES_PORT` | n/a |
 | `POSTGRES_DATABASE` | n/a |
@@ -207,6 +223,8 @@ Token TTL/uses:
 | `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
 | `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | n/a |
+| `ASSEMBLY_YAML_DESCRIPTOR_PATH` | Optional override for the assembly descriptor used by `read_plain(...)`. Default: `/config/assembly.yaml`. Use this when proc runs directly on the host without the `/config` mount. |
+| `BUNDLES_YAML_DESCRIPTOR_PATH` | Optional override for the bundles descriptor used by `read_plain("b:...")`. Default: `/config/bundles.yaml`. Use this when proc runs directly on the host without the `/config` mount. |
 | `POSTGRES_HOST` | n/a |
 | `POSTGRES_PORT` | n/a |
 | `POSTGRES_DATABASE` | n/a |
@@ -351,6 +369,8 @@ The CLI installer maps that to:
 | `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
 | `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
 | `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | n/a |
+| `ASSEMBLY_YAML_DESCRIPTOR_PATH` | Optional override for the assembly descriptor used by `read_plain(...)`. Default: `/config/assembly.yaml`. Set this if metrics runs directly on the host and needs plain descriptor reads. |
+| `BUNDLES_YAML_DESCRIPTOR_PATH` | Optional override for the bundles descriptor used by `read_plain("b:...")`. Default: `/config/bundles.yaml`. Set this if metrics runs directly on the host and needs plain descriptor reads. |
 | `REDIS_URL` | Redis endpoint (reachable from containers) |
 | `METRICS_SCHEDULER_ENABLED` | Scheduler/export |
 | `METRICS_EXPORT_INTERVAL_SEC` | n/a |

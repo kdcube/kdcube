@@ -156,6 +156,24 @@ In addition to secrets, the CLI-generated compose setup mounts descriptor files
 under `/config` so runtime code can read non-secret descriptor values through
 `read_plain(...)` / `get_plain(...)`.
 
+Default runtime descriptor paths:
+
+- assembly: `/config/assembly.yaml`
+- bundles: `/config/bundles.yaml`
+
+If you run `chat-ingress` or `chat-proc` directly on the host instead of via
+docker compose, those `/config/...` mounts usually do not exist. In that case,
+point runtime plain-config reads at real files with:
+
+```bash
+export ASSEMBLY_YAML_DESCRIPTOR_PATH=/absolute/path/to/assembly.yaml
+export BUNDLES_YAML_DESCRIPTOR_PATH=/absolute/path/to/bundles.yaml
+```
+
+These env vars are read by `kdcube_ai_app.apps.chat.sdk.config` and are the
+host-run equivalent of the compose `/config` mounts. If they are unset, runtime
+falls back to `/config/assembly.yaml` and `/config/bundles.yaml`.
+
 See:
 - [docs/service/configuration/descriptor-plain-config-README.md](../../service/configuration/descriptor-plain-config-README.md)
 
