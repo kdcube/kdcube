@@ -82,7 +82,7 @@ Expose only required ports to host:
 
 ### Secrets injection options
 Option A — **Installer runs inside VM** (cleanest):
-- CLI creates VM, then runs `kdcube-setup` inside VM via SSH.
+- CLI creates VM, then runs `kdcube` inside VM via SSH.
 - Secrets are entered inside the VM and never touch host disk.
 - Secrets are stored in the VM’s local store / keychain.
 

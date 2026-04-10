@@ -15,7 +15,7 @@ This guide shows the **minimal env variables** needed to load bundles from a
 `bundles.yaml` descriptor during local development, and how to prepare SSH
 credentials for private git repos.
 
-If you already use `kdcube-setup` (PyPI package: `kdcube-cli`), you can reuse the generated env files
+If you already use `kdcube` (PyPI package: `kdcube-cli`), you can reuse the generated env files
 from `workdir/config` instead of copying sample envs manually.
 
 ---

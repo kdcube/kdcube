@@ -490,14 +490,14 @@ python -m pip install --user kdcube-cli</code></pre>
       <div class="step-num">2</div>
       <div class="step-content">
         <h4>Run the setup wizard</h4>
-        <pre><code>kdcube-setup</code></pre>
+        <pre><code>kdcube</code></pre>
         <p>Choose <strong>release-latest</strong> → answer <strong>yes</strong> to "Run docker compose now?" — no local build needed. The wizard creates <code>~/.kdcube/kdcube-runtime/</code> with all config, data, and log folders.</p>
         <div style="margin: 1rem 0; border-radius: 8px; overflow: hidden; border: 1px solid #D8ECEB; box-shadow: 0 1px 4px rgba(0,0,0,0.07);">
           <img src="assets/cli-setup.png" alt="KDCube CLI setup wizard" style="display:block; width:100%; max-width:760px;">
         </div>
         <div class="callout tip">
           <span class="callout-icon">💡</span>
-          <div class="callout-body">Using a local repo checkout? <code>kdcube-setup --path /path/to/kdcube-ai-app</code> skips the install-source menu and uses your local templates.</div>
+          <div class="callout-body">Using a local repo checkout? <code>kdcube --path /path/to/kdcube-ai-app</code> skips the install-source menu and uses your local templates.</div>
         </div>
       </div>
     </li>
@@ -1621,8 +1621,8 @@ According to multiple sources [[S:1-4]], the trend is clear.</code></pre>
       <div class="step-num">3</div>
       <div class="step-content">
         <h4>Inject secrets and apply</h4>
-        <pre><code>kdcube-setup --secrets-set GIT_HTTP_TOKEN=ghp_...
-kdcube-setup --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
+        <pre><code>kdcube --secrets-set GIT_HTTP_TOKEN=ghp_...
+kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
         <p>The bundle config is applied immediately via Redis — no restart needed. Change the <code>ref</code> and re-run to switch bundle versions on the fly.</p>
       </div>
     </li>

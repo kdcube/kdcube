@@ -27,7 +27,7 @@ CI/CD overview: `app/ai-app/docs/service/cicd/custom-cicd-README.md`
 **2) Run the CLI**
 
 ```bash
-kdcube-setup
+kdcube
 ```
 
 Doc: `app/ai-app/docs/service/cicd/cli-README.md`  

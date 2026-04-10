@@ -63,7 +63,7 @@ sudo apt-get update
 sudo apt-get install -y python3-pip python3-venv
 python3 -m venv ~/.venvs/kdcube-cli
 ~/.venvs/kdcube-cli/bin/pip install -e /path/to/kdcube_cli
-~/.venvs/kdcube-cli/bin/kdcube-setup --help
+~/.venvs/kdcube-cli/bin/kdcube --help
 ```
 
 ### 2.1 `kdcube env init` (platform dev, host)
@@ -187,7 +187,7 @@ Repo field contract:
 The CLI now supports a descriptor-folder driven install path:
 
 ```bash
-kdcube-setup \
+kdcube \
   --descriptors-location /path/to/descriptors \
   --workdir ~/.kdcube/kdcube-runtime
 ```
@@ -207,7 +207,7 @@ Use `--latest` to resolve the platform release from the platform repo instead
 of using `assembly.yaml -> platform.ref`:
 
 ```bash
-kdcube-setup \
+kdcube \
   --descriptors-location /path/to/descriptors \
   --latest
 ```

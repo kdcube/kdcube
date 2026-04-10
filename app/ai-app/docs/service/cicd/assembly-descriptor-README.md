@@ -189,7 +189,7 @@ Bundle definitions moved to `bundles.yaml`.
 See: [docs/service/configuration/bundle-configuration-README.md](../configuration/bundle-configuration-README.md)
 
 ### Frontend section (CLI usage)
-The `frontend` section is used by `kdcube-setup` to build a customer UI when
+The `frontend` section is used by `kdcube` to build a customer UI when
 you run **custom‑ui‑managed‑infra** compose. It is ignored by runtime services.
 
 Required (build mode):

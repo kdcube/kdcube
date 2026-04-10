@@ -13,6 +13,7 @@ license = {file = "LICENSE"}
 
 [project.scripts]
 kdcube-setup = "kdcube_cli.cli:main"
+kdcube = "kdcube_cli.cli:main"
 
 [tool.setuptools]
 include-package-data = true

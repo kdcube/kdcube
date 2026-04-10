@@ -18,7 +18,7 @@ while infra (Postgres/Redis/ClamAV/proxylogin) runs separately (for example via
 ## Source‑Of‑Truth Env Files
 
 Use the sample envs below as the authoritative list and copy into your IDE run config.
-You can also use `kdcube-setup` (PyPI package: `kdcube-cli`) to generate a workdir and then point your IDE
+You can also use `kdcube` (PyPI package: `kdcube-cli`) to generate a workdir and then point your IDE
 to the generated env files in `workdir/config`.
 
 | File | Purpose |

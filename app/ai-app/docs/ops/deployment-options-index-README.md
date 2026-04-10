@@ -27,7 +27,7 @@ Use this when you want a local infra stack but run services on your host (DevEnv
 **Folder:** [deployment/docker/all_in_one_kdcube/](../../deployment/docker/all_in_one_kdcube)
 
 Runs Postgres/Redis/ClamAV + ingress/proc/metrics + UI + proxy in a single compose. Best for bundle development and quick evaluation.
-You can bootstrap a workdir + envs via the `kdcube-setup` CLI (PyPI package: `kdcube-cli`).
+You can bootstrap a workdir + envs via the `kdcube` CLI (PyPI package: `kdcube-cli`).
 
 ## 4. Custom UI + managed infra
 **Folder:** [deployment/docker/custom-ui-managed-infra/](../../deployment/docker/custom-ui-managed-infra)

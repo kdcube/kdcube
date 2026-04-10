@@ -1,20 +1,20 @@
 ---
 id: ks:docs/ops/local/local-setup-README.md
 title: "Local Setup (CLI)"
-summary: "How the kdcube-setup CLI provisions local workdir, config, data, and secrets."
+summary: "How the kdcube CLI provisions local workdir, config, data, and secrets."
 tags: ["ops", "local", "cli", "docker-compose", "secrets"]
-keywords: ["kdcube-setup", "workdir", "config", "data", "logs", "secrets", "sidecar"]
+keywords: ["kdcube", "workdir", "config", "data", "logs", "secrets", "sidecar"]
 see_also:
   - ks:docs/ops/deployment-options-index-README.md
 ---
 # Local setup (CLI)
 
-This document explains the local setup flow and where data and secrets are stored when you use `kdcube-setup`.
+This document explains the local setup flow and where data and secrets are stored when you use `kdcube`.
 
 ## Typical user flow
 1. Run the CLI:
    ```bash
-   kdcube-setup
+   kdcube
    ```
 2. The wizard walks you through:
    - Install source (release or upstream)
@@ -166,7 +166,7 @@ Important:
 
 Re‑inject:
 ```bash
-kdcube-setup --secrets-prompt --workdir ~/.kdcube/kdcube-runtime
+kdcube --secrets-prompt --workdir ~/.kdcube/kdcube-runtime
 ```
 
 Note: re‑inject restarts `kdcube-secrets`, `chat-ingress`, and `chat-proc` to refresh tokens.
@@ -174,7 +174,7 @@ It also restarts the web proxy so upstreams stay in sync.
 
 You can also inject a git HTTPS token (for private bundles):
 ```bash
-kdcube-setup --secrets-set GIT_HTTP_TOKEN=... --workdir ~/.kdcube/kdcube-runtime
+kdcube --secrets-set GIT_HTTP_TOKEN=... --workdir ~/.kdcube/kdcube-runtime
 ```
 
 If the compose stack is not running, the CLI starts `kdcube-secrets` first, injects keys,
@@ -186,7 +186,7 @@ attempt to read secrets.
 flowchart LR
   subgraph Host["Host machine"]
     U[User/Admin]
-    CLI[kdcube-setup CLI]
+    CLI[kdcube CLI]
     ENV[Workdir config\n.env files]
   end
 
@@ -264,12 +264,12 @@ Let’s Encrypt cert paths under `/etc/letsencrypt/live/<domain>/...`.
 ## Clean / reset
 Remove Docker images and cache for local KDCube builds:
 ```bash
-kdcube-setup --clean
+kdcube --clean
 ```
 
 Reset config prompts without deleting files:
 ```bash
-kdcube-setup --reset
+kdcube --reset
 ```
 
 Full reset (delete workdir):

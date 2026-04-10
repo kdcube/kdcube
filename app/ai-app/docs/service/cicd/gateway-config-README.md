@@ -18,7 +18,7 @@ The gateway descriptor is an optional YAML file that replaces
 
 ## CLI usage
 
-During `kdcube-setup`, the wizard can prompt for a gateway config path:
+During `kdcube`, the wizard can prompt for a gateway config path:
 
 ```
 Gateway config path (gateway.yaml) (leave blank to skip)

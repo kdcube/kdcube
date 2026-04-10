@@ -45,18 +45,18 @@ sudo apt-get update
 sudo apt-get install -y python3-pip python3-venv
 python3 -m venv ~/.venvs/kdcube-cli
 ~/.venvs/kdcube-cli/bin/pip install -e /path/to/kdcube_cli
-~/.venvs/kdcube-cli/bin/kdcube-setup --help
+~/.venvs/kdcube-cli/bin/kdcube --help
 ```
 
 ## Run
 
 ```bash
-kdcube-setup
+kdcube
 ```
 
 ## Quick start (new users)
 
-1) Run `kdcube-setup`  
+1) Run `kdcube`  
 2) Choose **release-latest** (pull prebuilt images)  
 3) Answer **yes** to “Run docker compose now?”  
 
@@ -70,7 +70,7 @@ installed admin assistant and bundled tools.
 If you already have a descriptor folder, you can skip the wizard:
 
 ```bash
-kdcube-setup \
+kdcube \
   --descriptors-location /path/to/descriptors \
   --workdir ~/.kdcube/kdcube-runtime
 ```
@@ -79,7 +79,7 @@ Or pull the latest platform release from the platform repo instead of
 `assembly.yaml -> platform.ref`:
 
 ```bash
-kdcube-setup \
+kdcube \
   --descriptors-location /path/to/descriptors \
   --latest
 ```
@@ -129,7 +129,7 @@ what is incomplete.
 ### Use a local checkout (dev)
 
 ```bash
-kdcube-setup --path /Users/you/src/kdcube/kdcube-ai-app
+kdcube --path /Users/you/src/kdcube/kdcube-ai-app
 ```
 
 When `--path` is provided, the wizard **uses that repo for templates and local builds**
@@ -138,21 +138,21 @@ and **does not show the Install source menu**.
 Re-run prompts (edit existing values):
 
 ```bash
-kdcube-setup --reset
+kdcube --reset
 ```
 
 Clean local Docker images/cache:
 
 ```bash
-kdcube-setup --clean
+kdcube --clean
 ```
 
-Tip: if `kdcube-setup` is not on your PATH, run `python -m pipx ensurepath`
+Tip: if `kdcube` is not on your PATH, run `python -m pipx ensurepath`
 or re-open your shell after installation.
 
 ## What the wizard does (today)
 
-When you run `kdcube-setup`, the **wizard** performs the steps below:
+When you run `kdcube`, the **wizard** performs the steps below:
 1) Creates a **workdir** with `config/`, `data/`, and `logs/` folders.
 2) Writes compose env files into `config/` (only if missing; it won’t overwrite existing files).
 3) Copies nginx configs into `config/` for runtime overrides:
@@ -219,19 +219,19 @@ Order (automatic):
 Manual re‑inject:
 
 ```bash
-kdcube-setup --secrets-prompt --workdir ~/.kdcube/kdcube-runtime
+kdcube --secrets-prompt --workdir ~/.kdcube/kdcube-runtime
 ```
 
 Or pass explicit values:
 
 ```bash
-kdcube-setup --secrets-set OPENAI_API_KEY=... --secrets-set ANTHROPIC_API_KEY=...
+kdcube --secrets-set OPENAI_API_KEY=... --secrets-set ANTHROPIC_API_KEY=...
 ```
 
 You can also override the git HTTPS token this way:
 
 ```bash
-kdcube-setup --secrets-set GIT_HTTP_TOKEN=...
+kdcube --secrets-set GIT_HTTP_TOKEN=...
 ```
 
 Note: re‑inject will **restart** `kdcube-secrets`, `chat-ingress`, and `chat-proc`
@@ -509,7 +509,7 @@ Frontend/runtime config behavior:
 - If `frontend.nginx_ui_config` is omitted, the CLI falls back to the built-in `nginx_ui.conf`.
 
 How to activate:
-1) Run `kdcube-setup`
+1) Run `kdcube`
 2) Choose **Use an assembly descriptor** → provide `assembly.yaml`
 3) Confirm **Frontend** usage when prompted.
 4) The CLI selects `deployment/docker/custom-ui-managed-infra/docker-compose.yaml`.
@@ -563,7 +563,7 @@ Open the UI:
 
 - The wizard **does not overwrite** existing config files in your workdir. It only fills
   placeholders in newly created files.
-- Use `kdcube-setup --reset` to re-enter values without deleting files.
+- Use `kdcube --reset` to re-enter values without deleting files.
 - Config upgrades/migrations will be added later when configs are versioned.
 - The wizard auto‑saves after major sections, so if you exit early (Ctrl+C) most
   values entered so far are preserved in `config/` and will appear as defaults next run.
@@ -582,12 +582,12 @@ container. Docker compose mounts the host file defined by
 ## Clean / reset
 Clean local Docker cache and unused KDCube images:
 ```bash
-kdcube-setup --clean
+kdcube --clean
 ```
 
 Reset prompts without deleting files:
 ```bash
-kdcube-setup --reset
+kdcube --reset
 ```
 
 Full reset (delete workdir):
