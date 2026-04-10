@@ -152,6 +152,7 @@ class EnhancedChatRequestProcessor:
         self._processor_task: Optional[asyncio.Task] = None
         self._config_task: Optional[asyncio.Task] = None
         self._reaper_task: Optional[asyncio.Task] = None
+        self._scheduler: Optional[Any] = None
         self._active_tasks: set[asyncio.Task] = set()
         self._active_task_details: dict[asyncio.Task, Dict[str, Any]] = {}
         self._current_load = 0
@@ -192,6 +193,23 @@ class EnhancedChatRequestProcessor:
                 self._inflight_recovery_loop(),
                 name="chat-inflight-recovery-loop",
             )
+        if self._scheduler is None:
+            from kdcube_ai_app.apps.chat.sdk.config import get_settings
+            from kdcube_ai_app.apps.chat.sdk.runtime.bundle_scheduler import BundleSchedulerManager
+            from kdcube_ai_app.infra.plugin.bundle_store import load_registry
+            _settings = get_settings()
+            self._scheduler = BundleSchedulerManager(
+                redis=self.redis,
+                redis_url=getattr(_settings, "REDIS_URL", None),
+                tenant=_settings.TENANT,
+                project=_settings.PROJECT,
+                instance_id=_settings.INSTANCE_ID,
+            )
+            try:
+                _reg = await load_registry(self.redis, _settings.TENANT, _settings.PROJECT)
+                await self._scheduler.reconcile(_reg)
+            except Exception:
+                logger.warning("Initial bundle scheduler reconcile failed; will retry on next registry update", exc_info=True)
 
     async def _await_background_task_exit(
             self,
@@ -253,6 +271,9 @@ class EnhancedChatRequestProcessor:
         self._config_task = None
         await self._await_background_task_exit(self._reaper_task, name="chat-inflight-recovery-loop")
         self._reaper_task = None
+        if self._scheduler is not None:
+            await self._scheduler.shutdown()
+            self._scheduler = None
         await self.wait_for_active_tasks()
 
     def get_current_load(self) -> int:
@@ -805,6 +826,7 @@ class EnhancedChatRequestProcessor:
         project = settings.PROJECT
         update_channel = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL.format(tenant=tenant, project=project)
         cleanup_channel = namespaces.CONFIG.BUNDLES.CLEANUP_CHANNEL.format(tenant=tenant, project=project)
+        props_update_channel = namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL.format(tenant=tenant, project=project)
         backoff = 0.5
         while not self._stop_event.is_set():
             pubsub = None
@@ -813,10 +835,11 @@ class EnhancedChatRequestProcessor:
                 await pubsub.subscribe(
                     update_channel,
                     cleanup_channel,
+                    props_update_channel,
                 )
                 logger.info(
                     "Subscribed to bundles channels: "
-                    f"{update_channel}, {cleanup_channel}"
+                    f"{update_channel}, {cleanup_channel}, {props_update_channel}"
                 )
                 backoff = 0.5
                 self._last_config_error = None
@@ -873,6 +896,11 @@ class EnhancedChatRequestProcessor:
                             logger.debug("Could not save snapshot to Redis; continuing")
 
                         logger.info(f"Applied bundles SNAPSHOT; now have {len(get_all())} bundles")
+                        if self._scheduler is not None:
+                            try:
+                                await self._scheduler.reconcile(reg)
+                            except Exception:
+                                logger.warning("Bundle scheduler reconcile failed after snapshot", exc_info=True)
                         continue
 
                     if evt.get("type") == "bundles.update":
@@ -909,6 +937,11 @@ class EnhancedChatRequestProcessor:
                             pass
 
                         logger.info(f"Applied bundles COMMAND (op={op}); now have {len(get_all())} bundles. New env = {new_env}")
+                        if self._scheduler is not None:
+                            try:
+                                await self._scheduler.reconcile(reg)
+                            except Exception:
+                                logger.warning("Bundle scheduler reconcile failed after bundles.update", exc_info=True)
                         continue
 
                     if evt.get("type") == "bundles.cleanup":
@@ -1006,6 +1039,18 @@ class EnhancedChatRequestProcessor:
                         )
                         continue
 
+                    if message.get("channel") in (
+                        props_update_channel,
+                        props_update_channel.encode(),
+                    ):
+                        if self._scheduler is not None:
+                            try:
+                                current = await store_load(self.redis)
+                                await self._scheduler.reconcile(current)
+                            except Exception:
+                                logger.warning("Bundle scheduler reconcile failed after props update", exc_info=True)
+                        continue
+
                     logger.debug("Ignoring unrelated pub/sub message on bundles channel")
 
                 if self._stop_event.is_set():
@@ -1022,7 +1067,7 @@ class EnhancedChatRequestProcessor:
             finally:
                 if pubsub:
                     try:
-                        await pubsub.unsubscribe(update_channel, cleanup_channel)
+                        await pubsub.unsubscribe(update_channel, cleanup_channel, props_update_channel)
                         await pubsub.close()
                     except Exception:
                         pass

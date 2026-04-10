@@ -609,6 +609,16 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
             for s in manifest.ui_widgets
         ],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
+        "scheduled_jobs": [
+            {
+                "method_name": s.method_name,
+                "alias": s.alias,
+                "cron_expression": s.cron_expression,
+                "expr_config": s.expr_config,
+                "span": s.span,
+            }
+            for s in manifest.scheduled_jobs
+        ],
     }
 
 
@@ -629,6 +639,16 @@ def _manifest_to_descriptor_filtered(
             if _roles_visible(s.roles, session)
         ],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
+        "scheduled_jobs": [
+            {
+                "method_name": s.method_name,
+                "alias": s.alias,
+                "cron_expression": s.cron_expression,
+                "expr_config": s.expr_config,
+                "span": s.span,
+            }
+            for s in manifest.scheduled_jobs
+        ],
     }
 
 

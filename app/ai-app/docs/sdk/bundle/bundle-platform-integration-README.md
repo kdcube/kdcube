@@ -2,10 +2,11 @@
 id: ks:docs/sdk/bundle/bundle-platform-integration-README.md
 title: "Bundle Platform Integration"
 summary: "Current declarative bundle integration contract: supported decorators, manifest metadata, REST routes, and UI/static integration."
-tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "ui", "manifest"]
-keywords: ["agentic_workflow", "bundle_id decorator", "api decorator", "ui_widget", "ui_main", "on_message", "bundle manifest", "integrations widgets", "integrations operations", "public route"]
+tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "ui", "manifest", "cron", "scheduled-jobs"]
+keywords: ["agentic_workflow", "bundle_id decorator", "api decorator", "ui_widget", "ui_main", "on_message", "cron decorator", "scheduled jobs", "bundle manifest", "integrations widgets", "integrations operations", "public route"]
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
+  - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/design/bundle-custom-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
@@ -37,6 +38,7 @@ Bundles currently use these decorators:
 - `@ui_widget(...)`
 - `@ui_main`
 - `@on_message`
+- `@cron(...)`
 - `@venv(...)`
 
 These decorators are metadata for the bundle interface surface. They are not
@@ -225,7 +227,58 @@ Current practical pattern:
 - base entrypoints already decorate `run()` with `@on_message`
 - manifest discovery reports the message handler method name
 
-### 1.6 `@venv(...)`
+### 1.6 `@cron(...)`
+
+Marks a method as a recurring scheduled job managed by proc.
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import cron
+
+@cron(
+    alias="rebuild-indexes",
+    cron_expression="0 * * * *",
+    expr_config="routines.reindex.cron",
+    span="system",
+)
+async def rebuild_indexes(self) -> None:
+    ...
+```
+
+Current fields:
+
+- `alias`
+  - stable job identifier used in lock keys and logs
+  - default: Python method name
+- `cron_expression`
+  - inline cron expression, e.g. `"*/15 * * * *"`
+  - used when `expr_config` is not set
+- `expr_config`
+  - dot-separated path into bundle props/config, e.g. `"routines.reindex.cron"`
+  - if set, takes precedence over `cron_expression` at runtime
+  - if the resolved value is missing, blank, or `"disable"` (case-insensitive) → job is **not** scheduled
+  - does **not** fall back to `cron_expression` when `expr_config` is set but unresolvable
+- `span`
+  - `"process"` — runs independently in every proc worker process (no lock)
+  - `"instance"` — runs once per host instance, Redis lock per `INSTANCE_ID`
+  - `"system"` — runs once across all instances for this tenant/project/bundle/job, Redis lock
+  - omitting `span` or passing an empty string defaults to `"system"`
+  - an unrecognised value raises `ValueError` at decoration time
+
+Current behavior:
+
+- proc discovers `@cron` methods through the same manifest discovery path as `@api` and `@ui_widget`
+- `BundleSchedulerManager` in proc reconciles job tasks after every registry or props change
+- no proc restart required for schedule changes
+- if Redis is unavailable for `instance`/`system` spans, the tick is skipped and a warning is logged; the job is **not** silently degraded to `process`
+- the method runs headlessly — no user session or SSE stream, but normal bundle runtime access is available (`self.bundle_props`, `self.redis`, `self.pg_pool`, secrets)
+- async methods are executed directly; sync methods run via `asyncio.to_thread`
+- overlapping runs within the same exclusivity scope are prevented (in-process flag for `process`, Redis lock for `instance`/`system`)
+
+For full details on span semantics, cron resolution, and local debug:
+
+- [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
+
+### 1.7 `@venv(...)`
 
 Marks a callable to execute in a cached per-bundle subprocess venv.
 
@@ -314,7 +367,19 @@ class UIMainSpec:
     method_name: str
 ```
 
-### 2.5 `BundleInterfaceManifest`
+### 2.5 `CronJobSpec`
+
+```python
+@dataclass(frozen=True)
+class CronJobSpec:
+    method_name: str
+    alias: str = ""
+    cron_expression: str | None = None
+    expr_config: str | None = None
+    span: str = "system"
+```
+
+### 2.6 `BundleInterfaceManifest`
 
 ```python
 @dataclass(frozen=True)
@@ -325,10 +390,14 @@ class BundleInterfaceManifest:
     api_endpoints: tuple[APIEndpointSpec, ...] = ()
     ui_main: UIMainSpec | None = None
     on_message: OnMessageSpec | None = None
+    scheduled_jobs: tuple[CronJobSpec, ...] = ()
 ```
 
 `allowed_roles` is populated from the `allowed_roles` argument of
 `@agentic_workflow`. Empty tuple means no restriction.
+
+`scheduled_jobs` is populated from all `@cron`-decorated methods on the
+entrypoint class, sorted by `alias`.
 
 Discovery helpers currently exposed by the loader:
 
@@ -357,6 +426,12 @@ Current response shape includes:
   - includes `roles`
 - `ui_main`
 - `on_message`
+- `scheduled_jobs`
+  - includes `method_name`
+  - includes `alias`
+  - includes `cron_expression` (declared value, not runtime-resolved)
+  - includes `expr_config`
+  - includes `span`
 
 Example:
 
@@ -388,7 +463,16 @@ Example:
   },
   "on_message": {
     "method_name": "run"
-  }
+  },
+  "scheduled_jobs": [
+    {
+      "method_name": "rebuild_indexes",
+      "alias": "rebuild-indexes",
+      "cron_expression": "0 * * * *",
+      "expr_config": "routines.reindex.cron",
+      "span": "system"
+    }
+  ]
 }
 ```
 
@@ -521,6 +605,10 @@ Use these rules for new bundles:
 6. Use `@ui_main` when the bundle has a main iframe application.
 7. Use `@on_message` on the bundle message handler. The base entrypoints already
    do this on `run()`.
+8. Use `@cron(...)` for recurring background work. Prefer `span="system"` (the
+   default) unless process-local or instance-local semantics are required.
+   See [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
+   for details on span semantics, `expr_config` resolution, and local debug.
 
 Important current rule:
 

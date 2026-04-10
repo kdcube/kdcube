@@ -410,6 +410,35 @@ async def _apply_bundle_props(
         await redis.set(key, json.dumps(props, ensure_ascii=False))
 
 
+async def get_bundle_props(
+    redis,
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+) -> Dict[str, Any]:
+    """Return the stored props dict for a bundle, or {} if not set."""
+    key = _props_key(tenant=tenant, project=project, bundle_id=bundle_id)
+    raw = await redis.get(key)
+    if not raw:
+        return {}
+    return json.loads(raw)
+
+
+def resolve_dot_path(obj: Any, path: str) -> Any:
+    """
+    Resolve a dot-separated path into a nested dict, e.g.
+    ``resolve_dot_path(props, "apps.some_app.routines.cron")`` returns the value
+    at ``props["apps"]["some_app"]["routines"]["cron"]``, or ``None`` if any
+    segment is missing or the traversal hits a non-dict node.
+    """
+    for part in path.split("."):
+        if not isinstance(obj, dict):
+            return None
+        obj = obj.get(part)
+    return obj
+
+
 def _decode_redis_key(raw: Any) -> str:
     if isinstance(raw, bytes):
         return raw.decode("utf-8", errors="ignore")

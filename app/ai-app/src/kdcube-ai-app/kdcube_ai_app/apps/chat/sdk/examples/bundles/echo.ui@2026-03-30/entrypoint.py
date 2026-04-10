@@ -22,7 +22,7 @@ from langgraph.graph import StateGraph, START, END
 
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.infra.service_hub.inventory import Config, BundleState
-from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, bundle_id
+from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow, api, bundle_id, cron
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 
 BUNDLE_ID = "echo.ui"
@@ -102,3 +102,25 @@ class EchoUIBundle(BaseEntrypoint):
         params: Dict[str, Any],
     ):
         return await self.graph.ainvoke(state)
+
+    @cron(
+        alias="echo-heartbeat",
+        cron_expression="* * * * *",
+        expr_config="routines.heartbeat.cron",
+        span="system",
+    )
+    async def scheduled_heartbeat(self) -> None:
+        """
+        Sandbox cron job for testing @cron decorator.
+        Fires every minute by default; can be overridden or disabled via bundle props:
+          routines.heartbeat.cron: "*/5 * * * *"   # change interval
+          routines.heartbeat.cron: "disable"        # disable the job
+        """
+        import logging
+        log = logging.getLogger("echo.ui.cron")
+        props_snapshot = dict(self.bundle_props or {})
+        log.info(
+            "[echo.ui] scheduled_heartbeat fired | bundle_props keys=%s | redis=%s",
+            list(props_snapshot.keys()),
+            "ok" if self.redis is not None else "none",
+        )

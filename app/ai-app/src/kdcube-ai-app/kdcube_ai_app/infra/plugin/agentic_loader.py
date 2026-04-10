@@ -40,6 +40,7 @@ API_METHOD_ATTR = "__bundle_api_method__"
 UI_WIDGET_ATTR = "__bundle_ui_widget__"
 ON_MESSAGE_ATTR = "__bundle_on_message__"
 UI_MAIN_ATTR = "__bundle_ui_main__"
+CRON_JOB_ATTR = "__bundle_cron_job__"
 BUNDLE_VENV_ATTR = "__bundle_venv__"
 _BUNDLE_VENV_EXEC_ENV = "KDCUBE_BUNDLE_VENV_EXEC"
 _BUNDLE_VENV_STAMP_FILE = ".kdcube_venv_stamp.json"
@@ -96,6 +97,15 @@ class UIMainSpec:
 
 
 @dataclass(frozen=True)
+class CronJobSpec:
+    method_name: str
+    alias: str = ""
+    cron_expression: str | None = None
+    expr_config: str | None = None
+    span: str = "system"
+
+
+@dataclass(frozen=True)
 class BundleInterfaceManifest:
     bundle_id: str
     allowed_roles: tuple[str, ...] = ()
@@ -103,6 +113,7 @@ class BundleInterfaceManifest:
     api_endpoints: tuple[APIEndpointSpec, ...] = ()
     ui_main: UIMainSpec | None = None
     on_message: OnMessageSpec | None = None
+    scheduled_jobs: tuple[CronJobSpec, ...] = ()
 
 
 def _clean_alias(value: str | None, default: str) -> str:
@@ -369,6 +380,52 @@ def venv(
 
         setattr(_sync_wrapper, BUNDLE_VENV_ATTR, meta)
         return _sync_wrapper
+
+
+_VALID_CRON_SPANS = frozenset({"process", "instance", "system"})
+
+
+def cron(
+        *,
+        alias: str | None = None,
+        cron_expression: str | None = None,
+        expr_config: str | None = None,
+        span: str = "system",
+):
+    """
+    Mark a bundle method as a scheduled job.
+
+    Args:
+        alias: human-readable job name used as a stable identifier. Defaults
+            to the method name if not provided.
+        cron_expression: inline cron expression, e.g. ``"*/15 * * * *"``.
+        expr_config: dot-separated path into bundle props/config, e.g.
+            ``"apps.app1.routines.cron"``. If provided, takes precedence over
+            ``cron_expression`` at runtime. If the resolved value is missing,
+            blank, or ``"disable"``, the job is not scheduled.
+        span: exclusivity level — one of ``"process"``, ``"instance"``,
+            ``"system"``. Defaults to ``"system"``.
+    """
+    span_norm = str(span).strip().lower() if span else "system"
+    if span_norm not in _VALID_CRON_SPANS:
+        raise ValueError(
+            f"Invalid cron span: {span!r}. Must be one of: process, instance, system"
+        )
+
+    def _wrap(fn):
+        method_name = getattr(fn, "__name__", "cron_job")
+        setattr(
+            fn,
+            CRON_JOB_ATTR,
+            CronJobSpec(
+                method_name=method_name,
+                alias=_clean_alias(alias, method_name),
+                cron_expression=str(cron_expression).strip() if cron_expression is not None else None,
+                expr_config=str(expr_config).strip() if expr_config is not None else None,
+                span=span_norm,
+            ),
+        )
+        return fn
 
     return _wrap
 
@@ -1205,7 +1262,7 @@ def _instantiate_symbol(kind: str, symbol: Any, config: Any, extra_kwargs: Dict[
 
 def _iter_bundle_callable_members(target: Any):
     cls = target if isinstance(target, type) else target.__class__
-    _bundle_attrs = (API_METHOD_ATTR, UI_WIDGET_ATTR, ON_MESSAGE_ATTR, UI_MAIN_ATTR)
+    _bundle_attrs = (API_METHOD_ATTR, UI_WIDGET_ATTR, ON_MESSAGE_ATTR, UI_MAIN_ATTR, CRON_JOB_ATTR)
     for name, member in inspect.getmembers(cls, predicate=callable):
         if name.startswith("__"):
             continue
@@ -1238,6 +1295,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     ui_widgets: list[UIWidgetSpec] = []
     ui_main_spec: UIMainSpec | None = None
     on_message_spec: OnMessageSpec | None = None
+    scheduled_jobs: list[CronJobSpec] = []
     seen_api: set[tuple[str, str]] = set()
     seen_widgets: set[str] = set()
 
@@ -1288,11 +1346,22 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 raise ValueError("Multiple @on_message methods detected on bundle entrypoint")
             on_message_spec = resolved
 
+        cron_spec = getattr(fn, CRON_JOB_ATTR, None)
+        if isinstance(cron_spec, CronJobSpec):
+            scheduled_jobs.append(CronJobSpec(
+                method_name=member_name,
+                alias=cron_spec.alias or member_name,
+                cron_expression=cron_spec.cron_expression,
+                expr_config=cron_spec.expr_config,
+                span=cron_spec.span,
+            ))
+
     meta = getattr(cls, AGENTIC_META_ATTR, {}) or {}
     allowed_roles: tuple[str, ...] = _tuple_str(meta.get("allowed_roles"))
 
     api_endpoints.sort(key=lambda item: (item.alias, item.route, item.http_method, item.method_name))
     ui_widgets.sort(key=lambda item: (item.alias, item.method_name))
+    scheduled_jobs.sort(key=lambda item: (item.alias, item.method_name))
     return BundleInterfaceManifest(
         bundle_id=resolved_bundle_id,
         allowed_roles=allowed_roles,
@@ -1300,6 +1369,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
         api_endpoints=tuple(api_endpoints),
         ui_main=ui_main_spec,
         on_message=on_message_spec,
+        scheduled_jobs=tuple(scheduled_jobs),
     )
 
 
