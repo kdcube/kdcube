@@ -84,6 +84,29 @@ kdcube \
   --latest
 ```
 
+Or build from the latest upstream repo state instead of a released ref:
+
+```bash
+kdcube \
+  --descriptors-location /path/to/descriptors \
+  --build \
+  --upstream
+```
+
+Or pin a specific release explicitly:
+
+```bash
+kdcube \
+  --descriptors-location /path/to/descriptors \
+  --release 2026.4.11.012
+```
+
+Choose exactly one source selector:
+- `--upstream` with `--build` for the latest upstream repo state
+- `--latest` for the latest released platform ref
+- `--release <ref>` for a specific released ref
+- otherwise `assembly.yaml -> platform.ref`
+
 Expected descriptor folder:
 
 ```text
@@ -116,6 +139,8 @@ what is incomplete.
 | `--workdir <path>` | Use a specific workdir instead of `~/.kdcube/kdcube-runtime`. |
 | `--descriptors-location <dir>` | Use a folder containing `assembly.yaml`, `secrets.yaml`, `gateway.yaml`, and optional bundle descriptors. |
 | `--latest` | With `--descriptors-location`, resolve the latest platform release instead of using `assembly.yaml -> platform.ref`. |
+| `--upstream` | With `--descriptors-location` and `--build`, use the latest upstream repo state (`origin/main`) instead of a released platform ref. |
+| `--release <ref>` | With `--descriptors-location`, use the given platform release instead of `assembly.yaml -> platform.ref`. |
 | `--reset-config` | Re‑prompt for config values without deleting files. |
 | `--reset` | Alias for `--reset-config`. |
 | `--clean` | Clean local Docker cache and unused KDCube images. |
@@ -347,7 +372,7 @@ enough for a non-interactive install. At minimum:
 - `assembly.secrets.provider == "secrets-file"`
 - `assembly.context.tenant` and `assembly.context.project` are set
 - `assembly.paths.host_bundles_path` is set
-- `assembly.platform.ref` is set unless `--latest` is used
+- `assembly.platform.ref` is set unless `--latest`, `--upstream`, or `--release` is used
 - `assembly.domain` is set when `proxy.ssl: true`
 - any git-backed workspace/session config includes its repo URL
 - Cognito auth fields are present when `auth.type` requires them

@@ -212,6 +212,31 @@ kdcube \
   --latest
 ```
 
+Use `--upstream` together with `--build` to build from the latest upstream
+repo state (`origin/main`) instead of a released ref:
+
+```bash
+kdcube \
+  --descriptors-location /path/to/descriptors \
+  --build \
+  --upstream
+```
+
+Use `--release` to pin a specific released platform ref explicitly:
+
+```bash
+kdcube \
+  --descriptors-location /path/to/descriptors \
+  --release 2026.4.11.012
+```
+
+Choose exactly one source selector:
+
+- `--upstream` with `--build` for the latest upstream repo state
+- `--latest` for the latest released platform ref
+- `--release <ref>` for a specific released ref
+- otherwise `assembly.yaml -> platform.ref`
+
 Fast-path requirements:
 
 - `assembly.yaml` exists
@@ -220,7 +245,7 @@ Fast-path requirements:
 - `assembly.secrets.provider == "secrets-file"`
 - `assembly.context.tenant` and `assembly.context.project` are set
 - `assembly.paths.host_bundles_path` is set
-- `assembly.platform.ref` is set unless `--latest` is used
+- `assembly.platform.ref` is set unless `--latest`, `--upstream`, or `--release` is used
 - if `proxy.ssl: true`, `assembly.domain` is set
 - if `storage.workspace.type == git`, `storage.workspace.repo` is set
 - if `storage.claude_code_session.type == git`, `storage.claude_code_session.repo` is set
