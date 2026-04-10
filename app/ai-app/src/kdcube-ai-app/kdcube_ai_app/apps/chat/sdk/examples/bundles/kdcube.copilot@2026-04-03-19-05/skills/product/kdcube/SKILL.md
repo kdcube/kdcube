@@ -85,6 +85,41 @@ Useful first anchors before deeper study:
 - `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`
 - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
 
+## Dependency check rule before adding third-party packages
+
+Do not assume which Python packages are already available in the shared runtime.
+
+Before adding:
+
+- a new third-party import
+- a `requirements.txt`
+- or an `@venv(...)` boundary
+
+inspect the actual runtime first from isolated exec.
+
+Normal approach:
+
+- run a small exec probe such as:
+  - `python -m pip list`
+  - targeted filtering/search for the candidate package names
+  - if needed, a tiny import/version probe from Python
+
+Decision rule:
+
+- if the dependency is already present in the runtime and the code can safely stay in proc:
+  - do not add it to `requirements.txt` just because it exists in another environment
+- if the dependency is missing from the runtime, or should not be assumed global:
+  - add only the minimal needed package(s) to the bundle's `requirements.txt`
+- if that dependency-heavy logic is better isolated from the shared proc runtime:
+  - move the leaf helper behind `@venv(...)`
+
+Important:
+
+- do not copy a full developer `pip freeze` into a bundle
+- do not add transitive packages unless they are explicitly needed
+- prefer the smallest explicit `requirements.txt`
+- use `@venv(...)` for dependency-heavy leaf helpers, not for the whole orchestration path
+
 Bundle-authoring rule:
 - If the task is about generating, editing, extracting, repairing, reviewing, or validating bundle code,
   read `sk:tests.bundles` as well before answering or generating code.
@@ -117,12 +152,13 @@ When the user asks for a bundle with specific features, prepare yourself in this
    - Examples of feature slices: bundle skeleton, workflow/agent integration, custom tools, skills, storage/state, isolated exec, citations, economics, MCP, widget UI, custom `ui.main_view`.
 3. Read the tests that define the minimum contract.
 4. For each requested feature slice, read the smallest current doc/source/example file set that proves how that slice is implemented now.
-5. If docs mention exact source paths, read those exact files next.
+5. Before introducing any third-party Python dependency, inspect the live runtime package set from exec and decide whether the bundle really needs `requirements.txt` and/or `@venv(...)`.
+6. If docs mention exact source paths, read those exact files next.
    - For normal bundle authoring in this repo, use the `versatile` bundle as the default source example unless the question is specifically about `ks:` or a stripped-down isolated-exec example.
-6. If the exact source/example file is still unclear, do a narrow exec browse of the relevant subtree, emit exact logical refs, and then `react.read` those exact files.
-7. After evidence is gathered, write the smallest implementation that satisfies the confirmed contract and the explicit user request.
-8. Validate early.
-9. If validation fails, inspect the exact failure and the exact related source/test files before patching.
+7. If the exact source/example file is still unclear, do a narrow exec browse of the relevant subtree, emit exact logical refs, and then `react.read` those exact files.
+8. After evidence is gathered, write the smallest implementation that satisfies the confirmed contract and the explicit user request.
+9. Validate early.
+10. If validation fails, inspect the exact failure and the exact related source/test files before patching.
 
 This is the normal copilot loop. Skills tell you where to look and how the platform is organized, but current tests and current source/examples decide what is actually valid.
 

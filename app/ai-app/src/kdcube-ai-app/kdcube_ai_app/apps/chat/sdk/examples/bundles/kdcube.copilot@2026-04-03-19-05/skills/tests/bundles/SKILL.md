@@ -52,6 +52,29 @@ Normal first bundle anchors before test deep dive:
 - `ks:docs/sdk/bundle/bundle-reference-versatile-README.md`
 - `ks:src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
 
+## Dependency check rule before writing bundle imports
+
+Before adding a new third-party import or a bundle `requirements.txt`, inspect the
+actual live runtime package set from isolated exec.
+
+Typical probe shape:
+
+- `python -m pip list`
+- targeted filtering for the candidate package names
+- small Python import/version checks when needed
+
+Use that probe to decide:
+
+- already present in runtime and safe in proc:
+  - do not add it to `requirements.txt`
+- missing from runtime or should not be treated as a global proc dependency:
+  - add only the minimal needed package(s) to `requirements.txt`
+- dependency-heavy leaf logic that should be isolated:
+  - put that helper behind `@venv(...)`
+
+Do not copy a full developer `pip freeze` into the bundle.
+Do not add transitive packages unless they are explicitly needed.
+
 Companion loading rule:
 - For bundle tasks, load this skill together with `sk:product.kdcube`.
 - `sk:product.kdcube` gives the platform/runtime model.
@@ -77,6 +100,7 @@ Before the first bundle file write, make sure all of the following are true:
 - You know the exact test file or small subset you plan to run, or you have a concrete discovery plan to find it.
 - For every requested platform-integrated feature, you have read at least one current source/example/doc file that proves the needed pattern.
 - The exact import paths and runtime symbols you intend to use are confirmed in visible evidence.
+- For every new third-party dependency, you have checked the actual runtime package set first and decided whether `requirements.txt` and/or `@venv(...)` is really needed.
 - You know the smallest bundle shape that should pass the relevant current tests.
 
 If any item above is still missing, do not write bundle code yet. Gather the missing evidence first.
@@ -218,13 +242,14 @@ When preparing to write or repair a bundle, use this exploration strategy:
 1. Read the tests first.
 2. Extract any exact file paths, import paths, symbol names, or structural expectations from the tests.
 3. If the tests imply a platform pattern that is still unclear, read the current source/example/doc files that prove that pattern.
-4. If exact files are still unknown, use isolated exec to search the relevant subtree like you would locally:
+4. Before introducing a new third-party dependency, inspect the runtime package set from isolated exec so you know whether the dependency is already present or needs a minimal `requirements.txt` plus possibly `@venv(...)`.
+5. If exact files are still unknown, use isolated exec to search the relevant subtree like you would locally:
    - resolve the subtree with `bundle_data.resolve_namespace(...)`
    - recursively list files
    - search for imports, base classes, descriptor patterns, decorators, or symbol names
    - use Python logic directly or `subprocess.run(...)` for local shell-style search when that is the clearest option
    - emit exact logical refs for the promising matches
-5. `react.read(...)` the exact discovered files before writing code.
+6. `react.read(...)` the exact discovered files before writing code.
 
 This means:
 - the agent is allowed to do sophisticated repository searches
