@@ -953,6 +953,7 @@ class EnhancedChatRequestProcessor:
                         continue
 
                     if "registry" in evt:
+                        from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_inactive_local_sidecars
                         try:
                             reg = BundlesRegistry(**(evt.get("registry") or {}))
                         except Exception:
@@ -963,6 +964,23 @@ class EnhancedChatRequestProcessor:
                             reg.default_bundle_id
                         )
                         serialize_to_env(get_all(), get_default_id())
+                        try:
+                            stopped_sidecars = stop_inactive_local_sidecars(
+                                active_bundle_ids={str(bid).strip() for bid in reg.bundles.keys() if str(bid).strip()},
+                                tenant=tenant,
+                                project=project,
+                                terminate_timeout_sec=2.0,
+                                kill_timeout_sec=1.0,
+                            )
+                            if stopped_sidecars:
+                                logger.info(
+                                    "Stopped inactive local sidecars after bundles SNAPSHOT: tenant=%s project=%s count=%s",
+                                    tenant,
+                                    project,
+                                    stopped_sidecars,
+                                )
+                        except Exception:
+                            logger.warning("Failed to stop inactive local sidecars after snapshot", exc_info=True)
                         try:
                             clear_agentic_caches()
                         except Exception:
@@ -982,6 +1000,7 @@ class EnhancedChatRequestProcessor:
                         continue
 
                     if evt.get("type") == "bundles.update":
+                        from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
                         op = evt.get("op", "merge")
                         bundles_patch = evt.get("bundles") or {}
                         default_id = evt.get("default_bundle_id")
@@ -1010,6 +1029,24 @@ class EnhancedChatRequestProcessor:
                         )
                         new_env = serialize_to_env(get_all(), get_default_id())
                         try:
+                            stopped_sidecars = stop_local_sidecars_for_bundle_ids(
+                                bundle_ids={str(bid).strip() for bid in (bundles_patch or {}).keys() if str(bid).strip()},
+                                tenant=tenant,
+                                project=project,
+                                terminate_timeout_sec=2.0,
+                                kill_timeout_sec=1.0,
+                            )
+                            if stopped_sidecars:
+                                logger.info(
+                                    "Stopped local sidecars after bundles.update: tenant=%s project=%s count=%s bundles=%s",
+                                    tenant,
+                                    project,
+                                    stopped_sidecars,
+                                    list((bundles_patch or {}).keys()),
+                                )
+                        except Exception:
+                            logger.warning("Failed to stop local sidecars after bundles.update", exc_info=True)
+                        try:
                             clear_agentic_caches()
                         except Exception:
                             pass
@@ -1024,6 +1061,7 @@ class EnhancedChatRequestProcessor:
 
                     if evt.get("type") == "bundles.cleanup":
                         from kdcube_ai_app.infra.plugin.agentic_loader import evict_inactive_specs, AgenticBundleSpec
+                        from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_inactive_local_sidecars
                         from kdcube_ai_app.infra.plugin.bundle_store import (
                             _discover_example_bundle_ids,
                             cleanup_old_shared_example_bundles,
@@ -1056,6 +1094,23 @@ class EnhancedChatRequestProcessor:
                             active_specs=active_specs,
                             drop_sys_modules=drop_sys_modules,
                         )
+                        try:
+                            stopped_sidecars = stop_inactive_local_sidecars(
+                                active_bundle_ids={str(_bid).strip() for _bid in (get_all() or {}).keys() if str(_bid).strip()},
+                                tenant=tenant,
+                                project=project,
+                                terminate_timeout_sec=2.0,
+                                kill_timeout_sec=1.0,
+                            )
+                            if stopped_sidecars:
+                                logger.info(
+                                    "Stopped inactive local sidecars during bundles cleanup: tenant=%s project=%s count=%s",
+                                    tenant,
+                                    project,
+                                    stopped_sidecars,
+                                )
+                        except Exception:
+                            logger.warning("Failed to stop inactive local sidecars during bundles cleanup", exc_info=True)
                         # Git bundle cleanup (skip active refs from Redis)
                         try:
                             active_paths = await get_active_paths(

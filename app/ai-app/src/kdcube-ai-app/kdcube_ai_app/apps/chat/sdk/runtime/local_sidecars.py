@@ -262,6 +262,79 @@ def stop_local_sidecar(
             logger.warning("Local sidecar did not exit after SIGKILL: %s", key)
 
 
+def stop_local_sidecars_for_scope(
+    *,
+    bundle_id: str,
+    tenant: str,
+    project: str,
+    terminate_timeout_sec: float = 10.0,
+    kill_timeout_sec: float = 3.0,
+) -> int:
+    with _lock:
+        keys = [
+            key
+            for key in _registry.keys()
+            if key.startswith(f"{bundle_id}:{tenant}:{project}:")
+        ]
+    for key in keys:
+        scope_bundle_id, scope_tenant, scope_project, name = key.split(":", 3)
+        stop_local_sidecar(
+            bundle_id=scope_bundle_id,
+            tenant=scope_tenant,
+            project=scope_project,
+            name=name,
+            terminate_timeout_sec=terminate_timeout_sec,
+            kill_timeout_sec=kill_timeout_sec,
+        )
+    return len(keys)
+
+
+def stop_local_sidecars_for_bundle_ids(
+    *,
+    bundle_ids: set[str],
+    tenant: str,
+    project: str,
+    terminate_timeout_sec: float = 10.0,
+    kill_timeout_sec: float = 3.0,
+) -> int:
+    if not bundle_ids:
+        return 0
+    stopped = 0
+    for bundle_id in bundle_ids:
+        stopped += stop_local_sidecars_for_scope(
+            bundle_id=bundle_id,
+            tenant=tenant,
+            project=project,
+            terminate_timeout_sec=terminate_timeout_sec,
+            kill_timeout_sec=kill_timeout_sec,
+        )
+    return stopped
+
+
+def stop_inactive_local_sidecars(
+    *,
+    active_bundle_ids: set[str],
+    tenant: str,
+    project: str,
+    terminate_timeout_sec: float = 10.0,
+    kill_timeout_sec: float = 3.0,
+) -> int:
+    with _lock:
+        scoped_bundle_ids = set()
+        for key in _registry.keys():
+            bundle_id_key, tenant_key, project_key, _name = key.split(":", 3)
+            if tenant_key == tenant and project_key == project:
+                scoped_bundle_ids.add(bundle_id_key)
+    target_bundle_ids = scoped_bundle_ids - active_bundle_ids
+    return stop_local_sidecars_for_bundle_ids(
+        bundle_ids=target_bundle_ids,
+        tenant=tenant,
+        project=project,
+        terminate_timeout_sec=terminate_timeout_sec,
+        kill_timeout_sec=kill_timeout_sec,
+    )
+
+
 async def shutdown_all_local_sidecars(
     *,
     terminate_timeout_sec: float = 10.0,

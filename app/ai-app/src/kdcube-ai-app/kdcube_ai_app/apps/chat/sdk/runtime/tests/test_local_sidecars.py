@@ -74,6 +74,7 @@ class _DummyConfig:
 
 
 def _write_sidecar_process(tmp_path: Path) -> tuple[Path, Path]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     script_path = tmp_path / "sidecar_service.py"
     flag_path = tmp_path / "terminated.txt"
     script_path.write_text(
@@ -171,6 +172,143 @@ async def test_local_sidecar_reuse_and_shutdown(tmp_path: Path):
         await asyncio.sleep(0.1)
 
     assert process_gone
+    local_sidecars.clear_local_sidecars_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_stop_local_sidecars_for_scope_stops_only_target_bundle(tmp_path: Path):
+    local_sidecars.clear_local_sidecars_for_tests()
+    script_path, flag_one = _write_sidecar_process(tmp_path / "one")
+    _, flag_two = _write_sidecar_process(tmp_path / "two")
+
+    handle_one = local_sidecars.ensure_local_sidecar(
+        bundle_id="bundle.one",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+        command=[sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env={"FLAG_PATH": str(flag_one)},
+        port=None,
+        ready_timeout_sec=5.0,
+    )
+    handle_two = local_sidecars.ensure_local_sidecar(
+        bundle_id="bundle.two",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+        command=[sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env={"FLAG_PATH": str(flag_two)},
+        port=None,
+        ready_timeout_sec=5.0,
+    )
+
+    stopped = local_sidecars.stop_local_sidecars_for_scope(
+        bundle_id="bundle.one",
+        tenant="demo-tenant",
+        project="demo-project",
+        terminate_timeout_sec=1.0,
+        kill_timeout_sec=0.5,
+    )
+
+    assert stopped == 1
+    assert local_sidecars.get_local_sidecar(
+        bundle_id="bundle.one",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+    ) is None
+    assert local_sidecars.get_local_sidecar(
+        bundle_id="bundle.two",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+    ) is not None
+
+    process_gone = False
+    for _ in range(20):
+        try:
+            os.kill(handle_one.pid, 0)
+        except ProcessLookupError:
+            process_gone = True
+            break
+        except PermissionError:
+            process_gone = True
+            break
+        await asyncio.sleep(0.05)
+    assert process_gone
+    try:
+        os.kill(handle_two.pid, 0)
+    except ProcessLookupError:
+        pytest.fail("non-target sidecar should still be alive")
+
+    local_sidecars.clear_local_sidecars_for_tests()
+
+
+@pytest.mark.asyncio
+async def test_stop_inactive_local_sidecars_stops_removed_bundle_ids(tmp_path: Path):
+    local_sidecars.clear_local_sidecars_for_tests()
+    script_path, flag_one = _write_sidecar_process(tmp_path / "active")
+    _, flag_two = _write_sidecar_process(tmp_path / "inactive")
+
+    local_sidecars.ensure_local_sidecar(
+        bundle_id="bundle.active",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+        command=[sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env={"FLAG_PATH": str(flag_one)},
+        port=None,
+        ready_timeout_sec=5.0,
+    )
+    inactive_handle = local_sidecars.ensure_local_sidecar(
+        bundle_id="bundle.inactive",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+        command=[sys.executable, str(script_path)],
+        cwd=tmp_path,
+        env={"FLAG_PATH": str(flag_two)},
+        port=None,
+        ready_timeout_sec=5.0,
+    )
+
+    stopped = local_sidecars.stop_inactive_local_sidecars(
+        active_bundle_ids={"bundle.active"},
+        tenant="demo-tenant",
+        project="demo-project",
+        terminate_timeout_sec=1.0,
+        kill_timeout_sec=0.5,
+    )
+
+    assert stopped == 1
+    assert local_sidecars.get_local_sidecar(
+        bundle_id="bundle.active",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+    ) is not None
+    assert local_sidecars.get_local_sidecar(
+        bundle_id="bundle.inactive",
+        tenant="demo-tenant",
+        project="demo-project",
+        name="svc",
+    ) is None
+    process_gone = False
+    for _ in range(20):
+        try:
+            os.kill(inactive_handle.pid, 0)
+        except ProcessLookupError:
+            process_gone = True
+            break
+        except PermissionError:
+            process_gone = True
+            break
+        await asyncio.sleep(0.05)
+    assert process_gone
+
     local_sidecars.clear_local_sidecars_for_tests()
 
 

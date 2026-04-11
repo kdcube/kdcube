@@ -1176,6 +1176,7 @@ async def _do_set_bundles(
         serialize_to_env,
     )
     from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches
+    from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
     from kdcube_ai_app.infra.plugin.bundle_store import (
         load_registry as store_load,
         save_registry as store_save,
@@ -1197,6 +1198,21 @@ async def _do_set_bundles(
             await upsert_bundles_async(payload.bundles, payload.default_bundle_id)
         else:
             raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
+        stopped_sidecars = stop_local_sidecars_for_bundle_ids(
+            bundle_ids={str(bid).strip() for bid in (payload.bundles or {}).keys() if str(bid).strip()},
+            tenant=tenant_id,
+            project=project_id,
+            terminate_timeout_sec=2.0,
+            kill_timeout_sec=1.0,
+        )
+        if stopped_sidecars:
+            logger.info(
+                "[bundle.reload] stopped local sidecars for updated bundles: tenant=%s project=%s count=%s bundles=%s",
+                tenant_id,
+                project_id,
+                stopped_sidecars,
+                list((payload.bundles or {}).keys()),
+            )
         reg = get_all()
         default_id = get_default_id()
         serialize_to_env(reg, default_id)
@@ -1235,6 +1251,7 @@ async def _do_reset_bundles_from_env(
     from kdcube_ai_app.infra.plugin.bundle_store import reset_registry_from_env
     from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async, serialize_to_env
     from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches, evict_bundle_scope, AgenticBundleSpec
+    from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
 
     tenant_id = (payload.tenant if payload else None) or settings.TENANT
     project_id = (payload.project if payload else None) or settings.PROJECT
@@ -1260,6 +1277,26 @@ async def _do_reset_bundles_from_env(
     if tenant_id == settings.TENANT and project_id == settings.PROJECT:
         await set_registry_async(bundles_dict, reg.default_bundle_id)
         serialize_to_env(bundles_dict, reg.default_bundle_id)
+        target_bundle_ids = (
+            {requested_bundle_id}
+            if requested_bundle_id
+            else {str(bid).strip() for bid in bundles_dict.keys() if str(bid).strip()}
+        )
+        stopped_sidecars = stop_local_sidecars_for_bundle_ids(
+            bundle_ids=target_bundle_ids,
+            tenant=tenant_id,
+            project=project_id,
+            terminate_timeout_sec=2.0,
+            kill_timeout_sec=1.0,
+        )
+        if stopped_sidecars:
+            logger.info(
+                "[bundle.reload] stopped local sidecars during reset-env: tenant=%s project=%s count=%s bundles=%s",
+                tenant_id,
+                project_id,
+                stopped_sidecars,
+                sorted(target_bundle_ids),
+            )
         if target_entry is not None:
             target_payload = target_entry.model_dump()
             target_spec = AgenticBundleSpec(
