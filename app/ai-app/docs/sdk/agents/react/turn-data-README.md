@@ -116,6 +116,9 @@ From the reconstructed turn view:
   or by adding a new artifact type.
 - Internal Memory Beacons (`react.note` / `react.note.preserved`) are not exposed as fetch/UI artifacts.
   They remain model-side timeline memory and turn-log reconstruction data.
+- External `user.followup` / `user.steer` blocks are also not surfaced today as dedicated fetch/UI
+  artifacts. They exist in the timeline and turn-log reconstruction path, but the current fetch payload
+  does not project them into a separate top-level client artifact family.
 - Future namespace note:
   - assistant artifact paths are now split into durable workspace `files/...` and non-workspace `outputs/...`
   - fetch does not need a new top-level artifact family immediately

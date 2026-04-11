@@ -119,6 +119,14 @@ The retained window starts **at the cut point**.
 If the cut falls **inside a turn**, only the **prefix** of that turn is summarized
 (and included under “Turn Context (split turn)”). The cut block itself stays visible.
 
+This includes external in-turn user contributions such as:
+- `user.followup`
+- `user.steer`
+
+They are treated like normal timeline blocks. Unlike Internal Memory Beacons, they are
+not specially cloned across the compaction boundary. If they fall behind the latest
+summary, they remain represented through the summary, not as preserved beacon copies.
+
 ---
 
 ## Persistence Rule
@@ -129,6 +137,8 @@ After compaction, the timeline is **persisted from the last summary onward**:
 - On persistence / next turn load: only blocks **from the latest summary onward**
   are kept.
 - Historical plan refs that were carried forward remain readable after persistence because their preserved copies live after the summary boundary.
+- The external-event replay cursor is still persisted with the timeline payload:
+  `last_external_event_id` and `last_external_event_seq`.
 
 This keeps the prefix small while allowing the summary to represent old turns.
 

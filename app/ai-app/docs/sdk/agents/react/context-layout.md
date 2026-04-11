@@ -19,6 +19,7 @@ assembled each turn.
    - Built from timeline (including any `conv.range.summary` blocks).
    - May include preserved Internal Memory Beacons (`react.note.preserved`) directly after a summary.
    - Includes prior turns (user → contributions → assistant → tool calls/results).
+   - May include previously folded external event blocks (`user.followup`, `user.steer`).
    - May include `turn.feedback` blocks injected as the **last block of a turn** (cache cold only).
 
 2) **Current turn user blocks**
@@ -27,6 +28,8 @@ assembled each turn.
 3) **Turn progress blocks**
    - Added by downstream agents (e.g., `react.notes`, `react.note`, tool call/result blocks).
    - Appended via `ContextBrowser.contribute(...)` and persisted into the turn log.
+   - May also receive live external user contributions from the shared external-event source
+     while the turn is active.
 
 4) **Sources pool block** (optional)
    - Only included if `timeline.render(include_sources=True)`.
@@ -76,6 +79,7 @@ This ensures prompt caching is stable even when turns are edited or hidden.
 │ TURN PROGRESS LOG        │
 │  - gate/react notes      │
 │  - internal beacons      │
+│  - user.followup/steer   │
 │  - tool call/result      │
 └──────────────────────────┘
 ┌──────────────────────────┐
@@ -156,6 +160,8 @@ Notes:
 - Feedback updates are fetched **only at turn start** (timeline load). If cache is cold, they are injected
   into the target turn and still announced once with “(incorporated into turn timeline)”.
 - Internal Memory Beacons render as `[INTERNAL NOTE]` blocks and are part of the model-visible timeline.
+- External followups/steers render as `[FOLLOWUP DURING TURN]` / `[STEER DURING TURN]`
+  and are part of the same model-visible timeline once folded.
 
 ---
 

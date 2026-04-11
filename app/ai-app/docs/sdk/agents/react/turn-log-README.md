@@ -15,6 +15,8 @@ The turn log is the single source of truth for reconstructing a turn.
 It stores **only the ordered timeline blocks** emitted during that turn.
 All user/assistant text, attachments, tool results, and artifacts are encoded in those blocks.
 That includes Internal Memory Beacons written with `react.write(channel="internal")`.
+It can also include live-folded external user event blocks (`user.followup`, `user.steer`)
+when those events reached the active timeline owner during the turn.
 
 ## Top‑level shape
 ```json
@@ -42,6 +44,14 @@ Important React-specific beacon blocks:
 - `react.note` for freshly written Internal Memory Beacons
 - `react.note.preserved` for beacon copies kept visible after compaction
 
+Important external-event blocks:
+- `user.followup`
+- `user.steer`
+
+These are persisted as ordinary turn blocks once folded into the active timeline. Their metadata
+retains the durable event identity (`message_id`, `stream_id`, `sequence`) and routing hints such as
+`target_turn_id` / `owner_turn_id`.
+
 ## Reconstruction
 The turn view is reconstructed by:
 ```
@@ -66,3 +76,5 @@ Rendered model view (via `timeline.render`) groups tool output into:
 - No `files` list is stored separately. Files are reconstructed from blocks.
 - All paths must include concrete `turn_id` (no `current_turn`).
 - Internal Memory Beacons are stored in the turn log as normal blocks, but they are not user-facing UI artifacts.
+- The turn log itself does not store the conversation-level external replay cursor; that cursor lives in
+  the timeline artifact payload (`last_external_event_id`, `last_external_event_seq`).

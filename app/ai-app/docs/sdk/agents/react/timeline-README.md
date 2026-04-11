@@ -13,8 +13,10 @@ see_also:
 
 The **timeline** is the single source of truth for turn context. It stores:
 - ordered **blocks** (user prompts, attachments, agent contributions, tool calls/results)
+- live-folded external user event blocks (`user.followup`, `user.steer`)
 - Internal Memory Beacons (`react.note`) and preserved beacons (`react.note.preserved`)
 - conversation metadata (title, started_at, last_activity_at)
+- the persisted external-event replay cursor (`last_external_event_id`, `last_external_event_seq`)
 - transient **announce** blocks (in‑memory only, not persisted)
  - **plan history blocks** (`react.plan` / `react.plan.ack`) persisted in the block stream
 
@@ -31,6 +33,8 @@ The sources pool is persisted separately as `artifact:conv:sources_pool`.
   "conversation_title": "...",
   "conversation_started_at": "...",
   "last_activity_at": "...",
+  "last_external_event_id": "17-0",
+  "last_external_event_seq": 42,
   "cache_last_touch_at": 1739078400,
   "cache_last_ttl_seconds": 1800
 }
@@ -40,11 +44,25 @@ The sources pool is persisted separately as `artifact:conv:sources_pool`.
 1) **Load** at turn start (from the latest timeline + sources_pool artifacts).
    - Loader: `ContextBrowser.load_timeline()` combines the latest
      `artifact:conv.timeline.v1` + `artifact:conv:sources_pool`.
+   - During load, unread external `followup` / `steer` events after the stored cursor are folded into the timeline.
 2) **Contribute** blocks as the turn progresses (gate/react).
-3) **Render** a message view with cache points + optional sources/announce.
-4) **Persist** at end of turn.
+3) **Listen** for shared external events while the turn owns the timeline.
+   - `ContextBrowser` holds a fenced owner lease.
+   - The live listener waits on the shared durable event source and folds accepted
+     `followup` / `steer` events into the same timeline.
+   - Runtime hooks (`on_timeline_event(...)`) are invoked after folding.
+4) **Render** a message view with cache points + optional sources/announce.
+5) **Persist** at end of turn.
    - Persister: `Timeline.persist()` writes both artifacts:
      `artifact:conv.timeline.v1` and `artifact:conv:sources_pool`.
+
+### External event delivery model
+The delivery model is now shared and durable:
+- ingress appends busy-turn `followup` / `steer` requests into one canonical conversation event source
+- the live React turn consumes from that source when it owns the timeline
+- if there is no live owner, processor promotion continues from that same source
+
+This avoids having one path for “live events” and a different source of truth for fallback continuation.
 
 ### Persistence behavior
 If compaction occurred, the persisted timeline contains **only the post‑summary window** (summary + following blocks).
@@ -62,6 +80,7 @@ When the visible window exceeds the model budget, the timeline compacts earlier 
 ```
 [TURN <id> header]
   user.prompt
+  user.followup / user.steer [optional]
   user.attachment.meta
   user.attachment (optional binary)
   stage.gate [optional] / stage.react / ...
@@ -100,6 +119,8 @@ When `RuntimeCtx.session.cache_ttl_seconds` is set, the timeline applies TTL-bas
   restore paths via `react.read(path)`. Hidden replacement blocks do **not**
   include per-block hints.
 - Internal Memory Beacons (`react.note`, `react.note.preserved`) are exempt from TTL hiding and remain visible.
+- External `user.followup` / `user.steer` blocks are normal timeline blocks. They are not TTL-special-cased;
+  they remain or disappear according to the same visible-window rules as other ordinary blocks.
 
 ### Pruned view (schematic)
 ```
@@ -121,6 +142,9 @@ Use react.read(path) to restore a logical path (fi:/ar:/so:/sk:).
 ## Concurrency / locking
 - `contribute_async`, `render`, and `persist` are guarded by an internal async lock.
 - This prevents interleaving of compaction and persistence when agents contribute in parallel.
+- Live external folding is still serialized through timeline contribution, but ownership of the
+  active listener is protected separately by a fenced lease (`lease_token`, `lease_epoch`) in the
+  shared external event source.
 
 ## Contribute vs announce
 - **Contribute** = persistent block additions (saved in timeline on persist).  

@@ -26,6 +26,8 @@ Blocks are dicts with:
 ## Core Block Types
 - `turn.header` (historical)
 - `user.prompt`
+- `user.followup`
+- `user.steer`
 - `user.attachment.meta`
 - `user.attachment`
 - `assistant.completion` (historical or current)
@@ -94,6 +96,51 @@ Blocks are dicts with:
 ```
 
 Search/fetch tools emit only SIDs in the result block; full content lives in `sources_pool`.
+
+## External user event blocks
+These blocks are produced when the shared conversation event source is folded into the
+active timeline:
+
+1) Followup
+   - `type`: `user.followup`
+   - `author`: `user`
+   - `mime`: `text/markdown`
+   - `path`: `ar:<turn_id>.external.followup.<message_id>`
+   - `text`: followup text, if provided
+   - `meta`:
+     - `event_kind = "followup"`
+     - `message_id`
+     - `stream_id`
+     - `sequence`
+     - `target_turn_id`
+     - `active_turn_id_at_ingress`
+     - `owner_turn_id`
+     - `explicit`
+     - `source`
+     - optional `payload`
+
+2) Steer
+   - `type`: `user.steer`
+   - same shape as followup, but:
+   - `path`: `ar:<turn_id>.external.steer.<message_id>`
+   - `meta.event_kind = "steer"`
+
+Rendered form:
+```text
+[FOLLOWUP DURING TURN]
+[path: ar:<turn_id>.external.followup.<message_id>]
+...
+```
+
+or:
+
+```text
+[STEER DURING TURN]
+[path: ar:<turn_id>.external.steer.<message_id>]
+...
+```
+
+These are model-visible timeline blocks, not merely transport-level ingress messages.
 
 ### react.read status block
 `react.read` always emits a **status JSON block first** at `tc:<turn_id>.<call_id>.result` with

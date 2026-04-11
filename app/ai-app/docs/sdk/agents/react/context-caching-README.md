@@ -67,6 +67,10 @@ Configured on `RuntimeCtx.cache`:
 - Cache points are applied to the **stable timeline** (post‑compaction, pre‑tail).
 - Sources/announce are appended after rendering and remain uncached.
 - If `cache_last=True`, the last rendered block is additionally cached (cache points still apply).
+- Live external events (`user.followup`, `user.steer`) are folded into the same timeline
+  stream while a turn is active. They typically invalidate only the tail portion; the
+  stable prefix remains reusable because the previous-turn and pre-tail checkpoints stay
+  anchored earlier in the visible stream.
 
 ## Implementation
 See `kdcube_ai_app/apps/chat/sdk/solutions/react/v2/caching.py`.

@@ -17,9 +17,11 @@ This describes how context is built and updated during a turn.
 1) `ContextBrowser.load_context(...)` fetches:
    - recent turn logs
    - recent `conv.range.summary` artifacts from the index
+   - the latest timeline payload cursor (`last_external_event_id` / `last_external_event_seq`)
 2) Browser builds:
    - `history_blocks` (older turns + summaries)
    - `current_turn_blocks` (user prompt + attachments)
+   - folds any unread external events from the shared conversation event source into the timeline snapshot
 3) Browser caches these blocks per (conversation_id, turn_id).
 
 ## During the Turn
@@ -30,6 +32,9 @@ This describes how context is built and updated during a turn.
   - Examples: gate/coordinator decisions, react tool calls/results.
   - When `persist=True`, they are stored in the turn log blocks for next-turn reconstruction.
 - React rounds append `react.tool.call` / `react.tool.result` blocks as contributions.
+- While a turn is active, the timeline owner can also fold external `followup` / `steer`
+  events into the same in-memory timeline. These become `user.followup` / `user.steer`
+  blocks and trigger `on_timeline_event(...)` hooks.
 - The rendered model view groups tool output into:
   - `[TOOL CALL <id>].call <tool_id>`
   - `[TOOL RESULT <id>].summary <tool_id>` (artifact tools)
@@ -40,6 +45,16 @@ This describes how context is built and updated during a turn.
   - sources pool via `ContextBrowser.set_sources_pool(...)`
   - ephemeral announce blocks via `ContextBrowser.announce(...)`
   - on exit, the current announce block is persisted into the turn log blocks and then cleared
+
+## Shared external events (live + fallback)
+`followup` and `steer` do not need to wait for turn end anymore.
+
+- Ingress appends them to a shared durable conversation event source.
+- If the active React turn owns the timeline, `ContextBrowser` listens to that source,
+  folds events live into the current timeline, persists the external-event cursor, and
+  notifies runtime hooks.
+- If there is no live owner, processor promotion uses that same durable source to continue
+  the conversation later. There is not a separate “live log” and “fallback queue” model anymore.
 
 ## Compaction
 Two places can trigger compaction:
@@ -78,6 +93,7 @@ except ServiceException as exc:
 - The summary block is **not** stored in the turn log.
 - Older blocks remain in the timeline but `timeline.render(...)` hides them by slicing
   from the most recent summary onward.
+- External followup/steer blocks participate in the same compaction rules as other timeline blocks.
 
 ## Context Access Diagram (Timeline + Contribute)
 ```
@@ -115,6 +131,7 @@ Retry on context-limit:
 └────────────────────────────┘
 ┌────────────────────────────┐
 │ TURN PROGRESS LOG          │   (agent contributions, react logs and finally final_answer)       [growing]
+│                            │   (+ live-folded external followup/steer blocks)                  [growing]
 └────────────────────────────┘
 ┌────────────────────────────┐
 │ SOURCES POOL (optional)     │   (tail, uncached)                        [ephemeral]
