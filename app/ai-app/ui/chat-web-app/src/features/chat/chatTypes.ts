@@ -149,6 +149,8 @@ export interface FileArtifact extends Artifact<RNFile> {
 export interface UserMessageRequest {
     message?: string;
     files?: File[] | null;
+    continuationKind?: "regular" | "followup" | "steer";
+    targetTurnId?: string;
 }
 
 export type TurnState = "new" | "inProgress" | "finished" | "error"

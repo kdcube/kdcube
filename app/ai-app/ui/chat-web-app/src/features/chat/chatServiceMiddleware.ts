@@ -19,6 +19,7 @@ import {
     selectChatConnected,
     selectChatStayConnected,
     selectConversationId,
+    selectCurrentTurn,
     selectTurnOrder,
     selectTurns,
     selectUserAttachments,
@@ -383,8 +384,12 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                     break;
                 case SEND_CHAT_MESSAGE: {
                     const state = store.getState() as RootState;
-                    const turnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
                     const request = (action as SendChatMessageAction).payload
+                    const activeTurn = selectCurrentTurn(state)
+                    const continuationKind = request.continuationKind ?? (activeTurn ? "followup" : "regular")
+                    const isContinuation = continuationKind === "followup" || continuationKind === "steer"
+                    const targetTurnId = request.targetTurnId ?? activeTurn?.id ?? undefined
+                    const turnId = `turn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
                     const message = request.message ?? selectUserMessage(state)
 
@@ -413,17 +418,19 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         attachments = []
                     }
 
-                    if (!message && attachments.length === 0) {
+                    if (!message && attachments.length === 0 && continuationKind !== "steer") {
                         //do not send empty message
                         return;
                     }
 
-                    dispatch(newTurn({
-                        id: turnId,
-                        state: "new",
-                        userMessage: message,
-                        attachments
-                    }))
+                    if (!isContinuation) {
+                        dispatch(newTurn({
+                            id: turnId,
+                            state: "new",
+                            userMessage: message,
+                            attachments
+                        }))
+                    }
 
                     let conversationId = selectConversationId(state)
                     if (!conversationId) {
@@ -433,11 +440,19 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
 
                     const chatRequest: ChatRequest = {
                         message,
-                        chat_history: sendChatHistory ? getConversationHistory(store) : undefined,
+                        chat_history: !isContinuation && sendChatHistory ? getConversationHistory(store) : undefined,
                         project: selectProject(state),
                         tenant: selectTenant(state),
                         turn_id: turnId,
                         bundle_id: selectCurrentBundle(state) ?? undefined,
+                        ...(isContinuation ? {
+                            message_kind: continuationKind,
+                            continuation_kind: continuationKind,
+                            active_turn_id: targetTurnId,
+                            target_turn_id: targetTurnId,
+                            ...(continuationKind === "followup" ? {followup: true} : {}),
+                            ...(continuationKind === "steer" ? {steer: true} : {}),
+                        } : {})
                     }
 
                     console.info(
@@ -453,9 +468,24 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
 
                     transport.sendChatMessage(conversationId, chatRequest, files).then(() => {
                         dispatch(clearUserInput())
+                        if (isContinuation) {
+                            dispatch(pushNotification({
+                                type: "info",
+                                text: continuationKind === "steer"
+                                    ? (message ? "Steer sent to the in-progress turn." : "Stop signal sent to the in-progress turn.")
+                                    : "Follow-up sent to the in-progress turn.",
+                            }))
+                        }
                     }).catch(error => {
                         console.error(error)
-                        dispatch(turnError({turnId, error}))
+                        if (isContinuation) {
+                            dispatch(pushNotification({
+                                type: "error",
+                                text: error instanceof Error ? error.message : String(error),
+                            }))
+                        } else {
+                            dispatch(turnError({turnId, error}))
+                        }
                     })
                     break;
                 }

@@ -118,6 +118,12 @@ export interface ChatRequest {
     // we forward this to the server for routing
     turn_id?: string;
     bundle_id?: string;
+    message_kind?: "regular" | "followup" | "steer";
+    continuation_kind?: "regular" | "followup" | "steer";
+    active_turn_id?: string;
+    target_turn_id?: string;
+    followup?: boolean;
+    steer?: boolean;
 }
 
 interface StepData {

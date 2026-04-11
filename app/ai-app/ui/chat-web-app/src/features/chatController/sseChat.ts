@@ -128,6 +128,12 @@ class SSEChat extends ChatBase {
                 turn_id: req.turn_id || `turn_${Date.now()}`,
                 conversation_id: conversationId,
                 ...(req.bundle_id ? {bundle_id: req.bundle_id} : {}),
+                ...(req.message_kind ? {message_kind: req.message_kind} : {}),
+                ...(req.continuation_kind ? {continuation_kind: req.continuation_kind} : {}),
+                ...(req.active_turn_id ? {active_turn_id: req.active_turn_id} : {}),
+                ...(req.target_turn_id ? {target_turn_id: req.target_turn_id} : {}),
+                ...(req.followup ? {followup: true} : {}),
+                ...(req.steer ? {steer: true} : {}),
             },
             attachment_meta: [] as { filename: string }[],
         };
