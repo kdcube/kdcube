@@ -23,6 +23,14 @@ The important split is:
 - `get_secret(...)` reads bundle/platform secrets
 - `get_user_secret(...)` reads user-scoped secrets
 
+For secrets, there are two recommended namespaces:
+- no prefix or `a:` -> platform/global secrets
+- `b:` -> the current bundle's secrets
+
+Fully qualified canonical keys such as `bundles.<bundle_id>.secrets...` and
+`users.<user_id>...` are still accepted by the low-level API, but they are the
+internal/global form, not the normal bundle-facing form.
+
 ## Four config layers
 
 ```text
@@ -45,7 +53,7 @@ The important split is:
 |---|---|---|
 | effective non-secret bundle config | `self.bundle_prop("dot.path")` / `self.bundle_props` | code defaults + `bundles.yaml` + Redis overrides |
 | raw deploy-time descriptor values | `get_plain("...")` / `get_plain("b:...")` | mounted `assembly.yaml` / `bundles.yaml` |
-| bundle-level secrets | `get_secret("bundles.<bundle_id>.secrets...")` | configured secrets provider |
+| bundle-level secrets | `get_secret("b:dot.path")` | configured secrets provider |
 | user-scoped secrets | `get_user_secret("some.key")` | configured secrets provider |
 | mutable bundle-owned state | bundle storage, not props | bundle storage backend |
 
@@ -169,8 +177,18 @@ Read secrets with:
 ```python
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
-token = get_secret("bundles.demo.bundle@1-0.secrets.api.token")
+token = get_secret("b:api.token")
 ```
+
+Namespace rules for `get_secret(...)`:
+
+| Key form | Meaning | Recommended use |
+|---|---|---|
+| `get_secret("services.openai.api_key")` | platform/global secret | yes |
+| `get_secret("a:services.openai.api_key")` | platform/global secret | yes, explicit form |
+| `get_secret("b:api.token")` | current bundle secret | yes |
+| `get_secret("bundles.demo.bundle@1-0.secrets.api.token")` | fully qualified bundle secret | only for low-level/admin/explicit cross-scope access |
+| `get_secret("users.user-1.bundles.demo.bundle@1-0.secrets.api.token")` | fully qualified user/bundle secret | do not use in normal bundle code; use `get_user_secret(...)` |
 
 Use secrets for:
 - API keys
@@ -180,11 +198,39 @@ Use secrets for:
 - JSON credentials content such as Google service-account files
 - sensitive identifiers such as Cognito pool ids when the bundle treats them as secrets
 
-The bundle-level secret namespace is:
+The underlying canonical bundle secret namespace is:
 
 ```text
 bundles.<bundle_id>.secrets.<dot.path>
 ```
+
+But normal bundle code should prefer:
+
+```python
+get_secret("b:<dot.path>")
+```
+
+because KDCube resolves the current bundle automatically from request context.
+
+### Can a bundle read another bundle's secret?
+
+Normal bundle code should treat the answer as **no**.
+
+Use these rules:
+- read your own bundle's deployment secrets via `get_secret("b:...")`
+- read platform/global shared secrets via `get_secret("...")` or `get_secret("a:...")`
+- read user-scoped secrets via `get_user_secret(...)`
+
+Today, the low-level API still accepts fully qualified canonical keys, so code
+that explicitly asks for `bundles.<other_bundle_id>.secrets...` can bypass the
+nice `b:` shorthand. That is an internal/administrative capability, not the
+recommended bundle contract. Bundle code should not depend on cross-bundle
+secret reads.
+
+If two bundles need the same secret, choose one of these instead:
+- move it to platform/global scope
+- duplicate it into each bundle's own secret scope
+- expose the needed capability through an API, not direct secret sharing
 
 `get_secret(...)` is backed by the configured runtime secrets provider. Current
 provider modes are:
@@ -239,6 +285,10 @@ token = get_user_secret("git.http_token")
 set_user_secret("git.http_token", "...")
 delete_user_secret("git.http_token")
 ```
+
+For normal bundle code, prefer these helpers over raw `get_secret("users....")`
+keys. They keep the scope explicit and use the current request context
+correctly.
 
 If `user_id` and `bundle_id` are omitted, KDCube resolves them from the current
 request context.

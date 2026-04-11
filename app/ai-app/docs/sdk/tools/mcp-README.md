@@ -98,7 +98,7 @@ Two secret patterns are supported:
 ```json
 "auth": {
   "type": "bearer",
-  "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"
+  "secret": "b:docs.token"
 }
 ```
 
@@ -109,9 +109,16 @@ resolve secrets via `get_secret()` at session creation time:
 
 ```json
 "env": {
-  "FIRECRAWL_API_KEY": "${secret:services.firecrawl.api_key}"
+  "FIRECRAWL_API_KEY": "${secret:b:firecrawl.api_key}"
 }
 ```
+
+For bundle-local MCP configs, prefer:
+- `b:...` for current bundle secrets
+- no prefix / `a:...` for platform/global secrets
+
+Fully qualified canonical keys such as `bundles.<bundle_id>.secrets...` are
+still accepted when the explicit form is needed.
 
 `get_secret()` resolution order:
 1. Environment variables (via `_SECRET_ALIASES` in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py`)

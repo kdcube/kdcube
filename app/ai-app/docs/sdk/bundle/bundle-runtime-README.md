@@ -34,7 +34,7 @@ There are two different runtime surfaces:
    - `self.comm`
    - `self.comm_context`
    - `self.bundle_props`
-   - `get_secret(...)`
+   - `get_secret(...)` / `get_user_secret(...)`
    - bundle storage helpers
    - DB/Redis handles passed into the entrypoint
 
@@ -76,7 +76,10 @@ What the bundle has in this path:
 - `self.pg_pool`
 - `self.redis`
 - bundle storage helpers such as `bundle_storage_root()`
-- secret lookup through `get_secret(...)`
+- secret lookup through:
+  - `get_secret("b:...")` for current bundle deployment secrets
+  - `get_secret("...")` / `get_secret("a:...")` for platform/global secrets
+  - `get_user_secret(...)` for current-user secrets
 
 Communicator behavior in this path:
 - if request routing carries an exact socket/stream target, direct peer delivery
@@ -194,6 +197,7 @@ Important:
 | `self.comm_context` | yes | yes | no | no |
 | `bundle_props` / `self.bundle_prop(...)` | yes | yes | indirectly through bundle code only | indirectly through bundle code only |
 | `get_secret(...)` | yes | yes | yes, if imported directly | yes, if imported directly |
+| `get_user_secret(...)` | yes | yes | yes, if imported directly | yes, if imported directly |
 | bundle storage helpers | yes | yes | yes if the tool receives/constructs the needed bundle context | yes if the tool receives/constructs the needed bundle context |
 | `_SERVICE` / `SERVICE` | no | no | yes | yes |
 | `_INTEGRATIONS` / `INTEGRATIONS` | no | no | yes | yes |

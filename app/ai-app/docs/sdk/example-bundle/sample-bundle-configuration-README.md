@@ -276,9 +276,9 @@ If the value does not match `${secret:...}`, it is passed through as-is.
 
 | Auth type | Config example | Behavior |
 |-----------|---------------|----------|
-| `bearer` | `"auth": {"type": "bearer", "secret": "bundles.react.mcp@2026-03-09.secrets.docs.token"}` | Reads token via `get_secret()`, sends `Authorization: Bearer {token}` |
-| `api_key` | `"auth": {"type": "api_key", "secret": "bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key"}` | Reads key via `get_secret()`, sends `X-API-Key` header |
-| `header` | `"auth": {"type": "header", "name": "X-Custom", "secret": "bundles.react.mcp@2026-03-09.secrets.custom.value"}` | Custom header injection via named secret |
+| `bearer` | `"auth": {"type": "bearer", "secret": "b:docs.token"}` | Reads current-bundle token via `get_secret()`, sends `Authorization: Bearer {token}` |
+| `api_key` | `"auth": {"type": "api_key", "secret": "b:firecrawl.api_key"}` | Reads current-bundle key via `get_secret()`, sends `X-API-Key` header |
+| `header` | `"auth": {"type": "header", "name": "X-Custom", "secret": "b:custom.value"}` | Custom header injection via named secret |
 
 ### Example: Firecrawl (stdio with `${secret:...}`)
 

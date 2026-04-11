@@ -22,7 +22,11 @@ configuration and secrets in code** and what to avoid.
 - **Use `get_settings()`** for non‑secret config values.
 - **Use `get_plain()` / `read_plain()`** when code must inspect mounted
   `assembly.yaml` or `bundles.yaml` directly.
-- **Use `get_secret()`** for secrets (keys, tokens, passwords).
+- **Use `get_secret()`** for deployment- or bundle-scoped secrets.
+- For bundle code:
+  - `get_secret("b:...")` = current bundle secret
+  - `get_secret("...")` or `get_secret("a:...")` = platform/global secret
+- **Use `get_user_secret()`** for user-scoped secrets.
 - Secrets are stored in the secrets sidecar using **dot‑path keys** (see below).
 - Env vars are **legacy compatibility only** and should not be referenced directly in new code.
 
@@ -55,6 +59,15 @@ from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
 api_key = get_secret("services.openai.api_key")
 ```
+
+```python
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
+
+bundle_token = get_secret("b:docs.token")
+```
+
+Fully qualified keys like `bundles.<bundle_id>.secrets...` are the canonical
+internal form. Normal bundle code should prefer `b:...`.
 
 ## 3) Non‑secret config
 
@@ -95,6 +108,11 @@ See:
 - The CLI merges and stages these at install time and injects secrets via the sidecar.
 - Secrets are **always** addressed via dot‑path keys; bundle config stays nested.
 
+Recommended secret namespace rules:
+- no prefix or `a:` -> platform/global secret
+- `b:` -> current bundle secret
+- user secrets -> `get_user_secret(...)`, not raw `get_secret("users....")`
+
 See:
 - [assembly-descriptor-README.md](../cicd/assembly-descriptor-README.md)
 - [secrets-descriptor-README.md](../cicd/secrets-descriptor-README.md)
@@ -106,4 +124,7 @@ When you add a new secret:
 1) Add it to `deployment/secrets.yaml` (dot‑path key).
 2) If you must support legacy env vars, add an alias mapping in
    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/config.py` (`_SECRET_ALIASES`).
-3) Use `get_secret("dot.path.key")` in code.
+3) Use:
+   - `get_secret("dot.path.key")` for platform/global secrets
+   - `get_secret("b:dot.path.key")` for current bundle secrets
+   - `get_user_secret("dot.path.key")` for current-user secrets

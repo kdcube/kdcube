@@ -397,7 +397,10 @@ This is why `@venv(...)` is good for rapid local prototyping of dependency-heavy
 ## Bundle configuration & secrets
 
 Bundles consume **non‑secret configuration** via `bundle_props` and **secrets**
-via `get_secret()` using dot‑path keys.
+via:
+- `get_secret("b:...")` for the current bundle's deployment secrets
+- `get_secret("...")` / `get_secret("a:...")` for platform/global secrets
+- `get_user_secret(...)` for current-user secrets
 
 Non‑secret config:
 - Defined in `bundles.yaml` under `items[].config`.
@@ -414,6 +417,8 @@ Non‑secret config:
   - `execution.runtime`
 - Canonical reference:
   [docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md).
+- Secret model reference:
+  [docs/sdk/bundle/bundle-props-secrets-README.md](bundle-props-secrets-README.md).
 
 Example overrides:
 ```yaml

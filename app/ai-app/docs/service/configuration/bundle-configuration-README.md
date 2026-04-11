@@ -322,13 +322,20 @@ See:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py` (`configuration`, `bundle_props`)
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint_with_economic.py`
 
-Secrets should be read via `get_secret()` with the dot‑path key:
+Secrets should be read via `get_secret()`. For the current bundle, prefer the
+bundle namespace shorthand:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
-api_key = get_secret("bundles.app@2-0.secrets.openai.api_key")
+api_key = get_secret("b:openai.api_key")
 ```
+
+Namespace rules:
+- `get_secret("b:...")` -> current bundle secret
+- `get_secret("...")` or `get_secret("a:...")` -> platform/global secret
+- fully qualified `bundles.<bundle_id>.secrets...` is still accepted as the
+  canonical internal form, but normal bundle code should not need it
 
 Example: MCP config can consume the same bundle secrets directly:
 
@@ -342,17 +349,17 @@ config:
           url: https://mcp.internal.example.com
           auth:
             type: bearer
-            secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+            secret: b:docs.token
         firecrawl:
           transport: stdio
           command: npx
           args: ["-y", "firecrawl-mcp"]
           env:
-            FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+            FIRECRAWL_API_KEY: ${secret:b:firecrawl.api_key}
 ```
 
 Meaning:
-- `auth.secret` resolves through `get_secret("bundles.react.mcp@2026-03-09.secrets.docs.token")`
+- `auth.secret` resolves through `get_secret("b:docs.token")`
 - `${secret:...}` in stdio `env` values resolves through `get_secret()` when the MCP subprocess is started
 
 ### Inspect effective props in Redis

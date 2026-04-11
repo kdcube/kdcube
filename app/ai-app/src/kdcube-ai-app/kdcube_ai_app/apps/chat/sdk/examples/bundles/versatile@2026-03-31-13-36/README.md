@@ -143,20 +143,25 @@ bundles:
           snapshot_hmac_key: null
 ```
 
-The CLI injects that into the configured secrets provider using the dot-path key:
+The CLI injects that into the configured secrets provider under the bundle's
+canonical secret namespace:
 
 ```text
 bundles.versatile@2026-03-31-13-36.secrets.preferences.snapshot_hmac_key
 ```
 
-Bundle code reads it with:
+Bundle code normally reads it with the current-bundle shorthand:
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.config import get_secret
 
-snapshot_hmac_key = get_secret(
-    "bundles.versatile@2026-03-31-13-36.secrets.preferences.snapshot_hmac_key"
-)
+snapshot_hmac_key = get_secret("b:preferences.snapshot_hmac_key")
+```
+
+The fully qualified form remains valid too:
+
+```python
+get_secret("bundles.versatile@2026-03-31-13-36.secrets.preferences.snapshot_hmac_key")
 ```
 
 Secrets-manager configuration:

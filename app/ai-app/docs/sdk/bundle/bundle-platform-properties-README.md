@@ -257,13 +257,13 @@ config:
           url: https://mcp.internal.example.com
           auth:
             type: bearer
-            secret: bundles.react.mcp@2026-03-09.secrets.docs.token
+            secret: b:docs.token
         firecrawl:
           transport: stdio
           command: npx
           args: ["-y", "firecrawl-mcp"]
           env:
-            FIRECRAWL_API_KEY: ${secret:bundles.react.mcp@2026-03-09.secrets.firecrawl.api_key}
+            FIRECRAWL_API_KEY: ${secret:b:firecrawl.api_key}
 ```
 
 Behavior:
@@ -272,6 +272,11 @@ Behavior:
   preferred way to supply bearer/api-key/header auth.
 - `${secret:...}` references inside stdio `env` blocks are resolved via
   `get_secret()` when the MCP session is created.
+- for bundle-local MCP config, prefer:
+  - `b:...` for current bundle secrets
+  - no prefix / `a:...` for platform/global secrets
+- fully qualified canonical keys such as `bundles.<bundle_id>.secrets...` are
+  still accepted when you need the explicit form
 - `MCP_SERVICES` env is still accepted only as a legacy/local-dev fallback when
   `mcp.services` is not configured in bundle props.
 
