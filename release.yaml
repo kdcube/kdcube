@@ -1,6 +1,6 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.11.012"
+  ref: "2026.4.11.1358"
   description: |
     This release expands the platform from bundle-hosting toward bundle-operated applications and
     scheduled scenarios. Bundles can now declare proc-owned scheduled APIs through `@cron(...)`,
@@ -23,5 +23,17 @@ platform:
     example/reference bundles now show fuller bundle surfaces, including authenticated and public
     API patterns, and the builder skills explicitly audit the runtime package set before deciding
     whether a custom `requirements.txt` and `@venv(...)` boundary are actually needed.
+
+    Since `2026.4.11.012`, the release also hardens live interactive React execution. Busy-turn
+    `followup` and `steer` events now travel through the shared external event source end to end:
+    a live React turn can fold them directly into the current timeline, `followup` can continue
+    the same turn, and `steer` now behaves as a cooperative interrupt that stops the current turn
+    at the next safe checkpoint while preserving work already completed.
+
+    Bundle hot reload was also made safer for bundle-operated applications that keep local
+    sidecars. Reload/reset/cleanup paths now stop bundle-owned local sidecars for the affected
+    bundle scope so the next load starts fresh code instead of reusing a stale long-lived process.
+    This is especially important for bundles such as RMS that host a Node bridge/backend alongside
+    their Python entrypoint.
 config:
-    version: "2026.4.11.012"
+    version: "2026.4.11.1358"
