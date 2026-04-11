@@ -64,6 +64,7 @@ class ContextBrowser:
         self._external_event_stop: Optional[asyncio.Event] = None
         self._external_listener_id: str = ""
         self._external_listener_turn_id: str = ""
+        self._external_lease_token: str = ""
 
     @property
     def external_event_source(self):
@@ -95,11 +96,12 @@ class ContextBrowser:
         self._external_listener_turn_id = turn_id
         self._external_event_stop = asyncio.Event()
         try:
-            await source.acquire_owner(
+            lease = await source.acquire_owner(
                 turn_id=turn_id,
                 bundle_id=str(self._runtime_ctx.bundle_id or ""),
                 listener_id=self._external_listener_id,
             )
+            self._external_lease_token = str(getattr(lease, "lease_token", "") or "")
         except Exception:
             self.log.log("[timeline.external] failed to acquire owner lease\n" + traceback.format_exc(), "ERROR")
             return
@@ -114,6 +116,8 @@ class ContextBrowser:
         self._external_event_task = None
         self._external_event_stop = None
         self._external_listener_turn_id = ""
+        lease_token = self._external_lease_token
+        self._external_lease_token = ""
         if stop_evt is not None:
             stop_evt.set()
         if task is not None:
@@ -127,7 +131,7 @@ class ContextBrowser:
         source = self.external_event_source
         if source is not None and self._external_listener_id:
             try:
-                await source.release_owner(listener_id=self._external_listener_id)
+                await source.release_owner(listener_id=self._external_listener_id, lease_token=lease_token)
             except Exception:
                 pass
 
@@ -300,11 +304,19 @@ class ContextBrowser:
             return
         while not stop_evt.is_set():
             try:
-                await source.refresh_owner(
+                refreshed = await source.refresh_owner(
                     listener_id=self._external_listener_id,
                     turn_id=str(self._runtime_ctx.turn_id or ""),
                     bundle_id=str(self._runtime_ctx.bundle_id or ""),
+                    lease_token=self._external_lease_token,
                 )
+                if refreshed is None:
+                    self.log.log("[timeline.external]: owner lease refresh rejected; stopping listener", "INFO")
+                    break
+                current_owner = await source.get_owner()
+                if current_owner is None or str(getattr(current_owner, "lease_token", "") or "") != str(self._external_lease_token or ""):
+                    self.log.log("[timeline.external]: owner lease lost; stopping listener", "INFO")
+                    break
                 last_cursor = ""
                 try:
                     last_cursor = str(self._timeline.last_external_event_id or "") if self._timeline is not None else ""
