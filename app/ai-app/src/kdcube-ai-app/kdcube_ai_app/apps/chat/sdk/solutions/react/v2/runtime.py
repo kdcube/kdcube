@@ -159,6 +159,10 @@ class ReactSolverV2:
         self._latest_external_event_seq_seen = 0
         self._last_decision_visible_external_event_seq = 0
         self._last_consumed_external_event_seq = 0
+        self._steer_interrupt_requested = False
+        self._latest_steer_seq_seen = 0
+        self._last_handled_steer_seq = 0
+        self._latest_steer_text = ""
 
     async def on_timeline_event(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> None:
         try:
@@ -167,6 +171,14 @@ class ReactSolverV2:
                 self._latest_external_event_seq_seen = seq
         except Exception:
             seq = None
+        try:
+            if str(type or "").strip().lower() == "steer":
+                if seq is not None and int(seq or 0) > self._latest_steer_seq_seen:
+                    self._latest_steer_seq_seen = int(seq or 0)
+                self._latest_steer_text = str(getattr(event, "text", "") or "").strip()
+                self._steer_interrupt_requested = True
+        except Exception:
+            pass
         try:
             event_id = getattr(event, "message_id", None) or ""
             self.log.log(
@@ -244,6 +256,114 @@ class ReactSolverV2:
         except Exception:
             self.log.log(f"[react.v2] external event wait/drain failed: {traceback.format_exc()}", level="ERROR")
             return 0
+
+    def _visible_external_event_seq(self) -> int:
+        try:
+            return int(getattr(getattr(self.ctx_browser, "timeline", None), "last_external_event_seq", 0) or 0)
+        except Exception:
+            return 0
+
+    def _seed_steer_interrupt_from_current_turn(self) -> None:
+        browser = self.ctx_browser
+        if browser is None or not hasattr(browser, "current_turn_blocks"):
+            return
+        try:
+            current_blocks = list(browser.current_turn_blocks() or [])
+        except Exception:
+            return
+        max_seq = 0
+        latest_text = ""
+        for blk in current_blocks:
+            if not isinstance(blk, dict):
+                continue
+            if str(blk.get("type") or "").strip().lower() != "user.steer":
+                continue
+            meta = blk.get("meta") or {}
+            try:
+                seq = int((meta or {}).get("sequence") or 0)
+            except Exception:
+                seq = 0
+            max_seq = max(max_seq, seq)
+            latest_text = str(blk.get("text") or latest_text or "").strip()
+        if max_seq > 0 or latest_text:
+            self._steer_interrupt_requested = True
+            self._latest_steer_seq_seen = max(self._latest_steer_seq_seen, max_seq)
+            if latest_text:
+                self._latest_steer_text = latest_text
+
+    async def _mark_external_events_consumed_up_to(self, *, max_sequence: int) -> int:
+        if max_sequence <= int(self._last_consumed_external_event_seq or 0):
+            return 0
+        if self.external_event_source is None:
+            return 0
+        consumed = await self.external_event_source.mark_consumed_up_to(
+            max_sequence=int(max_sequence or 0),
+            turn_id=str(self.scratchpad.turn_id or ""),
+        )
+        if consumed:
+            self._last_consumed_external_event_seq = max(
+                int(self._last_consumed_external_event_seq or 0),
+                int(max_sequence or 0),
+            )
+            self.log.log(
+                f"[react.v2] marked external events consumed turn_id={self.scratchpad.turn_id} "
+                f"count={consumed} up_to_seq={max_sequence}",
+                level="INFO",
+            )
+        return int(consumed or 0)
+
+    async def _apply_steer_interrupt_if_requested(self, state: Dict[str, Any], *, checkpoint: str) -> bool:
+        exit_reason = str(state.get("exit_reason") or "").strip()
+        if exit_reason and exit_reason not in {"complete", "exit", "steer"}:
+            return False
+        if not self._steer_interrupt_requested and int(self._latest_steer_seq_seen or 0) <= int(self._last_handled_steer_seq or 0):
+            return False
+        visible_seq = max(self._visible_external_event_seq(), int(self._latest_steer_seq_seen or 0))
+        try:
+            if visible_seq > int(self._last_consumed_external_event_seq or 0):
+                await self._mark_external_events_consumed_up_to(max_sequence=visible_seq)
+        except Exception:
+            self.log.log(f"[react.v2] failed to mark steer event consumed: {traceback.format_exc()}", level="ERROR")
+        self._last_handled_steer_seq = max(int(self._last_handled_steer_seq or 0), int(self._latest_steer_seq_seen or 0), int(visible_seq or 0))
+        self._steer_interrupt_requested = False
+        steer_text = str(self._latest_steer_text or "").strip()
+        state["retry_decision"] = False
+        state["exit_reason"] = "steer"
+        state["final_answer"] = None
+        state["suggested_followups"] = []
+        state["last_decision"] = {
+            "action": "exit",
+            "final_answer": "",
+            "notes": "steer_interrupt",
+            "suggested_followups": [],
+        }
+        state["steer_interrupt"] = {
+            "sequence": int(self._latest_steer_seq_seen or 0),
+            "text": steer_text,
+            "checkpoint": checkpoint,
+        }
+        self.log.log(
+            f"[react.v2] steer interrupt requested: turn_id={self.scratchpad.turn_id} "
+            f"checkpoint={checkpoint} seq={self._latest_steer_seq_seen} text={steer_text!r}",
+            level="INFO",
+        )
+        try:
+            await self.comm.service_event(
+                type="timeline.external.steer.interrupted",
+                step="timeline.external.steer",
+                status="completed",
+                title="Turn interrupted by steer",
+                agent=self.MODULE_AGENT_NAME,
+                data={
+                    "turn_id": str(self.scratchpad.turn_id or ""),
+                    "sequence": int(self._latest_steer_seq_seen or 0),
+                    "checkpoint": checkpoint,
+                    "text": steer_text,
+                },
+            )
+        except Exception:
+            pass
+        return True
 
     async def _render_timeline_with_announce(
         self,
@@ -802,11 +922,19 @@ class ReactSolverV2:
         state = await self.prepare_session(
             allowed_plugins=allowed_plugins,
         )
+        self._steer_interrupt_requested = False
+        self._latest_steer_seq_seen = 0
+        self._last_handled_steer_seq = 0
+        self._latest_steer_text = ""
         try:
             if self.ctx_browser and self.ctx_browser.timeline:
                 self._latest_external_event_seq_seen = int(self.ctx_browser.timeline.last_external_event_seq or 0)
                 self._last_decision_visible_external_event_seq = int(self.ctx_browser.timeline.last_external_event_seq or 0)
                 self._last_consumed_external_event_seq = int(self.ctx_browser.timeline.last_external_event_seq or 0)
+        except Exception:
+            pass
+        try:
+            self._seed_steer_interrupt_from_current_turn()
         except Exception:
             pass
 
@@ -943,6 +1071,8 @@ class ReactSolverV2:
         return "exit"
 
     async def _decision_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        if await self._apply_steer_interrupt_if_requested(state, checkpoint="decision.start"):
+            return state
         if state.get("exit_reason"):
             return state
         iteration = int(state.get("iteration") or 0)
@@ -1068,19 +1198,15 @@ class ReactSolverV2:
             emit_status=None,
         )
         await self._drain_external_events(call_hooks=True)
+        if await self._apply_steer_interrupt_if_requested(state, checkpoint="decision.after"):
+            state["force_compaction_next_decision"] = False
+            state["last_decision_raw"] = decision
+            elapsed_ms = int((time.perf_counter() - t0) * 1000)
+            self._append_react_timing(round_idx=iteration, stage="decision", elapsed_ms=elapsed_ms)
+            return state
         if visible_external_event_seq > self._last_consumed_external_event_seq and self.external_event_source is not None:
             try:
-                consumed = await self.external_event_source.mark_consumed_up_to(
-                    max_sequence=visible_external_event_seq,
-                    turn_id=str(self.scratchpad.turn_id or ""),
-                )
-                if consumed:
-                    self._last_consumed_external_event_seq = max(self._last_consumed_external_event_seq, visible_external_event_seq)
-                    self.log.log(
-                        f"[react.v2] marked external events consumed turn_id={self.scratchpad.turn_id} "
-                        f"count={consumed} up_to_seq={visible_external_event_seq}",
-                        level="INFO",
-                    )
+                await self._mark_external_events_consumed_up_to(max_sequence=visible_external_event_seq)
             except Exception:
                 self.log.log(f"[react.v2] failed to mark external events consumed: {traceback.format_exc()}", level="ERROR")
         # Reset forced compaction once we have a decision attempt.
@@ -1571,8 +1697,12 @@ class ReactSolverV2:
         return state
 
     async def _tool_execution_node(self, state: Dict[str, Any]) -> Dict[str, Any]:
+        if await self._apply_steer_interrupt_if_requested(state, checkpoint="tool.before_execute"):
+            return state
         state = await ReactRound.execute(react=self, state=state)
         await self._drain_external_events(call_hooks=True)
+        if await self._apply_steer_interrupt_if_requested(state, checkpoint="tool.after_execute"):
+            return state
         pending_sources = state.pop("pending_sources", None)
         if pending_sources:
             try:

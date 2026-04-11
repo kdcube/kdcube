@@ -21,6 +21,10 @@ def _solver_stub() -> ReactSolverV2:
     solver._latest_external_event_seq_seen = 0
     solver._last_decision_visible_external_event_seq = 0
     solver._last_consumed_external_event_seq = 0
+    solver._steer_interrupt_requested = False
+    solver._latest_steer_seq_seen = 0
+    solver._last_handled_steer_seq = 0
+    solver._latest_steer_text = ""
     solver.scratchpad = SimpleNamespace(turn_id="turn-1")
     solver.comm = SimpleNamespace(service_event=_noop_async)
     solver.tools_subsystem = None
@@ -87,6 +91,75 @@ async def test_tool_execution_node_drains_external_events_after_execute(monkeypa
 
     assert out["executed"] is True
     assert calls["drain"] == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_execution_node_short_circuits_on_pending_steer(monkeypatch):
+    solver = _solver_stub()
+    solver._steer_interrupt_requested = True
+    solver._latest_steer_seq_seen = 7
+
+    class _Timeline:
+        last_external_event_seq = 7
+
+    solver.ctx_browser = SimpleNamespace(
+        timeline=_Timeline(),
+        current_turn_blocks=lambda: [],
+    )
+
+    marks = {"count": 0}
+
+    async def _fake_mark(*, max_sequence):
+        assert max_sequence == 7
+        marks["count"] += 1
+        solver._last_consumed_external_event_seq = max_sequence
+        return 1
+
+    async def _fake_execute(*, react, state):
+        del react, state
+        raise AssertionError("tool execution should not happen after steer")
+
+    solver._mark_external_events_consumed_up_to = _fake_mark
+    monkeypatch.setattr(ReactRound, "execute", _fake_execute)
+
+    state = {"last_decision": {"tool_call": {"tool_id": "web_tools.web_search"}}}
+    out = await solver._tool_execution_node(state)
+
+    assert out["exit_reason"] == "steer"
+    assert out["final_answer"] is None
+    assert marks["count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_decision_node_short_circuits_on_pending_steer_before_decision():
+    solver = _solver_stub()
+    solver._steer_interrupt_requested = True
+    solver._latest_steer_seq_seen = 3
+    solver.ctx_browser = SimpleNamespace(
+        timeline=SimpleNamespace(last_external_event_seq=3),
+        current_turn_blocks=lambda: [],
+    )
+
+    async def _fake_mark(*, max_sequence):
+        assert max_sequence == 3
+        solver._last_consumed_external_event_seq = max_sequence
+        return 1
+
+    async def _impl(state, iteration):
+        del state, iteration
+        raise AssertionError("decision impl should not run after steer")
+
+    solver._mark_external_events_consumed_up_to = _fake_mark
+    solver._decision_node_impl = _impl
+    state = {
+        "iteration": 0,
+        "max_iterations": 5,
+    }
+
+    out = await solver._decision_node(state)
+
+    assert out["exit_reason"] == "steer"
+    assert out["final_answer"] is None
 
 
 @pytest.mark.asyncio
