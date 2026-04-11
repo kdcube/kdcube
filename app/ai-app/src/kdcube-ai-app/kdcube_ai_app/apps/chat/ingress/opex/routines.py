@@ -438,6 +438,7 @@ async def _run_bundle_cleanup_once() -> None:
         )
         from kdcube_ai_app.infra.plugin.git_bundle import (
             cleanup_old_git_bundles_async,
+            resolve_bundles_root,
             resolve_git_bundles_root,
             bundle_dir_for_git,
         )
