@@ -142,6 +142,11 @@ or:
 
 These are model-visible timeline blocks, not merely transport-level ingress messages.
 
+Behavioral meaning:
+- `user.followup` is additional user input that the current live turn actually consumed.
+- `user.steer` is a control signal. In React, a consumed steer requests interruption of the active turn at the next safe checkpoint.
+- If a live turn does not consume the event, the same durable event may later be promoted into a normal scheduled turn by proc.
+
 ### react.read status block
 `react.read` always emits a **status JSON block first** at `tc:<turn_id>.<call_id>.result` with
 `paths`, `missing`, and `exists_in_visible_context`. Result blocks follow after the status block.

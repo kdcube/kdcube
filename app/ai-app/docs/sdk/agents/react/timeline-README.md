@@ -61,6 +61,9 @@ The delivery model is now shared and durable:
 - ingress appends busy-turn `followup` / `steer` requests into one canonical conversation event source
 - the live React turn consumes from that source when it owns the timeline
 - if there is no live owner, processor promotion continues from that same source
+- a consumed `followup` remains on the same turn and becomes visible to the next decision round
+- a consumed `steer` is a runtime interrupt and exits the turn at the next safe checkpoint
+- steer interruption is cooperative; it does not hard-kill an already-running tool subprocess or model call
 
 This avoids having one path for “live events” and a different source of truth for fallback continuation.
 

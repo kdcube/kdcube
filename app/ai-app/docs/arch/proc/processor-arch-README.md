@@ -1,7 +1,7 @@
 ---
 id: ks:docs/arch/proc/processor-arch-README.md
 title: "Processor Architecture"
-summary: "Current chat processor architecture: queue claiming, execution, recovery, shutdown, and the implemented continuation mailbox behavior."
+summary: "Current chat processor architecture: queue claiming, execution, recovery, shutdown, and the implemented shared external-event behavior for followup and steer."
 tags: ["arch", "proc", "processor", "queues", "redis", "sse", "shutdown"]
 keywords: ["proc", "chat processor", "inflight", "drain", "turn interruption", "steer", "followup", "redis streams"]
 see_also:
@@ -14,7 +14,7 @@ see_also:
 ---
 # Chat Processor Architecture
 
-This document describes the current `proc` service architecture, including the currently implemented continuation mailbox behavior for `followup` and `steer`, and the next-step design beyond that slice.
+This document describes the current `proc` service architecture, including the currently implemented shared external-event behavior for `followup` and `steer`, and the next-step design beyond that slice.
 
 It reflects the current implementation in:
 - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py`
@@ -83,7 +83,7 @@ Important consequences:
 - scaling proc horizontally means more worker processes competing for the same queues
 - there is no sticky worker ownership by conversation across turns
 - only one active turn should own a conversation at one moment in time
-- ordering is preserved within a ready-queue lane and within a single conversation mailbox, not across all conversations globally
+- ordering is preserved within a ready-queue lane and within a single conversation external-event stream, not across all conversations globally
 
 ---
 
@@ -159,24 +159,26 @@ Why it matters:
 - that lease is renewed separately so a hard proc restart does not accidentally let an already-started turn fall back into the "pre-start reclaim" path
 - current product policy is simple: normal inbound chat messages do not opt into idempotent replay; once started, they are treated as non-idempotent
 
-### Per-conversation continuation mailbox
+### Per-conversation external event source
 
 Key patterns:
 
 ```text
-{tenant}:{project}:kdcube:chat:conversation:mailbox:{conversation_id}
-{tenant}:{project}:kdcube:chat:conversation:mailbox:seq:{conversation_id}
-{tenant}:{project}:kdcube:chat:conversation:mailbox:count:{user_type}
+{tenant}:{project}:kdcube:chat:conversation:external-events:{conversation_id}
+{tenant}:{project}:kdcube:chat:conversation:external-events:seq:{conversation_id}
+{tenant}:{project}:kdcube:chat:conversation:timeline-owner:{conversation_id}
 ```
 
-The mailbox stores accepted `followup` / `steer` messages for a busy conversation.
+The shared external event source stores accepted `followup` / `steer` messages for a busy conversation.
 
 Important:
 
-- mailbox items are ordered per conversation
-- mailbox items are not placed onto the main ready queue immediately
-- the active workflow may inspect and take them while it is still running
-- if the active workflow does not take them, proc promotes the next mailbox item back into the normal ready queue after the active turn finishes
+- events are ordered per conversation
+- events are not placed onto the main ready queue immediately
+- the active React workflow may consume them while it is still running
+- a live consumed `followup` stays on the current turn
+- a live consumed `steer` interrupts the current turn at the next safe checkpoint
+- if the active workflow does not consume them, proc promotes the next event back into the normal ready queue after the active turn finishes
 
 ---
 
@@ -201,10 +203,14 @@ Busy-conversation continuation path:
    - `steer` if explicitly marked; blank text is allowed
    - `followup` if explicitly marked
    - `followup` by default for any message that arrives while the conversation is busy
-3. ingress writes the message into the per-conversation continuation mailbox
+3. ingress writes the message into the per-conversation shared external event source
 4. ingress emits `chat_service` with `type="queue.continuation.accepted"`
 5. the synchronous `/sse/chat` response returns `status="followup_accepted"` or `status="steer_accepted"`
 6. no item is added to the main ready queue yet
+
+If a live React owner exists:
+- `followup` can be folded into the active turn and influence the next decision boundary
+- `steer` can be folded into the active turn and stop it at the next safe checkpoint
 
 ### 4.2 Claim on proc
 
@@ -243,11 +249,11 @@ On terminal completion:
 - success:
   - emit `chat.complete`
   - ack the inflight claim
-  - if there is no queued continuation to promote:
+  - if there is no pending external event to promote:
     - set conversation state to `idle`
     - emit `conv_status` with `completion="success"`
-  - if there is a queued continuation to promote:
-    - take exactly one oldest mailbox item
+  - if there is a pending external event to promote:
+    - take exactly one oldest unconsumed event
     - push it into the normal ready queue for its user type
     - set conversation state back to `in_progress` for the promoted turn
     - emit `conv_status` with `completion="queued_next"`
@@ -288,7 +294,7 @@ sequenceDiagram
     participant C as Client
     participant I as Ingress
     participant Q as Redis ready queue
-    participant M as Redis conversation mailbox
+    participant M as Redis conversation external event source
     participant P1 as Active proc worker
     participant R as Bundle/workflow runtime
     participant P2 as Next proc worker
@@ -299,15 +305,15 @@ sequenceDiagram
     P1->>R: Execute T1
 
     C->>I: POST /sse/chat (busy conversation)
-    I->>M: LPUSH followup/steer envelope
+    I->>M: Append followup/steer event
     I-->>C: HTTP status=followup_accepted or steer_accepted
     I-->>C: chat_service type=queue.continuation.accepted
 
-    alt runtime supports continuation API and takes mailbox item
-        R->>M: peek/take next continuation
-        R->>R: Apply steer/followup during active turn
-    else runtime does not take mailbox item
-        P1->>M: RPOP next mailbox item after T1 completes
+    alt runtime owns live timeline and consumes event
+        R->>M: read pending external event
+        R->>R: Apply followup during active turn or stop on steer at safe checkpoint
+    else runtime does not consume event
+        P1->>M: claim next promotable external event after T1 completes
         P1->>Q: LPUSH promoted next turn
         P1-->>C: conv_status completion=queued_next
         Note over P1,P2: P2 may be the same or a different proc worker
@@ -323,20 +329,21 @@ sequenceDiagram
 Current guarantees:
 
 - FIFO within each user-type lane
-- FIFO within each per-conversation mailbox
+- FIFO within each per-conversation external event stream
 - fair rotation across lanes
 - bounded parallelism per worker via `max_concurrent`
 - at most one actively executing turn per conversation because ingress currently blocks a second normal enqueue while the conversation is `in_progress`
 - busy-conversation continuation messages are preserved in ordered shared storage instead of being dropped
-- if the active workflow does not consume continuation input, proc promotes exactly one next mailbox item back to the normal ready queue after the current turn ends
+- if the active workflow does not consume continuation input, proc promotes exactly one next external event back to the normal ready queue after the current turn ends
+- a live consumed `steer` interrupts React cooperatively at a safe runtime checkpoint
 
 Current non-guarantees:
 
 - no sticky worker per conversation across turns
 - no full conversation-shard scheduler yet
-- no guarantee that a running workflow will inspect mailbox items unless that bundle uses the continuation API
+- no guarantee that a running workflow will inspect live external events unless that bundle/runtime supports them
 - no strict cross-conversation ordering
-- no hard lease protocol yet that makes mailbox ownership explicit independently from conversation state
+- no hard preemption of already-running tool subprocesses or model calls; interruption remains cooperative
 
 The current continuation slice is useful, but it is still layered on top of the existing lane queues rather than replacing them with a full conversation scheduler.
 
@@ -475,19 +482,20 @@ This metadata is intended to answer two different operational questions:
 
 ## 9. Current Continuation Behavior
 
-The current implementation is now mailbox-oriented for busy conversations.
+The current implementation is now shared-external-event-oriented for busy conversations.
 
 What happens today:
 
 - a second message for a busy conversation is no longer forced through the main ready queue immediately
-- ingress stores it in the ordered per-conversation mailbox
+- ingress stores it in the ordered per-conversation external event source
 - the active workflow receives a `ConversationContinuationSource` through the workflow/runtime layer
 - a bundle that supports continuation can call:
   - `pending_continuation_count()`
   - `peek_next_continuation()`
   - `take_next_continuation()`
-- if the bundle takes a mailbox item while it is running, that item is handled inside that active turn according to bundle logic
-- if the bundle does not take it, proc promotes exactly one next mailbox item into the normal ready queue after the current turn finishes
+- if the live runtime consumes a `followup` while it is running, that input stays inside the active turn
+- if the live runtime consumes a `steer` while it is running, the turn stops cooperatively at the next safe checkpoint
+- if the runtime does not consume the event, proc promotes exactly one next pending event into the normal ready queue after the current turn finishes
 
 This is the answer to the main operational question:
 
@@ -559,7 +567,7 @@ So the cutover rule is:
 
 ## 11. Remaining Gap To Full Steer/Followup
 
-The current mailbox slice is intentionally conservative.
+The current external-event slice is intentionally conservative.
 
 What it solves:
 
@@ -567,14 +575,15 @@ What it solves:
 - ordered storage per conversation
 - workflow-level inspection API
 - fallback processing for non-reactive bundles through post-turn promotion
+- live followup on the same turn for React
+- cooperative live steer interruption for React
 
 What it still does not provide:
 
 - a real conversation scheduler
 - a durable "wake this conversation up" mechanism independent from the current owner
-- a first-class lease that is owned and renewed by the active conversation owner
-- direct processing of the next mailbox turn without bouncing back through the global user-type queue
-- explicit crash recovery for "mailbox non-empty but owner died"
+- direct processing of the next followup turn without bouncing back through the global user-type queue
+- explicit crash recovery for "pending external events but owner died"
 - a clear fairness model once one conversation keeps receiving many followups
 
 This is why the current slice was implementable as an extension, but the full design is not a small patch.
@@ -1139,7 +1148,7 @@ These rules should survive the redesign:
 
 ## 17. Bottom Line
 
-Today the processor is still primarily a lane-based, turn-at-a-time worker, but with an implemented continuation mailbox layer for busy conversations.
+Today the processor is still primarily a lane-based, turn-at-a-time worker, but with an implemented shared external-event layer for busy conversations.
 
 That architecture is now much safer for long-running workers:
 
@@ -1147,9 +1156,11 @@ That architecture is now much safer for long-running workers:
 - it recovers stale pre-start claims
 - it does not replay started turns
 - it tells the client when a started turn was interrupted
-- it accepts busy-conversation followup/steer into an ordered mailbox
-- it lets continuation-aware bundles inspect that mailbox during execution
-- it falls back to promoting the next mailbox item into the normal queue for non-reactive bundles
+- it accepts busy-conversation followup/steer into an ordered shared event source
+- it lets React consume those events during execution
+- it lets live followup stay on the same turn
+- it lets live steer stop the current turn at a safe checkpoint
+- it falls back to promoting the next pending event into the normal queue when no live turn consumes it
 
 The next major step is no longer "improve mailbox promotion".
 It is to replace the current queue-centric execution model with a real conversation scheduler:

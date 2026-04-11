@@ -52,14 +52,17 @@ Known `status` values:
 | `status` | Meaning |
 | --- | --- |
 | `processing_started` | A regular turn was admitted to the normal proc ready queue. |
-| `followup_accepted` | The conversation was already busy; the message was accepted into the per-conversation continuation mailbox as a followup. |
-| `steer_accepted` | The conversation was already busy; the message was accepted into the per-conversation continuation mailbox as a steer/control message. |
+| `followup_accepted` | The conversation was already busy; the message was accepted into the shared per-conversation external event source as a followup. |
+| `steer_accepted` | The conversation was already busy; the message was accepted into the shared per-conversation external event source as a steer/control message. |
 
 Important:
 
 - `followup_accepted` / `steer_accepted` do **not** mean that a new proc turn started immediately.
 - They mean the message is accepted into ordered shared storage for that conversation.
-- The active bundle may consume it while still running, or proc may later promote it into the normal ready queue after the current turn ends.
+- A live React turn may consume it while still running.
+- A consumed `followup` stays on the current turn and can affect the next decision boundary.
+- A consumed `steer` is a control interrupt and stops the current turn at the next safe runtime checkpoint.
+- If no live turn consumes it, proc may later promote it into the normal ready queue after the current turn ends.
 
 ---
 
@@ -301,7 +304,7 @@ These are also delivered on `chat_service` with:
 
 ### Continuation accepted while conversation is busy
 
-Ingress may accept a new message for a conversation that is already `in_progress` and store it in the per-conversation continuation mailbox instead of rejecting it.
+Ingress may accept a new message for a conversation that is already `in_progress` and store it in the per-conversation shared external event source instead of rejecting it.
 
 Known `env.type` value:
 - `queue.continuation.accepted`
@@ -331,10 +334,10 @@ Typical payload:
 Meaning:
 
 - the active turn is still running
-- this message was accepted into the ordered conversation mailbox
+- this message was accepted into the ordered conversation external-event source
 - it is not yet a new `chat.start`
-- a continuation-aware bundle may consume it during the active turn
-- otherwise proc will later promote the next mailbox item into the normal ready queue
+- a live React turn may consume it during the active turn
+- otherwise proc will later promote the next accepted event into the normal ready queue
 
 ---
 
@@ -420,7 +423,7 @@ This event is emitted by `/sse/conv_status.get` and mirrors server‑side state:
 
 ### Queued-next contract
 
-If the active bundle does not consume mailbox items itself, proc may promote the oldest mailbox item into the normal ready queue after the current turn completes. In that case the client may see:
+If the active bundle does not consume accepted external events itself, proc may promote the oldest pending event into the normal ready queue after the current turn completes. In that case the client may see:
 
 - `conv_status` where:
   - `data.state = "in_progress"`

@@ -52,6 +52,10 @@ These are persisted as ordinary turn blocks once folded into the active timeline
 retains the durable event identity (`message_id`, `stream_id`, `sequence`) and routing hints such as
 `target_turn_id` / `owner_turn_id`.
 
+Runtime meaning:
+- a persisted `user.followup` means the active turn actually consumed that live followup
+- a persisted `user.steer` means the active turn saw the steer and stopped cooperatively at a safe checkpoint
+
 ## Reconstruction
 The turn view is reconstructed by:
 ```
