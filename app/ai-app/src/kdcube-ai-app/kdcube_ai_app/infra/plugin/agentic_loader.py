@@ -381,6 +381,8 @@ def venv(
         setattr(_sync_wrapper, BUNDLE_VENV_ATTR, meta)
         return _sync_wrapper
 
+    return _wrap
+
 
 _VALID_CRON_SPANS = frozenset({"process", "instance", "system"})
 
