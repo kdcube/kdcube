@@ -5,6 +5,7 @@ import errno
 import json
 import math
 import os
+import time
 import urllib.error
 import urllib.request
 from contextlib import asynccontextmanager
@@ -23,6 +24,18 @@ class NoopTaskScaleInProtection:
     async def hold(self, *, label: str):
         del label
         yield
+
+    async def reconcile(self, *, label: str, force: bool = False):
+        del label, force
+        return None
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "enabled": False,
+            "active_claims": 0,
+            "claimed_processes": 0,
+            "protection_enabled": False,
+        }
 
 
 class EcsTaskScaleInProtection:
@@ -73,6 +86,16 @@ class EcsTaskScaleInProtection:
                 int(expires_minutes or os.getenv("ECS_TASK_PROTECTION_EXPIRES_MINUTES", str(default_expires))),
             ),
         )
+        default_refresh_interval = max(30.0, min(float(self._expires_minutes * 30), 300.0))
+        self._refresh_interval_sec = max(
+            10.0,
+            float(
+                os.getenv(
+                    "ECS_TASK_PROTECTION_REFRESH_INTERVAL_SEC",
+                    str(default_refresh_interval),
+                )
+            ),
+        )
 
     @property
     def enabled(self) -> bool:
@@ -91,12 +114,20 @@ class EcsTaskScaleInProtection:
 
     def _load_state(self) -> dict[str, Any]:
         if not self._state_path.exists():
-            return {"claims": {}}
+            return {
+                "claims": {},
+                "protection_enabled": False,
+                "last_protection_sync_at": 0.0,
+            }
         try:
             raw = json.loads(self._state_path.read_text())
         except Exception:
             self._logger.warning("Failed to read ECS task protection state; resetting", exc_info=True)
-            return {"claims": {}}
+            return {
+                "claims": {},
+                "protection_enabled": False,
+                "last_protection_sync_at": 0.0,
+            }
         claims = raw.get("claims")
         if not isinstance(claims, dict):
             claims = {}
@@ -109,7 +140,11 @@ class EcsTaskScaleInProtection:
                 continue
             if pid_i > 0 and count_i > 0:
                 norm_claims[str(pid_i)] = count_i
-        return {"claims": norm_claims}
+        return {
+            "claims": norm_claims,
+            "protection_enabled": bool(raw.get("protection_enabled", False)),
+            "last_protection_sync_at": float(raw.get("last_protection_sync_at", 0.0) or 0.0),
+        }
 
     def _save_state(self, state: dict[str, Any]) -> None:
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -125,6 +160,9 @@ class EcsTaskScaleInProtection:
 
     def _active_count(self, state: dict[str, Any]) -> int:
         return sum(max(0, int(v)) for v in (state.get("claims") or {}).values())
+
+    def _claimed_processes(self, state: dict[str, Any]) -> int:
+        return len((state.get("claims") or {}).keys())
 
     def _format_http_error(self, exc: urllib.error.HTTPError) -> str:
         body_text = ""
@@ -181,6 +219,93 @@ class EcsTaskScaleInProtection:
             detail = self._format_http_error(exc)
             raise RuntimeError(f"ECS task protection API request failed: {detail}") from exc
 
+    def _should_refresh_enabled(self, state: dict[str, Any], *, now: float) -> bool:
+        if not bool(state.get("protection_enabled", False)):
+            return True
+        last_sync = float(state.get("last_protection_sync_at", 0.0) or 0.0)
+        return (now - last_sync) >= self._refresh_interval_sec
+
+    def _apply_desired_protection(
+        self,
+        state: dict[str, Any],
+        *,
+        desired_enabled: bool,
+        label: str,
+        force: bool = False,
+    ) -> None:
+        now = time.time()
+        currently_enabled = bool(state.get("protection_enabled", False))
+
+        if desired_enabled:
+            should_call = force or self._should_refresh_enabled(state, now=now)
+        else:
+            should_call = force or currently_enabled
+
+        if not should_call:
+            return
+
+        self._set_protection(desired_enabled)
+        state["protection_enabled"] = desired_enabled
+        state["last_protection_sync_at"] = now
+        self._logger.info(
+            "Reconciled ECS task protection: enabled=%s label=%s active_claims=%s claimed_processes=%s",
+            desired_enabled,
+            label,
+            self._active_count(state),
+            self._claimed_processes(state),
+        )
+
+    def _reconcile(self, *, label: str, force: bool = False) -> None:
+        if not self._enabled:
+            return
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_path.open("a+") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            state = self._load_state()
+            self._sweep_claims(state)
+            desired_enabled = self._active_count(state) > 0
+            try:
+                self._apply_desired_protection(
+                    state,
+                    desired_enabled=desired_enabled,
+                    label=label,
+                    force=force,
+                )
+            finally:
+                self._save_state(state)
+
+    async def reconcile(self, *, label: str, force: bool = False) -> None:
+        if not self._enabled:
+            return
+        await asyncio.to_thread(self._reconcile, label=label, force=force)
+
+    def _snapshot(self) -> dict[str, Any]:
+        if not self._enabled:
+            return {
+                "enabled": False,
+                "active_claims": 0,
+                "claimed_processes": 0,
+                "protection_enabled": False,
+            }
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with self._lock_path.open("a+") as lockf:
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            state = self._load_state()
+            self._sweep_claims(state)
+            self._save_state(state)
+            return {
+                "enabled": True,
+                "active_claims": self._active_count(state),
+                "claimed_processes": self._claimed_processes(state),
+                "protection_enabled": bool(state.get("protection_enabled", False)),
+                "expires_minutes": self._expires_minutes,
+                "refresh_interval_sec": self._refresh_interval_sec,
+                "last_protection_sync_at": float(state.get("last_protection_sync_at", 0.0) or 0.0),
+            }
+
+    def snapshot(self) -> dict[str, Any]:
+        return self._snapshot()
+
     def _acquire(self, label: str) -> None:
         if not self._enabled:
             return
@@ -194,7 +319,12 @@ class EcsTaskScaleInProtection:
             state.setdefault("claims", {})[pid] = int(state["claims"].get(pid, 0)) + 1
             if active_before == 0:
                 try:
-                    self._set_protection(True)
+                    self._apply_desired_protection(
+                        state,
+                        desired_enabled=True,
+                        label=label,
+                        force=True,
+                    )
                     self._logger.info(
                         "Enabled ECS task scale-in protection for busy proc task: label=%s expires_minutes=%s",
                         label,
@@ -226,7 +356,12 @@ class EcsTaskScaleInProtection:
             active_after = self._active_count(state)
             if active_after == 0:
                 try:
-                    self._set_protection(False)
+                    self._apply_desired_protection(
+                        state,
+                        desired_enabled=False,
+                        label=label,
+                        force=False,
+                    )
                     self._logger.info(
                         "Disabled ECS task scale-in protection after proc became idle: label=%s",
                         label,

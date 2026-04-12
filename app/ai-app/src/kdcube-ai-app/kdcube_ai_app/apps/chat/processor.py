@@ -22,6 +22,9 @@ from kdcube_ai_app.apps.chat.sdk.continuations import bind_current_conversation_
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
 from kdcube_ai_app.infra.availability.health_and_heartbeat import MultiprocessDistributedMiddleware, logger
+from kdcube_ai_app.infra.aws.ecs_container_instance_drain import (
+    build_ecs_container_instance_drain_detector,
+)
 from kdcube_ai_app.infra.aws.task_protection import build_task_scale_in_protection
 from kdcube_ai_app.infra.metrics.rolling_stats import record_metric
 from kdcube_ai_app.infra.namespaces import REDIS
@@ -130,6 +133,7 @@ class EnhancedChatRequestProcessor:
             lock_renew_sec: int = 60,
             started_marker_ttl_sec: Optional[int] = None,
             redis=None,
+            host_drain_detector=None,
     ):
         self.middleware = middleware
         self.redis = redis or middleware.redis
@@ -179,6 +183,21 @@ class EnhancedChatRequestProcessor:
         self._stale_requeue_count = 0
         self._stale_interrupted_count = 0
         self._task_scale_in_protection = build_task_scale_in_protection(logger_=logger)
+        self._task_protection_reconcile_task: Optional[asyncio.Task] = None
+        self._task_protection_reconcile_interval_sec = max(
+            5.0,
+            float(os.getenv("ECS_TASK_PROTECTION_RECONCILE_INTERVAL_SEC", "30") or "30"),
+        )
+        self._host_drain_detector = host_drain_detector or build_ecs_container_instance_drain_detector(
+            logger_=logger,
+        )
+        self._host_drain_watch_task: Optional[asyncio.Task] = None
+        self._host_drain_poll_interval_sec = max(
+            5.0,
+            float(os.getenv("ECS_CONTAINER_INSTANCE_DRAIN_POLL_INTERVAL_SEC", "15") or "15"),
+        )
+        self._host_draining = False
+        self._host_draining_since: Optional[str] = None
 
     # ---------------- Public API ----------------
 
@@ -193,6 +212,22 @@ class EnhancedChatRequestProcessor:
             self._reaper_task = asyncio.create_task(
                 self._inflight_recovery_loop(),
                 name="chat-inflight-recovery-loop",
+            )
+        if (
+            self._task_scale_in_protection.enabled
+            and (not self._task_protection_reconcile_task or self._task_protection_reconcile_task.done())
+        ):
+            self._task_protection_reconcile_task = asyncio.create_task(
+                self._task_protection_reconcile_loop(),
+                name="chat-task-protection-reconcile-loop",
+            )
+        if (
+            getattr(self._host_drain_detector, "enabled", False)
+            and (not self._host_drain_watch_task or self._host_drain_watch_task.done())
+        ):
+            self._host_drain_watch_task = asyncio.create_task(
+                self._host_drain_watch_loop(),
+                name="chat-host-drain-watch-loop",
             )
         if self._scheduler is None:
             from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -272,6 +307,16 @@ class EnhancedChatRequestProcessor:
         self._config_task = None
         await self._await_background_task_exit(self._reaper_task, name="chat-inflight-recovery-loop")
         self._reaper_task = None
+        await self._await_background_task_exit(
+            self._task_protection_reconcile_task,
+            name="chat-task-protection-reconcile-loop",
+        )
+        self._task_protection_reconcile_task = None
+        await self._await_background_task_exit(
+            self._host_drain_watch_task,
+            name="chat-host-drain-watch-loop",
+        )
+        self._host_drain_watch_task = None
         if self._scheduler is not None:
             await self._scheduler.shutdown()
             self._scheduler = None
@@ -282,10 +327,13 @@ class EnhancedChatRequestProcessor:
 
     def get_runtime_metadata(self) -> Dict[str, Any]:
         now = time.monotonic()
-        return {
+        metadata = {
             "current_load": self._current_load,
             "active_tasks": len(self._active_tasks),
             "draining": self._stop_event.is_set(),
+            "host_draining": self._host_draining,
+            "host_draining_since": self._host_draining_since,
+            "accepting_new_tasks": not self._stop_event.is_set() and not self._host_draining,
             "queue_loop_lag_sec": round(max(0.0, now - self._last_queue_poll_completed_at), 3),
             "config_loop_lag_sec": round(max(0.0, now - self._last_config_poll_completed_at), 3),
             "reaper_loop_lag_sec": round(max(0.0, now - self._last_reaper_poll_completed_at), 3),
@@ -295,6 +343,74 @@ class EnhancedChatRequestProcessor:
             "stale_requeue_count": self._stale_requeue_count,
             "stale_interrupted_count": self._stale_interrupted_count,
         }
+        try:
+            metadata["task_protection"] = self._task_scale_in_protection.snapshot()
+        except Exception:
+            metadata["task_protection"] = {"enabled": bool(getattr(self._task_scale_in_protection, "enabled", False))}
+            logger.debug("Failed to snapshot ECS task protection state", exc_info=True)
+        try:
+            metadata["ecs_host_drain"] = self._host_drain_detector.snapshot()
+        except Exception:
+            metadata["ecs_host_drain"] = {"enabled": bool(getattr(self._host_drain_detector, "enabled", False))}
+            logger.debug("Failed to snapshot ECS host-drain state", exc_info=True)
+        return metadata
+
+    def is_host_draining(self) -> bool:
+        return self._host_draining
+
+    async def _task_protection_reconcile_loop(self) -> None:
+        try:
+            await self._task_scale_in_protection.reconcile(label="processor-startup", force=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Initial ECS task protection reconcile failed", exc_info=True)
+
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.sleep(self._task_protection_reconcile_interval_sec)
+                if self._stop_event.is_set():
+                    break
+                await self._task_scale_in_protection.reconcile(
+                    label=f"processor-periodic:load={self._current_load}",
+                    force=False,
+                )
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.warning("Periodic ECS task protection reconcile failed", exc_info=True)
+
+    async def _host_drain_watch_loop(self) -> None:
+        logger.info(
+            "ECS host-drain watcher enabled: poll_interval_sec=%s",
+            self._host_drain_poll_interval_sec,
+        )
+        while not self._stop_event.is_set():
+            try:
+                if self._host_draining:
+                    await asyncio.sleep(self._host_drain_poll_interval_sec)
+                    continue
+                if await self._host_drain_detector.is_host_draining():
+                    self._latch_host_draining()
+                await asyncio.sleep(self._host_drain_poll_interval_sec)
+            except asyncio.CancelledError:
+                break
+            except Exception:
+                logger.warning("ECS host-drain watcher failed", exc_info=True)
+                await asyncio.sleep(self._host_drain_poll_interval_sec)
+
+    def _latch_host_draining(self) -> None:
+        if self._host_draining:
+            return
+        self._host_draining = True
+        self._host_draining_since = _utc_now_iso()
+        logger.warning(
+            "Processor host entered ECS DRAINING; stopping new task intake: instance_id=%s process_id=%s current_load=%s active_tasks=%s",
+            self.middleware.instance_id,
+            self.process_id,
+            self._current_load,
+            len(self._active_tasks),
+        )
 
     async def _reset_shared_async_pool(self, reason: str) -> None:
         logger.warning("Resetting shared async Redis pool for processor: %s", reason)
@@ -745,6 +861,10 @@ class EnhancedChatRequestProcessor:
     async def _processing_loop(self):
         while not self._stop_event.is_set():
             try:
+                if self._host_draining:
+                    await asyncio.sleep(0.1)
+                    continue
+
                 if self._current_load >= self.max_concurrent:
                     await asyncio.sleep(0.05)
                     continue
@@ -792,7 +912,7 @@ class EnhancedChatRequestProcessor:
 
     async def _pop_any_queue_fair(self) -> Optional[Dict[str, Any]]:
         for _ in range(len(self.QUEUE_ORDER)):
-            if self._stop_event.is_set():
+            if self._stop_event.is_set() or self._host_draining:
                 return None
             user_type = self.QUEUE_ORDER[self._queue_idx]
             self._queue_idx = (self._queue_idx + 1) % len(self.QUEUE_ORDER)
@@ -806,14 +926,18 @@ class EnhancedChatRequestProcessor:
             if raw_payload is None:
                 continue
 
-            if self._stop_event.is_set():
+            if self._stop_event.is_set() or self._host_draining:
                 await self._requeue_claimed_payload(
                     ready_queue_key=queue_key,
                     inflight_queue_key=inflight_queue_key,
                     raw_payload=raw_payload,
-                    reason=f"processor-drain-before-lock:{user_type}",
+                    reason=f"{'host-draining' if self._host_draining else 'processor-drain'}-before-lock:{user_type}",
                 )
-                logger.info("Processor draining; returned claimed queue item to %s before processing", queue_key)
+                logger.info(
+                    "Processor %s; returned claimed queue item to %s before processing",
+                    "host draining" if self._host_draining else "draining",
+                    queue_key,
+                )
                 return None
 
             try:
@@ -845,15 +969,20 @@ class EnhancedChatRequestProcessor:
                 ex=self.lock_ttl_sec,
             )
             if acquired:
-                if self._stop_event.is_set():
+                if self._stop_event.is_set() or self._host_draining:
                     await self._requeue_claimed_payload(
                         ready_queue_key=queue_key,
                         inflight_queue_key=inflight_queue_key,
                         raw_payload=raw_payload,
                         lock_key=lock_key,
-                        reason=f"processor-drain-after-lock:{logical_id}",
+                        reason=f"{'host-draining' if self._host_draining else 'processor-drain'}-after-lock:{logical_id}",
                     )
-                    logger.info("Processor draining; returned locked task %s to %s", logical_id, queue_key)
+                    logger.info(
+                        "Processor %s; returned locked task %s to %s",
+                        "host draining" if self._host_draining else "draining",
+                        logical_id,
+                        queue_key,
+                    )
                     return None
                 self._current_load += 1
                 created_at = (task_dict.get("meta") or {}).get("created_at")

@@ -192,6 +192,23 @@ class _DummyEnvelope:
         return data
 
 
+class _DummyHostDrainDetector:
+    def __init__(self, *, enabled=True, draining=False):
+        self.enabled = enabled
+        self.draining = draining
+        self.check_calls = 0
+
+    async def is_host_draining(self):
+        self.check_calls += 1
+        return self.draining
+
+    def snapshot(self):
+        return {
+            "enabled": self.enabled,
+            "container_instance_status": "DRAINING" if self.draining else "ACTIVE",
+        }
+
+
 @asynccontextmanager
 async def _noop_async_context(*args, **kwargs):
     del args, kwargs
@@ -231,6 +248,7 @@ def _build_processor(redis_client, *, max_concurrent=5, handler=_noop_handler, c
         relay=relay or _NoopRelay(),
         redis=redis_client,
         max_concurrent=max_concurrent,
+        host_drain_detector=_DummyHostDrainDetector(enabled=False),
     )
     processor.queue_block_timeout_sec = 0.01
     processor.queue_call_timeout_sec = 0.02
@@ -429,6 +447,25 @@ async def test_pop_any_queue_fair_requeues_item_if_drain_starts_after_claim():
     assert redis.lrem_calls == [("queue:inflight:privileged", 1, raw_payload)]
     assert redis.rpush_calls == [("queue:privileged", raw_payload)]
     assert processor.get_current_load() == 0
+
+
+@pytest.mark.asyncio
+async def test_pop_any_queue_fair_skips_queue_claims_when_host_is_draining():
+    redis = _MinimalRedis()
+    processor = _build_processor(redis)
+    processor._host_draining = True
+
+    async def _unexpected_queue_claim(*args, **kwargs):
+        raise AssertionError("queue claim should not run while host is draining")
+
+    processor._queue_claim = _unexpected_queue_claim
+
+    result = await processor._pop_any_queue_fair()
+
+    assert result is None
+    metadata = processor.get_runtime_metadata()
+    assert metadata["host_draining"] is True
+    assert metadata["accepting_new_tasks"] is False
 
 
 @pytest.mark.asyncio
