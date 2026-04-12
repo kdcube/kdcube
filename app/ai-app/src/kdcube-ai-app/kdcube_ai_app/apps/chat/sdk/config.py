@@ -13,6 +13,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 import yaml
 
+from kdcube_ai_app.infra.props import get_props_manager
 from kdcube_ai_app.infra.secrets import get_secrets_manager
 
 _SECRET_LOG = logging.getLogger("kdcube.settings.secrets")
@@ -227,6 +228,8 @@ def _resolve_current_user_bundle_scope(
             resolved_user_id = str(getattr(getattr(ctx, "user", None), "user_id", None) or "").strip() or None
         if resolved_bundle_id is None:
             resolved_bundle_id = str(getattr(getattr(ctx, "routing", None), "bundle_id", None) or "").strip() or None
+    if resolved_bundle_id is None:
+        resolved_bundle_id = _resolve_current_bundle_id()
     return resolved_user_id, resolved_bundle_id
 
 
@@ -289,6 +292,94 @@ def delete_user_secret(
     if not resolved_user_id:
         raise RuntimeError("Current user id is unavailable for user-scoped secret delete")
     get_secrets_manager(get_settings()).delete_user_secret(
+        user_id=resolved_user_id,
+        bundle_id=resolved_bundle_id,
+        key=key,
+    )
+
+
+def get_user_prop(
+    key: str,
+    *,
+    bundle_id: str | None = None,
+    user_id: str | None = None,
+    default: Any = None,
+) -> Any:
+    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
+        user_id=user_id,
+        bundle_id=bundle_id,
+    )
+    if not resolved_user_id or not resolved_bundle_id:
+        return default
+    try:
+        value = get_props_manager().get_user_prop(
+            user_id=resolved_user_id,
+            bundle_id=resolved_bundle_id,
+            key=key,
+        )
+    except Exception:
+        value = None
+    return default if value is None else value
+
+
+def get_user_props(
+    *,
+    bundle_id: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any]:
+    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
+        user_id=user_id,
+        bundle_id=bundle_id,
+    )
+    if not resolved_user_id or not resolved_bundle_id:
+        return {}
+    try:
+        return get_props_manager().list_user_props(
+            user_id=resolved_user_id,
+            bundle_id=resolved_bundle_id,
+        )
+    except Exception:
+        return {}
+
+
+def set_user_prop(
+    key: str,
+    value: Any,
+    *,
+    bundle_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
+        user_id=user_id,
+        bundle_id=bundle_id,
+    )
+    if not resolved_user_id:
+        raise RuntimeError("Current user id is unavailable for user-scoped prop write")
+    if not resolved_bundle_id:
+        raise RuntimeError("Current bundle id is unavailable for user-scoped prop write")
+    get_props_manager().set_user_prop(
+        user_id=resolved_user_id,
+        bundle_id=resolved_bundle_id,
+        key=key,
+        value=value,
+    )
+
+
+def delete_user_prop(
+    key: str,
+    *,
+    bundle_id: str | None = None,
+    user_id: str | None = None,
+) -> None:
+    resolved_user_id, resolved_bundle_id = _resolve_current_user_bundle_scope(
+        user_id=user_id,
+        bundle_id=bundle_id,
+    )
+    if not resolved_user_id:
+        raise RuntimeError("Current user id is unavailable for user-scoped prop delete")
+    if not resolved_bundle_id:
+        raise RuntimeError("Current bundle id is unavailable for user-scoped prop delete")
+    get_props_manager().delete_user_prop(
         user_id=resolved_user_id,
         bundle_id=resolved_bundle_id,
         key=key,

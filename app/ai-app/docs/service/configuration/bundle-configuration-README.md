@@ -13,11 +13,15 @@ see_also:
 ---
 # Bundle Configuration & Secrets
 
-Bundles have two kinds of inputs:
+Bundles have two deployment-scoped inputs:
 1) **Configuration** (non‑secret, safe to store)
 2) **Secrets** (API keys, tokens, passwords)
 
 We keep them in **separate files** with the **same shape**.
+
+There is also a third category which is intentionally **not** part of deployment descriptors:
+
+3) **User-scoped bundle props** (non-secret per-user mutable state)
 
 ---
 
@@ -200,7 +204,8 @@ bundles:
 
 Notes:
 - Same `items` shape as `bundles.yaml`, but **only secrets**.
-- Secrets are injected into the secrets manager using **dot‑path keys**:
+- Bundle code normally reads these with `get_secret("b:...")`.
+- The canonical internal namespace is still:
   - `bundles.<bundle_id>.secrets.openai.api_key`
   - `bundles.<bundle_id>.secrets.stripe.secret_key`
   - `bundles.<bundle_id>.secrets.docs.token`
@@ -213,40 +218,77 @@ Notes:
 
 ---
 
-## 3) Runtime overrides (operational updates)
+## 3) Authoritative storage by deployment mode
 
-Bundle config can be changed at runtime (admin UI). These overrides are stored in
-the bundle config store and layered on top of defaults.
+### `secrets-file`
 
-Resolution order:
-1) **Runtime overrides** (admin UI)
-2) **bundles.yaml** defaults
-3) **bundle defaults** (code)
+In `secrets-file` mode, the descriptor files themselves remain authoritative:
 
-**Effective props** are computed with a **deep merge**:
-`code defaults → bundles.yaml → runtime overrides`.
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+
+### `aws-sm`
+
+In `aws-sm` mode, deployment-scoped bundle state is authoritative in grouped AWS
+Secrets Manager documents:
+
+- `<prefix>/bundles-meta`
+- `<prefix>/bundles/<bundle_id>/descriptor`
+- `<prefix>/bundles/<bundle_id>/secrets`
+
+Where:
+
+- `bundles-meta` holds registry-level metadata such as `default_bundle_id` and `bundle_ids`
+- each `descriptor` document holds the effective deploy-scoped bundle item, including its plain props
+- each `secrets` document holds the effective deploy-scoped bundle secrets
+
+In this mode:
+
+- Redis is cache only
+- `bundles.yaml` and `bundles.secrets.yaml` are the descriptor/export format
+- the CLI can export the current effective live descriptors from those AWS docs
+
+---
+
+## 4) Runtime bundle props
+
+Bundle config can be changed at runtime from the bundle admin/API.
+
+**Effective bundle props** are computed with a deep merge:
+
+`code defaults → authoritative deploy-scoped bundle props`
+
+So the current source of the deploy-scoped bundle props layer is:
+
+- `bundles.yaml` in `secrets-file` mode
+- `bundles/<bundle_id>/descriptor.props` in `aws-sm` mode
 
 ### Authoritative env reset
 
-`bundles.yaml` is the authoritative descriptor for descriptor-backed bundle props.
 When proc startup runs with `BUNDLES_FORCE_ENV_ON_STARTUP=1`, or when an operator
-uses **Reset from env**, the platform rebuilds the Redis props layer from the
-current `bundles.yaml` content.
+uses **Reset from env**, the platform reapplies the descriptor-backed bundle state
+from the active descriptor source.
 
 That reset is authoritative:
-- props present in `bundles.yaml` are written to Redis
-- props removed from `bundles.yaml` are deleted from Redis
-- runtime/admin overrides stored in Redis are discarded by that reset
+- the authoritative deploy-scoped props layer is rewritten
+- stale deploy-scoped props are removed
+- Redis cache is rebuilt from that authoritative layer
 
-This is what makes `bundles.yaml` able to fully control bundle props, together
-with the defaults defined in bundle code.
+In `aws-sm` mode, this also materializes:
 
-### Admin UI: Save props
-The props editor always shows the **full effective props**.
-When you click **Save props**, the editor contents are stored as the **override object**.
-This means:
-- The effective configuration stays exactly as shown.
-- If you want minimal overrides, use the dot‑path editor to set only the keys you need.
+- `bundles-meta`
+- `bundles/<bundle_id>/descriptor`
+
+for each deployment-scoped bundle.
+
+### Admin UI / API: Save props
+
+When an operator saves bundle props:
+
+- Redis cache is updated
+- the authoritative deploy-scoped bundle descriptor is updated too
+
+So in `aws-sm` mode, bundle admin changes are not Redis-only anymore.
 
 Example — override just one role model:
 ```json
@@ -259,6 +301,43 @@ Example — override just one role model:
   }
 }
 ```
+
+---
+
+## 5) User-scoped bundle props
+
+User-scoped non-secret props are separate from deployment descriptors.
+
+They are for bundle-owned mutable user state such as:
+
+- per-user preferences
+- per-user UI state that the bundle wants to preserve
+- user-approved bundle settings
+
+They are **not** stored in:
+
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+- Redis bundle props cache
+- AWS SM deployment-scoped bundle descriptor docs
+
+They are stored in PostgreSQL per tenant/project schema in:
+
+- `<SCHEMA>.user_bundle_props`
+
+Bundle code should use the SDK helpers:
+
+- `get_user_prop(...)`
+- `get_user_props(...)`
+- `set_user_prop(...)`
+- `delete_user_prop(...)`
+
+These helpers resolve:
+
+- current user from request context
+- current bundle from request context / bundle context
+
+So normal bundle code does not need to hand-assemble storage keys.
 
 Example — override embedding:
 ```json

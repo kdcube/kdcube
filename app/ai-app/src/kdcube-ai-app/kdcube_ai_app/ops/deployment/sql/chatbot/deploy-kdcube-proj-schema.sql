@@ -182,6 +182,22 @@ CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cp_value_gin
 CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_cp_tags_gin
   ON <SCHEMA>.conv_prefs USING gin (tags);
 
+-- ---------- Persistent user-scoped bundle props (non-secret) ----------
+CREATE TABLE IF NOT EXISTS <SCHEMA>.user_bundle_props (
+    user_id    TEXT NOT NULL,
+    bundle_id  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value_json JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, bundle_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_user_bundle_updated
+  ON <SCHEMA>.user_bundle_props (user_id, bundle_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_bundle_updated
+  ON <SCHEMA>.user_bundle_props (bundle_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_<SCHEMA>_ubp_value_gin
+  ON <SCHEMA>.user_bundle_props USING gin (value_json);
 
 -- ---------- RAG index (hybrid: vector + BM25 + filters) ----------
 CREATE TABLE IF NOT EXISTS <SCHEMA>.rag_chunks (
@@ -223,6 +239,11 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_cp_user_bundle_props_updated_at ON <SCHEMA>.user_bundle_props;
+CREATE TRIGGER trg_cp_user_bundle_props_updated_at
+  BEFORE UPDATE ON <SCHEMA>.user_bundle_props
+  FOR EACH ROW EXECUTE FUNCTION <SCHEMA>.update_updated_at();
 
 -- =========================================
 -- USER PLAN OVERRIDES (temporary plan quota overrides)

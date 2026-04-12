@@ -2,7 +2,11 @@ from pathlib import Path
 
 from rich.console import Console
 
-from kdcube_cli.cli import _descriptor_fast_path_reasons, _load_bundle_ids_from_descriptor
+from kdcube_cli.cli import (
+    _descriptor_fast_path_reasons,
+    _load_bundle_ids_from_descriptor,
+)
+from kdcube_cli import export_live_bundles as export_mod
 from kdcube_cli.installer import PathsContext, gather_configuration
 
 
@@ -277,3 +281,84 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
     env_main = (config_dir / ".env").read_text()
     assert f"HOST_SECRETS_YAML_DESCRIPTOR_PATH={secrets_path}" in env_main
     assert f"HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH={bundles_secrets_path}" in env_main
+
+
+def test_resolve_aws_sm_prefix_defaults_from_tenant_project():
+    assert export_mod.resolve_aws_sm_prefix(tenant="demo", project="proj", explicit=None) == "kdcube/demo/proj"
+
+
+def test_export_live_bundle_descriptors_reconstructs_effective_files(monkeypatch, tmp_path: Path):
+    payloads = {
+        "kdcube/demo/proj/bundles-meta": {
+            "default_bundle_id": "demo.bundle",
+            "bundle_ids": ["demo.bundle", "git.bundle"],
+        },
+        "kdcube/demo/proj/bundles/demo.bundle/descriptor": {
+            "path": "/bundles/demo.bundle",
+            "module": "entrypoint",
+            "props": {"feature": {"enabled": True}},
+        },
+        "kdcube/demo/proj/bundles/demo.bundle/secrets": {
+            "api": {"key": "secret-1"},
+        },
+        "kdcube/demo/proj/bundles/git.bundle/descriptor": {
+            "repo": "https://github.com/example/git.bundle.git",
+            "ref": "main",
+            "subdir": "bundle",
+            "module": "entrypoint",
+        },
+    }
+
+    def _fake_get(*, secret_id, region, profile, required):
+        assert region == "eu-west-1"
+        assert profile == "demo"
+        value = payloads.get(secret_id)
+        if value is None and required:
+            raise AssertionError(f"unexpected required secret lookup: {secret_id}")
+        return value
+
+    monkeypatch.setattr(export_mod, "aws_secret_json", _fake_get)
+
+    export_mod.export_live_bundle_descriptors(
+        Console(file=None),
+        tenant="demo",
+        project="proj",
+        out_dir=tmp_path,
+        aws_region="eu-west-1",
+        aws_profile="demo",
+        aws_sm_prefix=None,
+    )
+
+    bundles_yaml = export_mod.yaml.safe_load((tmp_path / "bundles.yaml").read_text())
+    bundles_secrets_yaml = export_mod.yaml.safe_load((tmp_path / "bundles.secrets.yaml").read_text())
+
+    assert bundles_yaml == {
+        "bundles": {
+            "version": "1",
+            "items": [
+                {
+                    "id": "demo.bundle",
+                    "path": "/bundles/demo.bundle",
+                    "module": "entrypoint",
+                    "props": {"feature": {"enabled": True}},
+                },
+                {
+                    "id": "git.bundle",
+                    "repo": "https://github.com/example/git.bundle.git",
+                    "ref": "main",
+                    "subdir": "bundle",
+                    "module": "entrypoint",
+                },
+            ],
+            "default_bundle_id": "demo.bundle",
+        }
+    }
+    assert bundles_secrets_yaml == {
+        "bundles": {
+            "version": "1",
+            "items": [
+                {"id": "demo.bundle", "secrets": {"api": {"key": "secret-1"}}},
+                {"id": "git.bundle", "secrets": {}},
+            ],
+        }
+    }

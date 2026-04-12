@@ -21,8 +21,9 @@ Use:
 
 The goal is simple:
 
-- `assembly.yaml` and `bundles.yaml` remain the human-edited source of truth
-- runtime code can read selected plain values from those descriptors directly
+- runtime code can read selected plain values from mounted deployment descriptors directly
+- `assembly.yaml` stays the deployment-managed source of truth for platform plain config
+- `bundles.yaml` stays the portable descriptor/export shape for bundle plain config
 - secrets still stay in `secrets.yaml`, `bundles.secrets.yaml`, or the configured secrets provider
 
 ## 1. Runtime API
@@ -108,8 +109,8 @@ Use `read_plain(...)` when:
 Good examples for `read_plain(...)`:
 
 - reading optional `assembly.yaml` feature flags or nested metadata
-- reading bundle registry metadata from `bundles.yaml`
-- reading bundle config that should stay descriptor-shaped rather than env-shaped
+- reading bundle registry metadata from the mounted `bundles.yaml`
+- reading exported bundle config that should stay descriptor-shaped rather than env-shaped
 
 Do not use `read_plain(...)` for:
 
@@ -117,6 +118,7 @@ Do not use `read_plain(...)` for:
 - API keys
 - passwords
 - tokens
+- current effective bundle props
 
 Those still belong behind `get_secret(...)`.
 
@@ -161,9 +163,24 @@ So even when proc seeds the registry from `/config/bundles.yaml`, the assembly f
 The runtime should treat descriptor reads as read-only configuration access.
 
 - `assembly.yaml` = platform-level plain configuration
-- `bundles.yaml` = bundle registry and plain bundle metadata
+- `bundles.yaml` = bundle registry and bundle plain config in descriptor shape
 
 Neither should be used as a writable runtime datastore.
+
+Important deployment distinction:
+
+- in `secrets-file` / single-node style setups, the mounted `bundles.yaml` can also be the live authority
+- in `aws-sm` ECS setups, the mounted `bundles.yaml` is a staged/exported descriptor view, while live deployment-scoped bundle descriptor state is authoritative in AWS SM grouped bundle docs
+
+So:
+
+- use `read_plain("b:...")` when you explicitly want the mounted/exported descriptor
+- use `self.bundle_prop(...)` when you need the current effective bundle config
+
+`gateway.yaml` is deployment-managed too, but it is not part of `get_plain(...)`. The plain descriptor API reads only:
+
+- `/config/assembly.yaml`
+- `/config/bundles.yaml`
 
 ## 7. Related settings already rendered from assembly
 

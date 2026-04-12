@@ -107,6 +107,29 @@ Choose exactly one source selector:
 - `--release <ref>` for a specific released ref
 - otherwise `assembly.yaml -> platform.ref`
 
+For `aws-sm` deployments, you can also export the current effective live
+deployment-scoped bundle descriptors directly from AWS Secrets Manager:
+
+```bash
+kdcube \
+  --export-live-bundles \
+  --tenant <tenant> \
+  --project <project> \
+  --aws-region <region> \
+  --out-dir /tmp/kdcube-export
+```
+
+Optional:
+- `--aws-profile <profile>`
+- `--aws-sm-prefix <prefix>`
+
+This reconstructs:
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+
+from the authoritative grouped AWS SM bundle documents, not from Redis or the
+currently mounted `/config/bundles.yaml`.
+
 Expected descriptor folder:
 
 ```text
@@ -141,6 +164,15 @@ what is incomplete.
 | `--latest` | With `--descriptors-location`, resolve the latest platform release instead of using `assembly.yaml -> platform.ref`. |
 | `--upstream` | With `--descriptors-location` and `--build`, use the latest upstream repo state (`origin/main`) instead of a released platform ref. |
 | `--release <ref>` | With `--descriptors-location`, use the given platform release instead of `assembly.yaml -> platform.ref`. |
+| `--bundle-reload <bundle_id>` | Reapply the mounted bundle descriptor and clear proc bundle caches for local development. |
+| `--export-live-bundles` | Export effective live `bundles.yaml` and `bundles.secrets.yaml` from AWS SM grouped bundle docs. |
+| `--tenant <id>` / `--project <id>` | Scope for `--export-live-bundles` unless `--aws-sm-prefix` is given. |
+| `--out-dir <dir>` | Output directory for `--export-live-bundles`. |
+| `--aws-region <region>` | AWS region for `--export-live-bundles`. |
+| `--aws-profile <profile>` | AWS profile for `--export-live-bundles`. |
+| `--aws-sm-prefix <prefix>` | Explicit AWS SM prefix for `--export-live-bundles`. |
+| `--stop` | Stop the local Docker Compose stack for the selected workdir. |
+| `--remove-volumes` | With `--stop`, also remove local volumes. |
 | `--reset-config` | Re‑prompt for config values without deleting files. |
 | `--reset` | Alias for `--reset-config`. |
 | `--clean` | Clean local Docker cache and unused KDCube images. |
@@ -170,6 +202,18 @@ Clean local Docker images/cache:
 
 ```bash
 kdcube --clean
+```
+
+Stop the local stack:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime --stop
+```
+
+Stop and remove volumes:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
 ```
 
 Tip: if `kdcube` is not on your PATH, run `python -m pipx ensurepath`

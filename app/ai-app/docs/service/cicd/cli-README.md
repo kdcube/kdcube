@@ -256,6 +256,42 @@ Fast-path requirements:
 If any of those are missing, the CLI falls back to the guided setup and prints
 the missing reasons.
 
+### 2.3b Export live effective bundle descriptors
+
+For ECS / `aws-sm` deployments, the current effective live deployment-scoped
+bundle state can be exported directly from AWS Secrets Manager:
+
+```bash
+kdcube \
+  --export-live-bundles \
+  --tenant <tenant> \
+  --project <project> \
+  --aws-region <region> \
+  --out-dir /tmp/kdcube-export
+```
+
+Optional:
+
+- `--aws-profile <profile>`
+- `--aws-sm-prefix <prefix>`
+
+This reconstructs:
+
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+
+from the authoritative grouped AWS SM documents:
+
+- `<prefix>/bundles-meta`
+- `<prefix>/bundles/<bundle_id>/descriptor`
+- `<prefix>/bundles/<bundle_id>/secrets`
+
+This is the correct export path for current live ECS state. It does not read:
+
+- Redis
+- mounted `/config/bundles.yaml`
+- GitHub secrets blobs
+
 ### 2.4 Bundles descriptor (optional)
 
 You can provide a **bundles descriptor** (`bundles.yaml`) and an optional
@@ -292,6 +328,10 @@ Symlink note:
 
 `AGENTIC_BUNDLES_JSON` controls proc bundle-registry seeding.
 It is separate from the broader descriptor mounts used by `read_plain(...)`.
+
+In `aws-sm` deployments, `bundles.yaml` is the descriptor/export shape, but the
+live authoritative deployment-scoped bundle state is stored in grouped AWS SM
+documents and can be exported back with `--export-live-bundles`.
 
 Templates:
 - [`deployment/bundles.yaml`](../../../deployment/bundles.yaml)
@@ -436,3 +476,17 @@ This is intended for **local development** only.
 - `kdcube doctor` (validate env + filesystem + runtime dependencies)
 - `kdcube compose up` (wrapper around docker compose)
 - `kdcube release tag` (tag + VERSION validation)
+
+## 9) Operational commands
+
+Stop the local workdir stack:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime --stop
+```
+
+Stop and remove volumes too:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
+```

@@ -20,6 +20,20 @@ class _FakeSecretsManager:
         return values.get((user_id, bundle_id, key))
 
 
+class _FakePropsManager:
+    def get_user_prop(self, *, user_id: str, key: str, bundle_id: str | None = None):
+        values = {
+            ("user-1", "bundle.demo", "preferences.theme"): "dark",
+        }
+        return values.get((user_id, bundle_id, key))
+
+    def list_user_props(self, *, user_id: str, bundle_id: str | None = None):
+        values = {
+            ("user-1", "bundle.demo"): {"preferences.theme": "dark"},
+        }
+        return values.get((user_id, bundle_id), {})
+
+
 def test_settings_reads_secrets_through_provider(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -51,6 +65,21 @@ def test_get_user_secret_uses_request_context_scope(monkeypatch):
     )
 
     assert sdk_config.get_user_secret("anthropic.api_key") == "sk-user-anthropic"
+
+
+def test_get_user_prop_uses_request_context_scope(monkeypatch):
+    monkeypatch.setattr(sdk_config, "get_props_manager", lambda: _FakePropsManager())
+    monkeypatch.setattr(
+        comm_ctx,
+        "get_current_request_context",
+        lambda: ChatTaskPayload(
+            routing=ChatTaskRouting(bundle_id="bundle.demo", session_id="s-1"),
+            user=ChatTaskUser(user_type="registered", user_id="user-1"),
+        ),
+    )
+
+    assert sdk_config.get_user_prop("preferences.theme") == "dark"
+    assert sdk_config.get_user_props() == {"preferences.theme": "dark"}
 
 
 def test_get_secret_bundle_namespace_uses_request_context_scope(monkeypatch):

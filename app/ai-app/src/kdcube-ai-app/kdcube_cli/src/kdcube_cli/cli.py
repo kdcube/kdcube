@@ -18,6 +18,7 @@ from rich.text import Text
 
 from kdcube_cli.banner import print_cli_banner
 from kdcube_cli import installer as installer_mod
+from kdcube_cli.export_live_bundles import export_live_bundle_descriptors
 from kdcube_cli.tty_keys import (
     KEY_DOWN,
     KEY_ENTER,
@@ -1026,6 +1027,41 @@ def main() -> None:
         default="",
         help="Reapply the mounted bundle descriptor and clear proc bundle caches for local development. Validates that the given bundle id exists in the current descriptor.",
     )
+    parser.add_argument(
+        "--export-live-bundles",
+        action="store_true",
+        help="Export the current effective live bundles.yaml and bundles.secrets.yaml from AWS Secrets Manager.",
+    )
+    parser.add_argument(
+        "--tenant",
+        default="",
+        help="Tenant for --export-live-bundles. Required unless --aws-sm-prefix is provided.",
+    )
+    parser.add_argument(
+        "--project",
+        default="",
+        help="Project for --export-live-bundles. Required unless --aws-sm-prefix is provided.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default="",
+        help="Output directory for --export-live-bundles. Defaults to the current directory.",
+    )
+    parser.add_argument(
+        "--aws-region",
+        default="",
+        help="AWS region for --export-live-bundles. Falls back to current AWS CLI environment if omitted.",
+    )
+    parser.add_argument(
+        "--aws-profile",
+        default="",
+        help="AWS profile for --export-live-bundles. Falls back to current AWS CLI environment if omitted.",
+    )
+    parser.add_argument(
+        "--aws-sm-prefix",
+        default="",
+        help="Explicit AWS Secrets Manager prefix for --export-live-bundles. Default is kdcube/<tenant>/<project>.",
+    )
     args = parser.parse_args()
 
     def _arg_provided(name: str) -> bool:
@@ -1040,6 +1076,18 @@ def main() -> None:
     try:
         if args.clean:
             clean_docker_images(console)
+            return
+        if args.export_live_bundles:
+            out_dir = Path(os.path.expanduser(args.out_dir or os.getcwd())).expanduser().resolve()
+            export_live_bundle_descriptors(
+                console,
+                tenant=str(args.tenant or "").strip(),
+                project=str(args.project or "").strip(),
+                out_dir=out_dir,
+                aws_region=str(args.aws_region or "").strip() or None,
+                aws_profile=str(args.aws_profile or "").strip() or None,
+                aws_sm_prefix=str(args.aws_sm_prefix or "").strip() or None,
+            )
             return
         if args.remove_volumes and not args.stop:
             raise SystemExit("--remove-volumes can only be used together with --stop.")

@@ -107,6 +107,7 @@ class CONFIG:
         USER_SECRETS_KEYS_FMT = "kdcube:config:bundles:user-secrets:{tenant}:{project}:{bundle_id}:{user_id}"
         SECRETS_FILE_LOCK_FMT = "kdcube:config:bundles:secrets:file:lock:{tenant}:{project}"
         SECRETS_AWS_SM_LOCK_FMT = "kdcube:config:bundles:secrets:aws-sm:lock:{tenant}:{project}:{doc}"
+        DESCRIPTORS_AWS_SM_LOCK_FMT = "kdcube:config:bundles:descriptor:aws-sm:lock:{tenant}:{project}:{doc}"
         CLEANUP_CHANNEL = "kdcube:config:bundles:cleanup:{tenant}:{project}"
         ACTIVE_REFS_KEY_FMT = "kdcube:config:bundles:refs:{tenant}:{project}"
         ENV_SYNC_LOCK_FMT = "kdcube:config:bundles:env-sync-lock:{tenant}:{project}"

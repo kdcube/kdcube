@@ -14,7 +14,7 @@ see_also:
 # Config & Secrets Usage (Code Maintainers)
 
 This document is for **platform and bundle maintainers**. It defines **how to read
-configuration and secrets in code** and what to avoid.
+configuration, props, and secrets in code** and what to avoid.
 
 ## 1) Rules of thumb
 
@@ -22,7 +22,9 @@ configuration and secrets in code** and what to avoid.
 - **Use `get_settings()`** for non‑secret config values.
 - **Use `get_plain()` / `read_plain()`** when code must inspect mounted
   `assembly.yaml` or `bundles.yaml` directly.
+- **Use `self.bundle_prop(...)`** for effective deploy-scoped bundle config.
 - **Use `get_secret()`** for deployment- or bundle-scoped secrets.
+- **Use `get_user_prop()`** for non-secret per-user bundle state.
 - For bundle code:
   - `get_secret("b:...")` = current bundle secret
   - `get_secret("...")` or `get_secret("a:...")` = platform/global secret
@@ -69,7 +71,37 @@ bundle_token = get_secret("b:docs.token")
 Fully qualified keys like `bundles.<bundle_id>.secrets...` are the canonical
 internal form. Normal bundle code should prefer `b:...`.
 
-## 3) Non‑secret config
+Current bundle resolution for `get_secret("b:...")` is:
+
+1. bound request context `routing.bundle_id`
+2. bound runtime bundle `ContextVar`
+3. env fallback:
+   - `KDCUBE_BUNDLE_ID`
+   - `AGENTIC_BUNDLE_ID`
+   - `BUNDLE_ID`
+
+So normal bundle code should not hardcode its own bundle id.
+
+## 3) Deploy-scoped non-secret config
+
+For bundle code, the primary non-secret config path is:
+
+```python
+enabled = self.bundle_prop("features.sync.enabled", False)
+runtime_cfg = self.bundle_prop("execution.runtime", {})
+```
+
+This returns the current effective deploy-scoped bundle props.
+
+Use this for:
+
+- feature flags
+- model routing
+- MCP service config
+- execution runtime config
+- scheduled-job config
+
+Do not use `get_plain("b:...")` when you actually need current effective bundle props.
 
 For config values (tenant/project, bundle paths, limits, model routing, etc.):
 
@@ -98,10 +130,58 @@ Namespace rules:
 See:
 - [docs/service/configuration/descriptor-plain-config-README.md](descriptor-plain-config-README.md)
 
-## 4) Where config comes from
+## 4) User-scoped non-secret props
+
+Use these helpers for non-secret per-user bundle state:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.config import (
+    get_user_prop,
+    get_user_props,
+    set_user_prop,
+    delete_user_prop,
+)
+
+theme = get_user_prop("preferences.theme", default="light")
+set_user_prop("preferences.theme", "dark")
+delete_user_prop("preferences.theme")
+```
+
+This scope is:
+
+- current user
+- current bundle
+
+unless you pass explicit `user_id=` and `bundle_id=`.
+
+Backing store:
+
+- PostgreSQL project schema
+- table: `<SCHEMA>.user_bundle_props`
+
+Use user props for:
+
+- non-secret per-user bundle settings
+- user-approved bundle preferences
+- bundle UI state that should survive restarts
+
+Do not use user props for:
+
+- secrets
+- deployment-scoped bundle config
+- large artifacts or document state
+
+For secrets, use `get_user_secret(...)` instead.
+
+## 5) Where config comes from
 
 - **`assembly.yaml`** holds non‑secret config (platform/frontend/infra).
-- **`bundles.yaml`** holds bundle definitions and non‑secret bundle config.
+- **`bundles.yaml`** holds the bundle descriptor/export shape.
+- **effective deploy-scoped bundle props** come from:
+  - code defaults
+  - then the authoritative deployment-scoped bundle descriptor source
+  - `bundles.yaml` in `secrets-file` mode
+  - grouped AWS SM bundle descriptor docs in `aws-sm` mode
 - **`secrets.yaml`** holds sensitive secrets (LLM keys, tokens, passwords).
 - **`bundles.secrets.yaml`** holds bundle‑specific secrets.
 - **`gateway.yaml`** can be used to render `GATEWAY_CONFIG_JSON`.
@@ -112,12 +192,13 @@ Recommended secret namespace rules:
 - no prefix or `a:` -> platform/global secret
 - `b:` -> current bundle secret
 - user secrets -> `get_user_secret(...)`, not raw `get_secret("users....")`
+- user non-secret props -> `get_user_prop(...)`, not `get_plain(...)`
 
 See:
 - [assembly-descriptor-README.md](../cicd/assembly-descriptor-README.md)
 - [secrets-descriptor-README.md](../cicd/secrets-descriptor-README.md)
 
-## 5) Adding a new secret
+## 6) Adding a new secret
 
 When you add a new secret:
 

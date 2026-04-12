@@ -46,6 +46,8 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     load_registry,
     BundlesRegistry,
     BundleEntry,
+    get_bundle_props as store_get_bundle_props,
+    put_bundle_props as store_put_bundle_props,
 )
 from kdcube_ai_app.infra.plugin.agentic_loader import (
     AgenticBundleSpec,
@@ -783,14 +785,12 @@ async def get_bundle_props(
     project_id = project or settings.PROJECT
 
     redis = _get_app_redis(request)
-    key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
-    raw = await redis.get(key)
-    props = {}
-    if raw:
-        try:
-            props = json.loads(raw)
-        except Exception:
-            props = {}
+    props = await store_get_bundle_props(
+        redis,
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=bundle_id,
+    )
 
     defaults = await _load_bundle_props_defaults(
         bundle_id=bundle_id,
@@ -823,24 +823,27 @@ async def set_bundle_props(
     tenant_id = payload.tenant or settings.TENANT
     project_id = payload.project or settings.PROJECT
     redis = _get_app_redis(request)
-
-    key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
     props = dict(payload.props or {})
     props.pop("bundle_version", None)
 
     if payload.op == "merge":
-        raw = await redis.get(key)
-        current = {}
-        if raw:
-            try:
-                current = json.loads(raw)
-            except Exception:
-                current = {}
+        current = await store_get_bundle_props(
+            redis,
+            tenant=tenant_id,
+            project=project_id,
+            bundle_id=bundle_id,
+        )
         props = _deep_merge_props(current, props)
     elif payload.op != "replace":
         raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
 
-    await redis.set(key, json.dumps(props, ensure_ascii=False))
+    await store_put_bundle_props(
+        redis,
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=bundle_id,
+        props=props,
+    )
 
     try:
         msg = {
@@ -881,8 +884,13 @@ async def reset_bundle_props_from_code(
     )
 
     redis = _get_app_redis(request)
-    key = _bundle_props_key(tenant=tenant_id, project=project_id, bundle_id=bundle_id)
-    await redis.set(key, json.dumps(defaults, ensure_ascii=False))
+    await store_put_bundle_props(
+        redis,
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=bundle_id,
+        props=defaults,
+    )
 
     try:
         msg = {
@@ -1181,21 +1189,46 @@ async def _do_set_bundles(
         load_registry as store_load,
         save_registry as store_save,
         apply_update as store_apply,
+        _split_bundles_and_props as store_split_bundles_and_props,
+        _apply_bundle_props as store_apply_bundle_props,
+        _sync_bundle_props_authoritative as store_sync_bundle_props_authoritative,
     )
 
     redis = _get_app_redis(request)
     try:
+        bundles_patch, props_map = store_split_bundles_and_props(payload.bundles or {})
         current = await store_load(redis, tenant_id, project_id)
-        updated = store_apply(current, payload.op, payload.bundles, payload.default_bundle_id)
-        await store_save(redis, updated, tenant_id, project_id)
+        updated = store_apply(current, payload.op, bundles_patch, payload.default_bundle_id)
+        await store_save(
+            redis,
+            updated,
+            tenant_id,
+            project_id,
+            props_map=props_map,
+            replace=(payload.op == "replace"),
+        )
+        if payload.op == "replace":
+            await store_sync_bundle_props_authoritative(
+                redis,
+                tenant=tenant_id,
+                project=project_id,
+                props_map=props_map,
+            )
+        elif props_map:
+            await store_apply_bundle_props(
+                redis,
+                tenant=tenant_id,
+                project=project_id,
+                props_map=props_map,
+            )
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve))
 
     if tenant_id == settings.TENANT and project_id == settings.PROJECT:
         if payload.op == "replace":
-            await set_registry_async(payload.bundles, payload.default_bundle_id)
+            await set_registry_async(bundles_patch, payload.default_bundle_id)
         elif payload.op == "merge":
-            await upsert_bundles_async(payload.bundles, payload.default_bundle_id)
+            await upsert_bundles_async(bundles_patch, payload.default_bundle_id)
         else:
             raise HTTPException(status_code=400, detail="Invalid op; use 'replace' or 'merge'")
         stopped_sidecars = stop_local_sidecars_for_bundle_ids(
@@ -1225,7 +1258,7 @@ async def _do_set_bundles(
         msg = {
             "type": "bundles.update",
             "op": payload.op,
-            "bundles": payload.bundles,
+            "bundles": bundles_patch,
             "default_bundle_id": payload.default_bundle_id,
             "tenant": tenant_id,
             "project": project_id,

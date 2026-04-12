@@ -550,13 +550,14 @@ class BaseEntrypoint:
         overrides: Dict[str, Any] = {}
         if self.kv_cache:
             overrides = await self.kv_cache.get_json(key) or {}
-        else:
-            raw = await self.redis.get(key)
-            if raw:
-                try:
-                    overrides = json.loads(raw)
-                except Exception:
-                    overrides = {}
+        if not overrides and self.redis is not None:
+            from kdcube_ai_app.infra.plugin.bundle_store import get_bundle_props as _get_bundle_props
+            overrides = await _get_bundle_props(
+                self.redis,
+                tenant=tenant,
+                project=project,
+                bundle_id=bundle_id,
+            )
         if overrides:
             defaults = self._deep_merge_props(defaults, overrides)
 

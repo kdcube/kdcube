@@ -1,7 +1,7 @@
 ---
 id: ks:docs/sdk/bundle/bundle-props-secrets-README.md
 title: "Bundle Props and Secrets"
-summary: "How a bundle reads effective props, raw descriptor config, bundle secrets, and user-scoped secrets, and where each layer is stored."
+summary: "How a bundle reads effective props, raw descriptor config, bundle secrets, user-scoped props, and user-scoped secrets, and where each layer is stored."
 tags: ["sdk", "bundle", "props", "secrets", "configuration"]
 keywords: ["bundle_props", "get_plain", "get_secret", "get_user_secret", "bundles.yaml", "bundles.secrets.yaml", "secrets.yaml", "redis overrides"]
 see_also:
@@ -15,12 +15,14 @@ This document is the bundle-developer view of:
 - effective bundle props
 - raw descriptor reads through `get_plain(...)`
 - bundle-level secrets
+- user-scoped non-secret props
 - user-scoped secrets
 
 The important split is:
 - `self.bundle_prop(...)` reads the bundle's effective config
 - `get_plain(...)` reads raw mounted descriptor YAML
 - `get_secret(...)` reads bundle/platform secrets
+- `get_user_prop(...)` reads user-scoped non-secret bundle props
 - `get_user_secret(...)` reads user-scoped secrets
 
 For secrets, there are two recommended namespaces:
@@ -40,8 +42,9 @@ internal/global form, not the normal bundle-facing form.
 2) Bundle descriptor config
    bundles.yaml -> items[].config
 
-3) Runtime/admin overrides
-   Redis / admin props API
+3) Authoritative deploy-scoped bundle props
+   `bundles.yaml` in `secrets-file` mode
+   grouped bundle descriptor docs in `aws-sm` mode
 
 4) Secrets
    get_secret("dot.path.key")
@@ -51,9 +54,10 @@ internal/global form, not the normal bundle-facing form.
 
 | Need | Use | Backing store |
 |---|---|---|
-| effective non-secret bundle config | `self.bundle_prop("dot.path")` / `self.bundle_props` | code defaults + `bundles.yaml` + Redis overrides |
+| effective non-secret bundle config | `self.bundle_prop("dot.path")` / `self.bundle_props` | code defaults + authoritative deploy-scoped bundle descriptor state |
 | raw deploy-time descriptor values | `get_plain("...")` / `get_plain("b:...")` | mounted `assembly.yaml` / `bundles.yaml` |
 | bundle-level secrets | `get_secret("b:dot.path")` | configured secrets provider |
+| user-scoped non-secret bundle props | `get_user_prop("some.key")` / `get_user_props()` | PostgreSQL `<SCHEMA>.user_bundle_props` |
 | user-scoped secrets | `get_user_secret("some.key")` | configured secrets provider |
 | mutable bundle-owned state | bundle storage, not props | bundle storage backend |
 
@@ -67,8 +71,7 @@ Read effective non-secret config from:
 
 For non-secret config, precedence is:
 1. code defaults
-2. `bundles.yaml`
-3. runtime/admin overrides
+2. authoritative deploy-scoped bundle props
 
 The merged result is exposed to the bundle as `bundle_props`.
 
@@ -104,18 +107,22 @@ bundles:
             default_profile: "local"
 ```
 
-That descriptor layer is loaded into Redis per:
+That deploy-scoped bundle props layer is cached in Redis per:
 - tenant
 - project
 - bundle
+
+Its authority depends on deployment mode:
+
+- `secrets-file`: `bundles.yaml`
+- `aws-sm`: grouped AWS SM bundle descriptor docs
 
 The supported live override path is the admin props API:
 - `GET /admin/integrations/bundles/{bundle_id}/props`
 - `POST /admin/integrations/bundles/{bundle_id}/props`
 - `POST /admin/integrations/bundles/{bundle_id}/props/reset-code`
 
-Runtime/admin overrides are stored in Redis under a per-tenant/project/bundle key.
-The current key format is:
+Redis cache uses a per-tenant/project/bundle key. The current key format is:
 
 ```text
 kdcube:config:bundles:props:{tenant}:{project}:{bundle_id}
@@ -125,22 +132,21 @@ kdcube:config:bundles:props:{tenant}:{project}:{bundle_id}
 
 Not through `get_plain(...)`.
 
-The supported live write path is the admin/runtime props API, which writes the
-override layer into Redis. There is no first-class SDK helper like
-`set_bundle_prop(...)`.
+The supported live write path is the admin/runtime props API. There is no
+first-class SDK helper like `set_bundle_prop(...)`.
 
 If you mutate `self.bundle_props` directly in code, that is only in-memory and
 not persisted.
 
 ### What resets those props?
 
-- `reset-code` resets the Redis override layer to the bundle's code defaults
+- `reset-code` rewrites the deploy-scoped bundle props layer to the bundle's code defaults
 - `kdcube --bundle-reload <bundle_id>` is descriptor-authoritative:
   - reapplies the registry from `bundles.yaml`
-  - rebuilds the descriptor-backed props layer in Redis
+  - rebuilds the descriptor-backed deploy-scoped props layer
   - clears proc bundle caches
-- env/descriptor force-reset paths can also replace the Redis props layer
-  authoritatively from `bundles.yaml`
+- env/descriptor force-reset paths can also replace the deploy-scoped props
+  layer authoritatively from the active descriptor source
 
 ## Raw descriptor reads with `get_plain(...)`
 
@@ -210,7 +216,11 @@ But normal bundle code should prefer:
 get_secret("b:<dot.path>")
 ```
 
-because KDCube resolves the current bundle automatically from request context.
+because KDCube resolves the current bundle automatically from:
+
+1. request context `routing.bundle_id`
+2. bound runtime bundle context
+3. env fallback such as `KDCUBE_BUNDLE_ID`
 
 ### Can a bundle read another bundle's secret?
 
@@ -323,12 +333,54 @@ For `secrets-file`, the split is important:
 - keys under `bundles.<bundle_id>.secrets...` go to `bundles.secrets.yaml`
 - user keys under `users.<user_id>...` go to `secrets.yaml`
 
+## User-scoped non-secret props
+
+Use these helpers for non-secret per-user bundle state:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.config import (
+    get_user_prop,
+    get_user_props,
+    set_user_prop,
+    delete_user_prop,
+)
+
+theme = get_user_prop("preferences.theme", default="light")
+set_user_prop("preferences.theme", "dark")
+snapshot = get_user_props()
+delete_user_prop("preferences.theme")
+```
+
+These helpers resolve:
+
+- current user by request context
+- current bundle by request context / runtime bundle context
+
+Storage:
+
+- PostgreSQL project schema
+- table: `<SCHEMA>.user_bundle_props`
+
+They are for non-secret per-user bundle state such as:
+
+- user-approved preferences
+- per-user UI settings
+- small bundle-owned user choices
+
+They are not part of:
+
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+- deployment export
+- bundle secrets
+
 ## Practical decision rules
 
 Use:
 - `self.bundle_prop(...)` when bundle code needs its effective config
 - `get_plain(...)` when code must inspect raw descriptor YAML
 - `get_secret(...)` for deployment- or bundle-scoped secret values
+- `get_user_prop(...)` for per-user non-secret bundle values
 - `get_user_secret(...)` for per-user secret values
 - bundle storage for mutable non-secret business state
 
@@ -365,8 +417,8 @@ Use `setdefault(...)` patterns so external overrides can still win.
 For localhost bundle iteration, keep the split clear:
 
 1. code defaults
-2. descriptor-backed config in `bundles.yaml`
-3. runtime/admin overrides in Redis
+2. descriptor-backed deploy-scoped bundle config
+3. user-scoped non-secret state in PostgreSQL, if your bundle uses it
 
 Recommended local flow:
 - mount one host bundles root into proc as `/bundles`

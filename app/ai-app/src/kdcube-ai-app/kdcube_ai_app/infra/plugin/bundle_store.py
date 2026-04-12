@@ -3,7 +3,7 @@
 # kdcube_ai_app/infra/plugin/bundle_store.py
 
 from __future__ import annotations
-import json, os, time
+import json, os, time, uuid, threading
 import logging
 import shutil
 import fcntl
@@ -421,7 +421,13 @@ async def get_bundle_props(
     key = _props_key(tenant=tenant, project=project, bundle_id=bundle_id)
     raw = await redis.get(key)
     if not raw:
-        return {}
+        store = _get_authoritative_bundle_store(tenant, project)
+        if store is None:
+            return {}
+        props = store.load_bundle_props(bundle_id)
+        if props:
+            await redis.set(key, json.dumps(props, ensure_ascii=False))
+        return props
     return json.loads(raw)
 
 
@@ -566,6 +572,316 @@ class BundlesRegistry(BaseModel):
     default_bundle_id: Optional[str] = None
     bundles: Dict[str, BundleEntry] = Field(default_factory=dict)
 
+
+def _deployment_bundle_ids(reg: "BundlesRegistry") -> list[str]:
+    reserved = _reserved_bundle_ids()
+    return [bid for bid in reg.bundles.keys() if bid not in reserved]
+
+
+def _deployment_default_bundle_id(reg: "BundlesRegistry") -> Optional[str]:
+    deployment_ids = _deployment_bundle_ids(reg)
+    default_id = str(reg.default_bundle_id or "").strip()
+    if default_id and default_id in deployment_ids:
+        return default_id
+    return deployment_ids[0] if deployment_ids else None
+
+
+def _descriptor_doc_from_entry(entry: "BundleEntry", props: Dict[str, Any] | None) -> Dict[str, Any]:
+    payload = entry.model_dump(exclude_none=True)
+    payload.pop("id", None)
+    if props:
+        payload["props"] = props
+    return payload
+
+
+def _entry_and_props_from_descriptor_doc(bundle_id: str, payload: Dict[str, Any]) -> tuple["BundleEntry", Dict[str, Any]]:
+    data = dict(payload or {})
+    props = data.pop("props", None)
+    entry = _to_entry(bundle_id, {"id": bundle_id, **data})
+    return entry, props if isinstance(props, dict) else {}
+
+
+class _AwsBundleDescriptorStore:
+    _LOCK_TTL_SECONDS = 30
+    _LOCK_WAIT_SECONDS = 10.0
+
+    def __init__(
+        self,
+        *,
+        tenant: str,
+        project: str,
+        prefix: str,
+        region: Optional[str],
+        profile: Optional[str],
+        redis_url: Optional[str],
+    ) -> None:
+        self._tenant = tenant
+        self._project = project
+        self._prefix = (prefix or "kdcube").strip("/") or "kdcube"
+        self._region = region
+        self._profile = profile
+        self._redis_url = redis_url
+        self._client: Any | None = None
+        self._redis = None
+        self._lock = threading.RLock()
+        self._lock_key_fmt = namespaces.CONFIG.BUNDLES.DESCRIPTORS_AWS_SM_LOCK_FMT
+
+    def _get_client(self):
+        with self._lock:
+            if self._client is not None:
+                return self._client
+            import boto3
+
+            session_kwargs: dict[str, Any] = {}
+            if self._profile:
+                session_kwargs["profile_name"] = self._profile
+            session = boto3.Session(**session_kwargs)
+            self._client = session.client("secretsmanager", region_name=self._region)
+            return self._client
+
+    def _bundles_meta_secret_id(self) -> str:
+        return f"{self._prefix}/bundles-meta"
+
+    def _bundle_descriptor_secret_id(self, bundle_id: str) -> str:
+        return f"{self._prefix}/bundles/{bundle_id}/descriptor"
+
+    def _error_code(self, exc: Exception) -> str:
+        response = getattr(exc, "response", None) or {}
+        error = response.get("Error") if isinstance(response, dict) else {}
+        return str((error or {}).get("Code") or "")
+
+    def _doc_lock_key(self, secret_id: str) -> str:
+        safe = str(secret_id or "").replace("/", ":")
+        return self._lock_key_fmt.format(
+            tenant=self._tenant,
+            project=self._project,
+            doc=safe,
+        )
+
+    def _get_sync_redis(self):
+        if not self._redis_url:
+            return None
+        if self._redis is not None:
+            return self._redis
+        try:
+            from kdcube_ai_app.infra.redis.client import get_sync_redis_client
+
+            self._redis = get_sync_redis_client(self._redis_url, decode_responses=True)
+        except Exception:
+            _log.debug("Failed to initialize sync Redis client for aws bundle descriptors", exc_info=True)
+            self._redis = None
+        return self._redis
+
+    def _acquire_distributed_lock(self, secret_id: str) -> tuple[Any, str] | tuple[None, None]:
+        redis = self._get_sync_redis()
+        if redis is None:
+            return None, None
+        token = uuid.uuid4().hex
+        lock_key = self._doc_lock_key(secret_id)
+        start = time.time()
+        while (time.time() - start) < self._LOCK_WAIT_SECONDS:
+            try:
+                acquired = bool(redis.set(lock_key, token, nx=True, ex=self._LOCK_TTL_SECONDS))
+            except Exception:
+                acquired = False
+            if acquired:
+                return redis, token
+            time.sleep(0.25)
+        raise ValueError(f"Failed to acquire distributed aws-sm descriptor lock for {secret_id}")
+
+    def _release_distributed_lock(self, redis, token: str | None, secret_id: str) -> None:
+        if redis is None or not token:
+            return
+        lock_key = self._doc_lock_key(secret_id)
+        try:
+            redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+                1,
+                lock_key,
+                token,
+            )
+        except Exception:
+            _log.debug("Failed to release distributed aws-sm descriptor lock", exc_info=True)
+
+    def _get_secret_string_by_id(self, secret_id: str) -> str | None:
+        try:
+            response = self._get_client().get_secret_value(SecretId=secret_id)
+        except Exception as exc:
+            if self._error_code(exc) == "ResourceNotFoundException":
+                return None
+            _log.warning("AWS descriptor GET %s failed", secret_id, exc_info=True)
+            return None
+        if "SecretString" in response:
+            value = response.get("SecretString")
+            return str(value) if value is not None else None
+        binary = response.get("SecretBinary")
+        if binary is None:
+            return None
+        if isinstance(binary, (bytes, bytearray)):
+            return bytes(binary).decode("utf-8")
+        return str(binary)
+
+    def _get_secret_mapping_by_id(self, secret_id: str) -> Dict[str, Any] | None:
+        raw = self._get_secret_string_by_id(secret_id)
+        if raw is None:
+            return None
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _put_secret_mapping_by_id(self, secret_id: str, payload: Dict[str, Any]) -> None:
+        client = self._get_client()
+        rendered = json.dumps(payload, ensure_ascii=False)
+        try:
+            client.put_secret_value(SecretId=secret_id, SecretString=rendered)
+            return
+        except Exception as exc:
+            if self._error_code(exc) != "ResourceNotFoundException":
+                raise
+        client.create_secret(Name=secret_id, SecretString=rendered)
+
+    def _delete_secret_by_id(self, secret_id: str) -> None:
+        client = self._get_client()
+        try:
+            client.delete_secret(SecretId=secret_id, ForceDeleteWithoutRecovery=True)
+        except Exception as exc:
+            code = self._error_code(exc)
+            if code in {"ResourceNotFoundException", "InvalidRequestException"}:
+                return
+            raise
+
+    def load_registry(self) -> tuple["BundlesRegistry", Dict[str, Dict[str, Any]]] | None:
+        meta = self._get_secret_mapping_by_id(self._bundles_meta_secret_id()) or {}
+        bundle_ids = [
+            str(item).strip()
+            for item in (meta.get("bundle_ids") or [])
+            if str(item).strip()
+        ]
+        if not bundle_ids and not str(meta.get("default_bundle_id") or "").strip():
+            return None
+        bundles: Dict[str, BundleEntry] = {}
+        props_map: Dict[str, Dict[str, Any]] = {}
+        for bundle_id in bundle_ids:
+            payload = self._get_secret_mapping_by_id(self._bundle_descriptor_secret_id(bundle_id))
+            if not isinstance(payload, dict):
+                continue
+            try:
+                entry, props = _entry_and_props_from_descriptor_doc(bundle_id, payload)
+            except Exception:
+                _log.warning("Failed to parse stored bundle descriptor for %s", bundle_id, exc_info=True)
+                continue
+            bundles[bundle_id] = entry
+            if props:
+                props_map[bundle_id] = props
+        reg = BundlesRegistry(
+            default_bundle_id=str(meta.get("default_bundle_id") or "").strip() or None,
+            bundles=bundles,
+        )
+        if reg.default_bundle_id and reg.default_bundle_id not in reg.bundles:
+            reg.default_bundle_id = next(iter(reg.bundles.keys()), None)
+        return reg, props_map
+
+    def save_registry(
+        self,
+        reg: "BundlesRegistry",
+        props_map: Dict[str, Dict[str, Any]],
+        *,
+        replace: bool,
+    ) -> None:
+        deployment_ids = _deployment_bundle_ids(reg)
+        desired_ids = list(deployment_ids)
+        previous_ids: set[str] = set()
+        if replace:
+            previous = self._get_secret_mapping_by_id(self._bundles_meta_secret_id()) or {}
+            previous_ids = {
+                str(item).strip()
+                for item in (previous.get("bundle_ids") or [])
+                if str(item).strip()
+            }
+
+        for bundle_id in desired_ids:
+            secret_id = self._bundle_descriptor_secret_id(bundle_id)
+            payload = _descriptor_doc_from_entry(reg.bundles[bundle_id], props_map.get(bundle_id) or {})
+            with self._lock:
+                redis, token = self._acquire_distributed_lock(secret_id)
+                try:
+                    self._put_secret_mapping_by_id(secret_id, payload)
+                finally:
+                    self._release_distributed_lock(redis, token, secret_id)
+
+        if replace:
+            for stale_bundle_id in sorted(previous_ids.difference(desired_ids)):
+                secret_id = self._bundle_descriptor_secret_id(stale_bundle_id)
+                with self._lock:
+                    redis, token = self._acquire_distributed_lock(secret_id)
+                    try:
+                        self._delete_secret_by_id(secret_id)
+                    finally:
+                        self._release_distributed_lock(redis, token, secret_id)
+
+        meta_secret_id = self._bundles_meta_secret_id()
+        meta_payload = {
+            "default_bundle_id": _deployment_default_bundle_id(reg),
+            "bundle_ids": desired_ids,
+        }
+        with self._lock:
+            redis, token = self._acquire_distributed_lock(meta_secret_id)
+            try:
+                self._put_secret_mapping_by_id(meta_secret_id, meta_payload)
+            finally:
+                self._release_distributed_lock(redis, token, meta_secret_id)
+
+    def load_bundle_props(self, bundle_id: str) -> Dict[str, Any]:
+        if bundle_id in _reserved_bundle_ids():
+            return {}
+        payload = self._get_secret_mapping_by_id(self._bundle_descriptor_secret_id(bundle_id))
+        if not isinstance(payload, dict):
+            return {}
+        props = payload.get("props")
+        return dict(props) if isinstance(props, dict) else {}
+
+    def set_bundle_props(self, bundle_id: str, entry: "BundleEntry", props: Dict[str, Any]) -> None:
+        if bundle_id in _reserved_bundle_ids():
+            return
+        secret_id = self._bundle_descriptor_secret_id(bundle_id)
+        with self._lock:
+            redis, token = self._acquire_distributed_lock(secret_id)
+            try:
+                payload = self._get_secret_mapping_by_id(secret_id) or _descriptor_doc_from_entry(entry, {})
+                fresh_payload = _descriptor_doc_from_entry(entry, props or {})
+                payload.update({k: v for k, v in fresh_payload.items() if k != "props"})
+                if props:
+                    payload["props"] = props
+                else:
+                    payload.pop("props", None)
+                self._put_secret_mapping_by_id(secret_id, payload)
+            finally:
+                self._release_distributed_lock(redis, token, secret_id)
+
+
+def _get_authoritative_bundle_store(
+    tenant: str,
+    project: str,
+) -> _AwsBundleDescriptorStore | None:
+    try:
+        from kdcube_ai_app.infra.secrets.manager import build_secrets_manager_config
+
+        cfg = build_secrets_manager_config(get_settings())
+    except Exception:
+        return None
+    if cfg.provider != "aws-sm":
+        return None
+    return _AwsBundleDescriptorStore(
+        tenant=tenant,
+        project=project,
+        prefix=cfg.aws_sm_prefix,
+        region=cfg.aws_region,
+        profile=cfg.aws_profile,
+        redis_url=cfg.redis_url,
+    )
+
 def _tp_from_env() -> Tuple[str,str]:
     settings = get_settings()
     return settings.TENANT, settings.PROJECT
@@ -593,6 +909,9 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
     (e.g. {"default_bundle_id": null, "bundles": {}}), seed once from env.
     """
     key = redis_key(tenant, project)
+    t, p = tenant, project
+    if not t or not p:
+        t, p = _tp_from_env()
     raw = await redis.get(key)
 
     # Helper: parse raw -> BundlesRegistry (tolerant to shape)
@@ -607,6 +926,15 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
         reg = _parse(raw)
         # ---empty registry stored -> seed from env once ---
         if not reg.bundles or len(reg.bundles) == 0:
+            store = _get_authoritative_bundle_store(t, p)
+            if store is not None:
+                loaded = store.load_registry()
+                if loaded is not None:
+                    reg, props_map = loaded
+                    await redis.set(key, _ensure_admin_bundle(reg).model_dump_json())
+                    await _sync_bundle_props_authoritative(redis, tenant=t, project=p, props_map=props_map)
+                    reg, _ = _merge_example_bundles(reg)
+                    return _ensure_admin_bundle(reg)
             seeded = await seed_from_env_if_any(redis, tenant, project)
             if seeded and seeded.bundles:
                 seeded, _ = _merge_example_bundles(seeded)
@@ -624,6 +952,15 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
         return reg
 
     # Key absent -> try seeding once
+    store = _get_authoritative_bundle_store(t, p)
+    if store is not None:
+        loaded = store.load_registry()
+        if loaded is not None:
+            reg, props_map = loaded
+            await redis.set(key, _ensure_admin_bundle(reg).model_dump_json())
+            await _sync_bundle_props_authoritative(redis, tenant=t, project=p, props_map=props_map)
+            reg, _ = _merge_example_bundles(reg)
+            return _ensure_admin_bundle(reg)
     seeded = await seed_from_env_if_any(redis, tenant, project)
     if seeded:
         seeded, _ = _merge_example_bundles(seeded)
@@ -634,10 +971,45 @@ async def load_registry(redis, tenant: Optional[str] = None, project: Optional[s
         await save_registry(redis, reg, tenant, project)
     return reg
 
-async def save_registry(redis, reg: BundlesRegistry, tenant: Optional[str]=None, project: Optional[str]=None) -> None:
+async def save_registry(
+    redis,
+    reg: BundlesRegistry,
+    tenant: Optional[str]=None,
+    project: Optional[str]=None,
+    *,
+    props_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    replace: bool = False,
+) -> None:
     key = redis_key(tenant, project)
     reg = _ensure_admin_bundle(reg)
     await redis.set(key, reg.model_dump_json())
+    t, p = tenant, project
+    if not t or not p:
+        t, p = _tp_from_env()
+    store = _get_authoritative_bundle_store(t, p)
+    if store is None:
+        return
+    if not replace and not _deployment_bundle_ids(reg):
+        return
+    effective_props: Dict[str, Dict[str, Any]] = {}
+    incoming_props = props_map or {}
+    for bid in _deployment_bundle_ids(reg):
+        if replace:
+            candidate = incoming_props.get(bid) or {}
+        else:
+            candidate = incoming_props.get(bid)
+            if candidate is None:
+                raw_existing = await redis.get(_props_key(tenant=t, project=p, bundle_id=bid))
+                if raw_existing:
+                    try:
+                        candidate = json.loads(raw_existing)
+                    except Exception:
+                        candidate = None
+                if candidate is None:
+                    candidate = store.load_bundle_props(bid)
+        if isinstance(candidate, dict) and candidate:
+            effective_props[bid] = candidate
+    store.save_registry(reg, effective_props, replace=replace)
 
 async def publish_update(redis, reg: BundlesRegistry, *, tenant: Optional[str]=None, project: Optional[str]=None, op: str="merge", actor: Optional[str]=None):
     t,p = tenant, project
@@ -680,7 +1052,7 @@ async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Opt
             return None
         reg, _ = _merge_example_bundles(reg)
         reg = _ensure_admin_bundle(reg)
-        await save_registry(redis, reg, tenant, project)
+        await save_registry(redis, reg, tenant, project, props_map=props_map, replace=False)
         if props_map:
             t, p = tenant, project
             if not t or not p:
@@ -715,7 +1087,7 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
     )
     reg, _ = _merge_example_bundles(reg)
     reg = _ensure_admin_bundle(reg)
-    await save_registry(redis, reg, tenant, project)
+    await save_registry(redis, reg, tenant, project, props_map=props_map, replace=True)
     t, p = tenant, project
     if not t or not p:
         t, p = _tp_from_env()
@@ -865,6 +1237,32 @@ def _load_env_json(strict: bool) -> Optional[Dict[str, Any]]:
             "bundles": bundles,
         }
     return data
+
+
+async def put_bundle_props(
+    redis,
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+    props: Dict[str, Any],
+) -> None:
+    key = _props_key(tenant=tenant, project=project, bundle_id=bundle_id)
+    await redis.set(key, json.dumps(props, ensure_ascii=False))
+    if bundle_id in _reserved_bundle_ids():
+        return
+    reg = await load_registry(redis, tenant, project)
+    entry = reg.bundles.get(bundle_id)
+    if entry is None or bundle_id in _reserved_bundle_ids():
+        return
+    await save_registry(
+        redis,
+        reg,
+        tenant,
+        project,
+        props_map={bundle_id: props},
+        replace=False,
+    )
 
 def apply_update(
         current: BundlesRegistry,

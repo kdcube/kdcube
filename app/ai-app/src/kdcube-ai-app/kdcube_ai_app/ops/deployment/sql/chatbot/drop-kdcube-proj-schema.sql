@@ -39,6 +39,11 @@ DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_scope_ts;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_value_gin;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_cp_tags_gin;
 
+-- ---------- Indexes: user_bundle_props ----------
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_user_bundle_updated;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_bundle_updated;
+DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_ubp_value_gin;
+
 -- ---------- Indexes: rag_chunks ----------
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_uni;
 DROP INDEX IF EXISTS <SCHEMA>.idx_<SCHEMA>_rag_corpus_created;
@@ -58,6 +63,7 @@ DROP TABLE IF EXISTS <SCHEMA>.conv_track_tickets CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.rag_chunks CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_pref_exceptions CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_prefs CASCADE;
+DROP TABLE IF EXISTS <SCHEMA>.user_bundle_props CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.user_memory CASCADE;
 DROP TABLE IF EXISTS <SCHEMA>.conv_messages CASCADE;
 
