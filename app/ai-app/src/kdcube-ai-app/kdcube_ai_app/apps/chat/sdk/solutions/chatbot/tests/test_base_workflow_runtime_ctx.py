@@ -283,3 +283,29 @@ async def test_publish_git_workspace_if_needed_raises_turn_phase_error_on_publis
     payload = json.loads(wf.ctx_browser.contributed[-1]["text"])
     assert payload["status"] == "failed"
     assert payload["error"] == "RuntimeError"
+
+
+@pytest.mark.asyncio
+async def test_emit_committed_answer_once_streams_single_answer_pair():
+    deltas = []
+
+    async def _delta(**kwargs):
+        deltas.append(dict(kwargs))
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.comm = SimpleNamespace(delta=_delta)
+    wf._answer_delta_idx = 0
+
+    scratchpad = SimpleNamespace(answer="Committed answer")
+
+    await wf._emit_committed_answer_once(scratchpad)
+    await wf._emit_committed_answer_once(scratchpad)
+
+    assert scratchpad._final_answer_delta_emitted is True
+    assert len(deltas) == 2
+    assert deltas[0]["text"] == "Committed answer"
+    assert deltas[0]["marker"] == "answer"
+    assert deltas[0]["agent"] == "assistant.completion"
+    assert deltas[0]["completed"] is False
+    assert deltas[1]["text"] == ""
+    assert deltas[1]["completed"] is True

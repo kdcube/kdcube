@@ -245,6 +245,19 @@ def test_persist_interrupted_generation_uses_mainstream_raw_snapshot():
     assert blocks[0]["text"].startswith("<channel:thinking>")
 
 
+def test_mk_timeline_streamer_hides_provisional_final_answer_by_default():
+    solver = _solver_stub()
+    solver.comm = SimpleNamespace(delta=_noop_async)
+    solver.ctx_browser = None
+
+    _fn, streamer = solver._mk_timeline_streamer("decision")
+
+    target_names = [t.get("name") for t in streamer.targets]
+    assert "notes" in target_names
+    assert "plan" in target_names
+    assert "final_answer" not in target_names
+
+
 @pytest.mark.asyncio
 async def test_tool_execution_node_cancels_inflight_phase_on_steer(monkeypatch):
     solver = _solver_stub()

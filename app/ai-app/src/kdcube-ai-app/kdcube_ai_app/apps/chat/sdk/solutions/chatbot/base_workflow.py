@@ -1035,6 +1035,16 @@ class BaseWorkflow():
             completed=completed,
             format="markdown",
         )
+
+    async def _emit_committed_answer_once(self, scratchpad: TurnScratchpad, *, agent: str = "assistant.completion") -> None:
+        answer_text = str(getattr(scratchpad, "answer", "") or "")
+        if not answer_text:
+            return
+        if bool(getattr(scratchpad, "_final_answer_delta_emitted", False)):
+            return
+        await self._emit_answer_delta(text=answer_text, completed=False, agent=agent)
+        await self._emit_answer_delta(text="", completed=True, agent=agent)
+        scratchpad._final_answer_delta_emitted = True
     # ------ end of streaming ---------
 
     def bundle_root(self):
@@ -1395,6 +1405,10 @@ class BaseWorkflow():
         t_turn0, ms0u = self._ctx["turn"]["t_turn0"], self._ctx["turn"]["ms0u"]
 
         if scratchpad.answer:
+            try:
+                await self._emit_committed_answer_once(scratchpad, agent="assistant.completion")
+            except Exception:
+                pass
             # Contribute pre-answer blocks (e.g., final ANNOUNCE)
             try:
                 runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None)
