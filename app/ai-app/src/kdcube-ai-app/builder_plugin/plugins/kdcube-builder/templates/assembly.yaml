@@ -1,0 +1,92 @@
+domain: ""
+company: "KDCube"
+
+context:
+  tenant: "demo-tenant"
+  project: "demo-project"
+
+auth:
+  type: "simple"
+  cognito:
+    region: "eu-west-1"
+    user_pool_id: ""
+    app_client_id: ""
+    service_client_id: ""
+  proxy_login:
+    redis_key_prefix: "proxylogin:<TENANT>:<PROJECT>:"
+    token_masquerade: true
+    password_reset:
+      company: "KDCube"
+      sender: "email@your-org.com"
+      template_name: ""
+      redirect_url: "http://YOUR_DOMAIN/chatbot/reset-password?user=%[1]s"
+    http_urlbase: "https://YOUR_DOMAIN/auth"
+
+proxy:
+  ssl: false
+  route_prefix: "/chatbot"
+
+ports:
+  ingress: "8010"
+  proc: "8020"
+  metrics: "8090"
+  ui: "5174"
+  ui_ssl: "443"
+
+infra:
+  postgres:
+    user: "postgres"
+    password: "postgres"
+    database: "kdcube"
+    host: "postgres-db"
+    port: "5432"
+  redis:
+    password: "redispass"
+    host: "redis"
+    port: "6379"
+
+storage:
+  kdcube: "s3://kdcube-local/kdcube"
+  bundles: "s3://kdcube-local/bundles"
+  workspace:
+    type: git
+    repo: "https://github.com/kdcube/agentic-workspace.git"
+  claude_code_session:
+    type: local
+    repo: ""
+
+notifications:
+  email:
+    enabled: false
+    host: ""
+    port: "587"
+    user: ""
+    from: ""
+    to: "ops@example.com"
+    use_tls: true
+
+routines:
+  economics:
+    subscription_rollover_enabled: true
+    subscription_rollover_cron: "15 * * * *"
+    subscription_rollover_lock_ttl_seconds: 900
+    subscription_rollover_sweep_limit: 500
+  stripe:
+    reconcile_enabled: true
+    reconcile_cron: "45 * * * *"
+    reconcile_lock_ttl_seconds: 900
+  opex:
+    agg_cron: "0 3 * * *"
+
+secrets:
+  provider: "secrets-file"
+
+paths:
+  host_bundles_path: ""
+  host_git_bundles_path: ""
+
+platform:
+  repo: "https://github.com/kdcube/kdcube-ai-app.git"
+  ref: "2026.4.12.318"
+  config:
+    version: "2026.4.12.318"

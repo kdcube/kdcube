@@ -1,0 +1,44 @@
+{
+  "name": "kdcube-builder-marketplace",
+  "owner": {
+    "name": "KDCube",
+    "email": "team@kdcube.tech"
+  },
+  "metadata": {
+    "description": "KDCube bundle-building and local-runtime tools for Claude Code.",
+    "version": "2026.4.12.318",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "kdcube-builder",
+      "source": "kdcube-builder",
+      "description": "Build KDCube bundles, bootstrap local descriptors, and run KDCube locally.",
+      "version": "2026.4.12.318",
+      "author": {
+        "name": "KDCube",
+        "email": "team@kdcube.tech"
+      },
+      "homepage": "https://github.com/kdcube/kdcube-ai-app",
+      "repository": "https://github.com/kdcube/kdcube-ai-app",
+      "license": "MIT",
+      "keywords": [
+        "kdcube",
+        "claude-code",
+        "bundle-builder",
+        "agentic-apps",
+        "react-agent"
+      ],
+      "category": "Developer Tools",
+      "tags": [
+        "kdcube",
+        "bundles",
+        "claude-code",
+        "local-runtime",
+        "agentic-apps",
+        "react-agent"
+      ],
+      "strict": true
+    }
+  ]
+}

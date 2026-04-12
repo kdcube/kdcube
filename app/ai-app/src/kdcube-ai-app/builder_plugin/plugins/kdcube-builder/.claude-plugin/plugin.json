@@ -1,0 +1,30 @@
+{
+  "name": "kdcube-builder",
+  "description": "Build KDCube bundles and run local KDCube development flows from Claude Code.",
+  "author": {
+    "name": "KDCube",
+    "email": "team@kdcube.tech",
+    "url": "https://github.com/kdcube/kdcube-ai-app"
+  },
+  "homepage": "https://github.com/kdcube/kdcube-ai-app",
+  "repository": "https://github.com/kdcube/kdcube-ai-app",
+  "license": "MIT",
+  "keywords": [
+    "kdcube",
+    "bundles",
+    "claude-code",
+    "agentic-apps",
+    "local-runtime"
+  ],
+  "skills": "./skills",
+  "userConfig": {
+    "kdcube_repo_root": {
+      "description": "Optional absolute path to a local kdcube-ai-app clone. Needed for local docs lookup and bundle test runs.",
+      "sensitive": false
+    },
+    "kdcube_workdir": {
+      "description": "Optional KDCube workdir path. Default: ~/.kdcube/kdcube-runtime",
+      "sensitive": false
+    }
+  }
+}
