@@ -2358,7 +2358,8 @@ class ContextRAGClient:
                     try:
                         import datetime as _dt
                         _fu_dt = _dt.datetime.fromisoformat(_latest_followup_ts.replace("Z", "+00:00"))
-                        asst_ts = (_fu_dt + _dt.timedelta(milliseconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                        # Use +1 second so the millisecond difference survives JS Date.parse() rounding.
+                        asst_ts = (_fu_dt + _dt.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
                     except Exception:
                         pass
                 if asst_text:
