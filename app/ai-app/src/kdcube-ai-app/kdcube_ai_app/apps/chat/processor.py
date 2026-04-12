@@ -598,67 +598,87 @@ class EnhancedChatRequestProcessor:
     async def _promote_next_external_event(self, payload: ChatTaskPayload) -> Optional[Dict[str, Any]]:
         source = self._external_event_source_for(payload)
         claimant_id = f"{self.middleware.instance_id}:{self.process_id}:{time.time_ns()}"
-        event = await source.claim_next_promotable(claimant_id=claimant_id)
-        if event is None:
-            return None
-        logger.warning(
-            "Claimed promotable external event conversation=%s current_turn=%s event_id=%s kind=%s seq=%s target_turn=%s active_turn=%s owner_turn=%s text=%r",
-            payload.routing.conversation_id,
-            payload.routing.turn_id,
-            event.message_id,
-            event.kind,
-            event.sequence,
-            event.target_turn_id,
-            event.active_turn_id_at_ingress,
-            event.owner_turn_id,
-            (event.text or "")[:160],
-        )
-
-        try:
-            next_payload = event.task_payload_model()
-        except Exception:
-            logger.exception(
-                "Dropping malformed external event payload for conversation=%s event_id=%s",
+        while True:
+            event = await source.claim_next_promotable(claimant_id=claimant_id)
+            if event is None:
+                return None
+            logger.warning(
+                "Claimed promotable external event conversation=%s current_turn=%s event_id=%s kind=%s seq=%s target_turn=%s active_turn=%s owner_turn=%s text=%r",
                 payload.routing.conversation_id,
+                payload.routing.turn_id,
                 event.message_id,
+                event.kind,
+                event.sequence,
+                event.target_turn_id,
+                event.active_turn_id_at_ingress,
+                event.owner_turn_id,
+                (event.text or "")[:160],
             )
-            await source.mark_failed(
+
+            event_kind = str(getattr(event, "kind", "") or "").strip().lower()
+            if event_kind == "steer":
+                logger.info(
+                    "Discarding stale steer external event conversation=%s current_turn=%s event_id=%s seq=%s target_turn=%s active_turn=%s owner_turn=%s",
+                    payload.routing.conversation_id,
+                    payload.routing.turn_id,
+                    event.message_id,
+                    event.sequence,
+                    event.target_turn_id,
+                    event.active_turn_id_at_ingress,
+                    event.owner_turn_id,
+                )
+                await source.mark_failed(
+                    message_id=event.message_id,
+                    claimant_id=claimant_id,
+                    reason="steer_expired_not_promoted",
+                )
+                continue
+
+            try:
+                next_payload = event.task_payload_model()
+            except Exception:
+                logger.exception(
+                    "Dropping malformed external event payload for conversation=%s event_id=%s",
+                    payload.routing.conversation_id,
+                    event.message_id,
+                )
+                await source.mark_failed(
+                    message_id=event.message_id,
+                    claimant_id=claimant_id,
+                    reason="malformed_task_payload",
+                )
+                continue
+
+            user_type = next_payload.user.user_type
+            if hasattr(user_type, "value"):
+                user_type = user_type.value
+            ready_queue_key = self._ready_queue_key(str(user_type).lower())
+            raw_payload = json.dumps(next_payload.model_dump(), ensure_ascii=False)
+
+            try:
+                await self.redis.lpush(ready_queue_key, raw_payload)
+            except Exception:
+                await source.release_claim(message_id=event.message_id, claimant_id=claimant_id)
+                raise
+
+            await source.mark_promoted(
                 message_id=event.message_id,
                 claimant_id=claimant_id,
-                reason="malformed_task_payload",
+                task_id=str(getattr(next_payload.meta, "task_id", "") or ""),
             )
-            return None
-
-        user_type = next_payload.user.user_type
-        if hasattr(user_type, "value"):
-            user_type = user_type.value
-        ready_queue_key = self._ready_queue_key(str(user_type).lower())
-        raw_payload = json.dumps(next_payload.model_dump(), ensure_ascii=False)
-
-        try:
-            await self.redis.lpush(ready_queue_key, raw_payload)
-        except Exception:
-            await source.release_claim(message_id=event.message_id, claimant_id=claimant_id)
-            raise
-
-        await source.mark_promoted(
-            message_id=event.message_id,
-            claimant_id=claimant_id,
-            task_id=str(getattr(next_payload.meta, "task_id", "") or ""),
-        )
-        logger.info(
-            "Promoted external event message_id=%s kind=%s conversation=%s turn_id=%s to %s",
-            event.message_id,
-            event.kind,
-            next_payload.routing.conversation_id,
-            next_payload.routing.turn_id,
-            ready_queue_key,
-        )
-        return {
-            "envelope": event,
-            "payload": next_payload,
-            "ready_queue_key": ready_queue_key,
-        }
+            logger.info(
+                "Promoted external event message_id=%s kind=%s conversation=%s turn_id=%s to %s",
+                event.message_id,
+                event.kind,
+                next_payload.routing.conversation_id,
+                next_payload.routing.turn_id,
+                ready_queue_key,
+            )
+            return {
+                "envelope": event,
+                "payload": next_payload,
+                "ready_queue_key": ready_queue_key,
+            }
 
     async def _queue_claim(self, ready_queue_key: str, inflight_queue_key: str):
         try:

@@ -553,3 +553,103 @@ async def test_processor_promotes_next_external_event_from_shared_log():
     stored = await source.get_event(event.message_id)
     assert stored is not None
     assert stored.promoted_task_id == "task-next"
+
+
+@pytest.mark.asyncio
+async def test_processor_discards_stale_steers_before_promoting_followup():
+    redis = _FakeRedis()
+    source = build_conversation_external_event_source(
+        redis=redis,
+        tenant="t1",
+        project="p1",
+        conversation_id="conv1",
+    )
+    current_payload = ChatTaskPayload.model_validate(
+        {
+            "meta": {"task_id": "task-current", "created_at": 1.0, "instance_id": "proc-1"},
+            "routing": {"bundle_id": "bundle.demo", "session_id": "sess-1", "conversation_id": "conv1", "turn_id": "turn-1"},
+            "actor": {"tenant_id": "t1", "project_id": "p1"},
+            "user": {"user_type": "registered", "user_id": "u1"},
+            "request": {"message": "current", "payload": {}},
+            "config": {"values": {}},
+            "accounting": {"envelope": {}},
+            "continuation": {"kind": "regular", "explicit": False},
+        }
+    )
+    steer_one = await source.publish(
+        kind="steer",
+        explicit=True,
+        target_turn_id="turn-1",
+        active_turn_id_at_ingress="turn-1",
+        owner_turn_id="turn-1",
+        source="ingress.sse",
+        text="stop",
+        payload={"message": "stop"},
+        task_payload={
+            "meta": {"task_id": "task-steer-1", "created_at": 2.0, "instance_id": "ingress-1"},
+            "routing": {"bundle_id": "bundle.demo", "session_id": "sess-1", "conversation_id": "conv1", "turn_id": "turn-steer-1"},
+            "actor": {"tenant_id": "t1", "project_id": "p1"},
+            "user": {"user_type": "registered", "user_id": "u1"},
+            "request": {"message": "", "payload": {}},
+            "config": {"values": {}},
+            "accounting": {"envelope": {}},
+            "continuation": {"kind": "steer", "explicit": True, "active_turn_id": "turn-1", "target_turn_id": "turn-1"},
+        },
+    )
+    steer_two = await source.publish(
+        kind="steer",
+        explicit=True,
+        target_turn_id="turn-1",
+        active_turn_id_at_ingress="turn-1",
+        owner_turn_id="turn-1",
+        source="ingress.sse",
+        text="stop again",
+        payload={"message": "stop again"},
+        task_payload={
+            "meta": {"task_id": "task-steer-2", "created_at": 3.0, "instance_id": "ingress-1"},
+            "routing": {"bundle_id": "bundle.demo", "session_id": "sess-1", "conversation_id": "conv1", "turn_id": "turn-steer-2"},
+            "actor": {"tenant_id": "t1", "project_id": "p1"},
+            "user": {"user_type": "registered", "user_id": "u1"},
+            "request": {"message": "", "payload": {}},
+            "config": {"values": {}},
+            "accounting": {"envelope": {}},
+            "continuation": {"kind": "steer", "explicit": True, "active_turn_id": "turn-1", "target_turn_id": "turn-1"},
+        },
+    )
+    followup = await source.publish(
+        kind="followup",
+        source="ingress.sse",
+        text="followup",
+        payload={"message": "followup"},
+        task_payload={
+            "meta": {"task_id": "task-next", "created_at": 4.0, "instance_id": "ingress-1"},
+            "routing": {"bundle_id": "bundle.demo", "session_id": "sess-1", "conversation_id": "conv1", "turn_id": "turn-2"},
+            "actor": {"tenant_id": "t1", "project_id": "p1"},
+            "user": {"user_type": "registered", "user_id": "u1"},
+            "request": {"message": "followup", "payload": {}},
+            "config": {"values": {}},
+            "accounting": {"envelope": {}},
+            "continuation": {"kind": "followup", "explicit": False, "active_turn_id": "turn-1"},
+        },
+    )
+
+    processor = EnhancedChatRequestProcessor.__new__(EnhancedChatRequestProcessor)
+    processor.redis = redis
+    processor.process_id = 551
+    processor.middleware = type("MW", (), {"instance_id": "proc-1", "QUEUE_PREFIX": "chat-ready"})()
+
+    promoted = await processor._promote_next_external_event(current_payload)
+
+    assert promoted is not None
+    assert promoted["payload"].routing.turn_id == "turn-2"
+    assert redis._kv["__lists__"]["chat-ready:registered"]
+
+    steer_one_state = await source.get_event(steer_one.message_id)
+    steer_two_state = await source.get_event(steer_two.message_id)
+    followup_state = await source.get_event(followup.message_id)
+    assert steer_one_state is not None
+    assert steer_two_state is not None
+    assert followup_state is not None
+    assert steer_one_state.failed_reason == "steer_expired_not_promoted"
+    assert steer_two_state.failed_reason == "steer_expired_not_promoted"
+    assert followup_state.promoted_task_id == "task-next"

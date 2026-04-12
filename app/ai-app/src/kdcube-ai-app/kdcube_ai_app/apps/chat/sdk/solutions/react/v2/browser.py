@@ -65,6 +65,7 @@ class ContextBrowser:
         self._external_listener_id: str = ""
         self._external_listener_turn_id: str = ""
         self._external_lease_token: str = ""
+        self._external_apply_lock = asyncio.Lock()
 
     @property
     def external_event_source(self):
@@ -78,15 +79,32 @@ class ContextBrowser:
             try:
                 asyncio.get_running_loop().create_task(self.start_external_event_listener())
             except Exception:
-                pass
+                self.log.log("[timeline.external] failed to schedule owner listener start\n" + traceback.format_exc(), "ERROR")
+
+    async def ensure_external_event_listener(self) -> None:
+        if self._timeline is None or not self._timeline_event_hooks:
+            return
+        task = self._external_event_task
+        if task is not None and not task.done():
+            return
+        await self.start_external_event_listener()
 
     async def start_external_event_listener(self) -> None:
         source = self.external_event_source
         if source is None or self._timeline is None:
+            self.log.log(
+                f"[timeline.external] listener start skipped: source_present={bool(source is not None)} "
+                f"timeline_present={bool(self._timeline is not None)}",
+                "WARNING",
+            )
             return
         turn_id = str(self._runtime_ctx.turn_id or "").strip()
         conversation_id = str(self._runtime_ctx.conversation_id or "").strip()
         if not turn_id or not conversation_id:
+            self.log.log(
+                f"[timeline.external] listener start skipped: missing identifiers conversation={conversation_id!r} turn_id={turn_id!r}",
+                "WARNING",
+            )
             return
         if self._external_event_task and not self._external_event_task.done():
             if self._external_listener_turn_id == turn_id:
@@ -334,9 +352,7 @@ class ContextBrowser:
                         f"turn_id={self._runtime_ctx.turn_id} count={len(events)} last_cursor={last_cursor}",
                         "INFO",
                     )
-                changed = await self._apply_external_events(events, call_hooks=True)
-                if changed and self._timeline is not None:
-                    self._timeline.write_local()
+                await self.apply_external_events(events, call_hooks=True)
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -350,14 +366,6 @@ class ContextBrowser:
         if self._timeline is None:
             return 0
         changed = await self._fold_external_events(call_hooks=call_hooks)
-        if changed:
-            self.log.log(
-                f"[timeline.external]: drain applied conversation={self._runtime_ctx.conversation_id} "
-                f"turn_id={self._runtime_ctx.turn_id} changed={changed} last_seq={self._timeline.last_external_event_seq} "
-                f"last_id={self._timeline.last_external_event_id}",
-                "INFO",
-            )
-            self._timeline.write_local()
         return int(changed or 0)
 
     async def wait_and_drain_external_events(
@@ -376,16 +384,7 @@ class ContextBrowser:
         except Exception:
             last_cursor = ""
         events = await source.wait_for_events_after(last_cursor, block_ms=max(1, int(block_ms or 1)), limit=max(1, int(limit or 1)))
-        changed = await self._apply_external_events(events, call_hooks=call_hooks)
-        if changed:
-            self.log.log(
-                f"[timeline.external]: wait/drain applied conversation={self._runtime_ctx.conversation_id} "
-                f"turn_id={self._runtime_ctx.turn_id} changed={changed} last_seq={self._timeline.last_external_event_seq} "
-                f"last_id={self._timeline.last_external_event_id}",
-                "INFO",
-            )
-            self._timeline.write_local()
-        return int(changed or 0)
+        return int(await self.apply_external_events(events, call_hooks=call_hooks) or 0)
 
     async def _fold_external_events_initial(self) -> List[Dict[str, Any]]:
         source = self.external_event_source
@@ -426,7 +425,54 @@ class ContextBrowser:
             return 0
         last_cursor = self._timeline.last_external_event_id or int(self._timeline.last_external_event_seq or 0)
         events = await source.read_since(last_cursor)
-        return await self._apply_external_events(events, call_hooks=call_hooks)
+        return await self.apply_external_events(events, call_hooks=call_hooks)
+
+    @staticmethod
+    def _parse_stream_id(stream_id: str) -> Optional[tuple[int, int]]:
+        sid = str(stream_id or "").strip()
+        if not sid or "-" not in sid:
+            return None
+        try:
+            left, right = sid.split("-", 1)
+            return int(left), int(right)
+        except Exception:
+            return None
+
+    def _external_event_already_applied(self, event: Any) -> bool:
+        if self._timeline is None:
+            return False
+        event_stream_id = str(getattr(event, "stream_id", "") or "").strip()
+        last_stream_id = str(getattr(self._timeline, "last_external_event_id", "") or "").strip()
+        if event_stream_id and last_stream_id:
+            lhs = self._parse_stream_id(event_stream_id)
+            rhs = self._parse_stream_id(last_stream_id)
+            if lhs is not None and rhs is not None and lhs <= rhs:
+                return True
+            if event_stream_id == last_stream_id:
+                return True
+        if not event_stream_id:
+            try:
+                seq = int(getattr(event, "sequence", 0) or 0)
+                if seq and seq <= int(getattr(self._timeline, "last_external_event_seq", 0) or 0):
+                    return True
+            except Exception:
+                return False
+        return False
+
+    async def apply_external_events(self, events: List[Any], *, call_hooks: bool) -> int:
+        if self._timeline is None:
+            return 0
+        async with self._external_apply_lock:
+            changed = await self._apply_external_events(events, call_hooks=call_hooks)
+            if changed:
+                self.log.log(
+                    f"[timeline.external]: applied conversation={self._runtime_ctx.conversation_id} "
+                    f"turn_id={self._runtime_ctx.turn_id} changed={changed} last_seq={self._timeline.last_external_event_seq} "
+                    f"last_id={self._timeline.last_external_event_id}",
+                    "INFO",
+                )
+                self._timeline.write_local()
+            return int(changed or 0)
 
     async def _apply_external_events(self, events: List[Any], *, call_hooks: bool) -> int:
         if self._timeline is None:
@@ -438,6 +484,8 @@ class ContextBrowser:
         added = 0
         for event in events:
             if not isinstance(event, ConversationExternalEvent):
+                continue
+            if self._external_event_already_applied(event):
                 continue
             blocks = self._blocks_from_external_event(event)
             stream_id = str(getattr(event, "stream_id", "") or "")
