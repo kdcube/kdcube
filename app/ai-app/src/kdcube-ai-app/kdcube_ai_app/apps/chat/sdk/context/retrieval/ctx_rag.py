@@ -2313,7 +2313,9 @@ class ContextRAGClient:
                     })
                     replace_types["chat:user"] = True
 
-                # Emit user.followup blocks from Turn A (written when a followup arrived mid-turn)
+                # Emit user.followup blocks from Turn A (written when a followup arrived mid-turn).
+                # Track the latest followup timestamp so the assistant artifact can be placed after it.
+                _latest_followup_ts: str = ""
                 for _blk in blocks:
                     if not isinstance(_blk, dict):
                         continue
@@ -2327,6 +2329,8 @@ class ContextRAGClient:
                     if not _fu_text:
                         continue
                     _fu_ts = (_blk.get("ts") or ts or "")
+                    if _fu_ts > _latest_followup_ts:
+                        _latest_followup_ts = _fu_ts
                     out.append({
                         "message_id": None,
                         "type": "chat:user",
@@ -2348,6 +2352,15 @@ class ContextRAGClient:
 
                 asst_text = (view.get("assistant") or {}).get("text") or ""
                 asst_ts = (view.get("assistant") or {}).get("ts") or ts
+                # If followups were emitted, ensure assistant ts sorts after the last followup so the
+                # global client timestamp-sort renders: user → followup(s) → assistant.
+                if _latest_followup_ts and asst_ts <= _latest_followup_ts:
+                    try:
+                        import datetime as _dt
+                        _fu_dt = _dt.datetime.fromisoformat(_latest_followup_ts.replace("Z", "+00:00"))
+                        asst_ts = (_fu_dt + _dt.timedelta(milliseconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+                    except Exception:
+                        pass
                 if asst_text:
                     out.append({
                         "message_id": None,
