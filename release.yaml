@@ -1,39 +1,27 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.11.1358"
+  ref: "2026.4.12.318"
   description: |
-    This release expands the platform from bundle-hosting toward bundle-operated applications and
-    scheduled scenarios. Bundles can now declare proc-owned scheduled APIs through `@cron(...)`,
-    with inline expressions or bundle-config-driven expressions and explicit exclusivity span
-    (`process`, `instance`, or `system`). This gives hosted apps a native way to maintain and run
-    recurring logic in cooperation with their own storage, props, and user-facing flows.
+    This release turns live bundle configuration in AWS-backed deployments into a real persistent
+    runtime surface instead of a mostly Redis-only cache. Bundle deployment-scoped props now live
+    as grouped per-bundle descriptor documents in AWS Secrets Manager, bundle deployment-scoped
+    secrets now live as grouped per-bundle secret documents with `a:` / `b:` namespace lookup, and
+    user-scoped non-secret bundle props are now persisted in PostgreSQL. Redis remains a cache and
+    notification layer instead of the only durable authority for live bundle changes.
 
-    React v2 also gained internal memory beacons, strengthening the agent’s own runtime signals for
-    navigation and continuity. Together with timeline events, ANNOUNCE contributions, source-pool
-    references, and the existing plan/hide mechanics, this makes the React runtime more explicit as
-    an execution environment rather than only an API surface.
+    The CLI and runtime now also support exporting the current effective live bundle state for a
+    tenant/project back into `bundles.yaml` and `bundles.secrets.yaml`. That closes the loop
+    between runtime admin changes and redeployable descriptors, which is especially important for
+    ECS environments where bundles can be added or updated during operational time.
 
-    Local bundle development became cleaner operationally. Git-resolved bundles can now use a
-    dedicated host/cache root separate from local path bundles, while existing deployments keep the
-    old behavior until the new root is configured. The platform also now warns once and survives
-    when a path-only bundle appears in a deployment where that path is not mounted, instead of
-    turning registry sync into a fatal path problem.
+    Bundle authoring guidance was expanded with a dedicated builder skill in `kdcube.copilot`.
+    That skill now acts as the bundle-development index for the platform: lifecycle, runtimes,
+    authenticated and public APIs, widgets, main UI, storage, props, secrets, `@venv(...)`,
+    `@cron(...)`, React v2, Claude Code, and optional multi-runtime composition inside one bundle.
 
-    The bundle reference and builder guidance were refreshed as part of the same release. The
-    example/reference bundles now show fuller bundle surfaces, including authenticated and public
-    API patterns, and the builder skills explicitly audit the runtime package set before deciding
-    whether a custom `requirements.txt` and `@venv(...)` boundary are actually needed.
-
-    Since `2026.4.11.012`, the release also hardens live interactive React execution. Busy-turn
-    `followup` and `steer` events now travel through the shared external event source end to end:
-    a live React turn can fold them directly into the current timeline, `followup` can continue
-    the same turn, and `steer` now behaves as a cooperative interrupt that stops the current turn
-    at the next safe checkpoint while preserving work already completed.
-
-    Bundle hot reload was also made safer for bundle-operated applications that keep local
-    sidecars. Reload/reset/cleanup paths now stop bundle-owned local sidecars for the affected
-    bundle scope so the next load starts fresh code instead of reusing a stale long-lived process.
-    This is especially important for bundles such as RMS that host a Node bridge/backend alongside
-    their Python entrypoint.
+    The SDK now also ships a public Node or TypeScript backend bridge reference. Bundle authors can
+    keep KDCube-native lifecycle, props, secrets, and public APIs in Python while delegating
+    selected backend logic to a local Node/TS service through a narrow explicit bridge, without
+    relying on private customer bundles as the only example.
 config:
-    version: "2026.4.11.1358"
+    version: "2026.4.12.318"
