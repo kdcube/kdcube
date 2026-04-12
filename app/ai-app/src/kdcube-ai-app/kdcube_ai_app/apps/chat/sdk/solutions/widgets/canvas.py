@@ -607,11 +607,12 @@ class TimelineStreamer:
         notes_xpath: str = "notes",
         final_answer_xpath: str = "final_answer",
         notes_marker: str = "timeline_text",
-        final_answer_marker: str = "answer",
-        notes_format: str = "markdown",
-        final_answer_format: str = "markdown",
-        notes_artifact_name: str = "timeline_text.react.decision",
-        final_answer_artifact_name: str = "react.final_answer",
+            final_answer_marker: str = "answer",
+            notes_format: str = "markdown",
+            final_answer_format: str = "markdown",
+            notes_artifact_name: str = "timeline_text.react.decision",
+            final_answer_artifact_name: str = "react.final_answer",
+            final_answer_start_index: int = 0,
         plan_marker: str = "timeline_text",
         plan_format: str = "markdown",
         plan_artifact_name: str = "timeline_text.react.plan",
@@ -640,7 +641,7 @@ class TimelineStreamer:
                 "format": final_answer_format,
                 "artifact_name": final_answer_artifact_name,
                 "use_citations": True,
-                "index": 0,
+                "index": max(0, int(final_answer_start_index or 0)),
                 "started": False,
             })
         if stream_plan:
@@ -741,6 +742,15 @@ class TimelineStreamer:
                 return bool(t.get("started"))
         return False
 
+    def next_index(self, name: str) -> int:
+        for t in self.targets:
+            if t.get("name") == name:
+                try:
+                    return max(0, int(t.get("index") or 0))
+                except Exception:
+                    return 0
+        return 0
+
     async def emit_full(self, name: str, text: str) -> None:
         if not text:
             return
@@ -822,9 +832,12 @@ class TimelineStreamer:
                 return None
             return bool(str(self.tool_id_value).strip())
         if name == "final_answer":
+            # final_answer must stream as soon as it appears. Waiting for `action`
+            # causes the whole answer to stay buffered when models emit
+            # `final_answer` before `action`, which makes it pop at once later.
             if self.action_value is None:
-                return None
-            return (self.action_value or "").strip() in {"complete", "exit"}
+                return True
+            return (self.action_value or "").strip() in {"complete", "exit", "call_tool"}
         return True
 
     def _match_target(self) -> Optional[Dict[str, Any]]:

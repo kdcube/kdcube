@@ -126,6 +126,7 @@ class ReactSolverV2:
         comm_context: ChatTaskPayload,
         hosting_service: Optional[ApplicationHostingService] = None,
         ctx_browser: Optional[ContextBrowser] = None,
+        additional_instructions: Optional[str] = None,
     ) -> None:
         self.svc = service
         if isinstance(logger, AgentLogger):
@@ -147,11 +148,12 @@ class ReactSolverV2:
         self.comm_context = comm_context
         self.hosting_service = hosting_service
         self.ctx_browser = ctx_browser
+        self.additional_instructions = str(additional_instructions or "").strip()
         if self.ctx_browser is not None:
             try:
                 self.ctx_browser.add_timeline_event_hook(self.on_timeline_event)
             except Exception:
-                pass
+                self.log.log("[react.v2] failed to register timeline event hook\n" + traceback.format_exc(), level="ERROR")
         self.graph = self._build_graph()
         self._timeline_text_idx = {}
         self._outdir_cv_token = None
@@ -170,8 +172,50 @@ class ReactSolverV2:
         self._active_generation_iteration: Optional[int] = None
         self._active_generation_raw_chunks: List[str] = []
         self._interrupted_generation_snapshot: Optional[Dict[str, Any]] = None
+        self._active_phase_event_watch_task: Optional[asyncio.Task] = None
+        self._active_phase_external_cursor: str = ""
 
-    async def on_timeline_event(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> None:
+    def _current_turn_id(self) -> str:
+        try:
+            turn_id = str(getattr(self.scratchpad, "turn_id", "") or "").strip()
+            if turn_id:
+                return turn_id
+        except Exception:
+            pass
+        try:
+            runtime_ctx = getattr(self.ctx_browser, "runtime_ctx", None) if self.ctx_browser else None
+            return str(getattr(runtime_ctx, "turn_id", "") or "").strip()
+        except Exception:
+            return ""
+
+    def _event_targets_current_turn(self, event: Any) -> bool:
+        current_turn_id = self._current_turn_id()
+        if not current_turn_id:
+            return True
+        turn_ids = [
+            str(getattr(event, "target_turn_id", "") or "").strip(),
+            str(getattr(event, "active_turn_id_at_ingress", "") or "").strip(),
+            str(getattr(event, "owner_turn_id", "") or "").strip(),
+        ]
+        turn_ids = [item for item in turn_ids if item]
+        if not turn_ids:
+            return True
+        return current_turn_id in set(turn_ids)
+
+    async def on_timeline_event(self, *, type: str, event: Any, blocks: List[Dict[str, Any]]) -> bool:
+        type_norm = str(type or "").strip().lower()
+        if type_norm in {"steer", "followup"} and not self._event_targets_current_turn(event):
+            try:
+                self.log.log(
+                    f"[react.v2] timeline_event ignored: type={type_norm} current_turn={self._current_turn_id()} "
+                    f"target_turn={getattr(event, 'target_turn_id', None) or ''} "
+                    f"active_turn={getattr(event, 'active_turn_id_at_ingress', None) or ''} "
+                    f"owner_turn={getattr(event, 'owner_turn_id', None) or ''}",
+                    level="INFO",
+                )
+            except Exception:
+                pass
+            return False
         try:
             seq = int(getattr(event, "sequence", 0) or 0)
             if seq > self._latest_external_event_seq_seen:
@@ -179,7 +223,7 @@ class ReactSolverV2:
         except Exception:
             seq = None
         try:
-            if str(type or "").strip().lower() == "steer":
+            if type_norm == "steer":
                 if seq is not None and int(seq or 0) > self._latest_steer_seq_seen:
                     self._latest_steer_seq_seen = int(seq or 0)
                 self._latest_steer_text = str(getattr(event, "text", "") or "").strip()
@@ -226,12 +270,125 @@ class ReactSolverV2:
             pass
         return True
 
+    async def _log_external_event_watch_state(self, *, phase: str) -> None:
+        ctx_browser = self.ctx_browser
+        source = self.external_event_source
+        current_turn_id = self._current_turn_id()
+        timeline = getattr(ctx_browser, "timeline", None) if ctx_browser is not None else None
+        listener_task = getattr(ctx_browser, "_external_event_task", None) if ctx_browser is not None else None
+        listener_running = bool(listener_task is not None and not listener_task.done())
+        owner_turn_id = ""
+        owner_listener_id = ""
+        try:
+            owner = await source.get_owner() if source is not None else None
+            owner_turn_id = str(getattr(owner, "turn_id", "") or "").strip()
+            owner_listener_id = str(getattr(owner, "listener_id", "") or "").strip()
+        except Exception:
+            self.log.log(
+                f"[react.v2] phase={phase} failed to inspect external-event owner:\n{traceback.format_exc()}",
+                level="ERROR",
+            )
+            return
+        level = "INFO"
+        if not owner_turn_id or owner_turn_id != current_turn_id or not listener_running:
+            level = "WARNING"
+        self.log.log(
+            f"[react.v2] phase={phase} external watch state turn_id={current_turn_id} "
+            f"timeline_present={bool(timeline is not None)} listener_running={listener_running} "
+            f"owner_turn={owner_turn_id or '-'} owner_listener={owner_listener_id or '-'}",
+            level=level,
+        )
+
+    async def _watch_external_events_during_phase(self, *, phase: str, phase_task: asyncio.Task) -> None:
+        ctx_browser = self.ctx_browser
+        source = self.external_event_source
+        if ctx_browser is None or source is None:
+            return
+        try:
+            ensure_listener = getattr(ctx_browser, "ensure_external_event_listener", None)
+            if ensure_listener is not None:
+                maybe = ensure_listener()
+                if asyncio.iscoroutine(maybe):
+                    await maybe
+        except Exception:
+            pass
+        try:
+            await self._log_external_event_watch_state(phase=phase)
+        except Exception:
+            pass
+        try:
+            timeline = getattr(ctx_browser, "timeline", None)
+            if timeline is not None:
+                self._active_phase_external_cursor = str(getattr(timeline, "last_external_event_id", "") or "")
+        except Exception:
+            self._active_phase_external_cursor = ""
+        while not phase_task.done():
+            try:
+                timeline = getattr(ctx_browser, "timeline", None)
+                last_cursor = (
+                    str(getattr(timeline, "last_external_event_id", "") or "")
+                    if timeline is not None
+                    else str(self._active_phase_external_cursor or "")
+                )
+                events = await source.wait_for_events_after(last_cursor, block_ms=500, limit=100)
+                if phase_task.done():
+                    return
+                if not events:
+                    continue
+                self.log.log(
+                    f"[react.v2] phase={phase} direct external-event watch received count={len(events)} turn_id={self.scratchpad.turn_id}",
+                    level="INFO",
+                )
+                apply_events = getattr(ctx_browser, "apply_external_events", None)
+                changed = 0
+                if apply_events is not None and timeline is not None:
+                    maybe = apply_events(events, call_hooks=True)
+                    changed = int(await maybe if asyncio.iscoroutine(maybe) else maybe or 0)
+                else:
+                    for event in events:
+                        stream_id = str(getattr(event, "stream_id", "") or "")
+                        if stream_id:
+                            self._active_phase_external_cursor = stream_id
+                        try:
+                            handled = await self.on_timeline_event(
+                                type=str(getattr(event, "kind", "external") or "external"),
+                                event=event,
+                                blocks=[],
+                            )
+                            changed += int(bool(handled))
+                        except Exception:
+                            self.log.log(
+                                f"[react.v2] direct external-event dispatch failure phase={phase}: {traceback.format_exc()}",
+                                level="ERROR",
+                            )
+                if changed and self._steer_interrupt_requested:
+                    return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self.log.log(
+                    f"[react.v2] external-event phase watcher failure phase={phase}: {traceback.format_exc()}",
+                    level="ERROR",
+                )
+                await asyncio.sleep(0.2)
+
     async def _run_cancellable_phase(self, *, phase: str, coro: Awaitable[Any]) -> tuple[bool, Any]:
         task = asyncio.create_task(coro, name=f"react.{phase}.{self.scratchpad.turn_id}")
         self._active_phase_task = task
         self._active_phase_name = str(phase or "")
         self._active_phase_cancelled_by_steer = False
         self._active_phase_cancel_requested_at = 0.0
+        watch_task: Optional[asyncio.Task] = None
+        try:
+            if self.ctx_browser is not None and self.external_event_source is not None:
+                watch_task = asyncio.create_task(
+                    self._watch_external_events_during_phase(phase=phase, phase_task=task),
+                    name=f"react.{phase}.external_watch.{self.scratchpad.turn_id}",
+                )
+                self._active_phase_event_watch_task = watch_task
+        except Exception:
+            watch_task = None
+            self._active_phase_event_watch_task = None
         try:
             result = await task
             return False, result
@@ -244,11 +401,22 @@ class ReactSolverV2:
                 return True, None
             raise
         finally:
+            if watch_task is not None:
+                watch_task.cancel()
+                try:
+                    await watch_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             if self._active_phase_task is task:
                 self._active_phase_task = None
                 self._active_phase_name = ""
                 self._active_phase_cancelled_by_steer = False
                 self._active_phase_cancel_requested_at = 0.0
+            if self._active_phase_event_watch_task is watch_task:
+                self._active_phase_event_watch_task = None
+            self._active_phase_external_cursor = ""
         try:
             await self.comm.service_event(
                 type="timeline.external.accepted",
@@ -739,6 +907,14 @@ class ReactSolverV2:
         sources_getter = None
         if self.ctx_browser:
             sources_getter = lambda: list(self.ctx_browser.sources_pool or [])
+        final_answer_start_index = 0
+        try:
+            final_answer_start_index = max(
+                0,
+                int(getattr(self.scratchpad, "_react_answer_delta_idx", 0) or 0),
+            )
+        except Exception:
+            final_answer_start_index = 0
         streamer = TimelineStreamer(
             emit_delta=self.comm.delta,
             agent=agent or f"{self.MODULE_AGENT_NAME}.{phase}",
@@ -747,6 +923,7 @@ class ReactSolverV2:
             stream_final_answer=bool(stream_final_answer),
             notes_artifact_name=notes_artifact_name or "timeline_text.react.decision",
             final_answer_artifact_name=final_answer_artifact_name or "react.final_answer",
+            final_answer_start_index=final_answer_start_index,
             plan_artifact_name=plan_artifact_name or "timeline_text.react.plan",
         )
         return self._wrap_json_streamer(streamer, sources_list=sources_list), streamer
@@ -1323,6 +1500,7 @@ class ReactSolverV2:
             f"decision.timeline ({iteration})",
             sources_list=sources_list,
             agent=timeline_agent,
+            stream_final_answer=True,
             notes_artifact_name=f"timeline_text.react.decision.{iteration}",
             final_answer_artifact_name=f"react.final_answer.{iteration}",
             plan_artifact_name=f"timeline_text.react.plan.{iteration}",
@@ -1381,6 +1559,7 @@ class ReactSolverV2:
                     adapters=announced_adapters,
                     infra_adapters=extra_adapters_for_decision,
                     workspace_implementation=getattr(getattr(self.ctx_browser, "runtime_ctx", None), "workspace_implementation", "custom"),
+                    additional_instructions=self.additional_instructions,
                 ),
                 render_params=render_params,
                 agent_fn=_decision_agent,
@@ -1390,6 +1569,18 @@ class ReactSolverV2:
             if self._active_phase_cancelled_by_steer or self._steer_interrupt_requested:
                 self._stash_interrupted_generation_snapshot()
             self._clear_active_generation_capture()
+        try:
+            if timeline_streamer is not None and timeline_streamer.has_started("final_answer"):
+                self.scratchpad._final_answer_delta_emitted = True
+                self.scratchpad._react_answer_delta_idx = max(
+                    int(getattr(self.scratchpad, "_react_answer_delta_idx", 0) or 0),
+                    int(timeline_streamer.next_index("final_answer") or 0),
+                )
+        except Exception:
+            self.log.log(
+                f"[react.v2] failed to sync streamed final-answer index: {traceback.format_exc()}",
+                level="ERROR",
+            )
         await self._drain_external_events(call_hooks=True)
         if await self._apply_steer_interrupt_if_requested(state, checkpoint="decision.after"):
             state["force_compaction_next_decision"] = False
@@ -1862,8 +2053,9 @@ class ReactSolverV2:
                 except Exception:
                     pass
             else:
+                final_answer_text = (decision.get("final_answer") or "").strip()
                 state["exit_reason"] = "steer" if bool(state.get("steer_finalize_mode")) else action
-                state["final_answer"] = (decision.get("final_answer") or "").strip()
+                state["final_answer"] = final_answer_text
                 state["suggested_followups"] = decision.get("suggested_followups") or []
                 try:
                     sf = state.get("suggested_followups") or []
