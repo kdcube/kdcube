@@ -76,9 +76,10 @@ Do not copy a full developer `pip freeze` into the bundle.
 Do not add transitive packages unless they are explicitly needed.
 
 Companion loading rule:
-- For bundle tasks, load this skill together with `sk:product.kdcube`.
-- `sk:product.kdcube` gives the platform/runtime model.
+- For bundle tasks, load this skill together with `sk:product.bundle_builder`.
+- `sk:product.bundle_builder` gives the concrete bundle-authoring map.
 - `sk:tests.bundles` gives the current test contract and validation workflow.
+- `sk:product.kdcube` is still useful when the user also needs broader product/platform explanation.
 - This skill alone is not the contract. Before writing code, read the actual current test files, not only this skill.
 - Use the tests to understand the expected contract first, then write code to satisfy that contract.
 - When platform or framework symbols are needed, confirm them from current docs/examples/source before coding.

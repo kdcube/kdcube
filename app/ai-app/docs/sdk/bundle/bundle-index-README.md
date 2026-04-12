@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/bundle-node-backend-bridge-README.md
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
@@ -37,11 +38,15 @@ Use this as the **docs start point** when building, repairing, or reviewing a bu
 | Minimal bundle contract | [[docs/sdk/bundle/bundle-dev-README.md](bundle-dev-README.md)](bundle-dev-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/orchestrator/workflow.py` |
 | Bundle lifecycle + instance model | [[docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)](bundle-lifecycle-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | Runtime surfaces across REST, SSE, tools, and iso runtime | [[docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)](bundle-runtime-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/tool_subsystem.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/bootstrap.py` |
+| Dependency-heavy helpers with cached bundle venvs | [[docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)](bundle-lifecycle-README.md), [[docs/sdk/bundle/design/bundle-custom-venv-README.md](design/bundle-custom-venv-README.md)](design/bundle-custom-venv-README.md) | `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py` |
 | Config, secrets, reserved platform props | [[docs/sdk/bundle/bundle-props-secrets-README.md](bundle-props-secrets-README.md)](bundle-props-secrets-README.md), [[docs/sdk/bundle/bundle-platform-properties-README.md](bundle-platform-properties-README.md)](bundle-platform-properties-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | Custom tools + MCP | [[docs/sdk/tools/custom-tools-README.md](../tools/custom-tools-README.md)](../tools/custom-tools-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools_descriptor.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/tools/preference_tools.py` |
 | Custom skills | [[docs/sdk/skills/custom-skills-README.md](../skills/custom-skills-README.md)](../skills/custom-skills-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills_descriptor.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/skills/product/preferences/SKILL.md` |
 | Storage, cache, bundle state | [[docs/sdk/bundle/bundle-storage-cache-README.md](bundle-storage-cache-README.md)](bundle-storage-cache-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/preferences_store.py` |
 | Widgets + operations | [[docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)](bundle-platform-integration-README.md), [[docs/sdk/bundle/bundle-interfaces-README.md](bundle-interfaces-README.md)](bundle-interfaces-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
+| React v2 agent integration | [[docs/sdk/agents/react/structure-README.md](../agents/react/structure-README.md)](../agents/react/structure-README.md), [[docs/sdk/agents/react/plan-README.md](../agents/react/plan-README.md)](../agents/react/plan-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/orchestrator/workflow.py` |
+| Claude Code agent integration | [[docs/sdk/agents/claude/claude-code-README.md](../agents/claude/claude-code-README.md)](../agents/claude/claude-code-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/claude_code.py` |
+| Node/TypeScript backend behind Python bridge | [[docs/sdk/bundle/bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md)](bundle-node-backend-bridge-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/resources/node-backend-bridge/cli.mjs`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/resources/node-backend-bridge/sample_routes.ts` |
 | Scheduled jobs (`@cron`) | [[docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)](bundle-scheduled-jobs-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/bundle_scheduler.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/echo.ui@2026-03-30/entrypoint.py` |
 | Custom main-view UI | [[docs/sdk/bundle/bundle-lifecycle-README.md](bundle-lifecycle-README.md)](bundle-lifecycle-README.md), [[docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)](bundle-reference-versatile-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
 | Direct isolated exec from bundle code | [[docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)](bundle-reference-versatile-README.md) | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py` |
@@ -86,6 +91,8 @@ Why this is the primary reference:
   [[docs/sdk/bundle/bundle-interfaces-README.md](bundle-interfaces-README.md)](bundle-interfaces-README.md)
 - Declarative platform integration design (`@api`, `@ui_widget`, `@ui_main`, `@on_message`, `@cron`):
   [[docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)](bundle-platform-integration-README.md)
+- Node or TypeScript backend behind Python bridge:
+  [[docs/sdk/bundle/bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md)](bundle-node-backend-bridge-README.md)
 - Scheduled jobs (`@cron` decorator, span semantics, cron resolution, local debug):
   [[docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)](bundle-scheduled-jobs-README.md)
 - Bundle knowledge space (`ks:`):
@@ -122,6 +129,10 @@ These are useful when the primary reference bundle is too broad for the question
   - use when the question is specifically about direct isolated exec and scenario-driven runtime diagnostics
   - root:
     `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/with-isoruntime@2026-02-16-14-00`
+- `examples/resources/node-backend-bridge`
+  - use when the question is specifically about reusing a Node or TypeScript backend behind a Python bundle shell
+  - root:
+    `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/resources/node-backend-bridge`
 - older focused examples still exist under `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles`, but they are not the default starting point for bundle authoring anymore
 
 ## Ops after authoring

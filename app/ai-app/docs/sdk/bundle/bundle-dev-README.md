@@ -11,6 +11,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - ks:docs/sdk/bundle/bundle-node-backend-bridge-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/design/bundle-custom-venv-README.md
   - ks:docs/sdk/bundle/bundle-platform-properties-README.md
@@ -38,6 +39,8 @@ Read these first:
   [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 - optional React `ks:` integration:
   [docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)
+- optional Node or TypeScript backend behind a Python bridge:
+  [docs/sdk/bundle/bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md)
 
 If you need **ops/runtime config** (registry, env vars, git bundles, assembly descriptors), see:
 [docs/sdk/bundle/bundle-ops-README.md](bundle-ops-README.md).

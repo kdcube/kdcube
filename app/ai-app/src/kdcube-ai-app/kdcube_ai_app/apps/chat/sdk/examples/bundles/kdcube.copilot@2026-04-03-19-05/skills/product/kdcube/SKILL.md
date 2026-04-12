@@ -9,9 +9,8 @@ description: |
   Important: ensure this skill is always in front of your eyes ("read", marked
   with 💡) whenever the user is asking about KDCube tech, features, architecture,
   deployment, or SDK usage. If the task is about bundle code generation,
-  modification, review, extraction, or troubleshooting, also load
-  `sk:tests.bundles` so the current bundle contract and smoke-test expectations
-  are in context.
+  modification, review, extraction, or troubleshooting, load
+  `sk:product.bundle_builder` and `sk:tests.bundles`.
 version: 1.0.0
 category: product-knowledge
 tags:
@@ -122,9 +121,11 @@ Important:
 
 Bundle-authoring rule:
 - If the task is about generating, editing, extracting, repairing, reviewing, or validating bundle code,
-  read `sk:tests.bundles` as well before answering or generating code.
+  read `sk:product.bundle_builder` and `sk:tests.bundles` before answering or generating code.
 - Keep this product skill loaded for the platform/runtime model, and keep the tests skill loaded for the
   current bundle contract and validation workflow.
+- Keep `sk:product.bundle_builder` loaded for the concrete bundle-authoring map, example bundle tree,
+  runtime/lifecycle guidance, Node bridge pattern, and the exact doc/index route for bundle work.
 - Do not write platform-integrated code from skills alone.
 - For bundle code generation or modification, do not start with file writes after reading only skills.
   Before the first write, read the current tests that define the contract and the current docs/examples/source

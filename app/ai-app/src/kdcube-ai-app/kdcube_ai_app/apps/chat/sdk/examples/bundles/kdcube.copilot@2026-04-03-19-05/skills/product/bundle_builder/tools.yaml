@@ -1,0 +1,10 @@
+tools:
+  - id: react.read
+    role: load exact docs and example files
+    why: Open the bundle docs, reference bundle files, and exact `ks:` examples before coding.
+  - id: react.search_knowledge
+    role: navigate bundle docs
+    why: Find the right bundle, React, Claude, or runtime doc before drilling into exact files.
+  - id: exec_tools.execute_code_python
+    role: browse and validate from isolated exec
+    why: Inspect the live runtime package set, search exact source/test files, and run the smallest relevant validation subset.
