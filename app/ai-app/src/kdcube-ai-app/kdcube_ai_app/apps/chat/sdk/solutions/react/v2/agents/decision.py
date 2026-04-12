@@ -205,6 +205,7 @@ def build_decision_system_text(
     adapters: List[Dict[str, Any]],
     infra_adapters: Optional[List[Dict[str, Any]]] = None,
     workspace_implementation: str = "custom",
+    additional_instructions: Optional[str] = None,
 ) -> str:
     workspace_guide = get_workspace_implementation_guide(workspace_implementation)
     json_hint = (
@@ -585,6 +586,9 @@ It is preferable to use react.write for streaming large content and use renderin
         "CRITICAL: Exec tool DOES NOT HAVE code parameter! Putting code in the tool call params is WRONG. Code goes only in <channel:code>!"
     )
     sys_msg = sys_1 + "\n" + "\n" + protocol + "\n" + tool_block
+    extra_instructions = str(additional_instructions or "").strip()
+    if extra_instructions:
+        sys_msg += "\n\n[ADDITIONAL RUNTIME INSTRUCTIONS]\n" + extra_instructions
     return sys_msg
 
 
@@ -595,6 +599,7 @@ async def react_decision_stream_v2(
     adapters: List[Dict[str, Any]],
     infra_adapters: Optional[List[Dict[str, Any]]] = None,
     workspace_implementation: str = "custom",
+    additional_instructions: Optional[str] = None,
     on_progress_delta=None,
     on_raw_delta=None,
     subscribers: Optional[Dict[str, List[Any]]] = None,
@@ -605,6 +610,7 @@ async def react_decision_stream_v2(
         adapters=adapters,
         infra_adapters=infra_adapters,
         workspace_implementation=workspace_implementation,
+        additional_instructions=additional_instructions,
     )
     system_msg = create_cached_system_message([
         {"text": system_text, "cache": True},

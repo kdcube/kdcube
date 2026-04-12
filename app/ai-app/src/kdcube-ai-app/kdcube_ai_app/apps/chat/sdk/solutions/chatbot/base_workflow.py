@@ -1063,7 +1063,8 @@ class BaseWorkflow():
                     mcp_tools_spec: Optional[List[Dict[str, Any]]] = None,
                     tools_runtime: Optional[Dict[str, str]] = None,
                     custom_skills_root: Optional[str] = None,
-                    skills_visibility_agents_config: Optional[Dict[str, Dict[str, Any]]] = None) -> ReactSolverV2:
+                    skills_visibility_agents_config: Optional[Dict[str, Dict[str, Any]]] = None,
+                    additional_instructions: Optional[str] = None) -> ReactSolverV2:
 
         bundle_root = self.bundle_root()
 
@@ -1121,7 +1122,8 @@ class BaseWorkflow():
             comm_context=self.comm_context,
             hosting_service=self.hosting_service,
             ctx_browser=self.ctx_browser,
-            scratchpad=scratchpad
+            scratchpad=scratchpad,
+            additional_instructions=additional_instructions,
         )
         return react
 

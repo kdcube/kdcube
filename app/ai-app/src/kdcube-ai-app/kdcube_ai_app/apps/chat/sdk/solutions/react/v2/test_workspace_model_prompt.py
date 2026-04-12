@@ -52,3 +52,14 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert "turn_<current_turn>/files/..." in text
     assert "existing top-level scope" in text
     assert "ls workspace" in text
+
+
+def test_build_decision_system_text_appends_additional_runtime_instructions():
+    text = build_decision_system_text(
+        adapters=[],
+        infra_adapters=[],
+        workspace_implementation="custom",
+        additional_instructions="Always prefer the product knowledge skill before web search.",
+    )
+    assert "[ADDITIONAL RUNTIME INSTRUCTIONS]" in text
+    assert "Always prefer the product knowledge skill before web search." in text
