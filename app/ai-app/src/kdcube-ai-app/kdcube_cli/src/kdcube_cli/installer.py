@@ -1574,6 +1574,16 @@ def gather_configuration(
                     return val
         return None
 
+    def _secret_raw(*paths: object) -> tuple[bool, object]:
+        for path in paths:
+            if isinstance(path, str):
+                if isinstance(secrets_data, dict) and path in secrets_data:
+                    return True, secrets_data.get(path)
+            elif isinstance(path, (list, tuple)):
+                if _has_nested(secrets_data, *path):
+                    return True, _get_nested(secrets_data, *path)
+        return False, None
+
     def _flatten_bundle_secrets(data: Dict[str, object]) -> Dict[str, str]:
         flattened: Dict[str, str] = {}
 
@@ -2107,6 +2117,10 @@ def gather_configuration(
 
     redis_pass_from_assembly = _get_nested(assembly_data, "infra", "redis", "password")
     redis_pass_from_secrets = _secret_pick(("infra", "redis", "password"), ("redis_password",))
+    redis_secret_declared, redis_pass_raw_from_secrets = _secret_raw(
+        ("infra", "redis", "password"),
+        "redis_password",
+    )
     redis_host_from_assembly = _get_nested(assembly_data, "infra", "redis", "host")
     redis_port_from_assembly = _get_nested(assembly_data, "infra", "redis", "port")
     has_redis_descriptor = bool(
@@ -2115,7 +2129,7 @@ def gather_configuration(
         or (redis_port_from_assembly and not is_placeholder(str(redis_port_from_assembly)))
     )
     use_redis_secret = False
-    if redis_pass_from_secrets:
+    if redis_secret_declared:
         use_redis_secret = ask_confirm(console, "Use Redis password from secrets descriptor?", default=True)
 
     use_redis_descriptor = False
@@ -2138,13 +2152,24 @@ def gather_configuration(
             update_env_value(env_proc, "REDIS_PORT", str(redis_port_from_assembly))
             update_env_value(env_metrics, "REDIS_PORT", str(redis_port_from_assembly))
 
-    if use_redis_secret and redis_pass_from_secrets:
-        update_env_value(env_main, "REDIS_PASSWORD", str(redis_pass_from_secrets))
+    if use_redis_secret:
+        if redis_pass_raw_from_secrets is None:
+            update_env_value(env_main, "REDIS_PASSWORD", "")
+        else:
+            redis_secret_value = str(redis_pass_raw_from_secrets).strip()
+            if not redis_secret_value or is_placeholder(redis_secret_value):
+                redis_secret_value = ""
+            update_env_value(env_main, "REDIS_PASSWORD", redis_secret_value)
     if (not use_redis_secret) and is_placeholder(env_main.entries.get("REDIS_PASSWORD", (None, None))[1]) and redis_pass_from_assembly:
         update_env_value(env_main, "REDIS_PASSWORD", str(redis_pass_from_assembly))
 
-    if use_redis_secret and redis_pass_from_secrets:
-        redis_pass = redis_pass_from_secrets
+    if use_redis_secret:
+        if redis_pass_raw_from_secrets is None:
+            redis_pass = ""
+        else:
+            redis_pass = str(redis_pass_raw_from_secrets).strip()
+            if not redis_pass or is_placeholder(redis_pass):
+                redis_pass = ""
     elif use_redis_descriptor and _has_nested(assembly_data, "infra", "redis", "password"):
         if redis_pass_from_assembly is None or str(redis_pass_from_assembly).strip() == "":
             redis_pass = ""
