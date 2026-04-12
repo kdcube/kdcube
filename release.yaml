@@ -1,27 +1,21 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.12.318"
+  ref: "2026.4.12.500"
   description: |
-    This release turns live bundle configuration in AWS-backed deployments into a real persistent
-    runtime surface instead of a mostly Redis-only cache. Bundle deployment-scoped props now live
-    as grouped per-bundle descriptor documents in AWS Secrets Manager, bundle deployment-scoped
-    secrets now live as grouped per-bundle secret documents with `a:` / `b:` namespace lookup, and
-    user-scoped non-secret bundle props are now persisted in PostgreSQL. Redis remains a cache and
-    notification layer instead of the only durable authority for live bundle changes.
+    This release adds a shareable Claude Code builder plugin marketplace to the SDK. The plugin
+    bootstraps a clean one-bundle local descriptor set, defaults local auth to a simple local
+    mode, gives Claude Code explicit bundle-authoring guidance, and provides concrete local
+    runtime actions for start, reload, stop, and bundle-suite validation.
 
-    The CLI and runtime now also support exporting the current effective live bundle state for a
-    tenant/project back into `bundles.yaml` and `bundles.secrets.yaml`. That closes the loop
-    between runtime admin changes and redeployable descriptors, which is especially important for
-    ECS environments where bundles can be added or updated during operational time.
+    The same release line also fixes the new persistent user-props runtime path in ECS and other
+    split-service deployments. Ingress, proc, metrics, and exec images now include `psycopg2`,
+    which is required by the user props manager introduced in the previous release. Without that
+    addition, those services could fail on startup with `ModuleNotFoundError: No module named
+    'psycopg2'`.
 
-    Bundle authoring guidance was expanded with a dedicated builder skill in `kdcube.copilot`.
-    That skill now acts as the bundle-development index for the platform: lifecycle, runtimes,
-    authenticated and public APIs, widgets, main UI, storage, props, secrets, `@venv(...)`,
-    `@cron(...)`, React v2, Claude Code, and optional multi-runtime composition inside one bundle.
-
-    The SDK now also ships a public Node or TypeScript backend bridge reference. Bundle authors can
-    keep KDCube-native lifecycle, props, secrets, and public APIs in Python while delegating
-    selected backend logic to a local Node/TS service through a narrow explicit bridge, without
-    relying on private customer bundles as the only example.
+    The live bundle configuration model from the previous release remains in place: deployment-
+    scoped bundle descriptor state and bundle secrets persist in AWS-backed deployments, user-
+    scoped non-secret bundle props persist in PostgreSQL, and the runtime can export effective live
+    `bundles.yaml` and `bundles.secrets.yaml` for redeployable state capture.
 config:
-    version: "2026.4.12.318"
+    version: "2026.4.12.500"
