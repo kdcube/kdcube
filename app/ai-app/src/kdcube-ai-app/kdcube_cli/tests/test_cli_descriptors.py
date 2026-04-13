@@ -369,6 +369,11 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
     env_main = (config_dir / ".env").read_text()
     assert f"HOST_SECRETS_YAML_DESCRIPTOR_PATH={secrets_path}" in env_main
     assert f"HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH={bundles_secrets_path}" in env_main
+    assert (tmp_path / "kdcube-storage").is_dir()
+    assert (tmp_path / "bundles").is_dir()
+    assert (tmp_path / "git-bundles").is_dir()
+    assert (tmp_path / "bundle-storage").is_dir()
+    assert (tmp_path / "exec-workspace").is_dir()
 
 
 def test_gather_configuration_treats_null_redis_secret_as_unset(monkeypatch, tmp_path: Path):

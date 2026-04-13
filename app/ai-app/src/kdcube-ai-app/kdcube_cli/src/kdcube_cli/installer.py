@@ -1173,6 +1173,14 @@ def ensure_absolute(
         return str(resolved)
 
 
+def ensure_directory_root(path_value: str, *, label: str) -> str:
+    path = Path(path_value).expanduser().resolve()
+    if path.exists() and not path.is_dir():
+        raise ValueError(f"{label} must be a directory path, got existing file: {path}")
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
+
+
 def prompt_secret(
     console: Console,
     env_file: EnvFile,
@@ -2541,6 +2549,12 @@ def gather_configuration(
         str(_get_nested(assembly_data, "paths", "host_exec_workspace_path") or defaults.get("host_exec_workspace")),
         force_prompt=force_prompt,
     )
+
+    host_storage = ensure_directory_root(host_storage, label="Host system storage path")
+    host_bundles = ensure_directory_root(host_bundles, label="Host bundles root")
+    host_git_bundles = ensure_directory_root(host_git_bundles, label="Host git bundles cache root")
+    host_bundle_storage = ensure_directory_root(host_bundle_storage, label="Host bundle local storage path")
+    host_exec = ensure_directory_root(host_exec, label="Host exec workspace path")
 
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
