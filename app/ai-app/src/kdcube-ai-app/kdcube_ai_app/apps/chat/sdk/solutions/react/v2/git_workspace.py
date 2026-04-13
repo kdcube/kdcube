@@ -78,6 +78,18 @@ def _run_git_checked(
     return _run_checked(["git", "-C", str(repo_root), *args], op=op, env=env)
 
 
+def _git_has_tracked_files(*, repo_root: pathlib.Path) -> bool:
+    proc = subprocess.run(
+        ["git", "-C", str(repo_root), "ls-files", "-z", "--", "."],
+        check=False,
+        capture_output=True,
+        text=False,
+    )
+    if proc.returncode != 0:
+        return False
+    return bool(proc.stdout)
+
+
 def _workspace_cache_root(*, runtime_ctx: Any, outdir: pathlib.Path) -> pathlib.Path:
     root = pathlib.Path(outdir).parent / ".react_workspace_git"
     segs = workspace_lineage_segments(runtime_ctx)
@@ -485,6 +497,8 @@ def _git_path_is_ignored(*, repo_root: pathlib.Path, rel_path: str) -> bool:
 
 
 def _stage_current_turn_text_workspace(*, turn_root: pathlib.Path) -> None:
+    if not _git_has_tracked_files(repo_root=turn_root):
+        return
     _run_git_checked(
         turn_root,
         ["add", "--sparse", "-u", "--", "."],

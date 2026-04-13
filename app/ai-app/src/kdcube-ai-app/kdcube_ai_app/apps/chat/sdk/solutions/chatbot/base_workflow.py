@@ -1509,7 +1509,13 @@ class BaseWorkflow():
         if ok:
             if on_flush_completed_hook:
                 await on_flush_completed_hook(scratchpad)
-            await self._publish_git_workspace_if_needed()
+            try:
+                await self._publish_git_workspace_if_needed()
+            except TurnPhaseError:
+                self.logger.log(
+                    "[workflow] git workspace publish failed; continuing with turn persistence\n" + traceback.format_exc(),
+                    level="ERROR",
+                )
 
         try:
             if self.ctx_browser:

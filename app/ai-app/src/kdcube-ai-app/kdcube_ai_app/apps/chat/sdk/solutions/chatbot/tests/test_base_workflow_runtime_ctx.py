@@ -1,4 +1,5 @@
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -283,6 +284,130 @@ async def test_publish_git_workspace_if_needed_raises_turn_phase_error_on_publis
     payload = json.loads(wf.ctx_browser.contributed[-1]["text"])
     assert payload["status"] == "failed"
     assert payload["error"] == "RuntimeError"
+
+
+def test_stage_current_turn_text_workspace_skips_when_repo_has_no_tracked_files(monkeypatch, tmp_path):
+    turn_root = tmp_path / "turn"
+    turn_root.mkdir(parents=True, exist_ok=True)
+
+    calls = []
+
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace._git_has_tracked_files",
+        lambda *, repo_root: False,
+    )
+    monkeypatch.setattr(
+        "kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace._run_git_checked",
+        lambda repo_root, args, op, env=None: calls.append((repo_root, list(args), op, env)),
+    )
+
+    from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import _stage_current_turn_text_workspace
+
+    _stage_current_turn_text_workspace(turn_root=turn_root)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_finish_turn_persists_turn_log_and_timeline_when_git_workspace_publish_fails(tmp_path):
+    saved_turn_logs = []
+    timeline_persisted = {"count": 0}
+    stopped_listener = {"count": 0}
+
+    async def _noop_async(*args, **kwargs):
+        del args, kwargs
+
+    class _TimelineWithBlocks(_TimelineStub):
+        def __init__(self):
+            self.blocks = []
+
+    class _CtxBrowserFinishStub:
+        def __init__(self, runtime_ctx, blocks):
+            self.runtime_ctx = runtime_ctx
+            self.timeline = _TimelineWithBlocks()
+            self.timeline.blocks = list(blocks)
+
+        def current_turn_blocks(self):
+            return list(self.timeline.blocks)
+
+        async def persist_timeline(self):
+            timeline_persisted["count"] += 1
+
+        async def stop_external_event_listener(self):
+            stopped_listener["count"] += 1
+
+        def contribute(self, blocks):
+            self.timeline.blocks.extend(list(blocks or []))
+
+    async def _save_turn_log_as_artifact(**kwargs):
+        saved_turn_logs.append(dict(kwargs))
+
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.logger = SimpleNamespace(
+        log=lambda *args, **kwargs: None,
+        finish_operation=lambda *args, **kwargs: None,
+    )
+    wf.ctx_client = SimpleNamespace(save_turn_log_as_artifact=_save_turn_log_as_artifact)
+    wf._emit = _noop_async
+    wf._persist_stream_artifacts = _noop_async
+    wf.report_timings = _noop_async
+    wf._ctx = {
+        "service": {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "user": "user-a",
+            "user_type": "registered",
+            "request_id": "req-1",
+        },
+        "conversation": {
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+        },
+        "turn": {
+            "t_turn0": time.perf_counter(),
+            "ms0u": 0,
+        },
+    }
+    wf.config = SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="bundle.test"))
+    wf.runtime_ctx = RuntimeCtx(
+        turn_id="turn-1",
+        conversation_id="conv-1",
+        workspace_implementation="git",
+    )
+    contrib_blocks = [
+        {
+            "type": "react.decision.raw",
+            "turn_id": "turn-1",
+            "text": "partial generated text",
+            "path": "ar:turn-1.react.decision.raw.interrupted.0",
+            "meta": {"interrupted": True},
+        }
+    ]
+    wf.ctx_browser = _CtxBrowserFinishStub(wf.runtime_ctx, contrib_blocks)
+
+    async def _failing_publish():
+        raise workflow_mod.TurnPhaseError(
+            "Failed to save git workspace progress: push failed",
+            code="workspace_publish_failed",
+            data={"cause": "push failed"},
+        )
+
+    wf._publish_git_workspace_if_needed = _failing_publish
+
+    scratchpad = SimpleNamespace(
+        answer="",
+        timings=[],
+        started_at="2026-04-13T00:56:00Z",
+        suggested_followups=[],
+    )
+
+    await wf.finish_turn(scratchpad, ok=True)
+
+    assert stopped_listener["count"] == 1
+    assert timeline_persisted["count"] == 1
+    assert len(saved_turn_logs) == 1
+    saved_blocks = saved_turn_logs[0]["payload"]["blocks"]
+    assert any(isinstance(b, dict) and b.get("type") == "react.decision.raw" for b in saved_blocks)
 
 
 @pytest.mark.asyncio
