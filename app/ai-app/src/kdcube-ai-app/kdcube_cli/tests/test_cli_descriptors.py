@@ -131,16 +131,99 @@ def test_descriptor_fast_path_requires_host_bundles_path_for_noninteractive_loca
         "auth": {"type": "simple"},
         "proxy": {"ssl": False},
     }
+    bundles_descriptor = {
+        "bundles": {
+            "items": [
+                {
+                    "id": "demo.bundle@1.0.0",
+                    "path": "/bundles/demo",
+                    "module": "demo.entrypoint",
+                }
+            ]
+        }
+    }
+
+    reasons = _descriptor_fast_path_reasons(
+        assembly,
+        have_secrets=True,
+        have_gateway=True,
+        bundles_descriptor=bundles_descriptor,
+        latest=False,
+        release=None,
+    )
+
+    assert "assembly paths.host_bundles_path is required for non-interactive local bundle installs" in reasons
+
+
+def test_descriptor_fast_path_accepts_git_only_bundles_without_host_bundles_path():
+    assembly = {
+        "context": {"tenant": "example-product", "project": "chatbot"},
+        "secrets": {"provider": "secrets-file"},
+        "auth": {"type": "simple"},
+        "proxy": {"ssl": False},
+        "storage": {
+            "workspace": {"type": "git", "repo": "https://github.com/kdcube/agentic-workspace.git"},
+            "claude_code_session": {"type": "git", "repo": "https://github.com/kdcube/agentic-workspace.git"},
+        },
+    }
+    bundles_descriptor = {
+        "bundles": {
+            "items": [
+                {
+                    "id": "example-product@marketing",
+                    "repo": "git@github.com:example-org/example-product_chatbot.git",
+                    "ref": "2026.4.13.051",
+                    "subdir": "src/demo/app/service/bundle/demo_marketing/bundle",
+                    "module": "sample-marketing@2-0.entrypoint",
+                }
+            ]
+        }
+    }
+
+    reasons = _descriptor_fast_path_reasons(
+        assembly,
+        have_secrets=True,
+        have_gateway=True,
+        bundles_descriptor=bundles_descriptor,
+        latest=False,
+        upstream=True,
+        release=None,
+    )
+
+    assert reasons == []
+
+
+def test_descriptor_fast_path_accepts_frontend_build_without_frontend_config_override():
+    assembly = {
+        "context": {"tenant": "example-product", "project": "chatbot"},
+        "secrets": {"provider": "secrets-file"},
+        "paths": {"host_bundles_path": "/Users/demo/bundles"},
+        "auth": {"type": "delegated", "cognito": {"region": "eu-west-1", "user_pool_id": "pool", "app_client_id": "client"}},
+        "proxy": {"ssl": False},
+        "storage": {
+            "workspace": {"type": "git", "repo": "https://github.com/kdcube/agentic-workspace.git"},
+            "claude_code_session": {"type": "git", "repo": "https://github.com/kdcube/agentic-workspace.git"},
+        },
+        "frontend": {
+            "build": {
+                "repo": "git@github.com:example-org/example-product_chatbot.git",
+                "ref": "2026.4.13.051",
+                "dockerfile": "ops/demo/dockercompose/Dockerfile_UI",
+                "src": "src/demo/app/ui/chat-web-app",
+            }
+        },
+    }
 
     reasons = _descriptor_fast_path_reasons(
         assembly,
         have_secrets=True,
         have_gateway=True,
         latest=False,
+        upstream=True,
         release=None,
     )
 
-    assert "assembly paths.host_bundles_path is required for non-interactive local bundle installs" in reasons
+    assert reasons == []
 
 
 def test_load_bundle_ids_from_bundles_yaml(tmp_path: Path):

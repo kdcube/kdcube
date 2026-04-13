@@ -643,11 +643,42 @@ def _load_yaml_mapping(path: Path) -> dict:
         return {}
 
 
+def _iter_bundle_specs(payload: dict | None):
+    if not isinstance(payload, dict):
+        return
+    raw_bundles = payload.get("bundles") if "bundles" in payload else payload
+    if not isinstance(raw_bundles, dict):
+        return
+
+    items = raw_bundles.get("items")
+    if isinstance(items, list):
+        for item in items:
+            if isinstance(item, dict):
+                yield item
+        return
+
+    for key, value in raw_bundles.items():
+        if key in {"version", "default_bundle_id"}:
+            continue
+        if isinstance(value, dict):
+            spec = dict(value)
+            spec.setdefault("id", str(key))
+            yield spec
+
+
+def _uses_local_path_bundles(payload: dict | None) -> bool:
+    for spec in _iter_bundle_specs(payload):
+        if _has_value(spec.get("path")):
+            return True
+    return False
+
+
 def _descriptor_fast_path_reasons(
     assembly: dict,
     *,
     have_secrets: bool,
     have_gateway: bool,
+    bundles_descriptor: dict | None = None,
     latest: bool,
     upstream: bool = False,
     release: str | None = None,
@@ -692,7 +723,10 @@ def _descriptor_fast_path_reasons(
         if storage_type == "git" and not _has_value(_get_nested(assembly, "storage", storage_kind, "repo")):
             reasons.append(f"assembly storage.{storage_kind}.repo is required when type=git")
 
-    if not _has_value(_get_nested(assembly, "paths", "host_bundles_path")):
+    uses_local_path_bundles = _uses_local_path_bundles(bundles_descriptor)
+    if not uses_local_path_bundles:
+        uses_local_path_bundles = _uses_local_path_bundles(assembly)
+    if uses_local_path_bundles and not _has_value(_get_nested(assembly, "paths", "host_bundles_path")):
         reasons.append("assembly paths.host_bundles_path is required for non-interactive local bundle installs")
 
     frontend = assembly.get("frontend")
@@ -703,8 +737,6 @@ def _descriptor_fast_path_reasons(
             for field in ("repo", "ref", "dockerfile", "src"):
                 if not _has_value(build.get(field) if isinstance(build, dict) else None):
                     reasons.append(f"assembly frontend.build.{field} is required when frontend.image is not set")
-            if not _has_value(frontend.get("frontend_config")):
-                reasons.append("assembly frontend.frontend_config is required when frontend.image is not set")
 
     return reasons
 
@@ -1171,6 +1203,7 @@ def main() -> None:
                 assembly,
                 have_secrets=bool(descriptor_bootstrap["have_secrets"]),
                 have_gateway=bool(descriptor_bootstrap["have_gateway"]),
+                bundles_descriptor=descriptor_bootstrap.get("bundles_data"),
                 latest=bool(args.latest),
                 upstream=bool(args.upstream),
                 release=str(args.release or "").strip() or None,
