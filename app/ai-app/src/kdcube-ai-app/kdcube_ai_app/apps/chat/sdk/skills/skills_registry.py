@@ -445,6 +445,9 @@ class SkillsSubsystem:
         self._registry_cache = None
 
     def _iter_skill_files(self) -> Iterable[pathlib.Path]:
+        # Load built-in SDK skills first, then bundle skills.
+        # Registry uses last-one-wins, so bundle skills override SDK skills
+        # with the same id. Processing order (not alphabetical sort) determines priority.
         roots: List[pathlib.Path] = [BUILTIN_SKILLS_ROOT / "skills"]
         if self.custom_skills_root:
             roots.append(self.custom_skills_root)
@@ -453,12 +456,14 @@ class SkillsSubsystem:
         for root in roots:
             if not root.exists():
                 continue
-            files.extend([p for p in root.glob("*/*/SKILL.md") if p.is_file()])
-            files.extend([p for p in root.glob("*/*/skill.y*ml") if p.is_file()])
-            files.extend([p for p in root.glob("*/*/*.y*ml") if p.is_file() and p.name.lower() not in excluded])
+            root_files: List[pathlib.Path] = []
+            root_files.extend([p for p in root.glob("*/*/SKILL.md") if p.is_file()])
+            root_files.extend([p for p in root.glob("*/*/skill.y*ml") if p.is_file()])
+            root_files.extend([p for p in root.glob("*/*/*.y*ml") if p.is_file() and p.name.lower() not in excluded])
+            files.extend(sorted(set(root_files)))
         if not files:
             log.warning("Skills directories not found; no skills loaded")
-        return sorted(set(files))
+        return files
 
     def get_skill_registry(self) -> Dict[str, SkillSpec]:
         if self._registry_cache is not None:
