@@ -42,6 +42,10 @@ if __name__ == "__main__":
     load_dotenv(find_dotenv())
 
     import os
+    # One-shot schema deployment can legitimately run well past the generic
+    # runtime DB statement timeout due to index creation on existing tables.
+    # Keep it overrideable, but default this job to no timeout.
+    os.environ.setdefault("POSTGRES_STATEMENT_TIMEOUT_MS", "0")
     if not os.environ.get("POSTGRES_PORT"):
         os.environ["POSTGRES_PORT"] = "5436"
     settings = get_settings()
