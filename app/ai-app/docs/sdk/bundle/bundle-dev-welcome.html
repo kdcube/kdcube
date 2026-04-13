@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>KDCube Bundle Developer Portal</title>
+<title>KDCube Application SDK</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 <style>
@@ -278,7 +278,7 @@
 
 <!-- NAV -->
 <nav>
-  <span class="nav-brand">🧊 KDCube Bundles</span>
+  <span class="nav-brand">🧊 KDCube SDK</span>
   <div class="nav-links">
     <a href="#overview">Overview</a>
     <a href="#install">Install</a>
@@ -306,8 +306,8 @@
 
 <!-- HERO -->
 <div class="hero">
-  <h1>Bundle Developer Portal</h1>
-  <p>Everything you need to build, deploy, and extend AI-powered bundles on the KDCube platform — from zero to production.</p>
+  <h1>Application SDK</h1>
+  <p>Everything you need to build, deploy, and extend AI applications on KDCube — from entrypoint and workflow to widgets, operations, and ReAct-powered runtime behavior.</p>
   <div class="hero-badges">
     <span class="badge green">● Python 3.11+</span>
     <span class="badge blue">● SSE Streaming</span>
@@ -324,7 +324,7 @@
 <div class="section" id="overview">
   <h2><span class="icon">🗺️</span> Platform Overview</h2>
   <p>KDCube is a <strong>multi-tenant AI application platform</strong>. It provides the infrastructure for deploying conversational AI agents at scale — with streaming, storage, economics, tooling, and extensibility all built in.</p>
-  <p>A <strong>Bundle</strong> is your unit of deployment. It's a Python package that plugs into the platform and defines how your AI agent thinks, what tools it uses, how it stores data, what UI widgets it exposes, and how it bills users.</p>
+  <p>A <strong>bundle</strong> is the deployable application package in KDCube. It defines how your agent thinks, what tools it uses, how it stores data, what widgets or APIs it exposes, and how it applies economics and runtime policy.</p>
 
   <div class="callout info">
     <span class="callout-icon">💡</span>
@@ -624,7 +624,7 @@ BUNDLE_ID = <span class="str">"my-bundle"</span>
     <table>
       <thead><tr><th>Method / Property</th><th>When Called</th><th>Typical Use</th></tr></thead>
       <tbody>
-        <tr><td><code>configuration</code> (property)</td><td>On bundle load</td><td>Declare defaults: role_models, embedding, knowledge, economics, execution</td></tr>
+        <tr><td><code>configuration</code> (property)</td><td>On bundle load</td><td>Declare defaults: role_models, embedding, react, knowledge, economics, execution</td></tr>
         <tr><td><code>on_bundle_load(**kwargs)</code></td><td>Once per process, per tenant/project</td><td>Build knowledge index, connect external services, warm caches</td></tr>
         <tr><td><code>pre_run_hook(state)</code></td><td>Before each turn</td><td>Re-reconcile knowledge space if config changed</td></tr>
         <tr><td><code>execute_core(state, thread_id, params)</code></td><td>Every turn</td><td>Build + invoke your LangGraph workflow</td></tr>
@@ -679,10 +679,31 @@ BUNDLE_ID = <span class="str">"my-bundle"</span>
 <span class="cm"># Final complete signal</span>
 <span class="kw">await</span> self.comm.complete(data={<span class="str">"answer"</span>: <span class="str">"..."</span>})</code></pre>
 
-  <h3>REST Operations (for UI Widgets)</h3>
-  <p>Your bundle exposes additional REST operations via the <strong>Operations API</strong> hosted by the Processor:</p>
-  <pre><code>POST /bundles/{tenant}/{project}/operations/{operation}</code></pre>
-  <p>The platform calls <code>your_workflow.{operation}(**request_body)</code>. Define operations as async methods in your workflow or entrypoint. This is how UI widgets communicate back to your bundle (see <a href="#widgets">Widgets / UI</a>).</p>
+  <h3>REST Operations and Widget Endpoints</h3>
+  <p>Your bundle exposes explicit REST and UI surfaces through decorator-discovered interface metadata hosted by the Processor:</p>
+  <pre><code>GET  /api/integrations/bundles/{tenant}/{project}/{bundle_id}
+GET  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets
+GET  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget}
+POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}
+GET  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}
+POST /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/{operation}</code></pre>
+  <p>The explicit <code>bundle_id</code> path is now the preferred form. Route resolution comes from decorators on the bundle class, not from assuming every operation is an arbitrary workflow method.</p>
+
+  <h3>Bundle Interface Decorators</h3>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Decorator</th><th>Attaches To</th><th>Purpose</th><th>Key args</th></tr></thead>
+      <tbody>
+        <tr><td><code>@agentic_workflow(...)</code></td><td>class</td><td>Marks the bundle entrypoint for loader discovery</td><td><code>name</code>, <code>version</code>, <code>priority</code></td></tr>
+        <tr><td><code>@bundle_id(...)</code></td><td>class</td><td>Declares the canonical bundle id from code</td><td><code>id</code></td></tr>
+        <tr><td><code>@ui_widget(...)</code></td><td>method</td><td>Declares a UI widget discoverable under widget endpoints</td><td><code>icon</code>, <code>alias</code>, <code>roles</code></td></tr>
+        <tr><td><code>@api(...)</code></td><td>method</td><td>Declares a bundle API under <code>/operations/{operation}</code> or <code>/public/{operation}</code></td><td><code>method</code>, <code>alias</code>, <code>route</code>, <code>roles</code>, <code>public_auth</code></td></tr>
+        <tr><td><code>@ui_main</code></td><td>method</td><td>Marks the bundle’s main UI entrypoint returned in the interface manifest</td><td>no args</td></tr>
+        <tr><td><code>@on_message</code></td><td>method</td><td>Marks the live message-entry method the proc/web layer routes to</td><td>no args</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The runtime scans these decorators and builds a typed interface manifest. Only decorated methods are remotely callable.</p>
 
   <h3>Continuation Types</h3>
   <div class="table-wrap">
@@ -690,8 +711,8 @@ BUNDLE_ID = <span class="str">"my-bundle"</span>
       <thead><tr><th>Type</th><th>Description</th></tr></thead>
       <tbody>
         <tr><td><code>regular</code></td><td>Normal new message</td></tr>
-        <tr><td><code>followup</code></td><td>User clicked a suggested follow-up</td></tr>
-        <tr><td><code>steer</code></td><td>User is redirecting the ongoing turn</td></tr>
+        <tr><td><code>followup</code></td><td>User clicked a suggested follow-up; live React turns can continue the current turn instead of opening a separate one</td></tr>
+        <tr><td><code>steer</code></td><td>User is redirecting the ongoing turn; live React turns interrupt at the next safe checkpoint</td></tr>
       </tbody>
     </table>
   </div>
@@ -789,6 +810,10 @@ val = <span class="kw">await</span> self.redis.get(<span class="str">"my:key"</s
           <span class="kw">solver.react.v2.decision.v2.strong</span>:
             <span class="kw">provider</span>: <span class="str">"anthropic"</span>
             <span class="kw">model</span>: <span class="str">"claude-sonnet-4-6"</span>
+        <span class="kw">react</span>:
+          <span class="kw">additional_instructions</span>: |
+            <span class="str">Prefer concise executive summaries.</span>
+            <span class="str">When the user wants a polished document, prefer PDF/DOCX/PPTX over raw Markdown.</span>
         <span class="kw">economics</span>:
           <span class="kw">reservation_amount_dollars</span>: <span class="num">2.0</span>
         <span class="kw">execution</span>:
@@ -833,6 +858,7 @@ api_key = get_secret(<span class="str">"bundles.my-bundle@1-0.secrets.my_service
       <thead><tr><th>Path</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>role_models</code></td><td>Maps logical agent roles → concrete LLM (provider + model)</td></tr>
+        <tr><td><code>react.additional_instructions</code></td><td>Optional extra system-prompt instructions appended to the ReAct decision agent at runtime</td></tr>
         <tr><td><code>embedding</code></td><td>Embedding provider/model for RAG and vector search</td></tr>
         <tr><td><code>economics.reservation_amount_dollars</code></td><td>Pre-run cost reservation floor (default 2.0)</td></tr>
         <tr><td><code>execution.runtime</code></td><td>Code exec configuration (Docker, Fargate)</td></tr>
@@ -861,6 +887,7 @@ api_key = get_secret(<span class="str">"bundles.my-bundle@1-0.secrets.my_service
                 scratchpad=scratchpad,
                 tools_module=<span class="str">"my_bundle.tools_descriptor"</span>,
                 skills_module=<span class="str">"my_bundle.skills_descriptor"</span>,
+                additional_instructions=self.bundle_prop(<span class="str">"react.additional_instructions"</span>),
             )
             result = <span class="kw">await</span> react.run(payload)
             self.finish_turn(scratchpad, ok=<span class="kw">True</span>)
@@ -874,6 +901,7 @@ api_key = get_secret(<span class="str">"bundles.my-bundle@1-0.secrets.my_service
       <strong>Use <code>BaseWorkflow</code> for the quickest path.</strong> It wires up ConvMemories, TurnStatus, ContextRAG, ApplicationHosting, and gives you <code>build_react()</code> which assembles the full ReAct agent with all tools and skills resolved.
     </div>
   </div>
+  <p>If <code>react.additional_instructions</code> is present in bundle props, <code>build_react(...)</code> can append it directly to the React decision system prompt for that bundle. This is the clean way to add deploy-scoped steering without forking the base runtime.</p>
 
   <h3>BaseWorkflow Key Parameters</h3>
   <div class="table-wrap">
@@ -1522,7 +1550,7 @@ According to multiple sources [[S:1-4]], the trend is clear.</code></pre>
 <!-- ═══════════════════════════════════════ WIDGETS -->
 <div class="section" id="widgets">
   <h2><span class="icon">🖼️</span> Widgets &amp; Custom UI</h2>
-  <p>Your bundle can expose <strong>React SPA widgets</strong> embedded in the platform UI. Define an operation that returns HTML (a React app), and the UI renders it. The React app can in turn call back to <code>POST /operations/{op}</code> for any further interactions.</p>
+  <p>Your bundle can expose <strong>decorated widgets, bundle APIs, and a custom main UI</strong>. Widgets are declared with <code>@ui_widget</code>, bundle APIs with <code>@api</code>, and a bundle-wide SPA shell with <code>@ui_main</code>. The UI discovers these surfaces from the bundle manifest instead of hardcoded platform lists.</p>
 
   <div class="svg-wrap">
   <svg viewBox="0 0 780 150" xmlns="http://www.w3.org/2000/svg" style="max-width:780px;">
@@ -1541,44 +1569,48 @@ According to multiple sources [[S:1-4]], the trend is clear.</code></pre>
     <text x="80" y="87" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Renders widget</text>
 
     <line x1="143" y1="72" x2="185" y2="72" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wwa)"/>
-    <text x="164" y="63" text-anchor="middle" fill="#01BEB2" font-size="9.5" font-family="Inter" font-weight="600">POST /operations/{op}</text>
+    <text x="164" y="63" text-anchor="middle" fill="#01BEB2" font-size="9.5" font-family="Inter" font-weight="600">GET /widgets/{alias}</text>
 
     <rect x="185" y="35" width="170" height="75" rx="8" fill="white" stroke="#6B63FE" stroke-width="1.5"/>
     <text x="270" y="60" text-anchor="middle" fill="#5b21b6" font-size="12" font-family="Inter" font-weight="700">Proc Operations API</text>
-    <text x="270" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">/bundles/{t}/{p}/</text>
-    <text x="270" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">operations/{op}</text>
+    <text x="270" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">/api/integrations/bundles/</text>
+    <text x="270" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">{t}/{p}/{b}/widgets | operations</text>
 
     <line x1="355" y1="72" x2="397" y2="72" stroke="#01BEB2" stroke-width="1.5" marker-end="url(#wwa)"/>
 
     <rect x="397" y="35" width="145" height="75" rx="8" fill="white" stroke="#52B044" stroke-width="1.5"/>
     <text x="469" y="60" text-anchor="middle" fill="#065f46" font-size="12" font-family="Inter" font-weight="700">Your Bundle</text>
-    <text x="469" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">workflow.{op}()</text>
-    <text x="469" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">returns HTML/SPA</text>
+    <text x="469" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">@ui_widget / @ui_main</text>
+    <text x="469" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">@api / @on_message</text>
 
     <line x1="542" y1="72" x2="584" y2="72" stroke="#38B8C8" stroke-width="1.5" marker-end="url(#wwa2)"/>
 
     <rect x="584" y="35" width="170" height="75" rx="8" fill="white" stroke="#38B8C8" stroke-width="1.5"/>
-    <text x="669" y="60" text-anchor="middle" fill="#0e7490" font-size="12" font-family="Inter" font-weight="700">React SPA</text>
+    <text x="669" y="60" text-anchor="middle" fill="#0e7490" font-size="12" font-family="Inter" font-weight="700">Widget / Main View</text>
     <text x="669" y="78" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Rendered in UI panel</text>
-    <text x="669" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Calls back /operations</text>
+    <text x="669" y="94" text-anchor="middle" fill="#3A5672" font-size="10" font-family="Inter">Calls GET/POST /operations</text>
 
     <!-- loop arrow from SPA back to UI panel -->
     <path d="M 669 110 Q 669 135 80 135 Q 18 135 18 100" stroke="#94a3b8" stroke-width="1" fill="none" stroke-dasharray="4,3" marker-end="url(#wwa)"/>
-    <text x="380" y="132" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-family="Inter">SPA can POST to /operations for further actions</text>
+    <text x="380" y="132" text-anchor="middle" fill="#94a3b8" font-size="9.5" font-family="Inter">UI can call bundle APIs on the same explicit bundle_id path</text>
   </svg>
   </div>
 
-  <h3>Example: Return a React SPA</h3>
-  <pre><code><span class="kw">async def</span> <span class="fn">my_dashboard</span>(self, **kwargs) -> dict:
-    <span class="str">"""My Dashboard widget — loaded by UI when user clicks the button."""</span>
-    html = <span class="str">"""&lt;!DOCTYPE html&gt;&lt;html&gt;&lt;body&gt;
-      &lt;div id="root"&gt;&lt;/div&gt;
-      &lt;script&gt;
-        // Your bundled React app
-        // Can POST back to /bundles/{tenant}/{project}/operations/my_api
-      &lt;/script&gt;
-    &lt;/body&gt;&lt;/html&gt;"""</span>
-    <span class="kw">return</span> {<span class="str">"html"</span>: html, <span class="str">"content_type"</span>: <span class="str">"text/html"</span>}</code></pre>
+  <h3>Example: Declare widget, API, and main-view entrypoints</h3>
+  <pre><code><span class="kw">from</span> kdcube_ai_app.infra.plugin.agentic_loader <span class="kw">import</span> api, ui_widget, ui_main
+
+<span class="dec">@ui_widget</span>(icon={<span class="str">"tailwind"</span>: <span class="str">"heroicons-outline:swatch"</span>}, alias=<span class="str">"dashboard"</span>, roles=(<span class="str">"registered"</span>, <span class="str">"admin"</span>))
+<span class="kw">def</span> <span class="fn">dashboard_widget</span>(self, **kwargs):
+    <span class="kw">return</span> [<span class="str">"&lt;div id='root'&gt;&lt;/div&gt;"</span>]
+
+<span class="dec">@api</span>(alias=<span class="str">"refresh_dashboard"</span>, method=<span class="str">"POST"</span>, roles=(<span class="str">"registered"</span>, <span class="str">"admin"</span>))
+<span class="kw">def</span> <span class="fn">refresh_dashboard</span>(self, **kwargs):
+    <span class="kw">return</span> {<span class="str">"ok"</span>: <span class="kw">True</span>}
+
+<span class="dec">@ui_main</span>
+<span class="kw">def</span> <span class="fn">main_view</span>(self, **kwargs):
+    <span class="kw">return</span> [<span class="str">"&lt;div id='app'&gt;&lt;/div&gt;"</span>]</code></pre>
+  <p>Bundle-scoped frontend assets can also be served directly through <code>GET /api/integrations/static/{tenant}/{project}/{bundle_id}/{path}</code>. For legacy clients that still call widget content through an operations route, decorate the same method with both <code>@ui_widget</code> and <code>@api</code>.</p>
 
   <h3>Platform Built-in Operations</h3>
   <div class="table-wrap">
@@ -1630,7 +1662,7 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
       <div class="step-num">4</div>
       <div class="step-content">
         <h4>Set as default bundle via the Admin Dashboard</h4>
-        <p>Open the <strong>AI Bundle Dashboard</strong> (<code>/api/integrations/bundles/{tenant}/{project}/operations/ai_bundle</code>). Your registered bundle appears in the list. Set it as the <code>default_bundle_id</code> for the tenant/project. The change is applied immediately via Redis — no restart needed.</p>
+        <p>Open the <strong>AI Bundle Dashboard</strong> (<code>/api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/ai_bundle</code>). Your registered bundle appears in the list. Set it as the <code>default_bundle_id</code> for the tenant/project. The change is applied immediately via Redis — no restart needed.</p>
       </div>
     </li>
   </ol>
@@ -1648,6 +1680,40 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
       </tbody>
     </table>
   </div>
+
+  <h3>Fast Local Bundle Prototyping</h3>
+  <p>KDCube supports a descriptor-driven local bundle workflow optimized for fast iteration. Install once from descriptors, edit the bundle locally under the mounted bundles root, then reload just that bundle without reinstalling the platform.</p>
+  <pre><code># one-time install
+kdcube --descriptors-location /path/to/descriptors --build
+
+# then during development
+# edit files under assembly.paths.host_bundles_path
+kdcube --workdir ~/.kdcube/kdcube-runtime --bundle-reload my.bundle@1.0.0</code></pre>
+  <p>Use this flow for local code changes, descriptor-backed config edits, and quick widget/API iteration. The reload command replays the active descriptor, clears the bundle cache, and makes the next request load the updated code.</p>
+
+  <h3>Bundle-Scoped <code>@venv(...)</code> Helpers</h3>
+  <p>Bundles can mark dependency-heavy helper functions with <code>@venv(...)</code>. The platform creates a cached per-bundle subprocess venv, overlays the runtime packages already present in proc, then installs the bundle's <code>requirements.txt</code> on top.</p>
+  <pre><code><span class="kw">from</span> kdcube_ai_app.infra.plugin.agentic_loader <span class="kw">import</span> api, venv
+
+<span class="dec">@venv</span>(requirements=<span class="str">"requirements.txt"</span>, timeout_seconds=<span class="num">120</span>)
+<span class="kw">def</span> <span class="fn">parse_external_document</span>(payload: dict) -> dict:
+    ...
+
+<span class="kw">class</span> <span class="cls">MyBundle</span>(BaseEntrypoint):
+    <span class="dec">@api</span>(alias=<span class="str">"ingest_document"</span>, route=<span class="str">"operations"</span>)
+    <span class="kw">async def</span> <span class="fn">ingest_document</span>(self, **kwargs):
+        <span class="kw">return</span> parse_external_document(kwargs)</code></pre>
+  <p><strong>Boundary rule:</strong> keep communicator use, request context, DB pools, Redis clients, and other live proc-bound runtime objects outside the venv helper.</p>
+
+  <h3>Bundle-Scheduled <code>@cron(...)</code> Jobs</h3>
+  <p>Bundles can declare proc-owned scheduled jobs directly in bundle code with <code>@cron(...)</code>. This is the native way to bind periodic bundle logic to the platform lifecycle without a separate external scheduler.</p>
+  <pre><code><span class="kw">from</span> kdcube_ai_app.infra.plugin.agentic_loader <span class="kw">import</span> cron
+
+<span class="kw">class</span> <span class="cls">NewsBundle</span>(BaseEntrypoint):
+    <span class="dec">@cron</span>(alias=<span class="str">"compile-news-digest"</span>, cron_expression=<span class="str">"0 6 * * *"</span>, span=<span class="str">"system"</span>)
+    <span class="kw">async def</span> <span class="fn">compile_news_digest</span>(self):
+        ...</code></pre>
+  <p>The shipped contract is <code>@cron(alias=..., cron_expression=..., expr_config=..., span=...)</code>. Use <code>expr_config</code> when the schedule should come from bundle props and <code>cron_expression</code> for inline defaults.</p>
 </div>
 
 <!-- ═══════════════════════════════════════ EXAMPLES -->
@@ -1657,21 +1723,16 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
     <table>
       <thead><tr><th>Bundle ID</th><th>What It Shows</th><th>Key Features</th></tr></thead>
       <tbody>
-        <tr><td><code>react@2026-02-10-02-44</code></td><td>Basic ReAct + economics</td><td>BaseEntrypointWithEconomics, quota policies, web search, news, suggestions</td></tr>
-        <tr><td><code>kdcube.copilot@2026-04-03-19-05</code></td><td>Docs reader with knowledge space</td><td>Knowledge space (docs/src/deploy), file locking, signature caching</td></tr>
-        <tr><td><code>react.mcp@2026-03-09</code></td><td>ReAct with MCP tools</td><td>MCP server integration, custom tool namespacing</td></tr>
-        <tr><td><code>openrouter-data@2026-03-11</code></td><td>OpenRouter LLM provider</td><td>OpenRouter integration, model switching, data analysis</td></tr>
-        <tr><td><code>with-isoruntime@2026-02-16</code></td><td>Isolated exec runtime</td><td>Docker exec, code generation + execution, file output</td></tr>
-        <tr><td><code>customer@marketing</code></td><td>Real-world external bundle</td><td>Economics, complex orchestration, custom widgets, news API operation</td></tr>
+        <tr><td><code>versatile@2026-03-31-13-36</code></td><td>Reference bundle for SDK and integrations docs</td><td>ReAct agent, bundle-local tools, MCP tools, widget decorators, integrations operations, custom main UI under <code>ui-src/</code>, and economics-aware entrypoint patterns</td></tr>
       </tbody>
     </table>
   </div>
 
   <details>
-    <summary>kdcube.copilot — Knowledge Space pattern deep-dive</summary>
+    <summary>versatile — widgets, operations, and custom main-view pattern</summary>
     <div class="details-body">
-      <p>Builds the index in <code>on_bundle_load()</code> with file locking (multi-worker safe) and signature-based caching (skip rebuilds when nothing changed). Reconciles on config change in <code>pre_run_hook()</code>. The agent searches with <code>ks:</code> paths via <code>react.search_knowledge</code> and <code>react.read</code>.</p>
-      <p><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot%402026-04-03-19-05/entrypoint.py" target="_blank">View entrypoint.py on GitHub →</a></p>
+      <p>The versatile sample shows how one bundle can combine a standard ReAct conversation workflow with decorated widget endpoints, bundle APIs, and a custom SPA main view. It is the best current reference for how entrypoint methods, <code>tools_descriptor.py</code>, and <code>ui-src/</code> fit together.</p>
+      <p><a href="https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile%402026-03-31-13-36/entrypoint.py" target="_blank">View entrypoint.py on GitHub →</a></p>
     </div>
   </details>
 </div>
@@ -1745,19 +1806,34 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
       <thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>
       <tbody>
         <tr>
-          <td><strong>Dynamic widget buttons</strong></td>
-          <td><span class="pill soon">Soon</span></td>
-          <td>Bundle declares widget list in props (<code>widgets: [{id, label, icon}]</code>); UI reads it and renders buttons dynamically — no hardcoding on the platform side needed. Requires adding <code>widgets</code> to the bundle props schema and updating the frontend bundle selector.</td>
+          <td><strong>Bundle-declared widgets</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundles now mark their UI widgets explicitly with <code>@ui_widget</code>. The platform exposes that widget manifest via <code>GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}</code> and <code>/widgets</code>, so frontends can render bundle-defined widget launchers directly from discovered metadata instead of hardcoded platform lists.</td>
         </tr>
         <tr>
           <td><strong>Custom main view</strong></td>
-          <td><span class="pill soon">Soon</span></td>
-          <td>Bundle can override the default chat view with a custom HTML/SPA — ideal for dashboards and data-driven UIs that don't need SSE. Requires <code>main_view.operation</code> in bundle props and frontend reading it to render an operation result instead of the chat panel.</td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundles can override the default chat surface with a custom main UI via the reserved <code>ui.main_view</code> config and a discovered <code>@ui_main</code> entrypoint. This is not limited to static dashboards: a bundle main view can be a full SPA using REST, SSE streaming, widgets, downloads, and richer client behavior.</td>
         </tr>
         <tr>
           <td><strong>Static asset serving from bundle</strong></td>
-          <td><span class="pill partial">Available now</span></td>
-          <td>A bundle can already serve static files (CSS, JS, images) by encoding them in an operation endpoint that reads from its own package. Adding a GET variant to the Operations API (alongside the existing POST) would make this cleaner — a small extension that can be done now.</td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundle-scoped static files can now be served directly via <code>GET /api/integrations/static/{tenant}/{project}/{bundle_id}/{path}</code>. GET operations are also available for idempotent bundle APIs under <code>/operations/{operation}</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Anonymous public bundle APIs</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundle APIs can now be exposed under <code>/public/{operation}</code> through <code>@api(..., route="public")</code>. Public methods must declare <code>public_auth</code>; current built-in modes are explicit open access (<code>"none"</code>) and shared-secret header verification for webhook providers.</td>
+        </tr>
+        <tr>
+          <td><strong>Bundle endpoints RBAC</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundle endpoint visibility and access are governed by decorator metadata. Bundle listing honors bundle-level <code>allowed_roles</code>, while per-method <code>roles</code> on <code>@api</code> and <code>@ui_widget</code> control which operations and widgets are visible and callable for a given user.</td>
+        </tr>
+        <tr>
+          <td><strong>Admin bundle interface enrichment</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td><code>/api/admin/integrations/bundles</code> now returns registry metadata enriched with scanned bundle manifest data such as <code>widgets</code>, <code>apis</code>, and <code>on_message</code>. This gives admins a control-plane view of what a bundle exposes without opening the bundle code.</td>
         </tr>
         <tr>
           <td><strong>Bundle marketplace</strong></td>
@@ -1765,14 +1841,54 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
           <td>Browse and install community bundles from a registry.</td>
         </tr>
         <tr>
+          <td><strong>Local bundle dev fast prototyping</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Descriptor-driven local development now has a first-class fast path. Point <code>assembly.yaml</code> at <code>paths.host_bundles_path</code>, define the bundle in <code>bundles.yaml</code> with a container path under <code>/bundles</code>, install once with <code>kdcube --descriptors-location ... --build</code>, then iterate with <code>kdcube --bundle-reload &lt;bundle_id&gt;</code>.</td>
+        </tr>
+        <tr>
           <td><strong>Live bundle reload</strong></td>
           <td><span class="pill avail">Available</span></td>
-          <td>Bundle code is loaded per-process and cached as a singleton. Config updates (bundle props, role_models, etc.) propagate immediately via Redis pub/sub. Restarting the processor picks up any code changes.</td>
+          <td>Bundle code is loaded per-process and cached as a singleton, but local development no longer depends on restarting proc. Config overrides propagate immediately via Redis, and descriptor-backed local changes can be picked up with <code>kdcube --workdir &lt;runtime-workdir&gt; --bundle-reload &lt;bundle_id&gt;</code>, which replays the active descriptor and clears the bundle cache for the next request.</td>
         </tr>
         <tr>
           <td><strong>Bundle versioning</strong></td>
           <td><span class="pill avail">Available</span></td>
           <td>Update the <code>ref</code> (branch/tag/commit) in <code>bundles.yaml</code> or via the Admin API and the change applies immediately to new requests — no downtime. The bundle registry is stored in Redis and updated atomically.</td>
+        </tr>
+        <tr>
+          <td><strong>Bundle-scoped <code>@venv</code> helpers</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundles can run selected dependency-heavy helper functions in a cached per-bundle subprocess venv. The venv inherits the platform runtime packages, installs the bundle's <code>requirements.txt</code> on top, and rebuilds only when the requirements hash changes.</td>
+        </tr>
+        <tr>
+          <td><strong>Bundle-scheduled <code>@cron</code> jobs</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundles can declare scheduled jobs directly in bundle code with <code>@cron(alias=..., cron_expression=..., expr_config=..., span=...)</code>. The scheduler resolves <code>expr_config</code> first, falls back to inline <code>cron_expression</code> only when no config path is declared, and supports <code>process</code>, <code>instance</code>, and <code>system</code> exclusivity spans.</td>
+        </tr>
+        <tr>
+          <td><strong>Git-backed React workspace</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>React now supports a git workspace backend with sparse current-turn repos, lineage-isolated history, explicit historical materialization via <code>react.pull(...)</code>, and active workspace construction via <code>react.checkout(mode="replace"|"overlay", ...)</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Per-bundle React runtime instructions</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundles can append deploy-scoped prompt guidance to the React decision agent through <code>react.additional_instructions</code>. This is useful for bundle-specific style, output-format, or domain guardrails without forking the base system prompt.</td>
+        </tr>
+        <tr>
+          <td><strong>Claude Code agent integration</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundles can integrate the Claude Code agent as an accountable LLM runtime, including per-turn model, token, cache, and spend reporting plus optional git-backed session continuity.</td>
+        </tr>
+        <tr>
+          <td><strong>Interactive steer / followup execution</strong></td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Busy-turn <code>followup</code> and <code>steer</code> are implemented end to end for React. Ingress writes them into the shared external-event source, the live React runtime folds them into the current timeline when it owns the turn, <code>followup</code> continues the current turn, and <code>steer</code> interrupts at the next safe checkpoint.</td>
+        </tr>
+        <tr>
+          <td><strong>KDCube bundle-copilot</strong></td>
+          <td><span class="pill partial">Partial</span></td>
+          <td>The bundle-copilot foundation already exists as a React-based coding bundle and can help scaffold or evolve bundle code. The remaining work is to complete the product experience for bundle builders.</td>
         </tr>
         <tr>
           <td><strong>Multi-bundle conversations</strong></td>
@@ -1781,16 +1897,16 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
         </tr>
         <tr>
           <td><strong>Streaming SSE for operations</strong></td>
-          <td><span class="pill soon">Soon</span></td>
-          <td>Today, widget operations are synchronous REST POST. Adding an SSE channel for operations would allow widgets to stream responses back — enabling live-updating dashboards and progress indicators from widget calls.</td>
+          <td><span class="pill avail">Available</span></td>
+          <td>Bundle operations can already stream to connected clients. REST calls can target the initiating peer with <code>KDC-Stream-ID</code>, and bundle code can emit deltas, steps, and widget updates through the communicator over SSE or Socket.IO while the operation is still running.</td>
         </tr>
       </tbody>
     </table>
   </div>
 
   <div class="coming-soon-banner">
-    <h3>🎯 Priority: Dynamic Widget Registry + Custom Main View</h3>
-    <p>These two features together unlock fully self-describing bundles — a bundle that declares its own UI surface, widgets, and main view without any platform-side configuration. We're reviewing the cleanest implementation path now.</p>
+    <h3>🎯 Priority: Steer / Followup + KDCube Bundle Copilot</h3>
+    <p>The next high-value product work is to deepen the KDCube bundle-copilot experience so developers can create and evolve bundles directly inside the platform, and to extend the shared conversation event surface beyond <code>followup</code> / <code>steer</code> to richer operator, service, and workflow-originated inputs.</p>
   </div>
 
   <div class="callout info">
@@ -1802,8 +1918,8 @@ kdcube --secrets-prompt  <span class="cm"># for LLM keys</span></code></pre>
 </div><!-- /container -->
 
 <footer>
-  <p>KDCube Bundle Developer Portal &nbsp;·&nbsp; <a href="https://github.com/kdcube/kdcube-ai-app" target="_blank">GitHub</a> &nbsp;·&nbsp; MIT License</p>
-  <p style="margin-top:0.5rem;color:#94a3b8;">Built with care for bundle developers.</p>
+  <p>KDCube Application SDK &nbsp;·&nbsp; <a href="https://github.com/kdcube/kdcube-ai-app" target="_blank">GitHub</a> &nbsp;·&nbsp; MIT License</p>
+  <p style="margin-top:0.5rem;color:#94a3b8;">Built for application and bundle developers.</p>
 </footer>
 
 <script>
