@@ -57,6 +57,12 @@ echo "[entrypoint] Switching to user $APPUSER (UID $APPUSER_UID)"
 # Ensure appuser owns the exec workspace (volume overrides image ownership)
 chown -R appuser:appuser /exec-workspace || true
 
+# Ensure appuser owns the git bundle cache root when it is bind-mounted from host.
+GIT_BUNDLES_ROOT="${AGENTIC_GIT_BUNDLES_ROOT:-/git-bundles}"
+if [ -d "$GIT_BUNDLES_ROOT" ]; then
+    chown -R appuser:appuser "$GIT_BUNDLES_ROOT" || true
+fi
+
 # Ensure appuser can access git SSH materials (used for git bundles)
 GIT_KEY_SRC="/run/secrets/git_ssh_key"
 GIT_KNOWN_HOSTS_SRC="/run/secrets/git_known_hosts"
