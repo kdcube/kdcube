@@ -87,6 +87,19 @@ def test_resolve_git_bundles_root_falls_back_to_legacy_root(monkeypatch, tmp_pat
     assert git_bundle.resolve_git_bundles_root() == legacy_root.resolve()
 
 
+def test_atomic_dir_name_is_unique_tmp_workspace(monkeypatch):
+    monkeypatch.setattr(git_bundle.os, "getpid", lambda: 42)
+    sequence = iter([1001, 1002])
+    monkeypatch.setattr(git_bundle.time, "time_ns", lambda: next(sequence))
+
+    first = git_bundle._atomic_dir_name("bundle-root")
+    second = git_bundle._atomic_dir_name("bundle-root")
+
+    assert first == ".bundle-root.tmp-42-1001"
+    assert second == ".bundle-root.tmp-42-1002"
+    assert first != second
+
+
 def test_ensure_git_bundle_skips_pull_for_detached_ref(monkeypatch, tmp_path):
     calls: list[list[str]] = []
 

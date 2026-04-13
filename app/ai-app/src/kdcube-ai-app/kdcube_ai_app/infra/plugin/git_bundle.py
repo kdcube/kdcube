@@ -162,8 +162,7 @@ def _sanitize_ref(ref: str) -> str:
     return safe or "head"
 
 def _atomic_dir_name(base_dir: str) -> str:
-    ts = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
-    return f"{base_dir}__{ts}"
+    return f".{base_dir}.tmp-{os.getpid()}-{time.time_ns()}"
 
 def _lock_dir(root: pathlib.Path) -> pathlib.Path:
     lock_dir = root / ".bundle-locks"

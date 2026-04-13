@@ -390,6 +390,77 @@ def _delete_nested(dct: Dict[str, object], keys: List[str]) -> None:
         else:
             break
 
+
+def _upsert_bundle_secret(
+    bundles_secrets_data: Dict[str, object],
+    *,
+    bundle_id: str,
+    secret_path: List[str],
+    value: object,
+) -> None:
+    bundles_block = bundles_secrets_data.setdefault("bundles", {})
+    if not isinstance(bundles_block, dict):
+        bundles_block = {}
+        bundles_secrets_data["bundles"] = bundles_block
+    items = bundles_block.setdefault("items", [])
+    if not isinstance(items, list):
+        items = []
+        bundles_block["items"] = items
+
+    bundle_item: Optional[Dict[str, object]] = None
+    for raw in items:
+        if isinstance(raw, dict) and str(raw.get("id") or "") == bundle_id:
+            bundle_item = raw
+            break
+    if bundle_item is None:
+        bundle_item = {"id": bundle_id, "secrets": {}}
+        items.append(bundle_item)
+
+    secrets_block = bundle_item.setdefault("secrets", {})
+    if not isinstance(secrets_block, dict):
+        secrets_block = {}
+        bundle_item["secrets"] = secrets_block
+    _set_nested(secrets_block, secret_path, value)
+
+
+def apply_runtime_secrets_to_file_descriptors(
+    *,
+    config_dir: Path,
+    runtime_secrets: Dict[str, str],
+) -> None:
+    if not runtime_secrets:
+        return
+
+    secrets_path = config_dir / "secrets.yaml"
+    bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+
+    secrets_data = load_release_descriptor(secrets_path) if secrets_path.exists() else {}
+    bundles_secrets_data = (
+        load_release_descriptor(bundles_secrets_path)
+        if bundles_secrets_path.exists()
+        else {"bundles": {"items": []}}
+    )
+
+    for key, value in runtime_secrets.items():
+        parts = [part for part in str(key or "").split(".") if part]
+        if not parts:
+            continue
+        if len(parts) >= 4 and parts[0] == "bundles" and parts[2] == "secrets":
+            if parts[-1] == "__keys":
+                continue
+            _upsert_bundle_secret(
+                bundles_secrets_data,
+                bundle_id=parts[1],
+                secret_path=parts[3:],
+                value=value,
+            )
+            continue
+        _set_nested(secrets_data, parts, value)
+
+    save_release_descriptor(secrets_path, secrets_data)
+    save_release_descriptor(bundles_secrets_path, bundles_secrets_data)
+
+
 def _has_nested(dct: Dict[str, object], *keys: str) -> bool:
     cur: object = dct
     for key in keys:
@@ -2587,7 +2658,11 @@ def gather_configuration(
 
     _autosave()
 
-    git_token_from_secrets = _secret_pick(("git", "http_token"), ("git_http_token",))
+    git_token_from_secrets = _secret_pick(
+        ("services", "git", "http_token"),
+        ("git", "http_token"),
+        ("git_http_token",),
+    )
     env_http = env_proc.entries.get("GIT_HTTP_TOKEN", (None, None))[1]
     existing_ssh = env_proc.entries.get("GIT_SSH_KEY_PATH", (None, None))[1]
     if env_http and not is_placeholder(env_http):
@@ -3445,6 +3520,12 @@ def run_setup(
                     env=compose_env(runtime_env),
                 )
                 apply_runtime_secrets(console, ctx, runtime_secrets, runtime_env)
+            elif runtime_secrets and runtime_secrets_provider == "secrets-file":
+                apply_runtime_secrets_to_file_descriptors(
+                    config_dir=config_dir,
+                    runtime_secrets=runtime_secrets,
+                )
+                console.print("[dim]Applied runtime secrets to staged secrets-file descriptors.[/dim]")
             elif runtime_secrets:
                 console.print(
                     f"[yellow]Runtime secret injection is only supported for the secrets-service provider; "

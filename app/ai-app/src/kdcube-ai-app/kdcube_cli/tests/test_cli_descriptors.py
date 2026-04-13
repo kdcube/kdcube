@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import yaml
 from rich.console import Console
 
 from kdcube_cli.cli import (
@@ -7,7 +8,11 @@ from kdcube_cli.cli import (
     _load_bundle_ids_from_descriptor,
 )
 from kdcube_cli import export_live_bundles as export_mod
-from kdcube_cli.installer import PathsContext, gather_configuration
+from kdcube_cli.installer import (
+    PathsContext,
+    apply_runtime_secrets_to_file_descriptors,
+    gather_configuration,
+)
 
 
 def test_descriptor_fast_path_accepts_complete_release_descriptor():
@@ -480,6 +485,47 @@ def test_gather_configuration_treats_null_redis_secret_as_unset(monkeypatch, tmp
     assert "REDIS_PASSWORD=\n" in env_main or env_main.endswith("REDIS_PASSWORD=")
     assert "REDIS_URL=redis://redis.example.internal:6379/0" in env_ingress
     assert "redis://:redispass@" not in env_ingress
+
+
+def test_apply_runtime_secrets_to_file_descriptors_updates_secrets_files(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "secrets.yaml").write_text(
+        """
+git:
+  http_token: legacy-token
+""".strip()
+    )
+    (config_dir / "bundles.secrets.yaml").write_text(
+        """
+bundles:
+  items:
+    - id: demo-bundle
+      secrets:
+        existing:
+          key: value
+""".strip()
+    )
+
+    apply_runtime_secrets_to_file_descriptors(
+        config_dir=config_dir,
+        runtime_secrets={
+            "services.git.http_token": "new-token",
+            "services.git.http_user": "x-access-token",
+            "bundles.demo-bundle.secrets.api.token": "abc",
+            "bundles.demo-bundle.secrets.__keys": "[\"ignored\"]",
+        },
+    )
+
+    secrets_data = yaml.safe_load((config_dir / "secrets.yaml").read_text())
+    bundles_secrets_data = yaml.safe_load((config_dir / "bundles.secrets.yaml").read_text())
+
+    assert secrets_data["services"]["git"]["http_token"] == "new-token"
+    assert secrets_data["services"]["git"]["http_user"] == "x-access-token"
+    items = bundles_secrets_data["bundles"]["items"]
+    bundle_item = next(item for item in items if item["id"] == "demo-bundle")
+    assert bundle_item["secrets"]["existing"]["key"] == "value"
+    assert bundle_item["secrets"]["api"]["token"] == "abc"
 
 
 def test_resolve_aws_sm_prefix_defaults_from_tenant_project():
