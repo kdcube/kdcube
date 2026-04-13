@@ -246,27 +246,30 @@ async def _on_relay(self, message: dict):
     frame = _sse_frame(event, data, event_id=str(uuid.uuid4()))
 
     if target_sid:
-        # Prefer exact stream_id match; fall back to session broadcast
-        # if the target stream_id is no longer connected (e.g. client
-        # reconnected with a new stream_id while processor still holds
-        # the old one from task creation time).
-        matched = False
+        # DM: only client with matching stream_id.
+        # Client reuses stream_id across reconnects, so this should
+        # always match as long as the session is the same.
+        delivered = False
         for c in recipients:
             if c.stream_id and c.stream_id == target_sid:
                 self._enqueue(c, frame)
-                matched = True
-        if not matched and recipients:
-            # Fallback: deliver to all session clients
-            for c in recipients:
-                self._enqueue(c, frame)
+                delivered = True
+        if not delivered:
+            logger.warning(
+                "target stream_id=%s not found among %d client(s) for session=%s; "
+                "message dropped (connected: %s)",
+                target_sid, len(recipients), room,
+                [c.stream_id for c in recipients],
+            )
     else:
         for c in recipients:
             self._enqueue(c, frame)
 ```
 
-> **Reconnection safety:** When a client reconnects (new `stream_id`), the processor
-> may still publish with the old `target_sid`. The fallback ensures messages are not
-> silently dropped — they are delivered to all clients in the same session instead.
+> **Reconnection safety:** The client reuses its `stream_id` across reconnects
+> (generated once per session, not per connection). This ensures the processor's
+> `target_sid` stays valid after reconnect. If a mismatch still occurs, the message
+> is dropped with a warning log (not silently) so it can be diagnosed.
 
 ---
 
@@ -370,7 +373,10 @@ sequenceDiagram
     Ingress->>Browser: SSE frame via EventSource
 ```
 
-### Reconnection sequence (stream_id fallback)
+### Reconnection sequence (stream_id reuse)
+
+The client reuses its `stream_id` across reconnects. This keeps the processor's
+`target_sid` valid:
 
 ```mermaid
 sequenceDiagram
@@ -386,15 +392,15 @@ sequenceDiagram
     Proc->>Redis: BRPOPLPUSH (claim)
 
     Note over Browser: Network glitch → SSE drops
-    Note over Browser: Reconnect with stream_id=BBB
+    Note over Browser: Reconnect — reuses stream_id=AAA
 
-    Browser->>Ingress: SSE reconnect (stream_id=BBB)
-    Ingress->>Ingress: register(BBB), subscribe
+    Browser->>Ingress: SSE reconnect (stream_id=AAA)
+    Ingress->>Ingress: register(AAA), subscribe
 
     Proc->>Redis: PUBLISH {target_sid=AAA}
     Redis-->>Ingress: message arrives
-    Ingress->>Ingress: target_sid=AAA not found<br>→ fallback: broadcast to session
-    Ingress->>Browser: SSE frame delivered via BBB
+    Ingress->>Ingress: target_sid=AAA matches client AAA ✓
+    Ingress->>Browser: SSE frame delivered
 ```
 
 ---

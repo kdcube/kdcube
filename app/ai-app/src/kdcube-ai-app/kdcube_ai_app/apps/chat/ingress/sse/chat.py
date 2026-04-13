@@ -367,24 +367,22 @@ class SSEHub:
             frame = _sse_frame(event, data, event_id=str(uuid.uuid4()))
 
             if target_sid:
-                # DM: prefer client with matching stream_id, but fall back to
-                # all session clients if the target stream_id is no longer connected
-                # (e.g. client reconnected with a new stream_id while processor
-                # still holds the old one from task creation time).
-                matched = False
+                # DM: only client with matching stream_id.
+                # Client reuses stream_id across reconnects, so this should
+                # always match as long as the session is the same.
+                delivered = False
                 for c in recipients:
                     if c.stream_id and c.stream_id == target_sid:
                         logger.debug("[SSEHub._on_relay] DIRECT SEND the message for session session=%s stream_id=%s to recipient session=%s stream_id=%s", room, target_sid, c.session_id, c.stream_id)
                         self._enqueue(c, frame)
-                        matched = True
-                if not matched and recipients:
-                    logger.info(
+                        delivered = True
+                if not delivered:
+                    logger.warning(
                         "[SSEHub._on_relay] target stream_id=%s not found among %d session client(s) for session=%s; "
-                        "falling back to session broadcast (likely client reconnected)",
+                        "message dropped (connected stream_ids: %s)",
                         target_sid, len(recipients), room,
+                        [c.stream_id for c in recipients],
                     )
-                    for c in recipients:
-                        self._enqueue(c, frame)
             else:
                 # Broadcast to all clients in the same session
                 for c in recipients:
