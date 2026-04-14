@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 #
-# -- tools/_code_graph_state.py --
-# Shared code graph client state between entrypoint and tools.
+# -- sdk/tools/code_graph_state.py --
+# Shared code graph client state between bundle entrypoints and SDK tools.
 # Loaded via importlib with shared module name (_kdcube_code_graph_state)
-# so that entrypoint.py and code_graph_tools.py access the same globals.
+# so that any entrypoint and code_graph_tools access the same globals.
 #
 # Follows the same pattern as knowledge/resolver.py KNOWLEDGE_ROOT.
 

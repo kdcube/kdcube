@@ -52,7 +52,7 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "use_sk": True,
     },
     {
-        "ref": "tools/code_graph_tools.py",     # Code knowledge graph (Neo4j)
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.code_graph_tools",  # Code knowledge graph (Neo4j) — SDK level
         "alias": "code_graph",
         "use_sk": True,
     },

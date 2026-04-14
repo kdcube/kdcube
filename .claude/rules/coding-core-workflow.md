@@ -6,7 +6,7 @@
 
 Only need to ping once per session. If it returned "ok" or "warming" earlier, proceed without re-ping.
 
-If status is "down": remind user to start Neo4j Desktop (bolt port 7690, database `code-core`).
+If status is "down": remind user to start Neo4j via `docker compose up neo4j -d` (bolt port 7687, default `neo4j` database).
 
 ---
 

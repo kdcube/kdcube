@@ -3,9 +3,12 @@
 """
 Async Neo4j client for the code knowledge graph.
 Mirrors the coding-core MCP tools but runs inside the chat-proc process.
+Supports fulltext, vector, and hybrid code search.
 """
+from __future__ import annotations
+
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +16,37 @@ try:
     from neo4j import AsyncGraphDatabase
 except ImportError:
     AsyncGraphDatabase = None
+
+# ---------------------------------------------------------------------------
+# Lazy-loaded embedding model (sentence-transformers, same as coding-core)
+# ---------------------------------------------------------------------------
+_embedding_model = None
+
+
+def _get_embedding_model(model_name: str = "all-MiniLM-L6-v2"):
+    """Lazy-load sentence-transformers model. Called once on first vector search."""
+    global _embedding_model
+    if _embedding_model is not None:
+        return _embedding_model
+    try:
+        from sentence_transformers import SentenceTransformer
+        logger.info("Loading code embedding model '%s'...", model_name)
+        _embedding_model = SentenceTransformer(model_name)
+        logger.info("Code embedding model ready")
+        return _embedding_model
+    except ImportError:
+        logger.warning("sentence-transformers not installed; vector search unavailable")
+        return None
+
+
+def _embed(texts: List[str], model_name: str = "all-MiniLM-L6-v2") -> List[List[float]]:
+    """Embed texts using the code embedding model."""
+    model = _get_embedding_model(model_name)
+    if model is None:
+        return []
+    embeddings = model.encode(texts, show_progress_bar=False)
+    return [e.tolist() for e in embeddings]
+
 
 # ---------------------------------------------------------------------------
 # Cypher queries (mirrored from integration/coding-core/graph/queries.py)
@@ -48,56 +82,52 @@ FIND_REFERENCES = """
            collect(DISTINCT impl.qualified_name) AS implementors,
            collect(DISTINCT override.qualified_name) AS overrides,
            collect(DISTINCT ref.qualified_name) AS references,
-           collect(DISTINCT test.name) AS tests
+           collect(DISTINCT test.qualified_name) AS tests
 """
 
 FIND_SIBLINGS = """
-    MATCH (target:Class)
-    WHERE target.name = $name OR target.qualified_name = $name
-    MATCH (target)-[:INHERITS]->(base:Class)<-[:INHERITS]-(sibling:Class)
-    WHERE sibling.qualified_name <> target.qualified_name
-    RETURN base.name AS parent, base.qualified_name AS parent_qname,
-           collect(DISTINCT {name: sibling.name, qualified_name: sibling.qualified_name}) AS siblings
+    MATCH (cls:Class {name: $name})-[:INHERITS]->(parent:Class)
+    MATCH (sibling:Class)-[:INHERITS]->(parent)
+    WHERE sibling <> cls
+    RETURN sibling.name AS name,
+           sibling.qualified_name AS qualified_name,
+           parent.name AS shared_parent,
+           sibling.docstring AS docstring
+    ORDER BY sibling.name
 """
 
 SHOW_CONTRACT = """
-    MATCH (c:Class {qualified_name: $qname})
-    OPTIONAL MATCH (c)-[:IMPLEMENTS]->(iface)
-    OPTIONAL MATCH (iface)-[:CONTAINS_METHOD]->(im:Method)
-    OPTIONAL MATCH (c)-[:INHERITS]->(parent:Class)
-    OPTIONAL MATCH (parent)-[:CONTAINS_METHOD]->(pm:Method {is_abstract: true})
-    WITH c, iface,
-         collect(DISTINCT {name: im.name, signature: im.signature, is_abstract: im.is_abstract}) AS interface_methods,
-         collect(DISTINCT {name: pm.name, signature: pm.signature}) AS abstract_parent_methods
-    RETURN c.name AS class_name, c.qualified_name AS qualified_name,
-           iface.name AS interface, iface.qualified_name AS interface_qname,
-           interface_methods, abstract_parent_methods
+    MATCH (cls {qualified_name: $qname})
+    OPTIONAL MATCH (cls)-[:CONTAINS_METHOD]->(m:Method)
+    WHERE m.is_abstract = true OR m.name STARTS WITH '__'
+    RETURN m.name AS method,
+           m.signature AS signature,
+           m.docstring AS docstring,
+           m.is_abstract AS is_abstract
+    ORDER BY m.name
 """
 
 CLASS_FOOTPRINT = """
-    MATCH (c:Class {qualified_name: $qname})
-    OPTIONAL MATCH (c)-[:INHERITS*]->(ancestor:Class)
-    OPTIONAL MATCH (descendant:Class)-[:INHERITS*]->(c)
-    OPTIONAL MATCH (c)-[:IMPLEMENTS]->(iface:Interface)
-    OPTIONAL MATCH (c)-[:CONTAINS_METHOD]->(m:Method)
-    OPTIONAL MATCH (c)-[:CONTAINS_PROPERTY]->(p:Property)
-    OPTIONAL MATCH (caller:Method)-[:CALLS]->(m)
+    MATCH (cls:Class {qualified_name: $qname})
+    OPTIONAL MATCH (cls)-[:INHERITS]->(parent:Class)
+    OPTIONAL MATCH (child:Class)-[:INHERITS]->(cls)
+    OPTIONAL MATCH (cls)-[:CONTAINS_METHOD]->(m:Method)
+    OPTIONAL MATCH (cls)-[:CONTAINS_PROPERTY]->(p:Property)
+    OPTIONAL MATCH (caller)-[:CALLS]->(m)
     OPTIONAL MATCH (m)-[:CALLS]->(callee)
-    OPTIONAL MATCH (c)-[:DOCUMENTED_BY]->(doc:DocSection)
-    OPTIONAL MATCH (t:Test)-[:TESTS]->(c)
-    OPTIONAL MATCH (c)-[:DECORATED_BY]->(dec:Decorator)
-    RETURN c.name AS name, c.qualified_name AS qualified_name,
-           c.file_path AS file_path, c.docstring AS docstring,
-           c.is_abstract AS is_abstract, c.is_protocol AS is_protocol,
-           collect(DISTINCT ancestor.qualified_name) AS ancestors,
-           collect(DISTINCT descendant.qualified_name) AS descendants,
-           collect(DISTINCT iface.qualified_name) AS interfaces,
-           collect(DISTINCT {name: m.name, signature: m.signature, is_abstract: m.is_abstract, is_async: m.is_async}) AS methods,
-           collect(DISTINCT {name: p.name, type: p.type_annotation}) AS properties,
+    OPTIONAL MATCH (cls)-[:DOCUMENTED_BY]->(doc:DocSection)
+    OPTIONAL MATCH (test:Test)-[:TESTS]->(cls)
+    OPTIONAL MATCH (m)-[:DECORATED_BY]->(dec)
+    RETURN cls.name AS name, cls.qualified_name AS qualified_name,
+           cls.docstring AS docstring, cls.file_path AS file_path,
+           collect(DISTINCT parent.qualified_name) AS ancestors,
+           collect(DISTINCT child.qualified_name) AS descendants,
+           collect(DISTINCT {name: m.name, signature: m.signature, docstring: m.docstring, is_abstract: m.is_abstract}) AS methods,
+           collect(DISTINCT p.name) AS properties,
            collect(DISTINCT caller.qualified_name) AS callers,
            collect(DISTINCT callee.qualified_name) AS callees,
-           collect(DISTINCT {title: doc.title, file: doc.file_path}) AS docs,
-           collect(DISTINCT t.name) AS tests,
+           collect(DISTINCT {title: doc.title, path: doc.section_path}) AS docs,
+           collect(DISTINCT test.qualified_name) AS tests,
            collect(DISTINCT dec.name) AS decorators
 """
 
@@ -111,12 +141,11 @@ IMPACT_ANALYSIS = """
            collect(DISTINCT caller.qualified_name) AS callers,
            collect(DISTINCT child.qualified_name) AS subclasses,
            collect(DISTINCT override.qualified_name) AS overrides,
-           collect(DISTINCT test.name) AS tests
+           collect(DISTINCT test.qualified_name) AS tests
 """
 
 _SHOW_ARCHITECTURE = """
-    MATCH (pkg:Package)
-    {where}
+    MATCH (pkg:Package) {where}
     WITH pkg
     MATCH (pkg)-[:CONTAINS_MODULE]->(mod:Module)
     OPTIONAL MATCH (mod)-[:CONTAINS_CLASS]->(cls:Class)
@@ -140,6 +169,16 @@ _CODE_SEARCH_FULLTEXT = """
     ORDER BY score DESC LIMIT $limit
 """
 
+_CODE_SEARCH_VECTOR = """
+    CALL db.index.vector.queryNodes($index_name, $limit, $embedding)
+    YIELD node, score
+    RETURN node.name AS name,
+           node.qualified_name AS qualified_name,
+           labels(node)[0] AS type,
+           node.docstring AS docstring,
+           score
+"""
+
 _FIND_DOCS_FOR_CODE = """
     MATCH (code {qualified_name: $qname})-[:DOCUMENTED_BY]->(doc:DocSection)
     RETURN doc.title AS title,
@@ -148,6 +187,8 @@ _FIND_DOCS_FOR_CODE = """
            doc.text_preview AS preview
     ORDER BY doc.title
 """
+
+_VECTOR_INDEX_NAMES = ("class_embedding", "method_embedding", "function_embedding")
 
 
 class NullCodeGraphClient:
@@ -175,7 +216,7 @@ class NullCodeGraphClient:
     async def find_references(self, qualified_name: str) -> Dict[str, Any]:
         return {"references": {}}
 
-    async def code_search(self, query: str, limit: int = 10) -> Dict[str, Any]:
+    async def code_search(self, search_query: str, search_type: str = "hybrid", limit: int = 10) -> Dict[str, Any]:
         return {"results": [], "count": 0}
 
     async def impact_analysis(self, qualified_name: str) -> Dict[str, Any]:
@@ -198,6 +239,7 @@ class CodeGraphClient:
     """
     Async Neo4j client for the code knowledge graph (coding-core schema).
     Uses the same Cypher queries as the coding-core MCP server but via async driver.
+    Supports fulltext, vector, and hybrid search modes.
     """
     enabled = True
 
@@ -207,7 +249,8 @@ class CodeGraphClient:
             settings = get_settings()
         self._settings = settings
         self._driver = None
-        self._db_name = getattr(settings, "NEO4J_CODE_DB", "coding-core")
+        self._db_name = getattr(settings, "NEO4J_CODE_DB", "neo4j")
+        self._embedding_model_name = getattr(settings, "CODE_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
     async def init(self) -> None:
         if AsyncGraphDatabase is None:
@@ -263,10 +306,46 @@ class CodeGraphClient:
             return {"error": f"Symbol not found: {qualified_name}"}
         return {"references": records[0]}
 
-    async def code_search(self, search_query: str, limit: int = 10) -> Dict[str, Any]:
-        records = await self._run(_CODE_SEARCH_FULLTEXT, query=search_query, limit=limit)
-        results = [{**r, "source": "fulltext"} for r in records]
-        return {"results": results[:limit], "count": len(results)}
+    async def code_search(self, search_query: str, search_type: str = "hybrid", limit: int = 10) -> Dict[str, Any]:
+        """
+        Search the code knowledge graph.
+
+        search_type:
+            "fulltext" — BM25 fulltext index on code_names
+            "vector"   — semantic vector search using sentence-transformers embeddings
+            "hybrid"   — combines fulltext + vector, deduplicates by qualified_name
+        """
+        results: List[Dict[str, Any]] = []
+
+        if search_type in ("fulltext", "hybrid"):
+            records = await self._run(_CODE_SEARCH_FULLTEXT, query=search_query, limit=limit)
+            results.extend([{**r, "source": "fulltext"} for r in records])
+
+        if search_type in ("vector", "hybrid"):
+            embeddings = _embed([search_query], model_name=self._embedding_model_name)
+            if embeddings:
+                embedding = embeddings[0]
+                for index_name in _VECTOR_INDEX_NAMES:
+                    try:
+                        records = await self._run(
+                            _CODE_SEARCH_VECTOR,
+                            index_name=index_name,
+                            limit=limit,
+                            embedding=embedding,
+                        )
+                        results.extend([{**r, "source": "vector"} for r in records])
+                    except Exception:
+                        pass  # Index may not exist yet
+
+        # Deduplicate by qualified_name, keep highest score
+        seen: Dict[str, Dict[str, Any]] = {}
+        for r in results:
+            qn = r.get("qualified_name", "")
+            if qn not in seen or r.get("score", 0) > seen[qn].get("score", 0):
+                seen[qn] = r
+        deduped = sorted(seen.values(), key=lambda x: x.get("score", 0), reverse=True)
+
+        return {"results": deduped[:limit], "count": len(deduped)}
 
     async def impact_analysis(self, qualified_name: str) -> Dict[str, Any]:
         records = await self._run(IMPACT_ANALYSIS, qname=qualified_name)

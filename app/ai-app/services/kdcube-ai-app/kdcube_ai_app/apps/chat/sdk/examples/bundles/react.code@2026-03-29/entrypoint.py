@@ -490,15 +490,18 @@ def _load_knowledge_resolver():
 
 def _load_code_graph_state():
     """
-    Load shared code graph state by file path.
+    Load shared code graph state module (SDK level).
     Uses a shared module name (_kdcube_code_graph_state) so that
-    entrypoint.py and code_graph_tools.py access the same CLIENT global.
+    any entrypoint and sdk/tools/code_graph_tools.py access the same CLIENT global.
     """
     module_name = "_kdcube_code_graph_state"
     if module_name in sys.modules:
         return sys.modules[module_name]
-    bundle_root = pathlib.Path(__file__).resolve().parent
-    state_path = bundle_root / "tools" / "_code_graph_state.py"
+    # Resolve from SDK tools directory
+    found = importlib.util.find_spec("kdcube_ai_app.apps.chat.sdk.tools.code_graph_state")
+    if not found or not found.origin:
+        raise ImportError("Cannot locate SDK code_graph_state module")
+    state_path = pathlib.Path(found.origin)
     spec = importlib.util.spec_from_file_location(module_name, str(state_path))
     if not spec or not spec.loader:
         raise ImportError(f"Cannot load code graph state: {state_path}")

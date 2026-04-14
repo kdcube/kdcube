@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Elena Viter
 #
-# -- tools/code_graph_tools.py --
-# Semantic Kernel plugin exposing code knowledge graph tools to the ReAct agent.
-# Wraps CodeGraphClient methods as @kernel_function tools.
+# -- sdk/tools/code_graph_tools.py --
+# SDK-level Semantic Kernel plugin exposing code knowledge graph tools.
+# Any bundle can reference this via:
+#   {"module": "kdcube_ai_app.apps.chat.sdk.tools.code_graph_tools",
+#    "alias": "code_graph", "use_sk": True}
+#
 # The client instance is shared via the _kdcube_code_graph_state module
 # (importlib pattern, same as knowledge/resolver.py KNOWLEDGE_ROOT).
 
@@ -30,15 +33,15 @@ _GRAPH_UNAVAILABLE = "Code graph is not available. APP_GRAPH_ENABLED may be fals
 
 def _load_code_graph_state():
     """
-    Load shared code graph state by file path.
-    Uses a shared module name so that entrypoint.py and this file
+    Load shared code graph state module.
+    Uses a shared module name so that any entrypoint and this file
     access the same CLIENT global.
     """
     module_name = "_kdcube_code_graph_state"
     if module_name in sys.modules:
         return sys.modules[module_name]
-    bundle_root = Path(__file__).resolve().parent.parent
-    state_path = bundle_root / "tools" / "_code_graph_state.py"
+    # Resolve from SDK tools directory
+    state_path = Path(__file__).resolve().parent / "code_graph_state.py"
     if not state_path.exists():
         return None
     spec = importlib.util.spec_from_file_location(module_name, str(state_path))
@@ -69,19 +72,21 @@ class CodeGraphTools:
     @kernel_function(
         name="code_search",
         description=(
-            "Search the code knowledge graph for classes, methods, functions, and modules by name or keyword. "
-            "Uses fulltext index for fast lookup. Returns name, qualified_name, type, docstring, and relevance score."
+            "Search the code knowledge graph for classes, methods, functions, and modules. "
+            "Supports three modes: 'fulltext' (fast keyword match), 'vector' (semantic similarity), "
+            "'hybrid' (combined, default). Returns name, qualified_name, type, docstring, and score."
         ),
     )
     async def code_search(
         self,
         query: Annotated[str, "Search query -- class name, method name, or keyword (e.g. 'BaseEntrypoint', 'conversation store')."],
+        search_type: Annotated[str, "Search mode: 'fulltext', 'vector', or 'hybrid' (default)."] = "hybrid",
         limit: Annotated[int, "Max results to return."] = 10,
     ) -> Annotated[str, "JSON array of matching code symbols with scores."]:
         client = _get_client()
         if not client or not getattr(client, "enabled", False):
             return _GRAPH_UNAVAILABLE
-        result = await client.code_search(search_query=query, limit=limit)
+        result = await client.code_search(search_query=query, search_type=search_type, limit=limit)
         return _format_result(result)
 
     @kernel_function(
