@@ -234,6 +234,7 @@ Token TTL/uses:
 | `POSTGRES_SSL`                             | n/a |
 | `REDIS_URL`                                | Managed Redis endpoint (reachable from containers) |
 | `CB_RELAY_IDENTITY`                        | n/a |
+| `CHAT_SCHEDULER_BACKEND`                   | Proc scheduler backend selector. `legacy_lists` is the current shipped backend. `conversation_streams` is reserved for the next mailbox/lease scheduler and currently fails fast if selected. |
 | `CHAT_TASK_TIMEOUT_SEC`                    | Legacy/base proc task timeout (seconds). Used as the fallback idle timeout when the newer watchdog envs are unset. |
 | `CHAT_TASK_IDLE_TIMEOUT_SEC`               | Activity watchdog idle timeout for one active proc task (seconds). |
 | `CHAT_TASK_MAX_WALL_TIME_SEC`              | Hard wall-time cap for one active proc task (seconds). |
@@ -802,6 +803,7 @@ product‑level chatbot capabilities.
 | `GATEWAY_CONFIG_JSON.service_capacity.proc.avg_processing_time_seconds`     | `25`    | Capacity math / throughput estimate    | `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/config.py`                         |
 | `GATEWAY_CONFIG_JSON.service_capacity.ingress.processes_per_instance`       | `1`     | Ingress worker processes per instance  | `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/config.py`                         |
 | `GATEWAY_CONFIG_JSON.limits.proc.max_queue_size`                            | `0`     | Hard queue size limit (0 = disabled)   | `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/backpressure.py`                   |
+| `CHAT_SCHEDULER_BACKEND`                                                  | `legacy_lists` | Proc scheduling backend selector. The backend seam exists now so we can add the Redis Streams conversation scheduler in parallel without changing the shipped Lists path. `conversation_streams` is not yet runnable. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`, `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor_scheduler_backend.py` |
 | `CHAT_TASK_TIMEOUT_SEC`                                                     | `600`   | Legacy/base proc timeout knob. If unset in the proc service, normal proc wiring still passes `900` seconds as the effective base timeout. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`                          |
 | `CHAT_TASK_IDLE_TIMEOUT_SEC`                                                | unset   | Activity watchdog idle timeout for one active proc task. Defaults to the effective base timeout. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`                          |
 | `CHAT_TASK_MAX_WALL_TIME_SEC`                                               | unset   | Hard wall-time cap for one active proc task. Defaults to a larger derived value than the idle timeout. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`, `src/kdcube-ai-app/kdcube_ai_app/infra/aws/task_protection.py` |

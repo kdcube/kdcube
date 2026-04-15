@@ -18,6 +18,10 @@ from typing import Optional, Dict, Any, Iterable
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.continuations import build_conversation_continuation_source
 from kdcube_ai_app.apps.chat.external_events import build_conversation_external_event_source
+from kdcube_ai_app.apps.chat.processor_scheduler_backend import (
+    build_processor_scheduler_backend,
+    normalize_processor_scheduler_backend,
+)
 from kdcube_ai_app.apps.chat.sdk.continuations import bind_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
@@ -231,6 +235,7 @@ class EnhancedChatRequestProcessor:
             task_timeout_sec: Optional[int] = None,
             task_idle_timeout_sec: Optional[int] = None,
             task_max_wall_time_sec: Optional[int] = None,
+            scheduler_backend: Optional[str] = None,
             lock_ttl_sec: int = 300,
             lock_renew_sec: int = 60,
             started_marker_ttl_sec: Optional[int] = None,
@@ -242,6 +247,10 @@ class EnhancedChatRequestProcessor:
         self.chat_handler = chat_handler
         self.process_id = process_id or os.getpid()
         self.max_concurrent = int(max_concurrent or 5)
+        self.scheduler_backend_name = normalize_processor_scheduler_backend(
+            os.getenv("CHAT_SCHEDULER_BACKEND", scheduler_backend or ""),
+        )
+        self._task_scheduler_backend = build_processor_scheduler_backend(self.scheduler_backend_name)
         legacy_task_timeout_sec = max(
             1,
             int(os.getenv("CHAT_TASK_TIMEOUT_SEC", str(task_timeout_sec or 600))),
@@ -331,6 +340,7 @@ class EnhancedChatRequestProcessor:
         self._stop_event.clear()
         if self._processor_task and not self._processor_task.done():
             return
+        self._task_scheduler_backend.validate_startup(self)
         self._processor_task = asyncio.create_task(self._processing_loop(), name="chat-processing-loop")
         if not self._config_task or self._config_task.done():
             self._config_task = asyncio.create_task(self._config_listener_loop(), name="config-bundles-listener")
@@ -475,6 +485,7 @@ class EnhancedChatRequestProcessor:
             "host_draining": self._host_draining,
             "host_draining_since": self._host_draining_since,
             "accepting_new_tasks": not self._stop_event.is_set() and not self._host_draining,
+            "scheduler_backend": self.scheduler_backend_name,
             "task_timeout_sec": self.task_timeout_sec,
             "task_idle_timeout_sec": self.task_idle_timeout_sec,
             "task_max_wall_time_sec": self.task_max_wall_time_sec,
@@ -1082,7 +1093,7 @@ class EnhancedChatRequestProcessor:
     async def _inflight_recovery_loop(self) -> None:
         while not self._stop_event.is_set():
             try:
-                reclaimed = await self._requeue_stale_inflight_tasks()
+                reclaimed = await self._task_scheduler_backend.recover_stale_claims(self)
                 self._last_reaper_poll_completed_at = time.monotonic()
                 self._last_reaper_error = None
                 if reclaimed:
@@ -1095,7 +1106,7 @@ class EnhancedChatRequestProcessor:
                 logger.error("Inflight recovery loop error: %s", e, exc_info=True)
             await asyncio.sleep(self.inflight_reaper_interval_sec)
 
-    async def _requeue_stale_inflight_tasks(self) -> int:
+    async def _legacy_requeue_stale_inflight_tasks(self) -> int:
         reclaimed = 0
         for user_type in self.QUEUE_ORDER:
             ready_queue_key = self._ready_queue_key(user_type)
@@ -1165,6 +1176,9 @@ class EnhancedChatRequestProcessor:
                     )
         return reclaimed
 
+    async def _requeue_stale_inflight_tasks(self) -> int:
+        return await self._legacy_requeue_stale_inflight_tasks()
+
     # ---------------- Core loop ----------------
 
     async def _processing_loop(self):
@@ -1178,7 +1192,7 @@ class EnhancedChatRequestProcessor:
                     await asyncio.sleep(0.05)
                     continue
 
-                task_data = await self._pop_any_queue_fair()
+                task_data = await self._task_scheduler_backend.claim_next_task(self)
                 if not task_data:
                     await asyncio.sleep(0.05)
                     continue
@@ -1227,7 +1241,7 @@ class EnhancedChatRequestProcessor:
                 logger.error(f"Processing loop error: {e}")
                 await asyncio.sleep(0.5)
 
-    async def _pop_any_queue_fair(self) -> Optional[Dict[str, Any]]:
+    async def _legacy_pop_any_queue_fair(self) -> Optional[Dict[str, Any]]:
         for _ in range(len(self.QUEUE_ORDER)):
             if self._stop_event.is_set() or self._host_draining:
                 return None
@@ -1328,6 +1342,9 @@ class EnhancedChatRequestProcessor:
                 reason=f"lock-not-acquired:{logical_id}",
             )
         return None
+
+    async def _pop_any_queue_fair(self) -> Optional[Dict[str, Any]]:
+        return await self._legacy_pop_any_queue_fair()
 
     # ---------------- Config loop ----------------
     async def _config_listener_loop(self):

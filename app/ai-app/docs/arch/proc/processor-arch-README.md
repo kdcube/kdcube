@@ -217,6 +217,12 @@ If a live React owner exists:
 
 Each proc worker runs a fair lane loop.
 
+Current implementation note:
+
+- proc now has a scheduler-backend seam selected by `CHAT_SCHEDULER_BACKEND`
+- `legacy_lists` is the shipped backend and preserves the current behavior described below
+- `conversation_streams` is the reserved next backend for the mailbox/lease/owner-loop scheduler, but it is not yet wired into proc and currently fails fast at startup if selected
+
 High-level flow:
 
 1. rotate through user-type lanes in `("privileged", "registered", "anonymous", "paid")`
@@ -249,6 +255,7 @@ Execution timeout model:
 - `CHAT_TASK_IDLE_TIMEOUT_SEC` bounds how long a claimed task may stay alive without meaningful communicator activity (`chat.start`, `chat.step`, `chat.delta`, `chat.complete`, `chat.error`, and other relay-envelope emissions)
 - `CHAT_TASK_MAX_WALL_TIME_SEC` is the absolute ceiling for one active processor task even if activity continues
 - `CHAT_TASK_TIMEOUT_SEC` is now the legacy/base timeout knob; if the two newer env vars are unset, proc uses it as the idle fallback and derives a larger hard cap from it
+- `CHAT_SCHEDULER_BACKEND` selects which proc scheduling backend is active; today that should remain `legacy_lists`
 - this matters because same-turn `followup` / `steer` can keep one turn legitimately warm for much longer than a single model call
 
 ### 4.4 Completion

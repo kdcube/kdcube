@@ -9,6 +9,10 @@ import pytest
 
 import kdcube_ai_app.apps.chat.processor as processor_mod
 from kdcube_ai_app.apps.chat.processor import EnhancedChatRequestProcessor
+from kdcube_ai_app.apps.chat.processor_scheduler_backend import (
+    SCHEDULER_BACKEND_CONVERSATION_STREAMS,
+    SCHEDULER_BACKEND_LEGACY_LISTS,
+)
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     get_current_comm,
     get_current_request_context,
@@ -255,6 +259,7 @@ def _build_processor(
         task_timeout_sec=None,
         task_idle_timeout_sec=None,
         task_max_wall_time_sec=None,
+        scheduler_backend=None,
 ):
     middleware = SimpleNamespace(
         redis_url="redis://example",
@@ -273,6 +278,7 @@ def _build_processor(
         task_timeout_sec=task_timeout_sec,
         task_idle_timeout_sec=task_idle_timeout_sec,
         task_max_wall_time_sec=task_max_wall_time_sec,
+        scheduler_backend=scheduler_backend,
         host_drain_detector=_DummyHostDrainDetector(enabled=False),
     )
     processor.queue_block_timeout_sec = 0.01
@@ -308,6 +314,27 @@ async def test_queue_claim_timeout_disconnects_shared_pool():
     assert result is None
     assert hanging.connection_pool.disconnect_calls == [True]
     assert "Queue claim exceeded" in (processor.get_runtime_metadata()["last_queue_error"] or "")
+
+
+def test_processor_defaults_to_legacy_lists_scheduler_backend():
+    processor = _build_processor(_MinimalRedis())
+    assert processor.scheduler_backend_name == SCHEDULER_BACKEND_LEGACY_LISTS
+    assert processor.get_runtime_metadata()["scheduler_backend"] == SCHEDULER_BACKEND_LEGACY_LISTS
+
+
+def test_processor_accepts_legacy_scheduler_alias_via_env(monkeypatch):
+    monkeypatch.setenv("CHAT_SCHEDULER_BACKEND", "legacy")
+    processor = _build_processor(_MinimalRedis())
+    assert processor.scheduler_backend_name == SCHEDULER_BACKEND_LEGACY_LISTS
+
+
+@pytest.mark.asyncio
+async def test_start_processing_fails_fast_for_unimplemented_streams_backend(monkeypatch):
+    monkeypatch.setenv("CHAT_SCHEDULER_BACKEND", "conversation_streams")
+    processor = _build_processor(_MinimalRedis())
+    with pytest.raises(RuntimeError, match="conversation_streams"):
+        await processor.start_processing()
+    assert processor.scheduler_backend_name == SCHEDULER_BACKEND_CONVERSATION_STREAMS
 
 
 @pytest.mark.asyncio

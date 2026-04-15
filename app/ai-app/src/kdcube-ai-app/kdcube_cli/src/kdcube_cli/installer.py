@@ -50,6 +50,7 @@ SERVICE_ENV_KEY_MAP: dict[str, str] = {
     "uvicorn_reload": "UVICORN_RELOAD",
     "heartbeat_interval": "HEARTBEAT_INTERVAL",
     "cb_relay_identity": "CB_RELAY_IDENTITY",
+    "chat_scheduler_backend": "CHAT_SCHEDULER_BACKEND",
     "chat_task_timeout_sec": "CHAT_TASK_TIMEOUT_SEC",
     "chat_task_idle_timeout_sec": "CHAT_TASK_IDLE_TIMEOUT_SEC",
     "chat_task_max_wall_time_sec": "CHAT_TASK_MAX_WALL_TIME_SEC",
