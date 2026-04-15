@@ -1,0 +1,7 @@
+tools:
+  - id: rendering_tools.write_png
+    role: SVG inspection rendering
+    why: Renders SVG wrapped in HTML to PNG so spacing, clipping, and label placement can be checked visually.
+  - id: rendering_tools.write_pdf
+    role: final document rendering
+    why: Renders the parent HTML document that embeds the SVG into a PDF artifact.

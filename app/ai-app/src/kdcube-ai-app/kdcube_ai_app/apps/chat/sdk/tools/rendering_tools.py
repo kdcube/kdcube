@@ -26,7 +26,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output
     load_sources_pool_from_disk
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_citation_sids_any, extract_local_paths_any
 from kdcube_ai_app.apps.chat.sdk.tools.ctx_tools import SourcesUsedStore
-from kdcube_ai_app.apps.chat.sdk.tools.docx_renderer import render_docx
+from kdcube_ai_app.apps.chat.sdk.tools.docx_renderer import render_docx, KDCUBE_THEME
 from kdcube_ai_app.apps.chat.sdk.tools.pptx_renderer import render_pptx
 from kdcube_ai_app.apps.chat.sdk.tools.md2pdf_async import AsyncMarkdownPDF, PDFOptions, get_shared_md2pdf
 from kdcube_ai_app.apps.chat.sdk.util import _defence
@@ -1107,6 +1107,7 @@ class RenderingTools:
                 sources=sources,
                 resolve_citations=resolve_citations,
                 include_sources_section=include_sources_section,
+                theme=KDCUBE_THEME,
             )
             if not out_path.exists():
                 return _error_result(

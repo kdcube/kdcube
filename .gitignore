@@ -208,3 +208,4 @@ articles/
 
 app/ai-app/ui/chat-web-app/src/**/*.js
 /app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/prototyping/
+/projects/

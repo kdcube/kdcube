@@ -212,120 +212,120 @@ Token TTL/uses:
 | `AWS_EC2_METADATA_DISABLED` | make sure SDKs don’t disable IMDS accidentally |
 
 ### `.env.proc`
-| Key | Description |
-|---|---|
-| `CHAT_PROCESSOR_PORT` | n/a |
-| `GATEWAY_COMPONENT` | n/a |
-| `SECRETS_PROVIDER` | Secrets backend: `secrets-service`, `aws-sm`, `secrets-file`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
-| `SECRETS_URL` | Base URL for the local `secrets-service` provider. |
-| `SECRETS_TOKEN` | Read token for the configured `secrets-service` provider. |
-| `GLOBAL_SECRETS_YAML` | Read-only global secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
-| `BUNDLE_SECRETS_YAML` | Read-only bundle secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
-| `GATEWAY_CONFIG_JSON` | Gateway config JSON (see Gateway Config section above). |
-| `KDCUBE_GATEWAY_DESCRIPTOR_PATH` | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
-| `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP` | n/a |
-| `ASSEMBLY_YAML_DESCRIPTOR_PATH` | Optional override for the assembly descriptor used by `read_plain(...)`. Default: `/config/assembly.yaml`. Use this when proc runs directly on the host without the `/config` mount. |
-| `BUNDLES_YAML_DESCRIPTOR_PATH` | Optional override for the bundles descriptor used by `read_plain("b:...")`. Default: `/config/bundles.yaml`. Use this when proc runs directly on the host without the `/config` mount. |
-| `POSTGRES_HOST` | n/a |
-| `POSTGRES_PORT` | n/a |
-| `POSTGRES_DATABASE` | n/a |
-| `POSTGRES_USER` | n/a |
-| `POSTGRES_PASSWORD` | n/a |
-| `POSTGRES_SSL` | n/a |
-| `REDIS_URL` | Managed Redis endpoint (reachable from containers) |
-| `CB_RELAY_IDENTITY` | n/a |
-| `CHAT_TASK_TIMEOUT_SEC` | Per-task timeout (seconds). |
-| `PROC_CONTAINER_STOP_TIMEOUT_SEC` | Proc container/task stop window (seconds). Keep aligned with ECS `stopTimeout`; proc derives graceful shutdown budget from it. |
-| `UVICORN_RELOAD` | Dev-only: enable auto-reload when running web_app.py directly (0/1). |
-| `HEARTBEAT_INTERVAL` | n/a |
-| `KDCUBE_STORAGE_PATH` | Storage backend root (file:///... or s3://...). |
-| `CB_BUNDLE_STORAGE_URL` | n/a |
-| `BUNDLE_STORAGE_ROOT` | Shared bundle local storage (used by ks: resolvers). Must match docker-compose mount. |
-| `REACT_WORKSPACE_IMPLEMENTATION` | React workspace backend. `custom` keeps artifact/hosting-backed hydration. `git` enables git-backed `fi:<turn>.files/...` slice hydration. Default is `custom`. |
-| `REACT_WORKSPACE_GIT_REPO` | Remote repo used by the git workspace backend. Required when `REACT_WORKSPACE_IMPLEMENTATION=git`. Auth reuses `GIT_HTTP_TOKEN`, `GIT_HTTP_USER`, `GIT_SSH_KEY_PATH`, `GIT_SSH_KNOWN_HOSTS`, and `GIT_SSH_STRICT_HOST_KEY_CHECKING`. |
+| Key                                        | Description |
+|--------------------------------------------|---|
+| `CHAT_PROCESSOR_PORT`                      | n/a |
+| `GATEWAY_COMPONENT`                        | n/a |
+| `SECRETS_PROVIDER`                         | Secrets backend: `secrets-service`, `aws-sm`, `secrets-file`, or `in-memory`. Legacy `local` remains accepted as an alias for `secrets-service`. |
+| `SECRETS_URL`                              | Base URL for the local `secrets-service` provider. |
+| `SECRETS_TOKEN`                            | Read token for the configured `secrets-service` provider. |
+| `GLOBAL_SECRETS_YAML`                      | Read-only global secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
+| `BUNDLE_SECRETS_YAML`                      | Read-only bundle secrets descriptor for `secrets-file`; accepts `file://...` or `s3://...`. |
+| `GATEWAY_CONFIG_JSON`                      | Gateway config JSON (see Gateway Config section above). |
+| `KDCUBE_GATEWAY_DESCRIPTOR_PATH`           | Path to `gateway.yaml` used by the CLI to render `GATEWAY_CONFIG_JSON`. |
+| `GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP`      | n/a |
+| `ASSEMBLY_YAML_DESCRIPTOR_PATH`            | Optional override for the assembly descriptor used by `read_plain(...)`. Default: `/config/assembly.yaml`. Use this when proc runs directly on the host without the `/config` mount. |
+| `BUNDLES_YAML_DESCRIPTOR_PATH`             | Optional override for the bundles descriptor used by `read_plain("b:...")`. Default: `/config/bundles.yaml`. Use this when proc runs directly on the host without the `/config` mount. |
+| `POSTGRES_HOST`                            | n/a |
+| `POSTGRES_PORT`                            | n/a |
+| `POSTGRES_DATABASE`                        | n/a |
+| `POSTGRES_USER`                            | n/a |
+| `POSTGRES_PASSWORD`                        | n/a |
+| `POSTGRES_SSL`                             | n/a |
+| `REDIS_URL`                                | Managed Redis endpoint (reachable from containers) |
+| `CB_RELAY_IDENTITY`                        | n/a |
+| `CHAT_TASK_TIMEOUT_SEC`                    | Per-task timeout (seconds). |
+| `PROC_CONTAINER_STOP_TIMEOUT_SEC`          | Proc container/task stop window (seconds). Keep aligned with ECS `stopTimeout`; proc derives graceful shutdown budget from it. |
+| `UVICORN_RELOAD`                           | Dev-only: enable auto-reload when running web_app.py directly (0/1). |
+| `HEARTBEAT_INTERVAL`                       | n/a |
+| `KDCUBE_STORAGE_PATH`                      | Storage backend root (file:///... or s3://...). |
+| `CB_BUNDLE_STORAGE_URL`                    | n/a |
+| `BUNDLE_STORAGE_ROOT`                      | Shared bundle local storage (used by ks: resolvers). Must match docker-compose mount. |
+| `REACT_WORKSPACE_IMPLEMENTATION`           | React workspace backend. `custom` keeps artifact/hosting-backed hydration. `git` enables git-backed `fi:<turn>.files/...` slice hydration. Default is `custom`. |
+| `REACT_WORKSPACE_GIT_REPO`                 | Remote repo used by the git workspace backend. Required when `REACT_WORKSPACE_IMPLEMENTATION=git`. Auth reuses `GIT_HTTP_TOKEN`, `GIT_HTTP_USER`, `GIT_SSH_KEY_PATH`, `GIT_SSH_KNOWN_HOSTS`, and `GIT_SSH_STRICT_HOST_KEY_CHECKING`. |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | Claude Code session-store backend. `local` keeps continuity on local disk only. `git` enables per-conversation bootstrap/publish of the bundle-selected Claude session root. |
-| `CLAUDE_CODE_SESSION_GIT_REPO` | Remote repo used by the Claude Code git-backed session store. Required when `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION=git`. |
-| `OPENAI_API_KEY` | Services credentials Ext services |
-| `HUGGING_FACE_API_TOKEN` | n/a |
-| `ANTHROPIC_API_KEY` | n/a |
-| `BRAVE_API_KEY` | n/a |
-| `GEMINI_CACHE_ENABLED` | n/a |
-| `GEMINI_CACHE_TTL_SECONDS` | n/a |
-| `DEFAULT_LLM_MODEL_ID` | n/a |
-| `DEFAULT_EMBEDDING_MODEL_ID` | n/a |
-| `AUTH_PROVIDER` | Auth Auth provider, simple|cognito |
-| `ID_TOKEN_HEADER_NAME` | For non-simple auth, id token must be sent by client in addition to the access token in the auth header. |
-| `STREAM_ID_HEADER_NAME` | Header carrying the connected peer/stream id for REST requests that need peer-targeted communicator delivery. |
-| `AUTH_TOKEN_COOKIE_NAME` | n/a |
-| `ID_TOKEN_COOKIE_NAME` | n/a |
-| `COGNITO_REGION` | # Cognito specifics |
-| `COGNITO_USER_POOL_ID` | n/a |
-| `COGNITO_APP_CLIENT_ID` | n/a |
-| `COGNITO_SERVICE_CLIENT_ID` | ideally, separate client for service users. can be the same as COGNITO_APP_CLIENT_ID |
-| `JWKS_CACHE_TTL_SECONDS` | 24h JWKS cache. Not used |
-| `OIDC_SERVICE_ADMIN_USERNAME` | # Service account settings |
-| `OIDC_SERVICE_ADMIN_PASSWORD` | n/a |
-| `ODIC_SERVICE_USER_EMAIL` | n/a |
-| `EXEC_WORKSPACE_ROOT` | Exec |
-| `EXEC_RUNTIME_MODE` | Exec runtime selector for proc-side code execution. Typical values: `docker`, `fargate`. |
-| `PY_CODE_EXEC_IMAGE` | n/a |
-| `PY_CODE_EXEC_TIMEOUT` | n/a |
-| `PY_CODE_EXEC_NETWORK_MODE` | n/a |
-| `FARGATE_EXEC_ENABLED` | Enable distributed Fargate exec path. |
-| `FARGATE_CLUSTER` | ECS cluster ARN/name for distributed exec tasks. |
-| `FARGATE_TASK_DEFINITION` | ECS task definition used for distributed exec tasks. |
-| `FARGATE_CONTAINER_NAME` | Container name inside the exec task definition. |
-| `FARGATE_SUBNETS` | Comma-separated subnets for `awsvpc` task launch. |
-| `FARGATE_SECURITY_GROUPS` | Comma-separated security groups for `awsvpc` task launch. |
-| `FARGATE_ASSIGN_PUBLIC_IP` | `ENABLED` or `DISABLED` for distributed exec tasks. |
-| `FARGATE_LAUNCH_TYPE` | Launch type for exec tasks. Typical value: `FARGATE`. |
-| `FARGATE_PLATFORM_VERSION` | Optional ECS platform version for exec tasks. |
-| `TOOLS_WEB_SEARCH_FETCH_CONTENT` | Tools |
-| `WEB_FETCH_RESOURCES_MEDIUM` | Medium credentials (uid and sid from your browser after logging in.) |
-| `WEB_SEARCH_AGENTIC_THINKING_BUDGET` | n/a |
-| `WEB_SEARCH_PRIMARY_BACKEND` | Is adaptive (best effort graceful service degradation) backends supported: duckduckgo|brave|hybrid |
-| `WEB_SEARCH_BACKEND` | n/a |
-| `WEB_SEARCH_HYBRID_MODE` | # Hybrid mode (optional, defaults to "sequential"). sequential|parallel |
-| `WEB_SEARCH_SEGMENTER` | n/a |
-| `MCP_CACHE_TTL_SECONDS` | n/a |
-| `ACCOUNTING_SERVICES` | n/a |
-| `AGENTIC_BUNDLES_JSON` | Bundles descriptor (JSON/YAML). Common value inside container: `/config/bundles.yaml`. This path is mounted from `HOST_BUNDLES_DESCRIPTOR_PATH` in `.env`. |
-| `BUNDLES_INCLUDE_EXAMPLES` | Include built-in example bundles from sdk/examples/bundles (default: 1) |
-| `BUNDLE_CLEANUP_ENABLED` | Bundle cleanup / ref tracking Enable periodic bundle cleanup loop (uses Redis locks). |
-| `BUNDLE_CLEANUP_INTERVAL_SECONDS` | Cleanup interval (seconds). |
-| `BUNDLE_CLEANUP_LOCK_TTL_SECONDS` | Cleanup lock TTL (seconds). |
-| `BUNDLE_REF_TTL_SECONDS` | Active bundle ref TTL (seconds). |
-| `BUNDLES_FORCE_ENV_ON_STARTUP` | Force bundles registry overwrite from env on startup (processor only). |
-| `BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS` | n/a |
-| `BUNDLES_PRELOAD_ON_START` | Eagerly load all configured bundle modules and run on_bundle_load hooks at proc startup. Eliminates cold start on first request. Proc health returns 503 until preload completes (default: `0`). |
-| `AGENTIC_BUNDLES_ROOT` | Local path bundles root inside the container. Paths in `AGENTIC_BUNDLES_JSON` for manual path bundles must start with this root (normally `/bundles`). |
-| `AGENTIC_GIT_BUNDLES_ROOT` | Git-resolved bundles root inside the container (normally `/git-bundles`). If unset, git bundles fall back to the legacy bundles root behavior. |
-| `BUNDLE_GIT_RESOLUTION_ENABLED` | Git bundle resolution Disable git bundle resolution until git bundles are fully configured. |
-| `BUNDLE_GIT_ATOMIC` | Atomic checkout (clone to temp dir then rename) |
-| `BUNDLE_GIT_ALWAYS_PULL` | Always pull even if path exists (if using branch heads) |
-| `BUNDLE_GIT_REDIS_LOCK` | Redis lock for git pulls (per instance; key includes INSTANCE_ID) |
-| `BUNDLE_GIT_REDIS_LOCK_TTL_SECONDS` | n/a |
-| `BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS` | n/a |
-| `BUNDLE_GIT_PREFETCH_ENABLED` | Prefetch git bundles to gate readiness |
-| `BUNDLE_GIT_PREFETCH_INTERVAL_SECONDS` | n/a |
-| `BUNDLE_GIT_FAIL_BACKOFF_SECONDS` | Backoff after git failures |
-| `BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS` | n/a |
-| `BUNDLE_GIT_KEEP` | Shallow clone settings (optional) BUNDLE_GIT_CLONE_DEPTH=50 BUNDLE_GIT_SHALLOW=1 Cleanup policy for old git bundles |
-| `BUNDLE_GIT_TTL_HOURS` | n/a |
-| `GIT_SSH_KEY_PATH` | Optional SSH auth (private repos) Container paths are fixed by docker-compose mounts: /run/secrets/git_ssh_key /run/secrets/git_known_hosts |
-| `GIT_SSH_KNOWN_HOSTS` | n/a |
-| `GIT_SSH_STRICT_HOST_KEY_CHECKING` | n/a |
-| `LOG_LEVEL` | Log |
-| `LOG_MAX_MB` | n/a |
-| `LOG_BACKUP_COUNT` | n/a |
-| `LOG_DIR` | n/a |
-| `LOG_FILE_PREFIX` | n/a |
-| `CORS_CONFIG` | to disable CORS - remove env var or set it empty all options are optional to enable CORS with all defaults CORS_CONFIG={} |
-| `AWS_REGION` | AWS use AWS from the container AWS_PROFILE=... |
-| `AWS_DEFAULT_REGION` | n/a |
-| `AWS_SDK_LOAD_CONFIG` | optional: make boto3 read ~/.aws/config if present (harmless) |
-| `NO_PROXY` | EC2 stuff. If you run dockercompose on EC2. Running with managed services don't proxy IMDS |
-| `AWS_EC2_METADATA_DISABLED` | make sure SDKs don’t disable IMDS accidentally |
+| `CLAUDE_CODE_SESSION_GIT_REPO`             | Remote repo used by the Claude Code git-backed session store. Required when `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION=git`. |
+| `OPENAI_API_KEY`                           | Services credentials Ext services |
+| `HUGGING_FACE_API_TOKEN`                   | n/a |
+| `ANTHROPIC_API_KEY`                        | n/a |
+| `BRAVE_API_KEY`                            | n/a |
+| `GEMINI_CACHE_ENABLED`                     | n/a |
+| `GEMINI_CACHE_TTL_SECONDS`                 | n/a |
+| `DEFAULT_LLM_MODEL_ID`                     | n/a |
+| `DEFAULT_EMBEDDING_MODEL_ID`               | n/a |
+| `AUTH_PROVIDER`                            | Auth Auth provider, simple|cognito |
+| `ID_TOKEN_HEADER_NAME`                     | For non-simple auth, id token must be sent by client in addition to the access token in the auth header. |
+| `STREAM_ID_HEADER_NAME`                    | Header carrying the connected peer/stream id for REST requests that need peer-targeted communicator delivery. |
+| `AUTH_TOKEN_COOKIE_NAME`                   | n/a |
+| `ID_TOKEN_COOKIE_NAME`                     | n/a |
+| `COGNITO_REGION`                           | # Cognito specifics |
+| `COGNITO_USER_POOL_ID`                     | n/a |
+| `COGNITO_APP_CLIENT_ID`                    | n/a |
+| `COGNITO_SERVICE_CLIENT_ID`                | ideally, separate client for service users. can be the same as COGNITO_APP_CLIENT_ID |
+| `JWKS_CACHE_TTL_SECONDS`                   | 24h JWKS cache. Not used |
+| `OIDC_SERVICE_ADMIN_USERNAME`              | # Service account settings |
+| `OIDC_SERVICE_ADMIN_PASSWORD`              | n/a |
+| `ODIC_SERVICE_USER_EMAIL`                  | n/a |
+| `EXEC_WORKSPACE_ROOT`                      | Exec |
+| `EXEC_RUNTIME_MODE`                        | Exec runtime selector for proc-side code execution. Typical values: `docker`, `fargate`. |
+| `PY_CODE_EXEC_IMAGE`                       | n/a |
+| `PY_CODE_EXEC_TIMEOUT`                     | n/a |
+| `PY_CODE_EXEC_NETWORK_MODE`                | n/a |
+| `FARGATE_EXEC_ENABLED`                     | Enable distributed Fargate exec path. |
+| `FARGATE_CLUSTER`                          | ECS cluster ARN/name for distributed exec tasks. |
+| `FARGATE_TASK_DEFINITION`                  | ECS task definition used for distributed exec tasks. |
+| `FARGATE_CONTAINER_NAME`                   | Container name inside the exec task definition. |
+| `FARGATE_SUBNETS`                          | Comma-separated subnets for `awsvpc` task launch. |
+| `FARGATE_SECURITY_GROUPS`                  | Comma-separated security groups for `awsvpc` task launch. |
+| `FARGATE_ASSIGN_PUBLIC_IP`                 | `ENABLED` or `DISABLED` for distributed exec tasks. |
+| `FARGATE_LAUNCH_TYPE`                      | Launch type for exec tasks. Typical value: `FARGATE`. |
+| `FARGATE_PLATFORM_VERSION`                 | Optional ECS platform version for exec tasks. |
+| `TOOLS_WEB_SEARCH_FETCH_CONTENT`           | Tools |
+| `WEB_FETCH_RESOURCES_MEDIUM`               | Medium credentials (uid and sid from your browser after logging in.) |
+| `WEB_SEARCH_AGENTIC_THINKING_BUDGET`       | n/a |
+| `WEB_SEARCH_PRIMARY_BACKEND`               | Is adaptive (best effort graceful service degradation) backends supported: duckduckgo|brave|hybrid |
+| `WEB_SEARCH_BACKEND`                       | n/a |
+| `WEB_SEARCH_HYBRID_MODE`                   | # Hybrid mode (optional, defaults to "sequential"). sequential|parallel |
+| `WEB_SEARCH_SEGMENTER`                     | n/a |
+| `MCP_CACHE_TTL_SECONDS`                    | n/a |
+| `ACCOUNTING_SERVICES`                      | n/a |
+| `AGENTIC_BUNDLES_JSON`                     | Bundles descriptor (JSON/YAML). Common value inside container: `/config/bundles.yaml`. This path is mounted from `HOST_BUNDLES_DESCRIPTOR_PATH` in `.env`. |
+| `BUNDLES_INCLUDE_EXAMPLES`                 | Include built-in example bundles from sdk/examples/bundles (default: 1) |
+| `BUNDLE_CLEANUP_ENABLED`                   | Bundle cleanup / ref tracking Enable periodic bundle cleanup loop (uses Redis locks). |
+| `BUNDLE_CLEANUP_INTERVAL_SECONDS`          | Cleanup interval (seconds). |
+| `BUNDLE_CLEANUP_LOCK_TTL_SECONDS`          | Cleanup lock TTL (seconds). |
+| `BUNDLE_REF_TTL_SECONDS`                   | Active bundle ref TTL (seconds). |
+| `BUNDLES_FORCE_ENV_ON_STARTUP`             | Force bundles registry overwrite from env on startup (processor only). |
+| `BUNDLES_FORCE_ENV_LOCK_TTL_SECONDS`       | n/a |
+| `BUNDLES_PRELOAD_ON_START`                 | Eagerly load all configured bundle modules and run on_bundle_load hooks at proc startup. Eliminates cold start on first request. Proc health returns 503 until preload completes (default: `0`). |
+| `AGENTIC_BUNDLES_ROOT`                     | Local path bundles root inside the container. Paths in `AGENTIC_BUNDLES_JSON` for manual path bundles must start with this root (normally `/bundles`). |
+| `AGENTIC_GIT_BUNDLES_ROOT`                 | Git-resolved bundles root inside the container (normally `/git-bundles`). If unset, git bundles fall back to the legacy bundles root behavior. |
+| `BUNDLE_GIT_RESOLUTION_ENABLED`            | Git bundle resolution Disable git bundle resolution until git bundles are fully configured. |
+| `BUNDLE_GIT_ATOMIC`                        | Atomic checkout (clone to temp dir then rename) |
+| `BUNDLE_GIT_ALWAYS_PULL`                   | Always pull even if path exists (if using branch heads) |
+| `BUNDLE_GIT_REDIS_LOCK`                    | Redis lock for git pulls (per instance; key includes INSTANCE_ID) |
+| `BUNDLE_GIT_REDIS_LOCK_TTL_SECONDS`        | n/a |
+| `BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS`       | n/a |
+| `BUNDLE_GIT_PREFETCH_ENABLED`              | Prefetch git bundles to gate readiness |
+| `BUNDLE_GIT_PREFETCH_INTERVAL_SECONDS`     | n/a |
+| `BUNDLE_GIT_FAIL_BACKOFF_SECONDS`          | Backoff after git failures |
+| `BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS`      | n/a |
+| `BUNDLE_GIT_KEEP`                          | Shallow clone settings (optional) BUNDLE_GIT_CLONE_DEPTH=50 BUNDLE_GIT_SHALLOW=1 Cleanup policy for old git bundles |
+| `BUNDLE_GIT_TTL_HOURS`                     | n/a |
+| `GIT_SSH_KEY_PATH`                         | Optional SSH auth (private repos) Container paths are fixed by docker-compose mounts: /run/secrets/git_ssh_key /run/secrets/git_known_hosts |
+| `GIT_SSH_KNOWN_HOSTS`                      | n/a |
+| `GIT_SSH_STRICT_HOST_KEY_CHECKING`         | n/a |
+| `LOG_LEVEL`                                | Log |
+| `LOG_MAX_MB`                               | n/a |
+| `LOG_BACKUP_COUNT`                         | n/a |
+| `LOG_DIR`                                  | n/a |
+| `LOG_FILE_PREFIX`                          | n/a |
+| `CORS_CONFIG`                              | to disable CORS - remove env var or set it empty all options are optional to enable CORS with all defaults CORS_CONFIG={} |
+| `AWS_REGION`                               | AWS use AWS from the container AWS_PROFILE=... |
+| `AWS_DEFAULT_REGION`                       | n/a |
+| `AWS_SDK_LOAD_CONFIG`                      | optional: make boto3 read ~/.aws/config if present (harmless) |
+| `NO_PROXY`                                 | EC2 stuff. If you run dockercompose on EC2. Running with managed services don't proxy IMDS |
+| `AWS_EC2_METADATA_DISABLED`                | make sure SDKs don’t disable IMDS accidentally |
 
 ### Assembly -> React workspace env mapping
 
