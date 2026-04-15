@@ -25,7 +25,7 @@ Primary places to measure latency:
 1. Open Control Plane Monitoring Dashboard and refresh.
 2. Check `Total Queue`, `Queue Analytics` avg wait, and `chat_proc` healthy count.
 3. If avg wait is high, check Redis queues and heartbeats.
-4. If queue is growing while proc still looks healthy, inspect raw proc heartbeat JSON in Redis for `processor.queue_loop_lag_sec` and `processor.last_queue_error`.
+4. If queue is growing while proc still looks healthy, inspect raw proc heartbeat JSON in Redis for `processor.queue_loop_lag_sec`, `processor.last_queue_error`, and the watchdog age fields (`processor.max_active_task_idle_age_sec`, `processor.oldest_active_task_wall_age_sec`).
 5. If avg wait is low but UI is quiet, check SSE stream delivery logs.
 
 ## Key files and UIs
@@ -58,6 +58,10 @@ Where to look:
 Important proc heartbeat fields:
 - `processor.current_load`
 - `processor.active_tasks`
+- `processor.task_idle_timeout_sec`
+- `processor.task_max_wall_time_sec`
+- `processor.oldest_active_task_wall_age_sec`
+- `processor.max_active_task_idle_age_sec`
 - `processor.queue_loop_lag_sec`
 - `processor.config_loop_lag_sec`
 - `processor.last_queue_error`
@@ -69,6 +73,9 @@ How to interpret them:
 - `config_loop_lag_sec` rising continuously means the bundles/config pubsub loop is stalled.
 - `current_load=0` with a growing queue usually means proc is not acquiring work.
 - `active_tasks > 0` with flat queue depth can still be normal if workflows are slow; check `avg wait` before assuming a stall.
+- `max_active_task_idle_age_sec` approaching `task_idle_timeout_sec` means an active turn is close to the idle watchdog limit.
+- `oldest_active_task_wall_age_sec` approaching `task_max_wall_time_sec` means a long warm turn is nearing its hard wall-time cap.
+- These watchdog fields are raw heartbeat/debug signals. They are not exported autoscaling metrics.
 
 ## Fast reset actions (admin)
 Use this when 429/503 is stuck due to stale counters or misbehaving clients.
@@ -157,18 +164,23 @@ Use these patterns with your log stream or files:
    - `Queue pop timed out after`
    - `Resetting shared async Redis pool for processor`
    - `Queue pop failed on`
-5. Gateway rejections and pressure
+5. Proc watchdog timeouts
+   - `task_watchdog_timeout`
+   - `Task idle timeout exceeded`
+   - `Task max wall time exceeded`
+6. Gateway rejections and pressure
    - `gateway|backpressure|queue.enqueue_rejected|circuit_breaker`
 
 Examples:
 1. `rg -n "enqueue_chat_task_atomic result|acquired task|Starting task" /path/to/logs/*.log`
 2. `rg -n "SSEHub|sse_stream|no recipients found" /path/to/logs/*.log`
 3. `rg -n "Queue pop timed out after|Resetting shared async Redis pool for processor|Queue pop failed on" /path/to/logs/*.log`
-4. `rg -n "queue.enqueue_rejected|backpressure|circuit_breaker" /path/to/logs/*.log`
+4. `rg -n "Task idle timeout exceeded|Task max wall time exceeded|task_watchdog_timeout" /path/to/logs/*.log`
+5. `rg -n "queue.enqueue_rejected|backpressure|circuit_breaker" /path/to/logs/*.log`
 
 ## Quick triage checklist
 1. Verify processor is running and heartbeats are present.
-2. Check Redis queue size together with `processor.queue_loop_lag_sec` and `processor.last_queue_error`.
+2. Check Redis queue size together with `processor.queue_loop_lag_sec`, `processor.last_queue_error`, and the watchdog ages (`processor.max_active_task_idle_age_sec`, `processor.oldest_active_task_wall_age_sec`).
 3. Check `queue_wait_ms` logs and whether new `acquired task` logs are still appearing.
 4. Confirm SSE stream uses the same `stream_id` as `/sse/chat`.
 5. Check for rejected enqueues (queue pressure, no healthy processes).
@@ -211,6 +223,7 @@ What to expect:
 1. `chat_proc` healthy count should become `>= 1` within 10 to 30 seconds after restart.
 2. If `chat_proc` stays at 0 after ~45 seconds, the processor is not running or Redis is unhealthy.
 3. If `chat_proc` is healthy but `processor.queue_loop_lag_sec` keeps rising, the worker is up but the queue listener is likely stalled.
+4. If `chat_proc` is healthy, queue is not draining, and the watchdog ages are close to their limits, you are likely looking at a long warm turn rather than a dead worker.
 
 ## Minimal reproduction hints
 1. Restart server, immediately send a message and watch `queue_wait_ms`.
@@ -258,6 +271,17 @@ python -m kdcube_ai_app.infra.load.test.burst_sse_load \
   --concurrency 30 \
   --monitor
 ```
+
+### Watchdog-focused check
+
+For long warm turns, also inspect raw proc heartbeat JSON while the load test is running:
+
+- `processor.task_idle_timeout_sec`
+- `processor.task_max_wall_time_sec`
+- `processor.max_active_task_idle_age_sec`
+- `processor.oldest_active_task_wall_age_sec`
+
+This confirms whether proc is making progress, approaching the idle watchdog, or approaching the hard wall-time cap.
 
 ### How to profile during the test
 1. Open Control Plane Monitoring Dashboard:

@@ -62,6 +62,12 @@ Current exported scalar keys:
 - `throttling.rate_limit_429`
 - `throttling.backpressure_503`
 
+Raw proc watchdog note:
+- proc heartbeat/debug fields such as `processor.task_idle_timeout_sec`,
+  `processor.task_max_wall_time_sec`, `processor.oldest_active_task_wall_age_sec`,
+  and `processor.max_active_task_idle_age_sec` are **not** part of the exported scalar set
+- they remain raw processor observability data in Redis heartbeats and admin monitoring views
+
 Proc latency export note:
 - the Metrics server exports the proc latency metrics from the **`1m` percentile window** produced by `compute_system_monitoring(...)`
 - specifically:

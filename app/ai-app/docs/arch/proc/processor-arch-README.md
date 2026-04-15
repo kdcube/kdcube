@@ -236,11 +236,19 @@ Once claimed:
 5. proc emits `chat.start`
 6. proc emits an initial workflow step
 7. proc runs the bundle handler under:
-   - task timeout
+   - activity watchdog idle timeout
+   - hard wall-time cap
    - accounting binding
    - lock renewal
    - started-marker renewal
    - ECS task-protection hold
+
+Execution timeout model:
+
+- `CHAT_TASK_IDLE_TIMEOUT_SEC` bounds how long a claimed task may stay alive without meaningful communicator activity (`chat.start`, `chat.step`, `chat.delta`, `chat.complete`, `chat.error`, and other relay-envelope emissions)
+- `CHAT_TASK_MAX_WALL_TIME_SEC` is the absolute ceiling for one active processor task even if activity continues
+- `CHAT_TASK_TIMEOUT_SEC` is now the legacy/base timeout knob; if the two newer env vars are unset, proc uses it as the idle fallback and derives a larger hard cap from it
+- this matters because same-turn `followup` / `steer` can keep one turn legitimately warm for much longer than a single model call
 
 ### 4.4 Completion
 
@@ -464,6 +472,12 @@ The processor heartbeat metadata currently includes:
 - `current_load`
 - `active_tasks`
 - `draining`
+- `task_timeout_sec`
+- `task_idle_timeout_sec`
+- `task_max_wall_time_sec`
+- `task_watchdog_poll_interval_sec`
+- `oldest_active_task_wall_age_sec`
+- `max_active_task_idle_age_sec`
 - `queue_loop_lag_sec`
 - `config_loop_lag_sec`
 - `reaper_loop_lag_sec`
@@ -477,6 +491,9 @@ This metadata is intended to answer two different operational questions:
 
 - "Is the worker alive and still polling Redis?"
 - "Is the worker draining work or is it stuck?"
+
+The watchdog-related heartbeat fields are raw processor observability data.
+They are not currently exported as first-class autoscaling metrics by the Metrics service.
 
 ---
 

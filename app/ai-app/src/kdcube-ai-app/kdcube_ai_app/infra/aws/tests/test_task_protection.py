@@ -159,3 +159,17 @@ def test_ecs_task_scale_in_protection_reconcile_refreshes_busy_claims_when_sync_
     state = json.loads(protection._state_path.read_text())
     assert state["claims"][str(os.getpid())] == 1
     assert state["protection_enabled"] is True
+
+
+def test_ecs_task_scale_in_protection_prefers_max_wall_time_env_for_expiry(tmp_path, monkeypatch):
+    monkeypatch.setenv("CHAT_TASK_TIMEOUT_SEC", "600")
+    monkeypatch.setenv("CHAT_TASK_MAX_WALL_TIME_SEC", "3600")
+
+    protection = EcsTaskScaleInProtection(
+        logger_=logging.getLogger("test"),
+        agent_uri="http://127.0.0.1:51678",
+        lock_path=tmp_path / "ecs-task-protection.lock",
+        state_path=tmp_path / "ecs-task-protection.json",
+    )
+
+    assert protection._expires_minutes == 65

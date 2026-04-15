@@ -141,6 +141,7 @@ Notes:
 - The exported CloudWatch `p95` metrics currently use the **`1m` latency window**:
   - `chat/proc/queue/wait/p95` <- `components.proc.latency.queue_wait_ms.1m.p95`
   - `chat/proc/exec/p95` <- `components.proc.latency.exec_ms.1m.p95`
+- Proc watchdog internals (`task_idle_timeout_sec`, `task_max_wall_time_sec`, task wall/idle ages) are raw heartbeat/debug data, not first-class autoscaling metrics.
 
 ---
 

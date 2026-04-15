@@ -153,6 +153,11 @@ See `architecture-long.md §2` for the full breakdown, security group topology, 
 - **Redis**: cache + messaging (Pub/Sub) + rate‑limit counters.
 - **Neo4j**: optional, currently off.
 
+Processor note:
+- proc concurrency is bounded per worker
+- each active proc task is guarded by an activity-based idle watchdog plus a hard wall-time cap
+- this allows same-turn `followup` / `steer` to keep a turn warm while still terminating silent or runaway tasks
+
 ---
 
 ## 5) Limits & economics

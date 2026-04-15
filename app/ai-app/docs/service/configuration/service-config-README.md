@@ -234,7 +234,10 @@ Token TTL/uses:
 | `POSTGRES_SSL`                             | n/a |
 | `REDIS_URL`                                | Managed Redis endpoint (reachable from containers) |
 | `CB_RELAY_IDENTITY`                        | n/a |
-| `CHAT_TASK_TIMEOUT_SEC`                    | Per-task timeout (seconds). |
+| `CHAT_TASK_TIMEOUT_SEC`                    | Legacy/base proc task timeout (seconds). Used as the fallback idle timeout when the newer watchdog envs are unset. |
+| `CHAT_TASK_IDLE_TIMEOUT_SEC`               | Activity watchdog idle timeout for one active proc task (seconds). |
+| `CHAT_TASK_MAX_WALL_TIME_SEC`              | Hard wall-time cap for one active proc task (seconds). |
+| `CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC`     | How often proc re-checks active tasks against idle/wall limits. |
 | `PROC_CONTAINER_STOP_TIMEOUT_SEC`          | Proc container/task stop window (seconds). Keep aligned with ECS `stopTimeout`; proc derives graceful shutdown budget from it. |
 | `UVICORN_RELOAD`                           | Dev-only: enable auto-reload when running web_app.py directly (0/1). |
 | `HEARTBEAT_INTERVAL`                       | n/a |
@@ -799,12 +802,18 @@ product‑level chatbot capabilities.
 | `GATEWAY_CONFIG_JSON.service_capacity.proc.avg_processing_time_seconds`     | `25`    | Capacity math / throughput estimate    | `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/config.py`                         |
 | `GATEWAY_CONFIG_JSON.service_capacity.ingress.processes_per_instance`       | `1`     | Ingress worker processes per instance  | `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/config.py`                         |
 | `GATEWAY_CONFIG_JSON.limits.proc.max_queue_size`                            | `0`     | Hard queue size limit (0 = disabled)   | `src/kdcube-ai-app/kdcube_ai_app/infra/gateway/backpressure.py`                   |
-| `CHAT_TASK_TIMEOUT_SEC`                                                     | `600`   | Per‑task timeout (seconds)             | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`                          |
+| `CHAT_TASK_TIMEOUT_SEC`                                                     | `600`   | Legacy/base proc timeout knob. If unset in the proc service, normal proc wiring still passes `900` seconds as the effective base timeout. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`                          |
+| `CHAT_TASK_IDLE_TIMEOUT_SEC`                                                | unset   | Activity watchdog idle timeout for one active proc task. Defaults to the effective base timeout. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`                          |
+| `CHAT_TASK_MAX_WALL_TIME_SEC`                                               | unset   | Hard wall-time cap for one active proc task. Defaults to a larger derived value than the idle timeout. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`, `src/kdcube-ai-app/kdcube_ai_app/infra/aws/task_protection.py` |
+| `CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC`                                      | `1.0`   | Poll interval for the proc task watchdog loop. | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/processor.py`                          |
 | `PROC_CONTAINER_STOP_TIMEOUT_SEC`                                           | `120`   | Proc container/task stop window        | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/web_app.py`                       |
 
 Notes:
 - `PROC_CONTAINER_STOP_TIMEOUT_SEC` should match the deployment/task-definition `stopTimeout`.
 - Proc derives `timeout_graceful_shutdown` from this value with a small safety buffer, so raising the app-side drain window requires raising the deployment stop window too.
+- The proc execution model is now `idle watchdog + hard wall-time cap`, not a single absolute timeout.
+- If `CHAT_TASK_IDLE_TIMEOUT_SEC` and `CHAT_TASK_MAX_WALL_TIME_SEC` are both unset, proc uses `CHAT_TASK_TIMEOUT_SEC` as the compatibility base timeout and derives the newer limits from it.
+- Started-marker TTL and ECS task-protection default expiry track the hard wall-time cap, not the idle timeout.
 
 **Note:** The following are currently **not enforced** in the chat service (present only in examples):
 

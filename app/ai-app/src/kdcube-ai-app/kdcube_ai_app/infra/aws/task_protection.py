@@ -76,7 +76,11 @@ class EcsTaskScaleInProtection:
         )
         effective_task_timeout_sec = max(
             60,
-            int(task_timeout_sec or os.getenv("CHAT_TASK_TIMEOUT_SEC", "600")),
+            int(
+                task_timeout_sec
+                or os.getenv("CHAT_TASK_MAX_WALL_TIME_SEC")
+                or os.getenv("CHAT_TASK_TIMEOUT_SEC", "600")
+            ),
         )
         default_expires = max(5, min(120, math.ceil(effective_task_timeout_sec / 60) + 5))
         self._expires_minutes = max(

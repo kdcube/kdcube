@@ -364,7 +364,7 @@ sequenceDiagram
   API->>RQ: enqueue task (queue by user_type)
   W->>RQ: BRPOP (fair across queues)
   W->>RQ: acquire lock (per task)
-  W->>W: run workflow bundle
+  W->>W: run workflow bundle\n(activity watchdog + hard wall cap)
   W->>RQ: release lock / update metrics
 ```
 
@@ -376,6 +376,8 @@ Key worker: [apps/chat/processor.py](../../src/kdcube-ai-app/kdcube_ai_app/apps/
 
 - Each running process has an **instance id** and maintains load counters.
 - Workers respect **max concurrent** limits and fair queue scheduling.
+- Each active proc task is protected by an **activity watchdog** plus a **hard wall-time cap**.
+- This allows same-turn `followup` / `steer` to keep a turn warm without letting silent or runaway tasks live forever.
 - Gateway + backpressure protect the system from overload before enqueue.
 
 ---

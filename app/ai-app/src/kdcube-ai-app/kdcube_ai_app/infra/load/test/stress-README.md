@@ -78,3 +78,13 @@ Redis Browser:
 
 - Queue keys: <tenant>:<project>:kdcube:chat:prompt:queue:*
 - Heartbeats: <tenant>:<project>:kdcube:heartbeat:process:*
+
+For long warm-turn testing, also inspect raw proc heartbeat JSON for:
+
+- `processor.task_idle_timeout_sec`
+- `processor.task_max_wall_time_sec`
+- `processor.max_active_task_idle_age_sec`
+- `processor.oldest_active_task_wall_age_sec`
+
+These fields are the watchdog/debug view for active proc tasks. They are useful
+when you are specifically testing long-running turns with same-turn `followup` / `steer`.

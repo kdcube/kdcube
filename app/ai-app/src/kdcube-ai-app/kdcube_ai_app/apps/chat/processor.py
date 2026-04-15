@@ -49,6 +49,106 @@ QUEUE_CALL_TIMEOUT_SEC = 2.0
 CONFIG_GET_MESSAGE_TIMEOUT_SEC = 1.0
 CONFIG_CALL_TIMEOUT_SEC = 5.0
 INFLIGHT_REAPER_INTERVAL_SEC = 5.0
+TASK_WATCHDOG_POLL_INTERVAL_SEC = 1.0
+
+
+class _TaskExecutionWatchdogTimeout(asyncio.TimeoutError):
+    def __init__(
+        self,
+        *,
+        timeout_kind: str,
+        limit_sec: float,
+        wall_age_sec: float,
+        idle_age_sec: float,
+        last_activity_kind: str,
+        last_activity_at: Optional[str],
+    ):
+        self.timeout_kind = str(timeout_kind or "timeout")
+        self.limit_sec = float(limit_sec)
+        self.wall_age_sec = float(wall_age_sec)
+        self.idle_age_sec = float(idle_age_sec)
+        self.last_activity_kind = str(last_activity_kind or "unknown")
+        self.last_activity_at = last_activity_at
+        super().__init__(self._build_message())
+
+    def _build_message(self) -> str:
+        if self.timeout_kind == "idle":
+            return (
+                f"Task idle timeout exceeded after {self.idle_age_sec:.3f}s "
+                f"(limit={self.limit_sec:.3f}s, last_activity={self.last_activity_kind}, "
+                f"last_activity_at={self.last_activity_at or 'unknown'})"
+            )
+        return (
+            f"Task max wall time exceeded after {self.wall_age_sec:.3f}s "
+            f"(limit={self.limit_sec:.3f}s, last_activity={self.last_activity_kind}, "
+            f"idle_age={self.idle_age_sec:.3f}s)"
+        )
+
+
+class _ActivityTrackingCommunicator:
+    """
+    Lightweight proxy that updates processor task activity whenever the workflow
+    emits user-visible chat events.
+    """
+
+    def __init__(self, inner: ChatCommunicator, *, touch: callable):
+        self._inner = inner
+        self._touch = touch
+
+    def __getattr__(self, item):
+        return getattr(self._inner, item)
+
+    async def emit(self, event: str, data: dict, broadcast: bool = False):
+        result = await self._inner.emit(event, data, broadcast=broadcast)
+        typ = ""
+        try:
+            typ = str((data or {}).get("type") or event or "").strip().lower()
+        except Exception:
+            typ = str(event or "emit")
+        self._touch(f"emit:{typ or 'event'}")
+        return result
+
+    async def emit_enveloped(self, env: dict):
+        result = await self._inner.emit_enveloped(env)
+        typ = ""
+        try:
+            typ = str((env or {}).get("type") or "").strip().lower()
+        except Exception:
+            typ = ""
+        self._touch(f"emit:{typ or 'enveloped'}")
+        return result
+
+    async def start(self, **kwargs):
+        result = await self._inner.start(**kwargs)
+        self._touch("chat.start")
+        return result
+
+    async def step(self, **kwargs):
+        result = await self._inner.step(**kwargs)
+        self._touch("chat.step")
+        return result
+
+    async def delta(self, **kwargs):
+        result = await self._inner.delta(**kwargs)
+        marker = str((kwargs or {}).get("marker") or "answer").strip().lower()
+        self._touch(f"chat.delta:{marker}")
+        return result
+
+    async def complete(self, **kwargs):
+        result = await self._inner.complete(**kwargs)
+        self._touch("chat.complete")
+        return result
+
+    async def error(self, **kwargs):
+        result = await self._inner.error(**kwargs)
+        self._touch("chat.error")
+        return result
+
+    async def event(self, **kwargs):
+        result = await self._inner.event(**kwargs)
+        etype = str((kwargs or {}).get("type") or "event").strip().lower()
+        self._touch(f"chat.event:{etype}")
+        return result
 
 
 async def prefetch_git_bundles() -> dict[str, str]:
@@ -112,7 +212,7 @@ class EnhancedChatRequestProcessor:
       - Pops tasks fairly from multiple queues
       - Acquires + renews a per-task Redis lock
       - Emits chat_* events via ChatCommunicator (async)
-      - Enforces per-task timeout
+      - Enforces per-task idle timeout plus hard wall-time cap
       - Handles graceful shutdown
     """
 
@@ -129,6 +229,8 @@ class EnhancedChatRequestProcessor:
             queue_analytics_updater=None,
             max_concurrent: Optional[int] = None,
             task_timeout_sec: Optional[int] = None,
+            task_idle_timeout_sec: Optional[int] = None,
+            task_max_wall_time_sec: Optional[int] = None,
             lock_ttl_sec: int = 300,
             lock_renew_sec: int = 60,
             started_marker_ttl_sec: Optional[int] = None,
@@ -140,10 +242,30 @@ class EnhancedChatRequestProcessor:
         self.chat_handler = chat_handler
         self.process_id = process_id or os.getpid()
         self.max_concurrent = int(max_concurrent or 5)
-        self.task_timeout_sec = int(os.getenv("CHAT_TASK_TIMEOUT_SEC", str(task_timeout_sec or 600)))
+        legacy_task_timeout_sec = max(
+            1,
+            int(os.getenv("CHAT_TASK_TIMEOUT_SEC", str(task_timeout_sec or 600))),
+        )
+        self.task_timeout_sec = legacy_task_timeout_sec
+        self.task_idle_timeout_sec = max(
+            1,
+            int(os.getenv("CHAT_TASK_IDLE_TIMEOUT_SEC", str(task_idle_timeout_sec or legacy_task_timeout_sec))),
+        )
+        self.task_max_wall_time_sec = max(
+            self.task_idle_timeout_sec,
+            int(
+                os.getenv(
+                    "CHAT_TASK_MAX_WALL_TIME_SEC",
+                    str(task_max_wall_time_sec or max(legacy_task_timeout_sec, legacy_task_timeout_sec * 4)),
+                )
+            ),
+        )
         self.lock_ttl_sec = lock_ttl_sec
         self.lock_renew_sec = lock_renew_sec
-        default_started_marker_ttl = max(self.task_timeout_sec + self.lock_ttl_sec + 60, self.lock_ttl_sec * 2)
+        default_started_marker_ttl = max(
+            self.task_max_wall_time_sec + self.lock_ttl_sec + 60,
+            self.lock_ttl_sec * 2,
+        )
         self.started_marker_ttl_sec = int(
             os.getenv(
                 "CHAT_TASK_STARTED_MARKER_TTL_SEC",
@@ -195,6 +317,10 @@ class EnhancedChatRequestProcessor:
         self._host_drain_poll_interval_sec = max(
             5.0,
             float(os.getenv("ECS_CONTAINER_INSTANCE_DRAIN_POLL_INTERVAL_SEC", "15") or "15"),
+        )
+        self._task_watchdog_poll_interval_sec = max(
+            0.1,
+            float(os.getenv("CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC", str(TASK_WATCHDOG_POLL_INTERVAL_SEC)) or str(TASK_WATCHDOG_POLL_INTERVAL_SEC)),
         )
         self._host_draining = False
         self._host_draining_since: Optional[str] = None
@@ -276,6 +402,10 @@ class EnhancedChatRequestProcessor:
             info = dict(self._active_task_details.get(task) or {})
             info.setdefault("task_name", task.get_name())
             info["done"] = task.done()
+            info.update(self._task_age_snapshot(info))
+            info.pop("claimed_monotonic", None)
+            info.pop("started_monotonic", None)
+            info.pop("last_activity_monotonic", None)
             details.append(info)
         details.sort(key=lambda item: str(item.get("task_id") or item.get("task_name") or ""))
         return details
@@ -327,6 +457,17 @@ class EnhancedChatRequestProcessor:
 
     def get_runtime_metadata(self) -> Dict[str, Any]:
         now = time.monotonic()
+        oldest_active_task_wall_age_sec = 0.0
+        max_active_task_idle_age_sec = 0.0
+        for task in list(self._active_tasks):
+            info = self._active_task_details.get(task) or {}
+            ages = self._task_age_snapshot(info, now=now)
+            wall_age = ages.get("wall_age_sec")
+            idle_age = ages.get("idle_age_sec")
+            if wall_age is not None:
+                oldest_active_task_wall_age_sec = max(oldest_active_task_wall_age_sec, float(wall_age))
+            if idle_age is not None:
+                max_active_task_idle_age_sec = max(max_active_task_idle_age_sec, float(idle_age))
         metadata = {
             "current_load": self._current_load,
             "active_tasks": len(self._active_tasks),
@@ -334,6 +475,12 @@ class EnhancedChatRequestProcessor:
             "host_draining": self._host_draining,
             "host_draining_since": self._host_draining_since,
             "accepting_new_tasks": not self._stop_event.is_set() and not self._host_draining,
+            "task_timeout_sec": self.task_timeout_sec,
+            "task_idle_timeout_sec": self.task_idle_timeout_sec,
+            "task_max_wall_time_sec": self.task_max_wall_time_sec,
+            "task_watchdog_poll_interval_sec": self._task_watchdog_poll_interval_sec,
+            "oldest_active_task_wall_age_sec": round(oldest_active_task_wall_age_sec, 3),
+            "max_active_task_idle_age_sec": round(max_active_task_idle_age_sec, 3),
             "queue_loop_lag_sec": round(max(0.0, now - self._last_queue_poll_completed_at), 3),
             "config_loop_lag_sec": round(max(0.0, now - self._last_config_poll_completed_at), 3),
             "reaper_loop_lag_sec": round(max(0.0, now - self._last_reaper_poll_completed_at), 3),
@@ -357,6 +504,148 @@ class EnhancedChatRequestProcessor:
 
     def is_host_draining(self) -> bool:
         return self._host_draining
+
+    def _task_info(self, task: Optional[asyncio.Task] = None) -> Optional[Dict[str, Any]]:
+        resolved_task = task or asyncio.current_task()
+        if resolved_task is None:
+            return None
+        return self._active_task_details.get(resolved_task)
+
+    def _touch_task_activity(self, kind: str, *, task: Optional[asyncio.Task] = None) -> None:
+        info = self._task_info(task)
+        if info is None:
+            return
+        now = time.monotonic()
+        info["last_activity_at"] = _utc_now_iso()
+        info["last_activity_monotonic"] = now
+        info["last_activity_kind"] = str(kind or "processor.activity")
+        info["activity_count"] = int(info.get("activity_count") or 0) + 1
+
+    def _mark_task_execution_started(self, *, task: Optional[asyncio.Task] = None) -> None:
+        info = self._task_info(task)
+        if info is None:
+            return
+        now_iso = _utc_now_iso()
+        now_mono = time.monotonic()
+        info["started_execution"] = True
+        info["started_at"] = now_iso
+        info["started_monotonic"] = now_mono
+        if not info.get("last_activity_at"):
+            info["last_activity_at"] = now_iso
+        if info.get("last_activity_monotonic") is None:
+            info["last_activity_monotonic"] = now_mono
+        if not info.get("last_activity_kind"):
+            info["last_activity_kind"] = "processor.execution_started"
+
+    def _task_age_snapshot(
+            self,
+            info: Dict[str, Any],
+            *,
+            now: Optional[float] = None,
+    ) -> Dict[str, Optional[float]]:
+        now_mono = float(now if now is not None else time.monotonic())
+        start_mono = info.get("started_monotonic")
+        if start_mono is None:
+            start_mono = info.get("claimed_monotonic")
+        last_mono = info.get("last_activity_monotonic")
+        if last_mono is None:
+            last_mono = start_mono
+
+        wall_age_sec = None
+        idle_age_sec = None
+        try:
+            if start_mono is not None:
+                wall_age_sec = max(0.0, now_mono - float(start_mono))
+        except Exception:
+            wall_age_sec = None
+        try:
+            if last_mono is not None:
+                idle_age_sec = max(0.0, now_mono - float(last_mono))
+        except Exception:
+            idle_age_sec = None
+
+        return {
+            "wall_age_sec": round(wall_age_sec, 3) if wall_age_sec is not None else None,
+            "idle_age_sec": round(idle_age_sec, 3) if idle_age_sec is not None else None,
+        }
+
+    async def _cancel_handler_for_watchdog(
+            self,
+            handler_task: asyncio.Task,
+            *,
+            timeout_kind: str,
+            limit_sec: float,
+            wall_age_sec: float,
+            idle_age_sec: float,
+            last_activity_kind: str,
+            last_activity_at: Optional[str],
+    ) -> None:
+        if not handler_task.done():
+            handler_task.cancel()
+            try:
+                await handler_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.debug("Handler raised while cancelling after watchdog timeout", exc_info=True)
+        raise _TaskExecutionWatchdogTimeout(
+            timeout_kind=timeout_kind,
+            limit_sec=limit_sec,
+            wall_age_sec=wall_age_sec,
+            idle_age_sec=idle_age_sec,
+            last_activity_kind=last_activity_kind,
+            last_activity_at=last_activity_at,
+        )
+
+    async def _run_handler_with_watchdog(self, payload: ChatTaskPayload):
+        handler_task = asyncio.create_task(
+            self.chat_handler(payload),
+            name=f"chat-handler:{payload.meta.task_id}",
+        )
+        try:
+            while True:
+                done, _pending = await asyncio.wait(
+                    {handler_task},
+                    timeout=self._task_watchdog_poll_interval_sec,
+                )
+                if handler_task in done:
+                    return await handler_task
+
+                info = self._task_info() or {}
+                ages = self._task_age_snapshot(info)
+                wall_age_sec = float(ages.get("wall_age_sec") or 0.0)
+                idle_age_sec = float(ages.get("idle_age_sec") or 0.0)
+                last_activity_kind = str(info.get("last_activity_kind") or "unknown")
+                last_activity_at = info.get("last_activity_at")
+
+                if wall_age_sec >= float(self.task_max_wall_time_sec):
+                    await self._cancel_handler_for_watchdog(
+                        handler_task,
+                        timeout_kind="wall",
+                        limit_sec=float(self.task_max_wall_time_sec),
+                        wall_age_sec=wall_age_sec,
+                        idle_age_sec=idle_age_sec,
+                        last_activity_kind=last_activity_kind,
+                        last_activity_at=last_activity_at,
+                    )
+
+                if idle_age_sec >= float(self.task_idle_timeout_sec):
+                    await self._cancel_handler_for_watchdog(
+                        handler_task,
+                        timeout_kind="idle",
+                        limit_sec=float(self.task_idle_timeout_sec),
+                        wall_age_sec=wall_age_sec,
+                        idle_age_sec=idle_age_sec,
+                        last_activity_kind=last_activity_kind,
+                        last_activity_at=last_activity_at,
+                    )
+        except asyncio.CancelledError:
+            handler_task.cancel()
+            try:
+                await handler_task
+            except asyncio.CancelledError:
+                pass
+            raise
 
     async def _task_protection_reconcile_loop(self) -> None:
         try:
@@ -910,12 +1199,20 @@ class EnhancedChatRequestProcessor:
                     name=f"chat-task:{task_id}",
                 )
                 self._active_tasks.add(task)
+                claimed_at = _utc_now_iso()
+                claimed_monotonic = time.monotonic()
                 self._active_task_details[task] = {
                     "task_id": task_id,
                     "queue_key": task_data.get("_ready_queue_key") or task_data.get("_queue_key"),
                     "inflight_queue_key": task_data.get("_inflight_queue_key"),
-                    "started_at": _utc_now_iso(),
+                    "claimed_at": claimed_at,
+                    "claimed_monotonic": claimed_monotonic,
+                    "started_at": None,
                     "started_execution": False,
+                    "last_activity_at": claimed_at,
+                    "last_activity_monotonic": claimed_monotonic,
+                    "last_activity_kind": "processor.claimed",
+                    "activity_count": 1,
                 }
 
                 def _on_done(t: asyncio.Task) -> None:
@@ -1398,6 +1695,9 @@ class EnhancedChatRequestProcessor:
 
     async def _process_task(self, task_data: Dict[str, Any]):
         lock_key = task_data.get("_lock_key")
+        current_processor_task = asyncio.current_task()
+        ephemeral_active_task_registration = False
+        ephemeral_task_details = False
 
         # 1) Normalize payload
         try:
@@ -1414,9 +1714,36 @@ class EnhancedChatRequestProcessor:
 
         assert payload is not None
 
+        if current_processor_task is not None:
+            if current_processor_task not in self._active_tasks:
+                self._active_tasks.add(current_processor_task)
+                ephemeral_active_task_registration = True
+            if current_processor_task not in self._active_task_details:
+                claimed_at = _utc_now_iso()
+                claimed_monotonic = time.monotonic()
+                self._active_task_details[current_processor_task] = {
+                    "task_id": payload.meta.task_id,
+                    "queue_key": task_data.get("_ready_queue_key") or task_data.get("_queue_key"),
+                    "inflight_queue_key": task_data.get("_inflight_queue_key"),
+                    "claimed_at": claimed_at,
+                    "claimed_monotonic": claimed_monotonic,
+                    "started_at": None,
+                    "started_execution": False,
+                    "last_activity_at": claimed_at,
+                    "last_activity_monotonic": claimed_monotonic,
+                    "last_activity_kind": "processor.claimed",
+                    "activity_count": 1,
+                }
+                ephemeral_task_details = True
+
         # 2) Build contexts
         task_id = payload.meta.task_id
         request_id, svc, conv, comm = self._build_runtime_context(payload)
+        processor_task = asyncio.current_task()
+        tracked_comm = _ActivityTrackingCommunicator(
+            comm,
+            touch=lambda kind, _task=processor_task: self._touch_task_activity(kind, task=_task),
+        )
 
         # 3) accounting + storage
         from kdcube_ai_app.infra.accounting.envelope import AccountingEnvelope, bind_accounting
@@ -1453,26 +1780,23 @@ class EnhancedChatRequestProcessor:
             protection_label = f"task_id={task_id}"
             async with self._task_scale_in_protection.hold(label=protection_label):
                 started_key = await self._mark_task_started(task_data, payload, request_id)
+                self._mark_task_execution_started()
                 if started_key:
-                    details = self._active_task_details.get(asyncio.current_task())
-                    if details is not None:
-                        details["started_execution"] = True
-                        details["started_at"] = _utc_now_iso()
-
+                    self._touch_task_activity("processor.started_marker")
                 async with self._lock_renewer(
                         lock_key=lock_key,
                         extra_keys=[started_key] if started_key else None,
                         extra_ttl_sec=self.started_marker_ttl_sec if started_key else None,
                 ):
-                    await comm.start(message=msg, queue_stats={})
-                    await comm.step(
+                    exec_started_at = time.monotonic()
+                    await tracked_comm.start(message=msg, queue_stats={})
+                    await tracked_comm.step(
                         step="workflow_start",
                         status="started",
                         title="Workflow Start",
                         data={"default_model": (payload.config.values or {}).get("selected_model"), "task_id": task_id},
                     )
 
-                    exec_started_at = time.monotonic()
                     async with bind_accounting(envelope, storage_backend, enabled=True):
                         async with with_accounting("chat.orchestrator",
                                                    app_bundle_id=payload.routing.bundle_id,
@@ -1483,19 +1807,13 @@ class EnhancedChatRequestProcessor:
                             "conversation_id": payload.routing.conversation_id,
                             "turn_id": payload.routing.turn_id,
                         }):
-                            with bind_current_request_context(payload, comm=comm):
+                            with bind_current_request_context(payload, comm=tracked_comm):
                                 with bind_current_conversation_continuation_source(continuation_source):
-                                    result = await asyncio.wait_for(
-                                        self.chat_handler(
-                                            payload,
-
-                                        ),
-                                        timeout=self.task_timeout_sec,
-                                    )
+                                    result = await self._run_handler_with_watchdog(payload)
 
                 result = result or {}
                 success = True
-                await comm.complete(data=result)
+                await tracked_comm.complete(data=result)
 
         except asyncio.CancelledError:
             task_cancelled = True
@@ -1504,14 +1822,26 @@ class EnhancedChatRequestProcessor:
                 task_id,
             )
             raise
-        except asyncio.TimeoutError:
-            tb = "Task timed out"
-            await comm.error(message=tb, data={"task_id": task_id})
+        except _TaskExecutionWatchdogTimeout as exc:
+            tb = str(exc)
+            await tracked_comm.error(
+                message=tb,
+                data={
+                    "task_id": task_id,
+                    "error_type": "task_watchdog_timeout",
+                    "timeout_kind": exc.timeout_kind,
+                    "limit_sec": exc.limit_sec,
+                    "wall_age_sec": exc.wall_age_sec,
+                    "idle_age_sec": exc.idle_age_sec,
+                    "last_activity_kind": exc.last_activity_kind,
+                    "last_activity_at": exc.last_activity_at,
+                },
+            )
             success = False
         except Exception:
             tb = traceback.format_exc()
             try:
-                await comm.error(message=tb, data={"task_id": task_id})
+                await tracked_comm.error(message=tb, data={"task_id": task_id})
             except Exception:
                 logger.debug("Failed to emit processor error for %s", task_id, exc_info=True)
             success = False
@@ -1615,3 +1945,7 @@ class EnhancedChatRequestProcessor:
                                                          target_sid=None)
                 except Exception as ex:
                     logger.error(traceback.format_exc())
+            if ephemeral_task_details and current_processor_task is not None:
+                self._active_task_details.pop(current_processor_task, None)
+            if ephemeral_active_task_registration and current_processor_task is not None:
+                self._active_tasks.discard(current_processor_task)

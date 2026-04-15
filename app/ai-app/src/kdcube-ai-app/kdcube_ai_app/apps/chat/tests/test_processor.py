@@ -185,6 +185,18 @@ class _DummyChatCommunicator:
     async def error(self, **kwargs):
         type(self).error_calls.append(kwargs)
 
+    async def delta(self, **kwargs):
+        del kwargs
+
+    async def event(self, **kwargs):
+        del kwargs
+
+    async def emit(self, *args, **kwargs):
+        del args, kwargs
+
+    async def emit_enveloped(self, *args, **kwargs):
+        del args, kwargs
+
 
 class _DummyEnvelope:
     @staticmethod
@@ -233,7 +245,17 @@ def _build_task_payload(task_id="task-1", *, user_type="registered"):
     }
 
 
-def _build_processor(redis_client, *, max_concurrent=5, handler=_noop_handler, conversation_ctx=None, relay=None):
+def _build_processor(
+        redis_client,
+        *,
+        max_concurrent=5,
+        handler=_noop_handler,
+        conversation_ctx=None,
+        relay=None,
+        task_timeout_sec=None,
+        task_idle_timeout_sec=None,
+        task_max_wall_time_sec=None,
+):
     middleware = SimpleNamespace(
         redis_url="redis://example",
         instance_id="proc-test",
@@ -248,6 +270,9 @@ def _build_processor(redis_client, *, max_concurrent=5, handler=_noop_handler, c
         relay=relay or _NoopRelay(),
         redis=redis_client,
         max_concurrent=max_concurrent,
+        task_timeout_sec=task_timeout_sec,
+        task_idle_timeout_sec=task_idle_timeout_sec,
+        task_max_wall_time_sec=task_max_wall_time_sec,
         host_drain_detector=_DummyHostDrainDetector(enabled=False),
     )
     processor.queue_block_timeout_sec = 0.01
@@ -682,3 +707,88 @@ async def test_process_task_binds_runtime_request_context(_patch_processor_depen
 
     assert captured["before"] == ("user-1", "socket-1", True)
     assert captured["after"] == ("user-1", "socket-1", True)
+
+
+@pytest.mark.asyncio
+async def test_process_task_idle_watchdog_times_out_silent_handler(_patch_processor_dependencies):
+    redis = _MinimalRedis()
+
+    async def _silent_handler(_payload):
+        await asyncio.Event().wait()
+
+    processor = _build_processor(
+        redis,
+        handler=_silent_handler,
+        task_idle_timeout_sec=1,
+        task_max_wall_time_sec=5,
+    )
+    processor.task_idle_timeout_sec = 0.05
+    processor.task_max_wall_time_sec = 1.0
+    processor._task_watchdog_poll_interval_sec = 0.01
+
+    task_payload = _build_task_payload("idle-timeout-task")
+    raw_payload = json.dumps(task_payload).encode("utf-8")
+    inflight_key = "queue:inflight:registered"
+    lock_key = "lock:idle-timeout-task"
+    redis.seed_list(inflight_key, [raw_payload])
+    redis.lock_ttls[lock_key] = 300
+    processor._current_load = 1
+
+    task_data = dict(task_payload)
+    task_data["_lock_key"] = lock_key
+    task_data["_raw_payload"] = raw_payload
+    task_data["_ready_queue_key"] = "queue:registered"
+    task_data["_inflight_queue_key"] = inflight_key
+    task_data["_queue_wait_ms"] = 10
+
+    await processor._process_task(task_data)
+
+    assert redis.lists[inflight_key] == []
+    assert processor.get_current_load() == 0
+    assert _patch_processor_dependencies.error_calls[-1]["data"]["error_type"] == "task_watchdog_timeout"
+    assert _patch_processor_dependencies.error_calls[-1]["data"]["timeout_kind"] == "idle"
+
+
+@pytest.mark.asyncio
+async def test_process_task_hard_cap_wins_even_with_ongoing_activity(_patch_processor_dependencies):
+    redis = _MinimalRedis()
+
+    async def _chatty_handler(_payload):
+        comm = get_current_comm()
+        assert comm is not None
+        while True:
+            await asyncio.sleep(0.01)
+            await comm.step(step="heartbeat", status="running")
+
+    processor = _build_processor(
+        redis,
+        handler=_chatty_handler,
+        task_idle_timeout_sec=1,
+        task_max_wall_time_sec=5,
+    )
+    processor.task_idle_timeout_sec = 0.25
+    processor.task_max_wall_time_sec = 0.06
+    processor._task_watchdog_poll_interval_sec = 0.01
+
+    task_payload = _build_task_payload("wall-timeout-task")
+    raw_payload = json.dumps(task_payload).encode("utf-8")
+    inflight_key = "queue:inflight:registered"
+    lock_key = "lock:wall-timeout-task"
+    redis.seed_list(inflight_key, [raw_payload])
+    redis.lock_ttls[lock_key] = 300
+    processor._current_load = 1
+
+    task_data = dict(task_payload)
+    task_data["_lock_key"] = lock_key
+    task_data["_raw_payload"] = raw_payload
+    task_data["_ready_queue_key"] = "queue:registered"
+    task_data["_inflight_queue_key"] = inflight_key
+    task_data["_queue_wait_ms"] = 10
+
+    await processor._process_task(task_data)
+
+    metadata = processor.get_runtime_metadata()
+    assert metadata["task_idle_timeout_sec"] == pytest.approx(0.25, rel=0, abs=1e-6)
+    assert metadata["task_max_wall_time_sec"] == pytest.approx(0.06, rel=0, abs=1e-6)
+    assert _patch_processor_dependencies.error_calls[-1]["data"]["error_type"] == "task_watchdog_timeout"
+    assert _patch_processor_dependencies.error_calls[-1]["data"]["timeout_kind"] == "wall"

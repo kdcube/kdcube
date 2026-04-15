@@ -38,6 +38,27 @@ The processor uses several layers at once.
 
 No single mechanism is sufficient by itself.
 
+### 1.1 Execution watchdog inside one proc task
+
+Long-run protection is not only about shutdown and recovery. Proc also protects
+itself against tasks that stay alive too long.
+
+The current execution model is:
+
+- `CHAT_TASK_IDLE_TIMEOUT_SEC`: activity watchdog idle limit
+- `CHAT_TASK_MAX_WALL_TIME_SEC`: hard wall-time ceiling for one active proc task
+- `CHAT_TASK_TIMEOUT_SEC`: legacy/base timeout knob used as the fallback when the two newer settings are absent
+
+Important behavior:
+
+- meaningful communicator activity resets the idle timer
+- same-turn `followup` / `steer` can therefore keep a turn warm as long as it remains active
+- a completely silent task still times out on the idle watchdog
+- a very active task still stops once it reaches the hard wall-time cap
+
+This split is necessary because a modern React turn can now stay alive across
+multiple bounded interactions, and an absolute one-shot timeout is too blunt.
+
 ---
 
 ## 2. The Non-Idempotent Boundary
@@ -439,6 +460,9 @@ Relevant environment variables:
 - `ECS_CONTAINER_INSTANCE_DRAIN_POLL_INTERVAL_SEC`
 - `ECS_CONTAINER_INSTANCE_DRAIN_REQUEST_TIMEOUT_SEC`
 - `CHAT_TASK_TIMEOUT_SEC`
+- `CHAT_TASK_IDLE_TIMEOUT_SEC`
+- `CHAT_TASK_MAX_WALL_TIME_SEC`
+- `CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC`
 
 Operational meaning:
 
@@ -446,6 +470,15 @@ Operational meaning:
 - `REFRESH_INTERVAL_SEC` controls how often busy protection is refreshed
 - `RECONCILE_INTERVAL_SEC` controls how often proc re-checks and repairs local protection state
 - `ECS_CONTAINER_INSTANCE_DRAIN_POLL_INTERVAL_SEC` controls how often proc asks ECS whether its current container instance is already draining
+- `CHAT_TASK_IDLE_TIMEOUT_SEC` controls how long a task may remain alive without meaningful communicator activity
+- `CHAT_TASK_MAX_WALL_TIME_SEC` is the absolute ceiling for one active proc task
+- `CHAT_TASK_WATCHDOG_POLL_INTERVAL_SEC` controls how often proc re-checks active tasks against the idle / wall limits
+
+Derived behavior:
+
+- started-marker TTL now derives from the hard wall-time cap, not from the idle timeout
+- ECS task-protection default expiry also derives from the hard wall-time cap, so long warm turns and deployment protection remain aligned
+- if the new env vars are unset, `CHAT_TASK_TIMEOUT_SEC` remains the compatibility base value
 
 ---
 

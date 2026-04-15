@@ -30,7 +30,7 @@ It reflects the actual behavior in code (SSE/Socket.IO are gated; REST is sessio
   - Processor queue wait + execution time (p50/p95/p99, 1m/15m/1h)
   - Ingress REST latency (p50/p95/p99, 1m/15m/1h)
 - **Draining indicator**: instances that stopped heartbeating recently are marked as *draining* before becoming stale
-- **Proc runtime metadata in raw heartbeats**: queue/config loop lag and recent Redis errors are attached to proc process heartbeats
+- **Proc runtime metadata in raw heartbeats**: queue/config loop lag, recent Redis errors, and proc watchdog state (idle/hard-cap config plus active-task ages) are attached to proc process heartbeats
 
 ```mermaid
 graph TD
@@ -90,7 +90,8 @@ Pool reporting note:
 
 Proc stall note:
 - Detailed proc runtime metadata is attached to the raw process heartbeat JSON in Redis.
-- Use the Redis Browser or direct Redis access to inspect heartbeat `metadata.processor.*` fields such as queue loop lag and last queue error.
+- Use the Redis Browser or direct Redis access to inspect heartbeat `metadata.processor.*` fields such as queue loop lag, last queue error, `task_idle_timeout_sec`, `task_max_wall_time_sec`, `oldest_active_task_wall_age_sec`, and `max_active_task_idle_age_sec`.
+- These watchdog fields are not first-class exported metrics from the Metrics service; they are raw runtime observability signals.
 
 ### Metrics service
 Internal metrics endpoints are served by `kdcube_ai_app.apps.metrics.web_app`:
