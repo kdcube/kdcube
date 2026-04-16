@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-dev-README.md
 title: "Bundle Dev"
-summary: "Bundle developer guide: entrypoint setup, layout, tools/skills, ops API, and one‑time bundle init."
-tags: ["sdk", "bundle", "development", "workflow", "entrypoint", "tools", "skills", "ui", "operations"]
-keywords: ["agentic_workflow", "BaseEntrypoint", "tools_descriptor", "skills_descriptor", "operations API", "on_bundle_load", "knowledge space", "event_filter", "BundleState", "with_accounting", "track_llm", "followups", "final_answer"]
+summary: "Bundle developer guide: entrypoint setup, supported decorators, layout, tools/skills, ops API, and one‑time bundle init."
+tags: ["sdk", "bundle", "development", "workflow", "entrypoint", "decorators", "tools", "skills", "ui", "operations", "cron", "venv"]
+keywords: ["agentic_workflow", "agentic_workflow_factory", "bundle_id", "api decorator", "ui_widget", "ui_main", "on_message", "cron", "venv", "BaseEntrypoint", "tools_descriptor", "skills_descriptor", "operations API", "on_bundle_load", "knowledge space", "event_filter", "BundleState", "with_accounting", "track_llm", "followups", "final_answer"]
 see_also:
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/bundle-lifecycle-README.md
@@ -35,7 +35,7 @@ Read these first:
   [docs/sdk/bundle/bundle-props-secrets-README.md](bundle-props-secrets-README.md)
 - primary full-feature reference bundle:
   [docs/sdk/bundle/bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
-- declarative platform integration (`@api`, `@ui_widget`, `@ui_main`, `@on_message`):
+- declarative platform integration (`@agentic_workflow`, `@bundle_id`, `@api`, `@ui_widget`, `@ui_main`, `@on_message`, `@cron`, `@venv`):
   [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 - optional React `ks:` integration:
   [docs/sdk/bundle/bundle-knowledge-space-README.md](bundle-knowledge-space-README.md)
@@ -142,9 +142,65 @@ Notes:
 
 ---
 
+## Supported decorators
+
+These are the bundle decorators currently supported by the SDK loader in
+`src/kdcube-ai-app/kdcube_ai_app/infra/plugin/agentic_loader.py`.
+
+| Decorator | Scope | What it means |
+| --- | --- | --- |
+| `@agentic_workflow(...)` | entrypoint class | Declares the bundle workflow class used by the runtime. This is the normal entrypoint decorator for bundles. |
+| `@agentic_workflow_factory(...)` | factory function | Declares a workflow factory function instead of a workflow class. Use this only when the bundle needs factory-style construction rather than the normal class entrypoint pattern. |
+| `@bundle_id("my.bundle@1.0.0")` | entrypoint class | Declares the bundle id in code when runtime needs to infer identity from the bundle code itself. For deployed bundles loaded from `bundles.yaml`, the descriptor `id` still remains the operational registry id. |
+| `@api(...)` | entrypoint method | Exposes a bundle method through the integrations HTTP surface. Use `route="operations"` for authenticated/internal bundle operations and `route="public"` only for explicitly public endpoints. |
+| `@ui_widget(...)` | entrypoint method | Declares a discoverable widget in the bundle manifest and widget endpoints. |
+| `@ui_main` | entrypoint method | Declares the main iframe UI entrypoint for the bundle. |
+| `@on_message` | entrypoint method | Declares the message-handling method for the bundle turn path. Base entrypoints already apply this to `run()`. |
+| `@cron(...)` | entrypoint method | Declares a scheduled background job managed by proc. Cron expression can be inline or loaded from bundle props via `expr_config`. |
+| `@venv(...)` | helper function or method | Executes the decorated callable in a cached per-bundle subprocess venv. This is an execution-boundary decorator, not an HTTP/UI manifest decorator. |
+
+Important rules:
+- use exactly one entrypoint style: `@agentic_workflow(...)` or `@agentic_workflow_factory(...)`
+- most bundles should use `@agentic_workflow(...)`; `@agentic_workflow_factory(...)` is an exception for custom construction cases
+- `@api(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`, and `@cron(...)` define the bundle interface and runtime metadata
+- `@venv(...)` does not expose routes or widgets by itself; it only changes where the callable executes
+- for the detailed contract, fields, and route mapping, see
+  [docs/sdk/bundle/bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+
+---
+
 ## Entrypoint: register the bundle
 
 Entrypoint uses `@agentic_workflow` and typically extends `BaseEntrypoint`.
+
+Choose entrypoint style like this:
+
+- use `@agentic_workflow(...)` for the normal case: one workflow class is the bundle entrypoint
+- use `@agentic_workflow_factory(...)` only when bundle construction itself needs custom logic and a factory function must return the workflow object
+
+Side-by-side:
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import (
+    agentic_workflow,
+    agentic_workflow_factory,
+    bundle_id,
+)
+
+@agentic_workflow(name="My Bundle", version="1.0.0")
+@bundle_id("my.bundle@1.0.0")
+class MyWorkflow(BaseEntrypoint):
+    ...
+
+@agentic_workflow_factory(name="My Bundle", version="1.0.0")
+def build_workflow(config, **kwargs):
+    return MyWorkflow(config=config, **kwargs)
+```
+
+In practice:
+- class form means the runtime instantiates the workflow class directly
+- factory form means the runtime calls your function and uses the returned workflow instance
+- prefer the class form unless you specifically need dynamic selection, wrapping, or legacy construction adaptation
 
 Minimal pattern:
 ```python
@@ -184,6 +240,7 @@ If you override `configuration`, call `super().configuration()` and use
 
 The current bundle interface surface is explicit and decorator-driven:
 
+- `@agentic_workflow(...)` declares the bundle workflow class
 - `@bundle_id("my.bundle@version")` declares the canonical bundle id
 - `@api(...)` exposes a method through the integrations HTTP surface
   - `route="operations"` is the default
@@ -194,6 +251,7 @@ The current bundle interface surface is explicit and decorator-driven:
 - `@ui_widget(...)` declares a widget for `/widgets`
 - `@ui_main` declares the main iframe UI entrypoint for `/static/...`
 - `@on_message` marks the turn handler metadata used by the processor path
+- `@cron(...)` declares a scheduled background job reconciled by proc
 
 Important rules:
 

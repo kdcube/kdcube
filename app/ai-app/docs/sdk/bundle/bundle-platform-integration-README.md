@@ -30,21 +30,74 @@ All of this is implemented in:
 
 ## 1) Supported decorators
 
-Bundles currently use these decorators:
+Bundles currently support these decorators:
 
-- `@agentic_workflow(...)`
-- `@bundle_id(...)`
-- `@api(...)`
-- `@ui_widget(...)`
-- `@ui_main`
-- `@on_message`
-- `@cron(...)`
-- `@venv(...)`
+| Decorator | Scope | What it means |
+| --- | --- | --- |
+| `@agentic_workflow(...)` | entrypoint class | Declares the bundle workflow class used by the runtime. |
+| `@agentic_workflow_factory(...)` | factory function | Declares a workflow factory function instead of a workflow class. |
+| `@bundle_id(...)` | entrypoint class | Declares the code-level bundle id used when runtime needs to infer identity from the bundle code itself. |
+| `@api(...)` | entrypoint method | Declares a remotely callable bundle HTTP operation. |
+| `@ui_widget(...)` | entrypoint method | Declares a widget in the bundle interface manifest. |
+| `@ui_main` | entrypoint method | Declares the main iframe UI entrypoint. |
+| `@on_message` | entrypoint method | Declares the bundle message handler metadata. |
+| `@cron(...)` | entrypoint method | Declares a scheduled background job managed by proc. |
+| `@venv(...)` | helper function or method | Declares that a callable executes in a cached per-bundle subprocess venv. |
 
-These decorators are metadata for the bundle interface surface. They are not
-deployment config.
+Important distinction:
 
-### 1.1 `@bundle_id(...)`
+- `@agentic_workflow(...)`, `@agentic_workflow_factory(...)`, `@bundle_id(...)`,
+  `@api(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`, and `@cron(...)`
+  participate in bundle manifest and runtime interface discovery
+- `@venv(...)` is an execution decorator, not an HTTP/UI manifest decorator
+- most bundles should use `@agentic_workflow(...)`; `@agentic_workflow_factory(...)`
+  is the exception for custom construction cases
+
+These decorators are runtime metadata. They are not deployment config.
+
+### 1.1 `@agentic_workflow_factory(...)`
+
+Declares a workflow factory function rather than a workflow class.
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import agentic_workflow_factory
+
+@agentic_workflow_factory(name="My Bundle", version="1.0.0")
+def build_bundle(config, **kwargs):
+    ...
+```
+
+Use this only when the bundle must construct its runtime through a factory
+function. Most bundles should use `@agentic_workflow(...)` on a class.
+
+Side-by-side:
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import (
+    agentic_workflow,
+    agentic_workflow_factory,
+    bundle_id,
+)
+
+@agentic_workflow(name="My Bundle", version="1.0.0")
+@bundle_id("my.bundle@1.0.0")
+class MyWorkflow:
+    ...
+
+@agentic_workflow_factory(name="My Bundle", version="1.0.0")
+def build_workflow(config, **kwargs):
+    return MyWorkflow(config=config, **kwargs)
+```
+
+In practice:
+
+- class form means the runtime instantiates the workflow class directly
+- factory form means the runtime calls your function and uses the returned
+  workflow instance
+- prefer the class form unless you specifically need dynamic selection,
+  wrapping, or legacy construction adaptation
+
+### 1.2 `@bundle_id(...)`
 
 Declares the canonical bundle ID on the entrypoint class.
 
@@ -59,7 +112,7 @@ class MyBundle:
 
 Use it when the code should declare its own stable bundle identity.
 
-### 1.2 `@agentic_workflow(...)` — bundle-level `allowed_roles`
+### 1.3 `@agentic_workflow(...)` — bundle-level `allowed_roles`
 
 The `@agentic_workflow` decorator accepts an optional `allowed_roles` parameter
 that restricts which users can see the bundle in the bundle listing.
@@ -94,7 +147,7 @@ Current behavior:
 - A bundle with no `allowed_roles` is always included for any authenticated
   user (backwards-compatible default)
 
-### 1.3 `@api(...)`
+### 1.4 `@api(...)`
 
 Marks a method as a remotely callable bundle operation.
 
@@ -156,7 +209,7 @@ Route mapping:
 - `@api(route="public")` is callable through
   `/api/integrations/bundles/.../public/{alias}`
 
-### 1.3 `@ui_widget(...)`
+### 1.5 `@ui_widget(...)`
 
 Marks a method as a discoverable widget endpoint.
 
@@ -195,7 +248,7 @@ decorate it with both `@ui_widget(...)` and `@api(route="operations", ...)`.
 That is the current compatibility pattern for widgets that are still loaded
 through operation calls in existing clients.
 
-### 1.4 `@ui_main`
+### 1.6 `@ui_main`
 
 Marks the method that declares the bundle's main iframe UI surface.
 
@@ -212,7 +265,7 @@ Current behavior:
 - build-on-first-request is supported for bundles that have a UI defined but
   were not yet built in the current proc
 
-### 1.5 `@on_message`
+### 1.7 `@on_message`
 
 Marks the bundle message handler metadata.
 
@@ -227,7 +280,7 @@ Current practical pattern:
 - base entrypoints already decorate `run()` with `@on_message`
 - manifest discovery reports the message handler method name
 
-### 1.6 `@cron(...)`
+### 1.8 `@cron(...)`
 
 Marks a method as a recurring scheduled job managed by proc.
 
@@ -278,7 +331,7 @@ For full details on span semantics, cron resolution, and local debug:
 
 - [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
 
-### 1.7 `@venv(...)`
+### 1.9 `@venv(...)`
 
 Marks a callable to execute in a cached per-bundle subprocess venv.
 
