@@ -9,6 +9,7 @@ import pathlib
 import random
 import traceback
 import copy
+from importlib import import_module
 from typing import Dict, Any, List, Optional, Type, Callable, Awaitable
 
 from kdcube_ai_app.apps.chat.emitters import (
@@ -20,7 +21,6 @@ from kdcube_ai_app.apps.chat.external_events import build_conversation_external_
 from kdcube_ai_app.apps.chat.sdk.continuations import get_current_conversation_continuation_source
 from kdcube_ai_app.apps.chat.sdk.context.memory.conv_memories import ConvMemoriesStore
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import ContextRAGClient
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.browser import ContextBrowser
 
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_index import ConvIndex
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_index import ConvTicketIndex
@@ -34,10 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import (
     normalize_exec_runtime_config,
     resolve_exec_runtime_profile,
 )
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.gate.gate_contract import GateOut
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.runtime import ReactSolverV2
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.turn_log import TurnLog
 from kdcube_ai_app.apps.chat.sdk.solutions.widgets.conversation_turn_work_status import \
     ConversationTurnWorkStatus
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import create_tool_subsystem_with_mcp, ToolSubsystem
@@ -54,13 +51,31 @@ from kdcube_ai_app.infra.service_hub.errors import ServiceException, ServiceErro
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger, ModelServiceBase, Config, _mid
 from kdcube_ai_app.apps.chat.sdk.retrieval.kb_client import KBClient
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.solution_workspace import ApplicationHostingService
 from kdcube_ai_app.apps.chat.sdk.context.graph.graph_ctx import GraphCtx
 from kdcube_ai_app.apps.chat.sdk.runtime.user_inputs import (
     attachment_summary_index_text,
 )
 
 # ---------- small utilities ----------
+
+
+def _react_agent_version() -> str:
+    try:
+        version = str(get_settings().AI_REACT_AGENT_VERSION or "v2").strip().lower()
+    except Exception:
+        version = "v2"
+    return version if version in {"v2", "v3"} else "v2"
+
+
+def _react_module(module_suffix: str):
+    version = _react_agent_version()
+    return import_module(
+        f"kdcube_ai_app.apps.chat.sdk.solutions.react.{version}.{module_suffix}"
+    )
+
+
+def _react_symbol(module_suffix: str, name: str):
+    return getattr(_react_module(module_suffix), name)
 
 def _ttl_for(user_type: str, requested: int) -> int:
     ttl_map = {
@@ -124,6 +139,10 @@ class BaseWorkflow():
                                                         model_service=self.model_service,)
 
         self.gate_out_class = gate_out_class or GateOut
+
+        ApplicationHostingService = _react_symbol("solution_workspace", "ApplicationHostingService")
+        RuntimeCtx = _react_symbol("proto", "RuntimeCtx")
+        ContextBrowser = _react_symbol("browser", "ContextBrowser")
 
         self.hosting_service = ApplicationHostingService(
             store=self.store,
@@ -758,7 +777,10 @@ class BaseWorkflow():
         if not outdir_raw:
             return None
         turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
-        from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import publish_current_turn_git_workspace
+        publish_current_turn_git_workspace = _react_symbol(
+            "git_workspace",
+            "publish_current_turn_git_workspace",
+        )
         try:
             result = await asyncio.to_thread(
                 publish_current_turn_git_workspace,
@@ -1064,7 +1086,7 @@ class BaseWorkflow():
                     tools_runtime: Optional[Dict[str, str]] = None,
                     custom_skills_root: Optional[str] = None,
                     skills_visibility_agents_config: Optional[Dict[str, Dict[str, Any]]] = None,
-                    additional_instructions: Optional[str] = None) -> ReactSolverV2:
+                    additional_instructions: Optional[str] = None) -> Any:
 
         bundle_root = self.bundle_root()
 
@@ -1113,7 +1135,8 @@ class BaseWorkflow():
             },
             bundle_root=bundle_root,
         )
-        react = ReactSolverV2(
+        ReactSolver = _react_symbol("runtime", "ReactSolverV2")
+        react = ReactSolver(
             service=self.model_service,
             logger=self.logger,
             tools_subsystem=tools,     # exposes .tools to React
@@ -1336,7 +1359,7 @@ class BaseWorkflow():
 
         # Contribute user prompt + attachments to current turn log
         try:
-            from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_user_input_blocks
+            build_user_input_blocks = _react_symbol("layout", "build_user_input_blocks")
             _continuation = self.comm_context.continuation if hasattr(self.comm_context, "continuation") else None
             _continuation_kind = (getattr(_continuation, "kind", None) or "") or ""
             self.ctx_browser.contribute(
@@ -1350,7 +1373,10 @@ class BaseWorkflow():
             )
             # Add attachments to sources_pool so local attachment paths are citable.
             try:
-                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.sources import merge_sources_pool_for_attachment_rows
+                merge_sources_pool_for_attachment_rows = _react_symbol(
+                    "sources",
+                    "merge_sources_pool_for_attachment_rows",
+                )
                 turn_id = self.ctx_browser.runtime_ctx.turn_id if self.ctx_browser and self.ctx_browser.runtime_ctx else ""
                 new_rows = []
                 for att in (scratchpad.user_attachments or []):
@@ -1432,7 +1458,10 @@ class BaseWorkflow():
                 pass
             # Contribute assistant completion to current turn log
             try:
-                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.layout import build_assistant_completion_blocks
+                build_assistant_completion_blocks = _react_symbol(
+                    "layout",
+                    "build_assistant_completion_blocks",
+                )
                 self.ctx_browser.contribute(
                     blocks=build_assistant_completion_blocks(
                         runtime=self.ctx_browser.runtime_ctx,
@@ -1550,7 +1579,10 @@ class BaseWorkflow():
             used_sids = []
             total_tokens = 0
             try:
-                from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import extract_sources_used_from_blocks
+                extract_sources_used_from_blocks = _react_symbol(
+                    "timeline",
+                    "extract_sources_used_from_blocks",
+                )
                 used_sids = extract_sources_used_from_blocks(contrib_log)
             except Exception:
                 used_sids = []
@@ -1578,6 +1610,7 @@ class BaseWorkflow():
                 total_tokens = sum(_block_tokens(b) for b in (contrib_log or []))
             except Exception:
                 total_tokens = 0
+            TurnLog = _react_symbol("turn_log", "TurnLog")
             tlog = TurnLog(
                 turn_id=turn_id,
                 ts=(scratchpad.started_at or ""),

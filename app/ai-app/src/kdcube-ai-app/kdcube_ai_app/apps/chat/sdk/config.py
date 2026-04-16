@@ -484,6 +484,7 @@ class Settings(BaseSettings):
     BUNDLE_STORAGE_URL: str | None = Field(default=None, alias="CB_BUNDLE_STORAGE_URL")
     REACT_WORKSPACE_IMPLEMENTATION: str = Field(default="custom")
     REACT_WORKSPACE_GIT_REPO: str | None = None
+    AI_REACT_AGENT_VERSION: str = Field(default="v2")
     CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION: str = Field(default="local")
     CLAUDE_CODE_SESSION_GIT_REPO: str | None = None
 
@@ -588,6 +589,11 @@ class Settings(BaseSettings):
             )
         if not _env_present("REACT_WORKSPACE_GIT_REPO") and not self.REACT_WORKSPACE_GIT_REPO:
             self.REACT_WORKSPACE_GIT_REPO = _load_assembly_plain("storage.workspace.repo")
+        self.AI_REACT_AGENT_VERSION = (
+            str(self.AI_REACT_AGENT_VERSION or "v2").strip().lower() or "v2"
+        )
+        if self.AI_REACT_AGENT_VERSION not in {"v2", "v3"}:
+            self.AI_REACT_AGENT_VERSION = "v2"
         if not _env_present("CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION"):
             self.CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION = str(
                 _load_assembly_plain("storage.claude_code_session.type")

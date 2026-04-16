@@ -32,6 +32,21 @@ def _payload(*, tenant: str, project: str, user_id: str = "u1", turn_id: str = "
     )
 
 
+def test_react_agent_version_selector_defaults_and_normalizes(monkeypatch):
+    monkeypatch.delenv("AI_REACT_AGENT_VERSION", raising=False)
+    workflow_mod.get_settings.cache_clear()
+    try:
+        assert workflow_mod._react_agent_version() == "v2"
+        monkeypatch.setenv("AI_REACT_AGENT_VERSION", "V3")
+        workflow_mod.get_settings.cache_clear()
+        assert workflow_mod._react_agent_version() == "v3"
+        monkeypatch.setenv("AI_REACT_AGENT_VERSION", "unknown")
+        workflow_mod.get_settings.cache_clear()
+        assert workflow_mod._react_agent_version() == "v2"
+    finally:
+        workflow_mod.get_settings.cache_clear()
+
+
 def test_rebind_request_context_refreshes_runtime_ctx_bundle_storage(monkeypatch, tmp_path):
     resolved_storage = tmp_path / "bundle-storage" / "tenant-b" / "project-b" / "kdcube.copilot__main"
 
