@@ -539,6 +539,7 @@ class Settings(PLATFORM_CONFIG):
 
     STORAGE_PATH: str | None = Field(default=None, alias="KDCUBE_STORAGE_PATH")
     BUNDLE_STORAGE_URL: str | None = Field(default=None, alias="CB_BUNDLE_STORAGE_URL")
+    PLATFORM_DESCRIPTORS_DIR: str | None = None
     REACT_WORKSPACE_IMPLEMENTATION: str = Field(default="custom")
     REACT_WORKSPACE_GIT_REPO: str | None = None
     AI_REACT_AGENT_VERSION: str = Field(default="v2")
@@ -594,6 +595,13 @@ class Settings(PLATFORM_CONFIG):
     SOLUTION_RETAIN_TURN_WORKSPACE: bool = Field(default=False)
 
     def model_post_init(self, __context) -> None:
+        descriptors_dir = str(getattr(self, "PLATFORM_DESCRIPTORS_DIR", None) or os.getenv("PLATFORM_DESCRIPTORS_DIR") or "").strip()
+        descriptors_root = Path(descriptors_dir).expanduser() if descriptors_dir else None
+
+        def _descriptor_file_uri(filename: str) -> str | None:
+            if descriptors_root is None:
+                return None
+            return (descriptors_root / filename).resolve().as_uri()
 
 
         # 1. Override tenant/project from GATEWAY_CONFIG_JSON if present (backward compat).
@@ -635,6 +643,11 @@ class Settings(PLATFORM_CONFIG):
         #    so the assembled values feed into the URL construction below.
         if not self._env_present("SECRETS_PROVIDER") and not self.SECRETS_PROVIDER:
             self.SECRETS_PROVIDER = self._assembly_str("secrets.provider")
+
+        if not self._env_present("GLOBAL_SECRETS_YAML") and not self.GLOBAL_SECRETS_YAML:
+            self.GLOBAL_SECRETS_YAML = _descriptor_file_uri("secrets.yaml")
+        if not self._env_present("BUNDLE_SECRETS_YAML") and not self.BUNDLE_SECRETS_YAML:
+            self.BUNDLE_SECRETS_YAML = _descriptor_file_uri("bundles.secrets.yaml")
 
         if not self._env_present("POSTGRES_HOST"):
             val = self._assembly_str("infra.postgres.host")

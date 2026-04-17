@@ -111,6 +111,25 @@ Relevant controls include:
 
 Those are deployment controls. They are not bundle authoring APIs.
 
+## Operational Note On Bundle Local Storage
+
+If a bundle keeps local instance-visible state such as:
+- a cloned repo
+- a prepared index
+- a cron workspace
+- a mutable local cache
+
+that state should live under the platform-managed bundle local storage root, not under the bundle source tree.
+
+For bundle authors this means:
+- resolve local storage through `self.bundle_storage_root()` or `bundle_storage_dir(...)`
+- do not persist operational state under the checked-out bundle code path
+
+Why ops cares:
+- local mode expects this data under the mounted bundle storage area
+- cloud mode expects the same contract against the shared instance-visible storage layer
+- this keeps reloads, upgrades, and mounted code paths separate from mutable runtime state
+
 ## When To Read Service Docs
 
 Use service docs only when you are changing deployment descriptors, release packaging, or service-wide configuration.

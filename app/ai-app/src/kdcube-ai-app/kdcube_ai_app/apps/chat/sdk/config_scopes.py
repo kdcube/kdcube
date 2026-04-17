@@ -8,8 +8,21 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
 from kdcube_ai_app.infra.secrets import get_secrets_manager
 
-_ASSEMBLY_YAML_PATH = Path(os.getenv("ASSEMBLY_YAML_DESCRIPTOR_PATH") or "/config/assembly.yaml")
-_BUNDLES_YAML_PATH = Path(os.getenv("BUNDLES_YAML_DESCRIPTOR_PATH") or "/config/bundles.yaml")
+def _descriptors_dir() -> Path | None:
+    raw = str(os.getenv("PLATFORM_DESCRIPTORS_DIR") or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser()
+
+
+def _descriptor_path(*, env_name: str, filename: str, default: str) -> Path:
+    explicit = str(os.getenv(env_name) or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    descriptors_dir = _descriptors_dir()
+    if descriptors_dir is not None:
+        return descriptors_dir / filename
+    return Path(default)
 
 
 # ─── YAML helpers ─────────────────────────────────────────────────────────────
@@ -76,22 +89,41 @@ def _resolve_dotted_value(data: Any, dotted_path: str) -> Any:
 
 
 def _load_assembly_plain(dotted_path: str) -> Any:
-    return _resolve_dotted_value(_load_plain_yaml(_ASSEMBLY_YAML_PATH), dotted_path)
+    return _resolve_dotted_value(
+        _load_plain_yaml(
+            _descriptor_path(
+                env_name="ASSEMBLY_YAML_DESCRIPTOR_PATH",
+                filename="assembly.yaml",
+                default="/config/assembly.yaml",
+            )
+        ),
+        dotted_path,
+    )
 
 
 def _parse_plain_key(key: str) -> tuple[Path, str]:
     raw = str(key or "").strip()
+    assembly_path = _descriptor_path(
+        env_name="ASSEMBLY_YAML_DESCRIPTOR_PATH",
+        filename="assembly.yaml",
+        default="/config/assembly.yaml",
+    )
+    bundles_path = _descriptor_path(
+        env_name="BUNDLES_YAML_DESCRIPTOR_PATH",
+        filename="bundles.yaml",
+        default="/config/bundles.yaml",
+    )
     if not raw:
-        return _ASSEMBLY_YAML_PATH, ""
+        return assembly_path, ""
     for prefix, path in {
-        "a:": _ASSEMBLY_YAML_PATH,
-        "assembly:": _ASSEMBLY_YAML_PATH,
-        "b:": _BUNDLES_YAML_PATH,
-        "bundles:": _BUNDLES_YAML_PATH,
+        "a:": assembly_path,
+        "assembly:": assembly_path,
+        "b:": bundles_path,
+        "bundles:": bundles_path,
     }.items():
         if raw.startswith(prefix):
             return path, raw[len(prefix):]
-    return _ASSEMBLY_YAML_PATH, raw
+    return assembly_path, raw
 
 
 # ─── PLATFORM_CONFIG — base class with assembly + env helpers ─────────────────

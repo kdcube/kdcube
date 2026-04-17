@@ -94,6 +94,51 @@ Path layout (default):
 <bundles_root>/_bundle_storage/<tenant>/<project>/<bundle_id>[__<git_commit|ref|version>]
 ```
 
+Authoring rule:
+- if bundle code needs instance-local filesystem storage, do not hardcode your own root
+- resolve it through the platform helper
+- for normal mutable runtime data that should survive across requests on the same instance, prefer an unversioned subdirectory under the helper-resolved bundle storage root
+
+Use from bundle code:
+
+```python
+from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+local_root = bundle_storage_dir(
+    bundle_id=bundle_id,
+    version=None,
+    tenant=tenant,
+    project=project,
+    ensure=True,
+) / "_my_subsystem"
+local_root.mkdir(parents=True, exist_ok=True)
+```
+
+If you already have an entrypoint instance, use its helper first:
+
+```python
+storage_root = self.bundle_storage_root()
+```
+
+and only drop to `bundle_storage_dir(...)` when you specifically need the unversioned tenant/project/bundle path shape.
+
+Practical split:
+- `self.bundle_storage_root()`
+  - versioned bundle storage root for the active bundle spec
+  - good for versioned prepared assets and caches tied to the deployed bundle version
+- `bundle_storage_dir(..., version=None) / "_name"`
+  - unversioned tenant/project/bundle-local root
+  - good for mutable local working state, checkouts, local mirrors, and long-lived runtime workspaces
+- `AIBundleStorage`
+  - backend storage API for bundle artifacts
+  - separate from the shared local filesystem root
+
+Example pattern used in real bundles:
+- knowledge/index preparation may live under the bundle storage root
+- mutable local workspaces such as a cloned repo or a daily pipeline state folder should live under an unversioned subdirectory like:
+  - `<tenant>/<project>/<bundle_id>/_news`
+  - `<tenant>/<project>/<bundle_id>/_knowledge_base_admin`
+
 Version suffix rules (if present):
 - `git_commit` (preferred, if set)
 - else `ref`
@@ -114,3 +159,4 @@ See:
 
 - Storage: `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/storage/ai_bundle_storage.py`
 - KV cache: `src/kdcube-ai-app/kdcube_ai_app/infra/service_hub/cache.py`
+- Shared local storage helpers: `src/kdcube-ai-app/kdcube_ai_app/infra/plugin/bundle_storage.py`

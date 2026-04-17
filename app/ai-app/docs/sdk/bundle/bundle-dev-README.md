@@ -135,6 +135,48 @@ Read the exact model here:
 - [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
 - [bundle-platform-properties-README.md](bundle-platform-properties-README.md)
 
+## Local Storage Rule
+
+If your bundle needs local filesystem state on the proc instance, use the bundle-storage helper.
+
+Do not:
+- write mutable state next to the bundle source tree
+- invent your own repo-relative `.runtime` directory for runtime data
+
+Use:
+- `self.bundle_storage_root()` when you want the bundle-scoped shared local root
+- `bundle_storage_dir(..., version=None) / "_subsystem"` when you want a mutable unversioned local workspace for a subsystem
+
+Example:
+
+```python
+from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+def _local_root(self) -> pathlib.Path:
+    actor = getattr(self.comm_context, "actor", None)
+    bundle_spec = getattr(self.config, "ai_bundle_spec", None)
+    tenant = getattr(actor, "tenant_id", None) or self.settings.TENANT
+    project = getattr(actor, "project_id", None) or self.settings.PROJECT
+    bundle_id = getattr(bundle_spec, "id", None) or "my.bundle@1.0.0"
+    return bundle_storage_dir(
+        bundle_id=str(bundle_id),
+        version=None,
+        tenant=str(tenant),
+        project=str(project),
+        ensure=True,
+    ) / "_my_subsystem"
+```
+
+Use this for:
+- local repo checkouts
+- cached prepared files
+- local cron workspace
+- working state that should survive across requests on the same instance
+
+This is separate from:
+- `AIBundleStorage`
+- descriptor-backed props/secrets
+
 ## Local Development Loop
 
 Recommended local loop:
@@ -164,6 +206,11 @@ Use this when you changed:
 - bundle code
 - `bundles.yaml`
 - `bundles.secrets.yaml`
+
+If your bundle uses local bundle storage, `--bundle-reload` does not wipe that storage automatically.
+Design your subsystem roots intentionally:
+- versioned root for rebuildable version-tied data
+- unversioned `_subsystem` root for mutable local working state
 
 If you need the deployment-side details and registry behavior, use:
 

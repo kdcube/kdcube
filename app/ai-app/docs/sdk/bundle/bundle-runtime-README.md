@@ -78,8 +78,8 @@ What the bundle has in this path:
 - bundle storage helpers such as `bundle_storage_root()`
 - secret lookup through:
   - `get_secret("b:...")` for current bundle deployment secrets
-  - `get_secret("...")` / `get_secret("a:...")` for platform/global secrets
-  - `get_user_secret(...)` for current-user secrets
+- `get_secret("...")` / `get_secret("a:...")` for platform/global secrets
+- `get_user_secret(...)` for current-user secrets
 
 Communicator behavior in this path:
 - if request routing carries an exact socket/stream target, direct peer delivery
@@ -112,6 +112,57 @@ What the bundle has in this path:
 - `self.bundle_props`
 - `self.pg_pool` / `self.redis` when available
 - the same storage and secret helpers as the chat-turn path
+
+## Local bundle storage helpers
+
+If bundle code needs local filesystem state on the proc instance, use the SDK helper.
+
+Do not do this:
+- build ad hoc paths under the repo checkout
+- store mutable runtime state next to bundle source files
+- assume the current working directory is durable
+
+Use one of these:
+
+1. `self.bundle_storage_root()`
+- available on bundle entrypoints
+- resolves the bundle-scoped shared local storage root for the active tenant/project
+- versioned with the active bundle spec when version/ref/git_commit is present
+
+2. `bundle_storage_dir(...)`
+- import from `kdcube_ai_app.infra.plugin.bundle_storage`
+- use it when you need the unversioned tenant/project/bundle root directly
+
+Typical pattern for mutable local runtime state:
+
+```python
+from kdcube_ai_app.infra.plugin.bundle_storage import bundle_storage_dir
+
+local_root = bundle_storage_dir(
+    bundle_id=bundle_id,
+    version=None,
+    tenant=tenant,
+    project=project,
+    ensure=True,
+) / "_subsystem_name"
+local_root.mkdir(parents=True, exist_ok=True)
+```
+
+Why this matters:
+- local mode uses a dedicated mounted bundle-storage folder
+- cloud mode uses the shared instance-visible storage root as well
+- the helper gives bundle code the platform-managed location instead of an accidental repo-relative path
+
+Use cases for the local helper root:
+- cloned repos or working copies
+- prepared indexes
+- local mirrors
+- cron job state
+- daily pipeline workspace/cache
+
+Do not confuse this with `AIBundleStorage`:
+- local helper root = shared instance-local filesystem
+- `AIBundleStorage` = backend storage API for bundle artifacts
 
 Important current communicator rule for REST operations:
 - communicator is available

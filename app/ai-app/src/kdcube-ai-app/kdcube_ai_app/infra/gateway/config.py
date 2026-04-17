@@ -11,6 +11,7 @@ import logging
 import json
 import time
 import asyncio
+from pathlib import Path
 
 from dataclasses import dataclass, asdict, field
 from typing import Dict, Any, Optional
@@ -1130,10 +1131,13 @@ def _load_gateway_yaml() -> Optional[Dict[str, Any]]:
     """
     path_str = (os.getenv("GATEWAY_YAML_PATH") or "").strip()
     if not path_str:
+        descriptors_dir = str(os.getenv("PLATFORM_DESCRIPTORS_DIR") or "").strip()
+        if descriptors_dir:
+            path_str = str((Path(descriptors_dir).expanduser() / "gateway.yaml").resolve())
+    if not path_str:
         return None
     try:
         import yaml
-        from pathlib import Path
         path = Path(path_str)
         if not path.exists():
             logger.warning("GATEWAY_YAML_PATH set but file not found: %s", path_str)
