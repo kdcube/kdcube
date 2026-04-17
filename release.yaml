@@ -1,21 +1,79 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.12.500"
+  ref: "2026.4.17.247"
   description: |
-    This release adds a shareable Claude Code builder plugin marketplace to the SDK. The plugin
-    bootstraps a clean one-bundle local descriptor set, defaults local auth to a simple local
-    mode, gives Claude Code explicit bundle-authoring guidance, and provides concrete local
-    runtime actions for start, reload, stop, and bundle-suite validation.
+    This release focuses on React runtime robustness, long-running processor control, descriptor-
+    driven runtime configuration, and the first experimental React v3 line.
 
-    The same release line also fixes the new persistent user-props runtime path in ECS and other
-    split-service deployments. Ingress, proc, metrics, and exec images now include `psycopg2`,
-    which is required by the user props manager introduced in the previous release. Without that
-    addition, those services could fail on startup with `ModuleNotFoundError: No module named
-    'psycopg2'`.
+    Highlights
 
-    The live bundle configuration model from the previous release remains in place: deployment-
-    scoped bundle descriptor state and bundle secrets persist in AWS-backed deployments, user-
-    scoped non-secret bundle props persist in PostgreSQL, and the runtime can export effective live
-    `bundles.yaml` and `bundles.secrets.yaml` for redeployable state capture.
+    - Experimental React v3 runtime is now available behind `AI_REACT_AGENT_VERSION=v3`, with
+      `AI_REACT_AGENT_MULTI_ACTION=off|safe_fanout` controlling whether a round may contain one
+      action or a constrained multi-action bundle.
+    - React v3 introduces channel-instance-aware streaming for repeated
+      `<channel:ReactDecisionOutV2>` blocks and a safe multi-action mode for read-oriented tool
+      bundles. These actions are executed sequentially, not in parallel, and the model is now
+      instructed accordingly.
+    - React v2 and v3 both gained stronger protocol handling: failed decision attempts are rendered
+      as explicit failed rounds, round start is now visible in timeline rendering, and live
+      followup attachments are propagated into the active turn timeline instead of being dropped.
+    - Shared streaming infrastructure is now more robust for malformed model JSON. Streamed HTML
+      canvas artifacts and streamed final answers both tolerate raw quotes inside still-streaming
+      JSON strings, preventing live truncation while preserving the final rendered output.
+    - React activation is now configurable from settings rather than direct env reads, and v3 now
+      exposes clearer version-specific logging and prompt headers so runtime selection can be
+      verified without relying on misleading legacy labels.
+
+    Processor and deployment work in this release line:
+
+    - Proc no longer relies on one blunt wall-clock timeout. It now supports activity watchdogs,
+      with separate idle timeout, hard wall-time cap, and watchdog polling controls.
+    - Those service-level proc controls are now renderable from `assembly.yaml` into service env,
+      aligning descriptor-based deployment with the newer runtime settings.
+    - Scheduler migration groundwork is in place: proc now has a selectable scheduler backend seam,
+      keeping the current lists-based backend as default while reserving a future conversation-
+      streams backend.
+    - Git bundle/bootstrap reliability was tightened with initial prefetch gating, atomic descriptor
+      git auth staging, host cache root creation, container cache permission fixes, and schema
+      deployment timeout removal.
+    - React turns now survive more failure cases in deployment/runtime paths, including persistence
+      of interrupted turns despite workspace publish failures and polling of live external events
+      during active phases.
+
+    Bundle/runtime and SDK work:
+
+    - Bundles can now override built-in skills reliably, and the docs were expanded to clarify the
+      actual storage model for bundle props, bundle secrets, and user-scoped bundle props/secrets.
+    - The SDK docs were refreshed to reflect shipped bundle interface features, current React
+      options, decorator behavior, and workflow class vs factory semantics.
+    - Rendering capabilities were extended, including better format handling for rendering tools and
+      improved streamed widget behavior.
+    - Bundle user typing was separated from raw role handling, tightening identity semantics at the
+      bundle/runtime boundary.
+
+    Observability and frontend event collection:
+
+    - Frontend event collection was added and then consolidated into the metrics service, so the
+      metrics stack now also hosts the events ingestion endpoint used for client-side logging.
+    - Nginx and service routing were updated accordingly, and the associated architecture/design
+      docs were added.
+
+    Changelog
+
+    - Added experimental React v3 runtime, its dedicated streamer path, prompt tests, and widget
+      coverage.
+    - Added configurable React agent version selection and documented the new React-related service
+      settings.
+    - Tightened React v2 protocol/round handling and clarified the v3 protocol for single-action
+      and safe-fanout modes.
+    - Surfaced live followup attachments in React timeline rendering.
+    - Fixed truncation of streamed HTML canvas artifacts and streamed final answers caused by raw
+      quotes in malformed model JSON.
+    - Added processor activity watchdogs, descriptor-driven service rendering for watchdog config,
+      and selectable scheduler backend scaffolding.
+    - Added proc scheduler design docs, including notes on a Kafka-backed implementation model.
+    - Improved git bundle bootstrap reliability and disabled schema deployment statement timeout.
+    - Refreshed SDK/docs around bundle props/secrets, React SDK features, and workflow decorator
+      semantics.
 config:
-    version: "2026.4.12.500"
+    version: "2026.4.17.247"
