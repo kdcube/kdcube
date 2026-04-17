@@ -6,7 +6,7 @@ tags: ["economics", "rate-limit", "sse", "events", "client"]
 keywords: ["rate_limit.warning", "rate_limit.denied", "rate_limit.no_funding", "rate_limit.subscription_exhausted", "rate_limit.project_exhausted", "user_message", "events_resources"]
 see_also:
   - ks:docs/economics/economic-README.md
-  - ks:docs/clients/sse-events-README.md
+  - ks:docs/sdk/bundle/bundle-sse-events-README.md
 ---
 # Economics Rate-Limit SSE Events
 

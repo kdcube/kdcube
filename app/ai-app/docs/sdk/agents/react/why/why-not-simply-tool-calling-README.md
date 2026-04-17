@@ -21,7 +21,7 @@ see_also:
   - ks:docs/sdk/agents/react/tool-call-blocks-README.md
   - ks:docs/sdk/streaming/channeled-streamer-README.md
   - ks:docs/service/comm/README-comm.md
-  - ks:docs/clients/client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
 ---
 # Why Not Simply Tool Calling
 

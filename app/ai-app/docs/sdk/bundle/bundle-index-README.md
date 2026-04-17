@@ -50,6 +50,10 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Reserved platform-owned prop paths | [bundle-platform-properties-README.md](bundle-platform-properties-README.md) |
 | Bundle lifecycle and instance model | [bundle-lifecycle-README.md](bundle-lifecycle-README.md) |
 | Widgets, streaming, operations surface | [bundle-interfaces-README.md](bundle-interfaces-README.md) |
+| Bundle-facing browser/UI entry | [bundle-client-ui-README.md](bundle-client-ui-README.md) |
+| Browser/UI transport contract | [bundle-client-communication-README.md](bundle-client-communication-README.md) |
+| SSE event catalog for bundle-facing clients | [bundle-sse-events-README.md](bundle-sse-events-README.md) |
+| Frontend behavior under drains/rate limits | [bundle-frontend-awareness-README.md](bundle-frontend-awareness-README.md) |
 | Local reload and deployed registry updates | [bundle-ops-README.md](bundle-ops-README.md) |
 | Knowledge space (`ks:`) | [bundle-knowledge-space-README.md](bundle-knowledge-space-README.md) |
 | Bundle storage and cache | [bundle-storage-cache-README.md](bundle-storage-cache-README.md) |

@@ -12,7 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-knowledge-space-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
-  - ks:docs/clients/client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
 ---
 # Bundle Lifecycle
 
@@ -22,7 +22,7 @@ Read it together with:
 
 - [Bundle Runtime](bundle-runtime-README.md) for request/tool runtime surfaces
 - [Bundle Interfaces](bundle-interfaces-README.md) for streaming/widgets/operations
-- [Client Communication](../../clients/client-communication-README.md) when the bundle also ships client code
+- [Client Communication](bundle-client-communication-README.md) when the bundle also ships client code
 
 ## Mental model
 
@@ -331,7 +331,7 @@ for client-side routing.
   - `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui-src/src/App.tsx`
   That example shows a lightweight chat main view with bundle-scoped conversation browsing on top of the standard iframe handshake plus chat REST/SSE endpoints.
 - See:
-  [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+  [bundle-client-communication-README.md](bundle-client-communication-README.md)
   and [docs/sdk/bundle/bundle-runtime-README.md](bundle-runtime-README.md)
 
 ## React integration

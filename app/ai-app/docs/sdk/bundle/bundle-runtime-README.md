@@ -11,8 +11,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/tools/custom-tools-README.md
   - ks:docs/sdk/tools/tool-subsystem-README.md
-  - ks:docs/clients/client-communication-README.md
-  - ks:docs/clients/sse-events-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-sse-events-README.md
 ---
 # Bundle Runtime
 
@@ -131,7 +131,7 @@ Practical consequence:
 If the bundle also ships widget or frontend code, that code must follow the
 client transport contract when it calls `/api/integrations/*`:
 
-- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
+- [bundle-client-communication-README.md](bundle-client-communication-README.md)
 
 ### 3) Tool execution in normal in-process runtime
 
@@ -232,7 +232,7 @@ That is why:
 For actual event names, `chat.delta` shape, and predefined markers such as
 `answer`, `thinking`, `canvas`, `timeline_text`, and `subsystem`, read:
 
-- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+- [bundle-sse-events-README.md](bundle-sse-events-README.md)
 
 ## Shared browser, cache, and retrieval from tools
 

@@ -10,8 +10,8 @@ see_also:
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/clients/client-communication-README.md
-  - ks:docs/clients/sse-events-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-sse-events-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
@@ -48,8 +48,8 @@ Bundles stream output through the platform communicator. Clients receive events 
 
 Docs:
 - client request contract:
-  [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
-- SSE events: [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+  [bundle-client-communication-README.md](bundle-client-communication-README.md)
+- SSE events: [bundle-sse-events-README.md](bundle-sse-events-README.md)
 - Comm system: `docs/service/comm/README-comm.md`
 
 The communicator is **asynchronous**: bundle execution and streaming can happen on
@@ -69,7 +69,7 @@ Common stream payloads:
 - `citations` (sources)
 
 See:
-- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+- [bundle-sse-events-README.md](bundle-sse-events-README.md)
 
 ### Concrete bundle-to-client examples
 
@@ -236,8 +236,8 @@ Reference examples:
 This is not bundle-specific magic. Widget/frontend code is regular platform
 client code and should follow:
 
-- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
-- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+- [bundle-client-communication-README.md](bundle-client-communication-README.md)
+- [bundle-sse-events-README.md](bundle-sse-events-README.md)
 
 ## 4) Bundle operations endpoint (loop-back)
 
@@ -453,7 +453,7 @@ See `bundle-dev-README.md` for how these roots are configured.
 
 Docs:
 - Attachments system: [docs/hosting/attachments-system.md](../../hosting/attachments-system.md)
-- SSE events: [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+- SSE events: [bundle-sse-events-README.md](bundle-sse-events-README.md)
 
 ---
 

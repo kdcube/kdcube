@@ -9,8 +9,8 @@ see_also:
   - ks:docs/service/comm/comm-system.md
   - ks:docs/service/auth/auth-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
-  - ks:docs/clients/client-communication-README.md
-  - ks:docs/clients/sse-events-README.md
+  - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/sdk/bundle/bundle-sse-events-README.md
 ---
 # Communication Integrations (External + Internal)
 
@@ -204,8 +204,8 @@ The platform already has well-understood rendering behavior for these shapes:
 | Custom typed event | `chat_step` route with custom `env.type` | domain-specific semantic event |
 
 For the client-facing contract and examples, see:
-- [docs/clients/client-communication-README.md](../../clients/client-communication-README.md)
-- [docs/clients/sse-events-README.md](../../clients/sse-events-README.md)
+- [bundle-client-communication-README.md](../../sdk/bundle/bundle-client-communication-README.md)
+- [bundle-sse-events-README.md](../../sdk/bundle/bundle-sse-events-README.md)
 
 ### Which method owns which concept
 

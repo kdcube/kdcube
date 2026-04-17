@@ -7,7 +7,7 @@ keywords: ["redis relay", "channels", "fanout", "transport layer"]
 see_also:
   - ks:docs/service/comm/CHAT-RELAY-SESSION-SUBSCR-SSE-SOCKETIO-FUNOUT.README.md
   - ks:docs/service/comm/README-comm.md
-  - ks:docs/clients/sse-events-README.md
+  - ks:docs/sdk/bundle/bundle-sse-events-README.md
   - ks:docs/sdk/bundle/bundle-firewall-README.md
 ---
 # Communication Subsystem Architecture

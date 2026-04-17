@@ -6,7 +6,7 @@ tags: ["arch", "ecs", "fargate", "timeouts", "proc", "ingress", "shutdown"]
 keywords: ["ecs stopTimeout", "uvicorn graceful shutdown", "proc drain", "inflight task", "fargate termination", "chat task timeout"]
 see_also:
   - ks:docs/arch/proc/processor-arch-README.md
-  - ks:docs/clients/frontend-awareness-on-service-state-README.md
+  - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
   - ks:docs/service/maintenance/requests-monitoring-README.md
 ---
 # ECS Service Timeouts

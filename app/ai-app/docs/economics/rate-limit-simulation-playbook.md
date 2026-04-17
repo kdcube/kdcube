@@ -6,7 +6,7 @@ tags: ["economics", "rate-limit", "sse", "testing", "playbook"]
 keywords: ["rate_limit.warning", "rate_limit.denied", "SSE", "quota", "throttling"]
 see_also:
   - ks:docs/economics/economics-events-README.md
-  - ks:docs/clients/sse-events-README.md
+  - ks:docs/sdk/bundle/bundle-sse-events-README.md
   - ks:docs/economics/eco-test-README.md
   - ks:docs/economics/operational-README.md
 ---

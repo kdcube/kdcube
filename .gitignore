@@ -211,3 +211,4 @@ app/ai-app/ui/chat-web-app/src/**/*.js
 /projects/
 /app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/debug/raw/
 /app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v3/debug/
+/app/ai-app/src/kdcube-ai-app/kdcube_cli/operational/
