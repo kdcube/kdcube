@@ -599,3 +599,30 @@ async def test_timeline_streamer_replaces_many_repeated_citations():
     rendered = collector.text_for_marker("answer")
     assert "[[S:" not in rendered
     assert "https://example.com/only" in rendered
+
+
+@pytest.mark.asyncio
+async def test_timeline_streamer_tolerates_raw_quotes_inside_streamed_final_answer():
+    raw_payload = """```json
+{
+  "action": "complete",
+  "notes": "Wrapping up the requested deck update",
+  "final_answer": "Here's the updated deck.\\n\\n**Medicine**\\n1. **Scientists Remove "Zombie" Cells and Reverse Liver Damage in Mice** - This item must keep streaming past the raw quotes.\\n2. **Stanford Scientists Discover "Natural Ozempic" Molecule Without Side Effects** - Tail paragraph stays visible."
+}
+```"""
+
+    collector = _Collector()
+    streamer = TimelineStreamer(
+        emit_delta=collector.emit,
+        agent="test.agent",
+        sources_list=[],
+    )
+
+    for chunk in _chunk_text(raw_payload, size=9):
+        await streamer.feed(chunk)
+    await streamer.finish()
+
+    rendered = collector.text_for_marker("answer")
+    assert 'Scientists Remove "Zombie" Cells and Reverse Liver Damage in Mice' in rendered
+    assert 'Stanford Scientists Discover "Natural Ozempic" Molecule Without Side Effects' in rendered
+    assert "Tail paragraph stays visible." in rendered

@@ -73,14 +73,14 @@ def test_build_decision_system_text_single_action_mode_uses_action_channel_wordi
         multi_action_mode="off",
     )
     assert text.index("CRITICAL: you have 3 channels") < text.index("[CORE RESPONSIBILITIES]")
-    assert "One response = one round" in text
-    assert "After </channel:code>, STOP. The platform calls you again if another round is needed." in text
-    assert "Do NOT emit a second full thinking/ReactDecisionOutV2/code triplet in the same response." in text
+    assert "CRITICAL: you are the agent which must for in custom protocol which you must obey." in text
+    assert "Output protocol (strict): you must produce content which represents one round" in text
+    assert "In a single round, only one occurrence of each channel can be included in your response." in text
     assert "<channel:ReactDecisionOutV2> is the action channel" in text
-    assert "For now we support only one action per round" in text
-    assert "produce exactly one <channel:ReactDecisionOutV2> channel instance" in text
-    assert "If multiple tools are needed, emit only the first action now. Never simulate round 2 yourself." in text
-    assert "If you cite a channel token literally, write it in backticks like `channel:CHANNEL_ID`." in text
+    assert "DO NOT DO THIS: Your typical error is that you make sequence of triplets" in text
+    assert "Generating the second instance of any channel in the same response means you do not understand the contract and violate it." in text
+    assert "Use <channel:code> only when the single action is exec_tools.execute_code_python" in text
+    assert "After </channel:code>, STOP." not in text
 
 
 def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_and_no_exec_bundle():
@@ -90,17 +90,19 @@ def test_build_decision_system_text_safe_fanout_explains_no_intermediate_review_
         workspace_implementation="custom",
         multi_action_mode="safe_fanout",
     )
-    assert "One response = one round" in text
-    assert "Do NOT emit a second full thinking/ReactDecisionOutV2/code triplet in the same response." in text
+    assert "Output protocol (strict): you must produce content which represents one round" in text
+    assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
     assert "<channel:ReactDecisionOutV2> is the action channel" in text
-    assert "If you want multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
-    assert "One channel instance means one action." in text
-    assert "Example:" in text
-    assert "<channel:thinking>...one short status for the whole round...</channel:thinking>" in text
+    assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
+    assert "One <channel:ReactDecisionOutV2> ... </channel:ReactDecisionOutV2> channel instance means exactly one action." in text
+    assert "If you need multiple actions in one round, use this shape:" in text
+    assert "<channel:thinking>...short status for the whole round...</channel:thinking>" in text
     assert "<channel:code></channel:code>" in text
-    assert "Never put two actions into one ReactDecisionOutV2 channel instance" in text
-    assert "Execution is sequential and you do NOT review intermediate results in the middle" in text
-    assert "action B must not depend on action A's result" in text
+    assert "Never put two actions into one ReactDecisionOutV2 channel instance." in text
+    assert "The runtime executes the actions sequentially and you do NOT review intermediate results in the middle" in text
+    assert "action B must not depend on action A's result." in text
+    assert "Do NOT schedule search/fetch first and then a later action in the same round that depends on what that retrieval will return." in text
     assert "Do NOT use exec_tools.execute_code_python in a multi-action round" in text
-    assert "it must be the only action in the round" in text
-    assert "If you cite a channel token literally, write it in backticks like `channel:CHANNEL_ID`." in text
+    assert "If you need exec, it must be the only action in the round." in text
+    assert "Do NOT mix complete/exit with tool calls in the same multi-action response." in text
+    assert "After </channel:code>, STOP." not in text

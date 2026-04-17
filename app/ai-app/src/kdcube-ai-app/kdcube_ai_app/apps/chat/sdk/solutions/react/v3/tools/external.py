@@ -286,7 +286,7 @@ async def handle_external_tool(*,
             )
             try:
                 ctx_browser.log.log(
-                    f"[react.v2] exec_path_rewritten: {rewritten_paths}",
+                    f"[react.v3] exec_path_rewritten: {rewritten_paths}",
                     level="WARNING",
                 )
             except Exception:

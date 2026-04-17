@@ -68,6 +68,8 @@ class ToolContentStreamerBase:
         self.escaping = False
         self.unicode_mode = False
         self.unicode_buf = ""
+        self.pending_string_quote = False
+        self.pending_string_quote_ws = ""
 
         self.reading_key = False
         self.current_key = ""
@@ -699,6 +701,8 @@ class TimelineStreamer:
         self.escaping = False
         self.unicode_mode = False
         self.unicode_buf = ""
+        self.pending_string_quote = False
+        self.pending_string_quote_ws = ""
 
         self.reading_key = False
         self.current_key = ""
@@ -1039,6 +1043,41 @@ class TimelineStreamer:
 
         for ch in chunk:
             if self.in_string:
+                if self.pending_string_quote and self.active_key and self.streaming_target:
+                    if ch in " \t\r\n":
+                        self.pending_string_quote_ws += ch
+                        continue
+                    if ch in ",}]":
+                        self.in_string = False
+                        self.pending_string_quote = False
+                        self.pending_string_quote_ws = ""
+                        if self._matches_action_path():
+                            self.action_value = self.active_value_buf.strip()
+                        if self._matches_tool_id_path():
+                            self.tool_id_value = self.active_value_buf.strip()
+                        if self.streaming_target and self.active_value_buf:
+                            await self._emit_chunk(self.active_value_buf)
+                        self.active_value_buf = ""
+                        self.streaming_target = None
+                        self.active_key = None
+                        await self._flush_pending_targets()
+                        if ch in "}]":
+                            if self.path_stack:
+                                self.path_stack.pop()
+                            self.last_key = None
+                            self.expecting_value = False
+                        elif ch == ",":
+                            self.expecting_value = False
+                        continue
+                    buffered = '"' + self.pending_string_quote_ws + ch
+                    self.pending_string_quote = False
+                    self.pending_string_quote_ws = ""
+                    self.active_value_buf += buffered
+                    if self.streaming_target and len(self.active_value_buf) >= 256:
+                        await self._emit_chunk(self.active_value_buf)
+                        self.active_value_buf = ""
+                    continue
+
                 if self.unicode_mode:
                     self.unicode_buf += ch
                     if len(self.unicode_buf) == 4:
@@ -1076,12 +1115,17 @@ class TimelineStreamer:
                     continue
 
                 if ch == '"':
-                    self.in_string = False
                     if self.reading_key:
+                        self.in_string = False
                         self.last_key = self.current_key
                         self.current_key = ""
                         self.reading_key = False
                     elif self.active_key:
+                        if self.streaming_target:
+                            self.pending_string_quote = True
+                            self.pending_string_quote_ws = ""
+                            continue
+                        self.in_string = False
                         if self._matches_action_path():
                             self.action_value = self.active_value_buf.strip()
                         if self._matches_tool_id_path():
@@ -1158,6 +1202,19 @@ class TimelineStreamer:
             self.active_value_buf = ""
 
     async def finish(self) -> None:
+        if self.pending_string_quote and self.active_key:
+            self.in_string = False
+            self.pending_string_quote = False
+            self.pending_string_quote_ws = ""
+            if self._matches_action_path():
+                self.action_value = self.active_value_buf.strip()
+            if self._matches_tool_id_path():
+                self.tool_id_value = self.active_value_buf.strip()
+            if self.streaming_target and self.active_value_buf:
+                await self._emit_chunk(self.active_value_buf)
+            self.active_value_buf = ""
+            self.streaming_target = None
+            self.active_key = None
         if self.streaming_target and self.active_value_buf:
             await self._emit_chunk(self.active_value_buf)
             self.active_value_buf = ""

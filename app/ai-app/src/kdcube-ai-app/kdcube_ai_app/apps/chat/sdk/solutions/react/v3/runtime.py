@@ -144,7 +144,7 @@ class ReactSolverV2:
         if isinstance(logger, AgentLogger):
             self.log = logger
         else:
-            name = getattr(logger, "name", None) or "react.v2"
+            name = getattr(logger, "name", None) or "react.v3"
             level = "INFO"
             try:
                 lvl = getattr(logger, "level", None)
@@ -1928,7 +1928,7 @@ class ReactSolverV2:
         state["last_decision_raw"] = decision
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         self._append_react_timing(round_idx=iteration, stage="decision", elapsed_ms=elapsed_ms)
-        logging_helpers.log_agent_packet(role, "react.decision.v2", decision)
+        logging_helpers.log_agent_packet(role, "react.decision.v3", decision)
         decision_packet = decision
         decision_bundle = self._decision_bundle_from_packet(decision_packet)
         bundle_mode = False
@@ -1944,7 +1944,7 @@ class ReactSolverV2:
             ReactRound.thinking(
                 ctx_browser=self.ctx_browser,
                 decision=decision,
-                title=f"solver.react.v2.decision ({iteration})",
+                title=f"solver.react.v3.decision ({iteration})",
                 iteration=iteration,
             )
         except Exception:

@@ -1098,6 +1098,7 @@ class BaseWorkflow():
                     additional_instructions: Optional[str] = None) -> Any:
 
         bundle_root = self.bundle_root()
+        react_version = _react_agent_version()
 
         async def _kb_proxy(query: str, top_n: int = 8, providers: Optional[List[str]] = None):
             vec = (await self.model_service.embed_texts([query]))[0]
@@ -1157,6 +1158,14 @@ class BaseWorkflow():
             scratchpad=scratchpad,
             additional_instructions=additional_instructions,
         )
+        try:
+            self.logger.log(
+                f"[react.{react_version}] build_react version={react_version} "
+                f"multi_action_mode={getattr(self.runtime_ctx, 'multi_action_mode', None)}",
+                level="INFO",
+            )
+        except Exception:
+            pass
         return react
 
     # -------------------- Create solver --------------------
