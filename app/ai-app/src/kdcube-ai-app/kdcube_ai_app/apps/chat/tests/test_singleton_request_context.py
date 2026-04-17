@@ -11,6 +11,9 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskUser,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot import entrypoint as entrypoint_mod
+from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import (
+    BaseEntrypointWithEconomics,
+)
 from kdcube_ai_app.infra.plugin.agentic_loader import (
     AgenticBundleSpec,
     clear_agentic_caches,
@@ -139,3 +142,44 @@ async def test_singleton_entrypoint_keeps_comm_context_task_local(monkeypatch):
 
     assert first == ("user-a", "user-a", "user-a", "user-a")
     assert second == ("user-b", "user-b", "user-b", "user-b")
+
+
+def test_economics_entrypoint_rebind_refreshes_managers(monkeypatch):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _EconProbe(BaseEntrypointWithEconomics):
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    initial_redis = object()
+    ep = _EconProbe(
+        config=_DummyConfig(bundle_id="bundle.econ"),
+        pg_pool=None,
+        redis=initial_redis,
+        comm_context=_ctx(user_type="registered"),
+    )
+
+    assert ep.cp_manager is not None
+    assert ep.cp_manager._pg_pool is None
+    assert ep.cp_manager._redis is initial_redis
+
+    rebound_pg_pool = object()
+    rebound_redis = object()
+    ep.rebind_request_context(
+        comm_context=_ctx(user_type="privileged"),
+        pg_pool=rebound_pg_pool,
+        redis=rebound_redis,
+    )
+
+    assert ep.pg_pool is rebound_pg_pool
+    assert ep.redis is rebound_redis
+    assert ep.cp_manager is not None
+    assert ep.cp_manager._pg_pool is rebound_pg_pool
+    assert ep.cp_manager._redis is rebound_redis
+    assert ep.budget_limiter is not None
+    assert ep.budget_limiter.pg_pool is rebound_pg_pool
+    assert ep.budget_limiter.r is rebound_redis
+    assert ep.rl is not None
+    assert ep.rl.r is rebound_redis

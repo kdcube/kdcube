@@ -116,6 +116,17 @@ def _get_app_redis(request: Request):
     return redis
 
 
+def _get_app_pg_pool(request: Request):
+    pg_pool = getattr(request.app.state, "pg_pool", None)
+    if pg_pool is None:
+        pg_pool = getattr(router.state, "pg_pool", None)
+    if pg_pool is None:
+        pg_pool = getattr(admin_router.state, "pg_pool", None)
+    if pg_pool is None:
+        pg_pool = getattr(internal_router.state, "pg_pool", None)
+    return pg_pool
+
+
 def _request_stream_id(request: Request) -> Optional[str]:
     value = getattr(request.state, STATE_STREAM_ID, None)
     if isinstance(value, str):
@@ -550,8 +561,9 @@ async def _load_bundle_props_defaults(
 
     wf_config.ai_bundle_spec = spec_resolved
     redis = _get_app_redis(request)
+    pg_pool = _get_app_pg_pool(request)
     workflow, _mod = get_workflow_instance(
-        spec, wf_config, comm_context=comm_context, redis=redis,
+        spec, wf_config, comm_context=comm_context, redis=redis, pg_pool=pg_pool,
     )
     defaults = getattr(workflow, "bundle_props_defaults", None) or {}
     defaults = dict(defaults)
@@ -2058,9 +2070,10 @@ async def _load_bundle_workflow(
     )
 
     redis = _get_app_redis(request)
+    pg_pool = _get_app_pg_pool(request)
     try:
         workflow, _mod = get_workflow_instance(
-            spec, wf_config, comm_context=comm_context, redis=redis,
+            spec, wf_config, comm_context=comm_context, redis=redis, pg_pool=pg_pool,
         )
     except Exception as e:
         logger.exception(f"[call_bundle_op.{tenant}.{project}] Failed to load bundle {asdict(spec)}")
@@ -2075,7 +2088,7 @@ async def _load_bundle_workflow(
                 singleton=bool(admin_spec.singleton),
             )
             workflow, _mod = get_workflow_instance(
-                admin, wf_config, comm_context=comm_context, redis=redis,
+                admin, wf_config, comm_context=comm_context, redis=redis, pg_pool=pg_pool,
             )
             spec_resolved = admin_spec
         except Exception:

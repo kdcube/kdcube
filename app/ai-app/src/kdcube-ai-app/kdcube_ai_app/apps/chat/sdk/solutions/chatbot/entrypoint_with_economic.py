@@ -67,27 +67,51 @@ class BaseEntrypointWithEconomics(BaseEntrypoint):
         self.budget_limiter = None
         self._policies_initialized = False
 
-        if self.redis or self.pg_pool:
-            from kdcube_ai_app.apps.chat.sdk.infra.control_plane.manager import ControlPlaneManager
-            from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter
-            from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
+        self._bind_economics_runtime()
 
-            self.cp_manager = ControlPlaneManager(
-                pg_pool=self.pg_pool,
-                redis=self.redis,
-                cache_ttl=60,
-                plan_balance_cache_ttl=10,
-            )
-            self.rl = UserEconomicsRateLimiter(
-                self.redis,
-                user_balance_snapshot_mgr=self.cp_manager.plan_balance_snapshot_mgr,
-            )
-            self.budget_limiter = ProjectBudgetLimiter(
-                redis=self.redis,
-                pg_pool=self.pg_pool,
-                tenant=self.settings.TENANT,
-                project=self.settings.PROJECT,
-            )
+    def _bind_economics_runtime(self) -> None:
+        self.cp_manager = None
+        self.rl = None
+        self.budget_limiter = None
+
+        if self.redis is None and self.pg_pool is None:
+            return
+
+        from kdcube_ai_app.apps.chat.sdk.infra.control_plane.manager import ControlPlaneManager
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.limiter import UserEconomicsRateLimiter
+        from kdcube_ai_app.apps.chat.sdk.infra.economics.project_budget import ProjectBudgetLimiter
+
+        self.cp_manager = ControlPlaneManager(
+            pg_pool=self.pg_pool,
+            redis=self.redis,
+            cache_ttl=60,
+            plan_balance_cache_ttl=10,
+        )
+        self.rl = UserEconomicsRateLimiter(
+            self.redis,
+            user_balance_snapshot_mgr=self.cp_manager.plan_balance_snapshot_mgr,
+        )
+        self.budget_limiter = ProjectBudgetLimiter(
+            redis=self.redis,
+            pg_pool=self.pg_pool,
+            tenant=self.settings.TENANT,
+            project=self.settings.PROJECT,
+        )
+
+    def rebind_request_context(
+        self,
+        *,
+        comm_context: Optional[ChatTaskPayload] = None,
+        pg_pool: Any = None,
+        redis: Any = None,
+    ) -> None:
+        super().rebind_request_context(
+            comm_context=comm_context,
+            pg_pool=pg_pool,
+            redis=redis,
+        )
+        if pg_pool is not None or redis is not None:
+            self._bind_economics_runtime()
 
     @property
     def configuration(self) -> Dict[str, Any]:
