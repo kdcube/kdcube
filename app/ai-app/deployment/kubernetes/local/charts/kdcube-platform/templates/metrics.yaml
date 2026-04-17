@@ -1,0 +1,101 @@
+{{- if .Values.services.metrics.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.metrics.image.tag) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metrics
+  labels:
+    app: metrics
+spec:
+  replicas: {{ .Values.services.metrics.replicaCount }}
+  selector:
+    matchLabels:
+      app: metrics
+  template:
+    metadata:
+      labels:
+        app: metrics
+    spec:
+      containers:
+        - name: metrics
+          image: "{{ .Values.services.metrics.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.services.metrics.servicePort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ .Values.configMaps.backendEnv }}
+            - secretRef:
+                name: {{ .Values.secrets.platform.name }}
+          env:
+            - name: METRICS_PORT
+              value: {{ .Values.services.metrics.servicePort | quote }}
+            - name: GATEWAY_COMPONENT
+              value: metrics
+            - name: POSTGRES_HOST
+              value: {{ .Values.postgres.host | quote }}
+            - name: POSTGRES_PORT
+              value: {{ .Values.postgres.port | quote }}
+            - name: POSTGRES_DATABASE
+              value: {{ .Values.postgres.database | quote }}
+            - name: POSTGRES_SSL
+              value: {{ .Values.postgres.ssl | quote }}
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.postgres.name }}
+                  key: {{ .Values.secrets.postgres.userKey }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.postgres.name }}
+                  key: {{ .Values.secrets.postgres.passwordKey }}
+            - name: REDIS_HOST
+              value: {{ .Values.redis.host | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.port | quote }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.redis.name }}
+                  key: {{ .Values.secrets.redis.passwordKey }}
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@{{ .Values.redis.host }}:{{ .Values.redis.port }}/0"
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+{{ toYaml .Values.services.metrics.resources | indent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metrics
+  labels:
+    app: metrics
+spec:
+  type: ClusterIP
+  selector:
+    app: metrics
+  ports:
+    - name: http
+      port: {{ .Values.services.metrics.servicePort }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

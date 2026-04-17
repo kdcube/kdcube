@@ -1,0 +1,202 @@
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  imagePullPolicy: IfNotPresent
+
+configMaps:
+  backendEnv: backend-env
+  frontendRuntime: frontend-runtime-config
+  frontendNginx: frontend-nginx-config
+  nginxProxy: nginx-proxy-config
+  descriptors: kdcube-descriptors
+
+secrets:
+  postgres:
+    name: postgres-db-credentials
+    userKey: POSTGRES_USER
+    passwordKey: POSTGRES_PASSWORD
+  redis:
+    name: redis-auth
+    passwordKey: redis-password
+  platform:
+    create: true
+    name: kdcube-platform-secrets
+    data:
+      OPENAI_API_KEY: ""
+      HUGGING_FACE_API_TOKEN: ""
+      ANTHROPIC_API_KEY: ""
+      BRAVE_API_KEY: ""
+      SECRETS_ADMIN_TOKEN: ""
+      SECRETS_READ_TOKENS: ""
+      SECRETS_TOKEN_INGRESS: ""
+      SECRETS_TOKEN_PROC: ""
+
+postgres:
+  host: postgres-db
+  port: "5432"
+  database: kdcube
+  ssl: "False"
+
+redis:
+  host: redis
+  port: "6379"
+
+# Descriptor-compatible values (can be overridden by -f descriptors/*.yaml)
+context:
+  tenant: "TENANT_ID"
+  project: "PROJECT_ID"
+
+auth:
+  type: "simple" # simple | cognito | delegated
+  cognito:
+    region: ""
+    user_pool_id: ""
+    app_client_id: ""
+    service_client_id: ""
+    client_secret: ""
+
+proxy:
+  ssl: false
+  route_prefix: "/chatbot"
+
+storage:
+  kdcube: "file:///kdcube-storage"
+  bundles: "file:///bundle-storage"
+
+aws:
+  region: ""
+  access_key_id: ""
+  secret_access_key: ""
+
+gateway:
+  profile: development
+
+bundles:
+  version: "1"
+  default_bundle_id: ""
+  items: []
+
+frontend:
+  authToken: "test-admin-token-123"
+
+persistence:
+  create: true
+  storageClassName: ""
+  # Set hostPath.enabled=true to back PVCs with directories from the host (e.g. local k3d/minikube).
+  # The host paths must be visible inside the cluster node — for k3d, mount them at cluster creation:
+  #   k3d cluster create kdcube --volume /path/to/data:/data@server:0
+  # Then set hostPath.basePath to the in-node path (e.g. /data).
+  hostPath:
+    enabled: false
+    basePath: "/data"
+  bundles:
+    claimName: bundles
+    size: 10Gi
+    hostSubPath: bundles
+  kdcubeStorage:
+    claimName: kdcube-storage
+    size: 10Gi
+    hostSubPath: kdcube-storage
+  bundleStorage:
+    claimName: bundle-storage
+    size: 10Gi
+    hostSubPath: bundle-storage
+  execWorkspace:
+    claimName: exec-workspace
+    size: 10Gi
+    hostSubPath: exec-workspace
+  logs:
+    claimName: kdcube-logs
+    size: 10Gi
+    hostSubPath: logs
+
+dockerSocket:
+  enabled: false
+  hostPath: /var/run/docker.sock
+
+awsCredentials:
+  enabled: false
+  hostPath: /home/appuser/.aws
+
+services:
+  secrets:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: kdcube/kdcube-secrets
+      tag: ""
+    servicePort: 7777
+
+  chatIngress:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: kdcube/kdcube-chat-ingress
+      tag: ""
+    servicePort: 8010
+    uvicornWorkerHealthcheckTimeout: "60"
+    readinessProbe:
+      initialDelaySeconds: 10
+      periodSeconds: 5
+      timeoutSeconds: 10
+      failureThreshold: 3
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+  chatProc:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: kdcube/kdcube-chat-proc
+      tag: ""
+    servicePort: 8020
+    uvicornWorkerHealthcheckTimeout: "60"
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: 2000m
+        memory: 4Gi
+
+  metrics:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: kdcube/kdcube-metrics
+      tag: ""
+    servicePort: 8090
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  webUi:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: kdcube/kdcube-web-ui
+      tag: ""
+    servicePort: 80
+
+  webProxy:
+    enabled: true
+    replicaCount: 1
+    image:
+      repository: kdcube/kdcube-web-proxy
+      tag: ""
+    servicePort: 80
+    serviceType: ClusterIP
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

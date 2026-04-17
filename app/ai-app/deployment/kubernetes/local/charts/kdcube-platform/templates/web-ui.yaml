@@ -1,0 +1,74 @@
+{{- if .Values.services.webUi.enabled }}
+{{- $imageTag := include "kdcube-platform.imageTag" (dict "root" . "serviceTag" .Values.services.webUi.image.tag) -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-ui
+  labels:
+    app: web-ui
+spec:
+  replicas: {{ .Values.services.webUi.replicaCount }}
+  selector:
+    matchLabels:
+      app: web-ui
+  template:
+    metadata:
+      labels:
+        app: web-ui
+    spec:
+      containers:
+        - name: web-ui
+          image: "{{ .Values.services.webUi.image.repository }}:{{ $imageTag }}"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          env:
+            - name: NODE_ENV
+              value: production
+          volumeMounts:
+            - name: frontend-runtime
+              mountPath: /usr/share/nginx/html/config.json
+              subPath: config.json
+              readOnly: true
+            - name: frontend-nginx
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+              readOnly: true
+      volumes:
+        - name: frontend-runtime
+          configMap:
+            name: {{ .Values.configMaps.frontendRuntime }}
+        - name: frontend-nginx
+          configMap:
+            name: {{ .Values.configMaps.frontendNginx }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-ui
+  labels:
+    app: web-ui
+spec:
+  type: ClusterIP
+  selector:
+    app: web-ui
+  ports:
+    - name: http
+      port: {{ .Values.services.webUi.servicePort }}
+      targetPort: http
+      protocol: TCP
+{{- end }}

@@ -1,0 +1,322 @@
+{{- $tenant := default "TENANT_ID" .Values.context.tenant -}}
+{{- $project := default "PROJECT_ID" .Values.context.project -}}
+{{- $routePrefix := default "/chatbot" .Values.proxy.route_prefix -}}
+{{- $authMode := lower (default "simple" .Values.auth.type) -}}
+{{- $validAuthModes := list "simple" "cognito" "delegated" -}}
+{{- if not (has $authMode $validAuthModes) -}}
+{{- fail (printf "unsupported auth.type=%q (expected one of: simple, cognito, delegated)" $authMode) -}}
+{{- end -}}
+{{- $authProvider := "cognito" -}}
+{{- if eq $authMode "simple" }}{{- $authProvider = "simple" -}}{{- end -}}
+{{- $gateway := deepCopy (default (dict) .Values.gateway) -}}
+{{- $_ := set $gateway "tenant" $tenant -}}
+{{- $_ := set $gateway "project" $project -}}
+{{- if not (hasKey $gateway "profile") }}{{- $_ := set $gateway "profile" "development" -}}{{- end -}}
+{{- $gatewayJson := toJson $gateway -}}
+{{- $bundles := default (dict "version" "1" "default_bundle_id" "" "items" (list)) .Values.bundles -}}
+{{- $frontendAuth := dict -}}
+{{- if eq $authMode "simple" -}}
+{{- $frontendAuth = dict "authType" "hardcoded" "token" (default "test-admin-token-123" .Values.frontend.authToken) -}}
+{{- else -}}
+{{- $authority := "" -}}
+{{- if and .Values.auth.cognito.region .Values.auth.cognito.user_pool_id -}}
+{{- $authority = printf "https://cognito-idp.%s.amazonaws.com/%s" .Values.auth.cognito.region .Values.auth.cognito.user_pool_id -}}
+{{- end -}}
+{{- $frontendAuth = dict "authType" "cognito" "oidcConfig" (dict "authority" $authority "client_id" (default "" .Values.auth.cognito.app_client_id)) -}}
+{{- end -}}
+{{- $frontendRuntime := dict "auth" $frontendAuth "tenant" $tenant "project" $project "routesPrefix" $routePrefix -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMaps.backendEnv }}
+  labels:
+    app.kubernetes.io/name: {{ include "kdcube-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  AUTH_PROVIDER: {{ $authProvider | quote }}
+  ID_TOKEN_HEADER_NAME: "X-ID-Token"
+  DEFAULT_LLM_MODEL_ID: "sonnet-4.5"
+  DEFAULT_EMBEDDING_MODEL_ID: "openai-text-embedding-3-small"
+  CHAT_APP_PORT: {{ .Values.services.chatIngress.servicePort | quote }}
+  CHAT_PROCESSOR_PORT: {{ .Values.services.chatProc.servicePort | quote }}
+  METRICS_PORT: {{ .Values.services.metrics.servicePort | quote }}
+  POSTGRES_DATABASE: {{ .Values.postgres.database | quote }}
+  POSTGRES_PORT: {{ .Values.postgres.port | quote }}
+  POSTGRES_SSL: {{ .Values.postgres.ssl | quote }}
+  REDIS_PORT: {{ .Values.redis.port | quote }}
+  KDCUBE_STORAGE_PATH: {{ default "file:///kdcube-storage" .Values.storage.kdcube | quote }}
+  CB_BUNDLE_STORAGE_URL: {{ default "file:///bundle-storage" .Values.storage.bundles | quote }}
+  BUNDLE_STORAGE_ROOT: "/bundle-storage"
+  AGENTIC_BUNDLES_ROOT: "/bundles"
+  AGENTIC_BUNDLES_JSON: "/config/bundles.yaml"
+  EXEC_WORKSPACE_ROOT: "/exec-workspace"
+  HOST_EXEC_WORKSPACE_PATH: "/exec-workspace"
+  HOST_KDCUBE_STORAGE_PATH: "/kdcube-storage"
+  SECRETS_PROVIDER: "local"
+  SECRETS_URL: "http://kdcube-secrets:7777"
+  LINK_PREVIEW_ENABLED: "0"
+  GATEWAY_CONFIG_FORCE_ENV_ON_STARTUP: "1"
+  BUNDLES_FORCE_ENV_ON_STARTUP: "1"
+  GATEWAY_CONFIG_JSON: {{ $gatewayJson | quote }}
+  COGNITO_REGION: {{ default "" .Values.auth.cognito.region | quote }}
+  COGNITO_USER_POOL_ID: {{ default "" .Values.auth.cognito.user_pool_id | quote }}
+  COGNITO_APP_CLIENT_ID: {{ default "" .Values.auth.cognito.app_client_id | quote }}
+  COGNITO_SERVICE_CLIENT_ID: {{ default "" .Values.auth.cognito.service_client_id | quote }}
+  AWS_REGION: {{ default .Values.auth.cognito.region .Values.aws.region | quote }}
+  AWS_DEFAULT_REGION: {{ default .Values.auth.cognito.region .Values.aws.region | quote }}
+  LOG_LEVEL: "INFO"
+  LOG_MAX_MB: "20"
+  LOG_BACKUP_COUNT: "10"
+  LOG_DIR: "/logs"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMaps.descriptors }}
+  labels:
+    app.kubernetes.io/name: {{ include "kdcube-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  bundles.yaml: |
+    {{- /* Convert descriptor format (items list) to dict format expected by bundle_store */}}
+    {{- $bundlesDict := dict -}}
+    {{- range $item := ($bundles.items | default (list)) -}}
+      {{- $_ := set $bundlesDict $item.id (omit $item "id") -}}
+    {{- end }}
+    default_bundle_id: {{ $bundles.default_bundle_id | default "" | quote }}
+    bundles:
+{{ toYaml $bundlesDict | indent 6 }}
+  gateway.yaml: |
+{{ toYaml (dict "gateway" $gateway) | indent 4 }}
+  release.yaml: |
+{{ toYaml (dict "config" (dict "version" (default "" .Values.config.version)) "release_name" .Release.Name) | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMaps.frontendRuntime }}
+  labels:
+    app.kubernetes.io/name: {{ include "kdcube-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  config.json: |
+{{ toPrettyJson $frontendRuntime | indent 4 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMaps.frontendNginx }}
+  labels:
+    app.kubernetes.io/name: {{ include "kdcube-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  nginx.conf: |
+    events {
+        worker_connections 1024;
+    }
+
+    http {
+        include       /etc/nginx/mime.types;
+        default_type  application/octet-stream;
+
+        access_log /var/log/nginx/access.log;
+        error_log /var/log/nginx/error.log;
+
+        server {
+            listen 80;
+            server_name _;
+
+            root /usr/share/nginx/html;
+            index index.html;
+
+            location /config.json {
+                add_header Last-Modified $date_gmt;
+                add_header Cache-Control 'no-store, no-cache';
+                if_modified_since off;
+                expires off;
+                etag off;
+            }
+
+            location / {
+                try_files $uri $uri/ /index.html;
+            }
+        }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.configMaps.nginxProxy }}
+  labels:
+    app.kubernetes.io/name: {{ include "kdcube-platform.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+data:
+  nginx.conf: |
+    map $http_upgrade $connection_upgrade {
+      default upgrade;
+      ''      close;
+    }
+
+    upstream web_ui {
+      server web-ui:80;
+    }
+
+    upstream chat_api {
+      server chat-ingress:{{ .Values.services.chatIngress.servicePort }};
+    }
+
+    upstream chat_proc {
+      server chat-proc:{{ .Values.services.chatProc.servicePort }};
+    }
+
+    server {
+      listen 80;
+      server_name _;
+
+      location = / {
+        return 301 $scheme://$http_host{{ $routePrefix }}/chat;
+      }
+
+      # SSE stream — must not buffer
+      location /sse/ {
+        proxy_pass http://chat_api;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        client_max_body_size 20M;
+      }
+
+      # Auth session endpoint — no-cache so stale session_id is never served
+      location = /profile {
+        proxy_pass http://chat_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        add_header Cache-Control "no-store, no-cache, must-revalidate" always;
+      }
+
+      location /monitoring {
+        proxy_pass http://chat_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      location /cb/socket.io/ {
+        proxy_pass http://chat_api/socket.io/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header Origin $http_origin;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_buffering off;
+      }
+
+      location /api/chat/ {
+        proxy_pass http://chat_api/api/chat/;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+      }
+
+      location ^~ /api/cb/ {
+        proxy_pass http://chat_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        client_max_body_size 500M;
+      }
+
+      location ^~ /api/opex/ {
+        proxy_pass http://chat_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+      }
+
+      location ^~ /api/economics/ {
+        proxy_pass http://chat_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      location ^~ /api/admin/control-plane {
+        proxy_pass http://chat_api;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+      }
+
+      location /admin/integrations/ {
+        proxy_pass http://chat_proc;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 50M;
+      }
+
+      location ^~ /api/integrations/static/ {
+        proxy_pass http://chat_proc;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 50M;
+      }
+
+      location ^~ /api/integrations/ {
+        proxy_pass http://chat_proc;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        client_max_body_size 50M;
+      }
+
+      location /config.json {
+        proxy_pass http://web_ui/config.json;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+
+      # UI fallback: serve SPA and static assets from web-ui
+      location / {
+        proxy_pass http://web_ui;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+      }
+    }

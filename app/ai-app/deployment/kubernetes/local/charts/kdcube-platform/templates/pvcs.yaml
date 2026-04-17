@@ -1,0 +1,189 @@
+{{- if .Values.persistence.create }}
+{{- $hostPath := .Values.persistence.hostPath }}
+{{- $sc := .Values.persistence.storageClassName }}
+{{- $ns := .Release.Namespace }}
+
+{{- /* ── bundles ── */}}
+{{- if $hostPath.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.persistence.bundles.claimName }}-pv
+spec:
+  capacity:
+    storage: {{ .Values.persistence.bundles.size }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ printf "%s/%s" $hostPath.basePath .Values.persistence.bundles.hostSubPath | quote }}
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: {{ $ns }}
+    name: {{ .Values.persistence.bundles.claimName }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.bundles.claimName }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.bundles.size }}
+  {{- if $hostPath.enabled }}
+  storageClassName: ""
+  volumeName: {{ .Values.persistence.bundles.claimName }}-pv
+  {{- else if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+---
+
+{{- /* ── kdcube-storage ── */}}
+{{- if $hostPath.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.persistence.kdcubeStorage.claimName }}-pv
+spec:
+  capacity:
+    storage: {{ .Values.persistence.kdcubeStorage.size }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ printf "%s/%s" $hostPath.basePath .Values.persistence.kdcubeStorage.hostSubPath | quote }}
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: {{ $ns }}
+    name: {{ .Values.persistence.kdcubeStorage.claimName }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.kdcubeStorage.claimName }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.kdcubeStorage.size }}
+  {{- if $hostPath.enabled }}
+  storageClassName: ""
+  volumeName: {{ .Values.persistence.kdcubeStorage.claimName }}-pv
+  {{- else if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+---
+
+{{- /* ── bundle-storage ── */}}
+{{- if $hostPath.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.persistence.bundleStorage.claimName }}-pv
+spec:
+  capacity:
+    storage: {{ .Values.persistence.bundleStorage.size }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ printf "%s/%s" $hostPath.basePath .Values.persistence.bundleStorage.hostSubPath | quote }}
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: {{ $ns }}
+    name: {{ .Values.persistence.bundleStorage.claimName }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.bundleStorage.claimName }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.bundleStorage.size }}
+  {{- if $hostPath.enabled }}
+  storageClassName: ""
+  volumeName: {{ .Values.persistence.bundleStorage.claimName }}-pv
+  {{- else if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+---
+
+{{- /* ── exec-workspace ── */}}
+{{- if $hostPath.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.persistence.execWorkspace.claimName }}-pv
+spec:
+  capacity:
+    storage: {{ .Values.persistence.execWorkspace.size }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ printf "%s/%s" $hostPath.basePath .Values.persistence.execWorkspace.hostSubPath | quote }}
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: {{ $ns }}
+    name: {{ .Values.persistence.execWorkspace.claimName }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.execWorkspace.claimName }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.execWorkspace.size }}
+  {{- if $hostPath.enabled }}
+  storageClassName: ""
+  volumeName: {{ .Values.persistence.execWorkspace.claimName }}-pv
+  {{- else if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+---
+
+{{- /* ── logs ── */}}
+{{- if $hostPath.enabled }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Values.persistence.logs.claimName }}-pv
+spec:
+  capacity:
+    storage: {{ .Values.persistence.logs.size }}
+  accessModes: ["ReadWriteOnce"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: {{ printf "%s/%s" $hostPath.basePath .Values.persistence.logs.hostSubPath | quote }}
+    type: DirectoryOrCreate
+  claimRef:
+    namespace: {{ $ns }}
+    name: {{ .Values.persistence.logs.claimName }}
+---
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.persistence.logs.claimName }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ .Values.persistence.logs.size }}
+  {{- if $hostPath.enabled }}
+  storageClassName: ""
+  volumeName: {{ .Values.persistence.logs.claimName }}-pv
+  {{- else if $sc }}
+  storageClassName: {{ $sc | quote }}
+  {{- end }}
+{{- end }}
