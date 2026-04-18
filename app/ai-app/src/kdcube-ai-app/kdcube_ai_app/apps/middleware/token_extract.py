@@ -104,6 +104,25 @@ def resolve_auth_from_headers_and_cookies(
     return auth_header, id_token
 
 
+def resolve_auth_from_headers(
+    authorization_header: Optional[str],
+    id_token_header: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    auth_header = authorization_header or None
+    id_token = id_token_header or None
+
+    if _auth_debug_enabled():
+        logger.info(
+            "Auth resolve (headers only): header_auth=%s header_id=%s final_auth=%s final_id=%s",
+            bool(authorization_header),
+            bool(id_token_header),
+            bool(auth_header),
+            bool(id_token),
+        )
+
+    return auth_header, id_token
+
+
 def inject_auth_tokens_into_headers(
     headers: Mapping[str, str],
     bearer_token: Optional[str],

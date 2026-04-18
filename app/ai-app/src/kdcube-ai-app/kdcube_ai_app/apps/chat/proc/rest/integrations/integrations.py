@@ -19,7 +19,13 @@ from pydantic import BaseModel
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from kdcube_ai_app.apps.chat.emitters import build_comm_from_comm_context
-from kdcube_ai_app.apps.chat.ingress.resolvers import require_auth, auth_without_pressure, get_user_session_dependency
+from kdcube_ai_app.apps.chat.ingress.resolvers import (
+    require_auth,
+    require_auth_headers_only,
+    auth_without_pressure,
+    get_user_session_dependency,
+    get_user_session_dependency_headers_only,
+)
 from kdcube_ai_app.apps.middleware.gateway import STATE_STREAM_ID, extract_stream_id
 from kdcube_ai_app.auth.AuthManager import RequireUser
 from kdcube_ai_app.auth.sessions import UserSession
@@ -2140,7 +2146,7 @@ async def call_bundle_mcp(
         endpoint_alias: str,
         request: Request,
         mcp_path: str = "",
-        session: UserSession = Depends(require_auth(RequireUser())),
+        session: UserSession = Depends(require_auth_headers_only(RequireUser())),
 ):
     return await _call_bundle_mcp_limited(
         tenant=tenant,
@@ -2169,7 +2175,7 @@ async def call_bundle_mcp_public(
         endpoint_alias: str,
         request: Request,
         mcp_path: str = "",
-        session: UserSession = Depends(get_user_session_dependency()),
+        session: UserSession = Depends(get_user_session_dependency_headers_only()),
 ):
     return await _call_bundle_mcp_limited(
         tenant=tenant,

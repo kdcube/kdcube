@@ -20,7 +20,10 @@ from kdcube_ai_app.auth.sessions import UserType, UserSession, RequestContext
 from kdcube_ai_app.auth.AuthManager import RequirementBase, AuthenticationError, AuthorizationError, RequireUser, \
     RequireRoles
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
-from kdcube_ai_app.apps.middleware.token_extract import resolve_auth_from_headers_and_cookies
+from kdcube_ai_app.apps.middleware.token_extract import (
+    resolve_auth_from_headers,
+    resolve_auth_from_headers_and_cookies,
+)
 import logging
 import os
 
@@ -30,6 +33,7 @@ def _auth_debug_enabled() -> bool:
     return os.getenv("AUTH_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 
 STATE_ADMIN_CHECKED = "_gw_admin_checked"
+STATE_AUTH_MODE = "_gw_auth_mode"
 
 class CircuitBreakerStatusResponse(BaseModel):
     name: str
@@ -61,6 +65,19 @@ STATE_STREAM_ID = "stream_id"
 STREAM_ID_HEADER = get_settings().RUNTIME_CONFIG.STREAM_ID_HEADER_NAME
 
 
+def _state_auth_mode(header_only_auth: bool) -> str:
+    return "headers_only" if header_only_auth else "default"
+
+
+def _can_reuse_state_session(request: Request, *, header_only_auth: bool) -> bool:
+    existing: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
+    if existing is None:
+        return False
+    if not header_only_auth:
+        return True
+    return getattr(request.state, STATE_AUTH_MODE, None) == _state_auth_mode(True)
+
+
 def extract_stream_id(request: Request) -> Optional[str]:
     value = request.headers.get(STREAM_ID_HEADER) or request.headers.get(STREAM_ID_HEADER.lower())
     if value:
@@ -87,7 +104,7 @@ class FastAPIGatewayAdapter:
         if hasattr(self.gateway, "set_econ_role_resolver"):
             self.gateway.set_econ_role_resolver(resolver)
 
-    def _extract_context(self, request: Request) -> RequestContext:
+    def _extract_context(self, request: Request, *, header_only_auth: bool = False) -> RequestContext:
         """Extract request context from FastAPI request"""
         def _parse_int(v):
             try:
@@ -97,17 +114,28 @@ class FastAPIGatewayAdapter:
 
         _auth_cfg = get_settings().AUTH
         _rc = get_settings().RUNTIME_CONFIG
-        auth_header, id_token = resolve_auth_from_headers_and_cookies(
-            request.headers.get("authorization"),
+        raw_auth_header = request.headers.get("authorization")
+        raw_id_token = (
             request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME)
-            or request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME.lower()),
-            request.cookies,
+            or request.headers.get(_auth_cfg.ID_TOKEN_HEADER_NAME.lower())
         )
+        if header_only_auth:
+            auth_header, id_token = resolve_auth_from_headers(
+                raw_auth_header,
+                raw_id_token,
+            )
+        else:
+            auth_header, id_token = resolve_auth_from_headers_and_cookies(
+                raw_auth_header,
+                raw_id_token,
+                request.cookies,
+            )
         if _auth_debug_enabled():
             logger.info(
-                "Gateway adapter: has_auth=%s has_id=%s path=%s",
+                "Gateway adapter: has_auth=%s has_id=%s header_only=%s path=%s",
                 bool(auth_header),
                 bool(id_token),
+                header_only_auth,
                 request.url.path,
             )
 
@@ -144,7 +172,7 @@ class FastAPIGatewayAdapter:
         if not requested.user_id or requested.user_id != session.user_id:
             raise HTTPException(status_code=403, detail="Session does not belong to current user")
 
-    async def resolve_session(self, request: Request) -> UserSession:
+    async def resolve_session(self, request: Request, *, header_only_auth: bool = False) -> UserSession:
         """
         AuthN/AuthZ + session resolution only.
         No rate limit, no backpressure.
@@ -155,22 +183,24 @@ class FastAPIGatewayAdapter:
             requirements=[],
             bypass_throttling=True,
             bypass_gate=True,
+            header_only_auth=header_only_auth,
         )
 
-    def get_session_light(self):
+    def get_session_light(self, *, header_only_auth: bool = False):
         async def dependency(request: Request) -> UserSession:
             existing: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
-            if existing is not None:
+            if _can_reuse_state_session(request, header_only_auth=header_only_auth):
                 return existing
 
-            session = await self.resolve_session(request)
+            session = await self.resolve_session(request, header_only_auth=header_only_auth)
             setattr(request.state, STATE_SESSION, session)
             setattr(request.state, STATE_USER_TYPE, session.user_type.value)
             setattr(request.state, STATE_FLAG, True)
+            setattr(request.state, STATE_AUTH_MODE, _state_auth_mode(header_only_auth))
             return session
         return dependency
 
-    async def process_by_policy(self, request: Request) -> UserSession:
+    async def process_by_policy(self, request: Request, *, header_only_auth: bool = False) -> UserSession:
         pol = self.policy.resolve(request)
         return await self.process_request(
             request,
@@ -178,6 +208,7 @@ class FastAPIGatewayAdapter:
             bypass_throttling=pol.bypass_throttling,
             bypass_gate=pol.bypass_gate,
             bypass_backpressure=pol.bypass_backpressure,
+            header_only_auth=header_only_auth,
         )
 
     async def process_request(self,
@@ -185,10 +216,11 @@ class FastAPIGatewayAdapter:
                               requirements: List[RequirementBase] = None,
                               bypass_throttling: bool = False,
                               bypass_gate: bool = False,
-                              bypass_backpressure: bool = False) -> UserSession:
+                              bypass_backpressure: bool = False,
+                              header_only_auth: bool = False) -> UserSession:
         """Process request and return session"""
         requirements = requirements or []
-        context = self._extract_context(request)
+        context = self._extract_context(request, header_only_auth=header_only_auth)
         endpoint = request.url.path
 
         try:
@@ -249,31 +281,57 @@ class FastAPIGatewayAdapter:
             )
         return dependency
 
+    def require_headers_only(self, *requirements: RequirementBase):
+        """Create FastAPI dependency that enforces requirements using header-only JWT auth."""
+        async def dependency(request: Request) -> UserSession:
+            pol = self.policy.resolve(request)
+            return await self.process_request(
+                request,
+                list(requirements),
+                bypass_throttling=pol.bypass_throttling,
+                bypass_gate=pol.bypass_gate,
+                bypass_backpressure=pol.bypass_backpressure,
+                header_only_auth=True,
+            )
+        return dependency
+
     def get_session(self, bypass_gate: bool = False):
         """Create FastAPI dependency that just gets the session (no requirements)"""
         async def dependency(request: Request) -> UserSession:
             return await self.process_request(request, [], bypass_gate=bypass_gate)
         return dependency
 
+    def get_session_headers_only(self, bypass_gate: bool = False):
+        """Create FastAPI dependency that gets the session using header-only JWT auth."""
+        async def dependency(request: Request) -> UserSession:
+            return await self.process_request(
+                request,
+                [],
+                bypass_gate=bypass_gate,
+                header_only_auth=True,
+            )
+        return dependency
+
 
     # --- your dependency ---
-    def get_user_session_dependency(self):
+    def get_user_session_dependency(self, *, header_only_auth: bool = False):
         async def dependency(request: Request) -> UserSession:
             # If middleware already did it, reuse
             existing: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
-            if existing is not None:
+            if _can_reuse_state_session(request, header_only_auth=header_only_auth):
                 return existing
 
             # Otherwise process once here and mark
             # session = await self.process_request(request, [])
-            session = await self.resolve_session(request)
+            session = await self.resolve_session(request, header_only_auth=header_only_auth)
             setattr(request.state, STATE_SESSION, session)
             setattr(request.state, STATE_USER_TYPE, session.user_type.value)
             setattr(request.state, STATE_FLAG, True)
+            setattr(request.state, STATE_AUTH_MODE, _state_auth_mode(header_only_auth))
             return session
         return dependency
 
-    def auth_without_pressure(self, requirements: Optional[Iterable[RequirementBase]] = None):
+    def auth_without_pressure(self, requirements: Optional[Iterable[RequirementBase]] = None, *, header_only_auth: bool = False):
         """
         Authenticate + authorize for admin endpoints.
         Always bypass throttling + gate.
@@ -290,7 +348,7 @@ class FastAPIGatewayAdapter:
             admin_checked: bool = getattr(request.state, STATE_ADMIN_CHECKED, False)
 
             # Only reuse if this request already ran admin auth
-            if existing is not None and admin_checked:
+            if existing is not None and admin_checked and _can_reuse_state_session(request, header_only_auth=header_only_auth):
                 return existing
 
             session = await self.process_request(
@@ -298,12 +356,14 @@ class FastAPIGatewayAdapter:
                 reqs,
                 bypass_throttling=True,
                 bypass_gate=True,
+                header_only_auth=header_only_auth,
             )
 
             setattr(request.state, STATE_SESSION, session)
             setattr(request.state, STATE_USER_TYPE, session.user_type.value)
             setattr(request.state, STATE_FLAG, True)
             setattr(request.state, STATE_ADMIN_CHECKED, True)
+            setattr(request.state, STATE_AUTH_MODE, _state_auth_mode(header_only_auth))
 
             return session
 
@@ -370,7 +430,7 @@ class AccountingContextBinder:
         AccountingSystem.init_storage(self.storage_backend, enabled=self.enabled)
 
     # -------- FastAPI dependency (HTTP) --------
-    def http_dependency(self, component: Optional[str] = None):
+    def http_dependency(self, component: Optional[str] = None, *, header_only_auth: bool = False):
         """
         Use in FastAPI endpoints:
             session: UserSession = Depends(binder.http_dependency("chat-rest"))
@@ -379,11 +439,18 @@ class AccountingContextBinder:
 
         async def dep(request: Request) -> UserSession:
             session: Optional[UserSession] = getattr(request.state, STATE_SESSION, None)
-            if session is None:
-                session = await self.gateway_adapter.process_by_policy(request)
+            if not _can_reuse_state_session(request, header_only_auth=header_only_auth):
+                if header_only_auth:
+                    session = await self.gateway_adapter.process_by_policy(
+                        request,
+                        header_only_auth=True,
+                    )
+                else:
+                    session = await self.gateway_adapter.process_by_policy(request)
                 setattr(request.state, STATE_SESSION, session)
                 setattr(request.state, STATE_USER_TYPE, session.user_type.value)
                 setattr(request.state, STATE_FLAG, True)
+                setattr(request.state, STATE_AUTH_MODE, _state_auth_mode(header_only_auth))
             AccountingSystem.set_context(
                 user_id=getattr(session, "user_id", None),
                 session_id=getattr(session, "session_id", None),

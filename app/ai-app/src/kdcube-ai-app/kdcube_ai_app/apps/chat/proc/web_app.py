@@ -46,6 +46,7 @@ os.environ.setdefault("INSTANCE_ID", f"proc-{uuid.uuid4().hex[:8]}")
 from kdcube_ai_app.apps.utils.cors import configure_cors
 from kdcube_ai_app.apps.middleware.gateway import (
     STATE_FLAG,
+    STATE_AUTH_MODE,
     STATE_SESSION,
     STATE_USER_TYPE,
     bind_stream_id_to_request_state,
@@ -102,6 +103,12 @@ logging_config.configure_logging()
 get_settings.cache_clear()
 log_secret_statuses(force=True)
 logger = logging.getLogger("ChatProc.WebApp")
+
+
+def _is_bundle_mcp_route(path: str) -> bool:
+    if not path.startswith("/api/integrations/bundles/"):
+        return False
+    return "/mcp/" in path
 
 
 def _install_crash_logging() -> None:
@@ -761,8 +768,12 @@ async def gateway_middleware(request: Request, call_next):
     try:
         bind_stream_id_to_request_state(request)
 
-        # Inject auth tokens from query params if needed
-        if request.url.path.startswith("/api/integrations/"):
+        mcp_route = _is_bundle_mcp_route(request.url.path)
+
+        # Inject auth tokens from query params if needed.
+        # MCP routes intentionally do not use query-param auth or cookie fallback;
+        # they are header-only JWT endpoints.
+        if request.url.path.startswith("/api/integrations/") and not mcp_route:
             bearer_token, id_token = extract_auth_tokens_from_query_params(request.query_params)
             user_timezone = request.query_params.get("user_timezone")
             user_utc_offset_min = request.query_params.get("user_utc_offset_min")
@@ -777,10 +788,14 @@ async def gateway_middleware(request: Request, call_next):
             if user_utc_offset_min:
                 headers[get_settings().RUNTIME_CONFIG.USER_UTC_OFFSET_MIN_HEADER_NAME] = user_utc_offset_min
 
-        session = await app.state.gateway_adapter.process_by_policy(request)
+        session = await app.state.gateway_adapter.process_by_policy(
+            request,
+            header_only_auth=mcp_route,
+        )
         setattr(request.state, STATE_SESSION, session)
         setattr(request.state, STATE_USER_TYPE, session.user_type.value)
         setattr(request.state, STATE_FLAG, True)
+        setattr(request.state, STATE_AUTH_MODE, "headers_only" if mcp_route else "default")
 
         response = await call_next(request)
         response.headers["X-User-Type"] = session.user_type.value

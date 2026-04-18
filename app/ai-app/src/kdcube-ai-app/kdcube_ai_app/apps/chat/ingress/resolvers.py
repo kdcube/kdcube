@@ -355,15 +355,30 @@ def get_user_session_dependency():
     # return adapter.get_user_session_dependency()
     return adapter.http_dependency("chat-rest")
 
+def get_user_session_dependency_headers_only():
+    """Get FastAPI dependency for header-only JWT session resolution."""
+    adapter = get_fast_api_accounting_binder()
+    return adapter.http_dependency("chat-rest", header_only_auth=True)
+
 def auth_without_pressure(requirements = None):
     """Get FastAPI dependency for auth without pressure (admin access)"""
     adapter = get_fastapi_adapter()
     return adapter.auth_without_pressure(requirements)
 
+def auth_without_pressure_headers_only(requirements = None):
+    """Get FastAPI dependency for admin auth using header-only JWT tokens."""
+    adapter = get_fastapi_adapter()
+    return adapter.auth_without_pressure(requirements, header_only_auth=True)
+
 def require_auth(*requirements):
     """Get FastAPI dependency with auth requirements"""
     adapter = get_fastapi_adapter()
     return adapter.require(*requirements)
+
+def require_auth_headers_only(*requirements):
+    """Get FastAPI dependency with header-only JWT auth requirements."""
+    adapter = get_fastapi_adapter()
+    return adapter.require_headers_only(*requirements)
 
 async def get_service_token():
     """Get FastAPI dependency with service token"""

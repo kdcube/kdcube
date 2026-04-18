@@ -265,6 +265,9 @@ Current rule:
   `streamable_http_app()` or an ASGI app already prepared for MCP HTTP handling
 - proc resolves the bundle endpoint, enforces auth/visibility, obtains that MCP
   app from the bundle method, and dispatches the incoming request into it
+- MCP route auth is header-only JWT auth:
+  - no cookie fallback
+  - no query-param token injection
 
 Route mapping:
 

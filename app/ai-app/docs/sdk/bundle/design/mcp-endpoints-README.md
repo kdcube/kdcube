@@ -90,6 +90,16 @@ The decorator supports:
 
 If both are present, both checks must pass.
 
+MCP auth path is intentionally stricter than the normal bundle REST surface:
+
+- MCP routes use header-only JWT auth
+- they do not fall back to browser cookies
+- they do not accept query-param token injection
+
+This is deliberate because MCP clients are expected to present explicit bearer
+credentials rather than reuse the browser/session-oriented auth path used by
+the rest of the chat stack.
+
 ## Route Shape
 
 Proc serves bundle MCP endpoints under explicit bundle routing:
