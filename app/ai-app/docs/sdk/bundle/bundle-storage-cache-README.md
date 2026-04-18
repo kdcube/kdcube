@@ -136,7 +136,7 @@ Practical split:
 Example pattern used in real bundles:
 - knowledge/index preparation may live under the bundle storage root
 - mutable local workspaces such as a cloned repo or a daily pipeline state folder should live under an unversioned subdirectory like:
-  - `<tenant>/<project>/<bundle_id>/_news`
+  - `<tenant>/<project>/<bundle_id>/_task_tracker`
   - `<tenant>/<project>/<bundle_id>/_knowledge_base_admin`
 
 Version suffix rules (if present):

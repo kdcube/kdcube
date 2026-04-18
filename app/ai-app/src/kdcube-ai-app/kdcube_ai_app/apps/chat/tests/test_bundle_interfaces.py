@@ -660,6 +660,63 @@ def test_parse_bundle_request_payload_supports_multipart_files():
     assert uploaded_files[0].content == b"hello from rms"
 
 
+def test_parse_bundle_request_payload_supports_raw_json_object():
+    captured: dict[str, object] = {}
+    app = FastAPI()
+
+    @app.post("/bundle-op")
+    async def bundle_op(request: Request):
+        payload, uploaded_files = await integrations._parse_bundle_request_payload(request)
+        captured["payload"] = payload
+        captured["uploaded_files"] = uploaded_files
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.post(
+        "/bundle-op",
+        json={
+            "project_code": "PRJ",
+            "dry_run": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = captured["payload"]
+    uploaded_files = captured["uploaded_files"]
+    assert isinstance(payload, integrations.BundleSuggestionsRequest)
+    assert payload.data == {"project_code": "PRJ", "dry_run": True}
+    assert uploaded_files == []
+
+
+def test_parse_bundle_request_payload_merges_reserved_fields_with_raw_json_object():
+    captured: dict[str, object] = {}
+    app = FastAPI()
+
+    @app.post("/bundle-op")
+    async def bundle_op(request: Request):
+        payload, _uploaded_files = await integrations._parse_bundle_request_payload(request)
+        captured["payload"] = payload
+        return {"ok": True}
+
+    client = TestClient(app)
+    response = client.post(
+        "/bundle-op",
+        json={
+            "conversation_id": "conv-1",
+            "bundle_id": "bundle.demo",
+            "project_code": "PRJ",
+            "dry_run": True,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = captured["payload"]
+    assert isinstance(payload, integrations.BundleSuggestionsRequest)
+    assert payload.conversation_id == "conv-1"
+    assert payload.bundle_id == "bundle.demo"
+    assert payload.data == {"project_code": "PRJ", "dry_run": True}
+
+
 @pytest.mark.asyncio
 async def test_call_bundle_op_inner_passes_uploaded_files_and_returns_binary_response(monkeypatch):
     captured: dict[str, object] = {}

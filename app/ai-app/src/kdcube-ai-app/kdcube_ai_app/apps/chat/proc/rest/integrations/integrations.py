@@ -319,6 +319,37 @@ class BundleSuggestionsRequest(BaseModel):
     data: Optional[Dict[str, Any]] = None
 
 
+_BUNDLE_REQUEST_RESERVED_KEYS = {"conversation_id", "bundle_id", "config_request", "data"}
+
+
+def _normalize_bundle_request_body(raw_body: Any) -> Dict[str, Any]:
+    if not isinstance(raw_body, dict):
+        return {}
+
+    payload_data = dict(raw_body)
+    extra = {
+        key: value
+        for key, value in payload_data.items()
+        if key not in _BUNDLE_REQUEST_RESERVED_KEYS
+    }
+    if not extra:
+        return payload_data
+
+    normalized = {
+        key: value
+        for key, value in payload_data.items()
+        if key in _BUNDLE_REQUEST_RESERVED_KEYS
+    }
+    existing_data = normalized.get("data")
+    if existing_data is None:
+        normalized["data"] = extra
+        return normalized
+    if isinstance(existing_data, dict):
+        normalized["data"] = {**extra, **existing_data}
+        return normalized
+    return normalized
+
+
 def _attachment_headers(*, filename: Optional[str], headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     out = dict(headers or {})
     if filename and "content-disposition" not in {str(key).lower(): value for key, value in out.items()}:
@@ -360,7 +391,7 @@ async def _parse_bundle_request_payload(request: Request) -> Tuple[BundleSuggest
             raw_body = {}
         if not raw_body:
             return BundleSuggestionsRequest(), []
-        return BundleSuggestionsRequest.model_validate(raw_body), []
+        return BundleSuggestionsRequest.model_validate(_normalize_bundle_request_body(raw_body)), []
 
     form = await request.form()
     payload_data: Dict[str, Any] = {}

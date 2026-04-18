@@ -255,6 +255,10 @@ For those, use the dedicated docs:
 - [bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
 - [bundle-venv-README.md](bundle-venv-README.md)
 
+For bundle widgets and iframe app integration, use:
+
+- [bundle-widget-integration-README.md](bundle-widget-integration-README.md)
+
 ## Validation
 
 Shared SDK bundle suite:

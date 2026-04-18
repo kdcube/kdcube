@@ -268,6 +268,17 @@ decorate it with both `@ui_widget(...)` and `@api(route="operations", ...)`.
 That is the current compatibility pattern for widgets that are still loaded
 through operation calls in existing clients.
 
+Iframe widget contract:
+
+- request runtime config from the parent frame with `CONFIG_REQUEST`
+- accept both `CONN_RESPONSE` and `CONFIG_RESPONSE`
+- build operation URLs from `baseUrl`, `defaultTenant`, `defaultProject`, and `defaultAppBundleId`
+- do not hardcode tenant/project/bundle id from the source tree
+
+Use the dedicated frontend contract doc for the exact pattern and example:
+
+- [bundle-widget-integration-README.md](bundle-widget-integration-README.md)
+
 ### 1.6 `@ui_main`
 
 Marks the method that declares the bundle's main iframe UI surface.
