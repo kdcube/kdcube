@@ -90,6 +90,7 @@ Expected responsibilities:
 - `context.tenant`
 - `context.project`
 - `auth.type`
+- `auth.idp`
 - `proxy.route_prefix`
 - `storage.*`
 - `platform.*`
@@ -114,15 +115,23 @@ Before installation, decide:
 
 ### 6. Auth planning
 
-Set auth mode only in `assembly.yaml`:
+Set auth routing mode only in `assembly.yaml`:
 - `auth.type: simple`
 - `auth.type: cognito`
 - `auth.type: delegated`
 
+Set backend IDP implementation separately:
+- `auth.idp: simple`
+- `auth.idp: cognito`
+
 Current chart behavior:
-- `simple` -> backend `AUTH_PROVIDER=simple`, frontend `authType=hardcoded`
-- `cognito` -> backend `AUTH_PROVIDER=cognito`, frontend `authType=cognito`
-- `delegated` -> backend `AUTH_PROVIDER=cognito`, frontend `authType=cognito`
+- `auth.type` drives routing / frontend mode
+- `auth.idp` drives backend `AUTH_PROVIDER`
+- if `auth.idp` is omitted, chart falls back for backward compatibility:
+  `simple` -> backend `AUTH_PROVIDER=simple`; `cognito` / `delegated` -> backend `AUTH_PROVIDER=cognito`
+- frontend remains:
+  `simple` -> `authType=hardcoded`
+  `cognito` / `delegated` -> `authType=cognito`
 
 Do not configure auth mode in bundles.
 Do not manually edit generated env vars for the chart flow.

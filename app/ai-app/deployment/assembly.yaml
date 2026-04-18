@@ -7,10 +7,14 @@ context:
 
 # ---------------------------------------------------------------------------
 # Authentication
-# Set type to "simple" (local IDP), "cognito" (AWS Cognito), or "delegated".
+# auth.type controls request routing / deployment shape.
+# auth.idp controls backend AUTH_PROVIDER and must be "simple" or "cognito".
+# If auth.idp is omitted, older descriptors still fall back from auth.type:
+# simple -> simple; cognito/delegated -> cognito.
 # ---------------------------------------------------------------------------
 auth:
-  type: "simple"  # AUTH_PROVIDER: simple | cognito | delegated
+  type: "simple"  # deployment mode: simple | cognito | delegated
+  idp: "simple"   # backend AUTH_PROVIDER: simple | cognito
 
   # Token / cookie header names (new)
   id_token_header_name: "X-ID-Token"         # ID_TOKEN_HEADER_NAME
@@ -20,7 +24,7 @@ auth:
 
   # OIDC service account credentials → secrets.yaml: auth.oidc.{admin_email,admin_username,admin_password}
 
-  # Cognito — fill in when type = "cognito"
+  # Cognito — fill in when auth.idp = "cognito"
   cognito:
     region: eu-west-1                 # COGNITO_REGION
     user_pool_id: eu-west-1_XXXXXXXXX # COGNITO_USER_POOL_ID

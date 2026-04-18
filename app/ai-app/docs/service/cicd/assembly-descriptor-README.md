@@ -84,7 +84,8 @@ frontend:
 domain: "chat.example.com"                        # required when proxy.ssl=true; used for proxylogin URLs and nginx SSL server_name/cert paths
 company: "Example Inc."                           # optional; used for delegated frontend defaults and proxylogin/password-reset metadata
 auth:
-  type: "delegated"  # "simple" | "cognito" | "delegated"
+  type: "delegated"  # deployment mode / routing: "simple" | "cognito" | "delegated"
+  idp: "cognito"     # backend AUTH_PROVIDER: "simple" | "cognito"
   cognito:
     region: "eu-west-1"
     user_pool_id: "eu-west-1_AbCdEf123"
@@ -266,7 +267,8 @@ If `auth.type` is `cognito` or `delegated`, the CLI will ask whether to
 use the Cognito settings from the descriptor or re-enter them.
 
 Supported keys:
-- `auth.type`: `simple`, `cognito`, or `delegated`
+- `auth.type`: deployment/routing mode: `simple`, `cognito`, or `delegated`
+- `auth.idp`: backend IDP implementation / `AUTH_PROVIDER`: `simple` or `cognito`
 - `auth.cognito.region`
 - `auth.cognito.user_pool_id` (legacy aliases are normalized on save)
 - `auth.cognito.app_client_id` (legacy aliases are normalized on save)
@@ -278,6 +280,10 @@ Supported keys:
 - `auth.proxy_login.password_reset.template_name`
 - `auth.proxy_login.password_reset.redirect_url`
 - `auth.proxy_login.http_urlbase`
+
+Backward compatibility:
+- if `auth.idp` is omitted, backend `AUTH_PROVIDER` still falls back from `auth.type`
+- fallback mapping is: `simple` -> `simple`; `cognito` / `delegated` -> `cognito`
 
 If `domain` is set at the root of the descriptor, the CLI uses it to expand
 `YOUR_DOMAIN` placeholders in proxylogin URLs. If not set, it falls back to

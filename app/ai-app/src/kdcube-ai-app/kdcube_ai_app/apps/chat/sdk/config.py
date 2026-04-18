@@ -594,6 +594,19 @@ class Settings(PLATFORM_CONFIG):
     # Solution workspace retention — set True to keep workdir/outdir after turn completes (debug).
     SOLUTION_RETAIN_TURN_WORKSPACE: bool = Field(default=False)
 
+    def _resolve_auth_provider_from_assembly(self) -> str | None:
+        auth_idp = (self._assembly_str("auth.idp") or "").strip().lower()
+        if auth_idp in {"simple", "cognito"}:
+            return auth_idp
+
+        # Backward compatibility for older descriptors that overloaded auth.type.
+        auth_mode = (self._assembly_str("auth.type") or "").strip().lower()
+        if auth_mode == "simple":
+            return "simple"
+        if auth_mode in {"cognito", "delegated"}:
+            return "cognito"
+        return None
+
     def model_post_init(self, __context) -> None:
         descriptors_dir = str(getattr(self, "PLATFORM_DESCRIPTORS_DIR", None) or os.getenv("PLATFORM_DESCRIPTORS_DIR") or "").strip()
         descriptors_root = Path(descriptors_dir).expanduser() if descriptors_dir else None
@@ -706,7 +719,7 @@ class Settings(PLATFORM_CONFIG):
 
         # 6. auth provider
         if not self._env_present("AUTH_PROVIDER") and not self.AUTH_PROVIDER:
-            self.AUTH_PROVIDER = self._assembly_str("auth.type")
+            self.AUTH_PROVIDER = self._resolve_auth_provider_from_assembly()
 
         # 7. AWS settings
         if not self._env_present("AWS_REGION"):

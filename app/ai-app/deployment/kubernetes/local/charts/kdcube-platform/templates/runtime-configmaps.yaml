@@ -6,8 +6,19 @@
 {{- if not (has $authMode $validAuthModes) -}}
 {{- fail (printf "unsupported auth.type=%q (expected one of: simple, cognito, delegated)" $authMode) -}}
 {{- end -}}
-{{- $authProvider := "cognito" -}}
-{{- if eq $authMode "simple" }}{{- $authProvider = "simple" -}}{{- end -}}
+{{- $authIdp := lower (default "" .Values.auth.idp) -}}
+{{- $validAuthIdps := list "" "simple" "cognito" -}}
+{{- if not (has $authIdp $validAuthIdps) -}}
+{{- fail (printf "unsupported auth.idp=%q (expected one of: simple, cognito)" $authIdp) -}}
+{{- end -}}
+{{- $authProvider := $authIdp -}}
+{{- if eq $authProvider "" -}}
+  {{- if eq $authMode "simple" -}}
+    {{- $authProvider = "simple" -}}
+  {{- else -}}
+    {{- $authProvider = "cognito" -}}
+  {{- end -}}
+{{- end -}}
 {{- $gateway := deepCopy (default (dict) .Values.gateway) -}}
 {{- $_ := set $gateway "tenant" $tenant -}}
 {{- $_ := set $gateway "project" $project -}}

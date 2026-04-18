@@ -42,7 +42,7 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
-    monkeypatch.setattr(sdk_config, "_ASSEMBLY_YAML_PATH", Path(assembly_path))
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
     settings = sdk_config.Settings()
     monkeypatch.setattr(sdk_config, "get_settings", lambda: settings)
 
@@ -78,7 +78,7 @@ def test_get_plain_reads_bundles_namespace(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
-    monkeypatch.setattr(sdk_config, "_BUNDLES_YAML_PATH", Path(bundles_path))
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(bundles_path))
     settings = sdk_config.Settings()
     monkeypatch.setattr(sdk_config, "get_settings", lambda: settings)
 
@@ -92,8 +92,53 @@ def test_get_plain_returns_default_when_path_missing(monkeypatch, tmp_path):
     assembly_path.write_text(yaml.safe_dump({"storage": {"workspace": {"type": "custom"}}}, sort_keys=False))
 
     monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
-    monkeypatch.setattr(sdk_config, "_ASSEMBLY_YAML_PATH", Path(assembly_path))
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
     settings = sdk_config.Settings()
     monkeypatch.setattr(sdk_config, "get_settings", lambda: settings)
 
     assert sdk_config.get_plain("storage.workspace.repo", default="none") == "none"
+
+
+def test_settings_auth_provider_reads_auth_idp_from_assembly(monkeypatch, tmp_path):
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text(
+        yaml.safe_dump(
+            {
+                "auth": {
+                    "type": "delegated",
+                    "idp": "simple",
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH_PROVIDER == "simple"
+
+
+def test_settings_auth_provider_falls_back_to_legacy_auth_type(monkeypatch, tmp_path):
+    monkeypatch.delenv("AUTH_PROVIDER", raising=False)
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text(
+        yaml.safe_dump(
+            {
+                "auth": {
+                    "type": "delegated",
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+
+    settings = sdk_config.Settings()
+
+    assert settings.AUTH_PROVIDER == "cognito"
