@@ -232,16 +232,38 @@ def _session_user_type(session: UserSession) -> str | None:
     return value or None
 
 
+_USER_TYPE_VISIBILITY_ORDER: dict[str, int] = {
+    "anonymous": 0,
+    "registered": 1,
+    "paid": 2,
+    "privileged": 3,
+}
+
+
 def _user_types_visible(required_user_types: tuple[str, ...] | list[str] | None, session: UserSession) -> bool:
     user_types = tuple(
-        str(user_type or "").strip()
+        str(user_type or "").strip().lower()
         for user_type in (required_user_types or ())
         if str(user_type or "").strip()
     )
     if not user_types:
         return True
-    current = _session_user_type(session)
-    return bool(current and current in set(user_types))
+    current = str(_session_user_type(session) or "").strip().lower()
+    if not current:
+        return False
+
+    current_rank = _USER_TYPE_VISIBILITY_ORDER.get(current)
+    if current_rank is None:
+        return current in set(user_types)
+
+    thresholds = [
+        _USER_TYPE_VISIBILITY_ORDER[user_type]
+        for user_type in user_types
+        if user_type in _USER_TYPE_VISIBILITY_ORDER
+    ]
+    if not thresholds:
+        return current in set(user_types)
+    return current_rank >= min(thresholds)
 
 
 def _visible_widget_specs(manifest: BundleInterfaceManifest, session: UserSession) -> list[UIWidgetSpec]:

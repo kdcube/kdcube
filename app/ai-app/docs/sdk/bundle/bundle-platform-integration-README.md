@@ -180,6 +180,12 @@ Current fields:
   - tuple/list of inferred internal user types
   - examples: `registered`, `paid`, `privileged`, `anonymous`
   - empty means no user-type restriction
+  - threshold semantics:
+    - ordered as `anonymous < registered < paid < privileged`
+    - declaring `user_types=("registered",)` permits `registered`, `paid`, and `privileged`
+    - declaring `user_types=("paid",)` permits `paid` and `privileged`
+    - declaring `user_types=("privileged",)` permits only `privileged`
+    - declaring `user_types=("anonymous",)` permits any current user type
 - `roles`
   - tuple/list of raw external roles
   - use actual auth role ids such as `kdcube:role:super-admin`
@@ -198,6 +204,7 @@ Important current rule:
   operation routes
 - if both `user_types` and `roles` are provided, both must match for the
   endpoint to be visible/callable
+- `user_types` are evaluated by minimum required level, not exact equality
 - same-name fallback for undecorated methods is no longer part of the HTTP
   contract
 - `route="public"` must also declare `public_auth`
@@ -244,6 +251,9 @@ Current fields:
   - default: Python method name
 - `user_types`
   - inferred internal user types allowed to see the widget
+  - same threshold rule as `@api(...)`:
+    - `anonymous < registered < paid < privileged`
+    - `user_types=("registered",)` means registered-or-higher
 - `roles`
   - raw external roles allowed to see the widget
   - use values such as `kdcube:role:super-admin`
@@ -654,6 +664,14 @@ Applies within a bundle manifest — controls which apis and widgets are
 visible to a given user.
 
 - `user_types` are matched against the session's inferred platform user type.
+- `user_types` use ordered threshold semantics:
+  - `anonymous < registered < paid < privileged`
+  - a method is permitted when the current user type is greater than or equal
+    to the lowest declared user type
+  - `user_types=("registered",)` means registered-or-higher
+  - `user_types=("paid",)` means paid-or-higher
+  - `user_types=("privileged",)` means privileged only
+  - `user_types=("anonymous",)` means no effective restriction by user type
 - `roles` are matched against the session's raw `kdcube:role:*` entries.
 - If both are present, both conditions must pass.
 - Enforced by `_endpoint_visible` in the integration layer.

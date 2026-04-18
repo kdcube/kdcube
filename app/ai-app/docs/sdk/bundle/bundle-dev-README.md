@@ -116,6 +116,18 @@ Practical rule:
 - use `@cron(...)` only for scheduled work
 - use `@venv(...)` only for dependency-heavy leaf helpers, not general orchestration
 
+Visibility rule:
+
+- `user_types` on `@api(...)` and `@ui_widget(...)` are threshold-based, not exact-match
+- order is:
+  - `anonymous < registered < paid < privileged`
+- so:
+  - `user_types=("registered",)` means registered-or-higher
+  - `user_types=("paid",)` means paid-or-higher
+  - `user_types=("privileged",)` means privileged only
+- use `roles=(...)` for raw external auth roles such as `kdcube:role:super-admin`
+- if both `user_types` and `roles` are declared, both checks must pass
+
 ## Configuration Model
 
 The important split is:

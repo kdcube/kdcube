@@ -566,19 +566,64 @@ def test_visible_specs_require_intersection_of_user_types_and_raw_roles():
         manifest,
         _session(user_type="privileged", roles=["kdcube:role:super-admin"]),
     )
-    assert {spec.alias for spec in visible_admin} == {"by_role", "by_both"}
+    assert {spec.alias for spec in visible_admin} == {"by_user_type", "by_role", "by_both"}
 
     visible_privileged_no_role = integrations._visible_api_specs(
         manifest,
         _session(user_type="privileged"),
     )
-    assert {spec.alias for spec in visible_privileged_no_role} == set()
+    assert {spec.alias for spec in visible_privileged_no_role} == {"by_user_type"}
 
     visible_widget = integrations._visible_widget_specs(
         manifest,
         _session(user_type="privileged", roles=["kdcube:role:super-admin"]),
     )
     assert [spec.alias for spec in visible_widget] == ["admin_widget"]
+
+
+def test_user_type_visibility_uses_minimum_threshold_order():
+    assert integrations._user_types_visible(("registered",), _session(user_type="registered")) is True
+    assert integrations._user_types_visible(("registered",), _session(user_type="paid")) is True
+    assert integrations._user_types_visible(("registered",), _session(user_type="privileged")) is True
+    assert integrations._user_types_visible(("paid",), _session(user_type="registered")) is False
+    assert integrations._user_types_visible(("paid",), _session(user_type="paid")) is True
+    assert integrations._user_types_visible(("paid",), _session(user_type="privileged")) is True
+    assert integrations._user_types_visible(("privileged",), _session(user_type="paid")) is False
+    assert integrations._user_types_visible(("anonymous",), _session(user_type="registered")) is True
+    assert integrations._user_types_visible(("registered", "privileged"), _session(user_type="paid")) is True
+
+
+def test_visible_specs_apply_threshold_user_types():
+    class _VisibilityWorkflow:
+        @api(alias="reg_only", user_types=("registered",))
+        async def reg_only(self, **kwargs):
+            return kwargs
+
+        @api(alias="paid_only", user_types=("paid",))
+        async def paid_only(self, **kwargs):
+            return kwargs
+
+        @ui_widget(
+            icon="heroicons-outline:shield-check",
+            alias="paid_widget",
+            user_types=("paid",),
+        )
+        def paid_widget(self, **kwargs):
+            return kwargs
+
+    manifest = discover_bundle_interface_manifest(_VisibilityWorkflow(), bundle_id="bundle.demo")
+
+    visible_paid = integrations._visible_api_specs(manifest, _session(user_type="paid"))
+    assert {spec.alias for spec in visible_paid} == {"reg_only", "paid_only"}
+
+    visible_privileged = integrations._visible_api_specs(manifest, _session(user_type="privileged"))
+    assert {spec.alias for spec in visible_privileged} == {"reg_only", "paid_only"}
+
+    visible_registered = integrations._visible_api_specs(manifest, _session(user_type="registered"))
+    assert {spec.alias for spec in visible_registered} == {"reg_only"}
+
+    visible_widgets_paid = integrations._visible_widget_specs(manifest, _session(user_type="paid"))
+    assert [spec.alias for spec in visible_widgets_paid] == ["paid_widget"]
 
 
 def test_parse_bundle_request_payload_supports_multipart_files():
