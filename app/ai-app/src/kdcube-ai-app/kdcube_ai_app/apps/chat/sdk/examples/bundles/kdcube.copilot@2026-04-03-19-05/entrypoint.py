@@ -289,7 +289,7 @@ class ReactWorkflow(BaseEntrypoint):
             doc_reader_tools.ensure_knowledge_root(storage_root=storage_root)
         return storage_root
 
-    @mcp(alias="doc_reader", route="operations", user_types=("registered",))
+    @mcp(alias="doc_reader", route="operations")
     def doc_reader_mcp(self, **kwargs):
         if self._doc_reader_mcp_app is None:
             self._doc_reader_mcp_app = doc_reader_tools.build_doc_reader_mcp_app(

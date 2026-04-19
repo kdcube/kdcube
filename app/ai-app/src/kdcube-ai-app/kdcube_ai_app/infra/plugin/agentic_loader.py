@@ -79,9 +79,6 @@ class MCPEndpointSpec:
     alias: str
     route: str = "operations"
     transport: str = "streamable-http"
-    user_types: tuple[str, ...] = ()
-    roles: tuple[str, ...] = ()
-    public_auth: "PublicAPIAuthSpec | None" = None
 
 
 @dataclass(frozen=True)
@@ -416,11 +413,11 @@ def mcp(
 ):
     resolved_route = _normalize_api_route(route)
     resolved_transport = _normalize_mcp_transport(transport)
-    resolved_public_auth = _normalize_public_api_auth(resolved_route, public_auth)
-    resolved_user_types, resolved_roles = _normalize_visibility_selectors(
-        user_types=user_types,
-        roles=roles,
-    )
+    if user_types or roles or public_auth is not None:
+        raise ValueError(
+            "@mcp(...) does not support proc-side visibility or public_auth. "
+            "MCP request authentication/authorization must be handled by the bundle MCP app."
+        )
 
     def _wrap(fn):
         setattr(
@@ -431,9 +428,6 @@ def mcp(
                 alias=_clean_alias(alias, getattr(fn, "__name__", "mcp")),
                 route=resolved_route,
                 transport=resolved_transport,
-                user_types=resolved_user_types,
-                roles=resolved_roles,
-                public_auth=resolved_public_auth,
             ),
         )
         return fn
@@ -1484,9 +1478,6 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 alias=mcp_spec.alias,
                 route=mcp_spec.route,
                 transport=mcp_spec.transport,
-                user_types=tuple(mcp_spec.user_types or ()),
-                roles=tuple(mcp_spec.roles or ()),
-                public_auth=mcp_spec.public_auth,
             )
             mcp_key = (resolved.alias, resolved.route)
             if mcp_key in seen_mcp:

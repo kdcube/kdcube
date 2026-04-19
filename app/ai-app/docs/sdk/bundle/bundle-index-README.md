@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
 ---
 # Bundle Docs Index
 
@@ -39,9 +40,11 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
    - runtime surfaces available to bundle code
 6. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
    - exact decorator and route contract
-7. [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
+7. [bundle-transports-README.md](bundle-transports-README.md)
+   - canonical inbound/outbound protocol and transport map
+8. [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
    - effective props, raw descriptor reads, bundle secrets, user props, user secrets
-8. [bundle-ops-README.md](bundle-ops-README.md)
+9. [bundle-ops-README.md](bundle-ops-README.md)
    - local reload, registry updates, delivery modes, and deployment-side changes
 
 ## Core Doc Map
@@ -54,6 +57,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Study the reference bundle | [bundle-reference-versatile-README.md](bundle-reference-versatile-README.md) |
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
 | Decorators, widget/API/public integration | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
+| Inbound/outbound transports and protocols | [bundle-transports-README.md](bundle-transports-README.md) |
 | Props, secrets, raw descriptor reads | [bundle-props-secrets-README.md](bundle-props-secrets-README.md) |
 | Reserved platform-owned prop paths | [bundle-platform-properties-README.md](bundle-platform-properties-README.md) |
 | Bundle lifecycle and instance model | [bundle-lifecycle-README.md](bundle-lifecycle-README.md) |

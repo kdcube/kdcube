@@ -5,6 +5,7 @@ summary: "Browser/UI transport contract for bundles across REST, SSE, Socket.IO,
 tags: ["sdk", "bundle", "transport", "auth", "headers", "cookies", "sse", "socketio", "rest", "integrations"]
 keywords: ["Authorization", "X-ID-Token", "KDC-Stream-ID", "User-Session-ID", "__Secure-LATC", "__Secure-LITC", "stream_id", "peer targeting", "bundle widget"]
 see_also:
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-client-ui-README.md
   - ks:docs/sdk/bundle/bundle-sse-events-README.md
   - ks:docs/sdk/bundle/bundle-frontend-awareness-README.md
@@ -22,6 +23,14 @@ This document is the browser/UI contract for talking to the platform over:
 - proc integrations (`/api/integrations/*`)
 
 It focuses on what a bundle-facing client can send, what the server accepts, and what the client should expect back.
+
+This page is intentionally browser/UI-oriented.
+
+It does not define bundle-served MCP routes or the full bundle transport map.
+Use:
+
+- [bundle-transports-README.md](bundle-transports-README.md) for the overall inbound/outbound surface map
+- [bundle-platform-integration-README.md](bundle-platform-integration-README.md) for the exact `@mcp(...)` contract
 
 ## 1. Transport Overview
 

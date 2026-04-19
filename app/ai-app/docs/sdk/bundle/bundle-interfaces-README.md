@@ -10,6 +10,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-ops-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-sse-events-README.md
 ---
@@ -21,6 +22,10 @@ This doc describes how a bundle connects to clients:
 - **Operations API** to invoke bundle methods over REST
 - **Artifacts & attachments** surfaced in the timeline and SSE events
 - **Execution boundaries** when selected helper functions run through `@venv(...)`
+
+For the higher-level transport map, including how `@mcp(...)` fits beside
+REST/widget/browser routes, use
+[bundle-transports-README.md](bundle-transports-README.md).
 
 ```mermaid
 graph LR

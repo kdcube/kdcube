@@ -79,6 +79,8 @@ Typical use:
 - runtime profiles
 - feature flags
 - scheduled job config such as `@cron(..., expr_config=...)`
+- bundle-defined MCP inbound auth contract such as
+  `mcp.inbound.auth.header_name`
 
 ### Source-of-truth policy for bundle props
 
@@ -214,6 +216,58 @@ Do not put secrets into:
 - `bundles.yaml`
 - logs
 - artifacts
+
+### Example: bundle-defined MCP auth contract
+
+For bundle-authenticated MCP, a clean split is:
+
+- bundle props define the non-secret client contract
+- bundle secrets define the verification material
+
+Example:
+
+```yaml
+# bundles.yaml
+bundles:
+  version: "1"
+  items:
+    - id: "partner.tools@1-0"
+      config:
+        mcp:
+          inbound:
+            auth:
+              header_name: "X-Partner-MCP-Token"
+              scheme: "shared-header-secret"
+```
+
+```yaml
+# bundles.secrets.yaml
+bundles:
+  version: "1"
+  items:
+    - id: "partner.tools@1-0"
+      secrets:
+        mcp:
+          inbound:
+            auth:
+              shared_token: "replace-in-real-deployment"
+```
+
+Then bundle code reads:
+
+```python
+header_name = self.bundle_prop("mcp.inbound.auth.header_name", "X-Partner-MCP-Token")
+expected_token = get_secret("b:mcp.inbound.auth.shared_token")
+```
+
+That gives the bundle a stable contract with its MCP clients:
+
+- the prop tells clients which header name to send
+- the secret stores the expected token
+- proc does not verify it for MCP; the bundle verifies it itself
+
+Use this only for bundle-owned MCP auth. For full code, use the worked example
+in [bundle-transports-README.md](bundle-transports-README.md).
 
 ## User-scoped bundle props
 

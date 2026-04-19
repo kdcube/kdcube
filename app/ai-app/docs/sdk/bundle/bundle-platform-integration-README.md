@@ -5,6 +5,7 @@ summary: "Current declarative bundle integration contract: supported decorators,
 tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs"]
 keywords: ["agentic_workflow", "bundle_id decorator", "api decorator", "mcp decorator", "ui_widget", "ui_main", "on_message", "cron decorator", "scheduled jobs", "bundle manifest", "integrations widgets", "integrations operations", "bundle mcp endpoint", "public route"]
 see_also:
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
@@ -22,6 +23,9 @@ It covers:
 - REST routing for bundle operations, public operations, and bundle MCP endpoints
 - widget discovery and widget fetch
 - bundle main UI entrypoints and static asset serving
+
+For the higher-level inbound/outbound transport map, use
+[bundle-transports-README.md](bundle-transports-README.md).
 
 All of this is implemented in:
 
@@ -235,7 +239,6 @@ Current signature:
     alias="tools",
     route="operations",
     transport="streamable-http",
-    user_types=("registered",),
 )
 def tools_mcp(self):
     ...
@@ -251,23 +254,43 @@ Current fields:
   - default: `operations`
 - `transport`
   - current supported value: `streamable-http`
-- `user_types`
-  - same inferred internal user-type contract as `@api(...)`
-- `roles`
-  - same raw external role contract as `@api(...)`
-- `public_auth`
-  - same public-auth contract as `@api(...)`
-  - required for `route="public"`
 
 Current rule:
 
 - the decorated method must return a `FastMCP` app exposing
   `streamable_http_app()` or an ASGI app already prepared for MCP HTTP handling
-- proc resolves the bundle endpoint, enforces auth/visibility, obtains that MCP
-  app from the bundle method, and dispatches the incoming request into it
-- MCP route auth is header-only JWT auth:
-  - no cookie fallback
-  - no query-param token injection
+- proc resolves the bundle endpoint, obtains that MCP app from the bundle
+  method, and dispatches the incoming request into it
+- proc forwards the original request headers and body to the MCP subapp
+- proc does **not** authenticate or authorize MCP requests before dispatch
+- bundle code owns MCP request authentication/authorization
+- if the provider method accepts `request=`, proc passes the original FastAPI
+  request object so bundle code can inspect headers before returning the MCP app
+
+Route semantics:
+
+- `route="operations"`
+  - non-public MCP URL family
+  - use when the bundle intends to authenticate or otherwise gate the caller
+- `route="public"`
+  - public MCP URL family
+  - use when the endpoint is intentionally public
+
+Important:
+
+- `@mcp(...)` does not support proc-side `user_types`, `roles`, or `public_auth`
+- if a bundle needs header-based secrets, bearer tokens, API keys, custom JWT
+  validation, or any other MCP auth scheme, that logic must live in the bundle
+  MCP app itself
+- canonical pattern:
+  - put the client-facing header name in bundle props such as
+    `self.bundle_prop("mcp.inbound.auth.header_name")`
+  - put the verification material in bundle secrets such as
+    `get_secret("b:mcp.inbound.auth.shared_token")`
+  - read `request.headers[...]` in the provider and reject with
+    `HTTPException(status_code=401, ...)` before returning the MCP app
+- full worked example:
+  [bundle-transports-README.md](bundle-transports-README.md)
 
 Route mapping:
 
@@ -499,9 +522,6 @@ class MCPEndpointSpec:
     alias: str
     route: str = "operations"
     transport: str = "streamable-http"
-    user_types: tuple[str, ...] = ()
-    roles: tuple[str, ...] = ()
-    public_auth: PublicAPIAuthSpec | None = None
 ```
 
 ### 2.4 `OnMessageSpec`
@@ -626,9 +646,7 @@ Example:
     {
       "alias": "tools",
       "route": "operations",
-      "transport": "streamable-http",
-      "user_types": ["registered"],
-      "roles": []
+      "transport": "streamable-http"
     }
   ],
   "ui_main": {
@@ -703,13 +721,15 @@ Current rules:
 - route matching is strict:
   - `route="operations"` is not callable through `/public/mcp/...`
   - `route="public"` is not callable through `/mcp/...`
-- public MCP endpoints use the same `public_auth` contract as public `@api(...)`
-  methods
 - current supported transport is `streamable-http`
 - proc rewrites the routed request onto the MCP subapp path expected by the
   current FastMCP HTTP transport
 - bundle code returns the MCP app; proc does not synthesize MCP tools from
   ordinary `@api(...)` methods
+- proc forwards original request headers/body to the bundle MCP subapp
+- proc does not authenticate MCP at this route layer
+- bundle code is responsible for MCP request authentication if the endpoint is
+  not intentionally public
 ### 3.5 Legacy no-bundle-id operations route
 
 ```text
@@ -780,9 +800,9 @@ Applies to the bundle listing endpoint (`GET /api/integrations/bundles`).
 - A bundle with empty `allowed_roles` is always included.
 - Admin listing (`GET /api/admin/integrations/bundles`) is not filtered.
 
-### 4.2 Per-method filtering (`user_types` and `roles` on `@api`, `@mcp`, and `@ui_widget`)
+### 4.2 Per-method filtering (`user_types` and `roles` on `@api` and `@ui_widget`)
 
-Applies within a bundle manifest — controls which apis, MCP endpoints, and widgets are
+Applies within a bundle manifest — controls which apis and widgets are
 visible to a given user.
 
 - `user_types` are matched against the session's inferred platform user type.
@@ -802,13 +822,19 @@ visible to a given user.
 Bundle methods should still enforce business-level authorization when needed,
 but route-level visibility is already enforced from decorator metadata.
 
+`@mcp(...)` is different:
+
+- proc does not enforce `user_types` / `roles` for MCP
+- MCP authentication/authorization is owned by the bundle MCP app
+
 ## 5) Authoring rules
 
 Use these rules for new bundles:
 
 1. Decorate every remotely callable HTTP method with `@api(...)`.
 2. Decorate every remotely callable MCP surface with `@mcp(...)`.
-3. Use `route="operations"` for authenticated/internal bundle operations.
+3. Use `route="operations"` for authenticated/internal bundle operations and
+   for MCP endpoints that the bundle intends to authenticate itself.
 4. Use `route="public"` only for intentionally public endpoints.
 5. Decorate every widget method with `@ui_widget(...)`.
 6. If a widget method is also called through `/operations/...`, add

@@ -152,7 +152,7 @@ def test_gateway_adapter_header_only_auth_ignores_cookie_tokens():
     auth_cookie = settings.AUTH.AUTH_TOKEN_COOKIE_NAME.encode("utf-8")
     id_cookie = settings.AUTH.ID_TOKEN_COOKIE_NAME.encode("utf-8")
     request = _request(
-        "/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools",
+        "/test/header-only-auth",
         headers=[
             (b"cookie", auth_cookie + b"=cookie-access; " + id_cookie + b"=cookie-id"),
         ],
@@ -187,7 +187,7 @@ async def test_accounting_http_dependency_can_force_header_only_auth():
         accounting_enabled=False,
         default_component="chat-rest",
     )
-    request = _request("/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools")
+    request = _request("/test/header-only-auth")
 
     resolved = await binder.http_dependency("chat-rest", header_only_auth=True)(request)
 
@@ -218,7 +218,7 @@ async def test_accounting_http_dependency_does_not_reuse_default_auth_state_for_
         accounting_enabled=False,
         default_component="chat-rest",
     )
-    request = _request("/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools")
+    request = _request("/test/header-only-auth")
     setattr(request.state, STATE_SESSION, default_session)
     setattr(request.state, STATE_USER_TYPE, default_session.user_type.value)
     setattr(request.state, STATE_FLAG, True)

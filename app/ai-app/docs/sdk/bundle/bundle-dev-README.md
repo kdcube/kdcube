@@ -7,6 +7,7 @@ keywords: ["bundle authoring", "agentic_workflow", "bundle_id", "tools_descripto
 see_also:
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
+  - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
@@ -19,6 +20,7 @@ Use it together with:
 
 - [bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
 - [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+- [bundle-transports-README.md](bundle-transports-README.md)
 - [bundle-runtime-README.md](bundle-runtime-README.md)
 - [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
 
@@ -119,7 +121,7 @@ Practical rule:
 
 Visibility rule:
 
-- `user_types` on `@api(...)`, `@mcp(...)`, and `@ui_widget(...)` are threshold-based, not exact-match
+- `user_types` on `@api(...)` and `@ui_widget(...)` are threshold-based, not exact-match
 - order is:
   - `anonymous < registered < paid < privileged`
 - so:
@@ -128,6 +130,9 @@ Visibility rule:
   - `user_types=("privileged",)` means privileged only
 - use `roles=(...)` for raw external auth roles such as `kdcube:role:super-admin`
 - if both `user_types` and `roles` are declared, both checks must pass
+- `@mcp(...)` is different:
+  - proc does not enforce `user_types`, `roles`, or `public_auth` for MCP
+  - the bundle MCP app owns MCP request authentication/authorization
 
 ## Configuration Model
 

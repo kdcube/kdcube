@@ -21,14 +21,12 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from kdcube_ai_app.apps.chat.emitters import build_comm_from_comm_context
 from kdcube_ai_app.apps.chat.ingress.resolvers import (
     require_auth,
-    require_auth_headers_only,
     auth_without_pressure,
     get_user_session_dependency,
-    get_user_session_dependency_headers_only,
 )
 from kdcube_ai_app.apps.middleware.gateway import STATE_STREAM_ID, extract_stream_id
 from kdcube_ai_app.auth.AuthManager import RequireUser
-from kdcube_ai_app.auth.sessions import UserSession
+from kdcube_ai_app.auth.sessions import RequestContext, UserSession, UserType
 from kdcube_ai_app.apps.chat.sdk.config import get_settings, get_secret
 from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
 from kdcube_ai_app.apps.chat.sdk.protocol import (
@@ -284,7 +282,8 @@ def _visible_api_specs(manifest: BundleInterfaceManifest, session: UserSession) 
 
 
 def _visible_mcp_specs(manifest: BundleInterfaceManifest, session: UserSession) -> list[MCPEndpointSpec]:
-    return [spec for spec in manifest.mcp_endpoints if _endpoint_visible(spec.user_types, spec.roles, session)]
+    del session
+    return list(manifest.mcp_endpoints)
 
 
 def _user_raw_roles(session: UserSession) -> set[str]:
@@ -762,9 +761,6 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "alias": s.alias,
                 "route": s.route,
                 "transport": s.transport,
-                "user_types": list(s.user_types),
-                "roles": list(s.roles),
-                "public_auth_mode": (s.public_auth.mode if s.public_auth else None),
             }
             for s in manifest.mcp_endpoints
         ],
@@ -808,12 +804,8 @@ def _manifest_to_descriptor_filtered(
                 "alias": s.alias,
                 "route": s.route,
                 "transport": s.transport,
-                "user_types": list(s.user_types),
-                "roles": list(s.roles),
-                "public_auth_mode": (s.public_auth.mode if s.public_auth else None),
             }
             for s in manifest.mcp_endpoints
-            if _endpoint_visible(s.user_types, s.roles, session)
         ],
         "widgets": [
             {"alias": s.alias, "icon": s.icon, "user_types": list(s.user_types), "roles": list(s.roles)}
@@ -1878,9 +1870,6 @@ async def get_bundle_interface(
                 "alias": spec.alias,
                 "route": spec.route,
                 "transport": spec.transport,
-                "user_types": list(spec.user_types),
-                "roles": list(spec.roles),
-                "public_auth_mode": (spec.public_auth.mode if spec.public_auth else None),
             }
             for spec in visible_mcp_endpoints
         ],
@@ -1998,6 +1987,45 @@ def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
     )
 
 
+def _coerce_optional_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except Exception:
+        return None
+
+
+def _build_mcp_request_session(request: Request) -> UserSession:
+    settings = get_settings()
+    auth_cfg = settings.AUTH
+    runtime_cfg = settings.RUNTIME_CONFIG
+    context = RequestContext(
+        client_ip=request.client.host if request.client else "unknown",
+        user_agent=request.headers.get("user-agent", ""),
+        authorization_header=request.headers.get("authorization"),
+        id_token=(
+            request.headers.get(auth_cfg.ID_TOKEN_HEADER_NAME)
+            or request.headers.get(auth_cfg.ID_TOKEN_HEADER_NAME.lower())
+        ),
+        user_timezone=(
+            request.headers.get(runtime_cfg.USER_TIMEZONE_HEADER_NAME)
+            or request.headers.get(runtime_cfg.USER_TIMEZONE_HEADER_NAME.lower())
+        ),
+        user_utc_offset_min=_coerce_optional_int(
+            request.headers.get(runtime_cfg.USER_UTC_OFFSET_MIN_HEADER_NAME)
+            or request.headers.get(runtime_cfg.USER_UTC_OFFSET_MIN_HEADER_NAME.lower())
+        ),
+    )
+    return UserSession(
+        session_id=str(uuid.uuid4()),
+        user_type=UserType.ANONYMOUS,
+        fingerprint=context.get_fingerprint(),
+        roles=[],
+        permissions=[],
+        timezone=context.user_timezone,
+        request_context=context,
+    )
+
+
 async def _call_bundle_mcp_limited(
         *,
         tenant: str,
@@ -2007,8 +2035,9 @@ async def _call_bundle_mcp_limited(
         endpoint_alias: str,
         route: str,
         mcp_path: str,
-        session: UserSession,
+        session: UserSession | None = None,
 ):
+    resolved_session = session or _build_mcp_request_session(request)
     sem = _get_integrations_semaphore()
     if sem:
         async with sem:
@@ -2020,7 +2049,7 @@ async def _call_bundle_mcp_limited(
                 endpoint_alias=endpoint_alias,
                 route=route,
                 mcp_path=mcp_path,
-                session=session,
+                session=resolved_session,
             )
     return await _call_bundle_mcp_inner(
         tenant=tenant,
@@ -2030,7 +2059,7 @@ async def _call_bundle_mcp_limited(
         endpoint_alias=endpoint_alias,
         route=route,
         mcp_path=mcp_path,
-        session=session,
+        session=resolved_session,
     )
 
 
@@ -2043,8 +2072,9 @@ async def _call_bundle_mcp_inner(
         endpoint_alias: str,
         route: str,
         mcp_path: str,
-        session: UserSession,
+        session: UserSession | None = None,
 ):
+    resolved_session = session or _build_mcp_request_session(request)
     workflow, spec_resolved, tenant_id, project_id, comm_context = _unpack_loaded_bundle_workflow(
         await _load_bundle_workflow(
             tenant=tenant,
@@ -2052,7 +2082,7 @@ async def _call_bundle_mcp_inner(
             bundle_id=bundle_id,
             payload=BundleSuggestionsRequest(),
             request=request,
-            session=session,
+            session=resolved_session,
         )
     )
 
@@ -2064,15 +2094,6 @@ async def _call_bundle_mcp_inner(
     )
     if endpoint_spec is None:
         raise HTTPException(status_code=404, detail=f"Bundle does not support MCP endpoint {endpoint_alias}")
-
-    _enforce_public_api_auth(
-        endpoint_spec=endpoint_spec,
-        bundle_id=spec_resolved.id,
-        operation=f"mcp/{endpoint_alias}",
-        request=request,
-    )
-    if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session):
-        raise HTTPException(status_code=403, detail=f"Bundle MCP endpoint {endpoint_alias} is not visible to this user")
 
     try:
         fn = getattr(workflow, endpoint_spec.method_name)
@@ -2126,7 +2147,6 @@ async def call_bundle_mcp(
         endpoint_alias: str,
         request: Request,
         mcp_path: str = "",
-        session: UserSession = Depends(require_auth_headers_only(RequireUser())),
 ):
     return await _call_bundle_mcp_limited(
         tenant=tenant,
@@ -2136,7 +2156,6 @@ async def call_bundle_mcp(
         endpoint_alias=endpoint_alias,
         route="operations",
         mcp_path=mcp_path,
-        session=session,
     )
 
 
@@ -2155,7 +2174,6 @@ async def call_bundle_mcp_public(
         endpoint_alias: str,
         request: Request,
         mcp_path: str = "",
-        session: UserSession = Depends(get_user_session_dependency_headers_only()),
 ):
     return await _call_bundle_mcp_limited(
         tenant=tenant,
@@ -2165,7 +2183,6 @@ async def call_bundle_mcp_public(
         endpoint_alias=endpoint_alias,
         route="public",
         mcp_path=mcp_path,
-        session=session,
     )
 
 

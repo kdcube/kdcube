@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from kdcube_ai_app.apps.chat.proc.rest.integrations import integrations
+from kdcube_ai_app.auth.sessions import UserType
 from kdcube_ai_app.apps.chat.sdk.runtime.http_ops import BundleBinaryResponse
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint import BaseEntrypoint
 from kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint_with_economic import BaseEntrypointWithEconomics
@@ -97,6 +98,8 @@ class _RecordingMCPProvider:
                     "path": scope.get("path"),
                     "method": scope.get("method"),
                     "body": body.decode("utf-8"),
+                    "authorization": dict(scope.get("headers") or {}).get(b"authorization", b"").decode("utf-8"),
+                    "cookie": dict(scope.get("headers") or {}).get(b"cookie", b"").decode("utf-8"),
                 }
             ).encode("utf-8")
             await send(
@@ -130,11 +133,11 @@ class _DecoratedWorkflow:
     async def public_ping(self, **kwargs):
         return kwargs
 
-    @mcp(alias="tools", route="operations", user_types=("registered",))
+    @mcp(alias="tools", route="operations")
     def tools_mcp(self, **kwargs):
         return _RecordingMCPProvider()
 
-    @mcp(alias="public_tools", route="public", public_auth="none")
+    @mcp(alias="public_tools", route="public")
     def public_tools_mcp(self, **kwargs):
         return _RecordingMCPProvider()
 
@@ -182,10 +185,8 @@ def test_discover_bundle_interface_manifest_returns_declarative_specs():
     tools_mcp = next(item for item in manifest.mcp_endpoints if item.alias == "tools")
     assert tools_mcp.route == "operations"
     assert tools_mcp.transport == "streamable-http"
-    assert tools_mcp.user_types == ("registered",)
     public_tools_mcp = next(item for item in manifest.mcp_endpoints if item.alias == "public_tools")
     assert public_tools_mcp.route == "public"
-    assert public_tools_mcp.public_auth and public_tools_mcp.public_auth.mode == "none"
     prefs_view = next(item for item in manifest.api_endpoints if item.alias == "prefs_view")
     assert prefs_view.user_types == ("registered",)
     assert prefs_view.roles == ()
@@ -630,12 +631,15 @@ async def test_call_bundle_mcp_inner_dispatches_into_bundle_mcp_app(monkeypatch)
             method="POST",
             path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools/list",
             body=b'{"jsonrpc":"2.0","id":"1","method":"tools/list"}',
-            headers=[(b"content-type", b"application/json")],
+            headers=[
+                (b"content-type", b"application/json"),
+                (b"authorization", b"Bearer mcp-token"),
+                (b"cookie", b"bundle-auth=cookie-token"),
+            ],
         ),
         endpoint_alias="tools",
         route="operations",
         mcp_path="list",
-        session=_session(),
     )
 
     assert response.status_code == 200
@@ -643,6 +647,8 @@ async def test_call_bundle_mcp_inner_dispatches_into_bundle_mcp_app(monkeypatch)
     assert payload["path"] == "/mcp/list"
     assert payload["method"] == "POST"
     assert payload["body"] == '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
+    assert payload["authorization"] == "Bearer mcp-token"
+    assert payload["cookie"] == "bundle-auth=cookie-token"
 
 
 @pytest.mark.asyncio
@@ -664,13 +670,70 @@ async def test_call_bundle_mcp_inner_supports_public_mcp_endpoint(monkeypatch):
         endpoint_alias="public_tools",
         route="public",
         mcp_path="",
-        session=_session(user_type="anonymous"),
     )
 
     assert response.status_code == 200
     payload = json.loads(response.body.decode("utf-8"))
     assert payload["path"] == "/mcp"
     assert payload["method"] == "GET"
+
+
+@pytest.mark.asyncio
+async def test_call_bundle_mcp_route_delegates_without_proc_session(monkeypatch):
+    captured: dict[str, object] = {}
+
+    async def _call_bundle_mcp_limited(**kwargs):
+        captured.update(kwargs)
+        return {"ok": True}
+
+    monkeypatch.setattr(integrations, "_call_bundle_mcp_limited", _call_bundle_mcp_limited)
+
+    request = _request(
+        method="POST",
+        path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools/list",
+    )
+
+    result = await integrations.call_bundle_mcp(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.demo",
+        endpoint_alias="tools",
+        request=request,
+        mcp_path="list",
+    )
+
+    assert result == {"ok": True}
+    assert captured == {
+        "tenant": "tenant-a",
+        "project": "project-a",
+        "bundle_id": "bundle.demo",
+        "request": request,
+        "endpoint_alias": "tools",
+        "route": "operations",
+        "mcp_path": "list",
+    }
+
+
+def test_build_mcp_request_session_is_anonymous_and_keeps_raw_request_headers():
+    session = integrations._build_mcp_request_session(
+        _request(
+            method="POST",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools",
+            headers=[
+                (b"authorization", b"Bearer external-mcp-token"),
+                (b"x-id-token", b"opaque-id-token"),
+                (b"x-user-timezone", b"Europe/Berlin"),
+                (b"x-user-utc-offset", b"120"),
+            ],
+        )
+    )
+
+    assert session.user_type == UserType.ANONYMOUS
+    assert session.request_context is not None
+    assert session.request_context.authorization_header == "Bearer external-mcp-token"
+    assert session.request_context.id_token == "opaque-id-token"
+    assert session.request_context.user_timezone == "Europe/Berlin"
+    assert session.request_context.user_utc_offset_min == 120
 
 
 def test_visible_specs_require_intersection_of_user_types_and_raw_roles():
@@ -698,8 +761,6 @@ def test_visible_specs_require_intersection_of_user_types_and_raw_roles():
 
         @mcp(
             alias="admin_mcp",
-            user_types=("privileged",),
-            roles=("kdcube:role:super-admin",),
         )
         def admin_mcp(self, **kwargs):
             return _RecordingMCPProvider()
@@ -729,9 +790,29 @@ def test_visible_specs_require_intersection_of_user_types_and_raw_roles():
 
     visible_mcp = integrations._visible_mcp_specs(
         manifest,
-        _session(user_type="privileged", roles=["kdcube:role:super-admin"]),
+        _session(user_type="registered"),
     )
     assert [spec.alias for spec in visible_mcp] == ["admin_mcp"]
+
+
+def test_mcp_rejects_proc_side_visibility_and_public_auth():
+    with pytest.raises(ValueError):
+        class _WorkflowWithUserTypes:
+            @mcp(alias="bad", user_types=("registered",))
+            def bad(self, **kwargs):
+                return kwargs
+
+    with pytest.raises(ValueError):
+        class _WorkflowWithRoles:
+            @mcp(alias="bad", roles=("kdcube:role:super-admin",))
+            def bad(self, **kwargs):
+                return kwargs
+
+    with pytest.raises(ValueError):
+        class _WorkflowWithPublicAuth:
+            @mcp(alias="bad", route="public", public_auth="none")
+            def bad(self, **kwargs):
+                return kwargs
 
 
 def test_user_type_visibility_uses_minimum_threshold_order():
