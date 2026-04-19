@@ -31,7 +31,7 @@ const ChatLog = () => {
     }, [dispatch, stayConnected]);
 
     const inProgress = useMemo(() => !!currentTurn, [currentTurn])
-    const followUpQuestion = useMemo(() => {
+    const followUpQuestions = useMemo(() => {
         return turnOrder.length > 0 ? turns[turnOrder[turnOrder.length - 1]].followUpQuestions : null
     }, [turnOrder, turns])
 
@@ -75,7 +75,6 @@ const ChatLog = () => {
     }, [dispatch]);
 
     const scrollDownButton = useMemo(() => {
-        console.debug(showScrollDown);
         return <motion.button
             className={"block cursor-pointer z-50"}
             initial={{
@@ -98,12 +97,12 @@ const ChatLog = () => {
         </motion.button>
     }, [showScrollDown])
 
-    const followUpQuestionsRender = useMemo(() => {
+    const followUpQuestionsMemo = useMemo(() => {
         const disabled = inProgress;
-        if (!inProgress && followUpQuestion && followUpQuestion.length > 0) {
+        if (!inProgress && followUpQuestions && followUpQuestions.length > 0) {
             return (
                 <div className="flex flex-row items-start w-full flex-wrap space-x-1 space-y-1 pl-3">
-                    {followUpQuestion.map((q, i) => {
+                    {followUpQuestions.map((q, i) => {
                         return (<button key={`follow-up-question-${i}`}
                                         className="px-3 py-1 text-xs bg-white text-gray-700 border border-gray-200 rounded-full hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50"
                                         onClick={() => {
@@ -116,7 +115,7 @@ const ChatLog = () => {
             )
         }
         return null
-    }, [inProgress, followUpQuestion, sendMessage]);
+    }, [inProgress, followUpQuestions, sendMessage]);
 
     const conversationStatus = useMemo(() => {
         if (currentTurn) {
@@ -176,7 +175,7 @@ const ChatLog = () => {
                         <div className="px-10 py-4">
                             {turnsRender}
                             {processingRender}
-                            {followUpQuestionsRender}
+                            {followUpQuestionsMemo}
                         </div>
                         <div className="pb-22"/>
                     </div>
@@ -186,7 +185,7 @@ const ChatLog = () => {
                 </div>
             </div>
         )
-    }, [followUpQuestionsRender, onScroll, processingRender, scrollDownButton, turnsRender])
+    }, [followUpQuestionsMemo, onScroll, processingRender, scrollDownButton, turnsRender])
 }
 
 export default ChatLog;

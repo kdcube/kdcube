@@ -409,9 +409,6 @@ const chatStateSlice = createSlice({
             if (action.payload.data.final_answer) {
                 state.turns[turnId].answer = action.payload.data.final_answer;
             }
-            if (action.payload.data.followups) {
-                state.turns[turnId].followUpQuestions = action.payload.data.followups;
-            }
         },
         setUserMessage(state, action: PayloadAction<string>) {
             state.userMessage = action.payload;
@@ -561,7 +558,9 @@ const chatStateSlice = createSlice({
                     case "conversation_title":
                         state.conversationTitle = env.data?.title as string;
                         break;
-
+                    case "followups":
+                        turn.followUpQuestions = (env.data?.items ?? []) as string[];
+                        break
                 }
             }
         },
