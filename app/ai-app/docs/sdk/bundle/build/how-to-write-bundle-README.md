@@ -150,6 +150,127 @@ Use dedicated docs for those:
 - [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
 - [bundle-venv-README.md](../bundle-venv-README.md)
 
+## 4.1 Copyable Feature Snippets
+
+Use these as the smallest correct starting points.
+
+### Authenticated API
+
+```python
+@api(alias="task_list", route="operations", method="GET", user_types=("registered",))
+async def task_list(self, **kwargs):
+    return {"items": []}
+```
+
+Reference:
+- [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+
+### Public API with explicit platform auth
+
+```python
+@api(
+    alias="incoming_webhook",
+    route="public",
+    method="POST",
+    public_auth={"mode": "header_secret", "header": "X-Webhook-Secret", "secret_key": "incoming.secret"},
+)
+async def incoming_webhook(self, **kwargs):
+    return {"ok": True}
+```
+
+Reference:
+- [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+
+### Widget plus structured API
+
+```python
+@api(alias="task-board", route="operations", method="POST", user_types=("registered",))
+@ui_widget(alias="task-board", icon={"tailwind": "heroicons-outline:check-badge"}, user_types=("registered",))
+def task_board(self, **kwargs):
+    return ["<div id='root'></div>"]
+
+@api(alias="task-board-api", route="operations", method="POST", user_types=("registered",))
+async def task_board_api(self, **kwargs):
+    return {"items": []}
+```
+
+Reference:
+- [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
+
+### Public MCP
+
+```python
+@mcp(alias="docs_public", route="public", transport="streamable-http")
+def docs_public_mcp(self, **kwargs):
+    return build_docs_mcp_app()
+```
+
+Reference:
+- [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+- [bundle-transports-README.md](../bundle-transports-README.md)
+
+### Bundle-authenticated MCP
+
+```python
+from fastapi import HTTPException, Request
+from kdcube_ai_app.apps.chat.sdk.config import get_secret
+
+@mcp(alias="docs", route="operations", transport="streamable-http")
+def docs_mcp(self, request: Request, **kwargs):
+    header_name = self.bundle_prop("mcp.docs.auth.header_name", "X-Docs-MCP-Token")
+    expected_token = get_secret("b:mcp.docs.auth.shared_token")
+    if request.headers.get(header_name) != expected_token:
+        raise HTTPException(status_code=401, detail=f"Missing or invalid {header_name}")
+    return build_docs_mcp_app()
+```
+
+Reference:
+- [bundle-transports-README.md](../bundle-transports-README.md)
+- [bundle-props-secrets-README.md](../bundle-props-secrets-README.md)
+
+### Scheduled job
+
+```python
+@cron(alias="sync", expr_config="task_tracker.sync", span="bundle")
+async def sync(self, **kwargs):
+    await self._sync_tasks()
+```
+
+Reference:
+- [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
+
+### Bundle props and secrets
+
+```python
+enabled = self.bundle_prop("features.auto_sync", False)
+api_key = get_secret("b:external.api_key")
+```
+
+Reference:
+- [bundle-props-secrets-README.md](../bundle-props-secrets-README.md)
+
+### Bundle local storage
+
+```python
+root = self.bundle_storage_root()
+workspace = root / "_task_tracker"
+workspace.mkdir(parents=True, exist_ok=True)
+```
+
+Reference:
+- [bundle-storage-cache-README.md](../bundle-storage-cache-README.md)
+
+### Per-bundle virtualenv helper
+
+```python
+@venv(requirements="requirements.txt")
+def render_report(payload: dict) -> dict:
+    return {"ok": True, "payload": payload}
+```
+
+Reference:
+- [bundle-venv-README.md](../bundle-venv-README.md)
+
 ## 5. Entrypoint Rules
 
 Every bundle should make the entrypoint simple and explicit.

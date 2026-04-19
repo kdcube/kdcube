@@ -42,6 +42,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from fastapi import HTTPException, Request
 from langgraph.graph import StateGraph, START, END
 
 from kdcube_ai_app.apps.chat.sdk.context.vector.conv_ticket_store import ConvTicketStore
@@ -183,7 +184,8 @@ class ReactWorkflow(BaseEntrypoint):
         )
         # Signature-based cache key — avoids rebuilding the knowledge index on every turn
         self._knowledge_signature: str | None = None
-        self._doc_reader_mcp_app: Any = None
+        self._doc_reader_mcp_public_app: Any = None
+        self._doc_reader_mcp_authenticated_app: Any = None
         # Graph is built once at init and reused across invocations
         self.graph = self._build_graph()
 
@@ -289,15 +291,71 @@ class ReactWorkflow(BaseEntrypoint):
             doc_reader_tools.ensure_knowledge_root(storage_root=storage_root)
         return storage_root
 
-    @mcp(alias="doc_reader", route="operations")
-    def doc_reader_mcp(self, **kwargs):
-        if self._doc_reader_mcp_app is None:
-            self._doc_reader_mcp_app = doc_reader_tools.build_doc_reader_mcp_app(
-                name=f"{BUNDLE_ID}.doc_reader",
-                storage_root_provider=self._doc_reader_storage_root,
-                refresh_knowledge_space=lambda: self._reconcile_knowledge_space(reason="doc_reader_mcp"),
+    def _build_doc_reader_mcp_app(self, *, name_suffix: str) -> Any:
+        return doc_reader_tools.build_doc_reader_mcp_app(
+            name=f"{BUNDLE_ID}.{name_suffix}",
+            storage_root_provider=self._doc_reader_storage_root,
+            refresh_knowledge_space=lambda: self._reconcile_knowledge_space(reason=name_suffix),
+        )
+
+    def _require_doc_reader_mcp_auth(self, request: Request) -> None:
+        header_name = self.bundle_prop(
+            "mcp.doc_reader.auth.header_name",
+            "X-KDCube-Copilot-MCP-Token",
+        )
+        expected_token = get_secret("b:mcp.doc_reader.auth.shared_token")
+        provided_token = request.headers.get(header_name)
+
+        if not expected_token:
+            raise RuntimeError(
+                "Bundle secret b:mcp.doc_reader.auth.shared_token is not configured."
             )
-        return self._doc_reader_mcp_app
+        if provided_token != expected_token:
+            raise HTTPException(
+                status_code=401,
+                detail=f"Missing or invalid {header_name}",
+            )
+
+    @mcp(alias="doc_reader_public", route="public")
+    def doc_reader_public_mcp(self, **kwargs):
+        if self._doc_reader_mcp_public_app is None:
+            self._doc_reader_mcp_public_app = self._build_doc_reader_mcp_app(
+                name_suffix="doc_reader_public",
+            )
+        return self._doc_reader_mcp_public_app
+
+    @mcp(alias="doc_reader", route="operations")
+    def doc_reader_mcp(self, request: Request, **kwargs):
+        # Bundle-owned MCP auth contract for this endpoint:
+        #
+        # bundles.yaml
+        #   items:
+        #     - id: "kdcube.copilot"
+        #       config:
+        #         mcp:
+        #           doc_reader:
+        #             auth:
+        #               header_name: "X-KDCube-Copilot-MCP-Token"
+        #
+        # bundles.secrets.yaml
+        #   items:
+        #     - id: "kdcube.copilot"
+        #       secrets:
+        #         mcp:
+        #           doc_reader:
+        #             auth:
+        #               shared_token: "<rotate-me>"
+        #
+        # Share with MCP clients:
+        # - the operations route URL for alias "doc_reader"
+        # - the header name from bundle props
+        # - the token provisioned in bundle secrets
+        self._require_doc_reader_mcp_auth(request)
+        if self._doc_reader_mcp_authenticated_app is None:
+            self._doc_reader_mcp_authenticated_app = self._build_doc_reader_mcp_app(
+                name_suffix="doc_reader",
+            )
+        return self._doc_reader_mcp_authenticated_app
 
     def _resolve_knowledge_paths(
         self,

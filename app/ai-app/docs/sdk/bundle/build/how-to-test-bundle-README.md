@@ -44,6 +44,100 @@ That is the slowest feedback loop and the weakest signal.
 
 Every non-trivial bundle should be tested at these layers.
 
+### 2.1 Quick commands by feature
+
+Use these as the first actionable checks for each bundle surface.
+
+### Syntax and imports
+
+```bash
+python -m py_compile /abs/path/to/bundle/entrypoint.py
+```
+
+### Shared bundle contract
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+  --bundle-path /abs/path/to/bundle
+```
+
+### Bundle-local tests
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+pytest -q /abs/path/to/bundle/tests
+```
+
+### Authenticated API
+
+```bash
+curl -X POST \
+  "http://localhost:5173/api/integrations/bundles/<tenant>/<project>/<bundle_id>/operations/task-board-api" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"data":{"operation":"list","payload":{}}}'
+```
+
+### Public API with `header_secret`
+
+```bash
+curl -X POST \
+  "http://localhost:5173/api/integrations/bundles/<tenant>/<project>/<bundle_id>/public/incoming_webhook" \
+  -H "X-Webhook-Secret: <shared-secret>" \
+  -H "Content-Type: application/json" \
+  -d '{"event":"ping"}'
+```
+
+### Public MCP
+
+```bash
+curl -X POST \
+  "http://localhost:5173/api/integrations/bundles/<tenant>/<project>/<bundle_id>/public/mcp/docs_public" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
+```
+
+### Bundle-authenticated MCP
+
+```bash
+curl -X POST \
+  "http://localhost:5173/api/integrations/bundles/<tenant>/<project>/<bundle_id>/mcp/docs" \
+  -H "X-Docs-MCP-Token: <shared-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tools/list"}'
+```
+
+### Widget path sanity check
+
+Open the widget, then verify in browser networking that it calls:
+
+```text
+/api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{alias}
+```
+
+If you see `////operations/...`, the widget is not correctly wired.
+
+### Cron logic
+
+Expose the cron body through a helper and test it directly:
+
+```python
+@cron(alias="sync", expr_config="task_tracker.sync", span="bundle")
+async def sync(self, **kwargs):
+    await self._sync_impl()
+```
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app pytest -q /abs/path/to/bundle/tests -k sync
+```
+
+Reference map:
+- [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
+- [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
+- [bundle-transports-README.md](../bundle-transports-README.md)
+- [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
+
 ### A. Import and syntax layer
 
 Verify that the bundle files can load.
