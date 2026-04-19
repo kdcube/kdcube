@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import yaml
@@ -6,6 +7,7 @@ from rich.console import Console
 from kdcube_cli.cli import (
     _descriptor_fast_path_reasons,
     _load_bundle_ids_from_descriptor,
+    _resolve_cli_repo_path,
     _resolve_cli_workdir,
 )
 from kdcube_cli import export_live_bundles as export_mod
@@ -66,6 +68,43 @@ def test_resolve_cli_workdir_auto_selects_single_runtime(tmp_path: Path):
 
     resolved = _resolve_cli_workdir(tmp_path / "workspace")
     assert resolved == runtime_dir.resolve()
+
+
+def test_resolve_cli_repo_path_defaults_under_namespaced_runtime(tmp_path: Path):
+    descriptors_dir = tmp_path / "descriptors"
+    descriptors_dir.mkdir()
+    (descriptors_dir / "assembly.yaml").write_text(
+        "context:\n  tenant: Demo Tenant\n  project: Project/One\n"
+    )
+
+    resolved = _resolve_cli_repo_path(
+        tmp_path / "ignored-default",
+        workdir=tmp_path / "workspace",
+        path_provided=False,
+        descriptors_location=descriptors_dir,
+    )
+    assert resolved == (
+        tmp_path / "workspace" / "demo_tenant__project_one" / "repo"
+    ).resolve()
+
+
+def test_resolve_cli_repo_path_prefers_install_meta_repo_root(tmp_path: Path):
+    runtime_dir = tmp_path / "workspace" / "demo_tenant__project_one"
+    config_dir = runtime_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("")
+    repo_dir = runtime_dir / "checked-out-repo"
+    (repo_dir / ".git").mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(
+        json.dumps({"repo_root": str(repo_dir.resolve())})
+    )
+
+    resolved = _resolve_cli_repo_path(
+        tmp_path / "ignored-default",
+        workdir=tmp_path / "workspace",
+        path_provided=False,
+    )
+    assert resolved == repo_dir.resolve()
 
 
 def test_stage_descriptor_directory_requires_canonical_descriptor_set(tmp_path: Path):

@@ -33,6 +33,7 @@ from kdcube_cli.tty_keys import (
 DEFAULT_REPO = "https://github.com/kdcube/kdcube-ai-app.git"
 DEFAULT_DIR = Path.home() / ".kdcube" / "kdcube-ai-app"
 DEFAULT_WORKDIR = Path.home() / ".kdcube" / "kdcube-runtime"
+DEFAULT_REPO_DIRNAME = "repo"
 KDCUBE_REPOS = {
     "kdcube-chat-ingress",
     "kdcube-chat-proc",
@@ -271,6 +272,62 @@ def _resolve_cli_workdir(
             "Pass the namespaced runtime directory explicitly with --workdir."
         )
     return installer_mod.workspace_runtime_dir(workdir, tenant_hint, project_hint).resolve()
+
+
+def _is_git_repo(path: Path) -> bool:
+    return path.exists() and (path / ".git").is_dir()
+
+
+def _default_repo_path_for_workdir(workdir: Path) -> Path:
+    return workdir / DEFAULT_REPO_DIRNAME
+
+
+def _read_install_meta_raw(workdir: Path) -> dict | None:
+    meta_path = workdir / "config" / "install-meta.json"
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text())
+    except Exception:
+        return None
+
+
+def _repo_path_from_install_meta(workdir: Path) -> Path | None:
+    meta = _read_install_meta_raw(workdir)
+    if not isinstance(meta, dict):
+        return None
+    raw = str(meta.get("repo_root") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser().resolve()
+    return path if _is_git_repo(path) else None
+
+
+def _resolve_cli_repo_path(
+    repo_path: Path,
+    *,
+    workdir: Path,
+    path_provided: bool,
+    descriptors_location: Path | None = None,
+    assembly_path: Path | None = None,
+) -> Path:
+    if path_provided:
+        return repo_path.expanduser().resolve()
+
+    concrete_workdir = _resolve_cli_workdir(
+        workdir,
+        descriptors_location=descriptors_location,
+        assembly_path=assembly_path,
+    )
+
+    meta_repo = _repo_path_from_install_meta(concrete_workdir)
+    if meta_repo is not None:
+        return meta_repo
+
+    if descriptors_location is not None or assembly_path is not None:
+        return _default_repo_path_for_workdir(concrete_workdir).resolve()
+
+    return repo_path.expanduser().resolve()
 
 
 def _ensure_secrets_service_available(docker_dir: Path) -> None:
@@ -912,13 +969,7 @@ def _checkout_repo_upstream(console: Console, repo_root: Path) -> str:
 
 def _read_install_meta(workdir: Path) -> dict | None:
     workdir = _resolve_cli_workdir(workdir)
-    meta_path = workdir / "config" / "install-meta.json"
-    if not meta_path.exists():
-        return None
-    try:
-        return json.loads(meta_path.read_text())
-    except Exception:
-        return None
+    return _read_install_meta_raw(workdir)
 
 
 def _git_status(repo_root: Path) -> tuple[str | None, str | None, str | None]:
@@ -1127,6 +1178,7 @@ def main() -> None:
         args.secrets_prompt = False
 
     repo_path = Path(os.path.expanduser(args.path)).resolve()
+    path_provided = _arg_provided("--path")
     try:
         if args.clean:
             clean_docker_images(console)
@@ -1180,12 +1232,14 @@ def main() -> None:
         if args.dry_run_print_env:
             os.environ["KDCUBE_DRY_RUN_PRINT_ENV"] = "1"
         workdir = Path(os.path.expanduser(args.workdir)).expanduser().resolve()
-        def _is_git_repo(path: Path) -> bool:
-            return path.exists() and (path / ".git").is_dir()
         if args.stop:
             stop_compose_stack(
                 console,
-                repo_root=repo_path,
+                repo_root=_resolve_cli_repo_path(
+                    repo_path,
+                    workdir=workdir,
+                    path_provided=path_provided,
+                ),
                 workdir=_resolve_cli_workdir(workdir),
                 remove_volumes=args.remove_volumes,
             )
@@ -1193,7 +1247,11 @@ def main() -> None:
         if args.bundle_reload:
             reload_bundle_from_descriptor(
                 console,
-                repo_root=repo_path,
+                repo_root=_resolve_cli_repo_path(
+                    repo_path,
+                    workdir=workdir,
+                    path_provided=path_provided,
+                ),
                 workdir=_resolve_cli_workdir(workdir),
                 bundle_id=str(args.bundle_reload).strip(),
             )
@@ -1213,6 +1271,12 @@ def main() -> None:
         if args.descriptors_location and not args.secrets_set and not args.secrets_prompt:
             descriptors_location = Path(os.path.expanduser(args.descriptors_location)).expanduser().resolve()
             workdir = _resolve_cli_workdir(workdir, descriptors_location=descriptors_location)
+            repo_path = _resolve_cli_repo_path(
+                repo_path,
+                workdir=workdir,
+                path_provided=path_provided,
+                descriptors_location=descriptors_location,
+            )
             os.environ["KDCUBE_DESCRIPTORS_LOCATION"] = str(descriptors_location)
             descriptor_bootstrap = _stage_descriptor_set(
                 repo_root=repo_path,
@@ -1313,6 +1377,12 @@ def main() -> None:
             raw_dir = Prompt.ask("Descriptors directory", default=default_descriptors_dir).strip()
             source_dir = Path(os.path.expanduser(raw_dir)).expanduser().resolve()
             workdir = _resolve_cli_workdir(workdir, descriptors_location=source_dir)
+            repo_path = _resolve_cli_repo_path(
+                repo_path,
+                workdir=workdir,
+                path_provided=path_provided,
+                descriptors_location=source_dir,
+            )
             staged = installer_mod.stage_descriptor_directory(
                 workdir / "config",
                 source_dir=source_dir,

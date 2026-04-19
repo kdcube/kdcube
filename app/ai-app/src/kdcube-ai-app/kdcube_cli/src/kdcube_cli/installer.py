@@ -3807,6 +3807,7 @@ def run_setup(
             "install_mode": install_mode or "upstream",
             "platform_ref": release_ref or "",
             "dockerhub_namespace": docker_namespace or "",
+            "repo_root": str(repo_root),
             "tenant": install_tenant or DEFAULT_WORKSPACE_TENANT,
             "project": install_project or DEFAULT_WORKSPACE_PROJECT,
             "workspace_namespace": workspace_namespace(install_tenant, install_project),

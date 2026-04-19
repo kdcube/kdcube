@@ -72,9 +72,26 @@ If you already have a descriptor folder, you can skip the wizard:
 ```bash
 kdcube \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/runtime-workdir \
-  --path /path/to/platform-repo-clone
+  --workdir /path/to/workspace
 ```
+
+With descriptor-driven installs, `--workdir` is the base workspace root. The
+effective runtime is created under:
+
+```text
+<workspace>/<safe_tenant>__<safe_project>/
+```
+
+using `assembly.yaml -> context.tenant` and `context.project`.
+
+If `--path` is omitted, the CLI clones or reuses the platform checkout under:
+
+```text
+<workspace>/<safe_tenant>__<safe_project>/repo
+```
+
+You can still pass `--path` explicitly if you want to force a specific local
+checkout.
 
 Or pull the latest platform release from the platform repo instead of
 `assembly.yaml -> platform.ref`:
@@ -82,6 +99,7 @@ Or pull the latest platform release from the platform repo instead of
 ```bash
 kdcube \
   --descriptors-location /path/to/descriptors \
+  --workdir /path/to/workspace \
   --latest
 ```
 
@@ -90,8 +108,7 @@ Or build from the latest upstream repo state instead of a released ref:
 ```bash
 kdcube \
   --descriptors-location /path/to/descriptors \
-  --workdir /path/to/runtime-workdir \
-  --path /path/to/platform-repo-clone \
+  --workdir /path/to/workspace \
   --build \
   --upstream
 ```
@@ -155,7 +172,9 @@ descriptors/
 ```
 
 When the descriptor set is complete, the CLI:
-- stages the descriptors into `workdir/config`
+- resolves the effective runtime as `<workspace>/<safe_tenant>__<safe_project>`
+- stages the descriptors into `<runtime>/config`
+- clones or reuses the platform repo under `<runtime>/repo` when `--path` is omitted
 - skips interactive prompts
 - runs a release install directly
 
@@ -163,16 +182,17 @@ If required fields are missing, it falls back to the guided setup and prints
 what is incomplete.
 
 ## What it installs (default)
-- Repo clone: `~/.kdcube/kdcube-ai-app`
-- Workdir: `~/.kdcube/kdcube-runtime`
+- Base workspace: `~/.kdcube/kdcube-runtime`
+- Runtime namespace: `~/.kdcube/kdcube-runtime/<safe_tenant>__<safe_project>`
+- Repo clone default: `~/.kdcube/kdcube-runtime/<safe_tenant>__<safe_project>/repo`
 - Docker images: pulled (**release-latest**/**release-tag**) or built (**upstream**/**workspace**/**local**)
 
 ### CLI options (common)
 | Option | Purpose |
 |---|---|
 | `--repo <url>` | Git repo URL (default: official kdcube repo). |
-| `--path <repo>` | Use a local repo checkout for templates and builds (skips install-source menu). |
-| `--workdir <path>` | Use a specific workdir instead of `~/.kdcube/kdcube-runtime`. |
+| `--path <repo>` | Use a specific local repo checkout for templates and builds. If omitted in descriptor mode, the checkout defaults to `<workspace>/<tenant>__<project>/repo`. |
+| `--workdir <path>` | Base workspace root. In descriptor mode the effective runtime becomes `<workdir>/<tenant>__<project>`. |
 | `--descriptors-location <dir>` | Use a folder containing `assembly.yaml`, `secrets.yaml`, `gateway.yaml`, and optional bundle descriptors. |
 | `--latest` | With `--descriptors-location`, resolve the latest platform release instead of using `assembly.yaml -> platform.ref`. |
 | `--upstream` | With `--descriptors-location` and `--build`, use the latest upstream repo state (`origin/main`) instead of a released platform ref. |
@@ -228,6 +248,11 @@ Stop and remove volumes:
 ```bash
 kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
 ```
+
+When `--workdir` points at the base workspace root, `--stop` resolves the
+single matching runtime namespace automatically. If there are multiple runtime
+namespaces under that base workspace, pass the concrete namespaced runtime path
+explicitly.
 
 Tip: if `kdcube` is not on your PATH, run `python -m pipx ensurepath`
 or re-open your shell after installation.
@@ -611,7 +636,7 @@ Frontend/runtime config behavior:
 - `frontend.image` is optional. When present, the CLI writes `KDCUBE_UI_IMAGE` and treats the UI as a prebuilt image override.
 - If `frontend.image` is omitted but `frontend.build` is present, the CLI clones/uses the frontend source repo and builds `web-ui` locally from `build.repo`, `build.ref`, `build.dockerfile`, and `build.src`.
 - `frontend.build.repo` accepts SSH URLs, HTTPS URLs, and `owner/repo` shorthand.
-- `frontend.build.image_name` is not used by the CLI installer. That field belongs to the ECS customer CI/CD flow, not the local docker-compose flow.
+- `frontend.build.image_name` is not used by the CLI installer. That field belongs to the ECS CI/CD flow, not the local docker-compose flow.
 
 - If `frontend.frontend_config` is provided, the CLI uses it as the template for the
   generated runtime `config.json` and patches tenant/project/auth/routesPrefix values.
