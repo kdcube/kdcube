@@ -34,7 +34,7 @@ const CodeRender = ({className, children}: CodeRenderProps) => {
             }
             {languageName && <button
                 onClick={copyToClipboard}
-                className={"absolute right-2 top-7 cursor-pointer hover:text-black transition-colors duration-200"}>
+                className={"absolute right-2 top-7 cursor-pointer text-gray-600 hover:text-gray-800 transition-colors duration-200"}>
                 <IconContainer icon={ClipboardCopy} size={1}/>
             </button>}
             <code
