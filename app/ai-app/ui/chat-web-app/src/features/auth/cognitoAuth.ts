@@ -11,6 +11,7 @@ import {selectAuthConfig, selectChatPath} from "../chat/chatSettingsSlice.ts";
 
 class CognitoAuth {
     private userManager: UserManager | null = null;
+    private config:UserManagerSettings | null = null;
 
     handleAction(store: AppStore, action: AuthActions) {
         const getOAuthConfig = (store: AppStore): UserManagerSettings => {
@@ -23,7 +24,7 @@ class CognitoAuth {
             const origin = window.location.origin;
 
             const redirect_uri = config.oidcConfig.redirect_uri ?? `${origin}${base}/callback`;
-            const post_logout_redirect_uri = config.oidcConfig.post_logout_redirect_uri ?? getChatPagePath();
+            const post_logout_redirect_uri = `${origin}${config.oidcConfig.post_logout_redirect_uri ?? getChatPagePath()}`;
 
             return {
                 ...config.oidcConfig,
@@ -48,9 +49,9 @@ class CognitoAuth {
 
         const getUserManager = ((store: AppStore): UserManager => {
             if (!this.userManager) {
-                const settings = getOAuthConfig(store);
+               this.config = getOAuthConfig(store);
 
-                this.userManager = createDefaultUserManager(settings, {
+                this.userManager = createDefaultUserManager(this.config, {
                     onUserSignedIn: async () => {
                         console.debug("onUserSignedIn")
                     },
@@ -112,7 +113,12 @@ class CognitoAuth {
                     break
                 }
                 case LOG_OUT: {
-                    await userManager!.signoutRedirect()
+                    await userManager!.signoutRedirect({
+                        extraQueryParams: {
+                            client_id: this.config!.client_id,
+                            logout_uri: this.config!.post_logout_redirect_uri!
+                        }
+                    })
                     break
                 }
                 case LOG_IN_CALLBACK: {
