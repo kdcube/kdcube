@@ -313,10 +313,48 @@ async def test_reload_registry_from_authority_replaces_redis_from_authoritative_
     assert bundle_id in loaded.bundles
     props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=bundle_id)
     assert json.loads(redis.data[props_key]) == {"feature": {"enabled": True}}
-    assert store.saved
-    _saved_reg, saved_props, replace = store.saved[-1]
-    assert replace is True
-    assert saved_props == {bundle_id: {"feature": {"enabled": True}}}
+    assert store.saved == []
+
+
+@pytest.mark.asyncio
+async def test_reload_registry_from_authority_does_not_rewrite_local_descriptor_file(monkeypatch, tmp_path: Path):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "example.bundle"
+
+    descriptor_path = tmp_path / "bundles.yaml"
+    original_payload = {
+        "bundles": {
+            "version": "1",
+            "default_bundle_id": bundle_id,
+            "items": [
+                {
+                    "id": bundle_id,
+                    "path": "/bundles/example.bundle",
+                    "module": "entrypoint",
+                }
+            ],
+        }
+    }
+    descriptor_path.write_text(yaml.safe_dump(original_payload, sort_keys=False))
+
+    store = bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=descriptor_path.resolve().as_uri())
+
+    monkeypatch.setattr(bundle_store, "_merge_example_bundles", lambda reg: (reg, False))
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+    monkeypatch.setattr(bundle_store, "_reserved_bundle_ids", lambda: {"kdcube.admin", bundle_id})
+    monkeypatch.setattr(
+        bundle_store,
+        "_reserved_bundle_entry",
+        lambda bid: bundle_store.BundleEntry(id=bid, path="/bundles/example.bundle", module="entrypoint")
+        if bid == bundle_id else None,
+    )
+
+    loaded = await bundle_store.reload_registry_from_authority(redis, tenant=tenant, project=project)
+
+    assert loaded.default_bundle_id == bundle_id
+    assert descriptor_path.read_text() == yaml.safe_dump(original_payload, sort_keys=False)
 
 
 def test_file_bundle_descriptor_store_reads_config_blocks(tmp_path: Path):
@@ -366,6 +404,50 @@ def test_authoritative_bundle_store_prefers_aws_sm_over_mounted_bundles_yaml(mon
     store = bundle_store._get_authoritative_bundle_store("demo", "demo-project")
 
     assert isinstance(store, bundle_store._AwsBundleDescriptorStore)
+
+
+def test_describe_authoritative_bundle_store_reports_bundles_yaml(monkeypatch, tmp_path: Path):
+    descriptor_path = tmp_path / "bundles.yaml"
+    descriptor_path.write_text("bundles:\n  version: '1'\n  items: []\n")
+
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
+    monkeypatch.setattr(
+        "kdcube_ai_app.infra.secrets.manager.build_secrets_manager_config",
+        lambda _settings: SimpleNamespace(provider="file"),
+    )
+    monkeypatch.setattr(bundle_store, "get_settings", lambda: object())
+
+    descriptor = bundle_store.describe_authoritative_bundle_store("demo", "demo-project")
+
+    assert descriptor == {
+        "kind": "bundles-yaml",
+        "label": "bundles.yaml",
+        "description": "Reload from the mounted bundle descriptor file.",
+        "detail": str(descriptor_path.resolve()),
+    }
+
+
+def test_describe_authoritative_bundle_store_reports_aws_sm(monkeypatch):
+    monkeypatch.setattr(
+        "kdcube_ai_app.infra.secrets.manager.build_secrets_manager_config",
+        lambda _settings: SimpleNamespace(
+            provider="aws-sm",
+            aws_sm_prefix="kdcube/demo/proj",
+            aws_region="eu-west-1",
+            aws_profile=None,
+            redis_url=None,
+        ),
+    )
+    monkeypatch.setattr(bundle_store, "get_settings", lambda: object())
+
+    descriptor = bundle_store.describe_authoritative_bundle_store("demo", "demo-project")
+
+    assert descriptor == {
+        "kind": "aws-sm",
+        "label": "AWS Secrets Manager",
+        "description": "Reload from the live AWS bundle descriptor store.",
+        "detail": "kdcube/demo/proj",
+    }
 
 
 def test_authoritative_bundle_store_ignores_agentic_bundles_json_as_authority(monkeypatch, tmp_path: Path):

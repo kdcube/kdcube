@@ -48,6 +48,14 @@ interface BundlesResponse {
     default_bundle_id?: string | null;
     tenant?: string;
     project?: string;
+    authority?: AuthorityDescriptor | null;
+}
+
+interface AuthorityDescriptor {
+    kind: string;
+    label: string;
+    description?: string | null;
+    detail?: string | null;
 }
 
 interface BundlesUpdatePayload {
@@ -647,6 +655,7 @@ const AIBundleDashboard: React.FC = () => {
     const [error, setError] = useState<string | null>(null);
     const [bundles, setBundles] = useState<Record<string, BundleEntry>>({});
     const [defaultBundleId, setDefaultBundleId] = useState<string>('');
+    const [bundleAuthority, setBundleAuthority] = useState<AuthorityDescriptor | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [reloadingBundleId, setReloadingBundleId] = useState<string | null>(null);
     const [scopeTenant, setScopeTenant] = useState(settings.getDefaultTenant());
@@ -686,6 +695,20 @@ const AIBundleDashboard: React.FC = () => {
             return '';
         }
     }, [propsDefaultsJson]);
+    const authorityLabel = useMemo(() => {
+        const label = (bundleAuthority?.label || '').trim();
+        return label || 'configured bundle authority';
+    }, [bundleAuthority]);
+    const authorityDescription = useMemo(() => {
+        const description = (bundleAuthority?.description || '').trim();
+        return description || `Reload from ${authorityLabel}.`;
+    }, [bundleAuthority, authorityLabel]);
+    const authorityDetail = useMemo(() => {
+        const detail = (bundleAuthority?.detail || '').trim();
+        return detail;
+    }, [bundleAuthority]);
+    const reloadAuthorityLabel = useMemo(() => `Reload from ${authorityLabel}`, [authorityLabel]);
+    const propsResolutionLabel = useMemo(() => authorityLabel, [authorityLabel]);
     const bundleSnapshotPath = useMemo(() => {
         if (!bundleVersion || !propsBundleId || !scopeTenant || !scopeProject) return '';
         return `cb/tenants/${scopeTenant}/projects/${scopeProject}/ai-bundle-snapshots/${propsBundleId}.${bundleVersion}.zip`;
@@ -767,6 +790,7 @@ const AIBundleDashboard: React.FC = () => {
             const data = await api.listBundles(scopeOverride ?? registryScope);
             setBundles(data.available_bundles || {});
             setDefaultBundleId(data.default_bundle_id || '');
+            setBundleAuthority(data.authority || null);
             if (!propsBundleId || !(propsBundleId in (data.available_bundles || {}))) {
                 setPropsBundleId(data.default_bundle_id || '');
             }
@@ -776,6 +800,7 @@ const AIBundleDashboard: React.FC = () => {
             setError(null);
         } catch (e: any) {
             setError(e.message || 'Failed to load bundles');
+            setBundleAuthority(null);
         } finally {
             setLoading(false);
         }
@@ -952,7 +977,7 @@ const AIBundleDashboard: React.FC = () => {
             }
             setError(null);
         } catch (e: any) {
-            setError(e.message || `Failed to reload bundle ${bundleId} from authority`);
+            setError(e.message || `Failed to reload bundle ${bundleId} from ${authorityLabel}`);
         } finally {
             setReloadingBundleId(null);
         }
@@ -1042,7 +1067,7 @@ const AIBundleDashboard: React.FC = () => {
             await api.reloadFromAuthority(registryScope);
             await loadBundles();
         } catch (e: any) {
-            setError(e.message || 'Failed to reload from authority');
+            setError(e.message || `Failed to reload from ${authorityLabel}`);
         }
     };
 
@@ -1229,16 +1254,26 @@ const AIBundleDashboard: React.FC = () => {
                 <Card>
                     <CardHeader
                         title="Registry"
-                        subtitle="Current bundles stored in the registry. Reload from authority replaces the registry and descriptor-backed bundle props from the current authoritative bundle store."
+                        subtitle={`Current bundles stored in the registry. ${authorityDescription} This replaces the runtime registry and descriptor-backed bundle props from that source.`}
                         action={
                             <div className="flex gap-2">
                                 <Button variant="secondary" onClick={loadBundles}>Refresh</Button>
-                                <Button variant="secondary" onClick={reloadFromAuthority}>Reload from authority</Button>
+                                <Button variant="secondary" onClick={reloadFromAuthority}>{reloadAuthorityLabel}</Button>
                                 <Button variant="secondary" onClick={cleanupBundles}>Cleanup old versions</Button>
                             </div>
                         }
                     />
                     <CardBody className="space-y-4">
+                        <div className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-xs text-gray-600">
+                            <div>
+                                <strong className="text-gray-800">Current reload source:</strong> {authorityLabel}
+                            </div>
+                            {authorityDetail ? (
+                                <div className="mt-1 break-all">
+                                    <strong className="text-gray-800">Location:</strong> {authorityDetail}
+                                </div>
+                            ) : null}
+                        </div>
                         <div className="flex items-center gap-3">
                             <label className="text-sm font-medium text-gray-800">Default bundle</label>
                             <select
@@ -1296,6 +1331,7 @@ const AIBundleDashboard: React.FC = () => {
                                                         variant="secondary"
                                                         onClick={() => reloadBundleFromAuthority(b.id)}
                                                         disabled={reloadingBundleId === b.id}
+                                                        title={`Reload ${b.id} from ${authorityLabel}`}
                                                     >
                                                         {reloadingBundleId === b.id ? 'Reloading…' : 'Reload'}
                                                     </Button>
@@ -1348,7 +1384,7 @@ const AIBundleDashboard: React.FC = () => {
                                 ) : null}
                             </div>
                         }
-                        subtitle="Override bundle props per tenant/project. Reload from authority re-applies the current authoritative bundle store; reset from code restores bundle code defaults only."
+                        subtitle={`Override bundle props per tenant/project. ${reloadAuthorityLabel} re-applies props from that source; reset from code restores bundle code defaults only.`}
                         action={
                             <div className="flex gap-2">
                                 <Button variant="secondary" onClick={loadProps} disabled={!propsBundleId || propsLoading}>
@@ -1376,10 +1412,10 @@ const AIBundleDashboard: React.FC = () => {
                         </div>
 
                         <div className="text-xs text-gray-600">
-                            Props resolution order: <strong>code defaults → bundles.yaml → runtime overrides</strong>.
+                            Props resolution order: <strong>code defaults → {propsResolutionLabel} → runtime overrides</strong>.
                             The editor shows the full effective props; <strong>Save props</strong> stores exactly what you see.
-                            Use dot-path updates for precise changes. <strong>Reload from authority</strong> rebuilds this Redis props layer from the
-                            current authoritative bundle store, removes keys no longer present there, and discards runtime overrides.
+                            Use dot-path updates for precise changes. <strong>{reloadAuthorityLabel}</strong> rebuilds this Redis props layer from the
+                            current source, removes keys no longer present there, and discards runtime overrides.
                         </div>
 
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

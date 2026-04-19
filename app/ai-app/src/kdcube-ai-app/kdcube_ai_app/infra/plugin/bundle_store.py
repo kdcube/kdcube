@@ -1051,6 +1051,49 @@ def _resolve_bundles_descriptor_authority_uri() -> str | None:
     return None
 
 
+def describe_authoritative_bundle_store(
+    tenant: Optional[str] = None,
+    project: Optional[str] = None,
+) -> Dict[str, Any]:
+    del tenant, project
+    try:
+        from kdcube_ai_app.infra.secrets.manager import build_secrets_manager_config
+
+        cfg = build_secrets_manager_config(get_settings())
+    except Exception:
+        cfg = None
+
+    if cfg is not None and getattr(cfg, "provider", None) == "aws-sm":
+        prefix = str(getattr(cfg, "aws_sm_prefix", "") or "").strip()
+        return {
+            "kind": "aws-sm",
+            "label": "AWS Secrets Manager",
+            "description": "Reload from the live AWS bundle descriptor store.",
+            "detail": prefix or None,
+        }
+
+    bundles_yaml_uri = _resolve_bundles_descriptor_authority_uri()
+    if bundles_yaml_uri:
+        raw = bundles_yaml_uri
+        if raw.startswith("file://"):
+            raw = raw[len("file://"):]
+        path = Path(raw).expanduser()
+        label = path.name or "bundle descriptor file"
+        return {
+            "kind": "bundles-yaml",
+            "label": label,
+            "description": "Reload from the mounted bundle descriptor file.",
+            "detail": str(path),
+        }
+
+    return {
+        "kind": "unknown",
+        "label": "configured bundle authority",
+        "description": "Reload from the currently configured authoritative bundle store.",
+        "detail": None,
+    }
+
+
 def _get_authoritative_bundle_store(
     tenant: str,
     project: str,
@@ -1327,7 +1370,8 @@ async def reload_registry_from_authority(
     reg, props_map = loaded
     reg, _ = _merge_example_bundles(reg)
     reg = _ensure_admin_bundle(reg)
-    await save_registry(redis, reg, t, p, props_map=props_map, replace=True)
+    key = redis_key(t, p)
+    await redis.set(key, reg.model_dump_json())
     await _sync_bundle_props_authoritative(
         redis,
         tenant=t,

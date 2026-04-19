@@ -51,6 +51,7 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     load_registry,
     BundlesRegistry,
     BundleEntry,
+    describe_authoritative_bundle_store,
     get_bundle_props as store_get_bundle_props,
     put_bundle_props as store_put_bundle_props,
 )
@@ -883,6 +884,7 @@ async def get_available_bundles(
         "project": project_id,
         "available_bundles": bundles_out,
         "default_bundle_id": reg.default_bundle_id,
+        "authority": describe_authoritative_bundle_store(tenant_id, project_id),
     }
 
 
@@ -1531,6 +1533,7 @@ async def _do_reload_bundles_from_authority(
         "default_bundle_id": reg.default_bundle_id,
         "count": len(reg.bundles),
         "bundle_id": requested_bundle_id,
+        "authority": describe_authoritative_bundle_store(tenant_id, project_id),
         "eviction": eviction_result,
     }
 
