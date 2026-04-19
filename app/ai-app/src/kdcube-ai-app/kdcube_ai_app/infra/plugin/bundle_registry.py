@@ -39,7 +39,6 @@ class BundleSpec:
     subdir: Optional[str] = None
     git_commit: Optional[str] = None
 
-ENV_JSON = "AGENTIC_BUNDLES_JSON"
 ADMIN_BUNDLE_ID = "kdcube.admin"
 
 
@@ -335,15 +334,14 @@ def load_from_env() -> None:
             _DEFAULT_ID = ADMIN_BUNDLE_ID if ADMIN_BUNDLE_ID in _REGISTRY else next(iter(_REGISTRY.keys()), None)
 
 def serialize_to_env(registry: Dict[str, Dict[str, Any]], default_id: Optional[str]) -> str:
-    """Reflect current in-memory mapping back into env (best-effort)."""
+    """Serialize the current in-memory mapping to a JSON payload."""
     with _REG_LOCK:
         registry = _ensure_admin_bundle(registry or {})
         payload = {
             "default_bundle_id": default_id if default_id in registry else ADMIN_BUNDLE_ID,
             "bundles": registry,
         }
-        os.environ[ENV_JSON] = json.dumps(payload, ensure_ascii=False)
-        return os.environ[ENV_JSON]
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def get_all() -> Dict[str, Dict[str, Any]]:
@@ -437,20 +435,26 @@ def resolve_bundle(bundle_id: Optional[str], override: Optional[Dict[str, Any]] 
     return BundleSpec(**spec_dict)
 
 def _load_env_json(strict: bool) -> Optional[Dict[str, Any]]:
-    raw = os.getenv(ENV_JSON)
-    if not raw:
+    authority_path = str(os.getenv("BUNDLES_YAML_DESCRIPTOR_PATH") or "/config/bundles.yaml").strip()
+    if not authority_path:
         if strict:
-            raise ValueError(f"{ENV_JSON} is not set")
+            raise ValueError("BUNDLES_YAML_DESCRIPTOR_PATH is not set")
         return None
-    raw = raw.strip()
-    if raw.startswith("{") or raw.startswith("["):
-        return json.loads(raw)
-    path = Path(raw).expanduser()
+    path = Path(authority_path).expanduser()
     if not path.exists():
         if strict:
-            raise ValueError(f"{ENV_JSON} file not found: {path}")
+            raise ValueError(f"Bundle descriptor file not found: {path}")
         return None
-    return json.loads(path.read_text())
+    raw = path.read_text().strip()
+    if not raw:
+        if strict:
+            raise ValueError(f"Bundle descriptor file is empty: {path}")
+        return None
+    if path.suffix.lower() in {".yml", ".yaml"}:
+        import yaml  # type: ignore
+
+        return yaml.safe_load(raw)
+    return json.loads(raw)
 
 
 async def resolve_bundle_async(bundle_id: Optional[str], override: Optional[Dict[str, Any]] = None) -> Optional[BundleSpec]:

@@ -277,33 +277,22 @@ def _strip_env_value(raw: str | None) -> str:
 
 
 def _resolve_bundle_reload_source(env_main: installer_mod.EnvFile, env_proc: installer_mod.EnvFile) -> Path:
-    raw = _strip_env_value(env_proc.entries.get("AGENTIC_BUNDLES_JSON", (None, None))[1])
-    if not raw:
-        raise SystemExit(
-            "AGENTIC_BUNDLES_JSON is not configured for this runtime. "
-            "Bundle reload expects a descriptor-backed bundle registry."
-        )
+    del env_proc
 
-    if raw == "/config/bundles.yaml":
-        host = _strip_env_value(env_main.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1])
-        if not host or host == "/dev/null":
-            raise SystemExit(
-                "HOST_BUNDLES_DESCRIPTOR_PATH is not configured. "
-                "Bundle reload expects bundles.yaml to be mounted into chat-proc."
-            )
+    host = _strip_env_value(env_main.entries.get("HOST_BUNDLES_DESCRIPTOR_PATH", (None, None))[1])
+    if host and host != "/dev/null":
         return Path(host).expanduser().resolve()
 
-    if raw == "/config/assembly.yaml":
-        host = _strip_env_value(env_main.entries.get("HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH", (None, None))[1])
-        if not host or host == "/dev/null":
-            raise SystemExit(
-                "HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH is not configured. "
-                "Bundle reload expects assembly.yaml to be mounted into chat-proc."
-            )
-        return Path(host).expanduser().resolve()
+    legacy_assembly_host = _strip_env_value(
+        env_main.entries.get("HOST_ASSEMBLY_YAML_DESCRIPTOR_PATH", (None, None))[1]
+    )
+    if legacy_assembly_host and legacy_assembly_host != "/dev/null":
+        return Path(legacy_assembly_host).expanduser().resolve()
 
-    candidate = Path(raw).expanduser()
-    return candidate.resolve() if candidate.exists() else candidate
+    raise SystemExit(
+        "No local bundle descriptor source is configured for this runtime. "
+        "Bundle reload expects HOST_BUNDLES_DESCRIPTOR_PATH to point at bundles.yaml."
+    )
 
 
 def _resolve_live_bundle_export_sources(

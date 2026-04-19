@@ -477,8 +477,8 @@ async def _sync_bundle_props_authoritative(
     Make Redis bundle props exactly match the descriptor-provided props for this
     tenant/project scope.
 
-    This is used by explicit env reset paths where AGENTIC_BUNDLES_JSON is the
-    source of truth for bundle-level config overrides.
+    This is used by explicit descriptor-authority reset paths where bundles.yaml
+    is the source of truth for bundle-level config overrides.
     """
     prefix = _props_key(tenant=tenant, project=project, bundle_id="")
     pattern = f"{prefix}*"
@@ -1280,7 +1280,8 @@ async def publish_update(redis, reg: BundlesRegistry, *, tenant: Optional[str]=N
 
 async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Optional[str] = None) -> Optional[BundlesRegistry]:
     """
-    Seed Redis with bundles mapping from AGENTIC_BUNDLES_JSON env var, if present.
+    Seed Redis with bundles mapping from the current local bundle descriptor
+    authority, if present.
     Accepts either:
       - flat mapping: {"mybundle": {...}, ...}
       - new: {"default_bundle_id": "...", "bundles": { ... }}
@@ -1320,9 +1321,9 @@ async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Opt
 
 async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: Optional[str] = None) -> BundlesRegistry:
     """
-    Legacy env-backed reset path.
-    Force-reload from AGENTIC_BUNDLES_JSON and overwrite Redis for (tenant, project).
-    Raise ValueError if env is missing or invalid.
+    Legacy public API name kept for compatibility.
+    Force-reload from the current local descriptor authority and overwrite Redis
+    for (tenant, project).
     """
     data = _load_env_json(strict=True)
     if "bundles" not in data:
@@ -1335,7 +1336,7 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
     bundles_dict, props_map = _split_bundles_and_props(bundles_dict)
 
     if not bundles_dict:
-        raise ValueError("AGENTIC_BUNDLES_JSON has no bundles")
+        raise ValueError("Bundle descriptor authority has no bundles")
 
     reg = BundlesRegistry(
         default_bundle_id=default_id,
@@ -1407,7 +1408,8 @@ async def force_env_reset_if_requested(
     actor: Optional[str] = None,
 ) -> Optional[BundlesRegistry]:
     """
-    If BUNDLES_FORCE_ENV_ON_STARTUP is set, overwrite Redis registry from env once.
+    If BUNDLES_FORCE_ENV_ON_STARTUP is set, overwrite Redis registry once from
+    the mounted local bundle descriptor authority.
     Uses a Redis lock to avoid multiple workers doing it concurrently.
     """
     settings = get_settings()
@@ -1421,7 +1423,7 @@ async def force_env_reset_if_requested(
         cfg = None
     if cfg is not None and getattr(cfg, "provider", None) == "aws-sm":
         _log.info(
-            "Skipping startup bundle env reset because aws-sm is the authoritative bundle store."
+            "Skipping startup bundle descriptor reset because aws-sm is the authoritative bundle store."
         )
         return None
 
@@ -1548,10 +1550,6 @@ def _load_bundle_descriptor_payload(raw: str, *, strict: bool, label: str) -> Op
 
 
 def _load_env_json(strict: bool) -> Optional[Dict[str, Any]]:
-    raw = str(os.getenv("AGENTIC_BUNDLES_JSON") or "").strip()
-    if raw:
-        return _load_bundle_descriptor_payload(raw, strict=strict, label="AGENTIC_BUNDLES_JSON")
-
     authority_uri = _resolve_bundles_descriptor_authority_uri()
     if authority_uri:
         authority_raw = authority_uri
@@ -1568,7 +1566,7 @@ def _load_env_json(strict: bool) -> Optional[Dict[str, Any]]:
     if strict:
         raise ValueError(
             "No bundle descriptor authority is configured. "
-            "Expected AGENTIC_BUNDLES_JSON or a mounted bundles.yaml descriptor."
+            "Expected a mounted bundles.yaml descriptor."
         )
     return None
 

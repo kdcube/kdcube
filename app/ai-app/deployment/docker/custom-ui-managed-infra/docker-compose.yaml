@@ -62,7 +62,6 @@ services:
       - CLAMAV_HOST=clamav
       - CLAMAV_PORT=3310
       - LOG_FILE_PREFIX=chat-ingress
-      - GATEWAY_COMPONENT=ingress
       - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
       - HOST_GIT_BUNDLES_PATH=${HOST_GIT_BUNDLES_PATH:-}
       - AGENTIC_GIT_BUNDLES_ROOT=${AGENTIC_GIT_BUNDLES_ROOT:-/git-bundles}
@@ -85,6 +84,10 @@ services:
       - type: bind
         source: ${HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH:-/dev/null}
         target: /config/bundles.secrets.yaml
+        read_only: true
+      - type: bind
+        source: ${HOST_GATEWAY_YAML_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/gateway.yaml
         read_only: true
       - type: bind
         source: ${HOST_GIT_BUNDLES_PATH?}
@@ -116,7 +119,6 @@ services:
         required: false
     environment:
       - LOG_FILE_PREFIX=chat-proc
-      - GATEWAY_COMPONENT=proc
       - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
       - HOST_BUNDLES_PATH=${HOST_BUNDLES_PATH}
       - HOST_GIT_BUNDLES_PATH=${HOST_GIT_BUNDLES_PATH:-}
@@ -144,6 +146,10 @@ services:
       - type: bind
         source: ${HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH:-/dev/null}
         target: /config/bundles.secrets.yaml
+        read_only: true
+      - type: bind
+        source: ${HOST_GATEWAY_YAML_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/gateway.yaml
         read_only: true
       - type: bind
         source: ${HOST_BUNDLES_PATH?}           # host root with all bundles
@@ -201,6 +207,10 @@ services:
       - type: bind
         source: ${HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH:-/dev/null}
         target: /config/bundles.secrets.yaml
+        read_only: true
+      - type: bind
+        source: ${HOST_GATEWAY_YAML_DESCRIPTOR_PATH:-/dev/null}
+        target: /config/gateway.yaml
         read_only: true
     networks:
       - kdcube-internal

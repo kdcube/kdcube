@@ -54,38 +54,43 @@ class _FakeAuthoritativeStore:
 
 
 @pytest.mark.asyncio
-async def test_reset_registry_from_env_removes_stale_bundle_props(monkeypatch):
+async def test_reset_registry_from_env_removes_stale_bundle_props(monkeypatch, tmp_path: Path):
     redis = _FakeRedis()
     tenant = "demo"
     project = "demo-project"
     bundle_id = "demo.bundle"
     props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=bundle_id)
+    descriptor_path = tmp_path / "bundles.yaml"
 
     monkeypatch.setattr(bundle_store, "_merge_example_bundles", lambda reg: (reg, False))
 
-    monkeypatch.setenv(
-        "AGENTIC_BUNDLES_JSON",
-        json.dumps(
+    descriptor_path.write_text(
+        yaml.safe_dump(
             {
-                "default_bundle_id": bundle_id,
                 "bundles": {
-                    bundle_id: {
-                        "id": bundle_id,
-                        "path": "/bundles/demo.bundle",
-                        "module": "entrypoint",
-                        "config": {
-                            "role_models": {
-                                "solver.react.v2.decision.v2.strong": {
-                                    "provider": "anthropic",
-                                    "model": "claude-sonnet-4-6",
+                    "version": "1",
+                    "default_bundle_id": bundle_id,
+                    "items": [
+                        {
+                            "id": bundle_id,
+                            "path": "/bundles/demo.bundle",
+                            "module": "entrypoint",
+                            "config": {
+                                "role_models": {
+                                    "solver.react.v2.decision.v2.strong": {
+                                        "provider": "anthropic",
+                                        "model": "claude-sonnet-4-6",
+                                    }
                                 }
-                            }
-                        },
-                    }
-                },
-            }
-        ),
+                            },
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
     )
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
 
     await bundle_store.reset_registry_from_env(redis, tenant=tenant, project=project)
 
@@ -98,20 +103,23 @@ async def test_reset_registry_from_env_removes_stale_bundle_props(monkeypatch):
         }
     }
 
-    monkeypatch.setenv(
-        "AGENTIC_BUNDLES_JSON",
-        json.dumps(
+    descriptor_path.write_text(
+        yaml.safe_dump(
             {
-                "default_bundle_id": bundle_id,
                 "bundles": {
-                    bundle_id: {
-                        "id": bundle_id,
-                        "path": "/bundles/demo.bundle",
-                        "module": "entrypoint",
-                    }
-                },
-            }
-        ),
+                    "version": "1",
+                    "default_bundle_id": bundle_id,
+                    "items": [
+                        {
+                            "id": bundle_id,
+                            "path": "/bundles/demo.bundle",
+                            "module": "entrypoint",
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
     )
 
     await bundle_store.reset_registry_from_env(redis, tenant=tenant, project=project)
@@ -151,7 +159,6 @@ async def test_reset_registry_from_env_uses_descriptor_authority_when_env_is_uns
         )
     )
 
-    monkeypatch.delenv("AGENTIC_BUNDLES_JSON", raising=False)
     monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
     monkeypatch.setattr(bundle_store, "_merge_example_bundles", lambda reg: (reg, False))
 
@@ -338,14 +345,15 @@ async def test_put_bundle_props_persists_to_authoritative_store(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reset_registry_from_env_replaces_authoritative_store(monkeypatch):
+async def test_reset_registry_from_env_replaces_redis_from_local_descriptor(monkeypatch, tmp_path: Path):
     redis = _FakeRedis()
     tenant = "demo"
     project = "demo-project"
     old_bundle_id = "old.bundle"
     new_bundle_id = "new.bundle"
+    descriptor_path = tmp_path / "bundles.yaml"
 
-    existing = bundle_store.BundlesRegistry(
+    redis.data[bundle_store.redis_key(tenant, project)] = bundle_store.BundlesRegistry(
         default_bundle_id=old_bundle_id,
         bundles={
             old_bundle_id: bundle_store.BundleEntry(
@@ -354,36 +362,41 @@ async def test_reset_registry_from_env_replaces_authoritative_store(monkeypatch)
                 module="entrypoint",
             )
         },
+    ).model_dump_json()
+    old_props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=old_bundle_id)
+    redis.data[old_props_key] = json.dumps({"old": True})
+
+    descriptor_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "default_bundle_id": new_bundle_id,
+                    "items": [
+                        {
+                            "id": new_bundle_id,
+                            "path": "/bundles/new.bundle",
+                            "module": "entrypoint",
+                            "config": {"feature": {"enabled": True}},
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
     )
-    store = _FakeAuthoritativeStore(reg=existing, props_map={old_bundle_id: {"old": True}})
 
     monkeypatch.setattr(bundle_store, "_merge_example_bundles", lambda reg: (reg, False))
-    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
-    monkeypatch.setenv(
-        "AGENTIC_BUNDLES_JSON",
-        json.dumps(
-            {
-                "default_bundle_id": new_bundle_id,
-                "bundles": {
-                    new_bundle_id: {
-                        "id": new_bundle_id,
-                        "path": "/bundles/new.bundle",
-                        "module": "entrypoint",
-                        "config": {"feature": {"enabled": True}},
-                    }
-                },
-            }
-        ),
-    )
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
 
     reg = await bundle_store.reset_registry_from_env(redis, tenant=tenant, project=project)
 
     assert reg.default_bundle_id == new_bundle_id
-    assert store.saved
-    saved_reg, saved_props, replace = store.saved[-1]
-    assert replace is True
-    assert new_bundle_id in saved_reg.bundles
-    assert saved_props == {new_bundle_id: {"feature": {"enabled": True}}}
+    assert new_bundle_id in reg.bundles
+    assert old_bundle_id not in reg.bundles
+    assert await redis.get(old_props_key) is None
+    new_props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=new_bundle_id)
+    assert json.loads(redis.data[new_props_key]) == {"feature": {"enabled": True}}
 
 
 @pytest.mark.asyncio
@@ -554,13 +567,9 @@ def test_describe_authoritative_bundle_store_reports_aws_sm(monkeypatch):
     }
 
 
-def test_authoritative_bundle_store_ignores_agentic_bundles_json_as_authority(monkeypatch, tmp_path: Path):
-    legacy_env_path = tmp_path / "legacy-bundles.yaml"
-    legacy_env_path.write_text("bundles:\n  version: '1'\n  items: []\n")
-
+def test_authoritative_bundle_store_prefers_aws_sm_when_no_local_descriptor(monkeypatch):
     monkeypatch.delenv("BUNDLES_YAML_DESCRIPTOR_PATH", raising=False)
     monkeypatch.delenv("PLATFORM_DESCRIPTORS_DIR", raising=False)
-    monkeypatch.setenv("AGENTIC_BUNDLES_JSON", str(legacy_env_path.resolve()))
     monkeypatch.setattr(
         "kdcube_ai_app.infra.secrets.manager.build_secrets_manager_config",
         lambda _settings: SimpleNamespace(

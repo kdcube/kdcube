@@ -98,7 +98,7 @@ data:
   CB_BUNDLE_STORAGE_URL: {{ default "file:///bundle-storage" .Values.storage.bundles | quote }}
   BUNDLE_STORAGE_ROOT: "/bundle-storage"
   AGENTIC_BUNDLES_ROOT: "/bundles"
-  AGENTIC_BUNDLES_JSON: "/config/bundles.yaml"
+  BUNDLES_YAML_DESCRIPTOR_PATH: "/config/bundles.yaml"
   EXEC_WORKSPACE_ROOT: "/exec-workspace"
   HOST_EXEC_WORKSPACE_PATH: "/exec-workspace"
   HOST_KDCUBE_STORAGE_PATH: "/kdcube-storage"
