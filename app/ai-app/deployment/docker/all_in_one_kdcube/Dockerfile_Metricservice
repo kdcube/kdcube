@@ -47,4 +47,5 @@ RUN groupadd --gid 1000 appuser && \
 COPY --chown=appuser:appuser src/kdcube-ai-app/ .
 RUN chown -R appuser:appuser /app
 
+USER appuser
 CMD ["python", "kdcube_ai_app/apps/metrics/web_app.py"]
