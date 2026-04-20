@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "docs", "index", "reference"]
 keywords: ["bundle docs index", "bundle developer", "versatile bundle", "bundle reload", "bundles.yaml"]
 see_also:
   - ks:docs/sdk/bundle/bundle-dev-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
@@ -30,21 +31,26 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
    - minimal authoring contract
    - local bundle layout
    - config/secrets/update loop
-2. [build/how-to-write-bundle-README.md](build/how-to-write-bundle-README.md)
+2. [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
+   - exact local runtime contract
+   - `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`
+   - `kdcube --build --upstream` and `kdcube --info`
+   - sharp `path` / `module` rules
+3. [build/how-to-write-bundle-README.md](build/how-to-write-bundle-README.md)
    - builder playbook for designing and structuring a bundle
-3. [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md)
+4. [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md)
    - builder playbook for validation and runtime checks
-4. [bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
+5. [bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
    - the concrete reference bundle to study
-5. [bundle-runtime-README.md](bundle-runtime-README.md)
+6. [bundle-runtime-README.md](bundle-runtime-README.md)
    - runtime surfaces available to bundle code
-6. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+7. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
    - exact decorator and route contract
-7. [bundle-transports-README.md](bundle-transports-README.md)
+8. [bundle-transports-README.md](bundle-transports-README.md)
    - canonical inbound/outbound protocol and transport map
-8. [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
+9. [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
    - effective props, raw descriptor reads, bundle secrets, user props, user secrets
-9. [bundle-ops-README.md](bundle-ops-README.md)
+10. [bundle-ops-README.md](bundle-ops-README.md)
    - local reload, registry updates, delivery modes, and deployment-side changes
 
 ## Core Doc Map
@@ -52,6 +58,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Concern | Primary doc |
 | --- | --- |
 | Build a new bundle | [bundle-dev-README.md](bundle-dev-README.md) |
+| Configure local runtime, descriptors, and CLI loop | [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md) |
 | Builder playbook | [build/how-to-write-bundle-README.md](build/how-to-write-bundle-README.md) |
 | Testing playbook | [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md) |
 | Study the reference bundle | [bundle-reference-versatile-README.md](bundle-reference-versatile-README.md) |

@@ -9,6 +9,7 @@ see_also:
   - ks:docs/service/configuration/assembly-descriptor-README.md
   - ks:docs/service/configuration/bundles-secrets-descriptor-README.md
   - ks:docs/service/configuration/service-config-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
 ---
 # Bundles Descriptor
 
@@ -25,6 +26,11 @@ see_also:
   - `config`
 
 It does not carry bundle secrets.
+
+This page is about the descriptor contract itself.
+For the operational local workflow for reusing a runtime, changing bundle roots, and running `kdcube`, use:
+
+- [how-to-configure-and-run-bundle-README.md](../../sdk/bundle/build/how-to-configure-and-run-bundle-README.md)
 
 ## Direct runtime contract from this descriptor
 
@@ -101,32 +107,104 @@ This is for local development only.
 
 The `path` must be container-visible, not host-visible.
 
-Example:
+#### Local path bundles: exact rule
+
+The host parent root belongs in `assembly.yaml`.
+The concrete bundle root belongs in `bundles.yaml`.
+
+Use this split:
 
 ```yaml
+# assembly.yaml
+paths:
+  host_bundles_path: "/Users/you/src"
+```
+
+```yaml
+# bundles.yaml
 bundles:
   version: "1"
   default_bundle_id: "my.bundle@1-0"
   items:
     - id: "my.bundle@1-0"
       path: "/bundles/my-repo/src/my_bundle"
-      module: "my.bundle@1-0.entrypoint"
+      module: "entrypoint"
 ```
 
-If your real host folder is:
+The host folder:
 
 ```text
-/Users/you/src/my-repo
+/Users/you/src
 ```
 
-then `assembly.yaml` must map the host root:
+is mounted into the runtime as:
+
+```text
+/bundles
+```
+
+So the bundle entry must use the container path under `/bundles`, not the host path under `/Users/...`.
+
+#### `path` and `module`: only two valid forms
+
+There are exactly two supported shapes for local path bundles.
+
+##### Preferred form: `path` is the bundle root
+
+If `path` already points to the actual bundle directory, use:
 
 ```yaml
-paths:
-  host_bundles_path: "/Users/you/src"
+path: /bundles/my-repo/src/my_bundle
+module: entrypoint
 ```
 
-and the bundle descriptor still uses `/bundles/...`.
+This is the preferred form because it is explicit and does not depend on loader fallback behavior.
+
+##### Secondary form: `path` is the parent directory
+
+If `path` points to the parent directory that contains the bundle directory, use:
+
+```yaml
+path: /bundles/my-repo/src
+module: my_bundle.entrypoint
+```
+
+This works because bundle root resolution supports:
+
+- `<path>/<module_base>`
+- `<path>/<module_base as package path>`
+
+Do not mix the two forms without a reason.
+
+Avoid this hybrid form:
+
+```yaml
+path: /bundles/my-repo/src/my_bundle
+module: my_bundle.entrypoint
+```
+
+It may still load because of fallback behavior, but it is not the clear contract to rely on.
+
+#### Local path bundle must stay a pure path bundle
+
+If you switch a bundle to local `path:` mode, do not leave git fields on the same entry.
+
+Do not mix:
+
+- `path`
+- `repo`
+- `ref`
+- `subdir`
+
+on one bundle entry.
+
+For a local path bundle, keep only:
+
+- `id`
+- `name` if needed
+- `path`
+- `module`
+- `config`
 
 ## `bundles.yaml` by run mode
 
@@ -145,6 +223,16 @@ Important local settings:
 
 - `assembly.paths.host_bundles_path`
 - `assembly.paths.host_managed_bundles_path`
+
+Important runtime rule:
+
+- an initialized runtime reuses its existing `workdir/config/*.yaml`
+- running `kdcube --workdir <runtime> --build --upstream` does not reseed default descriptors
+- if you want different bundle roots or bundle entries in that runtime, edit `workdir/config/assembly.yaml` and `workdir/config/bundles.yaml` directly
+
+For the step-by-step workflow, use:
+
+- [how-to-configure-and-run-bundle-README.md](../../sdk/bundle/build/how-to-configure-and-run-bundle-README.md)
 
 Reload workflow:
 

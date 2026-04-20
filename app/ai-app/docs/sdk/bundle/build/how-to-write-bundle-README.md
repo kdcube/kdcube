@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "testing"]
 keywords: ["how to write bundle", "bundle builder", "bundle authoring", "versatile reference", "bundle widget", "bundle api", "bundle storage", "bundle props"]
 see_also:
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -29,6 +30,7 @@ Primary references:
 Use this document together with:
 
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
+- [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 - [bundle-dev-README.md](../bundle-dev-README.md)
 - [bundle-reference-versatile-README.md](../bundle-reference-versatile-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
@@ -51,9 +53,14 @@ Work in this order:
 
 Practical rule:
 
-- docs define the in tended contract
+- docs define the intended contract
 - `versatile` shows the reference bundle shape
 - platform source is the last resort for unresolved edge cases
+
+Configuration/runtime rule:
+
+- use this page for how to structure the bundle code
+- use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, `kdcube --build --upstream`, and `kdcube --info`
 
 ## 2. Decide What Kind Of Bundle You Are Building
 

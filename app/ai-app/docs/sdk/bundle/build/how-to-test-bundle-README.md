@@ -6,6 +6,7 @@ tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
 keywords: ["how to test bundle", "bundle suite", "run_bundle_suite", "bundle widget testing", "bundle reload", "bundle diagnostics"]
 see_also:
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
@@ -21,6 +22,7 @@ The goal is to prove that the bundle works in the supported KDCube runtime contr
 Use this together with:
 
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
+- [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 - [bundle-reference-versatile-README.md](../bundle-reference-versatile-README.md)
 - [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
@@ -39,6 +41,11 @@ Run tests in this order:
 
 Do not jump straight to browser/manual testing.
 That is the slowest feedback loop and the weakest signal.
+
+Runtime-shape rule:
+
+- if the runtime itself may be misconfigured, fix `assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` first
+- use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for the exact local runtime contract before debugging widget/API behavior
 
 ## 2. Baseline Test Matrix
 

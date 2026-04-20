@@ -5,6 +5,7 @@ summary: "Compact bundle authoring guide: minimal structure, runtime contract, c
 tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration"]
 keywords: ["bundle authoring", "agentic_workflow", "bundle_id", "tools_descriptor", "skills_descriptor", "bundle_prop", "get_secret", "bundle reload", "versatile"]
 see_also:
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/bundle-reference-versatile-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-transports-README.md
@@ -18,6 +19,7 @@ This page is the shortest complete path for bundle authors.
 
 Use it together with:
 
+- [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
 - [bundle-reference-versatile-README.md](bundle-reference-versatile-README.md)
 - [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 - [bundle-transports-README.md](bundle-transports-README.md)
@@ -152,6 +154,7 @@ Read the exact model here:
 
 - [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
 - [bundle-platform-properties-README.md](bundle-platform-properties-README.md)
+- [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
 
 ## Git Auth Environment Boundary
 
@@ -247,6 +250,7 @@ Design your subsystem roots intentionally:
 If you need the deployment-side details and registry behavior, use:
 
 - [bundle-ops-README.md](bundle-ops-README.md)
+- [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
 
 ## Reference Bundle Scope
 
