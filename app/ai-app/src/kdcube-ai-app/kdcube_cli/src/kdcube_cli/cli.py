@@ -214,14 +214,25 @@ def _build_paths_for_repo(repo_root: Path, workdir: Path) -> installer_mod.Paths
     lib_root = ai_app_root / "src/kdcube-ai-app"
     if not (lib_root / "kdcube_ai_app").exists():
         raise SystemExit(f"Could not locate kdcube_ai_app under {lib_root}")
-    docker_dir = ai_app_root / "deployment/docker/all_in_one_kdcube"
+    config_dir = workdir / "config"
+    compose_mode = "all-in-one"
+    env_main_path = config_dir / ".env"
+    if env_main_path.exists():
+        env_main = installer_mod.load_env_file(env_main_path)
+        compose_mode_raw = env_main.entries.get("KDCUBE_COMPOSE_MODE", (None, None))[1]
+        if _strip_env_value(compose_mode_raw) == "custom-ui-managed-infra":
+            compose_mode = "custom-ui-managed-infra"
+    if compose_mode == "custom-ui-managed-infra":
+        docker_dir = ai_app_root / "deployment/docker/custom-ui-managed-infra"
+    else:
+        docker_dir = ai_app_root / "deployment/docker/all_in_one_kdcube"
     return installer_mod.PathsContext(
         lib_root=lib_root,
         ai_app_root=ai_app_root,
         docker_dir=docker_dir,
         sample_env_dir=docker_dir / "sample_env",
         workdir=workdir,
-        config_dir=workdir / "config",
+        config_dir=config_dir,
         data_dir=workdir / "data",
     )
 

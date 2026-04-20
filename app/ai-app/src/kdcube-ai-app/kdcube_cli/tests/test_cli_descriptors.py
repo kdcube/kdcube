@@ -5,6 +5,7 @@ import yaml
 from rich.console import Console
 
 from kdcube_cli.cli import (
+    _build_paths_for_repo,
     _compose_running_services,
     _descriptor_fast_path_reasons,
     _load_bundle_ids_from_descriptor,
@@ -169,6 +170,25 @@ def test_compose_running_services_uses_runtime_docker_dir(monkeypatch, tmp_path:
 
     assert result == {"chat-proc", "chat-ingress"}
     assert seen["cwd"] == docker_dir
+
+
+def test_build_paths_for_repo_uses_runtime_compose_mode(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("KDCUBE_COMPOSE_MODE=custom-ui-managed-infra\n")
+
+    repo_root = tmp_path / "repo"
+    ai_app_root = repo_root / "app" / "ai-app"
+    (ai_app_root / "deployment" / "docker" / "all_in_one_kdcube").mkdir(parents=True)
+    (ai_app_root / "deployment" / "docker" / "custom-ui-managed-infra").mkdir(parents=True)
+    (ai_app_root / "deployment" / "docker" / "all_in_one_kdcube" / "docker-compose.yaml").write_text("")
+    (ai_app_root / "deployment" / "docker" / "custom-ui-managed-infra" / "docker-compose.yaml").write_text("")
+    (ai_app_root / "src" / "kdcube-ai-app" / "kdcube_ai_app").mkdir(parents=True)
+
+    ctx = _build_paths_for_repo(repo_root, workdir)
+
+    assert ctx.docker_dir == ai_app_root / "deployment" / "docker" / "custom-ui-managed-infra"
 
 
 def test_stage_descriptor_directory_requires_canonical_descriptor_set(tmp_path: Path):
