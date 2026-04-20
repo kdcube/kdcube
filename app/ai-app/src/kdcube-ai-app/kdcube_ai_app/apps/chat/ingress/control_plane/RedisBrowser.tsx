@@ -233,6 +233,20 @@ class RedisBrowserAPI {
         if (!res.ok) throw new Error('Failed to load key');
         return await res.json();
     }
+
+    async deleteKey(key: string): Promise<{status: string; key: string; deleted: number}> {
+        const params = new URLSearchParams();
+        params.set('key', key);
+        const res = await fetch(this.buildUrl(`/key?${params.toString()}`), {
+            method: 'DELETE',
+            headers: makeAuthHeaders(),
+        });
+        if (!res.ok) {
+            const text = await res.text().catch(() => '');
+            throw new Error(text || 'Failed to delete key');
+        }
+        return await res.json();
+    }
 }
 
 const api = new RedisBrowserAPI();
@@ -246,6 +260,7 @@ const RedisBrowserAdmin: React.FC = () => {
     const [manualKey, setManualKey] = useState('');
     const [keyDetails, setKeyDetails] = useState<RedisKeyDetails | null>(null);
     const [loading, setLoading] = useState(false);
+    const [deleting, setDeleting] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [limit] = useState(200);
 
@@ -287,6 +302,29 @@ const RedisBrowserAdmin: React.FC = () => {
         }
     };
 
+    const deleteCurrentKey = async (key: string) => {
+        const resolvedKey = String(key || '').trim();
+        if (!resolvedKey) return;
+        const confirmed = window.confirm(`Delete Redis key?\n\n${resolvedKey}`);
+        if (!confirmed) return;
+
+        setDeleting(true);
+        setError(null);
+        try {
+            await api.deleteKey(resolvedKey);
+            setKeyDetails(null);
+            setSelectedKey('');
+            if (manualKey.trim() === resolvedKey) {
+                setManualKey('');
+            }
+            setKeys((prev) => prev.filter((item) => item.key !== resolvedKey));
+        } catch (err) {
+            setError((err as Error).message);
+        } finally {
+            setDeleting(false);
+        }
+    };
+
     const summary = useMemo(() => {
         if (!keyDetails) return 'Select a key to inspect.';
         const ttl = keyDetails.ttl === null ? 'n/a' : keyDetails.ttl;
@@ -317,7 +355,7 @@ const RedisBrowserAdmin: React.FC = () => {
                         <h1 className="text-4xl font-semibold text-gray-900 tracking-tight">Redis Browser</h1>
                         <p className="text-gray-600 mt-2">Explore Redis keys and inspect stored values.</p>
                     </div>
-                    <div className="text-sm text-gray-500">{loading ? 'Loading…' : 'Ready'}</div>
+                    <div className="text-sm text-gray-500">{deleting ? 'Deleting…' : loading ? 'Loading…' : 'Ready'}</div>
                 </div>
 
                 {error && (
@@ -423,7 +461,18 @@ const RedisBrowserAdmin: React.FC = () => {
                         <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
                             <div className="flex items-center justify-between mb-3">
                                 <div className="text-sm font-semibold text-gray-900">Key data</div>
-                                <div className="text-xs text-gray-500">{selectedKey || '—'}</div>
+                                <div className="flex items-center gap-2">
+                                    {selectedKey && (
+                                        <button
+                                            className="px-3 py-1.5 rounded-xl text-[11px] font-semibold border border-red-200 text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                            onClick={() => deleteCurrentKey(selectedKey)}
+                                            disabled={deleting || loading}
+                                        >
+                                            Delete key
+                                        </button>
+                                    )}
+                                    <div className="text-xs text-gray-500">{selectedKey || '—'}</div>
+                                </div>
                             </div>
                             <div className="text-xs text-gray-500 mb-3">{summary}</div>
                             <pre className="text-xs bg-gray-900 text-gray-100 rounded-xl p-4 max-h-[420px] overflow-auto">

@@ -117,3 +117,24 @@ async def get_key(
         "length": length,
         "value": value,
     }
+
+
+@router.delete("/key")
+async def delete_key(
+    key: str = Query(...),
+    session=Depends(auth_without_pressure()),
+):
+    redis = _get_redis()
+    if not key:
+        raise HTTPException(status_code=400, detail="Missing key")
+
+    try:
+        deleted = await redis.delete(key)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete key: {exc}") from exc
+
+    return {
+        "status": "ok",
+        "key": key,
+        "deleted": int(deleted or 0),
+    }
