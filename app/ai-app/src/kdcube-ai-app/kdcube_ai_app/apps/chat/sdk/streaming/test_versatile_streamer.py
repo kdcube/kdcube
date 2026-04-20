@@ -3,9 +3,15 @@
 #
 # Tests and usage examples for the versatile channeled streamer.
 
+import json
+
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.streaming.versatile_streamer import ChannelSpec, stream_with_channels
+from kdcube_ai_app.apps.chat.sdk.solutions.widgets.exec import DecisionExecCodeStreamer
+
+
+HISTORICAL_EXEC_CODE_MISS_CHUNK_SIZES = [56, 62, 69, 70, 79, 80, 92, 93, 110, 111, 112]
 
 
 class _FakeService:
@@ -193,3 +199,81 @@ async def test_stream_with_channels_ignores_literal_channel_mentions_inside_cont
     assert "`<channel:code></channel:code>`" in results["thinking"].raw
     assert "Done." in results["answer"].raw
     assert results["code"].raw == ""
+
+
+@pytest.mark.asyncio
+async def test_stream_with_channels_captures_realistic_exec_code_payload():
+    output_file = "turn_demo_exec_001/outputs/monthly_priorities.xlsx"
+    payload = {
+        "action": "call_tool",
+        "notes": "Create the workbook.",
+        "tool_call": {
+            "tool_id": "exec_tools.execute_code_python",
+            "params": {
+                "prog_name": "monthly_priorities",
+                "contract": [
+                    {
+                        "filename": output_file,
+                        "description": "Excel workbook output.",
+                        "visibility": "external",
+                    }
+                ],
+            },
+        },
+    }
+    code_text = (
+        "import openpyxl\n"
+        "from pathlib import Path\n\n"
+        f"out_path = Path(OUTPUT_DIR) / \"{output_file}\"\n"
+        "out_path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "print(f\"Saved: {out_path}\")\n"
+    )
+    text = (
+        "<channel:thinking>Need a small Excel output.</channel:thinking>\n"
+        f"<channel:ReactDecisionOutV2>```json\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n```</channel:ReactDecisionOutV2>\n"
+        f"<channel:code>\n{code_text}</channel:code>"
+    )
+    from kdcube_ai_app.apps.chat.sdk.streaming.versatile_streamer import ChannelSubscribers
+
+    for chunk_size in HISTORICAL_EXEC_CODE_MISS_CHUNK_SIZES:
+        svc = _FakeService([text[i:i + chunk_size] for i in range(0, len(text), chunk_size)])
+        events = []
+
+        async def _emit(**kwargs):
+            events.append(kwargs)
+
+        widget = DecisionExecCodeStreamer(
+            emit_delta=_emit,
+            agent="test.exec",
+            artifact_name="react.exec.test",
+            execution_id="exec_demo",
+        )
+
+        subscribers = (
+            ChannelSubscribers()
+            .subscribe("ReactDecisionOutV2", widget.feed_json)
+            .subscribe("code", widget.feed_code)
+        )
+
+        results, meta = await stream_with_channels(
+            svc=svc,
+            messages=["sys", "user"],
+            role="answer.generator.regular",
+            channels=[
+                ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+                ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+                ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+            ],
+            emit=_emit,
+            agent="test.agent",
+            artifact_name="react.decision",
+            subscribers=subscribers,
+            max_tokens=600,
+            temperature=0.0,
+            return_full_raw=True,
+        )
+
+        assert meta.get("service_error") is None
+        assert results["ReactDecisionOutV2"].error is None
+        assert code_text in results["code"].raw, chunk_size
+        assert code_text in widget.get_code(), chunk_size

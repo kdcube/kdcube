@@ -75,7 +75,21 @@ class ChannelSubscribers:
 
 def _is_valid_channel_tag_start(text: str, idx: int) -> bool:
     try:
-        return (text[:idx].count("`") % 2) == 0
+        src = text[:idx]
+        in_fence = False
+        in_inline = False
+        i = 0
+        while i < len(src):
+            if src.startswith("```", i) and not in_inline:
+                in_fence = not in_fence
+                i += 3
+                continue
+            if src[i] == "`" and not in_fence:
+                in_inline = not in_inline
+                i += 1
+                continue
+            i += 1
+        return not in_fence and not in_inline
     except Exception:
         return True
 
@@ -104,6 +118,51 @@ def _extract_valid_channel_bodies(full_raw: str, channel_name: str) -> List[str]
         if body is not None:
             out.append(body)
     return out
+
+
+def _advance_channel_markup_state(
+        text: str,
+        *,
+        in_fence: bool,
+        in_inline: bool,
+) -> tuple[bool, bool]:
+    i = 0
+    while i < len(text):
+        if text.startswith("```", i) and not in_inline:
+            in_fence = not in_fence
+            i += 3
+            continue
+        if text[i] == "`" and not in_fence:
+            in_inline = not in_inline
+            i += 1
+            continue
+        i += 1
+    return in_fence, in_inline
+
+
+def _find_next_tag_within_channel(
+        text: str,
+        start: int,
+        *,
+        in_fence: bool,
+        in_inline: bool,
+) -> tuple[Optional[re.Match[str]], bool, bool]:
+    i = max(0, int(start or 0))
+    while i < len(text):
+        if text.startswith("```", i) and not in_inline:
+            in_fence = not in_fence
+            i += 3
+            continue
+        if text[i] == "`" and not in_fence:
+            in_inline = not in_inline
+            i += 1
+            continue
+        if not in_fence and not in_inline:
+            m = TAG_RE.match(text, i)
+            if m:
+                return m, in_fence, in_inline
+        i += 1
+    return None, in_fence, in_inline
 
 
 def _tag_holdback() -> int:
@@ -243,6 +302,8 @@ async def stream_with_channels(
     buf = ""
     cursor = 0
     current: Optional[str] = None
+    current_in_fence = False
+    current_in_inline = False
 
     raw_by_channel: Dict[str, List[str]] = {c.name: [] for c in channels}
     used_by_channel: Dict[str, set[int]] = {c.name: set() for c in channels}
@@ -367,7 +428,7 @@ async def stream_with_channels(
         await _emit_channel(name, raw_slice)
 
     async def _process_buffer(final: bool = False) -> None:
-        nonlocal buf, cursor, current
+        nonlocal buf, cursor, current, current_in_fence, current_in_inline
         loop_guard = 0
         while True:
             loop_guard += 1
@@ -383,7 +444,15 @@ async def stream_with_channels(
                 buf = buf[cursor:]
                 cursor = 0
 
-            m_tag = _find_next_valid_tag(buf, cursor)
+            if current is None:
+                m_tag = TAG_RE.search(buf, cursor)
+            else:
+                m_tag, _, _ = _find_next_tag_within_channel(
+                    buf,
+                    cursor,
+                    in_fence=current_in_fence,
+                    in_inline=current_in_inline,
+                )
             if not m_tag:
                 if current is None:
                     # No channel open; keep a short tail to catch tag boundaries
@@ -397,13 +466,17 @@ async def stream_with_channels(
                 if safe_end <= cursor:
                     break
                 raw_slice = buf[cursor:safe_end]
-                raw_slice = _truncate_at_channel_tag(raw_slice)
                 holdback = 0 if final else _get_holdback_for_channel(current)
                 emit_now, _, needs_more = citations_module.split_safe_stream_prefix_with_holdback(
                     raw_slice, holdback=holdback
                 )
                 if emit_now:
                     await _emit_raw_slice(current, emit_now)
+                    current_in_fence, current_in_inline = _advance_channel_markup_state(
+                        emit_now,
+                        in_fence=current_in_fence,
+                        in_inline=current_in_inline,
+                    )
                     cursor += len(emit_now)
                 if needs_more and not final:
                     break
@@ -414,9 +487,13 @@ async def stream_with_channels(
             tag_end = m_tag.end()
             if current is not None and tag_start > cursor:
                 raw_slice = buf[cursor:tag_start]
-                raw_slice = _truncate_at_channel_tag(raw_slice)
                 if raw_slice:
                     await _emit_raw_slice(current, raw_slice)
+                    current_in_fence, current_in_inline = _advance_channel_markup_state(
+                        raw_slice,
+                        in_fence=current_in_fence,
+                        in_inline=current_in_inline,
+                    )
                 cursor = tag_start
 
             is_close, tag_name = _parse_tag(m_tag.group(0))
@@ -434,12 +511,16 @@ async def stream_with_channels(
                 channel_times[current]["finished_at"] = time.time()
                 cursor = tag_end
                 current = None
+                current_in_fence = False
+                current_in_inline = False
                 continue
 
             # Opening a channel: switch to it (implicitly closes previous if any)
             if not is_close:
                 if current is not None:
                     await _flush_channel_citations(current)
+                current_in_fence = False
+                current_in_inline = False
                 if channel_times[tag_name]["started_at"] is None:
                     channel_times[tag_name]["started_at"] = time.time()
                 current = tag_name
@@ -463,39 +544,6 @@ async def stream_with_channels(
 
     async def on_complete(_ret):
         await _process_buffer(final=True)
-
-        if composite_streamer:
-            await composite_streamer.finish()
-
-        # Emit completed markers per channel
-        now = time.time()
-        for name, spec in channel_specs.items():
-            if channel_times[name]["started_at"] is None and raw_by_channel.get(name):
-                channel_times[name]["started_at"] = now
-            if channel_times[name]["finished_at"] is None and raw_by_channel.get(name):
-                channel_times[name]["finished_at"] = now
-            idx = delta_counts.get(name, 0)
-            await emit(
-                text="",
-                index=idx,
-                marker=spec.emit_marker or "answer",
-                agent=agent,
-                format=spec.format,
-                artifact_name=artifact_name,
-                channel=name,
-                completed=True,
-            )
-            await _emit_subscribers(
-                name,
-                text="",
-                index=idx,
-                marker=spec.emit_marker or "answer",
-                agent=agent,
-                format=spec.format,
-                artifact_name=artifact_name,
-                channel=name,
-                completed=True,
-            )
 
     client = svc.get_client(role)
     cfg = svc.describe_client(client, role=role)
@@ -521,7 +569,46 @@ async def stream_with_channels(
                 continue
             matches = _extract_valid_channel_bodies(full_raw, name)
             if matches:
-                raw_by_channel[name] = [m for m in matches if m is not None]
+                recovered = [m for m in matches if m is not None]
+                raw_by_channel[name] = recovered
+                for body in recovered:
+                    if body:
+                        await _emit_raw_slice(name, body)
+
+    if composite_streamer:
+        await composite_streamer.finish()
+
+    # Emit completed markers per channel after any recovered channel bodies were
+    # replayed to emit/subscribers. This keeps widgets consistent with the final
+    # raw results even when a channel body had to be recovered from full_raw.
+    now = time.time()
+    for name, spec in channel_specs.items():
+        if channel_times[name]["started_at"] is None and raw_by_channel.get(name):
+            channel_times[name]["started_at"] = now
+        if channel_times[name]["finished_at"] is None and raw_by_channel.get(name):
+            channel_times[name]["finished_at"] = now
+        idx = delta_counts.get(name, 0)
+        await emit(
+            text="",
+            index=idx,
+            marker=spec.emit_marker or "answer",
+            agent=agent,
+            format=spec.format,
+            artifact_name=artifact_name,
+            channel=name,
+            completed=True,
+        )
+        await _emit_subscribers(
+            name,
+            text="",
+            index=idx,
+            marker=spec.emit_marker or "answer",
+            agent=agent,
+            format=spec.format,
+            artifact_name=artifact_name,
+            channel=name,
+            completed=True,
+        )
 
     results: Dict[str, ChannelResult] = {}
     for name, spec in channel_specs.items():

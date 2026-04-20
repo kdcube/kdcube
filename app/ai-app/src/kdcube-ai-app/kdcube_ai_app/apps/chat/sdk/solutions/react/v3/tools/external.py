@@ -130,6 +130,29 @@ def _remap_tool_sources(
 TOOL_SPEC = None  # external tools are dynamic
 
 
+def _extract_exec_code_from_state(state: Dict[str, Any]) -> str:
+    exec_streamer = state.get("exec_code_streamer")
+    if exec_streamer:
+        try:
+            code_txt = exec_streamer.get_code() or ""
+            if isinstance(code_txt, str) and code_txt:
+                return code_txt
+        except Exception:
+            pass
+
+    packet = state.get("last_decision_raw")
+    if isinstance(packet, dict):
+        channels = packet.get("channels") or {}
+        if isinstance(channels, dict):
+            code = channels.get("code") or {}
+            if isinstance(code, dict):
+                text = code.get("text")
+                if isinstance(text, str) and text:
+                    return text
+
+    return ""
+
+
 async def handle_external_tool(*,
                                react: Any,
                                ctx_browser: Any,
@@ -195,12 +218,7 @@ async def handle_external_tool(*,
         if normalized_contract is not None:
             final_params["contract"] = normalized_contract
 
-        code_txt = ""
-        if exec_streamer:
-            try:
-                code_txt = exec_streamer.get_code() or ""
-            except Exception:
-                code_txt = ""
+        code_txt = _extract_exec_code_from_state(state)
         if not code_txt:
             notice_block(
                 ctx_browser=ctx_browser,

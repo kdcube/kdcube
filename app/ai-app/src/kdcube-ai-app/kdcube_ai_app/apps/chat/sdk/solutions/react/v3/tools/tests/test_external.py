@@ -3,7 +3,7 @@
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external import handle_external_tool
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external import handle_external_tool
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.tests.helpers import FakeBrowser, FakeReact
 
 
@@ -11,6 +11,7 @@ class _FakeExecStreamer:
     def __init__(self, code: str):
         self._code = code
         self.subsystem_language = "python"
+        self.execution_id = None
 
     def get_code(self):
         return self._code
@@ -60,7 +61,7 @@ async def test_external_exec_path_rewrite_notice(monkeypatch, tmp_path):
         captured["params"] = kwargs["tool_execution_context"]["params"]
         return {"items": []}
 
-    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
 
     react = FakeReact()
     react.tools_subsystem = None
@@ -93,7 +94,7 @@ async def test_rendering_tool_accepts_generic_outdir_fi_path(monkeypatch, tmp_pa
         target.write_bytes(b"%PDF-1.4\n")
         return {"output": kwargs["tool_execution_context"]["params"]["path"], "summary": ""}
 
-    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
 
     react = FakeReact()
     react.tools_subsystem = None
@@ -158,7 +159,7 @@ async def test_external_exec_internal_file_is_not_hosted_but_keeps_file_path(mon
             }]
         }
 
-    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
 
     hosting = _HostingRecorder()
     react = FakeReact(hosting_service=hosting)
@@ -215,7 +216,7 @@ async def test_external_exec_requires_pull_for_unmaterialized_historical_file(mo
         called["execute"] = True
         return {"items": []}
 
-    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
 
     react = FakeReact()
     react.tools_subsystem = None
@@ -232,3 +233,49 @@ async def test_external_exec_requires_pull_for_unmaterialized_historical_file(mo
     ]
     assert result_blocks
     assert "pre_exec_pull_required" in (result_blocks[-1].get("text") or "")
+
+
+@pytest.mark.asyncio
+async def test_external_exec_falls_back_to_decision_packet_code_channel(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    code_text = "print('from decision packet')\n"
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "exec_tools.execute_code_python",
+                "params": {
+                    "contract": [{
+                        "filename": "turn_exec/files/out.txt",
+                        "description": "test output",
+                    }],
+                    "prog_name": "snippet.py",
+                },
+            }
+        },
+        "last_decision_raw": {
+            "channels": {
+                "code": {
+                    "text": code_text,
+                }
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+        "exec_code_streamer": _FakeExecStreamer(""),
+    }
+
+    captured = {}
+
+    async def _fake_execute_tool(**kwargs):
+        captured["params"] = kwargs["tool_execution_context"]["params"]
+        return {"items": []}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    react = FakeReact()
+    react.tools_subsystem = None
+
+    await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="e_packet")
+
+    assert captured["params"]["code"] == code_text

@@ -17,6 +17,9 @@ from kdcube_ai_app.apps.chat.sdk.streaming.versatile_streamer_v3 import (
 )
 
 
+HISTORICAL_EXEC_CODE_MISS_CHUNK_SIZES = [56, 62, 69, 70, 79, 80, 92, 93, 110, 111, 112]
+
+
 class _FakeService:
     def __init__(self, chunks):
         self._chunks = list(chunks)
@@ -466,3 +469,74 @@ async def test_stream_with_channels_v3_ignores_literal_channel_mentions_inside_c
     assert "`<channel:code></channel:code>`" in results["thinking"].raw
     assert results["ReactDecisionOutV2"].raw == json.dumps(payload, ensure_ascii=True)
     assert results["code"].raw == ""
+
+
+@pytest.mark.asyncio
+async def test_stream_with_channels_v3_captures_realistic_exec_code_payload():
+    output_file = "turn_demo_exec_001/outputs/monthly_priorities.xlsx"
+    payload = {
+        "action": "call_tool",
+        "notes": "Create the workbook.",
+        "tool_call": {
+            "tool_id": "exec_tools.execute_code_python",
+            "params": {
+                "prog_name": "monthly_priorities",
+                "contract": [
+                    {
+                        "filename": output_file,
+                        "description": "Excel workbook output.",
+                        "visibility": "external",
+                    }
+                ],
+            },
+        },
+    }
+    code_text = (
+        "import openpyxl\n"
+        "from pathlib import Path\n\n"
+        f"out_path = Path(OUTPUT_DIR) / \"{output_file}\"\n"
+        "out_path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "print(f\"Saved: {out_path}\")\n"
+    )
+    text = (
+        "<channel:thinking>Need a small Excel output.</channel:thinking>\n"
+        f"{_json_channel('ReactDecisionOutV2', payload)}\n"
+        f"<channel:code>\n{code_text}</channel:code>"
+    )
+    for chunk_size in HISTORICAL_EXEC_CODE_MISS_CHUNK_SIZES:
+        svc = _FakeService(_chunk_text(text, size=chunk_size))
+        collector = _Collector()
+        widget = DecisionExecCodeStreamer(
+            emit_delta=collector.emit,
+            agent="test.exec",
+            artifact_name="react.exec.test",
+            execution_id="exec_demo",
+        )
+        subscribers = (
+            ChannelSubscribers()
+            .subscribe("ReactDecisionOutV2", widget.feed_json)
+            .subscribe("code", widget.feed_code)
+        )
+
+        results, meta = await stream_with_channels(
+            svc=svc,
+            messages=["sys", "user"],
+            role="answer.generator.regular",
+            channels=[
+                ChannelSpec(name="thinking", format="markdown", replace_citations=False, emit_marker="thinking"),
+                ChannelSpec(name="ReactDecisionOutV2", format="json", replace_citations=False, emit_marker="answer"),
+                ChannelSpec(name="code", format="text", replace_citations=False, emit_marker="subsystem"),
+            ],
+            emit=collector.emit,
+            agent="test.agent",
+            artifact_name="react.decision",
+            subscribers=subscribers,
+            max_tokens=600,
+            temperature=0.0,
+            return_full_raw=True,
+        )
+
+        assert meta.get("service_error") is None
+        assert results["ReactDecisionOutV2"].error is None
+        assert code_text in results["code"].raw, chunk_size
+        assert code_text in widget.get_code(), chunk_size
