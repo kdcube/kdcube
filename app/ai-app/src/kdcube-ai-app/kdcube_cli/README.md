@@ -244,7 +244,7 @@ what is incomplete.
 | `--reset-config` | Re‑prompt for config values without deleting files. |
 | `--reset` | Alias for `--reset-config`. |
 | `--clean` | Clean local Docker cache and unused KDCube images. |
-| `--secrets-prompt` | Prompt for LLM keys (OpenAI/Anthropic/Brave/OpenRouter) and inject them at runtime (sidecar). |
+| `--secrets-prompt` | Prompt for OpenAI, Anthropic, and Git HTTPS token values and inject them at runtime (sidecar). |
 | `--secrets-set KEY=VALUE` | Inject a secret value without prompting (repeatable). |
 | `--proxy-ssl` | Force SSL proxy config (overrides assembly descriptor). |
 | `--no-proxy-ssl` | Force non‑SSL proxy config (overrides assembly descriptor). |
@@ -352,11 +352,11 @@ runtime nginx SSL config so `YOUR_DOMAIN_NAME` becomes the configured domain in:
 - `/etc/letsencrypt/live/<domain>/privkey.pem`
 
 ### Secrets (third services tokens)
-The wizard **does not** write OpenAI/Anthropic/Brave keys to `.env` files.
+The wizard **does not** write OpenAI/Anthropic/Git token values to `.env` files.
 If you provide them during setup, they are injected at runtime into the
 `kdcube-secrets` sidecar (in‑memory only) when `assembly.yaml` uses
 `secrets.provider: secrets-service`. If you restart the stack, you’ll be
-prompted again to re‑inject keys.
+prompted again to re‑inject them.
 
 Order (automatic):
 1) Start `kdcube-secrets`
@@ -390,11 +390,40 @@ If you set LLM keys in env files (managed infra / custom setups), those env
 values still work and take precedence. The secrets sidecar is only used when
 env keys are missing.
 
+### First-run defaults
+Plain `kdcube` now seeds the full canonical descriptor set into `workdir/config/`
+from the tracked reference descriptors:
+
+- `assembly.yaml`
+- `secrets.yaml`
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+- `gateway.yaml`
+
+That first local bootstrap is descriptor-first and local-first:
+
+- `storage.workspace.type=local`
+- `storage.claude_code_session.type=local`
+- `storage.kdcube=/kdcube-storage`
+- `storage.bundles=/bundle-storage`
+- `bundles.default_bundle_id=versatile@2026-03-31-13-36`
+
+On a fresh default run, the installer asks only for:
+
+- `Host bundles root (local path bundles)`
+- `OpenAI API key` (optional)
+- `Anthropic API key` (optional)
+- `Git HTTPS token` (optional)
+
+It does not ask for OpenRouter. It does not ask for Brave. It auto-seeds local
+defaults for Postgres, Redis, auth mode, UI port, managed bundle cache paths,
+bundle storage, and exec workspace.
+
 ### Git HTTPS token (private bundles)
-If you choose **https-token** auth for git bundles, the token is treated as a
-secret and is **not stored** in `.env.proc`. It is injected at runtime (same
-flow as LLM keys). You will be prompted again on the next run unless you pass
-it via `--secrets-set GIT_HTTP_TOKEN=...`.
+If you choose or provide a Git HTTPS token for private bundles, the token is
+treated as a secret and is **not stored** in `.env.proc`. It is injected at
+runtime (same flow as LLM keys). You will be prompted again on the next run
+unless you pass it via `--secrets-set GIT_HTTP_TOKEN=...`.
 
 More details:
 https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/ops/local/local-setup-README.md
@@ -620,7 +649,7 @@ You can provide a `secrets.yaml` path in the wizard (or via `KDCUBE_SECRETS_DESC
 The CLI stages this file into the runtime workspace `config/` directory.
 
 It is used:
-- to prefill runtime secrets (OpenAI/Anthropic/Brave/Git HTTP token and delegated Cognito client secret) during guided setup
+- to prefill runtime secrets (OpenAI/Anthropic/Git HTTP token and delegated Cognito client secret) during guided setup
 - or as the runtime secrets source when `assembly.yaml -> secrets.provider == "secrets-file"`
 
 In `secrets-file` mode runtime resolves `/config/secrets.yaml` via

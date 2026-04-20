@@ -179,6 +179,7 @@ cython_debug/
 .idea/
 
 .vite/
+.githooks/
 
 app/ai-app/deployment/docker/all_in_one/kb-storage/
 app/ai-app/deployment/docker/all_in_one/kdcube-storage/

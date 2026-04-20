@@ -81,14 +81,14 @@ infra:
 # Storage
 # ---------------------------------------------------------------------------
 storage:
-  kdcube: "s3://YOUR_BUCKET/data/kdcube/dev"    # KDCUBE_STORAGE_PATH; for local storage use an absolute path
-  bundles: "s3://YOUR_BUCKET/data/kdcube/dev"   # CB_BUNDLE_STORAGE_URL; for local storage use an absolute path
+  kdcube: "/kdcube-storage"    # KDCUBE_STORAGE_PATH; local-first default for CLI compose
+  bundles: "/bundle-storage"   # CB_BUNDLE_STORAGE_URL; local-first default for CLI compose
   workspace:
-    type: git             # REACT_WORKSPACE_IMPLEMENTATION: local | git
-    repo: "https://github.com/YOUR_ORG/agentic-workspace.git"  # REACT_WORKSPACE_GIT_REPO
+    type: local           # REACT_WORKSPACE_IMPLEMENTATION: local | git
+    repo: ""              # REACT_WORKSPACE_GIT_REPO; used only when type=git
   claude_code_session:
-    type: git             # CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION: local | git
-    repo: "https://github.com/YOUR_ORG/agentic-workspace.git"  # CLAUDE_CODE_SESSION_GIT_REPO; used only when type=git
+    type: local           # CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION: local | git
+    repo: ""              # CLAUDE_CODE_SESSION_GIT_REPO; used only when type=git
 
 # ---------------------------------------------------------------------------
 # AWS

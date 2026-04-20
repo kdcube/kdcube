@@ -1639,16 +1639,13 @@ def main() -> None:
             if args.secrets_prompt:
                 openai = Prompt.ask("OpenAI API key (leave blank to skip)", default="", password=True)
                 anthropic = Prompt.ask("Anthropic API key (leave blank to skip)", default="", password=True)
-                openrouter = Prompt.ask("OpenRouter API key (leave blank to skip)", default="", password=True)
-                brave = Prompt.ask("Brave Search API key (leave blank to skip)", default="", password=True)
+                git_http_token = Prompt.ask("Git HTTPS token (leave blank to skip)", default="", password=True)
                 if openai:
                     secrets["OPENAI_API_KEY"] = openai
                 if anthropic:
                     secrets["ANTHROPIC_API_KEY"] = anthropic
-                if openrouter:
-                    secrets["OPENROUTER_API_KEY"] = openrouter
-                if brave:
-                    secrets["BRAVE_API_KEY"] = brave
+                if git_http_token:
+                    secrets["GIT_HTTP_TOKEN"] = git_http_token
             if not secrets:
                 console.print("[yellow]No secrets provided. Nothing to inject.[/yellow]")
                 return

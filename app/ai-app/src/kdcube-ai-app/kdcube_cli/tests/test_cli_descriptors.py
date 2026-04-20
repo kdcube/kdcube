@@ -1687,3 +1687,154 @@ bundles:
 
     assert (out_dir / "bundles.yaml").read_text() == bundles_path.read_text()
     assert (out_dir / "bundles.secrets.yaml").read_text() == bundles_secrets_path.read_text()
+
+
+def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monkeypatch, tmp_path: Path):
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    for name in (
+        ".env",
+        ".env.ingress",
+        ".env.proc",
+        ".env.metrics",
+        ".env.postgres.setup",
+        ".env.proxylogin",
+    ):
+        (config_dir / name).write_text("")
+
+    assembly_path = config_dir / "assembly.yaml"
+    assembly_path.write_text("x: 1\n")
+    secrets_path = config_dir / "secrets.yaml"
+    secrets_path.write_text("services: {}\n")
+    bundles_path = config_dir / "bundles.yaml"
+    bundles_path.write_text("bundles:\n  version: '1'\n  default_bundle_id: versatile@2026-03-31-13-36\n  items: []\n")
+    bundles_secrets_path = config_dir / "bundles.secrets.yaml"
+    bundles_secrets_path.write_text("bundles:\n  version: '1'\n  items: []\n")
+
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    ai_app_root = tmp_path / "ai-app"
+    ai_app_root.mkdir()
+    docker_dir = ai_app_root / "deployment" / "docker" / "all_in_one_kdcube"
+    docker_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("KDCUBE_DEFAULT_DESCRIPTOR_BOOTSTRAP", "1")
+    monkeypatch.setattr(
+        "kdcube_cli.installer.compute_paths",
+        lambda *_args, **_kwargs: {
+            "host_kb_storage": str(tmp_path / "kdcube-storage"),
+            "host_bundles": str(tmp_path / "src"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
+            "host_bundle_storage": str(tmp_path / "bundle-storage"),
+            "host_exec_workspace": str(tmp_path / "exec-workspace"),
+            "ui_build_context": str(ai_app_root),
+            "ui_dockerfile_path": "Dockerfile_UI",
+            "ui_source_path": "ui/chat-web-app",
+            "ui_env_build_relative": ".env.ui.build",
+            "nginx_ui_config": "nginx_ui.conf",
+            "nginx_proxy_config": "nginx_proxy.conf",
+            "proxy_build_context": str(ai_app_root),
+            "proxy_dockerfile_path": "Dockerfile_Proxy",
+        },
+    )
+
+    ask_labels: list[str] = []
+    select_titles: list[str] = []
+    secret_labels: list[str] = []
+
+    monkeypatch.setattr(
+        "kdcube_cli.installer.ask",
+        lambda _console, label, default=None, secret=False: ask_labels.append(label) or str(default or ""),
+    )
+    monkeypatch.setattr("kdcube_cli.installer.ask_confirm", lambda _console, _label, default=False: default)
+    monkeypatch.setattr(
+        "kdcube_cli.installer.select_option",
+        lambda _console, title, options, default_index=0: select_titles.append(title) or options[default_index],
+    )
+    monkeypatch.setattr(
+        "kdcube_cli.installer.ensure_absolute",
+        lambda _console, _label, current, default, force_prompt=False: str(Path(current or default or tmp_path).resolve()),
+    )
+    monkeypatch.setattr(
+        "kdcube_cli.installer.prompt_secret_value",
+        lambda _console, label, required=False, current=None, force_prompt=False: secret_labels.append(label) or None,
+    )
+    monkeypatch.setattr("kdcube_cli.installer.ensure_ui_env_build_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.ensure_ui_nginx_config_file", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.write_frontend_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.git_clone_or_update", lambda *_args, **_kwargs: ai_app_root)
+    monkeypatch.setattr("kdcube_cli.installer.sync_nginx_proxy_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.update_nginx_routes_prefix", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer.update_nginx_ssl_domain", lambda *args, **kwargs: None)
+    monkeypatch.setattr("kdcube_cli.installer._load_json_file", lambda *_args, **_kwargs: {})
+
+    ctx = PathsContext(
+        lib_root=tmp_path / "lib",
+        ai_app_root=ai_app_root,
+        docker_dir=docker_dir,
+        sample_env_dir=tmp_path / "sample_env",
+        workdir=workdir,
+        config_dir=config_dir,
+        data_dir=tmp_path / "data",
+    )
+
+    gather_configuration(
+        Console(file=None),
+        ctx,
+        release_descriptor_path=str(assembly_path),
+        release_descriptor={
+            "context": {"tenant": "demo-tenant", "project": "demo-project"},
+            "platform": {"ref": "2026.4.20.001"},
+            "secrets": {"provider": "secrets-service"},
+            "auth": {"type": "simple"},
+            "proxy": {"ssl": False},
+            "storage": {
+                "kdcube": "/kdcube-storage",
+                "bundles": "/bundle-storage",
+                "workspace": {"type": "local", "repo": ""},
+                "claude_code_session": {"type": "local", "repo": ""},
+            },
+            "infra": {
+                "postgres": {
+                    "user": "postgres",
+                    "password": "postgres",
+                    "database": "kdcube",
+                    "host": "postgres-db",
+                    "port": "5432",
+                },
+                "redis": {
+                    "password": "redispass",
+                    "host": "redis",
+                    "port": "6379",
+                },
+            },
+            "paths": {
+                "host_bundles_path": str(tmp_path / "src"),
+                "host_managed_bundles_path": str(tmp_path / "managed-bundles"),
+                "host_kdcube_storage_path": str(tmp_path / "kdcube-storage"),
+                "host_bundle_storage_path": str(tmp_path / "bundle-storage"),
+                "host_exec_workspace_path": str(tmp_path / "exec-workspace"),
+            },
+            "ports": {"ui": "5174"},
+        },
+        secrets_descriptor_path=str(secrets_path),
+        secrets_descriptor={"services": {}},
+        bundles_descriptor_path=str(bundles_path),
+        bundles_descriptor={"bundles": {"version": "1", "default_bundle_id": "versatile@2026-03-31-13-36", "items": []}},
+        bundles_secrets_path=str(bundles_secrets_path),
+        bundles_secrets_descriptor={"bundles": {"version": "1", "items": []}},
+        gateway_descriptor={"gateway": {"tenant": "demo-tenant", "project": "demo-project"}},
+        use_bundles_descriptor=True,
+        use_bundles_secrets=True,
+    )
+
+    assert ask_labels == []
+    assert select_titles == []
+    assert secret_labels == [
+        "OpenAI API key",
+        "Anthropic API key",
+        "Git HTTPS token",
+    ]
+
+    env_main = (config_dir / ".env").read_text()
+    assert f"HOST_BUNDLES_PATH={(tmp_path / 'src').resolve()}" in env_main

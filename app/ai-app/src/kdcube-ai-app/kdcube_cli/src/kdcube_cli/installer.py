@@ -1799,12 +1799,20 @@ def compute_paths(ai_app_root: Path, lib_root: Path, workdir: Path, compose_mode
     else:
         docker_dir = ai_app_root / "deployment/docker/all_in_one_kdcube"
     repo_root = ai_app_root.parent.parent
+    repo_src_root = repo_root.parent.parent
+    home_src = Path.home() / "src"
+    if repo_src_root.name == "src" and repo_src_root.exists():
+        host_bundles_default = str(repo_src_root.resolve())
+    elif home_src.exists():
+        host_bundles_default = str(home_src.resolve())
+    else:
+        host_bundles_default = str(workdir / "data/bundles")
     defaults: Dict[str, str] = {
         "docker_dir": str(docker_dir),
         "host_kb_storage": str(workdir / "data/kdcube-storage"),
         "host_bundle_storage": str(workdir / "data/bundle-storage"),
         "host_exec_workspace": str(workdir / "data/exec-workspace"),
-        "host_bundles": str(workdir / "data/bundles"),
+        "host_bundles": host_bundles_default,
         "host_managed_bundles": str(workdir / "data/managed-bundles"),
         "ui_dockerfile_path": "",
         "ui_source_path": "",
@@ -1887,6 +1895,12 @@ def gather_configuration(
         and workspace_assembly_path.exists()
         and workspace_bundles_path.exists()
     )
+    default_local_bootstrap_mode = os.getenv("KDCUBE_DEFAULT_DESCRIPTOR_BOOTSTRAP", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     def _secret_pick(*paths: object) -> Optional[str]:
         for path in paths:
@@ -2030,9 +2044,18 @@ def gather_configuration(
             str(defaults.get("host_kb_storage") or (ctx.workdir / "data/kdcube-storage")),
             label="Host system storage path",
         )
-        host_bundles_local = _normalize_local_path_bundles_for_workspace(
-            str(defaults.get("host_bundles") or (ctx.workdir / "data/bundles"))
-        )
+        host_bundles_default = str(defaults.get("host_bundles") or (ctx.workdir / "data/bundles"))
+        if default_local_bootstrap_mode and not force_prompt:
+            host_bundles_seed = ensure_absolute(
+                console,
+                "Host bundles root (local path bundles)",
+                _as_str(_get_nested(assembly_data, "paths", "host_bundles_path")),
+                host_bundles_default,
+                force_prompt=True,
+            )
+        else:
+            host_bundles_seed = host_bundles_default
+        host_bundles_local = _normalize_local_path_bundles_for_workspace(host_bundles_seed)
         host_managed_bundles_local = ensure_directory_root(
             str(defaults.get("host_managed_bundles") or (ctx.workdir / "data/managed-bundles")),
             label="Host managed bundles root",
@@ -2085,16 +2108,14 @@ def gather_configuration(
 
     descriptor_tenant = _get_nested(assembly_data, "context", "tenant")
     descriptor_project = _get_nested(assembly_data, "context", "project")
-    tenant = ask(
-        console,
-        "Tenant ID",
-        default=(str(descriptor_tenant) if descriptor_tenant else existing_tenant or "demo-tenant"),
-    )
-    project = ask(
-        console,
-        "Project name",
-        default=(str(descriptor_project) if descriptor_project else existing_project or "demo-project"),
-    )
+    tenant_default = str(descriptor_tenant) if descriptor_tenant else existing_tenant or "demo-tenant"
+    project_default = str(descriptor_project) if descriptor_project else existing_project or "demo-project"
+    if default_local_bootstrap_mode and not force_prompt:
+        tenant = tenant_default
+        project = project_default
+    else:
+        tenant = ask(console, "Tenant ID", default=tenant_default)
+        project = ask(console, "Project name", default=project_default)
     if is_placeholder(tenant):
         tenant = "demo-tenant"
     if is_placeholder(project):
@@ -2151,13 +2172,16 @@ def gather_configuration(
     if "delegated" in current_proxy_cfg:
         default_auth = "delegated"
     default_idx = auth_options.index(default_auth)
-    console.print("[bold]Authentication[/bold]")
-    auth_choice = select_option(
-        console,
-        "Auth type",
-        options=auth_options,
-        default_index=default_idx,
-    )
+    if default_local_bootstrap_mode and not force_prompt:
+        auth_choice = default_auth
+    else:
+        console.print("[bold]Authentication[/bold]")
+        auth_choice = select_option(
+            console,
+            "Auth type",
+            options=auth_options,
+            default_index=default_idx,
+        )
     auth_mode = auth_choice
     _set_nested(assembly_data, ["auth", "type"], auth_mode)
     auth_provider = "simple" if auth_choice == "simple" else "cognito"
@@ -2449,7 +2473,10 @@ def gather_configuration(
             if pg_user_from_assembly and not is_placeholder(str(pg_user_from_assembly))
             else (pg_user if not is_placeholder(pg_user) else "postgres")
         )
-        pg_user = ask(console, "Postgres user", default=pg_user_default)
+        if default_local_bootstrap_mode and not force_prompt:
+            pg_user = pg_user_default
+        else:
+            pg_user = ask(console, "Postgres user", default=pg_user_default)
         update_env_value(env_pg, "POSTGRES_USER", pg_user)
     if force_prompt:
         update_env_value(env_ingress, "POSTGRES_USER", pg_user or "postgres")
@@ -2479,27 +2506,34 @@ def gather_configuration(
             current_pass = None
         if current_pass and current_pass.strip().lower() == DEFAULT_PG_PASSWORD:
             current_pass = None
-        if current_pass:
-            options = ["Use existing password", "Unset (no password)", "Enter new password"]
-            default_index = 0
+        if default_local_bootstrap_mode and not force_prompt:
+            pg_pass = current_pass or (
+                str(pg_pass_from_assembly)
+                if pg_pass_from_assembly and not is_placeholder(str(pg_pass_from_assembly))
+                else DEFAULT_PG_PASSWORD
+            )
         else:
-            options = [f"Use default password ({DEFAULT_PG_PASSWORD})", "Unset (no password)", "Enter new password"]
-            default_index = 0
-        choice = select_option(console, "Postgres password", options, default_index)
-        if choice.startswith("Use existing") and current_pass:
-            pg_pass = current_pass
-        elif choice.startswith("Use default"):
-            pg_pass = DEFAULT_PG_PASSWORD
-        elif choice.startswith("Unset"):
-            pg_pass = ""
-        else:
-            pg_pass = prompt_secret_value(
-                console,
-                "Postgres password",
-                required=True,
-                current=current_pass,
-                force_prompt=True,
-            ) or ""
+            if current_pass:
+                options = ["Use existing password", "Unset (no password)", "Enter new password"]
+                default_index = 0
+            else:
+                options = [f"Use default password ({DEFAULT_PG_PASSWORD})", "Unset (no password)", "Enter new password"]
+                default_index = 0
+            choice = select_option(console, "Postgres password", options, default_index)
+            if choice.startswith("Use existing") and current_pass:
+                pg_pass = current_pass
+            elif choice.startswith("Use default"):
+                pg_pass = DEFAULT_PG_PASSWORD
+            elif choice.startswith("Unset"):
+                pg_pass = ""
+            else:
+                pg_pass = prompt_secret_value(
+                    console,
+                    "Postgres password",
+                    required=True,
+                    current=current_pass,
+                    force_prompt=True,
+                ) or ""
         update_env_value(env_pg, "POSTGRES_PASSWORD", pg_pass)
     if not pg_pass:
         pg_pass = env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1] or ""
@@ -2519,7 +2553,10 @@ def gather_configuration(
             if pg_db_from_assembly and not is_placeholder(str(pg_db_from_assembly))
             else (pg_db if not is_placeholder(pg_db) else "kdcube")
         )
-        pg_db = ask(console, "Postgres database", default=pg_db_default)
+        if default_local_bootstrap_mode and not force_prompt:
+            pg_db = pg_db_default
+        else:
+            pg_db = ask(console, "Postgres database", default=pg_db_default)
         update_env_value(env_pg, "POSTGRES_DATABASE", pg_db)
     if force_prompt:
         update_env_value(env_ingress, "POSTGRES_DATABASE", pg_db or "kdcube")
@@ -2608,27 +2645,34 @@ def gather_configuration(
             current_pass = None
         if current_pass and current_pass.strip().lower() == DEFAULT_REDIS_PASSWORD:
             current_pass = None
-        if current_pass:
-            options: List[str] = ["Use existing password", "Unset (no password)", "Enter new password"]
-            default_index = 0
+        if default_local_bootstrap_mode and not force_prompt:
+            redis_pass = current_pass or (
+                str(redis_pass_from_assembly)
+                if redis_pass_from_assembly and not is_placeholder(str(redis_pass_from_assembly))
+                else DEFAULT_REDIS_PASSWORD
+            )
         else:
-            options = [f"Use default password ({DEFAULT_REDIS_PASSWORD})", "Unset (no password)", "Enter new password"]
-            default_index = 0
-        choice = select_option(console, "Redis password", options, default_index)
-        if choice.startswith("Use existing") and current_pass:
-            redis_pass = current_pass
-        elif choice.startswith("Use default"):
-            redis_pass = DEFAULT_REDIS_PASSWORD
-        elif choice.startswith("Unset"):
-            redis_pass = ""
-        else:
-            redis_pass = prompt_secret_value(
-                console,
-                "Redis password",
-                required=False,
-                current=current_pass,
-                force_prompt=True,
-            ) or ""
+            if current_pass:
+                options = ["Use existing password", "Unset (no password)", "Enter new password"]
+                default_index = 0
+            else:
+                options = [f"Use default password ({DEFAULT_REDIS_PASSWORD})", "Unset (no password)", "Enter new password"]
+                default_index = 0
+            choice = select_option(console, "Redis password", options, default_index)
+            if choice.startswith("Use existing") and current_pass:
+                redis_pass = current_pass
+            elif choice.startswith("Use default"):
+                redis_pass = DEFAULT_REDIS_PASSWORD
+            elif choice.startswith("Unset"):
+                redis_pass = ""
+            else:
+                redis_pass = prompt_secret_value(
+                    console,
+                    "Redis password",
+                    required=False,
+                    current=current_pass,
+                    force_prompt=True,
+                ) or ""
         update_env_value(env_main, "REDIS_PASSWORD", redis_pass)
 
     redis_host = (
@@ -2763,29 +2807,13 @@ def gather_configuration(
         current=anthropic_from_secrets or env_proc.entries.get("ANTHROPIC_API_KEY", (None, None))[1],
         force_prompt=force_prompt,
     )
-    openrouter_key = prompt_secret_value(
-        console,
-        "OpenRouter API key",
-        required=False,
-        current=openrouter_from_secrets or env_proc.entries.get("OPENROUTER_API_KEY", (None, None))[1],
-        force_prompt=force_prompt,
-    )
-    brave_key = prompt_secret_value(
-        console,
-        "Brave Search API key",
-        required=False,
-        current=brave_from_secrets or env_proc.entries.get("BRAVE_API_KEY", (None, None))[1],
-        force_prompt=force_prompt,
-    )
     if openai_key:
         runtime_secrets["services.openai.api_key"] = openai_key
     if anthropic_key:
         runtime_secrets["services.anthropic.api_key"] = anthropic_key
-    if brave_key:
-        runtime_secrets["services.brave.api_key"] = brave_key
-    if openrouter_key:
-        runtime_secrets["services.openrouter.api_key"] = openrouter_key
-    elif openrouter_from_secrets:
+    if brave_from_secrets:
+        runtime_secrets["services.brave.api_key"] = brave_from_secrets
+    if openrouter_from_secrets:
         runtime_secrets["services.openrouter.api_key"] = openrouter_from_secrets
     if google_from_secrets:
         runtime_secrets["services.google.api_key"] = google_from_secrets
@@ -2971,7 +2999,10 @@ def gather_configuration(
         ui_port_current = str(ui_port_from_assembly)
     else:
         ui_default = str(ui_port_current or ui_port_from_assembly or "80")
-        ui_port_current = ask(console, "UI port", default=ui_default)
+        if default_local_bootstrap_mode and not force_prompt:
+            ui_port_current = ui_default
+        else:
+            ui_port_current = ask(console, "UI port", default=ui_default)
         update_env_value(env_main, "KDCUBE_UI_PORT", str(ui_port_current))
     ports_block["ui"] = str(ui_port_current)
     _set_port("KDCUBE_UI_SSL_PORT", "ui_ssl", "443")
@@ -3085,6 +3116,16 @@ def gather_configuration(
 
         if git_token_from_secrets and not is_placeholder(git_token_from_secrets):
             runtime_secrets["services.git.http_token"] = git_token_from_secrets
+        elif default_local_bootstrap_mode:
+            token = prompt_secret_value(
+                console,
+                "Git HTTPS token",
+                required=False,
+                current=None,
+                force_prompt=force_prompt,
+            )
+            if token:
+                runtime_secrets["services.git.http_token"] = token
     else:
         env_http = env_proc.entries.get("GIT_HTTP_TOKEN", (None, None))[1]
         existing_ssh = env_proc.entries.get("GIT_SSH_KEY_PATH", (None, None))[1]
@@ -3106,13 +3147,16 @@ def gather_configuration(
             default_idx = auth_options.index(default_auth)
         except ValueError:
             default_idx = 0
-        console.print("[bold]Git bundle authentication[/bold]")
-        auth_choice = select_option(
-            console,
-            "Git auth method for private bundles",
-            options=auth_options,
-            default_index=default_idx,
-        )
+        if default_local_bootstrap_mode and not force_prompt:
+            auth_choice = "https-token"
+        else:
+            console.print("[bold]Git bundle authentication[/bold]")
+            auth_choice = select_option(
+                console,
+                "Git auth method for private bundles",
+                options=auth_options,
+                default_index=default_idx,
+            )
         if auth_choice == "ssh":
             if force_prompt or is_placeholder(env_main.entries.get("HOST_GIT_SSH_KEY_PATH", (None, None))[1]):
                 ssh_key = prompt_optional(console, "Host SSH key path for git bundles")
@@ -3144,7 +3188,7 @@ def gather_configuration(
                 token = prompt_secret_value(
                     console,
                     "Git HTTPS token",
-                    required=True,
+                    required=not default_local_bootstrap_mode,
                     current=None,
                     force_prompt=force_prompt,
                 )
@@ -3632,6 +3676,7 @@ def run_setup(
     use_descriptor_platform = _env_flag("KDCUBE_ASSEMBLY_USE_PLATFORM")
     use_bundles_descriptor = _env_flag("KDCUBE_USE_BUNDLES_DESCRIPTOR")
     use_bundles_secrets = _env_flag("KDCUBE_USE_BUNDLES_SECRETS")
+    default_descriptor_bootstrap = False
     if env_descriptors_location:
         staged_descriptors = stage_descriptor_directory(
             config_dir,
@@ -3683,9 +3728,41 @@ def run_setup(
     if env_descriptor and (use_descriptor_bundles or use_descriptor_frontend or use_descriptor_platform):
         release_descriptor_path = env_descriptor
 
+    if (
+        not skip_assembly_prompt
+        and not env_descriptors_location
+        and not env_descriptor
+        and not release_descriptor_path
+    ):
+        staged_defaults = stage_descriptor_directory(
+            config_dir,
+            source_dir=None,
+            ai_app_root=ai_app_root,
+            require_complete=False,
+        )
+        release_descriptor_path = str(staged_defaults["assembly_path"])
+        secrets_descriptor_path = str(staged_defaults["secrets_path"])
+        bundles_descriptor_path = str(staged_defaults["bundles_path"])
+        bundles_secrets_path = str(staged_defaults["bundles_secrets_path"])
+        gateway_descriptor_path = str(staged_defaults["gateway_path"])
+        release_descriptor = dict(staged_defaults.get("assembly") or {})
+        secrets_descriptor = dict(staged_defaults.get("secrets") or {})
+        bundles_descriptor = dict(staged_defaults.get("bundles") or {})
+        bundles_secrets = dict(staged_defaults.get("bundles_secrets") or {})
+        gateway_descriptor = dict(staged_defaults.get("gateway") or {})
+        use_bundles_descriptor = True
+        use_bundles_secrets = True
+        default_descriptor_bootstrap = True
+        os.environ["KDCUBE_DEFAULT_DESCRIPTOR_BOOTSTRAP"] = "1"
+        os.environ["KDCUBE_ASSEMBLY_USER_SUPPLIED"] = "0"
+
     if skip_assembly_prompt:
         release_descriptor_path = None
-    elif not compose_mode and (not env_descriptor or (use_descriptor_bundles is None and use_descriptor_frontend is None and use_descriptor_platform is None)):
+    elif (
+        not default_descriptor_bootstrap
+        and not compose_mode
+        and (not env_descriptor or (use_descriptor_bundles is None and use_descriptor_frontend is None and use_descriptor_platform is None))
+    ):
         default_assembly = str((workdir / "config" / "assembly.yaml").resolve())
         release_descriptor_path = ask(console, "Assembly descriptor path (assembly.yaml)", default=default_assembly)
         source_path_obj = Path(release_descriptor_path).expanduser()
