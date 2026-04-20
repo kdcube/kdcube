@@ -386,13 +386,19 @@ def _build_git_env() -> Dict[str, str]:
     if env.get("GIT_SSH_COMMAND"):
         return env
     key_path = env.get("GIT_SSH_KEY_PATH")
-    if not key_path:
-        return env
-    cmd = ["ssh", "-i", key_path, "-o", "IdentitiesOnly=yes"]
     strict = env.get("GIT_SSH_STRICT_HOST_KEY_CHECKING")
     if strict:
-        cmd += ["-o", f"StrictHostKeyChecking={strict}"]
+        strict = str(strict).strip()
     known_hosts = env.get("GIT_SSH_KNOWN_HOSTS")
+    if known_hosts:
+        known_hosts = str(known_hosts).strip()
+    if not key_path and not strict and not known_hosts:
+        return env
+    cmd = ["ssh"]
+    if key_path:
+        cmd += ["-i", key_path, "-o", "IdentitiesOnly=yes"]
+    if strict:
+        cmd += ["-o", f"StrictHostKeyChecking={strict}"]
     if known_hosts:
         cmd += ["-o", f"UserKnownHostsFile={known_hosts}"]
     env["GIT_SSH_COMMAND"] = " ".join(cmd)

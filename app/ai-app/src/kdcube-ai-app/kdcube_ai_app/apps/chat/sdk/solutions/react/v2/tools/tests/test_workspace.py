@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+import kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace as v2_git_workspace
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace import (
     GitWorkspaceCommandError,
     checkout_current_turn_git_workspace,
@@ -403,6 +404,38 @@ def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_
         text=True,
     )
     assert (show_version.stdout or "") == "print('new')\n"
+
+
+def test_ensure_workspace_repo_rewrites_ssh_origin_to_https_when_pat_is_configured(tmp_path, monkeypatch):
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="tenant-a",
+        project="project-a",
+        user_id="user-a",
+        conversation_id="conversation-a",
+        workspace_implementation="git",
+        workspace_git_repo="git@github.com:org/workspace.git",
+    )
+
+    class _Settings:
+        GIT_HTTP_TOKEN = "pat-token"
+
+    monkeypatch.setattr(v2_git_workspace, "get_settings", lambda: _Settings())
+    monkeypatch.setattr(v2_git_workspace, "_build_git_env", lambda: {})
+
+    repo_root = _ensure_workspace_repo(runtime_ctx=runtime, outdir=outdir)
+
+    remote_url = subprocess.run(
+        ["git", "-C", str(repo_root), "config", "--get", "remote.origin.url"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert remote_url == "https://github.com/org/workspace.git"
 
 
 def test_publish_current_turn_git_workspace_skips_transient_and_ignored_files(tmp_path, monkeypatch):

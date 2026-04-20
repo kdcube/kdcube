@@ -16,7 +16,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.workspace import (
     workspace_lineage_segments,
     workspace_version_ref,
 )
-from kdcube_ai_app.infra.plugin.git_bundle import _build_git_env
+from kdcube_ai_app.apps.chat.sdk.config import get_settings
+from kdcube_ai_app.infra.plugin.git_bundle import _build_git_env, _https_url_for_ssh
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 _SKIP_WORKSPACE_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "logs", "executed_programs"}
@@ -197,6 +198,11 @@ def _ensure_workspace_repo(
         raise ValueError("missing_workspace_git_repo")
     log = logger or AgentLogger("react.workspace.git")
     env = _build_git_env()
+    if get_settings().GIT_HTTP_TOKEN:
+        https_url = _https_url_for_ssh(repo_url)
+        if https_url != repo_url:
+            log.log(f"[react.workspace.git] using HTTPS for {repo_url}", level="INFO")
+            repo_url = https_url
     cache_root = _workspace_cache_root(runtime_ctx=runtime_ctx, outdir=outdir)
     repo_root = _workspace_lineage_repo_root(runtime_ctx=runtime_ctx, outdir=outdir)
     cache_root.mkdir(parents=True, exist_ok=True)

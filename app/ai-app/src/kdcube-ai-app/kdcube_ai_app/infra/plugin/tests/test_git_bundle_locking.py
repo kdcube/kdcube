@@ -87,6 +87,39 @@ def test_resolve_git_bundles_root_falls_back_to_legacy_root(monkeypatch, tmp_pat
     assert git_bundle.resolve_git_bundles_root() == legacy_root.resolve()
 
 
+def test_build_git_env_uses_known_hosts_without_explicit_key(monkeypatch):
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.delenv("GIT_SSH_KEY_PATH", raising=False)
+    monkeypatch.setenv("GIT_SSH_KNOWN_HOSTS", "/run/secrets/git_known_hosts")
+    monkeypatch.setenv("GIT_SSH_STRICT_HOST_KEY_CHECKING", "yes")
+    monkeypatch.delenv("GIT_HTTP_TOKEN", raising=False)
+    monkeypatch.delenv("GIT_HTTP_USER", raising=False)
+    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
+
+    env = git_bundle._build_git_env()
+
+    assert env["GIT_SSH_COMMAND"] == (
+        "ssh -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/secrets/git_known_hosts"
+    )
+
+
+def test_build_git_env_still_includes_key_when_present(monkeypatch):
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+    monkeypatch.setenv("GIT_SSH_KEY_PATH", "/run/secrets/git_ssh_key")
+    monkeypatch.setenv("GIT_SSH_KNOWN_HOSTS", "/run/secrets/git_known_hosts")
+    monkeypatch.setenv("GIT_SSH_STRICT_HOST_KEY_CHECKING", "yes")
+    monkeypatch.delenv("GIT_HTTP_TOKEN", raising=False)
+    monkeypatch.delenv("GIT_HTTP_USER", raising=False)
+    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
+
+    env = git_bundle._build_git_env()
+
+    assert env["GIT_SSH_COMMAND"] == (
+        "ssh -i /run/secrets/git_ssh_key -o IdentitiesOnly=yes "
+        "-o StrictHostKeyChecking=yes -o UserKnownHostsFile=/run/secrets/git_known_hosts"
+    )
+
+
 def test_atomic_dir_name_is_unique_tmp_workspace(monkeypatch):
     monkeypatch.setattr(git_bundle.os, "getpid", lambda: 42)
     sequence = iter([1001, 1002])
