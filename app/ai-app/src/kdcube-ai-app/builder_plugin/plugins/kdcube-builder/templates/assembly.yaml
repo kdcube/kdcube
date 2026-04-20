@@ -85,7 +85,7 @@ secrets:
 
 paths:
   host_bundles_path: ""
-  host_git_bundles_path: ""
+  host_managed_bundles_path: ""
   host_git_ssh_key_path: ""
   host_git_ssh_known_hosts_path: ""
 

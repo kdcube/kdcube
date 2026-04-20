@@ -35,9 +35,9 @@ cp nginx/conf/nginx_proxy.conf ./config/nginx_proxy.conf
 2. Ensure bundle/exec paths are set (used by `chat-proc`):
 
 - `HOST_BUNDLES_PATH` = host folder for local path bundles
-- `AGENTIC_BUNDLES_ROOT` = local path bundle root inside container (usually `/bundles`)
-- `HOST_GIT_BUNDLES_PATH` = host folder for git-resolved bundle clones/cache
-- `AGENTIC_GIT_BUNDLES_ROOT` = git bundle root inside container (usually `/git-bundles`)
+- `BUNDLES_ROOT` = local path bundle root inside container (usually `/bundles`)
+- `HOST_MANAGED_BUNDLES_PATH` = host folder for managed bundles (git-resolved + examples)
+- `MANAGED_BUNDLES_ROOT` = managed bundle root inside container (usually `/managed-bundles`)
 - `HOST_BUNDLE_STORAGE_PATH` = host folder for shared bundle local storage
 - `BUNDLE_STORAGE_ROOT` = shared bundle local storage root inside container (e.g. `/bundle-storage`)
 - `HOST_EXEC_WORKSPACE_PATH` = host exec workspace
@@ -136,8 +136,8 @@ If you use the CLI installer, it pre‑creates `./logs/chat-ingress` and
 
 `chat-proc` **mounts bundles from the host**:
 
-- `HOST_BUNDLES_PATH` (host) → `AGENTIC_BUNDLES_ROOT` (container) for local path bundles
-- `HOST_GIT_BUNDLES_PATH` (host) → `AGENTIC_GIT_BUNDLES_ROOT` (container) for git-resolved bundle clones/cache
+- `HOST_BUNDLES_PATH` (host) → `BUNDLES_ROOT` (container) for local path bundles
+- `HOST_MANAGED_BUNDLES_PATH` (host) → `MANAGED_BUNDLES_ROOT` (container) for managed bundles
 
 **Knowledge space storage (doc/knowledge bundles):**
 

@@ -261,7 +261,7 @@ async def _initial_git_bundle_prefetch(app) -> None:
     """
     Resolve git-backed bundles before bundle preload and scheduler startup.
 
-    The registry already points repo-backed bundles at /git-bundles/... paths.
+    The registry already points repo-backed bundles at /managed-bundles/... paths.
     If scheduler reconcile runs before those paths exist, manifest loading fails
     on first startup and scheduled jobs are skipped until a later registry update.
     """
@@ -666,7 +666,7 @@ async def lifespan(app: FastAPI):
             )
 
         # Resolve git-backed bundles before preload/scheduler startup so the
-        # registry's /git-bundles/... paths exist when manifests are loaded.
+        # registry's /managed-bundles/... paths exist when manifests are loaded.
         await _initial_git_bundle_prefetch(app)
 
         app.state.bundles_preload_ready = True

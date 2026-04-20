@@ -33,11 +33,11 @@ HOST_BUNDLES_DESCRIPTOR_PATH=/absolute/path/to/bundles.yaml
 
 # Local path bundles root on host (mounted into /bundles)
 HOST_BUNDLES_PATH=/absolute/path/to/bundles
-AGENTIC_BUNDLES_ROOT=/bundles
+BUNDLES_ROOT=/bundles
 
-# Optional dedicated git bundles cache root (mounted into /git-bundles)
-HOST_GIT_BUNDLES_PATH=/absolute/path/to/git-bundles
-AGENTIC_GIT_BUNDLES_ROOT=/git-bundles
+# Managed bundles root on host (mounted into /managed-bundles)
+HOST_MANAGED_BUNDLES_PATH=/absolute/path/to/managed-bundles
+MANAGED_BUNDLES_ROOT=/managed-bundles
 
 # Optional SSH auth for private repos
 HOST_GIT_SSH_KEY_PATH=/absolute/path/to/.ssh/id_ed25519
@@ -53,8 +53,7 @@ These are mounted by compose into the runtime services that need them.
 Bundle path rule:
 
 - local manual bundles use `HOST_BUNDLES_PATH` and are visible inside proc as `/bundles/...`
-- git-described bundles are cloned under `HOST_GIT_BUNDLES_PATH` and are visible inside proc as `/git-bundles/...`
-- if `HOST_GIT_BUNDLES_PATH` is not configured, git bundles fall back to the legacy bundles root behavior
+- managed bundles are materialized under `HOST_MANAGED_BUNDLES_PATH` and are visible inside proc as `/managed-bundles/...`
 - local path bundle descriptors must point to `/bundles/...`, not to the raw host path
 
 Example:
@@ -93,7 +92,7 @@ BUNDLE_GIT_REDIS_LOCK_TTL_SECONDS=300
 BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS=60
 BUNDLE_GIT_ATOMIC=1
 
-AGENTIC_BUNDLES_ROOT=/bundles
+BUNDLES_ROOT=/bundles
 
 # Option A: writable secrets sidecar
 # Needed for admin UI to write secrets; values are sent to the sidecar.

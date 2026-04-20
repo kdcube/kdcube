@@ -17,7 +17,7 @@ from dotenv import find_dotenv, load_dotenv
 
 from kdcube_ai_app.apps.chat.sdk.runtime.external.detect_aws_env import check_and_apply_cloud_environment
 from kdcube_ai_app.apps.chat.sdk.runtime.external.base import build_external_exec_env
-from kdcube_ai_app.apps.chat.sdk.runtime.external.service_discovery import CONTAINER_BUNDLES_ROOT, CONTAINER_GIT_BUNDLES_ROOT, _path, \
+from kdcube_ai_app.apps.chat.sdk.runtime.external.service_discovery import CONTAINER_BUNDLES_ROOT, _path, \
     _translate_container_path_to_host, _is_running_in_docker, _resolve_redis_url_for_container, get_host_mount_paths
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 from kdcube_ai_app.infra.config import (
@@ -36,7 +36,7 @@ _SUPERVISOR_PRIVATE_KDCUBE_STORAGE_ROOT = _SUPERVISOR_PRIVATE_ROOT / "kdcube-sto
 _PROC_VISIBLE_ROOTS = (
     "/exec-workspace",
     "/bundles",
-    "/git-bundles",
+    "/managed-bundles",
     "/bundle-storage",
     "/kdcube-storage",
     "/tmp",
@@ -46,14 +46,14 @@ _PROC_VISIBLE_ROOTS = (
 def _log_path_translation_context(log: AgentLogger) -> None:
     host_mounts = get_host_mount_paths()
     host_bundles = host_mounts.bundles
-    host_git_bundles = host_mounts.git_bundles
+    host_managed_bundles = host_mounts.managed_bundles
     host_exec_workspace = host_mounts.exec_workspace
     host_bundle_storage = host_mounts.bundle_storage
     host_kdcube_storage = host_mounts.kdcube_storage
     log.log(
         "[docker.exec] path translation env "
         f"HOST_BUNDLES_PATH={host_bundles or '<unset>'} "
-        f"HOST_GIT_BUNDLES_PATH={host_git_bundles or '<unset>'} "
+        f"HOST_MANAGED_BUNDLES_PATH={host_managed_bundles or '<unset>'} "
         f"HOST_EXEC_WORKSPACE_PATH={host_exec_workspace or '<unset>'} "
         f"HOST_BUNDLE_STORAGE_PATH={host_bundle_storage or '<unset>'} "
         f"HOST_KDCUBE_STORAGE_PATH={host_kdcube_storage or '<unset>'}",
@@ -100,7 +100,7 @@ def _iter_locally_visible_mount_roots() -> list[pathlib.Path]:
     for raw_value in (
         host_mounts.kdcube_storage,
         host_mounts.bundles,
-        host_mounts.git_bundles,
+        host_mounts.managed_bundles,
         host_mounts.bundle_storage,
         host_mounts.exec_workspace,
     ):

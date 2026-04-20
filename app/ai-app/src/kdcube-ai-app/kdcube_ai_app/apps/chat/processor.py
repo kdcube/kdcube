@@ -37,7 +37,7 @@ from kdcube_ai_app.infra.plugin.git_bundle import (
     ensure_git_bundle_async,
     GitBundleCooldown,
     compute_git_bundle_paths,
-    resolve_git_bundles_root,
+    resolve_managed_bundles_root,
 )
 from kdcube_ai_app.storage.storage import create_storage_backend
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload, ServiceCtx, ConversationCtx
@@ -180,7 +180,7 @@ async def prefetch_git_bundles() -> dict[str, str]:
                 git_url=repo,
                 git_ref=entry.get("ref"),
                 git_subdir=entry.get("subdir"),
-                bundles_root=resolve_git_bundles_root(),
+                bundles_root=resolve_managed_bundles_root(),
             )
                 path_val = str(paths.bundle_root)
             except Exception:
@@ -199,7 +199,7 @@ async def prefetch_git_bundles() -> dict[str, str]:
                 git_url=repo,
                 git_ref=entry.get("ref"),
                 git_subdir=entry.get("subdir"),
-                bundles_root=resolve_git_bundles_root(),
+                bundles_root=resolve_managed_bundles_root(),
                 atomic=get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_ATOMIC,
             )
         except GitBundleCooldown as e:
@@ -1530,7 +1530,7 @@ class EnhancedChatRequestProcessor:
                         )
                         from kdcube_ai_app.infra.plugin.git_bundle import (
                             cleanup_old_git_bundles_async,
-                            resolve_bundles_root,
+                            resolve_managed_bundles_root,
                             bundle_dir_for_git,
                         )
                         from kdcube_ai_app.infra.plugin.bundle_refs import get_active_paths
@@ -1603,7 +1603,7 @@ class EnhancedChatRequestProcessor:
                                     base_dir = bundle_dir_for_git(_bid, entry.get("ref"))
                                     await cleanup_old_git_bundles_async(
                                         bundle_id=base_dir,
-                                        bundles_root=resolve_bundles_root(),
+                                        bundles_root=resolve_managed_bundles_root(),
                                         active_paths=active_paths,
                                     )
                                 await cleanup_old_bundle_storage_async(
@@ -1616,7 +1616,7 @@ class EnhancedChatRequestProcessor:
                             for _bid in _discover_example_bundle_ids():
                                 cleanup_old_shared_example_bundles(
                                     bundle_id=_bid,
-                                    bundles_root=resolve_bundles_root(),
+                                    bundles_root=resolve_managed_bundles_root(),
                                     active_paths=active_paths,
                                 )
                         except Exception as e:

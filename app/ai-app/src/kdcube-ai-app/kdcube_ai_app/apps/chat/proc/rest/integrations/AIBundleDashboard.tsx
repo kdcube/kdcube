@@ -14,7 +14,7 @@ interface AppSettings {
     defaultProject: string;
     defaultAppBundleId: string;
     hostBundlesPath: string;
-    agenticBundlesRoot: string;
+    bundlesRoot: string;
 }
 
 interface Scope {
@@ -105,7 +105,7 @@ class SettingsManager {
     private readonly PLACEHOLDER_PROJECT = '{{' + 'DEFAULT_PROJECT' + '}}';
     private readonly PLACEHOLDER_BUNDLE_ID = '{{' + 'DEFAULT_APP_BUNDLE_ID' + '}}';
     private readonly PLACEHOLDER_HOST_BUNDLES_PATH = '{{' + 'HOST_BUNDLES_PATH' + '}}';
-    private readonly PLACEHOLDER_AGENTIC_BUNDLES_ROOT = '{{' + 'AGENTIC_BUNDLES_ROOT' + '}}';
+    private readonly PLACEHOLDER_BUNDLES_ROOT = '{{' + 'BUNDLES_ROOT' + '}}';
 
     private settings: AppSettings = {
         baseUrl: '{{CHAT_BASE_URL}}',
@@ -116,7 +116,7 @@ class SettingsManager {
         defaultProject: '{{DEFAULT_PROJECT}}',
         defaultAppBundleId: '{{DEFAULT_APP_BUNDLE_ID}}',
         hostBundlesPath: '{{HOST_BUNDLES_PATH}}',
-        agenticBundlesRoot: '{{AGENTIC_BUNDLES_ROOT}}'
+        bundlesRoot: '{{BUNDLES_ROOT}}'
     };
 
     private configReceivedCallback: (() => void) | null = null;
@@ -175,10 +175,10 @@ class SettingsManager {
             : this.settings.hostBundlesPath;
     }
 
-    getAgenticBundlesRoot(): string {
-        return this.settings.agenticBundlesRoot === this.PLACEHOLDER_AGENTIC_BUNDLES_ROOT
+    getBundlesRoot(): string {
+        return this.settings.bundlesRoot === this.PLACEHOLDER_BUNDLES_ROOT
             ? ''
-            : this.settings.agenticBundlesRoot;
+            : this.settings.bundlesRoot;
     }
 
     updateSettings(partial: Partial<AppSettings>): void {
@@ -231,8 +231,8 @@ class SettingsManager {
                     if (config.hostBundlesPath) {
                         updates.hostBundlesPath = config.hostBundlesPath;
                     }
-                    if (config.agenticBundlesRoot) {
-                        updates.agenticBundlesRoot = config.agenticBundlesRoot;
+                    if (config.bundlesRoot) {
+                        updates.bundlesRoot = config.bundlesRoot;
                     }
 
                     if (Object.keys(updates).length > 0) {
@@ -252,7 +252,7 @@ class SettingsManager {
                     requestedFields: [
                         'baseUrl', 'accessToken', 'idToken', 'idTokenHeader',
                         'defaultTenant', 'defaultProject', 'defaultAppBundleId',
-                        'hostBundlesPath', 'agenticBundlesRoot'
+                        'hostBundlesPath', 'bundlesRoot'
                     ],
                     identity: identity
                 }
@@ -775,7 +775,7 @@ const AIBundleDashboard: React.FC = () => {
     }, [form.repo, form.ref, form.subdir, form.id]);
     const derivedAgenticPath = useMemo(() => {
         if (!form.repo) return '';
-        const root = settings.getAgenticBundlesRoot() || '<AGENTIC_BUNDLES_ROOT>';
+        const root = settings.getBundlesRoot() || '<BUNDLES_ROOT>';
         const id = form.id || '<bundle_id>';
         const ref = (form.ref || '').trim();
         const subdir = (form.subdir || '').trim();
@@ -1598,9 +1598,9 @@ const AIBundleDashboard: React.FC = () => {
                                     </code>
                                 </div>
                                 <div>
-                                    <span className="font-medium">AGENTIC_BUNDLES_ROOT:</span>{' '}
+                                    <span className="font-medium">BUNDLES_ROOT:</span>{' '}
                                     <code className="px-1 py-0.5 rounded bg-white border border-slate-200">
-                                        {settings.getAgenticBundlesRoot() || '—'}
+                                        {settings.getBundlesRoot() || '—'}
                                     </code>
                                 </div>
                                 <div>
@@ -1621,7 +1621,7 @@ const AIBundleDashboard: React.FC = () => {
                                 ) : null}
                                 {derivedAgenticPath ? (
                                     <div>
-                                        <span className="font-medium">Derived path (AGENTIC_BUNDLES_ROOT):</span>{' '}
+                                        <span className="font-medium">Derived path (BUNDLES_ROOT):</span>{' '}
                                         <code className="px-1 py-0.5 rounded bg-white border border-slate-200">{derivedAgenticPath}</code>
                                     </div>
                                 ) : null}

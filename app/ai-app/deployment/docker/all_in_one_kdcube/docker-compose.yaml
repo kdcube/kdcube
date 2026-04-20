@@ -218,16 +218,16 @@ services:
       - CLAMAV_PORT=3310
       - LOG_FILE_PREFIX=chat-ingress
       - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
-      - HOST_GIT_BUNDLES_PATH=${HOST_GIT_BUNDLES_PATH:-}
-      - AGENTIC_GIT_BUNDLES_ROOT=${AGENTIC_GIT_BUNDLES_ROOT:-/git-bundles}
+      - HOST_MANAGED_BUNDLES_PATH=${HOST_MANAGED_BUNDLES_PATH:-}
+      - MANAGED_BUNDLES_ROOT=${MANAGED_BUNDLES_ROOT:-/managed-bundles}
       - SECRETS_TOKEN=${SECRETS_TOKEN_INGRESS:-}
     volumes:
       - ${KDCUBE_DATA_DIR:-./data}/kdcube-storage:/kdcube-storage
       - ${KDCUBE_LOGS_DIR:-./logs}/chat-ingress:/logs
       - ${KDCUBE_CONFIG_DIR:-./config}:/config
       - type: bind
-        source: ${HOST_GIT_BUNDLES_PATH?}
-        target: ${AGENTIC_GIT_BUNDLES_ROOT:-/git-bundles}
+        source: ${HOST_MANAGED_BUNDLES_PATH?}
+        target: ${MANAGED_BUNDLES_ROOT:-/managed-bundles}
       - type: bind
         source: ${HOME}/.aws
         target: /home/appuser/.aws
@@ -262,10 +262,11 @@ services:
       - LOG_FILE_PREFIX=chat-proc
       - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
       - HOST_BUNDLES_PATH=${HOST_BUNDLES_PATH}
-      - HOST_GIT_BUNDLES_PATH=${HOST_GIT_BUNDLES_PATH:-}
+      - HOST_MANAGED_BUNDLES_PATH=${HOST_MANAGED_BUNDLES_PATH:-}
       - HOST_BUNDLE_STORAGE_PATH=${HOST_BUNDLE_STORAGE_PATH}
       - HOST_EXEC_WORKSPACE_PATH=${HOST_EXEC_WORKSPACE_PATH}
-      - AGENTIC_GIT_BUNDLES_ROOT=${AGENTIC_GIT_BUNDLES_ROOT:-/git-bundles}
+      - BUNDLES_ROOT=${BUNDLES_ROOT:-/bundles}
+      - MANAGED_BUNDLES_ROOT=${MANAGED_BUNDLES_ROOT:-/managed-bundles}
       - SECRETS_TOKEN=${SECRETS_TOKEN_PROC:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -275,10 +276,10 @@ services:
       - ${KDCUBE_CONFIG_DIR:-./config}:/config
       - type: bind
         source: ${HOST_BUNDLES_PATH?}           # host root with all bundles
-        target: ${AGENTIC_BUNDLES_ROOT?}       # e.g. /bundles inside the container
+        target: ${BUNDLES_ROOT:-/bundles}      # e.g. /bundles inside the container
       - type: bind
-        source: ${HOST_GIT_BUNDLES_PATH?}  # host root for git-resolved bundle clones/cache
-        target: ${AGENTIC_GIT_BUNDLES_ROOT:-/git-bundles}
+        source: ${HOST_MANAGED_BUNDLES_PATH?}  # host root for platform-managed bundles
+        target: ${MANAGED_BUNDLES_ROOT:-/managed-bundles}
       - type: bind
         source: ${HOST_BUNDLE_STORAGE_PATH?}   # host root for bundle shared storage (knowledge space)
         target: ${BUNDLE_STORAGE_ROOT?}        # e.g. /bundle-storage inside the container

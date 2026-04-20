@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
+from kdcube_ai_app.infra.git import auth as git_auth
 from kdcube_ai_app.infra.plugin import git_bundle
 
 
@@ -15,6 +17,24 @@ def _clear_git_bundle_fail_state():
     git_bundle._FAIL_STATE.clear()
     yield
     git_bundle._FAIL_STATE.clear()
+
+
+def _settings_for_roots(*, host_bundles=None, host_managed=None, managed_root="/managed-bundles", always_pull=False):
+    return SimpleNamespace(
+        HOST_BUNDLES_PATH=host_bundles,
+        HOST_MANAGED_BUNDLES_PATH=host_managed,
+        PLATFORM=SimpleNamespace(
+            APPLICATIONS=SimpleNamespace(
+                BUNDLES_ROOT="/bundles",
+                MANAGED_BUNDLES_ROOT=managed_root,
+                GIT=SimpleNamespace(
+                    BUNDLE_GIT_FAIL_BACKOFF_SECONDS=60,
+                    BUNDLE_GIT_FAIL_MAX_BACKOFF_SECONDS=300,
+                    BUNDLE_GIT_ALWAYS_PULL=always_pull,
+                ),
+            )
+        ),
+    )
 
 
 def test_ensure_git_bundle_holds_local_lock_during_git_operations(monkeypatch, tmp_path):
@@ -51,7 +71,6 @@ def test_ensure_git_bundle_holds_local_lock_during_git_operations(monkeypatch, t
     monkeypatch.setattr(git_bundle, "_bundle_lock", _fake_bundle_lock)
     monkeypatch.setattr(git_bundle, "_build_git_env", lambda: {})
     monkeypatch.setattr(git_bundle, "_git_depth", lambda: None)
-    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(git_bundle, "_run_git", _fake_run_git)
 
     paths = git_bundle.ensure_git_bundle(
@@ -64,27 +83,31 @@ def test_ensure_git_bundle_holds_local_lock_during_git_operations(monkeypatch, t
     assert paths.repo_root.exists()
 
 
-def test_resolve_git_bundles_root_prefers_dedicated_git_roots(monkeypatch, tmp_path):
+def test_resolve_managed_bundles_root_prefers_dedicated_managed_root(monkeypatch, tmp_path):
     host_git_root = tmp_path / "host-git"
     host_git_root.mkdir()
     fallback_root = tmp_path / "fallback"
     fallback_root.mkdir()
 
-    monkeypatch.setenv("HOST_GIT_BUNDLES_PATH", str(host_git_root))
-    monkeypatch.setenv("AGENTIC_GIT_BUNDLES_ROOT", str(fallback_root))
+    monkeypatch.setattr(
+        git_bundle,
+        "get_settings",
+        lambda: _settings_for_roots(host_managed=str(host_git_root), managed_root=str(fallback_root)),
+    )
 
-    assert git_bundle.resolve_git_bundles_root() == host_git_root.resolve()
+    assert git_bundle.resolve_managed_bundles_root() == host_git_root.resolve()
 
 
-def test_resolve_git_bundles_root_falls_back_to_legacy_root(monkeypatch, tmp_path):
-    legacy_root = tmp_path / "legacy-bundles"
-    legacy_root.mkdir()
+def test_resolve_managed_bundles_root_defaults_to_container_root(monkeypatch):
+    container_root = "/managed-bundles"
 
-    monkeypatch.delenv("HOST_GIT_BUNDLES_PATH", raising=False)
-    monkeypatch.delenv("AGENTIC_GIT_BUNDLES_ROOT", raising=False)
-    monkeypatch.setenv("HOST_BUNDLES_PATH", str(legacy_root))
+    monkeypatch.setattr(
+        git_bundle,
+        "get_settings",
+        lambda: _settings_for_roots(host_managed=None, managed_root=container_root),
+    )
 
-    assert git_bundle.resolve_git_bundles_root() == legacy_root.resolve()
+    assert git_bundle.resolve_managed_bundles_root() == git_bundle.pathlib.Path(container_root).resolve()
 
 
 def test_build_git_env_uses_known_hosts_without_explicit_key(monkeypatch):
@@ -94,6 +117,23 @@ def test_build_git_env_uses_known_hosts_without_explicit_key(monkeypatch):
     monkeypatch.setenv("GIT_SSH_STRICT_HOST_KEY_CHECKING", "yes")
     monkeypatch.delenv("GIT_HTTP_TOKEN", raising=False)
     monkeypatch.delenv("GIT_HTTP_USER", raising=False)
+    monkeypatch.setattr(
+        git_auth,
+        "get_settings",
+        lambda: SimpleNamespace(
+            GIT_HTTP_TOKEN=None,
+            GIT_HTTP_USER=None,
+            PLATFORM=SimpleNamespace(
+                APPLICATIONS=SimpleNamespace(
+                    GIT=SimpleNamespace(
+                        GIT_SSH_KEY_PATH=None,
+                        GIT_SSH_KNOWN_HOSTS="/run/secrets/git_known_hosts",
+                        GIT_SSH_STRICT_HOST_KEY_CHECKING="yes",
+                    )
+                )
+            ),
+        ),
+    )
 
     env = git_bundle._build_git_env()
 
@@ -109,6 +149,23 @@ def test_build_git_env_still_includes_key_when_present(monkeypatch):
     monkeypatch.setenv("GIT_SSH_STRICT_HOST_KEY_CHECKING", "yes")
     monkeypatch.delenv("GIT_HTTP_TOKEN", raising=False)
     monkeypatch.delenv("GIT_HTTP_USER", raising=False)
+    monkeypatch.setattr(
+        git_auth,
+        "get_settings",
+        lambda: SimpleNamespace(
+            GIT_HTTP_TOKEN=None,
+            GIT_HTTP_USER=None,
+            PLATFORM=SimpleNamespace(
+                APPLICATIONS=SimpleNamespace(
+                    GIT=SimpleNamespace(
+                        GIT_SSH_KEY_PATH="/run/secrets/git_ssh_key",
+                        GIT_SSH_KNOWN_HOSTS="/run/secrets/git_known_hosts",
+                        GIT_SSH_STRICT_HOST_KEY_CHECKING="yes",
+                    )
+                )
+            ),
+        ),
+    )
 
     env = git_bundle._build_git_env()
 
@@ -163,10 +220,9 @@ def test_ensure_git_bundle_skips_pull_for_detached_ref(monkeypatch, tmp_path):
     monkeypatch.setattr(git_bundle, "_bundle_lock", _fake_bundle_lock)
     monkeypatch.setattr(git_bundle, "_build_git_env", lambda: {})
     monkeypatch.setattr(git_bundle, "_git_depth", lambda: None)
-    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(git_bundle, "_run_git", _fake_run_git)
     monkeypatch.setattr(git_bundle.subprocess, "run", _fake_subprocess_run)
-    monkeypatch.setenv("BUNDLE_GIT_ALWAYS_PULL", "1")
+    monkeypatch.setattr(git_bundle, "get_settings", lambda: _settings_for_roots(always_pull=True))
 
     paths = git_bundle.compute_git_bundle_paths(
         bundle_id="demo",
@@ -221,10 +277,9 @@ def test_ensure_git_bundle_pulls_for_attached_branch(monkeypatch, tmp_path):
     monkeypatch.setattr(git_bundle, "_bundle_lock", _fake_bundle_lock)
     monkeypatch.setattr(git_bundle, "_build_git_env", lambda: {})
     monkeypatch.setattr(git_bundle, "_git_depth", lambda: None)
-    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(git_bundle, "_run_git", _fake_run_git)
     monkeypatch.setattr(git_bundle.subprocess, "run", _fake_subprocess_run)
-    monkeypatch.setenv("BUNDLE_GIT_ALWAYS_PULL", "1")
+    monkeypatch.setattr(git_bundle, "get_settings", lambda: _settings_for_roots(always_pull=True))
 
     paths = git_bundle.compute_git_bundle_paths(
         bundle_id="demo",
@@ -278,10 +333,9 @@ def test_ensure_git_bundle_raises_when_branch_reset_fails(monkeypatch, tmp_path)
     monkeypatch.setattr(git_bundle, "_bundle_lock", _fake_bundle_lock)
     monkeypatch.setattr(git_bundle, "_build_git_env", lambda: {})
     monkeypatch.setattr(git_bundle, "_git_depth", lambda: None)
-    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(git_bundle, "_run_git", _fake_run_git)
     monkeypatch.setattr(git_bundle.subprocess, "run", _fake_subprocess_run)
-    monkeypatch.setenv("BUNDLE_GIT_ALWAYS_PULL", "1")
+    monkeypatch.setattr(git_bundle, "get_settings", lambda: _settings_for_roots(always_pull=True))
 
     paths = git_bundle.compute_git_bundle_paths(
         bundle_id="demo",
@@ -329,10 +383,9 @@ def test_ensure_git_bundle_raises_when_fetch_fails(monkeypatch, tmp_path):
     monkeypatch.setattr(git_bundle, "_bundle_lock", _fake_bundle_lock)
     monkeypatch.setattr(git_bundle, "_build_git_env", lambda: {})
     monkeypatch.setattr(git_bundle, "_git_depth", lambda: None)
-    monkeypatch.setattr(git_bundle, "get_secret", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(git_bundle, "_run_git", _fake_run_git)
     monkeypatch.setattr(git_bundle.subprocess, "run", _fake_subprocess_run)
-    monkeypatch.setenv("BUNDLE_GIT_ALWAYS_PULL", "1")
+    monkeypatch.setattr(git_bundle, "get_settings", lambda: _settings_for_roots(always_pull=True))
 
     paths = git_bundle.compute_git_bundle_paths(
         bundle_id="demo",

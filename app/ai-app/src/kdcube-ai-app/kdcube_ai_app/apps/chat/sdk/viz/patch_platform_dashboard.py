@@ -22,7 +22,7 @@ def patch_dashboard_f(
         default_project: str = "demo",
         default_app_bundle_id: str = "kdcube.codegen.orchestrator",
         host_bundles_path: Optional[str] = None,
-        agentic_bundles_root: Optional[str] = None,
+        bundles_root: Optional[str] = None,
         access_token: Optional[str] = None,
         id_token: Optional[str] = None,
         id_token_header: str = "X-ID-Token"
@@ -39,7 +39,7 @@ def patch_dashboard_f(
         {{DEFAULT_PROJECT}} -> default project
         {{DEFAULT_APP_BUNDLE_ID}} -> default app bundle ID
         {{HOST_BUNDLES_PATH}} -> host bundles root (if set)
-        {{AGENTIC_BUNDLES_ROOT}} -> container bundles root (if set)
+        {{BUNDLES_ROOT}} -> container bundles root (if set)
     """
 
     print(f"Reading from: {input_file}")
@@ -55,7 +55,7 @@ def patch_dashboard_f(
         '{{DEFAULT_PROJECT}}': default_project,
         '{{DEFAULT_APP_BUNDLE_ID}}': default_app_bundle_id,
         '{{HOST_BUNDLES_PATH}}': host_bundles_path or '',
-        '{{AGENTIC_BUNDLES_ROOT}}': agentic_bundles_root or ''
+        '{{BUNDLES_ROOT}}': bundles_root or ''
     }
 
     for placeholder, value in replacements.items():
@@ -84,7 +84,7 @@ def patch_dashboard(
         default_project: str = "demo",
         default_app_bundle_id: str = "with.codegen",
         host_bundles_path: Optional[str] = None,
-        agentic_bundles_root: Optional[str] = None,
+        bundles_root: Optional[str] = None,
         access_token: Optional[str] = None,
         id_token: Optional[str] = None,
         id_token_header: str = "X-ID-Token"
@@ -109,7 +109,7 @@ def patch_dashboard(
         '{{DEFAULT_PROJECT}}': default_project,
         '{{DEFAULT_APP_BUNDLE_ID}}': default_app_bundle_id,
         '{{HOST_BUNDLES_PATH}}': host_bundles_path or '',
-        '{{AGENTIC_BUNDLES_ROOT}}': agentic_bundles_root or ''
+        '{{BUNDLES_ROOT}}': bundles_root or ''
     }
 
     output_content = input_content

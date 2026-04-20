@@ -26,7 +26,7 @@ REDIS_KEY_FMT = namespaces.CONFIG.BUNDLES.BUNDLE_MAPPING_KEY_FMT
 REDIS_CHANNEL_FMT = namespaces.CONFIG.BUNDLES.UPDATE_CHANNEL
 ADMIN_BUNDLE_ID = "kdcube.admin"
 _EXAMPLES_REL_PATH = Path("apps/chat/sdk/examples/bundles")
-_SHARED_BUNDLES_ROOT = Path("/bundles")
+_DEFAULT_MANAGED_BUNDLES_ROOT = Path("/managed-bundles")
 _log = logging.getLogger(__name__)
 
 
@@ -44,9 +44,17 @@ def _admin_bundle_entry() -> "BundleEntry":
 def _examples_root() -> Path:
     return (Path(__file__).resolve().parents[2] / _EXAMPLES_REL_PATH).resolve()
 
+def _shared_bundles_root() -> Path:
+    try:
+        from kdcube_ai_app.infra.plugin.git_bundle import resolve_managed_bundles_root
+
+        return resolve_managed_bundles_root()
+    except Exception:
+        return _DEFAULT_MANAGED_BUNDLES_ROOT
+
 def _example_bundle_lock_path(bundle_name: str) -> Path:
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", ".", "@") else "-" for ch in bundle_name)
-    lock_dir = _SHARED_BUNDLES_ROOT / ".example-bundle-locks"
+    lock_dir = _shared_bundles_root() / ".example-bundle-locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     return lock_dir / f"{safe}.lock"
 
@@ -73,10 +81,11 @@ def _current_platform_ref() -> Optional[str]:
     return None
 
 def _shared_example_bundle_dir(bundle_name: str, version: str) -> Path:
+    root = _shared_bundles_root()
     platform_ref = _current_platform_ref()
     if platform_ref:
-        return _SHARED_BUNDLES_ROOT / f"{bundle_name}__{platform_ref}__{version[:12]}"
-    return _SHARED_BUNDLES_ROOT / f"{bundle_name}__{version[:12]}"
+        return root / f"{bundle_name}__{platform_ref}__{version[:12]}"
+    return root / f"{bundle_name}__{version[:12]}"
 
 def cleanup_old_shared_example_bundles(
     *,
@@ -86,7 +95,7 @@ def cleanup_old_shared_example_bundles(
     ttl_hours: Optional[int] = None,
     active_paths: Optional[set[str] | list[str] | tuple[str, ...]] = None,
 ) -> int:
-    root = bundles_root or _SHARED_BUNDLES_ROOT
+    root = bundles_root or _shared_bundles_root()
     if not root.exists():
         return 0
 
@@ -152,8 +161,8 @@ def cleanup_old_shared_example_bundles(
 
 def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
     """
-    If running in Docker, copy example bundles from the image into /bundles
-    so sibling containers (py-code-exec) can mount them.
+    If running in Docker, copy example bundles from the image into the shared
+    managed bundles root so sibling containers can mount them.
     """
     if not _is_running_in_docker():
         return bundle_root

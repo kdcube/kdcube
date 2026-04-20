@@ -468,6 +468,119 @@ def _resolve_live_bundle_export_sources(
     return bundles_path, bundles_secrets_path if bundles_secrets_path.exists() else None
 
 
+def _collect_runtime_info(*, repo_root: Path, workdir: Path) -> dict[str, object]:
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    env_main_path = ctx.config_dir / ".env"
+    env_main = installer_mod.load_env_file(env_main_path) if env_main_path.exists() else None
+    assembly_path = ctx.config_dir / "assembly.yaml"
+    assembly = installer_mod.load_release_descriptor_soft(assembly_path)
+    bundles_path = ctx.config_dir / "bundles.yaml"
+    bundles_data = installer_mod.load_release_descriptor_soft(bundles_path)
+    bundles = bundles_data.get("bundles") if isinstance(bundles_data, dict) and "bundles" in bundles_data else bundles_data
+    bundle_items = []
+    default_bundle_id = None
+    if isinstance(bundles, dict):
+        default_bundle_id = bundles.get("default_bundle_id")
+        items = bundles.get("items")
+        if isinstance(items, list):
+            bundle_items = [item for item in items if isinstance(item, dict)]
+        else:
+            for key, value in bundles.items():
+                if key in {"version", "default_bundle_id"}:
+                    continue
+                if isinstance(value, dict):
+                    spec = dict(value)
+                    spec.setdefault("id", str(key))
+                    bundle_items.append(spec)
+    install_meta = _read_install_meta_raw(ctx.workdir) or {}
+    env_entries = env_main.entries if env_main is not None else {}
+
+    def _env_value(name: str) -> str | None:
+        raw = env_entries.get(name, (None, None))[1] if env_entries else None
+        value = _strip_env_value(raw)
+        return value or None
+
+    return {
+        "workdir": str(ctx.workdir),
+        "config_dir": str(ctx.config_dir),
+        "data_dir": str(ctx.data_dir),
+        "docker_dir": str(ctx.docker_dir),
+        "repo_root": str(repo_root),
+        "install_meta": install_meta,
+        "assembly_path": str(assembly_path) if assembly_path.exists() else None,
+        "bundles_path": str(bundles_path) if bundles_path.exists() else None,
+        "default_bundle_id": default_bundle_id,
+        "bundle_count": len(bundle_items),
+        "host_bundles_path": _env_value("HOST_BUNDLES_PATH"),
+        "container_bundles_root": _env_value("BUNDLES_ROOT"),
+        "host_managed_bundles_path": _env_value("HOST_MANAGED_BUNDLES_PATH"),
+        "container_managed_bundles_root": _env_value("MANAGED_BUNDLES_ROOT"),
+        "host_bundle_storage_path": _env_value("HOST_BUNDLE_STORAGE_PATH"),
+        "container_bundle_storage_root": _env_value("BUNDLE_STORAGE_ROOT"),
+        "host_exec_workspace_path": _env_value("HOST_EXEC_WORKSPACE_PATH"),
+        "compose_mode": _env_value("KDCUBE_COMPOSE_MODE"),
+        "tenant": _get_nested(assembly, "context", "tenant"),
+        "project": _get_nested(assembly, "context", "project"),
+    }
+
+
+def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> None:
+    info = _collect_runtime_info(repo_root=repo_root, workdir=workdir)
+
+    console.print("[bold]KDCube Runtime Info[/bold]")
+    console.print(f"[dim]Workdir:[/dim] {info['workdir']}")
+    console.print(f"[dim]Config dir:[/dim] {info['config_dir']}")
+    console.print(f"[dim]Data dir:[/dim] {info['data_dir']}")
+    console.print(f"[dim]Docker dir:[/dim] {info['docker_dir']}")
+    console.print(f"[dim]Repo root:[/dim] {info['repo_root']}")
+
+    install_meta = info["install_meta"] if isinstance(info["install_meta"], dict) else {}
+    if install_meta:
+        console.print(f"[dim]Install mode:[/dim] {install_meta.get('install_mode') or 'unknown'}")
+        console.print(f"[dim]Platform ref:[/dim] {install_meta.get('platform_ref') or 'unknown'}")
+
+    console.print(f"[dim]Tenant / project:[/dim] {info['tenant'] or 'unknown'} / {info['project'] or 'unknown'}")
+    console.print(f"[dim]Compose mode:[/dim] {info['compose_mode'] or 'unknown'}")
+    console.print(f"[dim]Assembly descriptor:[/dim] {info['assembly_path'] or 'missing'}")
+    console.print(f"[dim]Bundles descriptor:[/dim] {info['bundles_path'] or 'missing'}")
+    console.print(
+        f"[dim]Bundle registry snapshot:[/dim] default={info['default_bundle_id'] or '<none>'}, "
+        f"items={info['bundle_count']}"
+    )
+
+    console.print("\n[bold]Bundle Mounts[/bold]")
+    console.print(f"[dim]Host non-managed bundles:[/dim] {info['host_bundles_path'] or 'unset'}")
+    console.print(f"[dim]Container non-managed bundles root:[/dim] {info['container_bundles_root'] or 'unset'}")
+    console.print(f"[dim]Host managed bundles:[/dim] {info['host_managed_bundles_path'] or 'unset'}")
+    console.print(f"[dim]Container managed bundles root:[/dim] {info['container_managed_bundles_root'] or 'unset'}")
+    console.print(f"[dim]Host bundle storage:[/dim] {info['host_bundle_storage_path'] or 'unset'}")
+    console.print(f"[dim]Container bundle storage root:[/dim] {info['container_bundle_storage_root'] or 'unset'}")
+    console.print(f"[dim]Host exec workspace:[/dim] {info['host_exec_workspace_path'] or 'unset'}")
+
+    host_bundles_path = str(info["host_bundles_path"] or "").strip()
+    container_bundles_root = str(info["container_bundles_root"] or "").strip()
+    if host_bundles_path and container_bundles_root:
+        console.print("\n[bold]Non-git Bundle Path Rule[/bold]")
+        console.print(
+            "A non-managed local-path bundle host path must live under the host non-managed bundles root. "
+            "In bundles.yaml, use the matching container path under the container non-managed bundles root."
+        )
+        console.print(f"[dim]Example mapping:[/dim] {host_bundles_path}/my.bundle -> {container_bundles_root}/my.bundle")
+
+    host_managed_bundles_path = str(info["host_managed_bundles_path"] or "").strip()
+    container_managed_bundles_root = str(info["container_managed_bundles_root"] or "").strip()
+    if host_managed_bundles_path and container_managed_bundles_root:
+        console.print("\n[bold]Managed Bundle Path Rule[/bold]")
+        console.print(
+            "Platform-managed bundles are materialized under the managed bundles root. "
+            "This includes git-resolved bundles and built-in example bundles."
+        )
+        console.print(
+            f"[dim]Example mapping:[/dim] {host_managed_bundles_path}/repo__bundle.demo__main "
+            f"-> {container_managed_bundles_root}/repo__bundle.demo__main"
+        )
+
+
 def _load_bundle_ids_from_descriptor(path: Path) -> set[str]:
     if not path.exists():
         raise SystemExit(f"Bundle descriptor source not found: {path}")
@@ -1183,6 +1296,11 @@ def main() -> None:
         help="Reapply runtime workspace bundles.yaml and clear proc bundle caches for local development. Validates that the given bundle id exists in the current descriptor.",
     )
     parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Print resolved runtime info for the selected workdir, including descriptor files, install metadata, and host/container bundle mount mappings.",
+    )
+    parser.add_argument(
         "--export-live-bundles",
         action="store_true",
         help="Export the current effective live bundles.yaml and bundles.secrets.yaml from the active bundle authority.",
@@ -1321,6 +1439,18 @@ def main() -> None:
                 ),
                 workdir=_resolve_cli_workdir(workdir),
                 bundle_id=str(args.bundle_reload).strip(),
+            )
+            return
+        if args.info:
+            resolved_workdir = _resolve_cli_workdir(workdir)
+            print_runtime_info(
+                console,
+                repo_root=_resolve_cli_repo_path(
+                    repo_path,
+                    workdir=resolved_workdir,
+                    path_provided=path_provided,
+                ),
+                workdir=resolved_workdir,
             )
             return
         if (

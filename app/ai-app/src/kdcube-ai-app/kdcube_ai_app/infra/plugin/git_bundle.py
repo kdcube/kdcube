@@ -85,12 +85,13 @@ def _clear_fail(key: str) -> None:
 
 def resolve_bundles_root() -> pathlib.Path:
     """
-    Resolve bundles root on the current host.
-    Prefer HOST_BUNDLES_PATH (host filesystem), then AGENTIC_BUNDLES_ROOT.
+    Resolve the non-managed local-path bundle root on the current host.
+    Prefer the descriptor-backed local bundles root; fall back to the container
+    non-managed bundles root.
     """
     settings = get_settings()
-    host_root = str(getattr(settings, "HOST_BUNDLES_PATH", None) or os.environ.get("HOST_BUNDLES_PATH") or "").strip()
-    agentic_root = settings.PLATFORM.APPLICATIONS.AGENTIC_BUNDLES_ROOT
+    host_root = str(getattr(settings, "HOST_BUNDLES_PATH", None) or "").strip()
+    bundles_root = settings.PLATFORM.APPLICATIONS.BUNDLES_ROOT
     if host_root:
         host_path = pathlib.Path(host_root).expanduser()
         try:
@@ -100,10 +101,10 @@ def resolve_bundles_root() -> pathlib.Path:
         if host_path.exists():
             return host_path
         log = AgentLogger("git.bundle")
-        if agentic_root:
+        if bundles_root:
             log.log(
                 f"HOST_BUNDLES_PATH points to missing path {host_path}; "
-                f"using AGENTIC_BUNDLES_ROOT={agentic_root}",
+                f"using BUNDLES_ROOT={bundles_root}",
                 level="WARNING",
             )
         else:
@@ -111,25 +112,24 @@ def resolve_bundles_root() -> pathlib.Path:
                 f"HOST_BUNDLES_PATH points to missing path {host_path}; falling back to /bundles",
                 level="WARNING",
             )
-    root = agentic_root or "/bundles"
+    root = bundles_root or "/bundles"
     return pathlib.Path(root).expanduser().resolve()
 
 
-def resolve_git_bundles_root() -> pathlib.Path:
+def resolve_managed_bundles_root() -> pathlib.Path:
     """
-    Resolve the root used for materialized git-backed bundles.
+    Resolve the root used for platform-managed bundles materialized by KDCube.
 
     Preferred order:
-    1. HOST_GIT_BUNDLES_PATH (host filesystem)
-    2. AGENTIC_GIT_BUNDLES_ROOT (container path)
-    3. legacy bundles root fallback
+    1. HOST_MANAGED_BUNDLES_PATH (host filesystem)
+    2. MANAGED_BUNDLES_ROOT (container path)
 
-    This keeps existing cloud/ECS behavior unchanged until a dedicated git root
-    is explicitly configured.
+    Managed bundles include git-resolved bundles and platform-shipped example
+    bundles. User-managed local path bundles stay under the non-managed root.
     """
     settings = get_settings()
-    host_root = str(getattr(settings, "HOST_GIT_BUNDLES_PATH", None) or os.environ.get("HOST_GIT_BUNDLES_PATH") or "").strip()
-    agentic_root = os.environ.get("AGENTIC_GIT_BUNDLES_ROOT")
+    host_root = str(getattr(settings, "HOST_MANAGED_BUNDLES_PATH", None) or "").strip()
+    agentic_root = str(getattr(settings.PLATFORM.APPLICATIONS, "MANAGED_BUNDLES_ROOT", None) or "").strip()
     if host_root:
         host_path = pathlib.Path(host_root).expanduser()
         try:
@@ -141,19 +141,19 @@ def resolve_git_bundles_root() -> pathlib.Path:
         log = AgentLogger("git.bundle")
         if agentic_root:
             log.log(
-                f"HOST_GIT_BUNDLES_PATH points to missing path {host_path}; "
-                f"using AGENTIC_GIT_BUNDLES_ROOT={agentic_root}",
+                f"HOST_MANAGED_BUNDLES_PATH points to missing path {host_path}; "
+                f"using MANAGED_BUNDLES_ROOT={agentic_root}",
                 level="WARNING",
             )
         else:
             log.log(
-                f"HOST_GIT_BUNDLES_PATH points to missing path {host_path}; "
-                "falling back to the legacy bundles root",
+                f"HOST_MANAGED_BUNDLES_PATH points to missing path {host_path}; "
+                "falling back to /managed-bundles",
                 level="WARNING",
             )
     if agentic_root:
         return pathlib.Path(agentic_root).expanduser().resolve()
-    return resolve_bundles_root()
+    return pathlib.Path("/managed-bundles").expanduser().resolve()
 
 
 def _repo_name_from_url(url: str) -> str:
@@ -311,7 +311,7 @@ def compute_git_bundle_paths(
     git_subdir: Optional[str] = None,
     bundles_root: Optional[pathlib.Path] = None,
 ) -> GitBundlePaths:
-    root = bundles_root or resolve_git_bundles_root()
+    root = bundles_root or resolve_managed_bundles_root()
     bid = (bundle_id or "").strip()
     folder = _bundle_dir_name_for_git(bid or None, git_url, git_ref)
     repo_root = (root / folder).resolve()
@@ -383,7 +383,7 @@ def ensure_git_bundle(
     if normalized_git_url != git_url:
         log.log(f"[git.bundle] using HTTPS for {git_url}", level="INFO")
         git_url = normalized_git_url
-    root = bundles_root or resolve_git_bundles_root()
+    root = bundles_root or resolve_managed_bundles_root()
     fail_key = _fail_key(git_url=git_url, bundle_id=bundle_id, git_ref=git_ref)
     _check_fail_cooldown(fail_key)
     force_pull = get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_ALWAYS_PULL
@@ -520,7 +520,7 @@ def cleanup_old_git_bundles(
     Remove old atomic bundle dirs. Returns number removed.
     """
     log = logger or AgentLogger("git.bundle")
-    root = bundles_root or resolve_git_bundles_root()
+    root = bundles_root or resolve_managed_bundles_root()
     keep = keep if keep is not None else get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_KEEP
     ttl_hours = ttl_hours if ttl_hours is not None else get_settings().PLATFORM.APPLICATIONS.GIT.BUNDLE_GIT_TTL_HOURS
     prefix = f"{bundle_id}__"

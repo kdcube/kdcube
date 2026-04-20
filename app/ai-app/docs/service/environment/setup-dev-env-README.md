@@ -43,7 +43,7 @@ BUNDLE_GIT_REDIS_LOCK_WAIT_SECONDS=60
 BUNDLE_GIT_ATOMIC=1
 
 # Where bundles are stored on disk
-AGENTIC_BUNDLES_ROOT=/absolute/path/to/bundles
+BUNDLES_ROOT=/absolute/path/to/bundles
 
 # Option A: writable secrets sidecar
 SECRETS_PROVIDER=secrets-service

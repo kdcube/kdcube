@@ -323,21 +323,21 @@ Local bundle root contract:
 - `assembly.paths.host_kdcube_storage_path` becomes `HOST_KDCUBE_STORAGE_PATH`
 - `assembly.paths.host_bundle_storage_path` becomes `HOST_BUNDLE_STORAGE_PATH`
 - `assembly.paths.host_exec_workspace_path` becomes `HOST_EXEC_WORKSPACE_PATH`
-- `assembly.paths.host_bundles_path` is installer-facing config and is written to `HOST_BUNDLES_PATH`
-- compose mounts `HOST_BUNDLES_PATH` into proc as `AGENTIC_BUNDLES_ROOT` (normally `/bundles`)
-- bundle entries in `bundles.yaml` must therefore use the container-visible path, for example:
+- `assembly.paths.host_bundles_path` is installer-facing config for non-managed local path bundles and is written to `HOST_BUNDLES_PATH`
+- compose mounts `HOST_BUNDLES_PATH` into proc as `BUNDLES_ROOT` (normally `/bundles`)
+- non-managed local bundle entries in `bundles.yaml` must therefore use the container-visible path, for example:
   - host folder: `/Users/you/dev/bundles/my.bundle`
   - descriptor path: `/bundles/my.bundle`
 
-- `assembly.paths.host_git_bundles_path` optionally becomes `HOST_GIT_BUNDLES_PATH`
-- compose mounts `HOST_GIT_BUNDLES_PATH` into proc as `AGENTIC_GIT_BUNDLES_ROOT` (normally `/git-bundles`)
+- `assembly.paths.host_managed_bundles_path` becomes `HOST_MANAGED_BUNDLES_PATH`
+- compose mounts `HOST_MANAGED_BUNDLES_PATH` into proc as `MANAGED_BUNDLES_ROOT` (normally `/managed-bundles`)
 - runtime code now reads these promoted values via `get_settings()` when it needs host/container path translation
 
-Git bundle resolution uses the dedicated git cache root when configured:
+Managed bundle materialization uses the dedicated managed root:
 
-- local path bundles continue to use `HOST_BUNDLES_PATH` and `/bundles/...`
-- git bundles are cloned under `HOST_GIT_BUNDLES_PATH` and resolved inside proc as `/git-bundles/...`
-- if no dedicated git root is configured, git bundles fall back to the legacy bundles root behavior
+- non-managed local path bundles continue to use `HOST_BUNDLES_PATH` and `/bundles/...`
+- git bundles are cloned under `HOST_MANAGED_BUNDLES_PATH` and resolved inside proc as `/managed-bundles/...`
+- built-in example bundles are also materialized under the managed root
 
 Symlink note:
 
@@ -479,7 +479,7 @@ You can override any value:
 ```
 kdcube env init --mode dev-host --repo ... \
   --set EXEC_WORKSPACE_ROOT=/path/to/exec \
-  --set AGENTIC_BUNDLES_ROOT=/bundles
+  --set BUNDLES_ROOT=/bundles
 ```
 
 Overrides apply **after** merge rules.

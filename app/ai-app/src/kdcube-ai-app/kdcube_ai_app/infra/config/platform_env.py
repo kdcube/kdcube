@@ -127,6 +127,7 @@ PLATFORM_ENV_GROUPS: dict[str, tuple[str, ...]] = {
         "BUNDLES_FORCE_ENV_ON_STARTUP",
         "BUNDLES_INCLUDE_EXAMPLES",
         "BUNDLES_PRELOAD_LOCK_TTL_SECONDS",
+        "HOST_MANAGED_BUNDLES_PATH",
         "GIT_HTTP_TOKEN",
         "GIT_HTTP_USER",
         "GIT_SSH_COMMAND",

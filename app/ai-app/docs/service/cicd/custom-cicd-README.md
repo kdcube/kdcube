@@ -411,7 +411,7 @@ Recommended approach:
 
 1. Use the platform `kdcube-chat-proc` image as the base.
 2. Copy bundles from the custom app repo into `/bundles`.
-3. Set `AGENTIC_BUNDLES_ROOT=/bundles`.
+3. Set `BUNDLES_ROOT=/bundles`.
 
 Example Dockerfile (custom app repo):
 
@@ -423,7 +423,7 @@ WORKDIR /app
 # Copy bundles into container
 COPY ./bundles /bundles
 
-ENV AGENTIC_BUNDLES_ROOT=/bundles
+ENV BUNDLES_ROOT=/bundles
 ```
 
 This produces `kdcube-chat-proc-bundled`, which ECS can run without host mounts.
@@ -496,7 +496,7 @@ Example Dockerfile (custom app repo):
 ```dockerfile
 FROM <registry>/py-code-exec:<version>
 COPY ./bundles /bundles
-ENV AGENTIC_BUNDLES_ROOT=/bundles
+ENV BUNDLES_ROOT=/bundles
 ```
 
 **Fargate path:**  

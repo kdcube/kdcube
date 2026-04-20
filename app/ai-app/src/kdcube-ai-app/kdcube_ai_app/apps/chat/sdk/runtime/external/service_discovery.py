@@ -10,7 +10,7 @@ from typing import Mapping, Optional
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
 
 CONTAINER_BUNDLES_ROOT = "/bundles"
-CONTAINER_GIT_BUNDLES_ROOT = "/git-bundles"
+CONTAINER_MANAGED_BUNDLES_ROOT = "/managed-bundles"
 
 
 @dataclass(frozen=True)
@@ -25,13 +25,13 @@ class HostMountPaths:
 
     kdcube_storage: str | None
     bundles: str | None
-    git_bundles: str | None
+    managed_bundles: str | None
     bundle_storage: str | None
     exec_workspace: str | None
 
     @property
-    def effective_git_bundles(self) -> str:
-        return self.git_bundles or self.bundles or CONTAINER_GIT_BUNDLES_ROOT
+    def effective_managed_bundles(self) -> str:
+        return self.managed_bundles or CONTAINER_MANAGED_BUNDLES_ROOT
 
     @property
     def effective_bundles(self) -> str:
@@ -74,7 +74,7 @@ def get_host_mount_paths(env: Mapping[str, str] | None = None) -> HostMountPaths
     return HostMountPaths(
         kdcube_storage=_pick("HOST_KDCUBE_STORAGE_PATH", "HOST_KDCUBE_STORAGE_PATH"),
         bundles=_pick("HOST_BUNDLES_PATH", "HOST_BUNDLES_PATH"),
-        git_bundles=_pick("HOST_GIT_BUNDLES_PATH", "HOST_GIT_BUNDLES_PATH"),
+        managed_bundles=_pick("HOST_MANAGED_BUNDLES_PATH", "HOST_MANAGED_BUNDLES_PATH"),
         bundle_storage=_pick("HOST_BUNDLE_STORAGE_PATH", "HOST_BUNDLE_STORAGE_PATH"),
         exec_workspace=_pick("HOST_EXEC_WORKSPACE_PATH", "HOST_EXEC_WORKSPACE_PATH"),
     )
@@ -123,6 +123,7 @@ def _translate_container_path_to_host(container_path: pathlib.Path) -> pathlib.P
     Inside chat-chat container:
       /kdcube-storage/        → Host: {HOST_KDCUBE_STORAGE_PATH}
       /bundles/           → Host: {HOST_BUNDLES_PATH}
+      /managed-bundles/   → Host: {HOST_MANAGED_BUNDLES_PATH}
       /exec-workspace/    → Host: {HOST_EXEC_WORKSPACE_PATH}
       /tmp/codegen_xxx/   → Redirected to /exec-workspace/codegen_xxx/
 
@@ -141,10 +142,10 @@ def _translate_container_path_to_host(container_path: pathlib.Path) -> pathlib.P
         rel = os.path.relpath(path_str, "/kdcube-storage")
         return pathlib.Path(host_mounts.effective_kdcube_storage) / rel
 
-    # /git-bundles → host path from env
-    if path_str.startswith(CONTAINER_GIT_BUNDLES_ROOT):
-        rel = os.path.relpath(path_str, CONTAINER_GIT_BUNDLES_ROOT)
-        return pathlib.Path(host_mounts.effective_git_bundles) / rel
+    # /managed-bundles → host path from env/settings
+    if path_str.startswith(CONTAINER_MANAGED_BUNDLES_ROOT):
+        rel = os.path.relpath(path_str, CONTAINER_MANAGED_BUNDLES_ROOT)
+        return pathlib.Path(host_mounts.effective_managed_bundles) / rel
 
     # /bundles → host path from env
     if path_str.startswith(CONTAINER_BUNDLES_ROOT):

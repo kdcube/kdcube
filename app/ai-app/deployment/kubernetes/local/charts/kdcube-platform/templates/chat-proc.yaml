@@ -84,8 +84,10 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secrets.platform.name }}
                   key: SECRETS_TOKEN_PROC
-            - name: AGENTIC_BUNDLES_ROOT
+            - name: BUNDLES_ROOT
               value: /bundles
+            - name: MANAGED_BUNDLES_ROOT
+              value: /managed-bundles
             - name: BUNDLE_STORAGE_ROOT
               value: /bundle-storage
             - name: HOST_EXEC_WORKSPACE_PATH

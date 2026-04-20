@@ -187,7 +187,7 @@ secrets:
 paths:
   host_kdcube_storage_path: "/YOUR/HOST/PATH/.kdcube/kdcube-storage"     # HOST_KDCUBE_STORAGE_PATH; host folder mounted into /kdcube-storage
   host_bundles_path: "/YOUR/HOST/PATH/src"                               # HOST_BUNDLES_PATH; required for descriptor-driven local bundle installs; host folder mounted into /bundles
-  host_git_bundles_path: "/YOUR/HOST/PATH/.kdcube/git-bundles"           # HOST_GIT_BUNDLES_PATH; optional separate host folder for git-resolved bundle clones/cache; mounted into /git-bundles
+  host_managed_bundles_path: "/YOUR/HOST/PATH/.kdcube/managed-bundles"   # HOST_MANAGED_BUNDLES_PATH; host folder for platform-managed bundles (git-resolved + examples); mounted into /managed-bundles
   host_git_ssh_key_path: ""                                              # HOST_GIT_SSH_KEY_PATH; optional host SSH private key mounted to platform.applications.bundles.git.git_ssh_key_path
   host_git_ssh_known_hosts_path: ""                                      # HOST_GIT_KNOWN_HOSTS_PATH; optional host known_hosts mounted to platform.applications.bundles.git.git_ssh_known_hosts
   host_bundle_storage_path: "/YOUR/HOST/PATH/.kdcube/bundle-storage"     # HOST_BUNDLE_STORAGE_PATH; host folder mounted into /bundle-storage
@@ -274,7 +274,8 @@ platform:
         accounting_services: '{"web_search": {"brave": {"tier": "free"}, "duckduckgo": {"tier": "free"}}}'  # ACCOUNTING_SERVICES
 
       bundles:
-        agentic_bundles_root: "/bundles"              # AGENTIC_BUNDLES_ROOT; host path → paths.host_bundles_path
+        bundles_root: "/bundles"                      # BUNDLES_ROOT; host path → paths.host_bundles_path
+        managed_bundles_root: "/managed-bundles"      # MANAGED_BUNDLES_ROOT; host path → paths.host_managed_bundles_path
         bundle_storage_root: ""                       # BUNDLE_STORAGE_ROOT
         bundles_include_examples: true                # BUNDLES_INCLUDE_EXAMPLES
         bundle_cleanup_enabled: true                  # BUNDLE_CLEANUP_ENABLED

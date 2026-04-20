@@ -68,7 +68,7 @@ Runtime contract:
 Typical use:
 
 - local path bundles under a host root mounted as `/bundles`
-- git bundles resolved locally into `/git-bundles`
+- managed bundles resolved locally into `/managed-bundles`
 - local file-backed bundle storage and exec workspace
 
 ### 2. Direct local service run

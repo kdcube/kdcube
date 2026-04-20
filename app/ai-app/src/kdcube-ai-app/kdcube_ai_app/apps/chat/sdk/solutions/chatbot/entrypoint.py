@@ -977,7 +977,7 @@ class BaseEntrypoint:
                 default_project=self.settings.PROJECT,
                 default_app_bundle_id=self.config.ai_bundle_spec.id,
                 host_bundles_path=get_settings().HOST_BUNDLES_PATH,
-                agentic_bundles_root=get_settings().PLATFORM.APPLICATIONS.AGENTIC_BUNDLES_ROOT,
+                bundles_root=get_settings().PLATFORM.APPLICATIONS.BUNDLES_ROOT,
             )
             html = self._render_dashboard_html(content=output_content, title="AI Bundles")
             return [html]

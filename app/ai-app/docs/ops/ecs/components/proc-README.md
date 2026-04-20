@@ -210,7 +210,7 @@ For the EC2-backed proc deployment, a healthy host must have all of these:
 - Docker socket available to the proc task
 - proc container env mapping host-visible paths:
   - `HOST_BUNDLES_PATH`
-  - `HOST_GIT_BUNDLES_PATH` (optional dedicated git bundles cache root)
+  - `HOST_MANAGED_BUNDLES_PATH`
   - `HOST_EXEC_WORKSPACE_PATH`
   - `HOST_BUNDLE_STORAGE_PATH`
 

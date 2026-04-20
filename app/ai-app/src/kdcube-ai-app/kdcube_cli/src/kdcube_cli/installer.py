@@ -1805,7 +1805,7 @@ def compute_paths(ai_app_root: Path, lib_root: Path, workdir: Path, compose_mode
         "host_bundle_storage": str(workdir / "data/bundle-storage"),
         "host_exec_workspace": str(workdir / "data/exec-workspace"),
         "host_bundles": str(workdir / "data/bundles"),
-        "host_git_bundles": str(workdir / "data/git-bundles"),
+        "host_managed_bundles": str(workdir / "data/managed-bundles"),
         "ui_dockerfile_path": "",
         "ui_source_path": "",
         "ui_env_build_relative": "",
@@ -2033,9 +2033,9 @@ def gather_configuration(
         host_bundles_local = _normalize_local_path_bundles_for_workspace(
             str(defaults.get("host_bundles") or (ctx.workdir / "data/bundles"))
         )
-        host_git_bundles_local = ensure_directory_root(
-            str(defaults.get("host_git_bundles") or (ctx.workdir / "data/git-bundles")),
-            label="Host git bundles cache root",
+        host_managed_bundles_local = ensure_directory_root(
+            str(defaults.get("host_managed_bundles") or (ctx.workdir / "data/managed-bundles")),
+            label="Host managed bundles root",
         )
         host_bundle_storage_local = ensure_directory_root(
             str(defaults.get("host_bundle_storage") or (ctx.workdir / "data/bundle-storage")),
@@ -2051,18 +2051,19 @@ def gather_configuration(
         # selected workdir so the entire local runtime stays self-contained.
         _set_nested(assembly_data, ["paths", "host_kdcube_storage_path"], host_storage_local)
         _set_nested(assembly_data, ["paths", "host_bundles_path"], host_bundles_local)
-        _set_nested(assembly_data, ["paths", "host_git_bundles_path"], host_git_bundles_local)
+        _set_nested(assembly_data, ["paths", "host_managed_bundles_path"], host_managed_bundles_local)
         _set_nested(assembly_data, ["paths", "host_bundle_storage_path"], host_bundle_storage_local)
         _set_nested(assembly_data, ["paths", "host_exec_workspace_path"], host_exec_local)
         _set_nested(assembly_data, ["platform", "services", "ingress", "log", "log_dir"], "/logs")
         _set_nested(assembly_data, ["platform", "services", "proc", "log", "log_dir"], "/logs")
         _set_nested(assembly_data, ["platform", "services", "proc", "exec", "exec_workspace_root"], "/exec-workspace")
-        _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "agentic_bundles_root"], "/bundles")
+        _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "bundles_root"], "/bundles")
+        _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "managed_bundles_root"], "/managed-bundles")
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "bundle_storage_root"], "/bundle-storage")
         return (
             host_storage_local,
             host_bundles_local,
-            host_git_bundles_local,
+            host_managed_bundles_local,
             host_bundle_storage_local,
             host_exec_local,
         )
@@ -2830,7 +2831,7 @@ def gather_configuration(
         (
             host_storage,
             host_bundles,
-            host_git_bundles,
+            host_managed_bundles,
             host_bundle_storage,
             host_exec,
         ) = _apply_workspace_local_topology()
@@ -2844,10 +2845,10 @@ def gather_configuration(
             force_prompt=force_prompt,
         )
         host_bundles_current = env_main.entries.get("HOST_BUNDLES_PATH", (None, None))[1]
-        agentic_root = env_main.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1] or "/bundles"
+        bundles_root = env_main.entries.get("BUNDLES_ROOT", (None, None))[1] or "/bundles"
         if host_bundles_current:
             normalized = str(host_bundles_current).strip()
-            if normalized.startswith("/bundles") or normalized.startswith("/app/") or normalized == agentic_root:
+            if normalized.startswith("/bundles") or normalized.startswith("/app/") or normalized == bundles_root:
                 console.print(
                     "[yellow]HOST_BUNDLES_PATH points to a container path; "
                     "resetting to the local workdir bundles folder.[/yellow]"
@@ -2864,30 +2865,30 @@ def gather_configuration(
             )
         else:
             host_bundles = str(host_bundles_default or "")
-        host_git_bundles_current = env_main.entries.get("HOST_GIT_BUNDLES_PATH", (None, None))[1]
-        agentic_git_root = env_main.entries.get("AGENTIC_GIT_BUNDLES_ROOT", (None, None))[1] or "/git-bundles"
-        if host_git_bundles_current:
-            normalized = str(host_git_bundles_current).strip()
-            if normalized.startswith("/git-bundles") or normalized.startswith("/app/") or normalized == agentic_git_root:
+        host_managed_bundles_current = env_main.entries.get("HOST_MANAGED_BUNDLES_PATH", (None, None))[1]
+        managed_root = env_main.entries.get("MANAGED_BUNDLES_ROOT", (None, None))[1] or "/managed-bundles"
+        if host_managed_bundles_current:
+            normalized = str(host_managed_bundles_current).strip()
+            if normalized.startswith("/managed-bundles") or normalized.startswith("/app/") or normalized == managed_root:
                 console.print(
-                    "[yellow]HOST_GIT_BUNDLES_PATH points to a container path; "
-                    "resetting to the local workdir git-bundles folder.[/yellow]"
+                    "[yellow]HOST_MANAGED_BUNDLES_PATH points to a container path; "
+                    "resetting to the local workdir managed-bundles folder.[/yellow]"
                 )
-                host_git_bundles_current = None
-        host_git_bundles_default = (
-            _get_nested(assembly_data, "paths", "host_git_bundles_path")
-            or defaults.get("host_git_bundles")
+                host_managed_bundles_current = None
+        host_managed_bundles_default = (
+            _get_nested(assembly_data, "paths", "host_managed_bundles_path")
+            or defaults.get("host_managed_bundles")
         )
-        if force_prompt or not is_placeholder(host_git_bundles_current):
-            host_git_bundles = ensure_absolute(
+        if force_prompt or not is_placeholder(host_managed_bundles_current):
+            host_managed_bundles = ensure_absolute(
                 console,
-                "Host git bundles cache root",
-                host_git_bundles_current,
-                str(host_git_bundles_default) if host_git_bundles_default else None,
+                "Host managed bundles root",
+                host_managed_bundles_current,
+                str(host_managed_bundles_default) if host_managed_bundles_default else None,
                 force_prompt=force_prompt,
             )
         else:
-            host_git_bundles = str(host_git_bundles_default or "")
+            host_managed_bundles = str(host_managed_bundles_default or "")
         host_bundle_storage = ensure_absolute(
             console,
             "Host bundle local storage path",
@@ -2905,18 +2906,18 @@ def gather_configuration(
 
         host_storage = ensure_directory_root(host_storage, label="Host system storage path")
         host_bundles = ensure_directory_root(host_bundles, label="Host bundles root")
-        host_git_bundles = ensure_directory_root(host_git_bundles, label="Host git bundles cache root")
+        host_managed_bundles = ensure_directory_root(host_managed_bundles, label="Host managed bundles root")
         host_bundle_storage = ensure_directory_root(host_bundle_storage, label="Host bundle local storage path")
         host_exec = ensure_directory_root(host_exec, label="Host exec workspace path")
 
     update_env_value(env_main, "HOST_KDCUBE_STORAGE_PATH", host_storage)
     update_env_value(env_main, "HOST_BUNDLES_PATH", host_bundles)
-    update_env_value(env_main, "HOST_GIT_BUNDLES_PATH", host_git_bundles)
+    update_env_value(env_main, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
     update_env_value(env_main, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
     update_env_value(env_main, "HOST_EXEC_WORKSPACE_PATH", host_exec)
     _set_nested(assembly_data, ["paths", "host_kdcube_storage_path"], host_storage)
     _set_nested(assembly_data, ["paths", "host_bundles_path"], host_bundles)
-    _set_nested(assembly_data, ["paths", "host_git_bundles_path"], host_git_bundles)
+    _set_nested(assembly_data, ["paths", "host_managed_bundles_path"], host_managed_bundles)
     _set_nested(assembly_data, ["paths", "host_bundle_storage_path"], host_bundle_storage)
     _set_nested(assembly_data, ["paths", "host_exec_workspace_path"], host_exec)
     # Always align compose paths to the selected workdir.
@@ -2935,13 +2936,13 @@ def gather_configuration(
     ):
         remove_env_key(env_main, obsolete_key)
     if descriptor_workspace_mode:
-        update_env_value(env_main, "AGENTIC_BUNDLES_ROOT", "/bundles")
-        update_env_value(env_main, "AGENTIC_GIT_BUNDLES_ROOT", "/git-bundles")
+        update_env_value(env_main, "BUNDLES_ROOT", "/bundles")
+        update_env_value(env_main, "MANAGED_BUNDLES_ROOT", "/managed-bundles")
         update_env_value(env_main, "BUNDLE_STORAGE_ROOT", "/bundle-storage")
-    elif is_placeholder(env_main.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1]):
-        update_env_value(env_main, "AGENTIC_BUNDLES_ROOT", "/bundles")
-    if not descriptor_workspace_mode and is_placeholder(env_main.entries.get("AGENTIC_GIT_BUNDLES_ROOT", (None, None))[1]):
-        update_env_value(env_main, "AGENTIC_GIT_BUNDLES_ROOT", "/git-bundles")
+    elif is_placeholder(env_main.entries.get("BUNDLES_ROOT", (None, None))[1]):
+        update_env_value(env_main, "BUNDLES_ROOT", "/bundles")
+    if not descriptor_workspace_mode and is_placeholder(env_main.entries.get("MANAGED_BUNDLES_ROOT", (None, None))[1]):
+        update_env_value(env_main, "MANAGED_BUNDLES_ROOT", "/managed-bundles")
     if not descriptor_workspace_mode and is_placeholder(env_main.entries.get("BUNDLE_STORAGE_ROOT", (None, None))[1]):
         update_env_value(env_main, "BUNDLE_STORAGE_ROOT", "/bundle-storage")
 
@@ -3186,15 +3187,15 @@ def gather_configuration(
         update_env_value(env_proc, "CLAUDE_CODE_SESSION_GIT_REPO", str(claude_session_git_repo))
     if is_placeholder(env_proc.entries.get("BUNDLE_STORAGE_ROOT", (None, None))[1]):
         update_env_value(env_proc, "BUNDLE_STORAGE_ROOT", "/bundle-storage")
-    if is_placeholder(env_proc.entries.get("AGENTIC_BUNDLES_ROOT", (None, None))[1]):
-        update_env_value(env_proc, "AGENTIC_BUNDLES_ROOT", "/bundles")
-    if is_placeholder(env_proc.entries.get("AGENTIC_GIT_BUNDLES_ROOT", (None, None))[1]):
-        update_env_value(env_proc, "AGENTIC_GIT_BUNDLES_ROOT", "/git-bundles")
+    if is_placeholder(env_proc.entries.get("BUNDLES_ROOT", (None, None))[1]):
+        update_env_value(env_proc, "BUNDLES_ROOT", "/bundles")
+    if is_placeholder(env_proc.entries.get("MANAGED_BUNDLES_ROOT", (None, None))[1]):
+        update_env_value(env_proc, "MANAGED_BUNDLES_ROOT", "/managed-bundles")
     update_if_placeholder(env_proc, "BUNDLES_PRELOAD_ON_START", "1")
     if is_placeholder(env_proc.entries.get("HOST_BUNDLE_STORAGE_PATH", (None, None))[1]):
         update_env_value(env_proc, "HOST_BUNDLE_STORAGE_PATH", host_bundle_storage)
-    if is_placeholder(env_proc.entries.get("HOST_GIT_BUNDLES_PATH", (None, None))[1]):
-        update_env_value(env_proc, "HOST_GIT_BUNDLES_PATH", host_git_bundles)
+    if is_placeholder(env_proc.entries.get("HOST_MANAGED_BUNDLES_PATH", (None, None))[1]):
+        update_env_value(env_proc, "HOST_MANAGED_BUNDLES_PATH", host_managed_bundles)
 
     ui_build_context = env_main.entries.get("UI_BUILD_CONTEXT", (None, None))[1]
     default_ui_context = defaults.get("ui_build_context", "")

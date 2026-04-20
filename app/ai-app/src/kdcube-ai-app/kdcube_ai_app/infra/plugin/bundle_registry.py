@@ -145,7 +145,7 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
     try:
             from kdcube_ai_app.infra.plugin.git_bundle import (
                 ensure_git_bundle,
-                resolve_git_bundles_root,
+                resolve_managed_bundles_root,
                 cleanup_old_git_bundles,
                 bundle_dir_for_git,
             )
@@ -197,7 +197,7 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
                 git_url=repo,
                 git_ref=entry.get("ref"),
                 git_subdir=entry.get("subdir"),
-                bundles_root=resolve_git_bundles_root(),
+                bundles_root=resolve_managed_bundles_root(),
                 atomic=atomic,
             )
             entry = dict(entry)
@@ -226,7 +226,7 @@ def _apply_git_resolution(reg: Dict[str, Dict[str, Any]], source: str = "unknown
                 base_dir = bundle_dir_for_git(bid, entry.get("ref"), repo)
                 cleanup_old_git_bundles(
                     bundle_id=base_dir,
-                    bundles_root=resolve_git_bundles_root(),
+                    bundles_root=resolve_managed_bundles_root(),
                     active_paths=get_local_active_paths(),
                 )
         except Exception:

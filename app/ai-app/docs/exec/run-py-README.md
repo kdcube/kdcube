@@ -52,7 +52,7 @@ PY_CODE_EXEC_NETWORK_MODE=host
 - `/var/run/docker.sock:/var/run/docker.sock`
 - `HOST_EXEC_WORKSPACE_PATH` → `/exec-workspace`
 - If bundle tools are used:
-  - `HOST_BUNDLES_PATH` → `AGENTIC_BUNDLES_ROOT`
+  - `HOST_BUNDLES_PATH` → `BUNDLES_ROOT`
 - If bundle readonly local data is used:
   - `HOST_BUNDLE_STORAGE_PATH` → `BUNDLE_STORAGE_ROOT`
 
@@ -61,9 +61,9 @@ PY_CODE_EXEC_NETWORK_MODE=host
 ```
 HOST_EXEC_WORKSPACE_PATH=/abs/path/to/exec-workspace
 HOST_BUNDLES_PATH=/abs/path/to/bundles
-AGENTIC_BUNDLES_ROOT=/bundles
-HOST_GIT_BUNDLES_PATH=/abs/path/to/git-bundles   # optional dedicated git bundle cache root
-AGENTIC_GIT_BUNDLES_ROOT=/git-bundles
+BUNDLES_ROOT=/bundles
+HOST_MANAGED_BUNDLES_PATH=/abs/path/to/managed-bundles
+MANAGED_BUNDLES_ROOT=/managed-bundles
 HOST_BUNDLE_STORAGE_PATH=/abs/path/to/bundle-storage
 BUNDLE_STORAGE_ROOT=/bundle-storage
 ```

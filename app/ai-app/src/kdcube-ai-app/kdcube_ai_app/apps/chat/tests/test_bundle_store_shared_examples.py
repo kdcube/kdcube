@@ -14,7 +14,7 @@ def test_ensure_example_bundle_shared_uses_versioned_path(monkeypatch, tmp_path)
     shared = tmp_path / "shared"
     _write_example_bundle(src, marker="v1")
 
-    monkeypatch.setattr(bundle_store, "_SHARED_BUNDLES_ROOT", shared)
+    monkeypatch.setattr(bundle_store, "_shared_bundles_root", lambda: shared)
     monkeypatch.setattr(bundle_store, "_is_running_in_docker", lambda: True)
     monkeypatch.setenv("PLATFORM_REF", "2026.3.21.410")
 
@@ -33,7 +33,7 @@ def test_ensure_example_bundle_shared_keeps_old_version_when_source_changes(monk
     shared = tmp_path / "shared"
     _write_example_bundle(src, marker="v1")
 
-    monkeypatch.setattr(bundle_store, "_SHARED_BUNDLES_ROOT", shared)
+    monkeypatch.setattr(bundle_store, "_shared_bundles_root", lambda: shared)
     monkeypatch.setattr(bundle_store, "_is_running_in_docker", lambda: True)
     monkeypatch.setenv("PLATFORM_REF", "2026.3.21.410")
 
@@ -54,6 +54,27 @@ def test_cleanup_old_shared_example_bundles_keeps_active_version(monkeypatch, tm
     new_dir.mkdir(parents=True, exist_ok=True)
     (old_dir / "entrypoint.py").write_text("old\n", encoding="utf-8")
     (new_dir / "entrypoint.py").write_text("new\n", encoding="utf-8")
+    monkeypatch.setattr(
+        bundle_store,
+        "get_settings",
+        lambda: type(
+            "S",
+            (),
+            {
+                "PLATFORM": type(
+                    "P",
+                    (),
+                    {
+                        "APPLICATIONS": type(
+                            "A",
+                            (),
+                            {"GIT": type("G", (), {"BUNDLE_GIT_KEEP": 3, "BUNDLE_GIT_TTL_HOURS": 0})()},
+                        )()
+                    },
+                )()
+            },
+        )(),
+    )
 
     removed = bundle_store.cleanup_old_shared_example_bundles(
         bundle_id="kdcube.copilot@2026-04-03-19-05",

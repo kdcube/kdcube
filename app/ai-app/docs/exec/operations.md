@@ -329,7 +329,7 @@ services:
       
       # Path mappings for Docker-in-Docker
       - HOST_KDCUBE_STORAGE_PATH=${HOST_KDCUBE_STORAGE_PATH}
-      - HOST_BUNDLES_PATH=${SITE_AGENTIC_BUNDLES_ROOT}
+      - HOST_BUNDLES_PATH=${SITE_BUNDLES_ROOT}
       - HOST_EXEC_WORKSPACE_PATH=${HOST_EXEC_WORKSPACE_PATH}
       
       # Execution settings
@@ -346,8 +346,8 @@ services:
       
       # Bundles (tool modules)
       - type: bind
-        source: ${SITE_AGENTIC_BUNDLES_ROOT}
-        target: ${AGENTIC_BUNDLES_ROOT}
+        source: ${SITE_BUNDLES_ROOT}
+        target: ${BUNDLES_ROOT}
       
       # AWS credentials (local dev only)
       - type: bind
@@ -396,8 +396,8 @@ HOST_EXEC_WORKSPACE_PATH=/Users/yourname/project/deployment/cicd/local/exec-work
 # HOST_EXEC_WORKSPACE_PATH=/home/deploy/exec-workspace
 
 # === Bundle Configuration ===
-SITE_AGENTIC_BUNDLES_ROOT=/Users/yourname/project/bundles  # Host path
-AGENTIC_BUNDLES_ROOT=/bundles                                # Container path
+SITE_BUNDLES_ROOT=/Users/yourname/project/bundles  # Host path
+BUNDLES_ROOT=/bundles                              # Container path
 
 # === Execution Settings ===
 PY_CODE_EXEC_IMAGE=py-code-exec:latest

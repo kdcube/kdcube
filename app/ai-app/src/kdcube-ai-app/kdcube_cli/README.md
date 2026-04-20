@@ -232,6 +232,7 @@ what is incomplete.
 | `--upstream` | With `--build`, use the latest upstream repo state (`origin/main`) instead of a released platform ref. Requires either `--descriptors-location` or an initialized runtime with the canonical descriptor set under `config/`. |
 | `--release <ref>` | With `--descriptors-location`, use the given platform release instead of `assembly.yaml -> platform.ref`. |
 | `--bundle-reload <bundle_id>` | Reapply `config/bundles.yaml` from the active runtime workspace and clear proc bundle caches for local development. |
+| `--info` | Print resolved runtime info for the selected workdir, including descriptor paths, install metadata, and host/container bundle mount mappings. |
 | `--export-live-bundles` | Export effective live `bundles.yaml` and `bundles.secrets.yaml` from the active bundle authority: workspace descriptors when present, otherwise AWS SM grouped bundle docs. |
 | `--tenant <id>` / `--project <id>` | Scope for `--export-live-bundles` when exporting from AWS SM. Ignored when workspace descriptors are exported directly. |
 | `--out-dir <dir>` | Output directory for `--export-live-bundles`. |
@@ -281,6 +282,12 @@ Stop and remove volumes:
 
 ```bash
 kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
+```
+
+Inspect the resolved runtime, including how local non-git bundles are mounted:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime/acme__prod_demo --info
 ```
 
 When `--workdir` points at the base workspace root, `--stop` resolves the
@@ -529,20 +536,20 @@ Current proc behavior:
 
 Local bundle root contract:
 
-- `assembly.paths.host_bundles_path` is installer-facing config and becomes `HOST_BUNDLES_PATH`
-- compose mounts `HOST_BUNDLES_PATH` into proc as `AGENTIC_BUNDLES_ROOT` (normally `/bundles`)
-- bundle entries in `bundles.yaml` must use the container-visible path, for example:
+- `assembly.paths.host_bundles_path` is installer-facing config for non-managed local path bundles and becomes `HOST_BUNDLES_PATH`
+- compose mounts `HOST_BUNDLES_PATH` into proc as `BUNDLES_ROOT` (normally `/bundles`)
+- non-managed local bundle entries in `bundles.yaml` must use the container-visible path, for example:
   - host folder: `/Users/you/dev/bundles/my.bundle`
   - descriptor path: `/bundles/my.bundle`
 
-- `assembly.paths.host_git_bundles_path` optionally becomes `HOST_GIT_BUNDLES_PATH`
-- compose mounts `HOST_GIT_BUNDLES_PATH` into proc as `AGENTIC_GIT_BUNDLES_ROOT` (normally `/git-bundles`)
+- `assembly.paths.host_managed_bundles_path` becomes `HOST_MANAGED_BUNDLES_PATH`
+- compose mounts `HOST_MANAGED_BUNDLES_PATH` into proc as `MANAGED_BUNDLES_ROOT` (normally `/managed-bundles`)
 
-Git-described bundles use the dedicated git cache root when configured:
+Managed bundle materialization uses the dedicated managed root:
 
-- local path bundles continue to use `HOST_BUNDLES_PATH` and `/bundles/...`
-- git bundles are cloned under `HOST_GIT_BUNDLES_PATH` and resolved inside proc as `/git-bundles/...`
-- if no dedicated git root is configured, git bundles fall back to the legacy bundles root behavior
+- non-managed local path bundles continue to use `HOST_BUNDLES_PATH` and `/bundles/...`
+- git bundles are cloned under `HOST_MANAGED_BUNDLES_PATH` and resolved inside proc as `/managed-bundles/...`
+- built-in example bundles are also materialized under the managed root
 
 Symlink note:
 

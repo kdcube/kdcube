@@ -12,8 +12,8 @@ def test_bundle_store_repo_entry_ignores_supplied_path(monkeypatch):
         assert git_ref == "release-2"
         assert git_subdir == "subdir"
         return GitBundlePaths(
-            repo_root=Path("/bundles/repo__bundle.demo__release-2"),
-            bundle_root=Path("/bundles/repo__bundle.demo__release-2/subdir"),
+            repo_root=Path("/managed-bundles/repo__bundle.demo__release-2"),
+            bundle_root=Path("/managed-bundles/repo__bundle.demo__release-2/subdir"),
         )
 
     monkeypatch.setattr(
@@ -33,7 +33,7 @@ def test_bundle_store_repo_entry_ignores_supplied_path(monkeypatch):
         },
     )
 
-    assert entry.path == "/bundles/repo__bundle.demo__release-2/subdir"
+    assert entry.path == "/managed-bundles/repo__bundle.demo__release-2/subdir"
 
 
 def test_bundle_registry_normalize_repo_entry_ignores_supplied_path(monkeypatch):
@@ -43,8 +43,8 @@ def test_bundle_registry_normalize_repo_entry_ignores_supplied_path(monkeypatch)
         assert git_ref == "release-2"
         assert git_subdir == "subdir"
         return GitBundlePaths(
-            repo_root=Path("/bundles/repo__bundle.demo__release-2"),
-            bundle_root=Path("/bundles/repo__bundle.demo__release-2/subdir"),
+            repo_root=Path("/managed-bundles/repo__bundle.demo__release-2"),
+            bundle_root=Path("/managed-bundles/repo__bundle.demo__release-2/subdir"),
         )
 
     monkeypatch.setattr(
@@ -63,4 +63,4 @@ def test_bundle_registry_normalize_repo_entry_ignores_supplied_path(monkeypatch)
         }
     )
 
-    assert normalized["path"] == "/bundles/repo__bundle.demo__release-2/subdir"
+    assert normalized["path"] == "/managed-bundles/repo__bundle.demo__release-2/subdir"

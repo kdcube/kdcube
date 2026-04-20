@@ -67,8 +67,8 @@ def _descriptors_dir(profile: str) -> Path:
     return _profile_root(profile) / "descriptors"
 
 
-def _git_bundles_dir(profile: str) -> Path:
-    return _profile_root(profile) / "git-bundles"
+def _managed_bundles_dir(profile: str) -> Path:
+    return _profile_root(profile) / "managed-bundles"
 
 
 def _read_template(name: str) -> str:
@@ -116,12 +116,12 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
 
     profile = args.profile
     descriptors_dir = _descriptors_dir(profile)
-    git_bundles_dir = (
-        Path(args.host_git_bundles_path).expanduser().resolve()
-        if args.host_git_bundles_path
-        else _git_bundles_dir(profile)
+    managed_bundles_dir = (
+        Path(args.host_managed_bundles_path).expanduser().resolve()
+        if args.host_managed_bundles_path
+        else _managed_bundles_dir(profile)
     )
-    git_bundles_dir.mkdir(parents=True, exist_ok=True)
+    managed_bundles_dir.mkdir(parents=True, exist_ok=True)
     descriptors_dir.mkdir(parents=True, exist_ok=True)
 
     container_bundle_path = _resolve_bundle_mapping(bundle_path, host_bundles_path)
@@ -133,8 +133,8 @@ def cmd_bootstrap(args: argparse.Namespace) -> int:
     assembly = assembly.replace('"demo-project"', _yaml_scalar(args.project), 1)
     assembly = assembly.replace('host_bundles_path: ""', f"host_bundles_path: {_yaml_scalar(str(host_bundles_path))}")
     assembly = assembly.replace(
-        'host_git_bundles_path: ""',
-        f"host_git_bundles_path: {_yaml_scalar(str(git_bundles_dir))}",
+        'host_managed_bundles_path: ""',
+        f"host_managed_bundles_path: {_yaml_scalar(str(managed_bundles_dir))}",
     )
     assembly = assembly.replace(DEFAULT_KDCUBE_REPO, args.platform_repo)
     assembly = assembly.replace(CURRENT_RELEASE, args.platform_ref)
@@ -279,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--project", default=DEFAULT_PROJECT)
     bootstrap.add_argument("--profile", default="default")
     bootstrap.add_argument("--host-bundles-path")
-    bootstrap.add_argument("--host-git-bundles-path")
+    bootstrap.add_argument("--host-managed-bundles-path")
     bootstrap.add_argument("--platform-ref", default=CURRENT_RELEASE)
     bootstrap.add_argument("--platform-repo", default=DEFAULT_KDCUBE_REPO)
     bootstrap.add_argument("--singleton", action="store_true")

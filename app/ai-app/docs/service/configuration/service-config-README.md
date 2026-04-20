@@ -113,8 +113,8 @@ Important distinction:
 | Env var | Descriptor path | CLI local compose | Direct local run | AWS deployment |
 |---|---|---|---|---|
 | `HOST_KDCUBE_STORAGE_PATH` | `paths.host_kdcube_storage_path` | relevant | optional | not used |
-| `HOST_BUNDLES_PATH` | `paths.host_bundles_path` | relevant for local path bundles and local bundle roots | optional | not used |
-| `HOST_GIT_BUNDLES_PATH` | `paths.host_git_bundles_path` | optional separate git clone/cache root | optional | not used |
+| `HOST_BUNDLES_PATH` | `paths.host_bundles_path` | relevant for non-managed local path bundles | optional | not used |
+| `HOST_MANAGED_BUNDLES_PATH` | `paths.host_managed_bundles_path` | relevant for platform-managed bundles (git/example) | optional | not used |
 | `HOST_BUNDLE_STORAGE_PATH` | `paths.host_bundle_storage_path` | relevant | optional | not used |
 | `HOST_EXEC_WORKSPACE_PATH` | `paths.host_exec_workspace_path` | relevant | optional | not used |
 
@@ -158,7 +158,6 @@ Do not copy these local-only values into AWS/ECS deployment descriptors:
 
 - `paths.host_kdcube_storage_path`
 - `paths.host_bundles_path`
-- `paths.host_git_bundles_path`
 - `paths.host_bundle_storage_path`
 - `paths.host_exec_workspace_path`
 

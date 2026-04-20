@@ -107,7 +107,7 @@ The proc task receives:
   - `HOST_KDCUBE_STORAGE_PATH`
   - `HOST_BUNDLE_STORAGE_PATH`
   - `HOST_BUNDLES_PATH`
-  - `HOST_GIT_BUNDLES_PATH` (optional dedicated git bundles cache root; otherwise git bundles fall back to the legacy bundles root)
+  - `HOST_MANAGED_BUNDLES_PATH`
   - `HOST_EXEC_WORKSPACE_PATH`
 
 This lets proc start nested Docker exec containers that bind the same stable

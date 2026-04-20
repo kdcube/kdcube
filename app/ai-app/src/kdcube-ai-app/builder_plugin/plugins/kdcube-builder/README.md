@@ -14,6 +14,6 @@ Main skills:
 Generated local state is kept under `${CLAUDE_PLUGIN_DATA}`:
 
 - `profiles/<profile>/descriptors`
-- `profiles/<profile>/git-bundles`
+- `profiles/<profile>/managed-bundles`
 
 The plugin does not copy customer descriptors. It generates a minimal local descriptor set intended for bundle development.

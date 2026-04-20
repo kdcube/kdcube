@@ -541,7 +541,7 @@ class Settings(PLATFORM_CONFIG):
     BUNDLE_STORAGE_URL: str | None = Field(default=None, alias="CB_BUNDLE_STORAGE_URL")
     HOST_KDCUBE_STORAGE_PATH: str | None = None
     HOST_BUNDLES_PATH: str | None = None
-    HOST_GIT_BUNDLES_PATH: str | None = None
+    HOST_MANAGED_BUNDLES_PATH: str | None = None
     HOST_BUNDLE_STORAGE_PATH: str | None = None
     HOST_EXEC_WORKSPACE_PATH: str | None = None
     PLATFORM_DESCRIPTORS_DIR: str | None = None
@@ -801,7 +801,8 @@ class Settings(PLATFORM_CONFIG):
                 ACCOUNTING_SERVICES=self._resolve_str("ACCOUNTING_SERVICES", f"{svc}.tools.accounting_services"),
             ),
             APPLICATIONS=ApplicationsConfig(
-                AGENTIC_BUNDLES_ROOT=self._resolve_str("AGENTIC_BUNDLES_ROOT", f"{bundles_p}.agentic_bundles_root", "/bundles"),
+                BUNDLES_ROOT=self._resolve_str("BUNDLES_ROOT", f"{bundles_p}.bundles_root", "/bundles"),
+                MANAGED_BUNDLES_ROOT=self._resolve_str("MANAGED_BUNDLES_ROOT", f"{bundles_p}.managed_bundles_root", "/managed-bundles"),
                 BUNDLE_STORAGE_ROOT=self._resolve_str("BUNDLE_STORAGE_ROOT", f"{bundles_p}.bundle_storage_root"),
                 BUNDLES_INCLUDE_EXAMPLES=self._resolve_bool("BUNDLES_INCLUDE_EXAMPLES", f"{bundles_p}.bundles_include_examples", True),
                 BUNDLE_CLEANUP_ENABLED=self._resolve_bool("BUNDLE_CLEANUP_ENABLED", f"{bundles_p}.bundle_cleanup_enabled", True),
@@ -866,12 +867,16 @@ class Settings(PLATFORM_CONFIG):
             self.HOST_KDCUBE_STORAGE_PATH = self._assembly_str("paths.host_kdcube_storage_path")
         if not self._env_present("HOST_BUNDLES_PATH") and not self.HOST_BUNDLES_PATH:
             self.HOST_BUNDLES_PATH = self._assembly_str("paths.host_bundles_path")
-        if not self._env_present("HOST_GIT_BUNDLES_PATH") and not self.HOST_GIT_BUNDLES_PATH:
-            self.HOST_GIT_BUNDLES_PATH = self._assembly_str("paths.host_git_bundles_path")
+        if not self._env_present("HOST_MANAGED_BUNDLES_PATH") and not self.HOST_MANAGED_BUNDLES_PATH:
+            self.HOST_MANAGED_BUNDLES_PATH = self._assembly_str("paths.host_managed_bundles_path")
         if not self._env_present("HOST_BUNDLE_STORAGE_PATH") and not self.HOST_BUNDLE_STORAGE_PATH:
             self.HOST_BUNDLE_STORAGE_PATH = self._assembly_str("paths.host_bundle_storage_path")
         if not self._env_present("HOST_EXEC_WORKSPACE_PATH") and not self.HOST_EXEC_WORKSPACE_PATH:
             self.HOST_EXEC_WORKSPACE_PATH = self._assembly_str("paths.host_exec_workspace_path")
+        managed_root = str(self.PLATFORM.APPLICATIONS.MANAGED_BUNDLES_ROOT or "").strip()
+        if not managed_root:
+            managed_root = str(os.getenv("MANAGED_BUNDLES_ROOT") or "").strip() or "/managed-bundles"
+            self.PLATFORM.APPLICATIONS.MANAGED_BUNDLES_ROOT = managed_root
         if not self._env_present("REACT_WORKSPACE_IMPLEMENTATION"):
             self.REACT_WORKSPACE_IMPLEMENTATION = str(
                 self._assembly_str("storage.workspace.type") or self.REACT_WORKSPACE_IMPLEMENTATION
@@ -1108,7 +1113,9 @@ def export_managed_env(
     _put("KDCUBE_STORAGE_PATH", resolved.STORAGE_PATH)
     _put("HOST_KDCUBE_STORAGE_PATH", resolved.HOST_KDCUBE_STORAGE_PATH)
     _put("HOST_BUNDLES_PATH", resolved.HOST_BUNDLES_PATH)
-    _put("HOST_GIT_BUNDLES_PATH", resolved.HOST_GIT_BUNDLES_PATH)
+    _put("BUNDLES_ROOT", resolved.PLATFORM.APPLICATIONS.BUNDLES_ROOT)
+    _put("HOST_MANAGED_BUNDLES_PATH", resolved.HOST_MANAGED_BUNDLES_PATH)
+    _put("MANAGED_BUNDLES_ROOT", resolved.PLATFORM.APPLICATIONS.MANAGED_BUNDLES_ROOT)
     _put("HOST_BUNDLE_STORAGE_PATH", resolved.HOST_BUNDLE_STORAGE_PATH)
     _put("HOST_EXEC_WORKSPACE_PATH", resolved.HOST_EXEC_WORKSPACE_PATH)
     _put("BUNDLE_STORAGE_ROOT", resolved.PLATFORM.APPLICATIONS.BUNDLE_STORAGE_ROOT)

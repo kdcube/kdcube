@@ -337,7 +337,8 @@ class GitBundlesConfig(BaseModel):
 
 
 class ApplicationsConfig(BaseModel):
-    AGENTIC_BUNDLES_ROOT: str = "/bundles"
+    BUNDLES_ROOT: str = "/bundles"
+    MANAGED_BUNDLES_ROOT: str = "/managed-bundles"
     BUNDLE_STORAGE_ROOT: str | None = None
     BUNDLES_INCLUDE_EXAMPLES: bool = True
     BUNDLE_CLEANUP_ENABLED: bool = True

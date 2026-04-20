@@ -7,6 +7,7 @@ from rich.console import Console
 from kdcube_cli.cli import (
     _build_paths_for_repo,
     _canonical_descriptor_dir_from_initialized_workdir,
+    _collect_runtime_info,
     _compose_running_services,
     _descriptor_fast_path_reasons,
     _load_bundle_ids_from_descriptor,
@@ -231,6 +232,47 @@ def test_build_paths_for_repo_uses_runtime_compose_mode(tmp_path: Path):
     ctx = _build_paths_for_repo(repo_root, workdir)
 
     assert ctx.docker_dir == ai_app_root / "deployment" / "docker" / "custom-ui-managed-infra"
+
+
+def test_collect_runtime_info_reports_bundle_mount_mapping(tmp_path: Path):
+    workdir = tmp_path / "runtime"
+    config_dir = workdir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text(
+        "\n".join(
+            [
+                "HOST_BUNDLES_PATH=/host/bundles",
+                "BUNDLES_ROOT=/bundles",
+                "HOST_MANAGED_BUNDLES_PATH=/host/managed-bundles",
+                "MANAGED_BUNDLES_ROOT=/managed-bundles",
+                "HOST_BUNDLE_STORAGE_PATH=/host/bundle-storage",
+                "BUNDLE_STORAGE_ROOT=/bundle-storage",
+                "HOST_EXEC_WORKSPACE_PATH=/host/exec-workspace",
+                "KDCUBE_COMPOSE_MODE=all-in-one",
+            ]
+        )
+        + "\n"
+    )
+    (config_dir / "assembly.yaml").write_text("context:\n  tenant: demo\n  project: project-one\n")
+    (config_dir / "bundles.yaml").write_text("bundles:\n  default_bundle_id: demo.bundle\n  items: []\n")
+    (config_dir / "install-meta.json").write_text(json.dumps({"install_mode": "upstream", "platform_ref": "abc123"}))
+
+    repo_root = tmp_path / "repo"
+    ai_app_root = repo_root / "app" / "ai-app"
+    (ai_app_root / "deployment" / "docker" / "all_in_one_kdcube").mkdir(parents=True)
+    (ai_app_root / "deployment" / "docker" / "all_in_one_kdcube" / "docker-compose.yaml").write_text("")
+    (ai_app_root / "src" / "kdcube-ai-app" / "kdcube_ai_app").mkdir(parents=True)
+
+    info = _collect_runtime_info(repo_root=repo_root, workdir=workdir)
+
+    assert info["host_bundles_path"] == "/host/bundles"
+    assert info["container_bundles_root"] == "/bundles"
+    assert info["host_managed_bundles_path"] == "/host/managed-bundles"
+    assert info["container_managed_bundles_root"] == "/managed-bundles"
+    assert info["default_bundle_id"] == "demo.bundle"
+    assert info["bundle_count"] == 0
+    assert info["tenant"] == "demo"
+    assert info["project"] == "project-one"
 
 
 def test_stage_descriptor_directory_requires_canonical_descriptor_set(tmp_path: Path):
@@ -610,7 +652,7 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -681,7 +723,7 @@ def test_gather_configuration_accepts_descriptor_secret_paths(monkeypatch, tmp_p
     assert "HOST_BUNDLES_SECRETS_YAML_DESCRIPTOR_PATH=" not in env_main
     assert (tmp_path / "kdcube-storage").is_dir()
     assert (tmp_path / "bundles").is_dir()
-    assert (tmp_path / "git-bundles").is_dir()
+    assert (tmp_path / "managed-bundles").is_dir()
     assert (tmp_path / "bundle-storage").is_dir()
     assert (tmp_path / "exec-workspace").is_dir()
 
@@ -716,7 +758,7 @@ def test_gather_configuration_treats_null_redis_secret_as_unset(monkeypatch, tmp
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -833,7 +875,7 @@ def test_gather_configuration_applies_platform_service_env_from_assembly(monkeyp
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -963,7 +1005,7 @@ def test_gather_configuration_supports_explicit_proxy_host_ports(monkeypatch, tm
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -1083,7 +1125,7 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles-root"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -1137,7 +1179,7 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
             "paths": {
                 "host_kdcube_storage_path": "/seed/storage",
                 "host_bundles_path": "/seed/bundles",
-                "host_git_bundles_path": "/seed/git-bundles",
+                "host_managed_bundles_path": "/seed/managed-bundles",
                 "host_bundle_storage_path": "/seed/bundle-storage",
                 "host_exec_workspace_path": "/seed/exec-workspace",
             },
@@ -1155,7 +1197,7 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
                         "log": {"log_dir": "/seed/proc-logs"},
                         "exec": {"exec_workspace_root": "/seed/exec"},
                         "bundles": {
-                            "agentic_bundles_root": "/seed/bundles-root",
+                            "bundles_root": "/seed/bundles-root",
                             "bundle_storage_root": "/seed/bundle-storage-root",
                         },
                     },
@@ -1193,24 +1235,24 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
     assert "HOST_GATEWAY_YAML_DESCRIPTOR_PATH=" not in env_main
     assert f"HOST_KDCUBE_STORAGE_PATH={(tmp_path / 'kdcube-storage').resolve()}" in env_main
     assert f"HOST_BUNDLES_PATH={(tmp_path / 'bundles-root').resolve()}" in env_main
-    assert f"HOST_GIT_BUNDLES_PATH={(tmp_path / 'git-bundles').resolve()}" in env_main
+    assert f"HOST_MANAGED_BUNDLES_PATH={(tmp_path / 'managed-bundles').resolve()}" in env_main
     assert f"HOST_BUNDLE_STORAGE_PATH={(tmp_path / 'bundle-storage').resolve()}" in env_main
     assert f"HOST_EXEC_WORKSPACE_PATH={(tmp_path / 'exec-workspace').resolve()}" in env_main
     assert f"KDCUBE_CONFIG_DIR={config_dir}" in env_main
-    assert "AGENTIC_BUNDLES_ROOT=/bundles" in env_main
-    assert "AGENTIC_GIT_BUNDLES_ROOT=/git-bundles" in env_main
+    assert "BUNDLES_ROOT=/bundles" in env_main
+    assert "MANAGED_BUNDLES_ROOT=/managed-bundles" in env_main
     assert "BUNDLE_STORAGE_ROOT=/bundle-storage" in env_main
 
     assembly_data = yaml.safe_load(assembly_path.read_text())
     assert assembly_data["paths"]["host_kdcube_storage_path"] == str((tmp_path / "kdcube-storage").resolve())
     assert assembly_data["paths"]["host_bundles_path"] == str((tmp_path / "bundles-root").resolve())
-    assert assembly_data["paths"]["host_git_bundles_path"] == str((tmp_path / "git-bundles").resolve())
+    assert assembly_data["paths"]["host_managed_bundles_path"] == str((tmp_path / "managed-bundles").resolve())
     assert assembly_data["paths"]["host_bundle_storage_path"] == str((tmp_path / "bundle-storage").resolve())
     assert assembly_data["paths"]["host_exec_workspace_path"] == str((tmp_path / "exec-workspace").resolve())
     assert assembly_data["platform"]["services"]["ingress"]["log"]["log_dir"] == "/logs"
     assert assembly_data["platform"]["services"]["proc"]["log"]["log_dir"] == "/logs"
     assert assembly_data["platform"]["services"]["proc"]["exec"]["exec_workspace_root"] == "/exec-workspace"
-    assert assembly_data["platform"]["services"]["proc"]["bundles"]["agentic_bundles_root"] == "/bundles"
+    assert assembly_data["platform"]["services"]["proc"]["bundles"]["bundles_root"] == "/bundles"
     assert assembly_data["platform"]["services"]["proc"]["bundles"]["bundle_storage_root"] == "/bundle-storage"
 
 
@@ -1255,7 +1297,7 @@ def test_gather_configuration_uses_descriptor_git_ssh_mounts(monkeypatch, tmp_pa
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles-root"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -1318,7 +1360,7 @@ def test_gather_configuration_uses_descriptor_git_ssh_mounts(monkeypatch, tmp_pa
             "secrets": {"provider": "secrets-file"},
             "paths": {
                 "host_bundles_path": str(tmp_path / "bundles-root"),
-                "host_git_bundles_path": str(tmp_path / "git-bundles"),
+                "host_managed_bundles_path": str(tmp_path / "managed-bundles"),
                 "host_bundle_storage_path": str(tmp_path / "bundle-storage"),
                 "host_exec_workspace_path": str(tmp_path / "exec-workspace"),
                 "host_git_ssh_key_path": str(ssh_key),
@@ -1385,7 +1427,7 @@ def test_gather_configuration_rewrites_local_bundle_paths_into_staged_descriptor
         lambda *_args, **_kwargs: {
             "host_kb_storage": str(tmp_path / "kdcube-storage"),
             "host_bundles": str(tmp_path / "bundles-root"),
-            "host_git_bundles": str(tmp_path / "git-bundles"),
+            "host_managed_bundles": str(tmp_path / "managed-bundles"),
             "host_bundle_storage": str(tmp_path / "bundle-storage"),
             "host_exec_workspace": str(tmp_path / "exec-workspace"),
             "ui_build_context": str(ai_app_root),
@@ -1467,7 +1509,7 @@ def test_gather_configuration_rewrites_local_bundle_paths_into_staged_descriptor
 
     env_main = (config_dir / ".env").read_text()
     assert f"HOST_BUNDLES_PATH={host_bundle_root.resolve()}" in env_main
-    assert "AGENTIC_BUNDLES_ROOT=/bundles" in env_main
+    assert "BUNDLES_ROOT=/bundles" in env_main
 
     assembly_data = yaml.safe_load(assembly_path.read_text())
     assert assembly_data["paths"]["host_bundles_path"] == str(host_bundle_root.resolve())

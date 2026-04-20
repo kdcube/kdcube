@@ -144,7 +144,7 @@ Typical use:
 Important local settings:
 
 - `assembly.paths.host_bundles_path`
-- optional `assembly.paths.host_git_bundles_path`
+- `assembly.paths.host_managed_bundles_path`
 
 Reload workflow:
 

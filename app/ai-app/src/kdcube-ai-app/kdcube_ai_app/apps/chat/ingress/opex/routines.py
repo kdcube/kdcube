@@ -405,8 +405,7 @@ async def _run_bundle_cleanup_once() -> None:
         )
         from kdcube_ai_app.infra.plugin.git_bundle import (
             cleanup_old_git_bundles_async,
-            resolve_bundles_root,
-            resolve_git_bundles_root,
+            resolve_managed_bundles_root,
             bundle_dir_for_git,
         )
         from kdcube_ai_app.infra.plugin.bundle_refs import get_active_paths
@@ -421,14 +420,14 @@ async def _run_bundle_cleanup_once() -> None:
             base_dir = bundle_dir_for_git(bid, entry.get("ref"))
             removed = await cleanup_old_git_bundles_async(
                 bundle_id=base_dir,
-                bundles_root=resolve_git_bundles_root(),
+                bundles_root=resolve_managed_bundles_root(),
                 active_paths=active_paths,
             )
             total_removed += removed
         for bid in _discover_example_bundle_ids():
             total_removed += cleanup_old_shared_example_bundles(
                 bundle_id=bid,
-                bundles_root=resolve_bundles_root(),
+                bundles_root=resolve_managed_bundles_root(),
                 active_paths=active_paths,
             )
         if total_removed:

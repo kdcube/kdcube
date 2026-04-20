@@ -99,7 +99,7 @@ Supported keys:
 
 - `paths.host_kdcube_storage_path`
 - `paths.host_bundles_path`
-- `paths.host_git_bundles_path`
+- `paths.host_managed_bundles_path`
 - `paths.host_bundle_storage_path`
 - `paths.host_exec_workspace_path`
 
@@ -111,8 +111,8 @@ directories should back the container-visible paths.
 | Field | CLI local compose | Direct local service run | AWS deployment |
 |---|---|---|---|
 | `host_kdcube_storage_path` | relevant; mounted into container-backed local storage | optional; relevant only if the process should use that host storage path | ignore |
-| `host_bundles_path` | relevant for local path bundles and legacy git fallback; mounted as `/bundles` | optional; relevant only if proc needs a host-visible local bundle root | ignore |
-| `host_git_bundles_path` | optional; separate local git clone/cache root mounted as `/git-bundles` | optional; separate host git clone/cache root | ignore |
+| `host_bundles_path` | relevant for non-managed local path bundles; mounted as `/bundles` | optional; relevant only if proc needs a host-visible local bundle root | ignore |
+| `host_managed_bundles_path` | relevant for platform-managed bundles; mounted as `/managed-bundles` | optional; separate host root for git-resolved/example bundles | ignore |
 | `host_bundle_storage_path` | relevant; mounted as `/bundle-storage` | optional; relevant only if local runtime should use host file-backed bundle storage | ignore |
 | `host_exec_workspace_path` | relevant; mounted as `/exec-workspace` | optional; relevant only if local exec runtime should use a host workspace root | ignore |
 
@@ -128,7 +128,7 @@ env keys:
 
 - `HOST_KDCUBE_STORAGE_PATH`
 - `HOST_BUNDLES_PATH`
-- `HOST_GIT_BUNDLES_PATH`
+- `HOST_MANAGED_BUNDLES_PATH`
 - `HOST_BUNDLE_STORAGE_PATH`
 - `HOST_EXEC_WORKSPACE_PATH`
 
@@ -138,7 +138,7 @@ env keys:
 |---|---|---|
 | `HOST_KDCUBE_STORAGE_PATH` | `paths.host_kdcube_storage_path` | CLI local compose |
 | `HOST_BUNDLES_PATH` | `paths.host_bundles_path` | CLI local compose |
-| `HOST_GIT_BUNDLES_PATH` | `paths.host_git_bundles_path` | CLI local compose |
+| `HOST_MANAGED_BUNDLES_PATH` | `paths.host_managed_bundles_path` | CLI local compose |
 | `HOST_BUNDLE_STORAGE_PATH` | `paths.host_bundle_storage_path` | CLI local compose |
 | `HOST_EXEC_WORKSPACE_PATH` | `paths.host_exec_workspace_path` | CLI local compose |
 
@@ -147,13 +147,14 @@ container-visible paths such as:
 
 - `/kdcube-storage`
 - `/bundles`
-- `/git-bundles`
+- `/managed-bundles`
 - `/bundle-storage`
 - `/exec-workspace`
 
 So in `bundles.yaml`:
 
-- local path bundles must use container-visible paths like `/bundles/...`
+- non-managed local path bundles must use container-visible paths like `/bundles/...`
+- platform-managed bundles are materialized under `/managed-bundles/...`
 - not raw host paths from your laptop
 
 ## Direct local proc/ingress contract
@@ -222,7 +223,6 @@ secrets:
 
 paths:
   host_bundles_path: "/Users/you/src"
-  host_git_bundles_path: "/Users/you/.kdcube/runtime/data/git-bundles"
   host_bundle_storage_path: "/Users/you/.kdcube/runtime/data/bundle-storage"
   host_exec_workspace_path: "/Users/you/.kdcube/runtime/data/exec-workspace"
 ```
