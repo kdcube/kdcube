@@ -12,6 +12,7 @@ from kdcube_ai_app.infra.plugin import bundle_store
 class _FakeRedis:
     def __init__(self):
         self.data = {}
+        self.published = []
 
     async def get(self, key):
         return self.data.get(key)
@@ -26,6 +27,10 @@ class _FakeRedis:
 
     async def keys(self, pattern):
         return [key for key in self.data.keys() if fnmatch.fnmatch(key, pattern)]
+
+    async def publish(self, channel, message):
+        self.published.append((channel, message))
+        return 1
 
 
 class _FakeAuthoritativeStore:
@@ -342,6 +347,51 @@ async def test_put_bundle_props_persists_to_authoritative_store(monkeypatch):
     assert replace is False
     assert bundle_id in saved_reg.bundles
     assert saved_props[bundle_id] == {"feature": {"enabled": True}}
+
+
+@pytest.mark.asyncio
+async def test_put_bundle_props_publishes_props_update(monkeypatch):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "demo.bundle"
+
+    reg = bundle_store.BundlesRegistry(
+        default_bundle_id=bundle_id,
+        bundles={
+            bundle_id: bundle_store.BundleEntry(
+                id=bundle_id,
+                path="/bundles/demo.bundle",
+                module="entrypoint",
+            )
+        },
+    )
+    store = _FakeAuthoritativeStore(reg=reg)
+
+    monkeypatch.setattr(bundle_store, "_merge_example_bundles", lambda reg: (reg, False))
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+
+    await bundle_store.save_registry(redis, reg, tenant=tenant, project=project)
+    await bundle_store.put_bundle_props(
+        redis,
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        props={"feature": {"enabled": True}},
+        actor="tester",
+        source="unit-test",
+    )
+
+    assert len(redis.published) == 1
+    channel, message = redis.published[0]
+    assert channel == bundle_store.props_update_channel(tenant, project)
+    payload = json.loads(message)
+    assert payload["type"] == "bundles.props.update"
+    assert payload["bundle_id"] == bundle_id
+    assert payload["tenant"] == tenant
+    assert payload["project"] == project
+    assert payload["updated_by"] == "tester"
+    assert payload["source"] == "unit-test"
 
 
 @pytest.mark.asyncio

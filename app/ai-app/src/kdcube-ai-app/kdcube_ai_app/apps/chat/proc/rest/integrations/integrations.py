@@ -1021,23 +1021,9 @@ async def set_bundle_props(
         project=project_id,
         bundle_id=bundle_id,
         props=props,
+        actor=session.username or session.user_id or "unknown",
+        source="admin",
     )
-
-    try:
-        msg = {
-            "type": "bundles.props.update",
-            "bundle_id": bundle_id,
-            "tenant": tenant_id,
-            "project": project_id,
-            "updated_by": session.username or session.user_id or "unknown",
-            "ts": datetime.utcnow().isoformat() + "Z",
-        }
-        await redis.publish(
-            _bundles_channel(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
-            json.dumps(msg, ensure_ascii=False),
-        )
-    except Exception as e:
-        logger.error("Failed to publish props update: %s", e)
 
     return {"status": "ok", "bundle_id": bundle_id, "tenant": tenant_id, "project": project_id}
 
@@ -1068,23 +1054,9 @@ async def reset_bundle_props_from_code(
         project=project_id,
         bundle_id=bundle_id,
         props=defaults,
+        actor=session.username or session.user_id or "unknown",
+        source="admin.reset-code",
     )
-
-    try:
-        msg = {
-            "type": "bundles.props.update",
-            "bundle_id": bundle_id,
-            "tenant": tenant_id,
-            "project": project_id,
-            "updated_by": session.username or session.user_id or "unknown",
-            "ts": datetime.utcnow().isoformat() + "Z",
-        }
-        await redis.publish(
-            _bundles_channel(namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL, tenant=tenant_id, project=project_id),
-            json.dumps(msg, ensure_ascii=False),
-        )
-    except Exception as e:
-        logger.error("Failed to publish props reset: %s", e)
 
     return {"status": "ok", "bundle_id": bundle_id, "tenant": tenant_id, "project": project_id, "source": "code"}
 

@@ -161,13 +161,15 @@ async def test_set_bundle_prop_uses_request_context_scope_and_merges_nested_key(
         }
         return {"features": {"existing": True}}
 
-    async def _fake_put_bundle_props(redis, *, tenant, project, bundle_id, props):
+    async def _fake_put_bundle_props(redis, *, tenant, project, bundle_id, props, actor=None, source=None):
         calls["put"] = {
             "redis": redis,
             "tenant": tenant,
             "project": project,
             "bundle_id": bundle_id,
             "props": props,
+            "actor": actor,
+            "source": source,
         }
 
     redis_client = object()
@@ -216,4 +218,6 @@ async def test_set_bundle_prop_uses_request_context_scope_and_merges_nested_key(
                 "sync": {"enabled": False},
             }
         },
+        "actor": None,
+        "source": None,
     }

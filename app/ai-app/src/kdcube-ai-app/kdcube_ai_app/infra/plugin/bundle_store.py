@@ -1147,6 +1147,46 @@ def update_channel(tenant: Optional[str]=None, project: Optional[str]=None) -> s
         p = p or p2
     return REDIS_CHANNEL_FMT.format(tenant=t, project=p)
 
+
+def props_update_channel(tenant: Optional[str]=None, project: Optional[str]=None) -> str:
+    t, p = tenant, project
+    if not t or not p:
+        t2, p2 = _tp_from_env()
+        t = t or t2
+        p = p or p2
+    return namespaces.CONFIG.BUNDLES.PROPS_UPDATE_CHANNEL.format(tenant=t, project=p)
+
+
+async def publish_props_update(
+    redis,
+    *,
+    bundle_id: str,
+    tenant: Optional[str] = None,
+    project: Optional[str] = None,
+    actor: Optional[str] = None,
+    source: Optional[str] = None,
+) -> None:
+    t, p = tenant, project
+    if not t or not p:
+        t2, p2 = _tp_from_env()
+        t = t or t2
+        p = p or p2
+    payload = {
+        "type": "bundles.props.update",
+        "bundle_id": bundle_id,
+        "tenant": t,
+        "project": p,
+        "ts": time.time(),
+    }
+    if actor:
+        payload["updated_by"] = actor
+    if source:
+        payload["source"] = source
+    await redis.publish(
+        props_update_channel(t, p),
+        json.dumps(payload, ensure_ascii=False),
+    )
+
 async def load_registry(redis, tenant: Optional[str] = None, project: Optional[str] = None) -> BundlesRegistry:
     """
     Load per-tenant/project registry from Redis.
@@ -1587,23 +1627,46 @@ async def put_bundle_props(
     project: str,
     bundle_id: str,
     props: Dict[str, Any],
+    actor: Optional[str] = None,
+    source: Optional[str] = None,
 ) -> None:
     key = _props_key(tenant=tenant, project=project, bundle_id=bundle_id)
     await redis.set(key, json.dumps(props, ensure_ascii=False))
     if bundle_id in _reserved_bundle_ids():
+        try:
+            await publish_props_update(
+                redis,
+                bundle_id=bundle_id,
+                tenant=tenant,
+                project=project,
+                actor=actor,
+                source=source,
+            )
+        except Exception:
+            _log.warning("Failed to publish bundle props update", exc_info=True)
         return
     reg = await load_registry(redis, tenant, project)
     entry = reg.bundles.get(bundle_id)
-    if entry is None or bundle_id in _reserved_bundle_ids():
-        return
-    await save_registry(
-        redis,
-        reg,
-        tenant,
-        project,
-        props_map={bundle_id: props},
-        replace=False,
-    )
+    if entry is not None and bundle_id not in _reserved_bundle_ids():
+        await save_registry(
+            redis,
+            reg,
+            tenant,
+            project,
+            props_map={bundle_id: props},
+            replace=False,
+        )
+    try:
+        await publish_props_update(
+            redis,
+            bundle_id=bundle_id,
+            tenant=tenant,
+            project=project,
+            actor=actor,
+            source=source,
+        )
+    except Exception:
+        _log.warning("Failed to publish bundle props update", exc_info=True)
 
 def apply_update(
         current: BundlesRegistry,
