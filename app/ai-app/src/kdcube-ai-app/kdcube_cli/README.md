@@ -144,6 +144,41 @@ This reuse path requires:
 When those files exist, the CLI treats `workdir/config` as the descriptor
 authority and reuses the repo recorded in `install-meta.json` when possible.
 
+Important reused-runtime rule:
+
+- the CLI reuses `workdir/config/assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` as they already exist
+- it does not reseed default descriptors
+- if `bundles.yaml` already contains local path entries under `/bundles/...`, those are treated as container paths and preserved
+- the matching host root is taken from `assembly.yaml -> paths.host_bundles_path`
+- the CLI does not reinterpret `/bundles/...` as a host filesystem path
+
+So for an initialized runtime, change bundle topology by editing:
+
+- `workdir/config/assembly.yaml`
+- `workdir/config/bundles.yaml`
+
+Do not change local path bundles by putting host paths directly into `bundles.yaml`.
+
+Correct split:
+
+```yaml
+# workdir/config/assembly.yaml
+paths:
+  host_bundles_path: "/Users/you/src"
+```
+
+```yaml
+# workdir/config/bundles.yaml
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      path: "/bundles/my-repo/src/my_bundle"
+      module: "entrypoint"
+```
+
+`host_bundles_path` is the host parent root.
+`path` in `bundles.yaml` is the container-visible bundle root.
+
 `--latest` is different: it resolves the latest release ref for release-image
 installs. It does not mean “latest source templates from GitHub main”.
 
