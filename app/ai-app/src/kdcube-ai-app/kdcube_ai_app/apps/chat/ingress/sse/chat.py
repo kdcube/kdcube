@@ -34,6 +34,7 @@ from kdcube_ai_app.apps.chat.ingress.chat_core import (
     run_gateway_checks,
     map_gateway_error,
     process_chat_message,
+    resolve_ingress_conversation_id,
     get_conversation_status, build_sse_request_context, upgrade_session_from_tokens,
 )
 
@@ -764,8 +765,11 @@ def create_sse_router(
 
         turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
         message_data["turn_id"] = turn_id
-        conversation_id = message_data.get("conversation_id") or session.session_id
-        message_data["conversation_id"] = conversation_id
+        conversation_id, conversation_created = await resolve_ingress_conversation_id(
+            app=app,
+            session=session,
+            message_data=message_data,
+        )
         logger.info(
             "[sse_chat] parsed request session=%s stream_id=%s conversation_id=%s turn_id=%s text_len=%s",
             session.session_id,
@@ -871,6 +875,8 @@ def create_sse_router(
             "status": result.reason or "processing_started",
             "task_id": result.task_id,
             "session_id": result.session_id,
+            "conversation_id": result.conversation_id,
+            "conversation_created": conversation_created,
             "user_type": result.user_type,
             "message_kind": result.continuation_kind,
             "message": (

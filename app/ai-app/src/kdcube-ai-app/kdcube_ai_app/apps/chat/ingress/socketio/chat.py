@@ -20,6 +20,7 @@ import hashlib
 import re
 
 import socketio
+from fastapi import HTTPException
 
 from kdcube_ai_app.auth.AuthManager import AuthenticationError
 from kdcube_ai_app.auth.sessions import UserSession, UserType, RequestContext
@@ -35,6 +36,7 @@ from kdcube_ai_app.apps.chat.ingress.chat_core import (
     run_gateway_checks,
     map_gateway_error,
     process_chat_message,
+    resolve_ingress_conversation_id,
     get_conversation_status, build_ws_connect_request_context, upgrade_session_from_tokens,
     build_ws_chat_request_context,
 )
@@ -42,6 +44,13 @@ from kdcube_ai_app.infra.service_hub.multimodality import MESSAGE_MAX_BYTES
 from kdcube_ai_app.apps.middleware.token_extract import resolve_socket_auth_tokens
 
 logger = logging.getLogger(__name__)
+
+
+def _http_exception_message(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return str(detail.get("error") or detail.get("detail") or "Chat request failed")
+    return str(detail or "Chat request failed")
 
 async def _reject_anonymous(
         *,
@@ -418,8 +427,13 @@ class SocketIOChatHandler:
                     target_sid=sid,
                     session_id=session.session_id,
                 )
-                # No explicit WS ack – just error event
-                return
+                return {
+                    "ok": False,
+                    "status": mapped["status"],
+                    "error_type": mapped["error_type"],
+                    "error": mapped["message"],
+                    "retry_after": mapped.get("retry_after"),
+                }
 
             # ---------- attachments (Socket.IO → RawAttachment) ----------
             max_mb = getattr(self, "max_upload_mb", 20)
@@ -443,8 +457,33 @@ class SocketIOChatHandler:
 
             turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
             message_data["turn_id"] = turn_id
-            conversation_id = message_data.get("conversation_id") or session.session_id
-            message_data["conversation_id"] = conversation_id
+            try:
+                conversation_id, conversation_created = await resolve_ingress_conversation_id(
+                    app=self.app,
+                    session=session,
+                    message_data=message_data,
+                )
+            except HTTPException as exc:
+                svc = ServiceCtx(request_id=str(uuid.uuid4()), user=session.user_id)
+                conv = ConversationCtx(
+                    session_id=session.session_id,
+                    conversation_id=str(message_data.get("conversation_id") or "unknown"),
+                    turn_id=turn_id,
+                )
+                error_message = _http_exception_message(exc)
+                await self._comm.emit_error(
+                    svc,
+                    conv,
+                    error=error_message,
+                    target_sid=sid,
+                    session_id=session.session_id,
+                )
+                return {
+                    "ok": False,
+                    "status": exc.status_code,
+                    "error": error_message,
+                    "conversation_id": message_data.get("conversation_id"),
+                }
 
             # ---------- build final message text ----------
             base_message = (
@@ -489,11 +528,29 @@ class SocketIOChatHandler:
                     result.error_type,
                     result.error,
                 )
-                return
+                return {
+                    "ok": False,
+                    "status": result.http_status or 400,
+                    "error_type": result.error_type,
+                    "error": result.error,
+                    "conversation_id": result.conversation_id or conversation_id,
+                }
 
-            # On success, everything (conv_status + start) is already emitted.
-            # You *could* emit a lightweight ack event here if desired.
-            return
+            return {
+                "ok": True,
+                "status": result.reason or "processing_started",
+                "task_id": result.task_id,
+                "session_id": result.session_id,
+                "conversation_id": result.conversation_id,
+                "conversation_created": conversation_created,
+                "user_type": result.user_type,
+                "message_kind": result.continuation_kind,
+                "message": (
+                    "Continuation accepted; available to the active conversation owner"
+                    if result.reason in {"followup_accepted", "steer_accepted"}
+                    else "Queued; streaming via Socket.IO"
+                ),
+            }
 
         except Exception as e:
             logger.exception("chat_message error: %s", e)

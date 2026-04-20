@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Literal
-from fastapi import Request  # only if you put this in a place where FastAPI is available
+from fastapi import HTTPException, Request  # only if you put this in a place where FastAPI is available
 
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.continuations import RedisConversationContinuationSource
@@ -222,6 +222,47 @@ def _resolve_target_turn_id(message_data: Dict[str, Any]) -> Optional[str]:
     return value or None
 
 
+def _resolve_conversation_owner_id(session: UserSession) -> Optional[str]:
+    owner_id = getattr(session, "user_id", None) or getattr(session, "fingerprint", None)
+    if owner_id is None:
+        return None
+    owner_id = str(owner_id).strip()
+    return owner_id or None
+
+
+async def resolve_ingress_conversation_id(
+        *,
+        app,
+        session: UserSession,
+        message_data: Dict[str, Any],
+) -> tuple[str, bool]:
+    raw_conversation_id = message_data.get("conversation_id")
+    conversation_id = str(raw_conversation_id or "").strip()
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        message_data["conversation_id"] = conversation_id
+        return conversation_id, True
+
+    owner_id = _resolve_conversation_owner_id(session)
+    if not owner_id:
+        raise HTTPException(status_code=401, detail="Authenticated user identity is missing")
+
+    conversation_browser = getattr(getattr(app, "state", None), "conversation_browser", None)
+    if conversation_browser is None:
+        logger.error("Conversation lookup is unavailable: app.state.conversation_browser is not configured")
+        raise HTTPException(status_code=503, detail="Conversation lookup unavailable")
+
+    exists = await conversation_browser.conversation_exists(
+        user_id=owner_id,
+        conversation_id=conversation_id,
+    )
+    if not exists:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    message_data["conversation_id"] = conversation_id
+    return conversation_id, False
+
+
 async def process_chat_message(
         *,
         app,
@@ -254,7 +295,15 @@ async def process_chat_message(
     target_turn_id = _resolve_target_turn_id(message_data)
     task_id = str(uuid.uuid4())
     turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
-    conversation_id = message_data.get("conversation_id") or session.session_id
+    conversation_id = str(message_data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return IngressResult(
+            ok=False,
+            error_type="missing_conversation_id",
+            error="Missing conversation_id",
+            http_status=400,
+        )
+    message_data["conversation_id"] = conversation_id
     # Tenant / project
     settings = get_settings()
     tenant_id = (
