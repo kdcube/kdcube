@@ -172,10 +172,10 @@ def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
     if not _is_running_in_docker():
         return bundle_root
 
-    version = compute_dir_sha256(bundle_root, skip_files=set())
-    dest_root = _shared_example_bundle_dir(bundle_root.name, version)
-    lock_path = _example_bundle_lock_path(bundle_root.name)
     try:
+        version = compute_dir_sha256(bundle_root, skip_files=set())
+        dest_root = _shared_example_bundle_dir(bundle_root.name, version)
+        lock_path = _example_bundle_lock_path(bundle_root.name)
         with lock_path.open("a+") as fh:
             fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
             if dest_root.exists() and (dest_root / "entrypoint.py").exists():
@@ -198,7 +198,8 @@ def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
             )
             return dest_root
     except Exception as exc:
-        _log.warning("Failed to copy example bundle to %s: %s", dest_root, exc)
+        fallback_dest = locals().get("dest_root", bundle_root)
+        _log.warning("Failed to copy example bundle to %s: %s", fallback_dest, exc)
         return bundle_root
 
 def _examples_enabled() -> bool:
@@ -238,6 +239,8 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
     return bundles
 
 def _discover_example_bundle_ids() -> Set[str]:
+    if not _examples_enabled():
+        return set()
     root = _examples_root()
     if not root.exists():
         return set()

@@ -302,6 +302,54 @@ class MonitoringConfig(BaseModel):
     MONITORING_BURST_ENABLE: bool = True
 
 
+# ─── PLATFORM.METRICS ─────────────────────────────────────────────────────────
+
+class MetricsRuntimeConfig(BaseModel):
+    METRICS_MODE: str = "redis"
+    METRICS_REQUEST_TIMEOUT_SEC: float = 5.0
+    METRICS_ENABLE_PG_POOL: bool = False
+
+
+class MetricsProxyConfig(BaseModel):
+    METRICS_INGRESS_BASE_URL: str | None = None
+    METRICS_PROC_BASE_URL: str | None = None
+    METRICS_AUTH_HEADER_NAME: str | None = None
+    METRICS_AUTH_HEADER_VALUE: str | None = None
+    METRICS_HEADERS_JSON: str | None = None
+
+
+class MetricsCloudWatchConfig(BaseModel):
+    METRICS_EXPORT_CLOUDWATCH: bool = False
+    METRICS_CLOUDWATCH_NAMESPACE: str = "KDCube/Metrics"
+    METRICS_CLOUDWATCH_REGION: str | None = None
+    METRICS_CLOUDWATCH_DIMENSIONS_JSON: str | None = None
+
+
+class MetricsPrometheusConfig(BaseModel):
+    METRICS_EXPORT_PROMETHEUS_PUSH: bool = False
+    METRICS_PROM_PUSHGATEWAY_URL: str | None = None
+    METRICS_PROM_JOB_NAME: str = "kdcube_metrics"
+    METRICS_PROM_GROUPING_LABELS_JSON: str | None = None
+    METRICS_PROM_SCRAPE_TTL_SEC: float = 10.0
+
+
+class MetricsExportConfig(BaseModel):
+    METRICS_SCHEDULER_ENABLED: bool = False
+    METRICS_EXPORT_INTERVAL_SEC: float = 30.0
+    METRICS_EXPORT_ON_START: bool = True
+    METRICS_RUN_ONCE: bool = False
+    METRICS_MAPPING_JSON: str | None = None
+    CLOUDWATCH: MetricsCloudWatchConfig = Field(default_factory=MetricsCloudWatchConfig)
+    PROMETHEUS: MetricsPrometheusConfig = Field(default_factory=MetricsPrometheusConfig)
+
+
+class MetricsConfig(BaseModel):
+    LOG: LOGConfig = Field(default_factory=LOGConfig)
+    SERVICE: MetricsRuntimeConfig = Field(default_factory=MetricsRuntimeConfig)
+    PROXY: MetricsProxyConfig = Field(default_factory=MetricsProxyConfig)
+    EXPORT: MetricsExportConfig = Field(default_factory=MetricsExportConfig)
+
+
 # ─── PLATFORM.EXEC ────────────────────────────────────────────────────────────
 
 class PyExecConfig(BaseModel):
@@ -367,6 +415,7 @@ class PlatformConfig(BaseModel):
     SERVICE: ServiceConfig = Field(default_factory=ServiceConfig)
     HOSTED_SERVICES: HostedServicesConfig = Field(default_factory=HostedServicesConfig)
     MONITORING: MonitoringConfig = Field(default_factory=MonitoringConfig)
+    METRICS: MetricsConfig = Field(default_factory=MetricsConfig)
     EXEC: ExecConfig = Field(default_factory=ExecConfig)
     ACCOUNTING: AccountingConfig = Field(default_factory=AccountingConfig)
     APPLICATIONS: ApplicationsConfig = Field(default_factory=ApplicationsConfig)

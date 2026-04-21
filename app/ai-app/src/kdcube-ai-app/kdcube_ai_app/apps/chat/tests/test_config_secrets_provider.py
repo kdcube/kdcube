@@ -1,3 +1,4 @@
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -10,9 +11,8 @@ from kdcube_ai_app.apps.chat.sdk.runtime import comm_ctx
 class _FakeSecretsManager:
     def __init__(self):
         self.set_calls = []
-
-    def get_secret(self, key: str):
-        values = {
+        self.get_calls = []
+        self.values = {
             "services.openai.api_key": "sk-openai-test",
             "services.anthropic.api_key": "sk-anthropic-test",
             "services.git.http_token": "gh-token-test",
@@ -20,7 +20,10 @@ class _FakeSecretsManager:
             "infra.redis.password": "redis-secret-test",
             "bundles.bundle.demo.secrets.user_management.cognito_user_pool_id": "pool-123",
         }
-        return values.get(key)
+
+    def get_secret(self, key: str):
+        self.get_calls.append(key)
+        return self.values.get(key)
 
     def get_user_secret(self, *, user_id: str, key: str, bundle_id: str | None = None):
         values = {
@@ -46,7 +49,7 @@ class _FakePropsManager:
         return values.get((user_id, bundle_id), {})
 
 
-def test_settings_reads_secrets_through_provider(monkeypatch):
+def test_settings_reads_secrets_through_provider(monkeypatch, caplog):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
@@ -54,7 +57,10 @@ def test_settings_reads_secrets_through_provider(monkeypatch):
     monkeypatch.delenv("GIT_HTTP_TOKEN", raising=False)
     monkeypatch.delenv("GIT_HTTP_USER", raising=False)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
-    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _FakeSecretsManager())
+    manager = _FakeSecretsManager()
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: manager)
+    sdk_config._SECRET_LOGGED.clear()
+    caplog.set_level(logging.INFO, logger="kdcube.settings.secrets")
 
     settings = sdk_config.Settings()
 
@@ -63,6 +69,20 @@ def test_settings_reads_secrets_through_provider(monkeypatch):
     assert settings.secret("services.openai.api_key") == "sk-openai-test"
     assert settings.GIT_HTTP_TOKEN == "gh-token-test"
     assert settings.GIT_HTTP_USER == "x-access-token"
+    assert "Secret services.git.http_user loaded (default)" in caplog.text
+
+
+def test_settings_secret_canonicalizes_legacy_alias_for_provider(monkeypatch):
+    manager = _FakeSecretsManager()
+    manager.values["services.git.http_user"] = "git-user-secret"
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: manager)
+    sdk_config._SECRET_LOGGED.clear()
+
+    settings = sdk_config.Settings()
+    manager.get_calls.clear()
+
+    assert settings.secret("GIT_HTTP_USER") == "git-user-secret"
+    assert manager.get_calls == ["services.git.http_user"]
 
 
 def test_settings_reads_infra_passwords_through_provider_when_env_absent(monkeypatch):
@@ -74,6 +94,36 @@ def test_settings_reads_infra_passwords_through_provider_when_env_absent(monkeyp
 
     assert settings.PGPASSWORD == "pg-secret-test"
     assert settings.REDIS_PASSWORD == "redis-secret-test"
+
+
+def test_settings_prefers_secret_env_over_provider(monkeypatch):
+    manager = _FakeSecretsManager()
+    manager.values.update(
+        {
+            "auth.oidc.admin_email": "secret@example.com",
+            "auth.oidc.admin_username": "secret-user",
+            "auth.oidc.admin_password": "secret-pass",
+        }
+    )
+    monkeypatch.setenv("POSTGRES_PASSWORD", "env-postgres-pass")
+    monkeypatch.setenv("REDIS_PASSWORD", "env-redis-pass")
+    monkeypatch.setenv("OIDC_SERVICE_USER_EMAIL", "env@example.com")
+    monkeypatch.setenv("OIDC_SERVICE_ADMIN_USERNAME", "env-user")
+    monkeypatch.setenv("OIDC_SERVICE_ADMIN_PASSWORD", "env-pass")
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: manager)
+
+    settings = sdk_config.Settings()
+
+    assert settings.PGPASSWORD == "env-postgres-pass"
+    assert settings.REDIS_PASSWORD == "env-redis-pass"
+    assert settings.AUTH.OIDC_SERVICE_USER_EMAIL == "env@example.com"
+    assert settings.AUTH.OIDC_SERVICE_ADMIN_USERNAME == "env-user"
+    assert settings.AUTH.OIDC_SERVICE_ADMIN_PASSWORD == "env-pass"
+    assert "infra.postgres.password" not in manager.get_calls
+    assert "infra.redis.password" not in manager.get_calls
+    assert "auth.oidc.admin_email" not in manager.get_calls
+    assert "auth.oidc.admin_username" not in manager.get_calls
+    assert "auth.oidc.admin_password" not in manager.get_calls
 
 
 def test_get_user_secret_uses_request_context_scope(monkeypatch):

@@ -17,6 +17,8 @@ from kdcube_ai_app.apps.chat.sdk.config_scopes import (
     PLATFORM_CONFIG, RUNTIME_CONFIG,
     _load_assembly_plain, _parse_plain_key, _load_plain_yaml, _resolve_dotted_value,
     LOGConfig, ServiceConfig, AVConfig, HostedServicesConfig, MonitoringConfig,
+    MetricsConfig, MetricsRuntimeConfig, MetricsProxyConfig, MetricsExportConfig,
+    MetricsCloudWatchConfig, MetricsPrometheusConfig,
     PyExecConfig, ExecConfig, AccountingConfig, GitBundlesConfig, ApplicationsConfig,
     PlatformConfig, IDPLocalConfig, IDPConfig, AuthConfig, ServicesConfig,
 )
@@ -60,6 +62,11 @@ def _secret_candidates(key: str) -> list[str]:
         canon = _LEGACY_SECRET_TO_CANON[key]
         return [canon, *_SECRET_ALIASES.get(canon, [])]
     return [key]
+
+
+def _provider_secret_key(key: str) -> str:
+    raw = str(key or "").strip()
+    return _LEGACY_SECRET_TO_CANON.get(raw, raw)
 
 
 def _log_secret_status(key: str, value: str | None, source: str | None) -> None:
@@ -126,6 +133,8 @@ def get_secret(key: str, default: str | None = None) -> str | None:
             value = getattr(settings, candidate)
             if value:
                 return value
+        if candidate in _LEGACY_SECRET_TO_CANON:
+            continue
         value = settings.secret(candidate, default=None)
         if value:
             return value
@@ -465,12 +474,15 @@ def log_secret_statuses(force: bool = False) -> None:
     env_git_token = os.getenv("GIT_HTTP_TOKEN")
     env_git_user = os.getenv("GIT_HTTP_USER")
     env_openrouter = os.getenv("OPENROUTER_API_KEY")
+    git_user_source = "env" if env_git_user else "secrets"
+    if not env_git_user and settings.GIT_HTTP_USER == "x-access-token" and settings.GIT_HTTP_TOKEN:
+        git_user_source = "default"
     _log_secret_status("services.openai.api_key", settings.OPENAI_API_KEY, "env" if env_openai else "secrets")
     _log_secret_status("services.anthropic.api_key", settings.ANTHROPIC_API_KEY, "env" if env_anthropic else "secrets")
     _log_secret_status("services.google.api_key", settings.GOOGLE_API_KEY, "env" if env_gemini else "secrets")
     _log_secret_status("services.brave.api_key", settings.BRAVE_API_KEY, "env" if env_brave else "secrets")
     _log_secret_status("services.git.http_token", settings.GIT_HTTP_TOKEN, "env" if env_git_token else "secrets")
-    _log_secret_status("services.git.http_user", settings.GIT_HTTP_USER, "env" if env_git_user else "secrets")
+    _log_secret_status("services.git.http_user", settings.GIT_HTTP_USER, git_user_source)
     _log_secret_status("services.openrouter.api_key", settings.OPENROUTER_API_KEY, "env" if env_openrouter else "secrets")
 
 class CorsConfig(BaseModel):
@@ -498,6 +510,7 @@ class Settings(PLATFORM_CONFIG):
     PORT: int = 8011
     CHAT_APP_PORT: int = Field(default=8010)
     CHAT_PROCESSOR_PORT: int = Field(default=8020)
+    METRICS_PORT: int = Field(default=8090)
     CORS_CONFIG: str | None = None
     CORS_CONFIG_OBJ: CorsConfig | None = None
 
@@ -621,6 +634,28 @@ class Settings(PLATFORM_CONFIG):
     # Solution workspace retention — set True to keep workdir/outdir after turn completes (debug).
     SOLUTION_RETAIN_TURN_WORKSPACE: bool = Field(default=False)
 
+    def _resolve_secret_str(
+        self,
+        env_name: str,
+        secret_key: str,
+        *,
+        plain_path: str | None = None,
+        default: str | None = None,
+    ) -> str | None:
+        env_val = self._env_str(env_name)
+        if env_val is not None:
+            return env_val
+        secret_val = self._fetch_secret(secret_key)
+        if secret_val is not None and str(secret_val).strip():
+            return str(secret_val)
+        if plain_path:
+            raw = _load_assembly_plain(plain_path)
+            if raw is not None:
+                raw_str = str(raw).strip()
+                if raw_str:
+                    return raw_str
+        return default
+
     def _resolve_auth_provider_from_assembly(self) -> str | None:
         auth_idp = (self._assembly_str("auth.idp") or "").strip().lower()
         if auth_idp in {"simple", "cognito"}:
@@ -716,17 +751,13 @@ class Settings(PLATFORM_CONFIG):
             if val:
                 self.PGUSER = val
         if not self._env_present("POSTGRES_PASSWORD"):
-            secret_val = None
-            try:
-                secret_val = get_secrets_manager(self).get_secret("infra.postgres.password")
-            except Exception:
-                secret_val = None
-            if secret_val is not None and str(secret_val).strip():
-                self.PGPASSWORD = str(secret_val)
-            else:
-                raw = _load_assembly_plain("infra.postgres.password")
-                if raw is not None:
-                    self.PGPASSWORD = str(raw)
+            pg_password = self._resolve_secret_str(
+                "POSTGRES_PASSWORD",
+                "infra.postgres.password",
+                plain_path="infra.postgres.password",
+            )
+            if pg_password is not None:
+                self.PGPASSWORD = pg_password
         if not self._env_present("POSTGRES_DATABASE"):
             val = self._assembly_str("infra.postgres.database")
             if val:
@@ -745,17 +776,11 @@ class Settings(PLATFORM_CONFIG):
             if val is not None:
                 self.REDIS_PORT = val
         if not self._env_present("REDIS_PASSWORD"):
-            secret_val = None
-            try:
-                secret_val = get_secrets_manager(self).get_secret("infra.redis.password")
-            except Exception:
-                secret_val = None
-            if secret_val is not None:
-                self.REDIS_PASSWORD = str(secret_val) if str(secret_val).strip() else None
-            else:
-                raw = _load_assembly_plain("infra.redis.password")
-                if raw is not None:
-                    self.REDIS_PASSWORD = str(raw) if str(raw).strip() else None
+            self.REDIS_PASSWORD = self._resolve_secret_str(
+                "REDIS_PASSWORD",
+                "infra.redis.password",
+                plain_path="infra.redis.password",
+            )
 
         # 4. Build REDIS_URL from components if not explicitly set in env.
         #    Must happen after infra reads so assembly.yaml host/port/password are reflected.
@@ -794,6 +819,13 @@ class Settings(PLATFORM_CONFIG):
         av_p = f"{svc}.av"
         idp_p = f"{svc}.idp"
         mon_p = f"{svc}.monitoring"
+        metrics_p = "platform.services.metrics"
+        metrics_log_p = f"{metrics_p}.log"
+        metrics_service_p = f"{metrics_p}.service"
+        metrics_proxy_p = f"{metrics_p}.proxy"
+        metrics_export_p = f"{metrics_p}.export"
+        metrics_cloudwatch_p = f"{metrics_export_p}.cloudwatch"
+        metrics_prometheus_p = f"{metrics_export_p}.prometheus"
         exec_p = f"{svc}.exec"
         bundles_p = f"{svc}.bundles"
         git_p = f"{bundles_p}.git"
@@ -826,6 +858,47 @@ class Settings(PLATFORM_CONFIG):
             ),
             MONITORING=MonitoringConfig(
                 MONITORING_BURST_ENABLE=self._resolve_bool("MONITORING_BURST_ENABLE", f"{mon_p}.monitoring_burst_enable", True),
+            ),
+            METRICS=MetricsConfig(
+                LOG=LOGConfig(
+                    LOG_LEVEL=self._resolve_str("LOG_LEVEL", f"{metrics_log_p}.log_level", "INFO"),
+                    LOG_MAX_MB=self._resolve_int("LOG_MAX_MB", f"{metrics_log_p}.log_max_mb", 20),
+                    LOG_BACKUP_COUNT=self._resolve_int("LOG_BACKUP_COUNT", f"{metrics_log_p}.log_backup_count", 10),
+                    LOG_DIR=self._resolve_str("LOG_DIR", f"{metrics_log_p}.log_dir"),
+                    LOG_FILE_PREFIX=self._resolve_str("LOG_FILE_PREFIX", f"{metrics_log_p}.log_file_prefix", "metrics"),
+                ),
+                SERVICE=MetricsRuntimeConfig(
+                    METRICS_MODE=(self._resolve_str("METRICS_MODE", f"{metrics_service_p}.metrics_mode", "redis") or "redis").strip().lower(),
+                    METRICS_REQUEST_TIMEOUT_SEC=self._resolve_float("METRICS_REQUEST_TIMEOUT_SEC", f"{metrics_service_p}.metrics_request_timeout_sec", 5.0),
+                    METRICS_ENABLE_PG_POOL=self._resolve_bool("METRICS_ENABLE_PG_POOL", f"{metrics_service_p}.metrics_enable_pg_pool", False),
+                ),
+                PROXY=MetricsProxyConfig(
+                    METRICS_INGRESS_BASE_URL=self._resolve_str("METRICS_INGRESS_BASE_URL", f"{metrics_proxy_p}.metrics_ingress_base_url"),
+                    METRICS_PROC_BASE_URL=self._resolve_str("METRICS_PROC_BASE_URL", f"{metrics_proxy_p}.metrics_proc_base_url"),
+                    METRICS_AUTH_HEADER_NAME=self._resolve_str("METRICS_AUTH_HEADER_NAME", f"{metrics_proxy_p}.metrics_auth_header_name"),
+                    METRICS_AUTH_HEADER_VALUE=self._resolve_str("METRICS_AUTH_HEADER_VALUE", f"{metrics_proxy_p}.metrics_auth_header_value"),
+                    METRICS_HEADERS_JSON=self._resolve_str("METRICS_HEADERS_JSON", f"{metrics_proxy_p}.metrics_headers_json"),
+                ),
+                EXPORT=MetricsExportConfig(
+                    METRICS_SCHEDULER_ENABLED=self._resolve_bool("METRICS_SCHEDULER_ENABLED", f"{metrics_export_p}.scheduler_enabled", False),
+                    METRICS_EXPORT_INTERVAL_SEC=self._resolve_float("METRICS_EXPORT_INTERVAL_SEC", f"{metrics_export_p}.export_interval_sec", 30.0),
+                    METRICS_EXPORT_ON_START=self._resolve_bool("METRICS_EXPORT_ON_START", f"{metrics_export_p}.export_on_start", True),
+                    METRICS_RUN_ONCE=self._resolve_bool("METRICS_RUN_ONCE", f"{metrics_export_p}.run_once", False),
+                    METRICS_MAPPING_JSON=self._resolve_str("METRICS_MAPPING_JSON", f"{metrics_export_p}.mapping_json"),
+                    CLOUDWATCH=MetricsCloudWatchConfig(
+                        METRICS_EXPORT_CLOUDWATCH=self._resolve_bool("METRICS_EXPORT_CLOUDWATCH", f"{metrics_cloudwatch_p}.enabled", False),
+                        METRICS_CLOUDWATCH_NAMESPACE=self._resolve_str("METRICS_CLOUDWATCH_NAMESPACE", f"{metrics_cloudwatch_p}.namespace", "KDCube/Metrics"),
+                        METRICS_CLOUDWATCH_REGION=self._resolve_str("METRICS_CLOUDWATCH_REGION", f"{metrics_cloudwatch_p}.region"),
+                        METRICS_CLOUDWATCH_DIMENSIONS_JSON=self._resolve_str("METRICS_CLOUDWATCH_DIMENSIONS_JSON", f"{metrics_cloudwatch_p}.dimensions_json"),
+                    ),
+                    PROMETHEUS=MetricsPrometheusConfig(
+                        METRICS_EXPORT_PROMETHEUS_PUSH=self._resolve_bool("METRICS_EXPORT_PROMETHEUS_PUSH", f"{metrics_prometheus_p}.push_enabled", False),
+                        METRICS_PROM_PUSHGATEWAY_URL=self._resolve_str("METRICS_PROM_PUSHGATEWAY_URL", f"{metrics_prometheus_p}.pushgateway_url"),
+                        METRICS_PROM_JOB_NAME=self._resolve_str("METRICS_PROM_JOB_NAME", f"{metrics_prometheus_p}.job_name", "kdcube_metrics"),
+                        METRICS_PROM_GROUPING_LABELS_JSON=self._resolve_str("METRICS_PROM_GROUPING_LABELS_JSON", f"{metrics_prometheus_p}.grouping_labels_json"),
+                        METRICS_PROM_SCRAPE_TTL_SEC=self._resolve_float("METRICS_PROM_SCRAPE_TTL_SEC", f"{metrics_prometheus_p}.scrape_ttl_sec", 10.0),
+                    ),
+                ),
             ),
             EXEC=ExecConfig(
                 EXEC_WORKSPACE_ROOT=self._resolve_str("EXEC_WORKSPACE_ROOT", f"{exec_p}.exec_workspace_root"),
@@ -889,6 +962,10 @@ class Settings(PLATFORM_CONFIG):
             val = self._assembly_int("ports.proc")
             if val is not None:
                 self.CHAT_PROCESSOR_PORT = val
+        if not self._env_present("METRICS_PORT"):
+            val = self._assembly_int("ports.metrics")
+            if val is not None:
+                self.METRICS_PORT = val
 
         # Default LLM model (env: DEFAULT_LLM_MODEL_ID, assembly: models.default_llm_model_id).
         if not self._env_present("DEFAULT_LLM_MODEL_ID"):
@@ -1003,6 +1080,7 @@ class Settings(PLATFORM_CONFIG):
         env_git_token = os.getenv("GIT_HTTP_TOKEN")
         env_git_user = os.getenv("GIT_HTTP_USER")
         env_openrouter = os.getenv("OPENROUTER_API_KEY")
+        git_http_user_source = "env" if env_git_user else "secrets"
 
         if not self.OPENAI_API_KEY:
             self.OPENAI_API_KEY = self._fetch_secret("services.openai.api_key") or self._fetch_secret("OPENAI_API_KEY")
@@ -1019,7 +1097,12 @@ class Settings(PLATFORM_CONFIG):
         if not self.GIT_HTTP_TOKEN:
             self.GIT_HTTP_TOKEN = self._fetch_secret("services.git.http_token") or self._fetch_secret("GIT_HTTP_TOKEN")
         if not self.GIT_HTTP_USER and self.GIT_HTTP_TOKEN:
-            self.GIT_HTTP_USER = self._fetch_secret("services.git.http_user") or "x-access-token"
+            fetched_git_http_user = self._fetch_secret("services.git.http_user")
+            if fetched_git_http_user:
+                self.GIT_HTTP_USER = fetched_git_http_user
+            else:
+                self.GIT_HTTP_USER = "x-access-token"
+                git_http_user_source = "default"
         if not self.OPENROUTER_API_KEY:
             self.OPENROUTER_API_KEY = self._fetch_secret("services.openrouter.api_key") or self._fetch_secret("OPENROUTER_API_KEY")
         if not self.OPENROUTER_BASE_URL:
@@ -1032,7 +1115,7 @@ class Settings(PLATFORM_CONFIG):
         _log_secret_status("services.google.api_key", self.GOOGLE_API_KEY, "env" if env_gemini else "secrets")
         _log_secret_status("services.brave.api_key", self.BRAVE_API_KEY, "env" if env_brave else "secrets")
         _log_secret_status("services.git.http_token", self.GIT_HTTP_TOKEN, "env" if env_git_token else "secrets")
-        _log_secret_status("services.git.http_user", self.GIT_HTTP_USER, "env" if env_git_user else "secrets")
+        _log_secret_status("services.git.http_user", self.GIT_HTTP_USER, git_http_user_source)
         _log_secret_status("services.openrouter.api_key", self.OPENROUTER_API_KEY, "env" if env_openrouter else "secrets")
 
         # 13. Build AUTH config (env > assembly.yaml > default).
@@ -1045,9 +1128,9 @@ class Settings(PLATFORM_CONFIG):
             AUTH_TOKEN_COOKIE_NAME=self._resolve_str("AUTH_TOKEN_COOKIE_NAME", "auth.auth_token_cookie_name", "__Secure-LATC"),
             ID_TOKEN_COOKIE_NAME=self._resolve_str("ID_TOKEN_COOKIE_NAME", "auth.id_token_cookie_name", "__Secure-LITC"),
             JWKS_CACHE_TTL_SECONDS=self._resolve_int("JWKS_CACHE_TTL_SECONDS", "auth.jwks_cache_ttl_seconds", 86400),
-            OIDC_SERVICE_USER_EMAIL=self._fetch_secret("auth.oidc.admin_email") or self._env_str("OIDC_SERVICE_USER_EMAIL"),
-            OIDC_SERVICE_ADMIN_USERNAME=self._fetch_secret("auth.oidc.admin_username") or self._env_str("OIDC_SERVICE_ADMIN_USERNAME"),
-            OIDC_SERVICE_ADMIN_PASSWORD=self._fetch_secret("auth.oidc.admin_password") or self._env_str("OIDC_SERVICE_ADMIN_PASSWORD"),
+            OIDC_SERVICE_USER_EMAIL=self._resolve_secret_str("OIDC_SERVICE_USER_EMAIL", "auth.oidc.admin_email"),
+            OIDC_SERVICE_ADMIN_USERNAME=self._resolve_secret_str("OIDC_SERVICE_ADMIN_USERNAME", "auth.oidc.admin_username"),
+            OIDC_SERVICE_ADMIN_PASSWORD=self._resolve_secret_str("OIDC_SERVICE_ADMIN_PASSWORD", "auth.oidc.admin_password"),
             IDP=IDPConfig(
                 local=IDPLocalConfig(
                     IDP_DB_PATH=self._resolve_str("IDP_DB_PATH", f"{svc}.idp.idp_db_path"),
@@ -1073,8 +1156,9 @@ class Settings(PLATFORM_CONFIG):
         env_val = os.getenv(normalized_key)
         if env_val:
             return env_val
+        provider_key = _provider_secret_key(normalized_key)
         try:
-            value = get_secrets_manager(self).get_secret(normalized_key)
+            value = get_secrets_manager(self).get_secret(provider_key)
         except Exception:
             value = None
         return value or default

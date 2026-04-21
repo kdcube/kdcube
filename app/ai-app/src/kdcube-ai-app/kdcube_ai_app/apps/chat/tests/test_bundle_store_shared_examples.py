@@ -86,3 +86,32 @@ def test_cleanup_old_shared_example_bundles_keeps_active_version(monkeypatch, tm
     assert removed == 1
     assert not old_dir.exists()
     assert new_dir.exists()
+
+
+def test_discover_example_bundle_ids_is_disabled_when_examples_are_disabled(monkeypatch, tmp_path):
+    src = tmp_path / "kdcube.copilot@2026-04-03-19-05"
+    _write_example_bundle(src, marker="v1")
+
+    monkeypatch.setattr(bundle_store, "_examples_enabled", lambda: False)
+    monkeypatch.setattr(bundle_store, "_examples_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        bundle_store,
+        "_ensure_example_bundle_shared",
+        lambda _path: (_ for _ in ()).throw(AssertionError("should not materialize example bundle")),
+    )
+
+    assert bundle_store._discover_example_bundle_ids() == set()
+
+
+def test_ensure_example_bundle_shared_falls_back_when_lock_dir_cannot_be_created(monkeypatch, tmp_path):
+    src = tmp_path / "kdcube.copilot@2026-04-03-19-05"
+    _write_example_bundle(src, marker="v1")
+
+    monkeypatch.setattr(bundle_store, "_is_running_in_docker", lambda: True)
+    monkeypatch.setattr(
+        bundle_store,
+        "_example_bundle_lock_path",
+        lambda _bundle_name: (_ for _ in ()).throw(PermissionError("read-only managed bundles root")),
+    )
+
+    assert bundle_store._ensure_example_bundle_shared(src) == src
