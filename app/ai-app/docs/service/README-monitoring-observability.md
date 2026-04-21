@@ -6,6 +6,7 @@ tags: ["service", "monitoring", "observability", "metrics", "gateway"]
 keywords: ["monitoring endpoints", "gateway status", "queue metrics", "SSE", "admin access"]
 see_also:
   - ks:docs/service/maintenance/requests-monitoring-README.md
+  - ks:docs/service/scale/metric-server-README.md
   - ks:docs/service/gateway-README.md
   - ks:docs/service/auth/auth-README.md
 ---
@@ -107,6 +108,7 @@ Mode note:
 - In `proxy` mode, it calls ingress/proc `/monitoring/system`.
 - Because proc does not currently mount `/monitoring/system`, proxy mode usually targets ingress only unless another upstream exposes proc monitoring data.
 - `GET /metrics` exposes a smaller exported scalar subset, not the full monitoring payload.
+- The collection/export/publish contract of the Metrics service itself is documented in [scale/metric-server-README.md](scale/metric-server-README.md).
 
 ### Circuit breakers
 - `GET /admin/circuit-breakers`

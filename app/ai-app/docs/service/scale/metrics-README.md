@@ -241,6 +241,10 @@ Important export detail:
 We provide a **Metrics service** that aggregates ingress + processor metrics and can
 push them to CloudWatch / Prometheus.
 
+For the service-level contract itself, including collection modes, exporter behavior,
+current env-vs-descriptor configuration status, and open feature requests, use
+[metric-server-README.md](metric-server-README.md).
+
 **Service**
 - Module: `kdcube_ai_app.apps.metrics.web_app`
 - Port: `METRICS_PORT` (default `8090`)

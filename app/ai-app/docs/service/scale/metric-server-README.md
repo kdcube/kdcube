@@ -6,6 +6,7 @@ tags: ["service", "metrics", "autoscaling", "observability"]
 keywords: ["metrics server", "CloudWatch", "Prometheus", "redis metrics", "autoscaler"]
 see_also:
   - ks:docs/service/scale/metrics-README.md
+  - ks:docs/service/README-monitoring-observability.md
   - ks:docs/ops/ops-overview-README.md
   - ks:docs/service/ecs/custom-ecs-README.md
 ---
@@ -117,6 +118,65 @@ Same pattern: choose either **push** (CloudWatch/Pushgateway) or **pull** (`/met
 ---
 
 ## 4) Environment variables (full reference)
+
+## 4.1) Current configuration source of truth
+
+The Metrics service is **not yet fully migrated** to the newer
+"read everything through `get_settings()` / descriptors" model.
+
+Current reality in code:
+- The service still reads most `METRICS_*` settings directly from `os.getenv(...)`
+  in `kdcube_ai_app.apps.metrics.web_app`.
+- The shared app settings layer only contributes a small part of the config surface.
+- `ports.metrics` from `assembly.yaml` is bridged into `METRICS_PORT` through the
+  common settings loader when `GATEWAY_COMPONENT=metrics`.
+- Tenant/project and queue-capacity semantics come indirectly from the effective
+  gateway config source (`GATEWAY_CONFIG_JSON`, `GATEWAY_YAML_PATH`, or
+  `PLATFORM_DESCRIPTORS_DIR/gateway.yaml`).
+
+What the default descriptors cover today:
+- `assembly.yaml`
+  - `ports.metrics`
+  - shared AWS settings such as `aws.aws_region`
+  - shared storage / host-path settings used by the wider stack
+- `gateway.yaml`
+  - tenant/project
+  - service-capacity, backpressure, rate-limit, pool, and Redis monitoring settings
+
+What the default descriptors do **not** cover today:
+- `METRICS_MODE`
+- `METRICS_ENABLE_PG_POOL`
+- `METRICS_INGRESS_BASE_URL`
+- `METRICS_PROC_BASE_URL`
+- `METRICS_REQUEST_TIMEOUT_SEC`
+- `METRICS_SCHEDULER_ENABLED`
+- `METRICS_EXPORT_INTERVAL_SEC`
+- `METRICS_EXPORT_ON_START`
+- `METRICS_RUN_ONCE`
+- `METRICS_EXPORT_CLOUDWATCH`
+- `METRICS_CLOUDWATCH_NAMESPACE`
+- `METRICS_CLOUDWATCH_REGION`
+- `METRICS_CLOUDWATCH_DIMENSIONS_JSON`
+- `METRICS_EXPORT_PROMETHEUS_PUSH`
+- `METRICS_PROM_PUSHGATEWAY_URL`
+- `METRICS_PROM_JOB_NAME`
+- `METRICS_PROM_GROUPING_LABELS_JSON`
+- `METRICS_PROM_SCRAPE_TTL_SEC`
+- `METRICS_MAPPING_JSON`
+- `METRICS_AUTH_HEADER_NAME`
+- `METRICS_AUTH_HEADER_VALUE`
+- `METRICS_HEADERS_JSON`
+
+Operational conclusion:
+- The Metrics service currently still has a **service-local env contract**.
+- The default descriptor set does **not** yet contain the full Metrics service configuration.
+- Any doc or deployment path should state this explicitly until the component is migrated.
+
+About `src/.../apps/metrics/.env.metrics`:
+- that file is a **local/sample env source**, useful for direct local runs
+- it is **not** the canonical descriptor-driven contract for the service
+- descriptor-driven deployments should treat it as a compatibility/local-dev file,
+  not as the target long-term source of truth
 
 ### Core
 | Env | Default | Meaning |
@@ -356,3 +416,65 @@ The same computation is reused from the chat monitoring endpoint:
 - `GET /metrics/proc/system` → proxied proc `/monitoring/system`
 - `GET /metrics/combined` → separate `ingress` + `proc` payloads
 - `GET /metrics` → exported scalar metrics derived from proxied responses
+
+## 14) Feature requests
+
+### 14.1) OTLP / OpenTelemetry metrics export
+
+Requested feature:
+- export the Metrics service output in **OpenTelemetry Metrics** format and push it
+  to external systems through an OTLP exporter
+
+Recommended scope for this service:
+- keep the current `/metrics` Prometheus scrape endpoint unchanged
+- add a third push exporter beside CloudWatch and Pushgateway:
+  - OTLP gRPC
+  - OTLP HTTP/protobuf
+- support both:
+  - scheduled periodic export
+  - one-shot export
+
+Recommended first-phase payload:
+- export the **same scalar metric set** already produced by `extract_metrics(...)`
+- treat them as point-in-time gauge observations
+- do **not** invent histograms for current `p95` snapshot values
+- do **not** treat current throttling-window snapshots as monotonic counters unless
+  the upstream source is changed to cumulative counters
+
+Recommended resource attributes:
+- `service.name=metrics`
+- `service.namespace=kdcube`
+- `service.instance.id`
+- `deployment.environment`
+- `kdcube.tenant`
+- `kdcube.project`
+- `kdcube.metrics.mode`
+
+Recommended config surface:
+- `METRICS_EXPORT_OTLP`
+- `METRICS_OTLP_ENDPOINT`
+- `METRICS_OTLP_PROTOCOL=grpc|http/protobuf`
+- `METRICS_OTLP_HEADERS_JSON`
+- `METRICS_OTLP_TIMEOUT_SEC`
+- `METRICS_OTLP_INSECURE`
+- `METRICS_OTLP_COMPRESSION=gzip|none`
+- `METRICS_OTLP_RESOURCE_ATTRIBUTES_JSON`
+
+Phase-2 expansion candidates:
+- ingress REST latency exports
+- throttling windows by period
+- DB connection pressure
+- pool utilization aggregates
+- circuit breaker state
+- capacity-transparency metrics
+
+### 14.2) Config alignment with descriptor-driven settings
+
+Recommended follow-up:
+- migrate Metrics service settings away from direct `os.getenv(...)` reads
+- define a proper descriptor-backed metrics config block
+- load that block through the shared settings layer, like ingress and proc
+
+Until that is done, treat the Metrics service as a partially migrated component:
+- shared platform/gateway config is descriptor-backed
+- exporter/runtime knobs remain env-driven
