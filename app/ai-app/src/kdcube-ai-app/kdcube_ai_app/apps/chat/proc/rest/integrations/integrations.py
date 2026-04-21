@@ -55,6 +55,7 @@ from kdcube_ai_app.infra.plugin.bundle_store import (
     get_bundle_props as store_get_bundle_props,
     patch_bundle_props as store_patch_bundle_props,
     put_bundle_props as store_put_bundle_props,
+    resolve_dot_path as _resolve_prop_path,
 )
 from kdcube_ai_app.infra.plugin.agentic_loader import (
     AgenticBundleSpec,
@@ -82,6 +83,28 @@ import kdcube_ai_app.infra.namespaces as namespaces
 logger = logging.getLogger("ChatProc.Integrations")
 _integrations_limit: Optional[int] = None
 _integrations_semaphore = None
+
+_DISABLED_PROP_VALUES: frozenset = frozenset({"false", "disable", "disabled", "off", "0"})
+
+
+def _is_enabled_from_props(props: Dict[str, Any], enabled_config: Optional[str]) -> bool:
+    """Return True if the endpoint/bundle is enabled according to bundle props.
+
+    - No enabled_config declared -> always enabled.
+    - Path absent in props -> enabled (opt-in disabling, not opt-in enabling).
+    - Value is bool/int -> direct truthiness.
+    - Value is string -> disabled only for "false"/"disable"/"disabled"/"off"/"0".
+    """
+    if not enabled_config:
+        return True
+    value = _resolve_prop_path(props, enabled_config)
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    return str(value).strip().lower() not in _DISABLED_PROP_VALUES
 
 
 def _resolve_integrations_limit() -> Optional[int]:
@@ -748,6 +771,7 @@ async def _get_bundle_manifest(
 def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]:
     """Serialise a full (unfiltered) manifest to a plain dict."""
     return {
+        "enabled_config": manifest.enabled_config,
         "apis": [
             {
                 "alias": s.alias,
@@ -755,6 +779,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "route": s.route,
                 "user_types": list(s.user_types),
                 "roles": list(s.roles),
+                "enabled_config": s.enabled_config,
             }
             for s in manifest.api_endpoints
         ],
@@ -763,11 +788,18 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "alias": s.alias,
                 "route": s.route,
                 "transport": s.transport,
+                "enabled_config": s.enabled_config,
             }
             for s in manifest.mcp_endpoints
         ],
         "widgets": [
-            {"alias": s.alias, "icon": s.icon, "user_types": list(s.user_types), "roles": list(s.roles)}
+            {
+                "alias": s.alias,
+                "icon": s.icon,
+                "user_types": list(s.user_types),
+                "roles": list(s.roles),
+                "enabled_config": s.enabled_config,
+            }
             for s in manifest.ui_widgets
         ],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
@@ -780,6 +812,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
                 "timezone": s.timezone,
                 "tz_config": s.tz_config,
                 "span": s.span,
+                "enabled_config": s.enabled_config,
             }
             for s in manifest.scheduled_jobs
         ],
@@ -792,6 +825,7 @@ def _manifest_to_descriptor_filtered(
 ) -> Dict[str, Any]:
     """Serialise a manifest filtered to the endpoint visibility rules for session."""
     return {
+        "enabled_config": manifest.enabled_config,
         "apis": [
             {
                 "alias": s.alias,
@@ -799,6 +833,7 @@ def _manifest_to_descriptor_filtered(
                 "route": s.route,
                 "user_types": list(s.user_types),
                 "roles": list(s.roles),
+                "enabled_config": s.enabled_config,
             }
             for s in manifest.api_endpoints
             if _endpoint_visible(s.user_types, s.roles, session)
@@ -808,11 +843,18 @@ def _manifest_to_descriptor_filtered(
                 "alias": s.alias,
                 "route": s.route,
                 "transport": s.transport,
+                "enabled_config": s.enabled_config,
             }
             for s in manifest.mcp_endpoints
         ],
         "widgets": [
-            {"alias": s.alias, "icon": s.icon, "user_types": list(s.user_types), "roles": list(s.roles)}
+            {
+                "alias": s.alias,
+                "icon": s.icon,
+                "user_types": list(s.user_types),
+                "roles": list(s.roles),
+                "enabled_config": s.enabled_config,
+            }
             for s in manifest.ui_widgets
             if _endpoint_visible(s.user_types, s.roles, session)
         ],
@@ -826,6 +868,7 @@ def _manifest_to_descriptor_filtered(
                 "timezone": s.timezone,
                 "tz_config": s.tz_config,
                 "span": s.span,
+                "enabled_config": s.enabled_config,
             }
             for s in manifest.scheduled_jobs
         ],
@@ -921,6 +964,7 @@ async def get_bundles(
         else:
             raise HTTPException(status_code=503, detail="Failed to load bundles registry for tenant/project")
 
+    redis = _get_app_redis(request)
     bundles_out = {}
     for bid, entry in reg.bundles.items():
         manifest = await _get_bundle_manifest(
@@ -932,6 +976,10 @@ async def get_bundles(
         )
         if not _bundle_allowed_for_session(manifest, session):
             continue
+        if manifest is not None and manifest.enabled_config:
+            props = await store_get_bundle_props(redis, tenant=tenant_id, project=project_id, bundle_id=bid)
+            if not _is_enabled_from_props(props, manifest.enabled_config):
+                continue
         descriptor: Dict[str, Any] = {
             "id": bid,
             "name": entry.name,
@@ -1930,6 +1978,15 @@ async def fetch_bundle_widget(
     if not _endpoint_visible(widget_spec.user_types, widget_spec.roles, session):
         raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
 
+    manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
+    _props = await store_get_bundle_props(
+        _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
+    )
+    if not _is_enabled_from_props(_props, manifest.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
+    if not _is_enabled_from_props(_props, widget_spec.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} is not available")
+
     fn = getattr(workflow, widget_spec.method_name)
     extra = _with_implicit_bundle_kwargs(
         _get_query_kwargs(request),
@@ -2079,6 +2136,15 @@ async def _call_bundle_mcp_inner(
     )
     if endpoint_spec is None:
         raise HTTPException(status_code=404, detail=f"Bundle does not support MCP endpoint {endpoint_alias}")
+
+    manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
+    _props = await store_get_bundle_props(
+        _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
+    )
+    if not _is_enabled_from_props(_props, manifest.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
+    if not _is_enabled_from_props(_props, endpoint_spec.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle MCP endpoint {endpoint_alias} is not available")
 
     try:
         fn = getattr(workflow, endpoint_spec.method_name)
@@ -2460,6 +2526,15 @@ async def _call_bundle_op_inner(
     )
     if not _endpoint_visible(endpoint_spec.user_types, endpoint_spec.roles, session):
         raise HTTPException(status_code=403, detail=f"Bundle operation {operation} is not visible to this user")
+
+    manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
+    _props = await store_get_bundle_props(
+        _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
+    )
+    if not _is_enabled_from_props(_props, manifest.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
+    if not _is_enabled_from_props(_props, endpoint_spec.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle operation {operation} is not available")
 
     try:
         fn = getattr(workflow, endpoint_spec.method_name)

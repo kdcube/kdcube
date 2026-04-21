@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
 title: "Bundle Scheduled Jobs"
 summary: "Bundle-native cron jobs via the @cron decorator: span semantics, cron resolution, runtime access, and local debug."
 tags: ["sdk", "bundle", "cron", "scheduled-jobs", "scheduler", "proc"]
-keywords: ["@cron", "cron decorator", "CronJobSpec", "BundleSchedulerManager", "span", "process", "instance", "system", "expr_config", "cron_expression", "scheduled jobs", "BUNDLES_YAML_DESCRIPTOR_PATH"]
+keywords: ["@cron", "cron decorator", "CronJobSpec", "BundleSchedulerManager", "span", "process", "instance", "system", "expr_config", "cron_expression", "timezone", "tz_config", "enabled_config", "bundle disabled", "scheduled jobs", "BUNDLES_YAML_DESCRIPTOR_PATH"]
 see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
@@ -44,7 +44,10 @@ once per hour across the whole system.
     alias: str | None = None,
     cron_expression: str | None = None,
     expr_config: str | None = None,
+    timezone: str | None = None,
+    tz_config: str | None = None,
     span: str = "system",
+    enabled_config: str | None = None,
 )
 ```
 
@@ -53,7 +56,23 @@ once per hour across the whole system.
 | `alias` | `str \| None` | Stable job identifier. Used in Redis lock keys and logs. Defaults to method name. |
 | `cron_expression` | `str \| None` | Inline cron expression, e.g. `"*/15 * * * *"`. |
 | `expr_config` | `str \| None` | Dot-path into bundle props/config, e.g. `"routines.reindex.cron"`. Wins over `cron_expression`. |
+| `timezone` | `str \| None` | IANA timezone for cron interpretation, e.g. `"Europe/Berlin"`. Defaults to UTC. |
+| `tz_config` | `str \| None` | Dot-path into bundle props/config for the timezone override. Wins over `timezone`. |
 | `span` | `str` | Exclusivity: `"process"`, `"instance"`, `"system"`. Default: `"system"`. |
+| `enabled_config` | `str \| None` | Dot-path into bundle props that resolves to a boolean. Falsy → job not scheduled. `None` means always enabled. |
+
+---
+
+## Bundle-level enabled override
+
+If the bundle's `@agentic_workflow(enabled_config=...)` resolves to a falsy
+value from bundle props, **all** scheduled jobs for that bundle are skipped
+during reconcile — regardless of individual job `enabled_config` or
+`expr_config` values. The per-job checks are never reached.
+
+This is enforced in `bundle_scheduler.py` (`reconcile`) before the per-job
+loop. Use it as a single kill-switch to disable the entire bundle, including
+all its cron jobs, without touching each job individually.
 
 ---
 

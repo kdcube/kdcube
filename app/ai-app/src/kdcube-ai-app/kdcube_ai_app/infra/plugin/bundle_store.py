@@ -1005,8 +1005,6 @@ class _FileBundleDescriptorStore:
             self._write_mapping(payload)
 
     def load_bundle_props(self, bundle_id: str) -> Dict[str, Any]:
-        if bundle_id in _reserved_bundle_ids():
-            return {}
         loaded = self.load_registry()
         if loaded is None:
             return {}
@@ -1014,13 +1012,15 @@ class _FileBundleDescriptorStore:
         return dict(props_map.get(bundle_id) or {})
 
     def set_bundle_props(self, bundle_id: str, entry: "BundleEntry", props: Dict[str, Any]) -> None:
-        if bundle_id in _reserved_bundle_ids():
-            return
         with self._lock, self._acquire_file_lock():
             payload = self._load_mapping()
             items = self._bundle_items(payload)
             item = _secrets_find_bundle_item(items, bundle_id)
             if item is None:
+                if bundle_id in _reserved_bundle_ids():
+                    # Reserved bundles not explicitly listed in the descriptor
+                    # are not written — no dangling entries created.
+                    return
                 item = self._item_from_entry(entry, props)
                 items.append(item)
             else:
@@ -1297,6 +1297,18 @@ async def _put_bundle_props_locked(
     key = _props_key(tenant=tenant, project=project, bundle_id=bundle_id)
     await redis.set(key, json.dumps(props, ensure_ascii=False))
     if bundle_id in _reserved_bundle_ids():
+        # Persist to the file-backed descriptor so that _sync_bundle_props_authoritative
+        # on the next load_registry call (triggered by the listener) doesn't revert
+        # Redis to stale YAML values.
+        store = _get_authoritative_bundle_store(tenant, project)
+        if isinstance(store, _FileBundleDescriptorStore):
+            entry = _reserved_bundle_entry(bundle_id)
+            if entry is None:
+                entry = BundleEntry(id=bundle_id, path="")
+            try:
+                store.set_bundle_props(bundle_id, entry, props)
+            except Exception:
+                _log.warning("Failed to persist reserved bundle props to descriptor", exc_info=True)
         try:
             await publish_props_update(
                 redis,

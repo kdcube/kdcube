@@ -98,6 +98,47 @@ def resolve_effective_cron(
     return None
 
 
+_SCHEDULER_DISABLED_VALUES: frozenset = frozenset({"false", "disable", "disabled", "off", "0"})
+
+
+def resolve_effective_enabled(
+    enabled_config: Optional[str],
+    props: Dict[str, Any],
+) -> bool:
+    """Return False if the job should be suppressed based on bundle props.
+
+    Resolution order (mirrors resolve_effective_cron):
+    1. Redis bundle props (dot-path lookup in props dict).
+    2. bundles.yaml / assembly.yaml via read_plain, when the path is absent
+       from Redis props (value is None after step 1).
+    3. Default: True (enabled) when the path is absent from both sources.
+
+    Falsy values: False (bool), 0 (int), or any of
+    "false" / "disable" / "disabled" / "off" / "0" (case-insensitive string).
+    """
+    if not enabled_config:
+        return True
+    from kdcube_ai_app.infra.plugin.bundle_store import resolve_dot_path
+    value = resolve_dot_path(props, enabled_config)
+    if value is None:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.config import read_plain
+            raw = read_plain(f"b:{enabled_config}", default=None)
+            if raw is None:
+                raw = read_plain(enabled_config, default=None)
+            if raw is not None:
+                value = raw
+        except Exception:
+            pass
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    return str(value).strip().lower() not in _SCHEDULER_DISABLED_VALUES
+
+
 def resolve_effective_timezone(
     timezone_name: Optional[str],
     tz_config: Optional[str],
@@ -554,6 +595,14 @@ class BundleSchedulerManager:
                 props=props,
             )
 
+            if not resolve_effective_enabled(manifest.enabled_config, props):
+                _log.info(
+                    "[scheduler] Bundle disabled via enabled_config: bundle=%s enabled_config=%r"
+                    " — skipping all jobs",
+                    bundle_id, manifest.enabled_config,
+                )
+                continue
+
             for job_spec in manifest.scheduled_jobs:
                 effective = resolve_effective_cron(
                     cron_expression=job_spec.cron_expression,
@@ -574,6 +623,14 @@ class BundleSchedulerManager:
                         "expr_config=%r cron_expression=%r",
                         bundle_id, job_spec.alias,
                         job_spec.expr_config, job_spec.cron_expression,
+                    )
+                    continue
+
+                if not resolve_effective_enabled(job_spec.enabled_config, props):
+                    _log.info(
+                        "[scheduler] Job disabled via enabled_config: bundle=%s alias=%s "
+                        "enabled_config=%r",
+                        bundle_id, job_spec.alias, job_spec.enabled_config,
                     )
                     continue
 

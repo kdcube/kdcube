@@ -141,6 +141,15 @@ Current fields relevant to access control:
   - do **not** use derived platform types here (`"registered"`, `"privileged"`)
   - empty or omitted means the bundle is visible to all authenticated users
   - OR semantics: user passes if at least one of their raw roles matches
+- `enabled_config`
+  - dot-separated path into bundle props that resolves to a boolean
+  - if the resolved value is falsy, the bundle is treated as disabled:
+    all its HTTP routes return 404 and all its scheduled jobs are skipped,
+    regardless of any resource-level `enabled_config` values
+  - absent or `None` means always enabled
+  - prop absent in Redis also means enabled (opt-in disabling, not opt-in enabling)
+  - enforced in `integrations.py` for HTTP resources (widgets, operations, MCP endpoints)
+    and in `bundle_scheduler.py` for scheduled jobs, before any per-resource check
 
 Current behavior:
 
@@ -204,6 +213,12 @@ Current fields:
     - `"bundle"`: proc forwards the request into the bundle method and the
       bundle authenticates it itself
   - default: required for `route="public"`, invalid for `route="operations"`
+- `enabled_config`
+  - dot-separated path into bundle props that resolves to a boolean
+  - if the resolved value is falsy, this endpoint returns 404
+  - absent or `None` means always enabled
+  - checked after the bundle-level `enabled_config` — if the bundle is disabled,
+    this check is never reached
 
 Important current rule:
 
@@ -262,6 +277,11 @@ Current fields:
   - default: `operations`
 - `transport`
   - current supported value: `streamable-http`
+- `enabled_config`
+  - dot-separated path into bundle props that resolves to a boolean
+  - if the resolved value is falsy, the MCP endpoint returns 404
+  - absent or `None` means always enabled
+  - checked after the bundle-level `enabled_config`
 
 Current rule:
 
@@ -341,6 +361,11 @@ Current fields:
 - `roles`
   - raw external roles allowed to see the widget
   - use values such as `kdcube:role:super-admin`
+- `enabled_config`
+  - dot-separated path into bundle props that resolves to a boolean
+  - if the resolved value is falsy, the widget fetch returns 404
+  - absent or `None` means always enabled
+  - checked after the bundle-level `enabled_config`
 
 Current rule:
 
@@ -431,6 +456,18 @@ Current fields:
   - `"system"` — runs once across all instances for this tenant/project/bundle/job, Redis lock
   - omitting `span` or passing an empty string defaults to `"system"`
   - an unrecognised value raises `ValueError` at decoration time
+- `timezone`
+  - IANA timezone name, e.g. `"Europe/Berlin"`
+  - defaults to UTC when omitted
+- `tz_config`
+  - dot-separated path into bundle props/config for the timezone override
+  - if set and resolved to a non-blank string, takes precedence over `timezone`
+- `enabled_config`
+  - dot-separated path into bundle props that resolves to a boolean
+  - if the resolved value is falsy, this job is not scheduled
+  - absent or `None` means always enabled
+  - checked after the bundle-level `enabled_config` in `bundle_scheduler.py` —
+    if the bundle itself is disabled, no per-job check is performed
 
 Current behavior:
 
@@ -507,6 +544,7 @@ class APIEndpointSpec:
     route: str = "operations"
     user_types: tuple[str, ...] = ()
     roles: tuple[str, ...] = ()
+    enabled_config: str | None = None
 ```
 
 ### 2.2 `UIWidgetSpec`
@@ -519,6 +557,7 @@ class UIWidgetSpec:
     icon: dict[str, str]
     user_types: tuple[str, ...] = ()
     roles: tuple[str, ...] = ()
+    enabled_config: str | None = None
 ```
 
 ### 2.3 `MCPEndpointSpec`
@@ -530,6 +569,7 @@ class MCPEndpointSpec:
     alias: str
     route: str = "operations"
     transport: str = "streamable-http"
+    enabled_config: str | None = None
 ```
 
 ### 2.4 `OnMessageSpec`
@@ -557,7 +597,10 @@ class CronJobSpec:
     alias: str = ""
     cron_expression: str | None = None
     expr_config: str | None = None
+    timezone: str | None = None
+    tz_config: str | None = None
     span: str = "system"
+    enabled_config: str | None = None
 ```
 
 ### 2.7 `BundleInterfaceManifest`
@@ -573,6 +616,7 @@ class BundleInterfaceManifest:
     ui_main: UIMainSpec | None = None
     on_message: OnMessageSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
+    enabled_config: str | None = None
 ```
 
 `allowed_roles` is populated from the `allowed_roles` argument of
