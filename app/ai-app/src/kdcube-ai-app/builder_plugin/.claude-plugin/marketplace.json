@@ -6,13 +6,12 @@
   },
   "metadata": {
     "description": "KDCube bundle-building and local-runtime tools for Claude Code.",
-    "version": "2026.4.12.318",
-    "pluginRoot": "./plugins"
+    "version": "2026.4.12.318"
   },
   "plugins": [
     {
       "name": "kdcube-builder",
-      "source": "kdcube-builder",
+      "source": "./plugins/kdcube-builder",
       "description": "Build KDCube bundles, bootstrap local descriptors, and run KDCube locally.",
       "version": "2026.4.12.318",
       "author": {

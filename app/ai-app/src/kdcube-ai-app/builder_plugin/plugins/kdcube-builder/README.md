@@ -2,6 +2,22 @@
 
 This is the installable Claude Code plugin shipped by the local marketplace in the parent directory.
 
+## Install from the local repository
+
+```bash
+claude plugin uninstall kdcube-builder@kdcube-builder-marketplace --scope user
+claude plugin marketplace remove kdcube-builder-marketplace
+claude plugin marketplace add /Users/evgen/PycharmProjects/kdcube-ai-app
+claude plugin install kdcube-builder@kdcube-builder-marketplace --scope user
+```
+
+## Remove the plugin
+
+```bash
+claude plugin uninstall kdcube-builder@kdcube-builder-marketplace --scope user
+claude plugin marketplace remove kdcube-builder-marketplace
+```
+
 Main skills:
 
 - `/kdcube-builder:bundle-builder`

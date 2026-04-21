@@ -17,12 +17,22 @@
     "local-runtime"
   ],
   "skills": "./skills",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest"]
+    }
+  },
   "userConfig": {
     "kdcube_repo_root": {
+      "type": "directory",
+      "title": "KDCube repo root",
       "description": "Optional absolute path to a local kdcube-ai-app clone. Needed for local docs lookup and bundle test runs.",
       "sensitive": false
     },
     "kdcube_workdir": {
+      "type": "directory",
+      "title": "KDCube workdir",
       "description": "Optional KDCube workdir path. Default: ~/.kdcube/kdcube-runtime",
       "sensitive": false
     }

@@ -1,8 +1,0 @@
-bundles:
-  version: "1"
-  default_bundle_id: "example.bundle@1-0"
-  items:
-    - id: "example.bundle@1-0"
-      name: "Example Bundle"
-      path: "/bundles/example.bundle@1-0"
-      module: "entrypoint"

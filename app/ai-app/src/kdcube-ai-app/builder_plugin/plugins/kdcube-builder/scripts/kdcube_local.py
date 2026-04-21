@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path, PurePosixPath
 
 
@@ -82,7 +84,10 @@ def _write(path: Path, content: str) -> None:
 
 def _ensure_cmd_available(cmd: str) -> None:
     if shutil.which(cmd) is None:
-        raise SystemExit(f"Required command not found in PATH: {cmd}")
+        raise SystemExit(
+            f"Required command not found in PATH: {cmd}\n"
+            f"Run `python3 {Path(__file__).resolve()} install` to install kdcube-cli."
+        )
 
 
 def _resolve_bundle_mapping(bundle_path: Path, host_bundles_path: Path) -> PurePosixPath:
@@ -95,6 +100,28 @@ def _resolve_bundle_mapping(bundle_path: Path, host_bundles_path: Path) -> PureP
     if not relative.parts:
         raise SystemExit("Bundle path must not be the same directory as host bundles root")
     return PurePosixPath("/bundles", *relative.parts)
+
+
+def _docker_container_name(match: str) -> str:
+    try:
+        out = subprocess.check_output(
+            ["docker", "ps", "--filter", f"name={match}", "--format", "{{.Names}}"],
+            text=True,
+            stderr=subprocess.PIPE
+        ).strip()
+    except FileNotFoundError:
+        raise SystemExit("`docker` CLI not found in PATH.")
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or "").strip() or "is the Docker daemon running?"
+        raise SystemExit(f"`docker ps` failed: {detail}")
+
+    names = [n for n in out.splitlines() if n]
+
+    if not names:
+        raise SystemExit(f"No running container matching '{match}'. Start the stack first.")
+    if len(names) > 1:
+        raise SystemExit(f"Multiple containers match '{match}': {names}. Be more specific.")
+    return names[0]
 
 
 def cmd_bootstrap(args: argparse.Namespace) -> int:
@@ -184,7 +211,6 @@ def _ensure_descriptors_exist(profile: str) -> Path:
     required = [
         descriptors_dir / "assembly.yaml",
         descriptors_dir / "bundles.yaml",
-        descriptors_dir / "bundles.secrets.yaml",
         descriptors_dir / "gateway.yaml",
         descriptors_dir / "secrets.yaml",
     ]
@@ -197,9 +223,27 @@ def _ensure_descriptors_exist(profile: str) -> Path:
     return descriptors_dir
 
 
+def _expand_descriptors(descriptors_dir: Path) -> Path:
+    """Copy descriptors to a temp dir with ~ and $HOME expanded in all yaml values."""
+    home = str(Path.home())
+    tilde_re = re.compile(r'(:\s*["\']?)~/')
+
+    tmp = Path(tempfile.mkdtemp(prefix="kdcube-descriptors-"))
+    for src in descriptors_dir.iterdir():
+        if not src.is_file() or src.suffix not in (".yaml", ".yml"):
+            continue
+        text = src.read_text()
+        # expand ~/  →  /home/user/
+        text = tilde_re.sub(lambda m: m.group(1) + home + "/", text)
+        # expand $HOME/
+        text = text.replace("$HOME/", home + "/")
+        (tmp / src.name).write_text(text)
+    return tmp
+
+
 def cmd_start(args: argparse.Namespace) -> int:
     _ensure_cmd_available(_kdcube_cmd())
-    descriptors_dir = _ensure_descriptors_exist(args.profile)
+    descriptors_dir = _expand_descriptors(_ensure_descriptors_exist(args.profile))
     cmd = [_kdcube_cmd(), "--descriptors-location", str(descriptors_dir)]
 
     if args.mode == "upstream":
@@ -266,6 +310,160 @@ def cmd_bundle_tests(args: argparse.Namespace) -> int:
     return subprocess.run(cmd, env=env).returncode
 
 
+def cmd_verify_reload(args: argparse.Namespace) -> int:
+    container = _docker_container_name("chat-proc")
+
+    payload = json.dumps({"bundle_id": args.bundle_id})
+    script = (
+        "import json,sys,urllib.request;"
+        f"data={payload!r}.encode('utf-8');"
+        "req=urllib.request.Request("
+        "'http://127.0.0.1:8020/internal/bundles/reset-env',"
+        "data=data,"
+        "headers={'content-type':'application/json'},"
+        "method='POST');"
+        "resp=urllib.request.urlopen(req);"
+        "sys.stdout.write(resp.read().decode('utf-8'))"
+    )
+    r = subprocess.run(
+        ["docker", "exec", container, "python", "-c", script],
+        capture_output=True, text=True,
+    )
+
+    if r.returncode != 0:
+        raise SystemExit(f"docker exec failed: {r.stderr.strip() or r.stdout.strip()}")
+
+    try:
+        resp = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        raise SystemExit(f"Non-JSON response: {r.stdout!r}")
+
+    if resp.get("status") != "ok":
+        raise SystemExit(f"reset-env returned non-ok: {resp}")
+    if resp.get("bundle_id") != args.bundle_id:
+        raise SystemExit(
+            f"bundle_id mismatch: expected {args.bundle_id}, got {resp.get('bundle_id')!r}"
+        )
+    if resp.get("eviction") is None:
+        print(f"WARN: eviction was null — bundle may not have been in proc cache.")
+
+    print(f"Verify OK.")
+    print(f"  bundle_id: {args.bundle_id}")
+    print(f"  count:     {resp.get('count')}")
+    print(f"  eviction:  {resp.get('eviction')}")
+
+    return 0
+
+
+def cmd_use_descriptors(args: argparse.Namespace) -> int:
+    src = Path(args.descriptors_dir).expanduser().resolve()
+
+    required = ["assembly.yaml", "bundles.yaml", "gateway.yaml", "secrets.yaml"]
+    missing = [n for n in required if not (src / n).exists()]
+
+    if not src.exists():
+        raise SystemExit(f"Descriptors dir does not exist: {src}")
+    if not src.is_dir():
+        raise SystemExit(f"Not a directory: {src}")
+    if missing:
+        raise SystemExit(f"Missing in {src}: {', '.join(missing)}")
+
+    profile = args.profile
+    profile_dir = _profile_root(profile)
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    link = profile_dir / "descriptors"
+
+    if link.is_symlink() or link.exists():
+        if link.is_symlink():
+            link.unlink()
+        else:
+            raise SystemExit(
+                f"{link} is a real directory, not a symlink. "
+                f"Refusing to overwrite. Remove it manually if you want to switch."
+            )
+
+    link.symlink_to(src, target_is_directory=True)
+
+    print(f"Linked profile '{profile}' -> {src}")
+    print(f"Descriptors link:   {link}")
+    print("Next commands:")
+    print(f"  python3 {Path(__file__).resolve()} start latest-image --profile {profile}")
+    print(f"  python3 {Path(__file__).resolve()} status --profile {profile}")
+
+    return 0
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    kdcube = _kdcube_cmd()
+    if shutil.which(kdcube) is not None:
+        print(f"kdcube-cli is already installed: {shutil.which(kdcube)}")
+        return 0
+
+    if shutil.which("pipx") is None:
+        raise SystemExit("pipx not found in PATH. Install it first: https://pipx.pypa.io/stable/installation/")
+    installer = ["pipx", "install", "kdcube-cli"]
+
+    print(f"Installing kdcube-cli via: {' '.join(installer)}")
+    r = subprocess.run(installer)
+    if r.returncode != 0:
+        raise SystemExit("Installation failed. Check the output above.")
+
+    if shutil.which(kdcube) is None:
+        raise SystemExit(
+            "Installation succeeded but `kdcube` is still not in PATH. "
+            "You may need to add the install location to PATH and restart your shell."
+        )
+
+    print(f"kdcube-cli installed: {shutil.which(kdcube)}")
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    profile = args.profile
+
+    # kdcube CLI
+    kdcube = _kdcube_cmd()
+    kdcube_available = shutil.which(kdcube) is not None
+    print(f"kdcube CLI:     {'ok (' + kdcube + ')' if kdcube_available else 'NOT FOUND (' + kdcube + ')'}")
+
+    # descriptor profile
+    link = _profile_root(profile) / "descriptors"
+    if link.is_symlink():
+        target = link.resolve()
+        exists = target.exists()
+        print(f"Profile:        {profile}")
+        print(f"Descriptors:    {link} -> {target}{'' if exists else '  (TARGET MISSING)'}")
+    elif link.exists():
+        print(f"Profile:        {profile}")
+        print(f"Descriptors:    {link}  (real dir, not a symlink)")
+    else:
+        print(f"Profile:        {profile}  (no descriptors linked — run use-descriptors or bootstrap first)")
+
+    # workdir
+    workdir = _configured_workdir()
+    print(f"Workdir:        {workdir}{'' if workdir.exists() else '  (not found)'}")
+
+    # docker containers
+    try:
+        out = subprocess.check_output(
+            ["docker", "ps", "--filter", "name=kdcube", "--format", "{{.Names}}\t{{.Status}}"],
+            text=True, stderr=subprocess.PIPE,
+        ).strip()
+        containers = [line for line in out.splitlines() if line]
+        if containers:
+            print(f"Containers ({len(containers)}):")
+            for c in containers:
+                print(f"  {c}")
+        else:
+            print("Containers:     none running (filter: name=kdcube)")
+    except FileNotFoundError:
+        print("Containers:     docker CLI not found")
+    except subprocess.CalledProcessError as e:
+        print(f"Containers:     docker ps failed — {(e.stderr or '').strip() or 'is daemon running?'}")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="KDCube Claude plugin local runtime helper.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -308,6 +506,23 @@ def build_parser() -> argparse.ArgumentParser:
     tests.add_argument("bundle_path")
     tests.add_argument("extra_args", nargs=argparse.REMAINDER)
     tests.set_defaults(func=cmd_bundle_tests)
+
+    use_d = sub.add_parser("use-descriptors", help="Point a profile at an existing descriptor directory.")
+    use_d.add_argument("descriptors_dir")
+    use_d.add_argument("--profile", default="default")
+    use_d.set_defaults(func=cmd_use_descriptors)
+
+    vr = sub.add_parser("verify-reload",
+                        help="Verify that a bundle's cache was evicted and registry accepts it.")
+    vr.add_argument("bundle_id")
+    vr.set_defaults(func=cmd_verify_reload)
+
+    status = sub.add_parser("status", help="Show runtime status: CLI, descriptor profile, workdir, containers.")
+    status.add_argument("--profile", default="default")
+    status.set_defaults(func=cmd_status)
+
+    install = sub.add_parser("install", help="Install kdcube-cli via pipx or pip if not already present.")
+    install.set_defaults(func=cmd_install)
 
     return parser
 
