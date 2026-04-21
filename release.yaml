@@ -1,79 +1,73 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.17.247"
+  ref: "2026.4.21.1656"
   description: |
-    This release focuses on React runtime robustness, long-running processor control, descriptor-
-    driven runtime configuration, and the first experimental React v3 line.
+    This release focuses on descriptor-driven runtime maturity, secret/provider alignment, bundle
+    runtime correctness, ingress conversation identity hardening, and improved operational support
+    for local and deployed environments.
 
     Highlights
 
-    - Experimental React v3 runtime is now available behind `AI_REACT_AGENT_VERSION=v3`, with
-      `AI_REACT_AGENT_MULTI_ACTION=off|safe_fanout` controlling whether a round may contain one
-      action or a constrained multi-action bundle.
-    - React v3 introduces channel-instance-aware streaming for repeated
-      `<channel:ReactDecisionOutV2>` blocks and a safe multi-action mode for read-oriented tool
-      bundles. These actions are executed sequentially, not in parallel, and the model is now
-      instructed accordingly.
-    - React v2 and v3 both gained stronger protocol handling: failed decision attempts are rendered
-      as explicit failed rounds, round start is now visible in timeline rendering, and live
-      followup attachments are propagated into the active turn timeline instead of being dropped.
-    - Shared streaming infrastructure is now more robust for malformed model JSON. Streamed HTML
-      canvas artifacts and streamed final answers both tolerate raw quotes inside still-streaming
-      JSON strings, preventing live truncation while preserving the final rendered output.
-    - React activation is now configurable from settings rather than direct env reads, and v3 now
-      exposes clearer version-specific logging and prompt headers so runtime selection can be
-      verified without relying on misleading legacy labels.
+    - Descriptor-driven runtimes are more robust end-to-end. CLI bootstrap now seeds stronger
+      local-first defaults, preserves mounted bundle paths in reused runtimes, reads current AWS
+      descriptor values when needed, and precreates metrics log mounts for compose-based runtime
+      setups.
+    - Bundle runtime behavior was tightened in several places. Runtime inspection and split bundle
+      root handling were added, bundle prop writes are now serialized, scheduler-driven bundle prop
+      updates are published through the shared store, and shared infrastructure password lookup is
+      now driven through the configured secret provider.
+    - Gateway/runtime config resolution is more predictable. Descriptor scope placeholders are now
+      resolved centrally, and the runtime no longer depends on inconsistent ad hoc expansion paths.
+    - Chat ingress now owns conversation identity correctly. New conversations receive a
+      server-issued UUID at ingress time, supplied conversation ids are validated against the
+      authenticated user, SSE returns the resolved conversation id in the HTTP ack, and Socket.IO
+      now returns the same information via an explicit ack payload.
+    - Operator workflows were improved around git and resume behavior. Git subprocesses now use a
+      centralized repo-local commit identity contract, and Claude Code resume now treats git
+      lineage as the authority when deciding whether a session can resume safely.
+    - The control plane and proxy integration surface were extended. A single-key Redis delete
+      action was added to control-plane tooling, and integrations now expose an exact bundle list
+      route for callers that need strict bundle enumeration.
 
-    Processor and deployment work in this release line:
+    Runtime and deployment work in this release line:
 
-    - Proc no longer relies on one blunt wall-clock timeout. It now supports activity watchdogs,
-      with separate idle timeout, hard wall-time cap, and watchdog polling controls.
-    - Those service-level proc controls are now renderable from `assembly.yaml` into service env,
-      aligning descriptor-based deployment with the newer runtime settings.
-    - Scheduler migration groundwork is in place: proc now has a selectable scheduler backend seam,
-      keeping the current lists-based backend as default while reserving a future conversation-
-      streams backend.
-    - Git bundle/bootstrap reliability was tightened with initial prefetch gating, atomic descriptor
-      git auth staging, host cache root creation, container cache permission fixes, and schema
-      deployment timeout removal.
-    - React turns now survive more failure cases in deployment/runtime paths, including persistence
-      of interrupted turns despite workspace publish failures and polling of live external events
-      during active phases.
+    - CLI compose runtimes now better preserve runtime-specific bundle mount behavior instead of
+      flattening everything back to seed descriptor assumptions.
+    - AWS-oriented descriptor flows can now read the currently configured deployment-side AWS keys,
+      reducing drift between desired and active configuration.
+    - Metrics runtime setup is more reliable in compose mode thanks to precreated log mounts and
+      the related bootstrap fixes delivered in this release line.
+    - Secret resolution is more consistent across the runtime, especially for infrastructure
+      passwords and shared service configuration, because provider lookup has been unified instead
+      of split across older code paths.
 
-    Bundle/runtime and SDK work:
+    Bundle/runtime and documentation work:
 
-    - Bundles can now override built-in skills reliably, and the docs were expanded to clarify the
-      actual storage model for bundle props, bundle secrets, and user-scoped bundle props/secrets.
-    - The SDK docs were refreshed to reflect shipped bundle interface features, current React
-      options, decorator behavior, and workflow class vs factory semantics.
-    - Rendering capabilities were extended, including better format handling for rendering tools and
-      improved streamed widget behavior.
-    - Bundle user typing was separated from raw role handling, tightening identity semantics at the
-      bundle/runtime boundary.
-
-    Observability and frontend event collection:
-
-    - Frontend event collection was added and then consolidated into the metrics service, so the
-      metrics stack now also hosts the events ingestion endpoint used for client-side logging.
-    - Nginx and service routing were updated accordingly, and the associated architecture/design
-      docs were added.
+    - Bundle storage and runtime documentation were rewritten to reflect actual operational
+      behavior, including the contract for mounted bundle paths, runtime descriptor reuse, and
+      storage semantics.
+    - Local runtime descriptor documentation now matches the shipped bootstrap behavior instead of
+      older partial flows.
+    - Bundle storage guidance was clarified so the runtime/storage contract is easier to operate and
+      support in real deployments.
 
     Changelog
 
-    - Added experimental React v3 runtime, its dedicated streamer path, prompt tests, and widget
-      coverage.
-    - Added configurable React agent version selection and documented the new React-related service
-      settings.
-    - Tightened React v2 protocol/round handling and clarified the v3 protocol for single-action
-      and safe-fanout modes.
-    - Surfaced live followup attachments in React timeline rendering.
-    - Fixed truncation of streamed HTML canvas artifacts and streamed final answers caused by raw
-      quotes in malformed model JSON.
-    - Added processor activity watchdogs, descriptor-driven service rendering for watchdog config,
-      and selectable scheduler backend scaffolding.
-    - Added proc scheduler design docs, including notes on a Kafka-backed implementation model.
-    - Improved git bundle bootstrap reliability and disabled schema deployment statement timeout.
-    - Refreshed SDK/docs around bundle props/secrets, React SDK features, and workflow decorator
-      semantics.
+    - Added local-first descriptor bootstrap defaults for CLI-driven runtimes.
+    - Added runtime bundle inspection support and split bundle root handling.
+    - Preserved mounted local bundle paths when reusing existing runtimes.
+    - Added compose bootstrap support to precreate metrics log mounts.
+    - Added descriptor-aware AWS key lookup for CLI deployment flows.
+    - Unified secret-provider lookup for shared and infrastructure password resolution.
+    - Resolved descriptor scope placeholders centrally in gateway/runtime config handling.
+    - Serialized shared bundle prop writes and published scheduler-side prop updates from the shared
+      store.
+    - Added exact bundle list exposure for proxy/integration consumers.
+    - Added control-plane single-key Redis deletion support.
+    - Centralized repo-local git commit identity handling.
+    - Treated git lineage as the authority for Claude Code resume decisions.
+    - Issued conversation ids at ingress, rejected unknown supplied ids, and aligned SSE and
+      Socket.IO acknowledgment payloads around the resolved conversation id.
+    - Expanded bundle/runtime documentation to match the actual deployment and runtime contract.
 config:
-    version: "2026.4.17.247"
+    version: "2026.4.21.1656"
