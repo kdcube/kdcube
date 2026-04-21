@@ -37,6 +37,21 @@ In practice:
 - service runtime behavior comes from this application codebase
 - deployment changes are applied by updating descriptor values and rerunning the provision workflow
 
+This does not mean AWS bypasses the normal descriptor model.
+
+- `assembly.yaml` and `bundles.yaml` still drive normal settings resolution and
+  plain descriptor reads
+- `gateway.yaml` is still normal deployment input, but AWS runtime consumes the
+  rendered `GATEWAY_CONFIG_JSON` value rather than a staged `/config/gateway.yaml`
+- `secrets.yaml` and `bundles.secrets.yaml` are still normal deployment input
+  and export format, but in `aws-sm` mode the live secret authority is AWS
+  Secrets Manager
+
+See:
+- [docs/service/configuration/service-config-README.md](../../service/configuration/service-config-README.md)
+- [docs/service/configuration/secrets-descriptor-README.md](../../service/configuration/secrets-descriptor-README.md)
+- [docs/service/configuration/bundles-secrets-descriptor-README.md](../../service/configuration/bundles-secrets-descriptor-README.md)
+
 ## Runtime Topology
 
 Current runtime on ECS:
@@ -107,7 +122,6 @@ The proc task receives:
   - `HOST_KDCUBE_STORAGE_PATH`
   - `HOST_BUNDLE_STORAGE_PATH`
   - `HOST_BUNDLES_PATH`
-  - `HOST_MANAGED_BUNDLES_PATH`
   - `HOST_EXEC_WORKSPACE_PATH`
 
 This lets proc start nested Docker exec containers that bind the same stable
@@ -149,17 +163,57 @@ Important mounted areas include:
 
 In practice:
 
-- bundle registry config is written to EFS and consumed from `/config/bundles.yaml`
-- assembly descriptor may also be exposed under `/config/assembly.yaml`
+- deploy snapshots of `assembly.yaml` and `bundles.yaml` can be written to EFS
+  and consumed from `/config/assembly.yaml` and `/config/bundles.yaml`
 - proc uses `/bundles` as the bundle root
 - proc and nested exec containers share storage through EFS-backed paths
-- bundle config updates can be applied without full infrastructure reprovision
+- plain descriptor reads still work from `/config`
+- live bundle authority in `aws-sm` is AWS Secrets Manager:
+  - `<prefix>/bundles-meta`
+  - `<prefix>/bundles/<id>/descriptor`
+  - `<prefix>/bundles/<id>/secrets`
+- `/config/bundles.yaml` is a deploy snapshot and startup reseed input, not the
+  live bundle authority in `aws-sm`
+- `gateway.yaml` is not required as a mounted live runtime file in ECS; the
+  runtime receives gateway config through `GATEWAY_CONFIG_JSON`
 
 If ingress, proc, or metrics code uses `read_plain(...)`, those services must
 receive the shared `/config` mount so runtime can read:
 
 - `/config/assembly.yaml`
 - `/config/bundles.yaml`
+
+`PLATFORM_DESCRIPTORS_DIR` is not required for this on ECS.
+The settings loader falls back to the default descriptor paths under `/config`
+when explicit descriptor env vars are not set.
+
+## Settings And Secrets Resolution On AWS
+
+The runtime settings path on ECS is the same `config.py` contract as elsewhere.
+
+For non-secret config:
+
+- `assembly.yaml` remains the source for normal settings resolution
+- `bundles.yaml` remains the source for plain descriptor reads and deploy-time
+  bundle registry input
+- `config.py` still resolves assembly-backed settings in the normal order:
+  assembly descriptor, then env, then hard-coded default
+
+For secrets:
+
+- `assembly.yaml -> secrets.provider` selects the runtime secret backend
+- in ECS this is normally `aws-sm`
+- infra secrets such as Postgres and Redis are injected from individual AWS
+  Secrets Manager entries
+- platform/global secrets are resolved from the grouped platform secret document
+- app-scoped secrets are resolved from grouped app secret documents
+- `secrets.yaml` and `bundles.secrets.yaml` remain deployment input and export
+  format, not live runtime authority in `aws-sm`
+
+So the AWS deployment is still descriptor-driven in the normal sense.
+The difference is that live secret and live app registry authority moves from
+files to provider-backed state, while descriptor snapshots remain valid deploy
+inputs and plain-read sources.
 
 See:
 - [docs/service/configuration/service-config-README.md](../../service/configuration/service-config-README.md)
