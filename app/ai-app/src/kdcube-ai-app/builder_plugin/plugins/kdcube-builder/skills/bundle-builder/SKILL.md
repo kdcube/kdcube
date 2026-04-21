@@ -7,19 +7,65 @@ description: Build or repair KDCube bundles. Use the KDCube bundle docs, the ver
 Use this skill when the task is bundle authoring: writing a bundle from scratch, wrapping an
 existing application into a bundle, or adding features to an existing bundle.
 
-## Authoring rule #1 — lean on the docs
+## Authoring rule #1 — lean on the docs (HARD GATE — NO EXCEPTIONS)
 
-**Never write bundle code from memory.** Always read the docs and a real reference bundle
-first. Decorators, import paths, descriptor fields, and runtime bindings change between
-releases — guessing them produces bundles that load but silently misbehave.
+**Never write bundle code, edit a descriptor, or touch runtime config from memory.**
+Decorators, import paths, descriptor fields, runtime paths, and mount semantics change
+between releases — guessing them produces bundles that "load" but silently misbehave, or
+worse, `bundles.yaml` entries that look right but never actually resolve inside the
+container. You will not catch these by reading the code — the runtime is permissive and
+the symptoms are delayed.
 
-For every bundle task, the first actions are:
+**This rule is absolute.** It applies every single time, including:
 
-1. Read the docs in the order below.
+- "small" edits to an existing bundle
+- renames, path changes, adding one decorator
+- "I already read it last session" — no, re-read it; state changes between sessions
+- the user says "just do it quickly" — still read the docs first, then do it quickly
+- the bundle lives outside the runtime workdir / outside `host_bundles_path` — **especially then**
+
+Do NOT skip the read step because the task "looks simple." The most common failure mode
+of this plugin is exactly that: the agent skips the docs, writes a plausible-looking
+`bundles.yaml` entry with the host path instead of the container path, the reload
+appears to succeed, and nothing works. Reading the docs is cheaper than debugging that.
+
+### Mandatory pre-flight (do these in order, every bundle task)
+
+1. **Read the how-to playbooks first — operational canon:**
+   - `how-to-write-bundle-README.md` — authoring
+   - `how-to-configure-and-run-bundle-README.md` — **REQUIRED reading any time the bundle
+     lives outside the current `host_bundles_path`, or any time you touch `bundles.yaml`
+     or `assembly.yaml`.** This doc is the only source of truth for the host-path /
+     container-path / mount-root split. Do not attempt to configure a bundle that sits
+     outside the runtime tree without reading it — you will get the path wrong.
+   - `how-to-test-bundle-README.md` — testing
 2. Read the versatile reference bundle (and another example if the task is a specialized case).
-3. Only then start writing or editing code.
+3. When editing `assembly.yaml` / `bundles.yaml` / `bundles.secrets.yaml` / `gateway.yaml` /
+   `secrets.yaml`, also read the matching descriptor doc under `docs/service/configuration/`
+   before making the edit. Not after. Before.
+4. Only then start writing or editing code.
 
 If a doc contradicts this skill, the doc wins — surface the conflict to the user.
+
+### Bundle lives outside the runtime mount — read this section of the how-to twice
+
+When the user's bundle directory is NOT under the current `host_bundles_path` from
+`assembly.yaml`, the runtime cannot see it. The fix documented in
+`how-to-configure-and-run-bundle-README.md` (section "If you want to change the host
+bundles root") is: edit `assembly.yaml -> paths.host_bundles_path` to the parent that
+contains the bundle, then rebuild with `kdcube --workdir $WORKDIR --build --upstream`
+so the new mount takes effect. After that, in `bundles.yaml` use the **container path**
+= `/bundles/<relative-path-from-host_bundles_path>`.
+
+The plugin's `bootstrap <bundle-id> <bundle-dir> --host-bundles-path <parent>` helper
+does the same thing (it writes `host_bundles_path` into `assembly.yaml`), so you can
+use it as a shortcut when you also want a fresh descriptor set — but it is the same
+underlying action, not an alternative fix.
+
+Do not put the host path directly into `bundles.yaml` — the runtime path and host path
+are different namespaces. Read the "Host path and runtime path are not the same thing"
+and "If you want to change the host bundles root" sections of the how-to before
+editing anything.
 
 ## What one bundle can contain
 
@@ -40,39 +86,54 @@ One KDCube bundle can combine:
 
 ## Read order
 
-Check whether `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set. If it is, use **local paths**
-(faster, no network). Otherwise fall back to the GitHub URLs below.
+**Default source is GitHub.** The plugin has no reliable way to locate the repo on disk, so
+fetch the docs from GitHub with `WebFetch`. Only use local paths if
+`CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is explicitly set — that is an opt-in fast path, not
+the default.
 
-### Local paths (when repo root is available)
+All paths below are relative to `https://github.com/kdcube/kdcube-ai-app/blob/main/`.
 
-Let `R = $CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT`. Read in this order with the `Read` tool:
+### 1. How-to playbooks (read these first — operational canon)
 
-1. `R/app/ai-app/docs/sdk/bundle/bundle-index-README.md`
-2. `R/app/ai-app/docs/sdk/bundle/bundle-reference-versatile-README.md`
-3. `R/app/ai-app/docs/sdk/bundle/bundle-dev-README.md`
-4. `R/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md`
-5. `R/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md`
-6. `R/app/ai-app/docs/sdk/bundle/bundle-props-secrets-README.md`
-7. `R/app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md`
+- `app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring
+- `app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
+- `app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing
 
-Reference bundle (read all files with `Read` / `Glob`):
+### 2. SDK reference docs
 
-- `R/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
+- `app/ai-app/docs/sdk/bundle/bundle-index-README.md`
+- `app/ai-app/docs/sdk/bundle/bundle-reference-versatile-README.md`
+- `app/ai-app/docs/sdk/bundle/bundle-dev-README.md`
+- `app/ai-app/docs/sdk/bundle/bundle-runtime-README.md`
+- `app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md`
+- `app/ai-app/docs/sdk/bundle/bundle-props-secrets-README.md`
+- `app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md`
 
-Bundle suite tests (read to understand what the suite validates):
+### 3. Descriptor / service configuration
 
-- `R/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
-- `R/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
+Read the matching descriptor doc when editing any of `assembly.yaml`, `bundles.yaml`,
+`bundles.secrets.yaml`, `gateway.yaml`, `secrets.yaml`:
 
-### GitHub fallback (when no local repo)
+- `app/ai-app/docs/service/configuration/service-config-README.md`
+- `app/ai-app/docs/service/configuration/assembly-descriptor-README.md`
+- `app/ai-app/docs/service/configuration/bundles-descriptor-README.md`
+- `app/ai-app/docs/service/configuration/bundles-secrets-descriptor-README.md`
+- `app/ai-app/docs/service/configuration/gateway-descriptor-README.md`
+- `app/ai-app/docs/service/configuration/secrets-descriptor-README.md`
 
-1. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-index-README.md`
-2. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-reference-versatile-README.md`
-3. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-dev-README.md`
-4. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-runtime-README.md`
-5. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md`
-6. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-props-secrets-README.md`
-7. `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md`
+### 4. Reference bundle and tests
+
+- Bundle: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/`
+- Suite tests (understand what validates a bundle):
+  - `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
+  - `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
+
+### Local fast path (opt-in)
+
+If `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set, read the same files from
+`$CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT/<path-above>` with the `Read` tool instead of
+`WebFetch`. This is purely an optimization — do not ask the user for a local path if the env
+var is not already set, just use GitHub.
 
 ## Primary examples
 

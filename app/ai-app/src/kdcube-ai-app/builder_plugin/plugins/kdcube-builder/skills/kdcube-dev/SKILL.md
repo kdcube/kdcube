@@ -5,7 +5,7 @@ description: >
   build or fix bundle code, configure descriptors, wrap an existing app into a bundle, add a feature
   to a bundle, or asks what KDCube is doing right now.
   SKIP: user is asking about unrelated code, cloud deployments, or non-KDCube services.
-allowed-tools: Bash, Read, Write, Edit, Grep, Glob
+allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch
 ---
 
 # KDCube Dev Assistant
@@ -31,6 +31,7 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kdcube_local.py" <command> [args]
 | wrap app / заверни приложение в бандл | see **Bundle build flow** → wrap workflow |
 | add feature / добавь фичу в бандл | see **Bundle build flow** → add feature workflow |
 | setup / first time / настрой / where are descriptors | see **First-time setup flow** |
+| configure / настрой конфиг / how do I edit bundles.yaml / assembly.yaml | see **Configuration flow** |
 | status / what's running / что запущено | `status` |
 | inject secrets / добавь ключи / clean / reset config | use `/kdcube-builder:kdcube-cli` |
 
@@ -56,6 +57,41 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kdcube_local.py" bootstrap <bundle_id> <b
 ```
 
 Generates all descriptors with safe local defaults (auth=simple, demo tenant/project). After success, offer to start.
+
+## Configuration flow
+
+When the user asks about editing descriptors, configuring a bundle, what a field in
+`assembly.yaml` / `bundles.yaml` / `bundles.secrets.yaml` / `gateway.yaml` / `secrets.yaml`
+means, or how props/secrets reach a bundle — **do not guess from memory. Ever. Read the
+docs first, every single time, no exceptions.**
+
+This rule is absolute. The most common failure mode of this plugin is skipping the read
+step on "small" edits and ending up with a `bundles.yaml` entry that uses the host path
+instead of the container path, or an `assembly.yaml` whose `host_bundles_path` does not
+actually cover the bundle directory on disk. Both look fine until the runtime silently
+serves nothing. Reading the docs is cheaper than debugging that. Re-read even if you
+think you remember from a previous session — descriptor shapes change between releases.
+
+**Especially when the bundle lives outside the current runtime workdir / outside
+`host_bundles_path`:** the host path is NOT the container path. `bundles.yaml` takes the
+container path `/bundles/<relative-from-host_bundles_path>`. The documented fix
+(how-to-configure-and-run-bundle, section "If you want to change the host bundles root")
+is to edit `assembly.yaml -> paths.host_bundles_path` to the parent that contains the
+bundle, then `kdcube --workdir $WORKDIR --build --upstream`. The plugin's `bootstrap`
+helper with `--host-bundles-path` does the same thing in one call. Do not invent other
+workarounds — read the how-to first.
+
+1. Fetch the how-to first:
+   `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`
+2. Fetch the matching descriptor doc under
+   `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/configuration/`
+   (`service-config-README.md`, `assembly-descriptor-README.md`,
+   `bundles-descriptor-README.md`, `bundles-secrets-descriptor-README.md`,
+   `gateway-descriptor-README.md`, `secrets-descriptor-README.md`).
+3. Use `WebFetch` by default. If `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set, read the same
+   files locally instead — that is an opt-in fast path, not the default.
+4. After editing `$WORKDIR/config/bundles.yaml` on macOS, restart `chat-proc` (see the Reload
+   gotcha below), then `reload` + `verify-reload`.
 
 ## Reload flow
 
@@ -115,16 +151,30 @@ If `$WORKDIR` still resolves to nothing or `$WORKDIR/config/.env` is missing,
 
 Non-negotiable rules for any bundle work:
 
+- **Read the docs before writing or editing anything — every time, no exceptions.** Start
+  with `how-to-write-bundle-README.md` and `how-to-configure-and-run-bundle-README.md`,
+  plus the versatile reference bundle. "I remember this" is not a substitute. The
+  descriptor shapes and mount semantics change between releases and the runtime fails
+  silently when you get them wrong.
 - The bundle directory can live anywhere on the host — `~/.kdcube/bundles/<bundle-id>/`
   by default, or wherever the user asked (Desktop, project dir, etc.). Use a real
   directory, not a symlink.
 - Register in `$WORKDIR/config/bundles.yaml` with the **container path**
-  (`/bundles/<bundle-id>`), not the host path.
+  (`/bundles/<relative-from-host_bundles_path>`), not the host path. The container path
+  is derived from where the bundle sits relative to `host_bundles_path` in
+  `assembly.yaml` — NOT from the host filesystem. Read
+  `how-to-configure-and-run-bundle-README.md` section "Host path and runtime path are
+  not the same thing" if this is unclear — do not guess.
 - If the chosen host directory is outside the current `HOST_BUNDLES_PATH` (from
-  `$WORKDIR/config/.env`), re-run `bootstrap <bundle-id> <bundle-dir>` so its parent
-  becomes the mount root, then restart. `bundle-builder` covers the mechanics.
-- Read the bundle docs and the versatile reference bundle **before** writing code — every
-  time, even for small edits. Do not invent decorators or import paths.
+  `$WORKDIR/config/.env` or `$WORKDIR/config/assembly.yaml`), the documented fix
+  (how-to-configure-and-run-bundle, "If you want to change the host bundles root") is:
+  edit `assembly.yaml -> paths.host_bundles_path` to the parent that contains the
+  bundle, then `kdcube --workdir $WORKDIR --build --upstream` so the mount takes effect.
+  The plugin's `bootstrap <bundle-id> <bundle-dir> --host-bundles-path <parent>` helper
+  does the same thing in one call (it writes `host_bundles_path` into `assembly.yaml`).
+  Do NOT put the host path into `bundles.yaml` and hope it resolves — the runtime path
+  and host path are different namespaces. `bundle-builder` covers the mechanics.
+- Do not invent decorators, import paths, or descriptor fields.
 
 ### Wrap existing app into a bundle
 
