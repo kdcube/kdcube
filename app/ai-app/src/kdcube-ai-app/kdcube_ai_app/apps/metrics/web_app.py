@@ -29,8 +29,40 @@ from dotenv import load_dotenv, find_dotenv
 _ENV_DIR = Path(__file__).resolve().parent
 load_dotenv(_ENV_DIR / ".env.metrics", override=True)
 load_dotenv(find_dotenv(usecwd=False))
+
+# The metrics service uses proc gateway capacity semantics for queue/backpressure math.
+os.environ.setdefault("GATEWAY_COMPONENT", "proc")
+# Ensure per-replica instance id is set (do not override explicit env)
+os.environ.setdefault("INSTANCE_ID", f"metrics-{uuid.uuid4().hex[:8]}")
+
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
+
 get_settings.cache_clear()
+_SETTINGS = get_settings()
+_METRICS = _SETTINGS.PLATFORM.METRICS
+
+
+def _apply_metrics_log_env() -> None:
+    log_cfg = _METRICS.LOG
+    resolved = {
+        "LOG_LEVEL": log_cfg.LOG_LEVEL,
+        "LOG_MAX_MB": str(log_cfg.LOG_MAX_MB),
+        "LOG_BACKUP_COUNT": str(log_cfg.LOG_BACKUP_COUNT),
+        "LOG_FILE_PREFIX": log_cfg.LOG_FILE_PREFIX or "metrics",
+    }
+    log_dir = str(log_cfg.LOG_DIR or "").strip()
+    if log_dir:
+        resolved["LOG_DIR"] = log_dir
+    for key, value in resolved.items():
+        if value is None:
+            continue
+        os.environ[key] = str(value)
+
+import kdcube_ai_app.apps.utils.logging_config as logging_config
+
+_apply_metrics_log_env()
+logging_config.configure_logging()
+logger = logging.getLogger("Metrics.WebApp")
 
 from kdcube_ai_app.apps.utils.cors import configure_cors
 from kdcube_ai_app.apps.metrics.rest.events import mount_events_routers
@@ -41,7 +73,6 @@ from kdcube_ai_app.apps.chat.ingress.resolvers import (
     get_heartbeats_mgr_and_middleware,
     REDIS_URL,
 )
-from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.infra.gateway.config import (
     apply_gateway_config_from_cache,
     apply_gateway_config_from_env,
@@ -56,57 +87,53 @@ import httpx
 from prometheus_client import CollectorRegistry, Gauge, generate_latest, CONTENT_TYPE_LATEST
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, Response
-# Ensure per-replica instance id is set (do not override explicit env)
-os.environ.setdefault("INSTANCE_ID", f"metrics-{uuid.uuid4().hex[:8]}")
-
-import kdcube_ai_app.apps.utils.logging_config as logging_config
-logging_config.configure_logging()
-logger = logging.getLogger("Metrics.WebApp")
-
-# Metrics server should use processor capacity for queue/backpressure calculations.
-os.environ.setdefault("GATEWAY_COMPONENT", "proc")
 
 
-METRICS_PORT = int(os.getenv("METRICS_PORT", "8090"))
-INGRESS_BASE_URL = os.getenv("METRICS_INGRESS_BASE_URL", "").strip()
-PROC_BASE_URL = os.getenv("METRICS_PROC_BASE_URL", "").strip()
-REQUEST_TIMEOUT = float(os.getenv("METRICS_REQUEST_TIMEOUT_SEC", "5.0"))
-METRICS_MODE = os.getenv("METRICS_MODE", "redis").strip().lower()
-METRICS_ENABLE_PG_POOL = os.getenv("METRICS_ENABLE_PG_POOL", "0").lower() in {"1", "true", "yes", "on"}
+METRICS_PORT = _SETTINGS.METRICS_PORT
+INGRESS_BASE_URL = str(_METRICS.PROXY.METRICS_INGRESS_BASE_URL or "").strip()
+PROC_BASE_URL = str(_METRICS.PROXY.METRICS_PROC_BASE_URL or "").strip()
+REQUEST_TIMEOUT = float(_METRICS.SERVICE.METRICS_REQUEST_TIMEOUT_SEC)
+METRICS_MODE = str(_METRICS.SERVICE.METRICS_MODE or "redis").strip().lower()
+METRICS_ENABLE_PG_POOL = bool(_METRICS.SERVICE.METRICS_ENABLE_PG_POOL)
 
 # Scheduled exporter
-SCHEDULER_ENABLED = os.getenv("METRICS_SCHEDULER_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
-EXPORT_INTERVAL_SEC = float(os.getenv("METRICS_EXPORT_INTERVAL_SEC", "30"))
-EXPORT_ON_START = os.getenv("METRICS_EXPORT_ON_START", "1").lower() in {"1", "true", "yes", "on"}
+SCHEDULER_ENABLED = bool(_METRICS.EXPORT.METRICS_SCHEDULER_ENABLED)
+EXPORT_INTERVAL_SEC = float(_METRICS.EXPORT.METRICS_EXPORT_INTERVAL_SEC)
+EXPORT_ON_START = bool(_METRICS.EXPORT.METRICS_EXPORT_ON_START)
 
 # CloudWatch export
-CLOUDWATCH_ENABLED = os.getenv("METRICS_EXPORT_CLOUDWATCH", "0").lower() in {"1", "true", "yes", "on"}
-CLOUDWATCH_NAMESPACE = os.getenv("METRICS_CLOUDWATCH_NAMESPACE", "KDCube/Metrics")
-CLOUDWATCH_REGION = os.getenv("METRICS_CLOUDWATCH_REGION") or os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
-CLOUDWATCH_DIMENSIONS_JSON = os.getenv("METRICS_CLOUDWATCH_DIMENSIONS_JSON", "").strip()
+CLOUDWATCH_ENABLED = bool(_METRICS.EXPORT.CLOUDWATCH.METRICS_EXPORT_CLOUDWATCH)
+CLOUDWATCH_NAMESPACE = str(_METRICS.EXPORT.CLOUDWATCH.METRICS_CLOUDWATCH_NAMESPACE or "KDCube/Metrics")
+CLOUDWATCH_REGION = (
+    str(_METRICS.EXPORT.CLOUDWATCH.METRICS_CLOUDWATCH_REGION or "").strip()
+    or str(_SETTINGS.AWS_REGION or "").strip()
+    or str(os.getenv("AWS_DEFAULT_REGION") or "").strip()
+    or None
+)
+CLOUDWATCH_DIMENSIONS_JSON = str(_METRICS.EXPORT.CLOUDWATCH.METRICS_CLOUDWATCH_DIMENSIONS_JSON or "").strip()
 
 # Prometheus pushgateway export
-PROM_PUSH_ENABLED = os.getenv("METRICS_EXPORT_PROMETHEUS_PUSH", "0").lower() in {"1", "true", "yes", "on"}
-PROM_PUSHGATEWAY_URL = os.getenv("METRICS_PROM_PUSHGATEWAY_URL", "").strip()
-PROM_JOB_NAME = os.getenv("METRICS_PROM_JOB_NAME", "kdcube_metrics").strip()
-PROM_GROUPING_LABELS_JSON = os.getenv("METRICS_PROM_GROUPING_LABELS_JSON", "").strip()
-PROM_SCRAPE_CACHE_TTL_SEC = float(os.getenv("METRICS_PROM_SCRAPE_TTL_SEC", "10"))
+PROM_PUSH_ENABLED = bool(_METRICS.EXPORT.PROMETHEUS.METRICS_EXPORT_PROMETHEUS_PUSH)
+PROM_PUSHGATEWAY_URL = str(_METRICS.EXPORT.PROMETHEUS.METRICS_PROM_PUSHGATEWAY_URL or "").strip()
+PROM_JOB_NAME = str(_METRICS.EXPORT.PROMETHEUS.METRICS_PROM_JOB_NAME or "kdcube_metrics").strip()
+PROM_GROUPING_LABELS_JSON = str(_METRICS.EXPORT.PROMETHEUS.METRICS_PROM_GROUPING_LABELS_JSON or "").strip()
+PROM_SCRAPE_CACHE_TTL_SEC = float(_METRICS.EXPORT.PROMETHEUS.METRICS_PROM_SCRAPE_TTL_SEC)
 
 # One-shot mode (for scheduled tasks)
-RUN_ONCE = os.getenv("METRICS_RUN_ONCE", "0").lower() in {"1", "true", "yes", "on"}
+RUN_ONCE = bool(_METRICS.EXPORT.METRICS_RUN_ONCE)
 
 # Metric mapping (optional)
-METRICS_MAPPING_JSON = os.getenv("METRICS_MAPPING_JSON", "").strip()
+METRICS_MAPPING_JSON = str(_METRICS.EXPORT.METRICS_MAPPING_JSON or "").strip()
 
 
 def _build_headers() -> Dict[str, str]:
     headers: Dict[str, str] = {}
-    name = os.getenv("METRICS_AUTH_HEADER_NAME", "").strip()
-    value = os.getenv("METRICS_AUTH_HEADER_VALUE", "").strip()
+    name = str(_METRICS.PROXY.METRICS_AUTH_HEADER_NAME or "").strip()
+    value = str(_METRICS.PROXY.METRICS_AUTH_HEADER_VALUE or "").strip()
     if name and value:
         headers[name] = value
 
-    extra_raw = os.getenv("METRICS_HEADERS_JSON", "").strip()
+    extra_raw = str(_METRICS.PROXY.METRICS_HEADERS_JSON or "").strip()
     if extra_raw:
         try:
             extra = json.loads(extra_raw)
@@ -299,7 +326,7 @@ async def _collect_system_redis(app: FastAPI) -> Dict[str, Any]:
         redis=app.state.redis_async,
         gateway_adapter=app.state.gateway_adapter,
         middleware=app.state.middleware,
-        instance_id=os.getenv("INSTANCE_ID", "metrics"),
+        instance_id=_SETTINGS.INSTANCE_ID,
         expected_services=None,
         sse_hub=None,
         pg_pool=app.state.pg_pool,

@@ -94,3 +94,38 @@ platform:
   ref: "2026.4.12.318"
   config:
     version: "2026.4.12.318"
+  services:
+    metrics:
+      log:
+        log_level: "INFO"
+        log_max_mb: 20
+        log_backup_count: 10
+        log_dir: ""
+        log_file_prefix: "metrics"
+      service:
+        metrics_mode: "redis"
+        metrics_request_timeout_sec: 5.0
+        metrics_enable_pg_pool: false
+      proxy:
+        metrics_ingress_base_url: ""
+        metrics_proc_base_url: ""
+        metrics_auth_header_name: ""
+        metrics_auth_header_value: ""
+        metrics_headers_json: ""
+      export:
+        scheduler_enabled: false
+        export_interval_sec: 30
+        export_on_start: true
+        run_once: false
+        mapping_json: ""
+        cloudwatch:
+          enabled: false
+          namespace: "KDCube/Metrics"
+          region: ""
+          dimensions_json: ""
+        prometheus:
+          push_enabled: false
+          pushgateway_url: ""
+          job_name: "kdcube_metrics"
+          grouping_labels_json: ""
+          scrape_ttl_sec: 10

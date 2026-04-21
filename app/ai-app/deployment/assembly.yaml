@@ -302,3 +302,43 @@ platform:
           git_ssh_key_path: ""                        # GIT_SSH_KEY_PATH; absolute path to SSH private key
           git_ssh_known_hosts: ""                     # GIT_SSH_KNOWN_HOSTS; absolute path to known_hosts file
           git_ssh_strict_host_key_checking: "yes"     # GIT_SSH_STRICT_HOST_KEY_CHECKING
+
+    metrics:
+      log:
+        log_level: "INFO"         # LOG_LEVEL
+        log_max_mb: 20            # LOG_MAX_MB
+        log_backup_count: 10      # LOG_BACKUP_COUNT
+        log_dir: ""               # LOG_DIR; absolute path; leave empty to use default
+        log_file_prefix: "metrics"  # LOG_FILE_PREFIX
+
+      service:
+        metrics_mode: "redis"              # METRICS_MODE: redis | proxy
+        metrics_request_timeout_sec: 5.0   # METRICS_REQUEST_TIMEOUT_SEC
+        metrics_enable_pg_pool: false      # METRICS_ENABLE_PG_POOL
+
+      proxy:
+        metrics_ingress_base_url: ""       # METRICS_INGRESS_BASE_URL; required in proxy mode
+        metrics_proc_base_url: ""          # METRICS_PROC_BASE_URL; required in proxy mode
+        metrics_auth_header_name: ""       # METRICS_AUTH_HEADER_NAME
+        metrics_auth_header_value: ""      # METRICS_AUTH_HEADER_VALUE
+        metrics_headers_json: ""           # METRICS_HEADERS_JSON
+
+      export:
+        scheduler_enabled: false           # METRICS_SCHEDULER_ENABLED
+        export_interval_sec: 30            # METRICS_EXPORT_INTERVAL_SEC
+        export_on_start: true              # METRICS_EXPORT_ON_START
+        run_once: false                    # METRICS_RUN_ONCE
+        mapping_json: ""                   # METRICS_MAPPING_JSON
+
+        cloudwatch:
+          enabled: false                   # METRICS_EXPORT_CLOUDWATCH
+          namespace: "KDCube/Metrics"      # METRICS_CLOUDWATCH_NAMESPACE
+          region: ""                       # METRICS_CLOUDWATCH_REGION
+          dimensions_json: ""              # METRICS_CLOUDWATCH_DIMENSIONS_JSON
+
+        prometheus:
+          push_enabled: false              # METRICS_EXPORT_PROMETHEUS_PUSH
+          pushgateway_url: ""              # METRICS_PROM_PUSHGATEWAY_URL
+          job_name: "kdcube_metrics"       # METRICS_PROM_JOB_NAME
+          grouping_labels_json: ""         # METRICS_PROM_GROUPING_LABELS_JSON
+          scrape_ttl_sec: 10               # METRICS_PROM_SCRAPE_TTL_SEC

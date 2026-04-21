@@ -144,6 +144,131 @@ def test_settings_auth_provider_falls_back_to_legacy_auth_type(monkeypatch, tmp_
     assert settings.AUTH_PROVIDER == "cognito"
 
 
+def test_settings_reads_metrics_service_config_from_assembly(monkeypatch, tmp_path):
+    for key in (
+        "METRICS_PORT",
+        "METRICS_MODE",
+        "METRICS_REQUEST_TIMEOUT_SEC",
+        "METRICS_ENABLE_PG_POOL",
+        "METRICS_INGRESS_BASE_URL",
+        "METRICS_PROC_BASE_URL",
+        "METRICS_AUTH_HEADER_NAME",
+        "METRICS_AUTH_HEADER_VALUE",
+        "METRICS_HEADERS_JSON",
+        "METRICS_SCHEDULER_ENABLED",
+        "METRICS_EXPORT_INTERVAL_SEC",
+        "METRICS_EXPORT_ON_START",
+        "METRICS_RUN_ONCE",
+        "METRICS_MAPPING_JSON",
+        "METRICS_EXPORT_CLOUDWATCH",
+        "METRICS_CLOUDWATCH_NAMESPACE",
+        "METRICS_CLOUDWATCH_REGION",
+        "METRICS_CLOUDWATCH_DIMENSIONS_JSON",
+        "METRICS_EXPORT_PROMETHEUS_PUSH",
+        "METRICS_PROM_PUSHGATEWAY_URL",
+        "METRICS_PROM_JOB_NAME",
+        "METRICS_PROM_GROUPING_LABELS_JSON",
+        "METRICS_PROM_SCRAPE_TTL_SEC",
+        "LOG_LEVEL",
+        "LOG_MAX_MB",
+        "LOG_BACKUP_COUNT",
+        "LOG_DIR",
+        "LOG_FILE_PREFIX",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("GATEWAY_COMPONENT", "proc")
+
+    assembly_path = tmp_path / "assembly.yaml"
+    assembly_path.write_text(
+        yaml.safe_dump(
+            {
+                "ports": {"metrics": "9191"},
+                "platform": {
+                    "services": {
+                        "metrics": {
+                            "log": {
+                                "log_level": "DEBUG",
+                                "log_max_mb": 42,
+                                "log_backup_count": 7,
+                                "log_dir": "/var/log/kdcube-metrics",
+                                "log_file_prefix": "metrics-service",
+                            },
+                            "service": {
+                                "metrics_mode": "proxy",
+                                "metrics_request_timeout_sec": 9.5,
+                                "metrics_enable_pg_pool": True,
+                            },
+                            "proxy": {
+                                "metrics_ingress_base_url": "http://ingress:8010",
+                                "metrics_proc_base_url": "http://proc:8020",
+                                "metrics_auth_header_name": "Authorization",
+                                "metrics_auth_header_value": "Bearer demo",
+                                "metrics_headers_json": '{"X-Scope":"metrics"}',
+                            },
+                            "export": {
+                                "scheduler_enabled": True,
+                                "export_interval_sec": 12,
+                                "export_on_start": False,
+                                "run_once": True,
+                                "mapping_json": '{"proc.queue.total":{"name":"ProcQueueTotal"}}',
+                                "cloudwatch": {
+                                    "enabled": True,
+                                    "namespace": "Demo/Metrics",
+                                    "region": "eu-west-1",
+                                    "dimensions_json": '{"env":"dev"}',
+                                },
+                                "prometheus": {
+                                    "push_enabled": True,
+                                    "pushgateway_url": "http://pushgateway:9091",
+                                    "job_name": "demo_metrics",
+                                    "grouping_labels_json": '{"tenant":"demo"}',
+                                    "scrape_ttl_sec": 17,
+                                },
+                            },
+                        }
+                    }
+                },
+            },
+            sort_keys=False,
+        )
+    )
+
+    monkeypatch.setattr(sdk_config, "get_secrets_manager", lambda _settings: _NoopSecretsManager())
+    monkeypatch.setenv("ASSEMBLY_YAML_DESCRIPTOR_PATH", str(assembly_path))
+
+    settings = sdk_config.Settings()
+
+    assert settings.METRICS_PORT == 9191
+    metrics = settings.PLATFORM.METRICS
+    assert metrics.LOG.LOG_LEVEL == "DEBUG"
+    assert metrics.LOG.LOG_MAX_MB == 42
+    assert metrics.LOG.LOG_BACKUP_COUNT == 7
+    assert metrics.LOG.LOG_DIR == "/var/log/kdcube-metrics"
+    assert metrics.LOG.LOG_FILE_PREFIX == "metrics-service"
+    assert metrics.SERVICE.METRICS_MODE == "proxy"
+    assert metrics.SERVICE.METRICS_REQUEST_TIMEOUT_SEC == 9.5
+    assert metrics.SERVICE.METRICS_ENABLE_PG_POOL is True
+    assert metrics.PROXY.METRICS_INGRESS_BASE_URL == "http://ingress:8010"
+    assert metrics.PROXY.METRICS_PROC_BASE_URL == "http://proc:8020"
+    assert metrics.PROXY.METRICS_AUTH_HEADER_NAME == "Authorization"
+    assert metrics.PROXY.METRICS_AUTH_HEADER_VALUE == "Bearer demo"
+    assert metrics.PROXY.METRICS_HEADERS_JSON == '{"X-Scope":"metrics"}'
+    assert metrics.EXPORT.METRICS_SCHEDULER_ENABLED is True
+    assert metrics.EXPORT.METRICS_EXPORT_INTERVAL_SEC == 12
+    assert metrics.EXPORT.METRICS_EXPORT_ON_START is False
+    assert metrics.EXPORT.METRICS_RUN_ONCE is True
+    assert metrics.EXPORT.METRICS_MAPPING_JSON == '{"proc.queue.total":{"name":"ProcQueueTotal"}}'
+    assert metrics.EXPORT.CLOUDWATCH.METRICS_EXPORT_CLOUDWATCH is True
+    assert metrics.EXPORT.CLOUDWATCH.METRICS_CLOUDWATCH_NAMESPACE == "Demo/Metrics"
+    assert metrics.EXPORT.CLOUDWATCH.METRICS_CLOUDWATCH_REGION == "eu-west-1"
+    assert metrics.EXPORT.CLOUDWATCH.METRICS_CLOUDWATCH_DIMENSIONS_JSON == '{"env":"dev"}'
+    assert metrics.EXPORT.PROMETHEUS.METRICS_EXPORT_PROMETHEUS_PUSH is True
+    assert metrics.EXPORT.PROMETHEUS.METRICS_PROM_PUSHGATEWAY_URL == "http://pushgateway:9091"
+    assert metrics.EXPORT.PROMETHEUS.METRICS_PROM_JOB_NAME == "demo_metrics"
+    assert metrics.EXPORT.PROMETHEUS.METRICS_PROM_GROUPING_LABELS_JSON == '{"tenant":"demo"}'
+    assert metrics.EXPORT.PROMETHEUS.METRICS_PROM_SCRAPE_TTL_SEC == 17
+
+
 def test_export_managed_env_includes_fargate_settings_from_assembly(monkeypatch, tmp_path):
     assembly_path = tmp_path / "assembly.yaml"
     assembly_path.write_text(

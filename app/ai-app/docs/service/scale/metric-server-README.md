@@ -121,62 +121,66 @@ Same pattern: choose either **push** (CloudWatch/Pushgateway) or **pull** (`/met
 
 ## 4.1) Current configuration source of truth
 
-The Metrics service is **not yet fully migrated** to the newer
-"read everything through `get_settings()` / descriptors" model.
+The Metrics service now reads its own runtime/export settings through
+`get_settings()` from the descriptor-backed settings layer.
 
-Current reality in code:
-- The service still reads most `METRICS_*` settings directly from `os.getenv(...)`
-  in `kdcube_ai_app.apps.metrics.web_app`.
-- The shared app settings layer only contributes a small part of the config surface.
-- `ports.metrics` from `assembly.yaml` is bridged into `METRICS_PORT` through the
-  common settings loader when `GATEWAY_COMPONENT=metrics`.
-- Tenant/project and queue-capacity semantics come indirectly from the effective
-  gateway config source (`GATEWAY_CONFIG_JSON`, `GATEWAY_YAML_PATH`, or
-  `PLATFORM_DESCRIPTORS_DIR/gateway.yaml`).
-
-What the default descriptors cover today:
+Current runtime contract:
 - `assembly.yaml`
   - `ports.metrics`
+  - `platform.services.metrics.log.*`
+  - `platform.services.metrics.service.*`
+  - `platform.services.metrics.proxy.*`
+  - `platform.services.metrics.export.*`
   - shared AWS settings such as `aws.aws_region`
-  - shared storage / host-path settings used by the wider stack
 - `gateway.yaml`
   - tenant/project
   - service-capacity, backpressure, rate-limit, pool, and Redis monitoring settings
 
-What the default descriptors do **not** cover today:
-- `METRICS_MODE`
-- `METRICS_ENABLE_PG_POOL`
-- `METRICS_INGRESS_BASE_URL`
-- `METRICS_PROC_BASE_URL`
-- `METRICS_REQUEST_TIMEOUT_SEC`
-- `METRICS_SCHEDULER_ENABLED`
-- `METRICS_EXPORT_INTERVAL_SEC`
-- `METRICS_EXPORT_ON_START`
-- `METRICS_RUN_ONCE`
-- `METRICS_EXPORT_CLOUDWATCH`
-- `METRICS_CLOUDWATCH_NAMESPACE`
-- `METRICS_CLOUDWATCH_REGION`
-- `METRICS_CLOUDWATCH_DIMENSIONS_JSON`
-- `METRICS_EXPORT_PROMETHEUS_PUSH`
-- `METRICS_PROM_PUSHGATEWAY_URL`
-- `METRICS_PROM_JOB_NAME`
-- `METRICS_PROM_GROUPING_LABELS_JSON`
-- `METRICS_PROM_SCRAPE_TTL_SEC`
-- `METRICS_MAPPING_JSON`
-- `METRICS_AUTH_HEADER_NAME`
-- `METRICS_AUTH_HEADER_VALUE`
-- `METRICS_HEADERS_JSON`
+Important implementation detail:
+- the Metrics service still sets `GATEWAY_COMPONENT=proc`
+- that is intentional and preserves the existing processor-capacity semantics used
+  by queue/backpressure calculations
+- metrics-specific settings are therefore read from the explicit
+  `platform.services.metrics.*` path, not from the generic component-scoped
+  `platform.services.<component>.*` path
 
-Operational conclusion:
-- The Metrics service currently still has a **service-local env contract**.
-- The default descriptor set does **not** yet contain the full Metrics service configuration.
-- Any doc or deployment path should state this explicitly until the component is migrated.
+Supported descriptor paths:
+- `ports.metrics`
+- `platform.services.metrics.log.log_level`
+- `platform.services.metrics.log.log_max_mb`
+- `platform.services.metrics.log.log_backup_count`
+- `platform.services.metrics.log.log_dir`
+- `platform.services.metrics.log.log_file_prefix`
+- `platform.services.metrics.service.metrics_mode`
+- `platform.services.metrics.service.metrics_request_timeout_sec`
+- `platform.services.metrics.service.metrics_enable_pg_pool`
+- `platform.services.metrics.proxy.metrics_ingress_base_url`
+- `platform.services.metrics.proxy.metrics_proc_base_url`
+- `platform.services.metrics.proxy.metrics_auth_header_name`
+- `platform.services.metrics.proxy.metrics_auth_header_value`
+- `platform.services.metrics.proxy.metrics_headers_json`
+- `platform.services.metrics.export.scheduler_enabled`
+- `platform.services.metrics.export.export_interval_sec`
+- `platform.services.metrics.export.export_on_start`
+- `platform.services.metrics.export.run_once`
+- `platform.services.metrics.export.mapping_json`
+- `platform.services.metrics.export.cloudwatch.enabled`
+- `platform.services.metrics.export.cloudwatch.namespace`
+- `platform.services.metrics.export.cloudwatch.region`
+- `platform.services.metrics.export.cloudwatch.dimensions_json`
+- `platform.services.metrics.export.prometheus.push_enabled`
+- `platform.services.metrics.export.prometheus.pushgateway_url`
+- `platform.services.metrics.export.prometheus.job_name`
+- `platform.services.metrics.export.prometheus.grouping_labels_json`
+- `platform.services.metrics.export.prometheus.scrape_ttl_sec`
+
+Backward-compatibility note:
+- env vars with the existing `METRICS_*` names still work as fallbacks
+- descriptor values are the preferred source when mounted
 
 About `src/.../apps/metrics/.env.metrics`:
-- that file is a **local/sample env source**, useful for direct local runs
-- it is **not** the canonical descriptor-driven contract for the service
-- descriptor-driven deployments should treat it as a compatibility/local-dev file,
-  not as the target long-term source of truth
+- that file remains a **local/sample env source** for direct local runs
+- it is no longer the primary configuration contract for descriptor-driven deployments
 
 ### Core
 | Env | Default | Meaning |
