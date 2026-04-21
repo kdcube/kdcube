@@ -31,19 +31,21 @@ appears to succeed, and nothing works. Reading the docs is cheaper than debuggin
 
 ### Mandatory pre-flight (do these in order, every bundle task)
 
-1. **Read the how-to playbooks first — operational canon:**
+Read **Tier 1 only** by default. Pull Tier 2 on demand when Tier 1 does not answer the
+specific thing you are about to do.
+
+1. **Tier 1 — always read, every bundle task:**
    - `how-to-write-bundle-README.md` — authoring
-   - `how-to-configure-and-run-bundle-README.md` — **REQUIRED reading any time the bundle
+   - `how-to-configure-and-run-bundle-README.md` — **REQUIRED any time the bundle
      lives outside the current `host_bundles_path`, or any time you touch `bundles.yaml`
-     or `assembly.yaml`.** This doc is the only source of truth for the host-path /
-     container-path / mount-root split. Do not attempt to configure a bundle that sits
-     outside the runtime tree without reading it — you will get the path wrong.
+     or `assembly.yaml`.** Only source of truth for the host-path / container-path /
+     mount-root split.
    - `how-to-test-bundle-README.md` — testing
-2. Read the versatile reference bundle (and another example if the task is a specialized case).
-3. When editing `assembly.yaml` / `bundles.yaml` / `bundles.secrets.yaml` / `gateway.yaml` /
-   `secrets.yaml`, also read the matching descriptor doc under `docs/service/configuration/`
-   before making the edit. Not after. Before.
-4. Only then start writing or editing code.
+   - versatile reference bundle — read end-to-end (structure + `entrypoint.py`)
+2. **Tier 2 — only when Tier 1 is not enough.** See the Tier 2 section below for the
+   trigger list. Do not preload Tier 2 "just in case" — it is large and mostly irrelevant
+   to any single task.
+3. Only then start writing or editing code.
 
 If a doc contradicts this skill, the doc wins — surface the conflict to the user.
 
@@ -93,40 +95,57 @@ the default.
 
 All paths below are relative to `https://github.com/kdcube/kdcube-ai-app/blob/main/`.
 
-### 1. How-to playbooks (read these first — operational canon)
+### Tier 1 — always read (operational canon)
 
 - `app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring
 - `app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
 - `app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing
+- Reference bundle (read end-to-end): `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/`
 
-### 2. SDK reference docs
+### Tier 2 — read only on demand (when Tier 1 is not enough)
 
-- `app/ai-app/docs/sdk/bundle/bundle-index-README.md`
-- `app/ai-app/docs/sdk/bundle/bundle-reference-versatile-README.md`
-- `app/ai-app/docs/sdk/bundle/bundle-dev-README.md`
-- `app/ai-app/docs/sdk/bundle/bundle-runtime-README.md`
-- `app/ai-app/docs/sdk/bundle/bundle-platform-integration-README.md`
-- `app/ai-app/docs/sdk/bundle/bundle-props-secrets-README.md`
-- `app/ai-app/docs/sdk/bundle/bundle-node-backend-bridge-README.md`
+Pull these when the task specifically hits the topic. Do not preload.
 
-### 3. Descriptor / service configuration
+**SDK reference deep-dives** (`app/ai-app/docs/sdk/bundle/`) — read the matching file when
+you need more than Tier 1 gave you on a specific feature:
 
-Read the matching descriptor doc when editing any of `assembly.yaml`, `bundles.yaml`,
-`bundles.secrets.yaml`, `gateway.yaml`, `secrets.yaml`:
+- `bundle-index-README.md` — SDK map
+- `bundle-reference-versatile-README.md` — annotated walkthrough of versatile
+- `bundle-dev-README.md` — dev loop / layout
+- `bundle-runtime-README.md` — runtime internals
+- `bundle-platform-integration-README.md` — platform hooks
+- `bundle-props-secrets-README.md` — props / secrets model (read when editing either)
+- `bundle-knowledge-space-README.md` — **read for KS / `ks:` namespace resolvers**
+- `bundle-node-backend-bridge-README.md` — **read for Node/TS backend**
+- `bundle-widget-integration-README.md` — widget deep-dive
+- `bundle-client-ui-README.md` / `bundle-client-communication-README.md` — client UI + transport
+- `bundle-venv-README.md` — `@venv` internals
+- `bundle-scheduled-jobs-README.md` — `@cron` internals
+- `bundle-storage-cache-README.md` — storage + cache
+- `bundle-sse-events-README.md`, `bundle-transports-README.md`, `bundle-frontend-awareness-README.md`,
+  `bundle-interfaces-README.md`, `bundle-lifecycle-README.md`, `bundle-ops-README.md`,
+  `bundle-firewall-README.md`, `bundle-platform-properties-README.md` — specialized; read by name when the topic matches.
 
-- `app/ai-app/docs/service/configuration/service-config-README.md`
-- `app/ai-app/docs/service/configuration/assembly-descriptor-README.md`
-- `app/ai-app/docs/service/configuration/bundles-descriptor-README.md`
-- `app/ai-app/docs/service/configuration/bundles-secrets-descriptor-README.md`
-- `app/ai-app/docs/service/configuration/gateway-descriptor-README.md`
-- `app/ai-app/docs/service/configuration/secrets-descriptor-README.md`
+**Descriptor / service configuration** (`app/ai-app/docs/service/configuration/`) — read the
+matching file **only when editing that specific descriptor**:
 
-### 4. Reference bundle and tests
+- `service-config-README.md` — overview
+- `assembly-descriptor-README.md` — when editing `assembly.yaml`
+- `bundles-descriptor-README.md` — when editing `bundles.yaml`
+- `bundles-secrets-descriptor-README.md` — when editing `bundles.secrets.yaml`
+- `gateway-descriptor-README.md` — when editing `gateway.yaml`
+- `secrets-descriptor-README.md` — when editing `secrets.yaml`
 
-- Bundle: `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/`
-- Suite tests (understand what validates a bundle):
-  - `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
-  - `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
+**Specialized example bundles** (`app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/`) — read the one that matches the specialized case:
+
+- `kdcube.copilot@2026-04-03-19-05` — knowledge-space / extended resolver
+- `with-isoruntime@2026-02-16-14-00` — isolated exec
+- `resources/node-backend-bridge` — Node/TS bridge
+
+**Suite tests** (read when writing or debugging bundle tests):
+
+- `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
+- `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
 
 ### Local fast path (opt-in)
 
@@ -135,72 +154,63 @@ If `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set, read the same files from
 `WebFetch`. This is purely an optimization — do not ask the user for a local path if the env
 var is not already set, just use GitHub.
 
-## Primary examples
+## Primary example
 
-Default to `versatile` unless the task is specifically about `ks:` / custom namespace resolvers,
-isolated exec, or the Node/TS bridge.
+Default to `versatile` (Tier 1). Pull specialized examples from Tier 2 only when the task
+is specifically about `ks:` / custom namespace resolvers, isolated exec, or the Node/TS bridge.
 
-- versatile reference bundle — `versatile@2026-03-31-13-36` (see local path above, or GitHub tree)
-- knowledge-space and extended resolver — `kdcube.copilot@2026-04-03-19-05`
-- isolated exec — `with-isoruntime@2026-02-16-14-00`
-- Node/TS bridge — `resources/node-backend-bridge`
+**Versatile is NOT a reference for `@cron` or `@venv`** — it does not use them. If the task
+needs either decorator, read `bundle-scheduled-jobs-README.md` (for `@cron`) or
+`bundle-venv-README.md` (for `@venv`) from Tier 2 before writing code. The copyable
+snippets in `how-to-write-bundle-README.md` §4.1 are the minimum correct starting point.
 
 ## Register the bundle in `bundles.yaml`
 
+Recommended form — `path` = bundle root, `module: entrypoint`:
+
 ```yaml
 bundles:
-  version: "1"
-  default_bundle_id: "<bundle-id>"
   items:
     - id: "<bundle-id>"
       name: "<Human Name>"
-      path: "/bundles/<bundle-id>"
+      path: "/bundles/<relative-path-from-host_bundles_path>"
       module: "entrypoint"
-      config:
-        role_models:
-          gate.simple:
-            provider: "anthropic"
-            model: "claude-haiku-4-5-20251001"
 ```
 
-The `path` MUST be the **container path** (`/bundles/<bundle-id>`), not the host
-path. Mismatch here is the #1 source of silent reload failures.
+`path` is the **container path** — `/bundles/` + the bundle's path relative to
+`assembly.yaml -> paths.host_bundles_path`. It is **not** `/bundles/<bundle-id>` unless
+the bundle directory happens to sit directly under `host_bundles_path` with that name.
+Host path in `bundles.yaml` is the #1 source of silent reload failures — see
+"Host path and runtime path are not the same thing" in the how-to.
 
-**macOS gotcha:** Docker Desktop on macOS does not refresh a file-level bind mount
-when the host file's inode changes — and the Edit/Write tools replace inodes.
-After editing `$WORKDIR/config/bundles.yaml`, restart `chat-proc` before reloading
-so the container sees the new file:
-
-```bash
-docker restart all_in_one_kdcube-chat-proc-1
-```
-
-Changes to files inside the bundle directory itself do **not** need this — the
-bundle is mounted as a directory bind, not a file bind.
+Alternative form (less readable, use only when needed): `path` points at the parent,
+`module` carries the bundle subdir — `module: "<bundle_dir>.entrypoint"`.
 
 ## Workflows
 
 ### Write a bundle from scratch
 
 1. Resolve `$WORKDIR` and `$BUNDLES_YAML` (ask the user if the workdir is not found).
-2. Read the docs (all seven, in order).
-3. Read the versatile reference bundle end-to-end.
+2. Read Tier 1 (3 how-to docs + versatile reference bundle end-to-end).
+3. If the task hits a specialized feature (`@cron`, `@venv`, KS, Node bridge, isolated
+   exec, specific descriptor edit), pull the matching Tier 2 doc.
 4. Pick a host directory for the bundle (default `~/.kdcube/bundles/<bundle-id>/`,
    or wherever the user asked). Create it and write `entrypoint.py` + `__init__.py`.
-5. Register the bundle in `$BUNDLES_YAML` using the **container path**
-   (`/bundles/<bundle-id>`).
+5. Register the bundle in `$BUNDLES_YAML` using the correct **container path**
+   (`/bundles/<relative-path-from-host_bundles_path>`, not the host path, not
+   `/bundles/<bundle-id>` unless that matches the actual layout).
 6. Run bundle tests (`bundle-tests <host-path>`), then reload + verify-reload.
 
 ### Wrap an existing application into a bundle
 
 1. Resolve `$WORKDIR` and `$BUNDLES_YAML`.
 2. Read the existing app's code to understand entry points, APIs, and data.
-3. Read the docs and versatile reference bundle.
+3. Read Tier 1 (3 how-to docs + versatile). Pull Tier 2 on demand.
 4. Map the app's functionality to bundle primitives (`@api`, `@ui_main`, `@cron`, etc.).
 5. Pick a host directory for the bundle (default `~/.kdcube/bundles/<bundle-id>/`,
    or wherever the user asked). Copy the app source into it (or under a subdir)
    and call it from `entrypoint.py`. Do not modify the original app tree.
-6. Register in `$BUNDLES_YAML` with the container path, run bundle tests,
+6. Register in `$BUNDLES_YAML` with the correct container path, run bundle tests,
    then reload + verify-reload.
 
 ### Add a feature to an existing bundle
