@@ -19,6 +19,7 @@ from kdcube_cli.installer import (
     PathsContext,
     apply_runtime_secrets_to_file_descriptors,
     build_ui_url,
+    ensure_local_dirs,
     gather_configuration,
     resolve_frontend_routes_prefix,
     stage_descriptor_directory,
@@ -66,6 +67,17 @@ def test_ui_entry_path_uses_routes_prefix():
 def test_build_ui_url_uses_routes_prefix():
     assert build_ui_url("5174", "/chatbot/demo") == "http://localhost:5174/chatbot/demo/chat"
     assert build_ui_url("80", None) == "http://localhost/chatbot/chat"
+
+
+def test_ensure_local_dirs_creates_metrics_logs_dir(tmp_path: Path):
+    data_dir = tmp_path / "data"
+    logs_dir = tmp_path / "logs"
+
+    ensure_local_dirs(data_dir, logs_dir)
+
+    assert (logs_dir / "chat-ingress").is_dir()
+    assert (logs_dir / "chat-proc").is_dir()
+    assert (logs_dir / "metrics").is_dir()
 
 
 def test_resolve_frontend_routes_prefix_reads_generated_config(tmp_path: Path):

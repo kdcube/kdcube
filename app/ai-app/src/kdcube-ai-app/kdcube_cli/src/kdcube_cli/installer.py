@@ -1115,9 +1115,9 @@ def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
     ]:
         path.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
-    for subdir in ("chat-ingress", "chat-proc"):
+    for subdir in ("chat-ingress", "chat-proc", "metrics"):
         (logs_dir / subdir).mkdir(parents=True, exist_ok=True)
-    for path in (logs_dir, logs_dir / "chat-ingress", logs_dir / "chat-proc"):
+    for path in (logs_dir, logs_dir / "chat-ingress", logs_dir / "chat-proc", logs_dir / "metrics"):
         try:
             os.chmod(path, 0o777)
         except Exception:
