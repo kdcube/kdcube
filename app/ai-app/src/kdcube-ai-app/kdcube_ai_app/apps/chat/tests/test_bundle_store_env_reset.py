@@ -90,6 +90,22 @@ class _FakeAuthoritativeStore:
         self.props_updates.append((bundle_id, entry, dict(props)))
 
 
+def _install_reserved_example(monkeypatch, bundle_id: str, *, path: str = "/bundles/example.bundle"):
+    entry = bundle_store.BundleEntry(
+        id=bundle_id,
+        path=path,
+        module="entrypoint",
+    )
+    monkeypatch.setattr(
+        bundle_store,
+        "_reserved_bundle_ids",
+        lambda: {bundle_store.ADMIN_BUNDLE_ID, bundle_id},
+    )
+    monkeypatch.setattr(bundle_store, "_load_example_bundles", lambda: {bundle_id: entry})
+    monkeypatch.setattr(bundle_store, "_reserved_bundle_entry", lambda bid: entry if bid == bundle_id else None)
+    return entry
+
+
 @pytest.mark.asyncio
 async def test_reset_registry_from_env_removes_stale_bundle_props(monkeypatch, tmp_path: Path):
     redis = _FakeRedis()
@@ -341,6 +357,134 @@ async def test_load_registry_file_authority_preserves_default_example_bundle(mon
 
     assert loaded.default_bundle_id == bundle_id
     assert bundle_id in loaded.bundles
+
+
+@pytest.mark.asyncio
+async def test_reset_registry_from_env_preserves_reserved_bundle_props_in_file_authority(monkeypatch, tmp_path: Path):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "kdcube.copilot@2026-04-03-19-05"
+    props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=bundle_id)
+    descriptor_path = tmp_path / "bundles.yaml"
+
+    _install_reserved_example(monkeypatch, bundle_id)
+
+    descriptor_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "default_bundle_id": bundle_id,
+                    "items": [
+                        {
+                            "id": bundle_id,
+                            "config": {
+                                "role_models": {
+                                    "solver.react.v2.decision.v2.strong": {
+                                        "provider": "anthropic",
+                                        "model": "claude-sonnet-4-6",
+                                    }
+                                }
+                            },
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
+
+    store = bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=descriptor_path.resolve().as_uri())
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+
+    await bundle_store.reset_registry_from_env(redis, tenant=tenant, project=project)
+
+    payload = yaml.safe_load(descriptor_path.read_text())
+    assert payload["bundles"]["default_bundle_id"] == bundle_id
+    assert payload["bundles"]["items"][0]["id"] == bundle_id
+    assert payload["bundles"]["items"][0]["config"]["role_models"]["solver.react.v2.decision.v2.strong"]["model"] == "claude-sonnet-4-6"
+
+    await bundle_store.load_registry(redis, tenant=tenant, project=project)
+
+    assert json.loads(redis.data[props_key]) == {
+        "role_models": {
+            "solver.react.v2.decision.v2.strong": {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-6",
+            }
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_put_bundle_props_persists_reserved_bundle_to_file_authority(monkeypatch, tmp_path: Path):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "kdcube.copilot@2026-04-03-19-05"
+    props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=bundle_id)
+    descriptor_path = tmp_path / "bundles.yaml"
+
+    _install_reserved_example(monkeypatch, bundle_id)
+
+    descriptor_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "default_bundle_id": bundle_id,
+                    "items": [
+                        {
+                            "id": bundle_id,
+                            "config": {
+                                "role_models": {
+                                    "solver.react.v2.decision.v2.strong": {
+                                        "provider": "anthropic",
+                                        "model": "claude-sonnet-4-6",
+                                    }
+                                }
+                            },
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
+
+    store = bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=descriptor_path.resolve().as_uri())
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+
+    await bundle_store.reset_registry_from_env(redis, tenant=tenant, project=project)
+    await bundle_store.put_bundle_props(
+        redis,
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        props={
+            "role_models": {
+                "solver.react.v2.decision.v2.strong": {
+                    "provider": "anthropic",
+                    "model": "claude-sonnet-4-7",
+                }
+            }
+        },
+    )
+
+    await redis.delete(props_key)
+    await bundle_store.load_registry(redis, tenant=tenant, project=project)
+
+    assert json.loads(redis.data[props_key]) == {
+        "role_models": {
+            "solver.react.v2.decision.v2.strong": {
+                "provider": "anthropic",
+                "model": "claude-sonnet-4-7",
+            }
+        }
+    }
 
 
 @pytest.mark.asyncio

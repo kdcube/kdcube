@@ -604,6 +604,58 @@ def _deployment_default_bundle_id(reg: "BundlesRegistry") -> Optional[str]:
     return deployment_ids[0] if deployment_ids else None
 
 
+def _persisted_bundle_ids(
+    reg: "BundlesRegistry",
+    *,
+    props_map: Optional[Dict[str, Dict[str, Any]]] = None,
+    existing_ids: Optional[Set[str] | list[str] | tuple[str, ...]] = None,
+) -> list[str]:
+    reserved = _reserved_bundle_ids()
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def _add(bid: Optional[str]) -> None:
+        bid_norm = str(bid or "").strip()
+        if not bid_norm or bid_norm in seen:
+            return
+        entry = reg.bundles.get(bid_norm)
+        if entry is None and bid_norm in reserved:
+            entry = _reserved_bundle_entry(bid_norm)
+        if entry is None:
+            return
+        seen.add(bid_norm)
+        ordered.append(bid_norm)
+
+    for bid in reg.bundles.keys():
+        if bid not in reserved:
+            _add(bid)
+
+    for bid in existing_ids or ():
+        if bid in reserved:
+            _add(bid)
+
+    for bid in (props_map or {}).keys():
+        if bid in reserved:
+            _add(bid)
+
+    default_id = str(reg.default_bundle_id or "").strip()
+    if default_id and default_id in reserved:
+        _add(default_id)
+
+    return ordered
+
+
+def _persisted_default_bundle_id(
+    reg: "BundlesRegistry",
+    *,
+    persisted_ids: Set[str] | list[str] | tuple[str, ...],
+) -> Optional[str]:
+    default_id = str(reg.default_bundle_id or "").strip()
+    if default_id and default_id in set(persisted_ids):
+        return default_id
+    return _deployment_default_bundle_id(reg)
+
+
 def _descriptor_doc_from_entry(entry: "BundleEntry", props: Dict[str, Any] | None) -> Dict[str, Any]:
     payload = entry.model_dump(exclude_none=True)
     payload.pop("id", None)
@@ -806,20 +858,24 @@ class _AwsBundleDescriptorStore:
         *,
         replace: bool,
     ) -> None:
-        deployment_ids = _deployment_bundle_ids(reg)
-        desired_ids = list(deployment_ids)
-        previous_ids: set[str] = set()
-        if replace:
-            previous = self._get_secret_mapping_by_id(self._bundles_meta_secret_id()) or {}
-            previous_ids = {
-                str(item).strip()
-                for item in (previous.get("bundle_ids") or [])
-                if str(item).strip()
-            }
+        previous = self._get_secret_mapping_by_id(self._bundles_meta_secret_id()) or {}
+        previous_ids = {
+            str(item).strip()
+            for item in (previous.get("bundle_ids") or [])
+            if str(item).strip()
+        }
+        desired_ids = _persisted_bundle_ids(
+            reg,
+            props_map=props_map,
+            existing_ids=previous_ids,
+        )
 
         for bundle_id in desired_ids:
             secret_id = self._bundle_descriptor_secret_id(bundle_id)
-            payload = _descriptor_doc_from_entry(reg.bundles[bundle_id], props_map.get(bundle_id) or {})
+            entry = reg.bundles.get(bundle_id) or _reserved_bundle_entry(bundle_id)
+            if entry is None:
+                continue
+            payload = _descriptor_doc_from_entry(entry, props_map.get(bundle_id) or {})
             with self._lock:
                 redis, token = self._acquire_distributed_lock(secret_id)
                 try:
@@ -839,7 +895,7 @@ class _AwsBundleDescriptorStore:
 
         meta_secret_id = self._bundles_meta_secret_id()
         meta_payload = {
-            "default_bundle_id": _deployment_default_bundle_id(reg),
+            "default_bundle_id": _persisted_default_bundle_id(reg, persisted_ids=desired_ids),
             "bundle_ids": desired_ids,
         }
         with self._lock:
@@ -850,8 +906,6 @@ class _AwsBundleDescriptorStore:
                 self._release_distributed_lock(redis, token, meta_secret_id)
 
     def load_bundle_props(self, bundle_id: str) -> Dict[str, Any]:
-        if bundle_id in _reserved_bundle_ids():
-            return {}
         payload = self._get_secret_mapping_by_id(self._bundle_descriptor_secret_id(bundle_id))
         if not isinstance(payload, dict):
             return {}
@@ -859,8 +913,6 @@ class _AwsBundleDescriptorStore:
         return dict(props) if isinstance(props, dict) else {}
 
     def set_bundle_props(self, bundle_id: str, entry: "BundleEntry", props: Dict[str, Any]) -> None:
-        if bundle_id in _reserved_bundle_ids():
-            return
         secret_id = self._bundle_descriptor_secret_id(bundle_id)
         with self._lock:
             redis, token = self._acquire_distributed_lock(secret_id)
@@ -984,23 +1036,40 @@ class _FileBundleDescriptorStore:
         *,
         replace: bool,
     ) -> None:
-        deployment_ids = _deployment_bundle_ids(reg)
         with self._lock, self._acquire_file_lock():
             payload = self._load_mapping()
             items = self._bundle_items(payload)
+            existing_items_by_id = {
+                str(item.get("id") or "").strip(): item
+                for item in items
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            }
+            persisted_ids = _persisted_bundle_ids(
+                reg,
+                props_map=props_map,
+                existing_ids=set(existing_items_by_id.keys()),
+            )
             new_items: list[dict[str, Any]] = []
-            for bundle_id in deployment_ids:
-                entry = reg.bundles.get(bundle_id)
+            for bundle_id in persisted_ids:
+                entry = reg.bundles.get(bundle_id) or _reserved_bundle_entry(bundle_id)
                 if entry is None:
                     continue
-                new_items.append(self._item_from_entry(entry, props_map.get(bundle_id) or {}))
+                props = props_map.get(bundle_id)
+                if props is None:
+                    existing_item = existing_items_by_id.get(bundle_id)
+                    if existing_item is not None:
+                        try:
+                            _existing_entry, props = self._bundle_item_entry_and_props(bundle_id, existing_item)
+                        except Exception:
+                            props = {}
+                new_items.append(self._item_from_entry(entry, props or {}))
             items[:] = new_items
             bundles_root = payload.get("bundles")
             if not isinstance(bundles_root, dict):
                 bundles_root = {}
                 payload["bundles"] = bundles_root
             bundles_root["version"] = str(bundles_root.get("version") or "1")
-            default_bundle_id = _deployment_default_bundle_id(reg)
+            default_bundle_id = _persisted_default_bundle_id(reg, persisted_ids=persisted_ids)
             if default_bundle_id:
                 bundles_root["default_bundle_id"] = default_bundle_id
             else:
@@ -1020,10 +1089,6 @@ class _FileBundleDescriptorStore:
             items = self._bundle_items(payload)
             item = _secrets_find_bundle_item(items, bundle_id)
             if item is None:
-                if bundle_id in _reserved_bundle_ids():
-                    # Reserved bundles not explicitly listed in the descriptor
-                    # are not written — no dangling entries created.
-                    return
                 item = self._item_from_entry(entry, props)
                 items.append(item)
             else:
@@ -1337,11 +1402,8 @@ async def _put_bundle_props_locked(
     key = _props_key(tenant=tenant, project=project, bundle_id=bundle_id)
     await redis.set(key, json.dumps(props, ensure_ascii=False))
     if bundle_id in _reserved_bundle_ids():
-        # Persist to the file-backed descriptor so that _sync_bundle_props_authoritative
-        # on the next load_registry call (triggered by the listener) doesn't revert
-        # Redis to stale YAML values.
         store = _get_authoritative_bundle_store(tenant, project)
-        if isinstance(store, _FileBundleDescriptorStore):
+        if store is not None:
             entry = _reserved_bundle_entry(bundle_id)
             if entry is None:
                 entry = BundleEntry(id=bundle_id, path="")
