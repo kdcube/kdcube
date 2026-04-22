@@ -1,0 +1,81 @@
+# KDCube Builder Plugin — Dev Notes
+
+## Goal
+
+Claude Code plugin that lets Claude operate KDCube: run CLI, reload bundles, test, build.
+
+Steps:
+1. Minimal CLI — reload bundle by id, verify it's live
+2. Edit bundle code + reload
+3. Browser / UI testing
+
+---
+
+## Step 1 status
+
+| Item | Done |
+|---|---|
+| Plugin scaffold + marketplace manifest | ✓ |
+| Skills: bundle-builder, bootstrap-local, local-runtime, use-descriptors | ✓ |
+| `kdcube_local.py`: use-descriptors, verify-reload commands | ✓ |
+| `skills/verify-reload/SKILL.md` | ✓ |
+| `skills/kdcube-dev/SKILL.md` — natural language orchestrator with TRIGGER | ✓ |
+| `kdcube_local.py`: status command | ✓ |
+| End-to-end smoke test | ✗ |
+
+---
+
+## Session log
+
+Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work on
+`feat/claude-kdcube-plugin-clean`. Commits below reconstruct the timeline from git.
+
+**2026-04-12** — `041b955f`
+- First commit: Claude Code bundle builder plugin marketplace scaffold
+
+**2026-04-17** — `36aec2b5`, `2d88e40e`
+- `verify-reload` skill — wraps `kdcube_local.py verify-reload <bundle_id>`, checks proc cache eviction
+- `kdcube-dev` orchestrator skill — no `disable-model-invocation`, `TRIGGER when:` so Claude auto-invokes on natural-language KDCube requests; maps intents (start/reload/test/build/status) directly to `kdcube_local.py` calls
+- `status` subcommand — CLI availability, descriptor profile symlink, workdir, running docker containers
+- `install` subcommand — installs `kdcube-cli` via pipx or pip (venv vs global handled automatically)
+- `use-descriptors` skill + `cmd_use_descriptors`
+- `_expand_descriptors`: copies descriptors to tmp dir with `~` and hardcoded user paths expanded before passing to kdcube CLI
+- Fix `assembly.yaml`: replace hardcoded user path with `~` in `host_git_bundles_path`
+- Fix `marketplace.json` source path + `plugin.json` `userConfig` type/title fields
+- Install flow clarified: `claude plugin marketplace add <path>` + `claude plugin install kdcube-builder@kdcube-builder-marketplace --scope user`
+
+**2026-04-18** — `4d486bea`
+- Added `kdcube-find-project`, `kdcube-cli`, `kdcube-ui-test` skills
+- Expanded bundle authoring workflows: app wrapping, bundle placement, reload verification, local-doc resolution
+- Documented Playwright MCP support; simplified install/update guidance
+
+**2026-04-19** — `eec27ae7`, `432666a1`
+- Inlined bundle path resolution (refactor)
+- README: added local-install commands
+
+**2026-04-20** — `cab51b52`, `508434e7`
+- Dev docs for the plugin split into five files under `docs/plugins/claude/`: `index`, `architecture`, `skills`, `bundle-authoring`, `runtime-flows`, `extending`
+- Relaxed bundle placement rules: bundle dir can live anywhere on host (default `~/.kdcube/bundles/<bundle-id>/`); plugin mounts it into container at `/bundles/<bundle-id>`
+- Workdir resolution now probes `~/.kdcube/kdcube-runtime` and explicitly asks the user if not found (no silent fallback)
+- Removed prescriptive "Bundle placement" section from `bundle-builder/SKILL.md`
+
+**2026-04-21** — `db491551`, `421e6f91`, `b95e6aed`
+- Merged plugin into clean branch (`feat/claude-kdcube-plugin-clean`)
+- Hardened "always read docs" rule in `bundle-builder`, `kdcube-dev`, `use-descriptors`: doc read is a hard pre-flight gate (no exceptions for small edits / "remembered from last session"); explicit guidance for bundles outside `host_bundles_path`; container-path formula `/bundles/<relative-from-host_bundles_path>`
+- Split `bundle-builder/SKILL.md` docs into Tier 1 (3 how-tos + versatile, always read) and Tier 2 (SDK deep-dives, descriptor docs, specialized bundles, suite tests — read on demand with explicit triggers)
+- Fixed `bundles.yaml` registration example: `path` is `/bundles/<relative-path-from-host_bundles_path>`, not `/bundles/<bundle-id>`; dropped unsupported `version` / `default_bundle_id`; documented alternative `path` + `module: "<subdir>.entrypoint"` form
+- Noted versatile is NOT a reference for `@cron` / `@venv` → Tier 2 (`bundle-scheduled-jobs`, `bundle-venv`) + how-to §4.1 snippets
+- Dropped macOS docker-restart gotcha from `SKILL.md`
+
+---
+
+## Cross-tool notes
+
+- **Codex did not digest this plugin.** The same plugin layout that Claude Code loads
+  and runs was not accepted by Codex — its plugin / skill model does not consume this
+  marketplace structure as-is. If cross-tool support is ever wanted, the plugin would
+  need a separate adapter; current scope is Claude Code only.
+
+---
+
+**Next:** smoke test — start runtime, reload telegram-bot, verify via natural language
