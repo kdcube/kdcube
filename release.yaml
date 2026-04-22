@@ -1,48 +1,39 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.22.1914"
+  ref: "2026.4.23.17"
   description: |
-    This release focuses on making bundle descriptor authority file-backed in deployed
-    environments and clarifying the Git transport/auth contract for repo-backed bundles.
+    This release focuses on making deployment-scoped overrides for built-in and reserved
+    bundles durable under the file-backed bundle authority model.
 
     Highlights
 
-    - Bundle descriptor authority is now configurable independently from the secrets provider. In
-      deployed environments, `bundles.yaml` and non-secret bundle props can live on mounted
-      writable storage while secrets continue to live in AWS Secrets Manager.
-    - File-backed bundle descriptor writes are now atomic. This reduces the risk of partial
-      descriptor updates when bundle admin or runtime code persists deployment-scoped bundle
-      properties.
-    - The bundle props update contract is clearer and more reliable. Bundle code and bundle admin
-      both write through the same authoritative bundle store, and processor-side reconciliation
-      continues to listen for bundle property updates.
-    - Git transport and auth rules are now documented explicitly. The supported HTTPS and SSH repo
-      forms, their auth requirements, and the precedence between token and SSH auth are now clear
-      in the runtime and bundle docs.
+    - Explicitly configured built-in or reserved bundles now keep their deployment-scoped
+      descriptor properties when the authoritative bundle store is persisted and reloaded.
+    - Bundle admin and deployment-authored prop overrides for reserved bundles no longer disappear
+      after file-backed registry rewrites or reload-driven reconciliation.
+    - This closes a real regression in the file-backed authority flow where reserved bundle ids
+      were accepted on input but were dropped from the persisted authoritative view.
 
-    Runtime and deployment work in this release line:
+    Runtime work in this release line:
 
-    - Added explicit bundle descriptor provider selection so bundle descriptor authority no longer
-      implicitly follows `SECRETS_PROVIDER`.
-    - File-backed bundle authority can now create a missing `bundles.yaml` on first write, which
-      makes mounted writable config usable as the live source of truth in ECS-style deployments.
-    - This supports a cleaner cloud architecture for large bundle descriptors and non-secret bundle
-      properties, which no longer need to be constrained by single-document Secrets Manager limits.
+    - The authoritative bundle store now preserves explicitly configured reserved bundle ids when
+      computing the persisted registry shape.
+    - Reserved bundle prop writes now survive the same save/reload cycle as normal deployment
+      bundles, so file-backed authority behavior is consistent across bundle classes.
+    - This is especially important for built-in bundles such as
+      `kdcube.copilot@2026-04-03-19-05`, where deployment config may override selected role
+      models or other non-secret bundle properties.
 
-    Bundle/runtime and documentation work:
+    Validation and regression coverage:
 
-    - Updated the service configuration, runtime read/write contract, and bundle docs to explain
-      the file-backed bundle authority model, including how bundle props are persisted and applied.
-    - Clarified the repo-backed bundle Git source rules across service config, storage, and bundle
-      authoring docs so operators know when HTTPS or SSH is expected and what credentials are
-      required.
+    - Added regression coverage for reserved bundle props surviving authoritative-store reload.
+    - Added regression coverage for later reserved bundle prop updates continuing to persist after
+      reload.
 
     Changelog
 
-    - Added file-backed bundle descriptor authority independent of the secrets provider.
-    - Made file-backed bundle descriptor writes atomic and first-write safe.
-    - Documented bundle prop persistence and processor reconciliation under the file-backed
-      authority model.
-    - Clarified HTTPS vs SSH Git repo transport rules and auth precedence.
+    - Preserved explicitly configured reserved bundles in the authoritative descriptor store.
+    - Fixed loss of deployment-scoped props for built-in bundles under file-backed authority.
+    - Added reserved-bundle persistence regressions to prevent future reload/save regressions.
 config:
-    version: "2026.4.22.1914"
+    version: "2026.4.23.17"
