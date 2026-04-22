@@ -97,6 +97,16 @@ That means:
 
 ## HTTPS vs SSH
 
+Accepted remote forms:
+
+- `https://github.com/org/repo.git`
+- `http://...` where intentionally used
+- `git@github.com:org/repo.git`
+- `ssh://git@github.com/org/repo.git`
+
+All of these are valid inputs to the shared helper. The effective transport then
+depends on which auth mode is configured.
+
 ### HTTPS token path
 
 If a PAT is configured, the helper:
@@ -115,6 +125,9 @@ to:
 
 - `https://github.com/org/repo.git`
 
+So a descriptor may still contain an SSH-style remote while the effective git
+transport becomes HTTPS because PAT auth was configured. That is intentional.
+
 ### SSH path
 
 If PAT auth is not selected, the helper can synthesize:
@@ -128,6 +141,10 @@ from:
 - `GIT_SSH_STRICT_HOST_KEY_CHECKING`
 
 This is how host-key verification and SSH identity selection are passed into git subprocesses.
+
+SSH therefore requires more than just an SSH-style repo URL. It also requires
+the matching SSH identity and host-verification inputs to be configured and
+available at runtime.
 
 ## What Uses It
 

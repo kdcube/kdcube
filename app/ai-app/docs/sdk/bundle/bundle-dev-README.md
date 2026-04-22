@@ -198,6 +198,22 @@ Practical implication:
 - do not assume one bundle can safely rewrite processor-level git auth for itself only
 - if you need bundle-specific git auth, pass it as an explicit subprocess override instead of mutating global process env
 
+Transport contract:
+
+- git-backed repos may use either HTTPS or SSH remote forms
+- if `GIT_HTTP_TOKEN` is configured, the shared helper prefers HTTPS token auth
+- when HTTPS token auth is selected, an SSH-style remote may be normalized to HTTPS before git is called
+- if SSH transport is intended, configure:
+  - `GIT_SSH_KEY_PATH`
+  - `GIT_SSH_KNOWN_HOSTS`
+  - `GIT_SSH_STRICT_HOST_KEY_CHECKING`
+
+Practical rule:
+
+- HTTPS + PAT is usually the simpler runtime/deployment path
+- SSH is supported, but it is a stricter operational contract because key and known-hosts material
+  must be present and mounted correctly
+
 ## Local Storage Rule
 
 If your bundle needs local filesystem state on the proc instance, use the bundle-storage helper.

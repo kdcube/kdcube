@@ -110,6 +110,22 @@ Important distinction:
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `assembly.yaml` | CLI local compose, direct local run |
 | `CLAUDE_CODE_SESSION_GIT_REPO` | `storage.claude_code_session.repo` | `assembly.yaml` | CLI local compose, direct local run |
 
+Git repo transport for workspace/session stores:
+
+- `storage.workspace.repo` and `storage.claude_code_session.repo` may use either HTTPS or SSH
+  remote forms
+- if HTTPS token auth is configured through `services.git.http_token`, the shared git helper
+  prefers that path and may normalize SSH-style remotes to HTTPS before invoking git
+- if SSH transport is intended, configure the matching SSH settings:
+  - `services.git.git_ssh_key_path`
+  - `services.git.git_ssh_known_hosts`
+  - `services.git.git_ssh_strict_host_key_checking`
+
+Operational guidance:
+
+- HTTPS + PAT is usually the simpler deployment/runtime choice
+- SSH is supported, but it additionally requires mounted key and host-verification material
+
 ## The `assembly.paths.*` keys you asked about
 
 | Env var | Descriptor path | CLI local compose | Direct local run | AWS deployment |

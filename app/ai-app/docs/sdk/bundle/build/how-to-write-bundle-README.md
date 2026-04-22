@@ -125,6 +125,22 @@ Interpretation:
 - descriptor-backed settings/secrets remain the normal source of truth
 - explicit overrides remain local to the subprocess call only
 
+Transport rule:
+
+- git-backed workspace or storage repos may be configured with either HTTPS or SSH remotes
+- if HTTPS token auth is configured, the shared helper prefers that path and may normalize an
+  SSH-style remote such as `git@github.com:org/repo.git` to `https://github.com/org/repo.git`
+- if SSH transport is intended, configure the SSH settings explicitly:
+  - `GIT_SSH_KEY_PATH`
+  - `GIT_SSH_KNOWN_HOSTS`
+  - `GIT_SSH_STRICT_HOST_KEY_CHECKING`
+- do not half-configure both modes and assume git will choose the intended one silently
+
+Operationally:
+
+- HTTPS + PAT is usually the simpler deployment choice
+- SSH is supported, but it requires key and host-verification material to be mounted and configured
+
 ## 3. Start From The Minimal Bundle Shape
 
 Recommended layout:
