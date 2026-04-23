@@ -17,6 +17,12 @@ see_also:
 This is the single SDK page bundle authors should use for programmatic access
 to settings, props, and secrets.
 
+Tier 1 rule:
+
+- this page is one part of the Tier 1 pack
+- do not treat it as sufficient on its own
+- read it together with the Tier 1 test, authoring, and configure/run pages
+
 Use this page when you need to answer questions like:
 
 - which scope does this value belong to

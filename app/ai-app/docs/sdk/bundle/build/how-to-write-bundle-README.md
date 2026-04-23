@@ -14,6 +14,10 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
+  - ks:docs/sdk/storage/cache-README.md
+  - ks:docs/sdk/storage/git-store-README.md
+  - ks:docs/sdk/storage/sdk-store-README.md
 ---
 # How To Write A KDCube Bundle
 
@@ -24,6 +28,12 @@ It is the working instruction set for doing the job correctly.
 
 If you are not yet sure where this page fits in the full reading order, start
 with [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
+
+Tier 1 rule:
+
+- this page is one part of the Tier 1 pack
+- do not treat it as sufficient on its own
+- read it together with the Tier 1 test, configuration, and configure/run pages
 
 Primary references:
 
@@ -49,15 +59,17 @@ When you build a bundle, do not invent the platform contract from memory.
 
 Work in this order:
 
-1. read the relevant bundle docs first
-2. inspect the `versatile` reference bundle for the nearest working pattern
-3. inspect the platform implementation only when docs/reference are not enough
-4. then write the bundle
-5. then run the shared bundle suite and bundle-local tests
-6. then verify the actual UI/API runtime behavior
+1. read the test guide first so you know the runtime contract you must satisfy
+2. read the relevant bundle docs
+3. inspect the `versatile` reference bundle for the nearest working pattern
+4. inspect the platform implementation only when docs/reference are not enough
+5. then write the bundle
+6. then run the shared bundle suite and bundle-local tests
+7. then verify the actual UI/API runtime behavior
 
 Practical rule:
 
+- test expectations are part of requirements, not only post-build validation
 - docs define the intended contract
 - `versatile` shows the reference bundle shape
 - platform source is the last resort for unresolved edge cases
@@ -194,6 +206,58 @@ State-placement rule:
 - DB/Redis/external APIs:
   runtime or business state
 
+## 1E. SDK Configuration And Secrets Cheat Sheet
+
+Keep this page compact, but do not hide the actual SDK helpers.
+
+Use this quick map while writing code:
+
+| What you need | Read | Write |
+| --- | --- | --- |
+| platform/global props | `get_settings()` | none |
+| platform/global secrets | `get_secret("canonical.key")` | none |
+| deployment-scoped bundle props | `self.bundle_prop("path", default=...)`, `self.bundle_props` | `await set_bundle_prop(...)` |
+| deployment-scoped bundle secrets | `get_secret("b:...")` | `await set_bundle_secret(...)` |
+| user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` |
+| user-scoped bundle secrets | `get_user_secret(...)` | `set_user_secret(...)`, `delete_user_secret(...)` |
+
+Hard rule:
+
+- bundle code reads all scopes
+- bundle code writes bundle-scoped and user-scoped values only
+- bundle code does not write platform/global props or secrets
+
+Use the full contract page only when you need the deeper ownership, storage, or
+export rules:
+
+- [bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+
+## 1F. SDK Storage, Cache, And Git Cheat Sheet
+
+Use this compact map while writing bundle code:
+
+| Need | Use | Typical purpose |
+| --- | --- | --- |
+| local mutable files on this instance | `self.bundle_storage_root()` | workspaces, cloned repos, local indexes, generated files |
+| same local root outside entrypoint code | `bundle_storage_dir(...)` | helper code that has no `self` |
+| persisted bundle artifacts | `AIBundleStorage` | artifact read/write/list/delete through the storage backend |
+| lightweight Redis cache | `create_kv_cache()` or namespaced cache helpers | small runtime cache, flags, lightweight transient state |
+| git subprocess auth/transport | `build_git_env(...)`, `normalize_git_remote_url(...)` | PAT/SSH-safe git commands without mutating process-global env |
+
+Hard rule:
+
+- local mutable filesystem state -> bundle storage helper
+- persisted bundle artifacts -> `AIBundleStorage`
+- lightweight transient cache -> KV cache
+- git auth/transport -> shared git helper, not custom `os.environ` mutation
+
+Use the deeper docs only when needed:
+
+- [bundle-storage-and-cache-README.md](../bundle-storage-and-cache-README.md)
+- [cache-README.md](../../storage/cache-README.md)
+- [git-store-README.md](../../storage/git-store-README.md)
+- [sdk-store-README.md](../../storage/sdk-store-README.md)
+
 ## 2. Decide What Kind Of Bundle You Are Building
 
 Before writing code, classify the bundle.
@@ -284,6 +348,7 @@ my_bundle/
     workflow.py
   tools_descriptor.py
   skills_descriptor.py
+  requirements.txt    # optional, but required when bundle-local venv code needs Python deps
   tools/
   skills/
   ui/                 # optional TSX widget templates
@@ -302,6 +367,7 @@ Usually present:
 - `orchestrator/workflow.py`
 - `tools_descriptor.py`
 - `skills_descriptor.py`
+- `requirements.txt` when bundle-local Python deps are installed through `@venv(...)`
 
 ## 4. Copy The Right Reference Pattern
 

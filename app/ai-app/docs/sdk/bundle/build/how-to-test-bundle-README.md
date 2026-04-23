@@ -20,6 +20,12 @@ This document is the operational test playbook for bundle builders.
 If you are still deciding what to read first, start with
 [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
 
+Tier 1 rule:
+
+- this page is one part of the Tier 1 pack
+- do not treat it as sufficient on its own
+- read it together with the Tier 1 authoring, configuration, and configure/run pages
+
 The goal is not “run something once”.
 The goal is to prove that the bundle works in the supported KDCube runtime contract.
 

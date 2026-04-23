@@ -24,6 +24,12 @@ This page is the operational guide for local bundle runtime setup.
 If you are not sure whether you should start here, start with
 [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
 
+Tier 1 rule:
+
+- this page is one part of the Tier 1 pack
+- do not treat it as sufficient on its own
+- read it together with the Tier 1 test, authoring, and configuration pages
+
 Use it when you need to answer questions like:
 
 - how do I start a local runtime from a descriptor set
