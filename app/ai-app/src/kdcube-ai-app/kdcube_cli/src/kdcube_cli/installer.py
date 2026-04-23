@@ -2491,10 +2491,12 @@ def gather_configuration(
     if use_pg_descriptor:
         if pg_user_from_assembly and not is_placeholder(str(pg_user_from_assembly)):
             update_env_value(env_pg, "POSTGRES_USER", str(pg_user_from_assembly))
+            update_env_value(env_main, "POSTGRES_USER", str(pg_user_from_assembly))
         if pg_db_from_assembly and not is_placeholder(str(pg_db_from_assembly)):
             update_env_value(env_pg, "POSTGRES_DATABASE", str(pg_db_from_assembly))
         if pg_pass_from_assembly and not is_placeholder(str(pg_pass_from_assembly)) and not use_pg_secret:
             update_env_value(env_pg, "POSTGRES_PASSWORD", str(pg_pass_from_assembly))
+            update_env_value(env_main, "POSTGRES_PASSWORD", str(pg_pass_from_assembly))
         if pg_host_from_assembly and not is_placeholder(str(pg_host_from_assembly)):
             update_env_value(env_ingress, "POSTGRES_HOST", str(pg_host_from_assembly))
             update_env_value(env_proc, "POSTGRES_HOST", str(pg_host_from_assembly))
@@ -2520,9 +2522,13 @@ def gather_configuration(
     if force_prompt:
         update_env_value(env_ingress, "POSTGRES_USER", pg_user or "postgres")
         update_env_value(env_proc, "POSTGRES_USER", pg_user or "postgres")
+        if use_pg_descriptor:
+            update_env_value(env_main, "POSTGRES_USER", pg_user or "postgres")
     else:
         _set_env(env_ingress, "POSTGRES_USER", pg_user or "postgres")
         _set_env(env_proc, "POSTGRES_USER", pg_user or "postgres")
+        if use_pg_descriptor:
+            update_env_value(env_main, "POSTGRES_USER", pg_user or "postgres")
 
     # If .env.postgres.setup is empty, fall back to .env values
     if use_pg_secret and pg_pass_from_secrets:
@@ -2578,6 +2584,8 @@ def gather_configuration(
         pg_pass = env_pg.entries.get("POSTGRES_PASSWORD", (None, None))[1] or ""
         if not pg_pass and pg_pass_from_assembly:
             pg_pass = str(pg_pass_from_assembly)
+    if use_pg_descriptor and pg_pass:
+        update_env_value(env_main, "POSTGRES_PASSWORD", pg_pass)
     if force_prompt:
         update_env_value(env_ingress, "POSTGRES_PASSWORD", pg_pass or "postgres")
         update_env_value(env_proc, "POSTGRES_PASSWORD", pg_pass or "postgres")
