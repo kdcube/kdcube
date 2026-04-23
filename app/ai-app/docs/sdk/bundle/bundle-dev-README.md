@@ -42,6 +42,24 @@ Read in this order:
 5. `tools_descriptor.py`
 6. `skills_descriptor.py`
 
+## Environment Boundary
+
+For bundle authors, `tenant/project` means one isolated environment.
+
+Use a separate `tenant/project` when you need:
+
+- customer isolation
+- a separate lifecycle stage such as `dev`, `staging`, or `prod`
+
+Keep multiple bundles inside the same `tenant/project` when they belong to the
+same environment.
+
+So the platform model is:
+
+- one environment = one `tenant/project`
+- one environment can host many bundles
+- one bundle = one end-to-end application unit inside that environment
+
 ## Minimal Bundle Shape
 
 Recommended layout:

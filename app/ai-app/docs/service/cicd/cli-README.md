@@ -7,6 +7,7 @@ keywords: ["kdcube cli", "env init", "docker compose", "local dev", "bundles.yam
 see_also:
   - ks:docs/service/cicd/release-README.md
   - ks:docs/service/cicd/descriptors-README.md
+  - ks:docs/service/cicd/design/cli--as-control-plane-README.md
   - ks:docs/service/configuration/assembly-descriptor-README.md
   - ks:docs/service/configuration/secrets-descriptor-README.md
   - ks:docs/service/configuration/bundles-descriptor-README.md
@@ -26,6 +27,37 @@ This document defines the **initial CLI surface** and behavior. The CLI is for:
 CLI root (code): `src/kdcube-ai-app/kdcube_cli`
 
 ---
+
+## Current vs Planned
+
+This page documents the current implemented CLI contract.
+
+Use it for:
+
+- commands that exist now
+- current runtime/workdir behavior
+- current descriptor-driven local install flow
+
+Do not read it as the future deployment-first CLI contract.
+
+That future model is tracked separately here:
+
+- [cli--as-control-plane-README.md](design/cli--as-control-plane-README.md)
+
+Short version of the difference:
+
+- current CLI: centered on bootstrapping and reusing a concrete local runtime workdir
+- planned CLI: centered on deployment identity first (`tenant/project`, defaults, profiles, start/stop/reload/export as first-class operations)
+
+In both models, the deployment boundary is the same:
+
+- one `tenant/project` = one isolated environment
+- use separate `tenant/project` values for customer isolation or lifecycle
+  stages such as `dev`, `staging`, and `prod`
+- keep multiple bundles inside one `tenant/project` when they belong to the
+  same environment
+
+So `tenant/project` is the environment boundary, not the bundle boundary.
 
 ## 1) Immediate use cases
 

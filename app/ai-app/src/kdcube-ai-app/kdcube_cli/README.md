@@ -5,6 +5,38 @@
 Bootstrap installer for the KDCube platform stack. This package clones the
 repository (if needed) and launches the guided setup wizard.
 
+This README describes the current implemented CLI behavior.
+
+It does not describe the planned deployment-first CLI redesign with
+`kdcube init`, `kdcube defaults`, `kdcube start/stop`, `kdcube reload`, and
+profile-driven local/cloud targeting. That future model is design-only today
+and is tracked in:
+
+- `app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md`
+
+Short version of the current model:
+
+- the CLI bootstraps or reuses a concrete runtime snapshot under a namespaced
+  workdir
+- the namespace is usually derived from `assembly.yaml -> context.tenant` and
+  `context.project`
+- each local runtime snapshot keeps its own staged descriptors, platform
+  snapshot, and runtime data
+
+So current local CLI usage is still deployment-isolated, but workdir-first.
+
+Operationally, that means:
+
+- one `tenant/project` = one isolated environment
+- use separate `tenant/project` values for different customers or different
+  stages such as `dev`, `staging`, and `prod`
+- keep multiple bundles inside one `tenant/project` when they belong to the
+  same environment
+
+So the current CLI does not create one runtime per bundle.
+It creates one runtime per environment, and that environment may host many
+bundles.
+
 ----
 
 ## Prerequisites

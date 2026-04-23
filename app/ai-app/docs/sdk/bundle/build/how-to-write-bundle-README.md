@@ -95,6 +95,17 @@ Operational rule:
 - decorators decide what interfaces it exposes
 - runtime context decides which execution path the code is in
 
+Environment rule:
+
+- one `tenant/project` runtime is one isolated environment
+- use a different `tenant/project` when you need separate customer data or
+  separate stages such as `dev`, `staging`, and `prod`
+- keep multiple bundles inside one `tenant/project` when they belong to the
+  same environment
+
+So a bundle is the end-to-end application unit inside an environment.
+`tenant/project` is the environment boundary, not the bundle boundary.
+
 ## 1B. Bundle Lifecycle
 
 When a bundle exists in a real environment, its lifecycle is:

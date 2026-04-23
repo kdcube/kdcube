@@ -9,8 +9,10 @@ see_also:
   - ks:docs/service/configuration/bundles-secrets-descriptor-README.md
   - ks:docs/service/configuration/assembly-descriptor-README.md
   - ks:docs/service/configuration/runtime-read-write-contract-README.md
+  - ks:docs/service/cicd/design/cli--as-control-plane-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
 ---
@@ -28,6 +30,14 @@ Use it when you need to answer questions like:
 - how do I avoid overwriting live bundle props/secrets with stale descriptor copies
 
 This page is not the primary source for bundle design or test strategy.
+It also documents the CLI/runtime model that exists now, not the planned
+deployment-first CLI redesign.
+
+Important:
+
+- `tenant/project` isolation already exists in the current model
+- the planned CLI redesign does not introduce that isolation
+- the redesign changes how the operator targets and manages deployments
 
 Use the companion docs for those:
 
@@ -43,6 +53,8 @@ For exact descriptor schemas, use:
 - [bundles-secrets-descriptor-README.md](../../../service/configuration/bundles-secrets-descriptor-README.md)
 - [assembly-descriptor-README.md](../../../service/configuration/assembly-descriptor-README.md)
 - [runtime-read-write-contract-README.md](../../../service/configuration/runtime-read-write-contract-README.md)
+- [how-to-configure-and-run-bundle-new-cli-README.md](how-to-configure-and-run-bundle-new-cli-README.md)
+- [cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md)
 
 ## How This Page Fits In The Bundle Lifecycle
 
@@ -128,9 +140,85 @@ then the actual runtime usually becomes:
 
 If there are multiple runtimes under one parent directory, pass the concrete namespaced runtime explicitly.
 
+### 5. What `tenant/project` means today
+
+In the current CLI/runtime model, `tenant/project` is the namespace that
+selects one concrete local runtime sandbox.
+
+That sandbox encloses all three state scopes used by a local deployment:
+
+- platform/global deployment config and secrets
+- deployment-scoped bundle props and bundle secrets
+- user-scoped bundle state for that deployment
+
+Operationally, the namespace also selects:
+
+- the concrete workdir under `<base_workdir>/<tenant>__<project>`
+- the platform version or source snapshot staged for that runtime
+- the Postgres/Redis data used by that runtime
+
+So today `tenant/project` is not only a label used by routing.
+
+It is the boundary of one local deployment snapshot.
+
+Practical interpretation:
+
+- use a separate `tenant/project` when you need full storage isolation between
+  different applications or customer environments
+- use a separate `tenant/project` when you want different lifecycle stages such
+  as `dev`, `staging`, and `prod`
+
+Examples:
+
+- `tenant-a/prod`
+- `tenant-a/staging`
+- `demo/dev`
+- `demo/test`
+
+Inside one `tenant/project`, bundles share the same environment boundary:
+
+- the same platform snapshot
+- the same deployment-scoped config/secrets boundary
+- the same PostgreSQL/Redis deployment data stores
+
+So `tenant/project` is the right boundary for:
+
+- multiple customers
+- multiple isolated product environments
+- multiple lifecycle stages of the same system
+
+It is not the right boundary for:
+
+- splitting one environment into many application modules that should still run
+  together
+
+### 6. What `tenant/project` does not mean yet
+
+The current CLI does not implement a true shared local control plane over many
+deployments.
+
+Today the safer operating model is:
+
+- each `tenant/project` runtime keeps its own staged descriptor set
+- each `tenant/project` runtime keeps its own platform snapshot
+- each `tenant/project` runtime keeps its own Postgres/Redis data
+
+That means a local machine can host many deployment snapshots, but they remain
+isolated from each other.
+
+This is intentional today because it lets bundle developers keep one known-good
+runtime snapshot while testing another one with a newer platform version.
+
+For the planned deployment-first CLI model, use:
+
+- [how-to-configure-and-run-bundle-new-cli-README.md](how-to-configure-and-run-bundle-new-cli-README.md)
+- [cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md)
+
 ## Config And Secret Scopes In The Local Runtime
 
 Use this as the quick decision table for bundle development.
+
+All rows below are inside one current `tenant/project` runtime sandbox.
 
 For the exact helper contract and cloud-mode differences, use:
 
@@ -150,6 +238,57 @@ Two hard rules:
 
 - `kdcube --export-live-bundles` is a bundle-state export only. It exports `bundles.yaml` and `bundles.secrets.yaml`. It does not export `assembly.yaml`, `gateway.yaml`, `secrets.yaml`, user props, or user secrets.
 - Bundle Admin writes live deployment-scoped bundle state only. It does not rewrite platform/global deployment descriptors.
+
+## One Environment Can Host Many Bundles
+
+One `tenant/project` runtime is one environment.
+
+That environment can host many bundles at the same time.
+
+This is the normal model:
+
+- one environment
+- many bundles
+
+Use multiple bundles when you want multiple application modules to share the
+same environment boundary.
+
+Examples:
+
+- one admin bundle
+- one public-facing bundle
+- one background automation bundle
+- one MCP integration bundle
+
+All of those can live inside the same `tenant/project` if they belong to the
+same environment and should share its deployment boundary.
+
+Create a new `tenant/project` only when you need a new isolated environment.
+
+## What A Bundle Is In This Guide
+
+In this guide, a bundle should be read as an end-to-end application unit.
+
+A bundle may include:
+
+- backend execution logic
+- authenticated or public APIs
+- widgets
+- iframe UI
+- scheduled jobs
+- bundle-scoped config
+- bundle-scoped secrets
+
+So a bundle is not only one backend handler and not only one frontend widget.
+
+A real bundle can be a full application module with:
+
+- BE
+- FE
+- deployment-scoped config/secrets
+- optional per-user state
+
+Multiple such bundles can run inside one `tenant/project` environment.
 
 ## Which Files Do What
 
@@ -174,6 +313,9 @@ For local path bundles, `assembly.yaml` is where the host-side roots belong.
 - which one is default
 - whether a bundle is local-path or git-backed
 - bundle props under `config:`
+
+Operationally, this is the file that says which application modules are present
+inside the current `tenant/project` environment.
 
 ### `bundles.secrets.yaml`
 
