@@ -5,6 +5,7 @@ summary: "Authoring guide for end-to-end bundles: bundle shape, lifecycle, decor
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "testing"]
 keywords: ["bundle authoring guide", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron choices", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
 see_also:
+  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
@@ -21,6 +22,9 @@ This document is written for a builder agent or engineer who must create or main
 It is not a conceptual overview.
 It is the working instruction set for doing the job correctly.
 
+If you are not yet sure where this page fits in the full reading order, start
+with [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
+
 Primary references:
 
 - bundle docs under `docs/sdk/bundle/`
@@ -29,6 +33,7 @@ Primary references:
 
 Use this document together with:
 
+- [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 - [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 - [bundle-developer-guide-README.md](../bundle-developer-guide-README.md)
@@ -61,6 +66,12 @@ Configuration/runtime rule:
 
 - use this page for how to structure the bundle code
 - use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, `kdcube --build --upstream`, and `kdcube --info`
+
+Tier 1 role of this page:
+
+- use it first when you are creating a new bundle
+- use it first when you are wrapping existing user code into a bundle
+- do not use it as the main runtime setup guide or the main test guide
 
 ## 1A. What A Bundle Is
 
@@ -105,6 +116,22 @@ Environment rule:
 
 So a bundle is the end-to-end application unit inside an environment.
 `tenant/project` is the environment boundary, not the bundle boundary.
+
+## 1D. If You Are Wrapping Existing Code
+
+Treat the existing application code and the bundle adapter as different layers.
+
+Preferred structure:
+
+- keep business logic, schemas, and external API adapters reusable
+- keep KDCube-specific decorators and runtime calls close to `entrypoint.py`
+- move deployment-scoped config into bundle props or bundle secrets
+- move user-owned runtime state into user props or user secrets
+
+Do not port the whole legacy application into one giant bundle class.
+
+The bundle should be the KDCube-facing integration boundary, not the place where
+all product logic becomes entangled with platform wiring.
 
 ## 1B. Bundle Lifecycle
 
@@ -277,6 +304,18 @@ Usually present:
 ## 4. Copy The Right Reference Pattern
 
 Use `versatile` as the default reference bundle.
+
+Reference doc:
+
+- [versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
+
+Reference bundle root:
+
+- `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
+
+Do not guess from older example bundles first.
+Start from this reference unless your task is specifically about a capability it
+does not cover.
 
 Study in this order:
 

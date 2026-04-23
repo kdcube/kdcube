@@ -5,6 +5,7 @@ summary: "Testing guide for bundle authors: unit and suite coverage, runtime rel
 tags: ["sdk", "bundle", "testing", "pytest", "widget", "runtime", "validation"]
 keywords: ["bundle testing workflow", "shared bundle suite", "local bundle tests", "widget and api validation", "runtime reload verification", "scheduled job checks", "bundle failure diagnosis", "manual and automated test loop"]
 see_also:
+  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
@@ -16,17 +17,27 @@ see_also:
 
 This document is the operational test playbook for bundle builders.
 
+If you are still deciding what to read first, start with
+[how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
+
 The goal is not “run something once”.
 The goal is to prove that the bundle works in the supported KDCube runtime contract.
 
 Use this together with:
 
+- [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 - [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 - [versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
 - [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
 - [bundle-delivery-and-update-README.md](../bundle-delivery-and-update-README.md)
+
+Tier 1 role of this page:
+
+- use it after you have bundle code and a real runtime
+- use it to validate wrappers around existing user code, not only greenfield bundles
+- use it to prove the full KDCube contract, not only unit-level correctness
 
 ## 1. Testing Order
 

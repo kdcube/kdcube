@@ -5,6 +5,7 @@ summary: "Current bundle-development runtime workflow: tenant/project environmen
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
 keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "current kdcube cli workflow"]
 see_also:
+  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
   - ks:docs/configuration/bundles-secrets-descriptor-README.md
   - ks:docs/configuration/assembly-descriptor-README.md
@@ -19,6 +20,9 @@ see_also:
 # How To Configure And Run A Bundle
 
 This page is the operational guide for local bundle runtime setup.
+
+If you are not sure whether you should start here, start with
+[how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md).
 
 Use it when you need to answer questions like:
 
@@ -41,6 +45,7 @@ Important:
 
 Use the companion docs for those:
 
+- [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
@@ -54,6 +59,14 @@ Configuration rule:
   platform/global, deployment-scoped bundle, and user-scoped
 - this page keeps only the operational/runtime summary needed while installing,
   reloading, and exporting a local deployment
+
+Tier 1 role of this page:
+
+- use it after `how-to-write` when you need a real local runtime
+- use it first when your main task is integrating an existing bundle into a
+  `tenant/project` environment
+- use it when the problem is descriptor authority, reload behavior, workdir
+  layout, or local runtime staging
 
 For exact descriptor schemas, use:
 
@@ -74,6 +87,10 @@ Use this page for the operational phases of bundle work:
 4. apply descriptor changes correctly
 5. verify what the runtime is actually using
 6. export live bundle state when admin/runtime changes must be kept
+
+For bundle shape, surface choice, and wrapper design, return to:
+
+- [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 
 ## Current Mental Model
 

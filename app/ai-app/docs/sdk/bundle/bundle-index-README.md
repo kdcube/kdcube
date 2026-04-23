@@ -5,6 +5,7 @@ summary: "Navigation index for bundle documentation: pick the right authoring, r
 tags: ["sdk", "bundle", "docs", "index", "reference"]
 keywords: ["bundle docs navigation", "authoring doc index", "runtime doc index", "integration doc index", "configuration doc index", "reference bundle entrypoint", "delivery and storage docs"]
 see_also:
+  - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
@@ -27,36 +28,39 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 
 ## Read in this order
 
-1. [bundle-developer-guide-README.md](bundle-developer-guide-README.md)
+1. [build/how-to-navigate-kdcube-docs-README.md](build/how-to-navigate-kdcube-docs-README.md)
+   - shortest path for bundle creators, wrappers, integrators, and readers
+2. [bundle-developer-guide-README.md](bundle-developer-guide-README.md)
    - minimal authoring contract
    - local bundle layout
    - config/secrets/update loop
-2. [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
+3. [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
    - exact local runtime contract
    - `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`
    - `kdcube --build --upstream` and `kdcube --info`
    - sharp `path` / `module` rules
-3. [build/how-to-write-bundle-README.md](build/how-to-write-bundle-README.md)
+4. [build/how-to-write-bundle-README.md](build/how-to-write-bundle-README.md)
    - builder playbook for designing and structuring a bundle
-4. [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md)
+5. [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md)
    - builder playbook for validation and runtime checks
-5. [versatile-reference-bundle-README.md](versatile-reference-bundle-README.md)
+6. [versatile-reference-bundle-README.md](versatile-reference-bundle-README.md)
    - the concrete reference bundle to study
-6. [bundle-runtime-README.md](bundle-runtime-README.md)
+7. [bundle-runtime-README.md](bundle-runtime-README.md)
    - runtime surfaces available to bundle code
-7. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
+8. [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
    - exact decorator and route contract
-8. [bundle-transports-README.md](bundle-transports-README.md)
+9. [bundle-transports-README.md](bundle-transports-README.md)
    - canonical inbound/outbound protocol and transport map
-9. [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md)
+10. [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md)
    - platform/global, bundle-scoped, and user-scoped configuration and secrets
-10. [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md)
+11. [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md)
    - local reload, registry updates, delivery modes, and deployment-side changes
 
 ## Core Doc Map
 
 | Concern | Primary doc |
 | --- | --- |
+| Fastest Tier 1 reading order | [build/how-to-navigate-kdcube-docs-README.md](build/how-to-navigate-kdcube-docs-README.md) |
 | Build a new bundle | [bundle-developer-guide-README.md](bundle-developer-guide-README.md) |
 | Configure local runtime, descriptors, and CLI loop | [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md) |
 | Builder playbook | [build/how-to-write-bundle-README.md](build/how-to-write-bundle-README.md) |
