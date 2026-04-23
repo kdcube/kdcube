@@ -67,14 +67,30 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
 - Noted versatile is NOT a reference for `@cron` / `@venv` → Tier 2 (`bundle-scheduled-jobs`, `bundle-venv`) + how-to §4.1 snippets
 - Dropped macOS docker-restart gotcha from `SKILL.md`
 
+**2026-04-23** — codex_plugin + header-first gate
+- Built `codex_plugin/` — Codex CLI port of the builder plugin. Shares `kdcube_local.py`
+  and templates from `builder_plugin/` (copied by `install.sh`); adapted to Codex's
+  extension model: `AGENTS.md` as always-in-context rule block + `prompts/*.md` as slash
+  commands
+- Prompt files: `kdcube-dev`, `kdcube-bundle-builder`, `kdcube-bootstrap`,
+  `kdcube-use-descriptors`, `kdcube-runtime`, `kdcube-verify-reload`, `kdcube-cli`,
+  `kdcube-ui-test` (8 total; last 4 were missing and added)
+- `install.sh`: idempotent, copies runtime + templates from sibling `builder_plugin/`,
+  merges `AGENTS.md` block between HTML markers (`<!-- kdcube-builder:begin/end -->`)
+- `uninstall.sh`: strips prompt files and AGENTS.md block, removes runtime dir
+- Added **header-first gate** to both plugins (builder + codex): Tier 2 docs and
+  descriptor docs — fetch, read title + first section only, decide if full read needed;
+  Tier 1 docs stay always-full-read
+
 ---
 
 ## Cross-tool notes
 
-- **Codex did not digest this plugin.** The same plugin layout that Claude Code loads
-  and runs was not accepted by Codex — its plugin / skill model does not consume this
-  marketplace structure as-is. If cross-tool support is ever wanted, the plugin would
-  need a separate adapter; current scope is Claude Code only.
+- **Codex plugin ships as `codex_plugin/`.** Not a marketplace plugin — Codex has no
+  plugin system. Instead: `AGENTS.md` (always-in-context orchestrator) + `prompts/*.md`
+  (slash commands). Tier 1/Tier 2 split lives in `kdcube-bundle-builder.md`; `AGENTS.md`
+  delegates bundle authoring to it. Capabilities identical to builder_plugin; routing
+  reliability differs (harness-driven vs model-driven).
 
 ---
 
