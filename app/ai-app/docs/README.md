@@ -5,6 +5,7 @@ summary: "Top-level map of the KDCube documentation tree: architecture, configur
 tags: ["docs", "index", "sdk", "service", "ops", "architecture"]
 keywords: ["documentation index", "platform architecture", "configuration guides", "service runtime docs", "bundle sdk docs", "execution docs", "economics docs", "deployment and operations docs"]
 see_also:
+  - ks:docs/what-you-can-do-with-kdcube-README.md
   - ks:docs/arch/architecture-short.md
   - ks:docs/configuration/assembly-descriptor-README.md
   - ks:docs/service/service-and-infrastructure-index-README.md
@@ -15,6 +16,12 @@ see_also:
 
 Curated index of platform, service, and SDK documentation.
 ![pixel-cubes.svg](../../../assets/pixel-cubes.svg)
+
+## Start Here
+
+* What You Can Do With KDCube: [what-you-can-do-with-kdcube-README.md](what-you-can-do-with-kdcube-README.md)
+* Quick Start (Local Docker Compose): [quick-start-README.md](quick-start-README.md)
+
 ## Architecture
 
 * System Architecture (Short): [architecture-short.md](arch/architecture-short.md)
