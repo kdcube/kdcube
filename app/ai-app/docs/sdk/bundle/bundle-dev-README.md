@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-props-secrets-README.md
   - ks:docs/sdk/bundle/bundle-ops-README.md
+  - ks:docs/service/configuration/runtime-read-write-contract-README.md
 ---
 # Bundle Developer Guide
 
@@ -141,12 +142,19 @@ Visibility rule:
 
 The important split is:
 
+- platform/global config and secrets:
+  - `get_settings()`
+  - `get_secret("canonical.key")`
 - non-secret bundle config:
   - `self.bundle_prop(...)`
   - code defaults -> `bundles.yaml` -> runtime/admin overrides
 - bundle secrets:
   - `get_secret("b:...")`
   - provisioned through `bundles.secrets.yaml` or the configured secrets provider
+- user-scoped bundle state:
+  - `get_user_prop(...)`
+  - `get_user_secret(...)`
+  - never exported back into descriptors
 - raw mounted descriptor reads:
   - `get_plain(...)`
   - only when bundle code really must inspect descriptor files directly
@@ -156,6 +164,7 @@ Read the exact model here:
 - [bundle-props-secrets-README.md](bundle-props-secrets-README.md)
 - [bundle-platform-properties-README.md](bundle-platform-properties-README.md)
 - [build/how-to-configure-and-run-bundle-README.md](build/how-to-configure-and-run-bundle-README.md)
+- [../../service/configuration/runtime-read-write-contract-README.md](../../service/configuration/runtime-read-write-contract-README.md)
 
 ## Feature Gating With `enabled_config`
 

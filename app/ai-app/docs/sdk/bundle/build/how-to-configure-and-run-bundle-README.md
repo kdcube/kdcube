@@ -8,6 +8,7 @@ see_also:
   - ks:docs/service/configuration/bundles-descriptor-README.md
   - ks:docs/service/configuration/bundles-secrets-descriptor-README.md
   - ks:docs/service/configuration/assembly-descriptor-README.md
+  - ks:docs/service/configuration/runtime-read-write-contract-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/bundle-dev-README.md
@@ -15,45 +16,18 @@ see_also:
 ---
 # How To Configure And Run A Bundle
 
-This page is for the operational side of bundle work:
+This page is the operational guide for local bundle runtime setup.
 
-- where to put bundle definitions
-- how `kdcube` uses the runtime workdir
-- how to test a local bundle from your source tree
-- what to change when a bundle moves between local path and git
-- what happens when props or secrets are changed
+Use it when you need to answer questions like:
 
-Use this page when you are working with:
+- how do I start a local runtime from a descriptor set
+- what does `--workdir` really point to
+- where are the active descriptor files after install
+- how do I point a bundle at my local source tree
+- when should I rerun install vs `--bundle-reload`
+- how do I avoid overwriting live bundle props/secrets with stale descriptor copies
 
-- `assembly.yaml`
-- `bundles.yaml`
-- `bundles.secrets.yaml`
-- `kdcube --build --upstream`
-- `kdcube --info`
-- `kdcube --bundle-reload`
-
-Use other docs for the exact descriptor schemas:
-
-- [bundles-descriptor-README.md](../../../service/configuration/bundles-descriptor-README.md)
-- [bundles-secrets-descriptor-README.md](../../../service/configuration/bundles-secrets-descriptor-README.md)
-- [assembly-descriptor-README.md](../../../service/configuration/assembly-descriptor-README.md)
-
-## How This Page Fits In The Bundle Lifecycle
-
-Use this page for the operational phases of the bundle lifecycle:
-
-1. choose or inspect the runtime workdir
-2. stage/update `assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml`
-3. point bundle entries at local paths or git refs
-4. apply descriptor changes with build or bundle reload
-5. verify what runtime/config the bundle is actually using
-
-This page is not the primary source for:
-
-- bundle surface design
-- request-vs-cron-vs-isolated runtime semantics
-- widget/API/MCP decorator contracts
-- testing strategy
+This page is not the primary source for bundle design or test strategy.
 
 Use the companion docs for those:
 
@@ -61,229 +35,283 @@ Use the companion docs for those:
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
+- [bundle-props-secrets-README.md](../bundle-props-secrets-README.md)
 
-## Concepts
+For exact descriptor schemas, use:
 
-### 1. A runtime is a real workspace, not just a command
+- [bundles-descriptor-README.md](../../../service/configuration/bundles-descriptor-README.md)
+- [bundles-secrets-descriptor-README.md](../../../service/configuration/bundles-secrets-descriptor-README.md)
+- [assembly-descriptor-README.md](../../../service/configuration/assembly-descriptor-README.md)
+- [runtime-read-write-contract-README.md](../../../service/configuration/runtime-read-write-contract-README.md)
 
-When you run KDCube locally, the important thing is the runtime workdir.
+## How This Page Fits In The Bundle Lifecycle
 
-That runtime usually contains:
+Use this page for the operational phases of bundle work:
+
+1. choose a canonical descriptor directory
+2. install or update a local runtime from that descriptor set
+3. point bundle entries at local paths or git refs
+4. apply descriptor changes correctly
+5. verify what the runtime is actually using
+6. export live bundle state when admin/runtime changes must be kept
+
+## Current Mental Model
+
+### 1. The runtime is a concrete workspace under `workdir`
+
+The local runtime is not only a CLI command. It is a concrete workspace that contains:
 
 - `config/install-meta.json`
 - `config/assembly.yaml`
+- `config/secrets.yaml`
 - `config/bundles.yaml`
 - `config/bundles.secrets.yaml`
-- other generated runtime files
+- `config/gateway.yaml`
+- `.env` files
+- runtime data under `data/`
 
-Once that runtime already exists, `kdcube` normally reuses it.
+Those files under `workdir/config/` are the active runtime inputs.
+
+### 2. `--descriptors-location` stages the descriptor set into the runtime
+
+When you run `kdcube` with `--descriptors-location`, the CLI copies the canonical descriptor set into:
+
+```text
+<runtime>/config/
+```
+
+After that, the runtime uses the staged copies.
 
 That means:
 
-- the runtime keeps using the descriptor files already staged under `workdir/config/`
-- `kdcube --build --upstream` updates the platform checkout and rebuilds from it
-- it does not throw away the runtime descriptor state and start over
+- the source descriptor directory is an input to install/update
+- the staged files under `workdir/config/` are the live local runtime authority
+- editing the source directory later does nothing until you rerun install
 
-So there are two different local use cases:
+This is the main point that older workflow descriptions often got wrong.
 
-- reuse the current runtime because you want to keep its config and data
-- start a fresh empty runtime because you want to test first-run bootstrap
+### 3. Bundle descriptors are now file-backed local runtime authority
 
-### 2. The three files do different jobs
+In local descriptor-backed mode, deployment-scoped bundle configuration lives in:
 
-`assembly.yaml` is about the runtime topology:
+- `workdir/config/bundles.yaml`
+- `workdir/config/bundles.secrets.yaml`
 
-- host paths
-- mounted roots
+Bundle Admin and runtime updates can persist back into those files.
+
+So treat them as live operational state, not only as seed examples.
+
+### 4. `--workdir` often resolves to a namespaced runtime
+
+The CLI can derive a concrete runtime directory from assembly context:
+
+```text
+<base_workdir>/<tenant>__<project>
+```
+
+If you pass a base workdir like:
+
+```text
+~/.kdcube/kdcube-runtime
+```
+
+and the descriptor set says:
+
+- tenant = `mytenant`
+- project = `myproject`
+
+then the actual runtime usually becomes:
+
+```text
+~/.kdcube/kdcube-runtime/mytenant__myproject
+```
+
+If there are multiple runtimes under one parent directory, pass the concrete namespaced runtime explicitly.
+
+## Config And Secret Scopes In The Local Runtime
+
+Use this as the quick decision table for bundle development.
+
+For the exact helper contract and cloud-mode differences, use:
+
+- [bundle-props-secrets-README.md](../bundle-props-secrets-README.md)
+- [runtime-read-write-contract-README.md](../../../service/configuration/runtime-read-write-contract-README.md)
+
+| Scope | Typical examples | Read / write API | Live authority in the local runtime | Export / ejection path |
+|---|---|---|---|---|
+| platform/global props | ports, auth ids, storage backends, path roots | `get_settings()` for effective values; `get_plain("...")` for raw descriptor inspection; no supported write API from bundle code | staged `assembly.yaml` and `gateway.yaml` under `workdir/config/`, plus env | not part of `kdcube --export-live-bundles`; manage through the deployment descriptor set |
+| platform/global secrets | deployment-wide API keys, auth secrets | `get_secret("canonical.key")`; no supported write API from bundle code | `secrets.yaml` only when `secrets-file` is active; otherwise the configured secrets provider | not part of `kdcube --export-live-bundles`; manage through deployment secret workflows |
+| deployment-scoped bundle props | feature flags, cron expressions, model selection, bundle UI config | read: `self.bundle_prop(...)`; write: `await set_bundle_prop(...)` | `workdir/config/bundles.yaml` when file-backed descriptor mode is active, with Redis as runtime cache | exported by `kdcube --export-live-bundles` to `bundles.yaml` |
+| deployment-scoped bundle secrets | webhook secrets, shared API tokens, bundle-specific credentials | read: `get_secret("b:...")`; write: `await set_bundle_secret(...)` | `workdir/config/bundles.secrets.yaml` only in local `secrets-file` mode; otherwise the configured secrets provider | exported by `kdcube --export-live-bundles` to `bundles.secrets.yaml` when the provider/export flow can reconstruct them |
+| user-scoped bundle props | one user's preferences or bundle-managed non-secret state | read/write: `get_user_prop(...)`, `set_user_prop(...)`, `delete_user_prop(...)` | PostgreSQL user bundle props table | never exported |
+| user-scoped bundle secrets | one user's personal tokens or credentials managed by the bundle | read/write: `get_user_secret(...)`, `set_user_secret(...)`, `delete_user_secret(...)` | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported |
+
+Two hard rules:
+
+- `kdcube --export-live-bundles` is a bundle-state export only. It exports `bundles.yaml` and `bundles.secrets.yaml`. It does not export `assembly.yaml`, `gateway.yaml`, `secrets.yaml`, user props, or user secrets.
+- Bundle Admin writes live deployment-scoped bundle state only. It does not rewrite platform/global deployment descriptors.
+
+## Which Files Do What
+
+### `assembly.yaml`
+
+`assembly.yaml` controls runtime topology and platform wiring:
+
+- tenant/project identity
+- platform repo/ref
+- host path roots
+- bundle mount roots
 - storage roots
-- service-wide runtime config
+- auth/infra/runtime settings
 
-`bundles.yaml` is about bundle definitions and deployment-scoped non-secret bundle config:
+For local path bundles, `assembly.yaml` is where the host-side roots belong.
+
+### `bundles.yaml`
+
+`bundles.yaml` controls bundle definitions and deployment-scoped non-secret bundle props:
 
 - which bundles exist
 - which one is default
 - whether a bundle is local-path or git-backed
 - bundle props under `config:`
 
-`bundles.secrets.yaml` is about deployment-scoped bundle secrets:
+### `bundles.secrets.yaml`
 
-- API tokens
-- webhook shared secrets
-- MCP shared tokens
-- other bundle-scoped credentials
+`bundles.secrets.yaml` controls deployment-scoped bundle secrets:
 
-### 3. Local path bundles and git bundles are different workflows
+- shared API tokens
+- webhook secrets
+- MCP tokens
+- external service credentials that are bundle-scoped
 
-A local path bundle is for editing code directly from your source tree.
+### `secrets.yaml` and `gateway.yaml`
 
-A git bundle is for:
+These still matter to a local runtime, but they are not the main bundle authoring focus:
 
-- pinned refs
-- managed delivery
-- versioned deployment
+- `secrets.yaml` holds non-bundle service/runtime secrets for local install
+- `gateway.yaml` holds gateway config
 
-You can move a bundle from one style to the other, but do not mix both styles in one bundle entry.
+For non-interactive local install, the descriptor set should be complete and internally consistent.
 
-### 4. Host path and runtime path are not the same thing
+## Recommended Local Workflow
 
-This is the main source of confusion.
+Use a canonical descriptor directory and let `kdcube` stage it into the runtime.
 
-Example:
-
-- host root: `/Users/you/src`
-- runtime root: `/bundles`
-
-If a bundle lives on the host at:
-
-```text
-/Users/you/src/my-repo/src/my_bundle
-```
-
-then the bundle entry in `bundles.yaml` must use:
-
-```text
-/bundles/my-repo/src/my_bundle
-```
-
-The host path belongs in `assembly.yaml`.
-The runtime-visible path belongs in `bundles.yaml`.
-
-### 5. Managed bundles and unmanaged bundles are separate
-
-Managed bundles are:
-
-- git-resolved bundles
-- built-in example bundles materialized by the platform
-
-Unmanaged bundles are:
-
-- local path bundles mounted from your own source tree
-
-Keep those roots separate.
-
-In practice:
-
-- `assembly.yaml -> paths.host_bundles_path` points to your source tree root
-- `assembly.yaml -> paths.host_managed_bundles_path` points to the runtime-managed cache
-
-### 6. Descriptor-backed bundle config is operational state
-
-Bundle props and secrets are not the same as code.
-
-Deployment-scoped bundle props live in:
-
-- `bundles.yaml`
-
-Deployment-scoped bundle secrets live in:
-
-- `bundles.secrets.yaml` in local `secrets-file` mode
-- or the configured provider authority in other deployments
-
-User-scoped props and secrets are different:
-
-- user props are not stored in `bundles.yaml`
-- user secrets are not stored in `bundles.secrets.yaml`
-
-For the exact split, use:
-
-- [bundle-props-secrets-README.md](../bundle-props-secrets-README.md)
-
-## What To Do In Practice
-
-### If you want to reuse the runtime you already have
-
-Use the existing runtime if your goal is:
-
-- test the updated CLI
-- test newer platform code
-- keep the current descriptor state
-- keep the current local runtime data
-
-Typical commands:
+Recommended command shape:
 
 ```bash
-pip install -e /abs/path/to/kdcube_cli
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --build --upstream
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors
 ```
 
-What this does:
+Without `--build`, this runs the release-image flow using:
 
-- reuses `workdir/config/install-meta.json`
-- reuses `workdir/config/*.yaml`
-- pulls the newer upstream repo state
-- rebuilds from it
-- does not reseed the default descriptors
+- `assembly.platform.ref`
+- or `--latest`
+- or `--release <ref>`
 
-So if you need to change bundle roots or bundle entries in that runtime, edit the files already under:
-
-```text
-<workdir>/config/
-```
-
-### If you want to test first-run bootstrap
-
-Do not reuse the existing runtime.
-
-Use a new empty workdir:
+### Release-image install from `assembly.platform.ref`
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime-test-default
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors
 ```
 
-That is the flow that exercises:
+Use this when you want the normal local runtime based on a released platform version.
 
-- default descriptor seeding
-- first-run prompt behavior
-- local-first runtime bootstrap
-
-### If you want to change the host bundles root
-
-Edit:
-
-```text
-<workdir>/config/assembly.yaml
-```
-
-Set:
-
-```yaml
-paths:
-  host_bundles_path: "/Users/you/src"
-```
-
-This means:
-
-- the host parent root is `/Users/you/src`
-- local path bundles will be mounted under `/bundles/...`
-
-After changing it, rerun:
+### Release-image install from an explicit release
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --build --upstream
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors \
+  --release 2026.4.23.17
 ```
 
-Then verify:
+### Release-image install from the latest known platform release
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --info
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors \
+  --latest
 ```
 
-Check:
+### Source build from a released platform ref
 
-- host bundles path
-- container bundles root
-- host managed bundles path
-- container managed bundles root
-
-### If you want to run a bundle directly from your local source tree
-
-Define it as a pure path bundle in:
-
-```text
-<workdir>/config/bundles.yaml
+```bash
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors \
+  --build
 ```
 
-Recommended form:
+Use this when you want to build locally from the selected release source rather than pull release images.
+
+### Source build from upstream `origin/main`
+
+```bash
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors \
+  --build --upstream
+```
+
+Important:
+
+- `--upstream` requires `--build`
+- `--upstream` requires either `--descriptors-location` or an already initialized runtime
+
+Use this when you are validating current platform source, not when you only need to update bundle descriptors.
+
+## Inspecting The Runtime You Already Have
+
+### Show active runtime info
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject --info
+```
+
+This prints:
+
+- resolved workdir
+- config/data/docker dirs
+- repo root
+- install mode / platform ref
+- active assembly and bundles descriptor paths
+- host/container bundle roots
+- host/container managed bundle roots
+- bundle storage roots
+
+Use `--info` whenever you are not sure which runtime or mount mapping you are actually using.
+
+### Stop the runtime
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject --stop
+```
+
+With volumes removed:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject --stop --remove-volumes
+```
+
+## Local Path Bundles vs Git Bundles
+
+### Local path bundles
+
+Use a local path bundle when you are actively editing code from your source tree.
+
+Recommended entry:
 
 ```yaml
 bundles:
@@ -294,104 +322,157 @@ bundles:
       module: "entrypoint"
 ```
 
-This is the easiest form to reason about:
+This means:
 
-- `path` is the actual bundle root in the runtime
-- `module` is the module inside that root
+- `path` is the bundle root as seen inside the runtime
+- `module` is resolved inside that root
 
-If you do this, do not leave:
-
-- `repo`
-- `ref`
-- `subdir`
-
-on that same bundle entry.
-
-### If you want to switch a bundle from git to local path
-
-Edit `bundles.yaml`.
-
-Remove the git shape:
+Do not keep these on the same entry:
 
 - `repo`
 - `ref`
 - `subdir`
 
-Replace it with the local path shape:
+### Git bundles
 
-- `path`
-- `module`
+Use a git-backed bundle when you want pinned, managed, versioned delivery.
 
-Then rerun:
+Typical shape:
 
-```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --build --upstream
+```yaml
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      repo: "git@github.com:org/repo.git"
+      ref: "2026.4.23.17"
+      subdir: "src/my_bundle"
+      module: "entrypoint"
 ```
 
-If the code is already mounted locally and only the code changed, not the runtime topology, a bundle reload is usually enough:
+Do not mix local-path and git fields on the same bundle entry.
 
-```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --bundle-reload my.bundle@1-0
-```
+## Host Paths vs Runtime Paths
 
-Use `--build --upstream` when you changed:
+This is the most common source of mistakes.
 
-- `assembly.yaml`
-- descriptor topology
-- platform code
-- compose/runtime files
+Example:
 
-Use `--bundle-reload` when you changed:
+- host root in `assembly.yaml`: `/Users/you/src`
+- runtime bundles root: `/bundles`
 
-- bundle code
-- `bundles.yaml`
-- `bundles.secrets.yaml`
-
-and the runtime topology itself is still the same.
-
-### If you want to switch a bundle from local path back to git
-
-Edit `bundles.yaml`.
-
-Remove the local path shape:
-
-- `path`
-
-Replace it with the git shape:
-
-- `repo`
-- `ref`
-- `subdir`
-- `module`
-
-Then rebuild or restart the runtime:
-
-```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --build --upstream
-```
-
-### If the bundle is still git-backed but should use a different ref
-
-Edit only the git fields in `bundles.yaml`, for example:
-
-- `ref`
-- or `repo` if needed
-
-Then rerun:
-
-```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --build --upstream
-```
-
-### If you added or changed bundle props
-
-Bundle props are deployment-scoped non-secret config.
-
-Put them into:
+If the host bundle path is:
 
 ```text
-<workdir>/config/bundles.yaml
+/Users/you/src/my-repo/src/my_bundle
 ```
+
+then the bundle entry in `bundles.yaml` must use the runtime-visible path:
+
+```text
+/bundles/my-repo/src/my_bundle
+```
+
+So:
+
+- host path roots belong in `assembly.yaml`
+- runtime-visible bundle paths belong in `bundles.yaml`
+
+## Managed vs Non-Managed Bundle Roots
+
+Keep non-managed local bundles and managed bundles separate.
+
+Non-managed bundles:
+
+- your local source-tree bundles
+
+Managed bundles:
+
+- git-resolved bundles
+- built-in example bundles materialized by the platform
+
+In practice:
+
+- `assembly.yaml -> paths.host_bundles_path` points to the host root for non-managed local bundles
+- `assembly.yaml -> paths.host_managed_bundles_path` points to the runtime-managed bundle cache
+
+Use `kdcube --info` to verify both host/container mappings.
+
+## Applying Changes Correctly
+
+### If you changed the canonical descriptor source directory
+
+If you edited files in the source descriptor directory passed via `--descriptors-location`, rerun install so those changes are restaged into the runtime:
+
+```bash
+kdcube \
+  --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors
+```
+
+This is required because `--bundle-reload` does not read arbitrary external descriptor directories. It reuses the runtime’s staged descriptor files.
+
+### If you changed `bundles.yaml` or `bundles.secrets.yaml` inside the active runtime
+
+After editing:
+
+```text
+<runtime>/config/bundles.yaml
+<runtime>/config/bundles.secrets.yaml
+```
+
+apply the change with:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject --bundle-reload my.bundle@1-0
+```
+
+`--bundle-reload`:
+
+- validates that the bundle id exists in the active runtime descriptor
+- requires `chat-proc` to be running
+- reapplies the runtime descriptor
+- clears the target bundle from proc caches
+
+Use this for:
+
+- bundle props changes
+- bundle secrets changes
+- enable/disable flag changes
+- switching a bundle entry between local path and git, if the runtime topology itself did not change
+
+It does not reload:
+
+- user props
+- user secrets
+- platform/global descriptor files such as `assembly.yaml`, `gateway.yaml`, or `secrets.yaml`
+
+### If you changed platform/runtime topology
+
+Rerun install, not only `--bundle-reload`.
+
+Typical cases:
+
+- `assembly.yaml`
+- host path roots
+- storage roots
+- compose/runtime shape
+- platform version selection
+- source-build vs release-image mode
+
+### If you only changed local bundle code
+
+If the bundle is already mounted as a local path bundle, you often only need a reload:
+
+```bash
+kdcube --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject --bundle-reload my.bundle@1-0
+```
+
+Use a full reinstall only when code changes depend on wider runtime/platform changes.
+
+## Bundle Props, Secrets, And `enabled_config`
+
+Deployment-scoped non-secret bundle config goes in `bundles.yaml`.
 
 Example:
 
@@ -405,22 +486,24 @@ bundles:
         api:
           header_name: "X-My-Bundle-Token"
         features:
-          enabled: true
+          admin_export:
+            enabled: false
 ```
 
-Then apply them with:
+Deployment-scoped secret bundle config goes in `bundles.secrets.yaml`.
 
-```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --bundle-reload my.bundle@1-0
+Example:
+
+```yaml
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      secrets:
+        api:
+          shared_token: "replace-me"
 ```
 
-Use `--build --upstream` instead only if you also changed runtime topology or platform code.
-
-### If you want to gate a bundle feature with `enabled_config`
-
-`enabled_config` is resolved from bundle props, so operationally the toggle
-value belongs in `bundles.yaml`, not in code constants and not in
-`bundles.secrets.yaml`.
+`enabled_config` values belong in bundle props, not in secrets.
 
 Example bundle code:
 
@@ -436,144 +519,138 @@ async def admin_export(self, **kwargs):
     return {"ok": True}
 ```
 
-Example runtime config:
-
-```yaml
-bundles:
-  items:
-    - id: "my.bundle@1-0"
-      config:
-        features:
-          admin_export:
-            enabled: false
-```
-
-Current operational behavior:
+Operational behavior:
 
 - missing path means enabled
 - `false`, `0`, `disable`, `disabled`, and `off` disable the surface
-- changing the flag is a bundle-props change, so apply it with:
+
+After changing the prop, apply it with:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --bundle-reload my.bundle@1-0
+kdcube --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject --bundle-reload my.bundle@1-0
 ```
 
-Use this for:
-
-- environment-specific rollout
-- temporary shutdown of one widget/API/job
-- disabling a scheduled job without deleting its descriptor entry
-
-### If you added or changed bundle secrets
-
-Bundle secrets are deployment-scoped secret config.
-
-Put them into:
-
-```text
-<workdir>/config/bundles.secrets.yaml
-```
-
-Example:
-
-```yaml
-bundles:
-  items:
-    - id: "my.bundle@1-0"
-      secrets:
-        api:
-          shared_token: "replace-me"
-```
-
-Then apply them with:
-
-```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --bundle-reload my.bundle@1-0
-```
-
-In code, the clean split is:
-
-```python
-header_name = self.bundle_prop("api.header_name", "X-My-Bundle-Token")
-shared_token = get_secret("b:api.shared_token")
-```
-
-### If bundle props or bundle secrets were changed from bundle admin
-
-That is still operational configuration.
+## What Happens When Bundle Admin Changes Props Or Secrets
 
 In local descriptor-backed mode:
 
-- deployment-scoped bundle prop changes should persist into `bundles.yaml`
-- deployment-scoped bundle secret changes should persist into `bundles.secrets.yaml` in `secrets-file` mode
+- deployment-scoped bundle prop changes persist into the active runtime `bundles.yaml`
+- deployment-scoped bundle secret changes persist into the active runtime `bundles.secrets.yaml`
 
-That means the local descriptor files remain the runtime authority and should be treated as real state, not as throwaway examples.
+They do not persist into:
 
-If someone changes those values through bundle admin, do not later overwrite them with stale copies.
+- `assembly.yaml`
+- `gateway.yaml`
+- `secrets.yaml`
+- user-scoped runtime state
 
-### If the bundle writes user props or user secrets
+So if bundle admin changes live config, the runtime files under `workdir/config/` become the newest state.
 
-That does not belong in bundle descriptors.
+If you later rerun install from an older source descriptor directory, you can overwrite that newer live state.
 
-User-scoped writes are normal business/runtime state:
+That is why you should export live bundle state before replacing runtime descriptors with stale source copies.
 
-- user props are not exported to `bundles.yaml`
-- user secrets are not exported to `bundles.secrets.yaml`
+## Exporting Live Bundle State
 
-Do not expect bundle reload or descriptor export to reconstruct user-scoped state.
-
-### If you want to know what the runtime is actually using
-
-Run:
+To export the current effective bundle descriptors:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/my_runtime --info
+kdcube \
+  --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject \
+  --export-live-bundles \
+  --out-dir /tmp/live-bundles
 ```
 
-Use this when you need to answer:
+In local descriptor-backed mode, this exports from the active runtime workspace descriptor files.
 
-- which descriptor files are active
-- which repo/workdir this runtime is using
-- what the host and container bundle roots are
-- where managed bundles live
+Current export includes:
 
-## The `path` And `module` Question
+- `bundles.yaml`
+- `bundles.secrets.yaml`
 
-There are two valid forms, but one is easier to work with.
+Current export does not include:
 
-### Recommended form
+- `assembly.yaml`
+- `gateway.yaml`
+- `secrets.yaml`
+- user props
+- user secrets
+- platform/global secrets
+- bundle storage payloads
 
-Use this when `path` is the actual bundle root:
+Use it when:
 
-```yaml
-path: /bundles/my-repo/src/my_bundle
-module: entrypoint
+- bundle admin changed props/secrets
+- runtime code changed live bundle state you want to keep
+- you want to sync the current runtime authority back into a canonical descriptor directory
+
+## User-Scoped State Is Different
+
+Do not expect user-scoped state to be reconstructed from descriptor files.
+
+User-scoped runtime state is not deployment-scoped descriptor state:
+
+- user props do not belong in `bundles.yaml`
+- user secrets do not belong in `bundles.secrets.yaml`
+
+Descriptor export/reload is for deployment-scoped bundle config, not per-user business state.
+
+## First-Run Bootstrap vs Existing Runtime
+
+### Existing runtime
+
+Use the existing runtime when you want to:
+
+- keep current config and data
+- keep the current staged runtime descriptors
+- validate a new platform source build against the current runtime
+
+Example:
+
+```bash
+kdcube \
+  --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject \
+  --build --upstream
 ```
 
-This is the most readable form and should be your default.
+This reuses the initialized runtime and rebuilds from upstream source.
 
-### Alternative form
+### Fresh runtime
 
-Use this only when `path` is the parent folder that contains the bundle directory:
+Use a new workdir when you want to test:
 
-```yaml
-path: /bundles/my-repo/src
-module: my_bundle.entrypoint
-```
+- first-run bootstrap
+- default descriptor seeding
+- clean local runtime setup
 
-This also works, but it is less direct because the runtime resolves the real bundle root from the module base.
+But for normal bundle development, prefer a descriptor-driven initialized runtime instead of ad hoc manual prompting.
 
-For normal local development, prefer the first form.
+## Common Mistakes
+
+- Editing the canonical descriptor source directory and expecting the running runtime to pick it up automatically.
+- Forgetting that the staged runtime files under `workdir/config/` are the active local authority.
+- Passing host paths in `bundles.yaml` instead of runtime-visible `/bundles/...` paths.
+- Mixing `path` with `repo`/`ref`/`subdir` in the same bundle entry.
+- Using `--upstream` without `--build`.
+- Assuming the base `--workdir` is the concrete runtime when the CLI has resolved a namespaced runtime under it.
+- Using `--bundle-reload` before the stack is running.
+- Overwriting live bundle-admin changes with stale descriptor source files.
 
 ## What To Remember
 
 If you only remember the essentials, remember these:
 
-- reuse the current runtime when you want to keep its config and data
-- use a fresh workdir only to test first-run bootstrap
-- `assembly.yaml` owns the host roots
+- the active local runtime authority is under `workdir/config/`
+- `--descriptors-location` stages descriptor files into that runtime
 - `bundles.yaml` owns bundle definitions and non-secret deployment props
 - `bundles.secrets.yaml` owns deployment-scoped bundle secrets
-- local path bundles should usually use bundle-root `path` plus `module: entrypoint`
-- after changing descriptor-backed bundle config, apply it with bundle reload
-- after changing runtime topology or platform code, rerun `--build --upstream`
+- local path bundles should use runtime-visible `/bundles/...` paths
+- rerun install when you changed the canonical source descriptor set or runtime topology
+- use `--bundle-reload` when you changed active runtime bundle descriptors or need proc cache eviction
+- use `--info` to inspect the runtime you are actually using
+- use `--export-live-bundles` before overwriting runtime bundle state with older descriptor copies
+
+For the exact read/write helper contract behind those rules, use:
+
+- [runtime-read-write-contract-README.md](../../../service/configuration/runtime-read-write-contract-README.md)
+- [bundle-props-secrets-README.md](../bundle-props-secrets-README.md)

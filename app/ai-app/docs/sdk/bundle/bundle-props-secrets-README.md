@@ -12,26 +12,51 @@ see_also:
 ---
 # Bundle Props and Secrets
 
-This document covers the four bundle-facing state classes that matter in practice:
+This document defines the exact config and secret scopes bundle authors interact
+with.
 
-1. deployment-scoped bundle props
-2. deployment-scoped bundle secrets
-3. user-scoped bundle props
-4. user-scoped bundle secrets
+There are three scopes:
 
-For now, bundle code should **not** write platform/global props or platform/global secrets.
+1. platform/global
+2. deployment-scoped bundle
+3. user-scoped bundle
 
-## What lives where
+Across those scopes, there are six concrete state classes that matter in
+practice:
 
-| Data class | Read API | Write API | Scope | Live authority today | Export / descriptor behavior |
+1. platform/global props
+2. platform/global secrets
+3. deployment-scoped bundle props
+4. deployment-scoped bundle secrets
+5. user-scoped bundle props
+6. user-scoped bundle secrets
+
+Bundle code may read all six classes through the supported helpers, but normal
+bundle code should write only:
+
+- deployment-scoped bundle props
+- deployment-scoped bundle secrets
+- user-scoped bundle props
+- user-scoped bundle secrets
+
+Bundle code should not write platform/global props or platform/global secrets.
+Those remain deployment-owned.
+
+## Exact scope matrix
+
+| Data class | Read API | Write API from bundle code | Scope | Live authority today | Export / ejection path |
 |---|---|---|---|---|---|
-| deployment-scoped bundle props | `self.bundle_prop(...)`, `self.bundle_props` | `await set_bundle_prop(...)` | tenant + project + bundle | configured bundle descriptor authority; Redis is the runtime cache. In ECS the recommended authority is writable mounted `bundles.yaml` on EFS with `BUNDLES_DESCRIPTOR_PROVIDER=file`. | exported to `bundles.yaml` |
-| deployment-scoped bundle secrets | `get_secret("b:...")` | `await set_bundle_secret(...)` | tenant + project + bundle | configured secrets provider; in local `secrets-file` mode this is `bundles.secrets.yaml` | exported to `bundles.secrets.yaml` |
-| user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` | tenant + project + bundle + user | PostgreSQL `<SCHEMA>.user_bundle_props` | never exported to descriptors |
-| user-scoped bundle secrets | `get_user_secret(...)` | `set_user_secret(...)`, `delete_user_secret(...)` | tenant + project + bundle + user | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported to descriptors |
+| platform/global props | `get_settings()` for effective values; `get_plain("...")` for raw `assembly.yaml` reads | none supported | tenant + project deployment | promoted runtime config assembled from env plus descriptor files such as `assembly.yaml` and `gateway.yaml` | outside `kdcube --export-live-bundles`; manage through deployment descriptors, not bundle export |
+| platform/global secrets | `get_secret("canonical.key")` | none supported | tenant + project deployment | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | outside `kdcube --export-live-bundles`; manage through deployment secret workflows, not bundle export |
+| deployment-scoped bundle props | `self.bundle_prop(...)`, `self.bundle_props` | `await set_bundle_prop(...)` | tenant + project + bundle | configured bundle descriptor authority; Redis is the runtime cache. In ECS the recommended authority is writable mounted `bundles.yaml` on EFS with `BUNDLES_DESCRIPTOR_PROVIDER=file`. | exported to `bundles.yaml`; `kdcube --export-live-bundles` includes it |
+| deployment-scoped bundle secrets | `get_secret("b:...")` | `await set_bundle_secret(...)` | tenant + project + bundle | configured secrets provider; in local `secrets-file` mode this is `bundles.secrets.yaml` | exported to `bundles.secrets.yaml`; `kdcube --export-live-bundles` includes it when the provider/export flow can reconstruct bundle secrets |
+| user-scoped bundle props | `get_user_prop(...)`, `get_user_props()` | `set_user_prop(...)`, `delete_user_prop(...)` | tenant + project + bundle + user | PostgreSQL `<SCHEMA>.user_bundle_props` | never exported to descriptors or bundle export |
+| user-scoped bundle secrets | `get_user_secret(...)` | `set_user_secret(...)`, `delete_user_secret(...)` | tenant + project + bundle + user | configured secrets provider; in local `secrets-file` mode this is `secrets.yaml` | never exported to descriptors or bundle export |
 
 The most important split is:
 
+- `get_settings()` reads effective platform/global runtime config
+- `get_secret("canonical.key")` reads deployment-scoped platform/global secrets
 - `self.bundle_prop(...)` reads the bundle's effective non-secret runtime config
 - `get_plain(...)` reads raw mounted descriptor files only
 - `get_secret("b:...")` reads deployment-scoped bundle secrets
@@ -40,12 +65,30 @@ The most important split is:
 
 If the data is mutable business data rather than config or credentials, use bundle storage instead.
 
+## Use the right scope
+
+| If the value belongs to... | Use | Do not use |
+|---|---|---|
+| the environment or platform deployment as a whole | `get_settings()` or `get_secret("canonical.key")` | `self.bundle_prop(...)` |
+| one bundle for the whole deployment | `self.bundle_prop(...)` or `get_secret("b:...")` | user props/secrets |
+| one user inside one bundle | `get_user_prop(...)` or `get_user_secret(...)` | `bundles.yaml`, `bundles.secrets.yaml` |
+
+Examples:
+
+- OpenAI API key for the deployment -> platform/global secret
+- bundle feature flag or cron expression -> deployment-scoped bundle prop
+- bundle webhook token shared by the deployment -> deployment-scoped bundle secret
+- one user's theme preference -> user-scoped bundle prop
+- one user's personal GitHub token -> user-scoped bundle secret
+
 ## What is actually supported today
 
 ### From inside bundle code
 
 Supported directly:
 
+- read platform/global props via `get_settings()`
+- read platform/global secrets via `get_secret("canonical.key")`
 - read deployment-scoped bundle props via `self.bundle_prop(...)`
 - read deployment-scoped bundle secrets via `get_secret("b:...")`
 - write deployment-scoped bundle props via `await set_bundle_prop(...)`
@@ -55,8 +98,45 @@ Supported directly:
 
 That distinction matters:
 
+- platform/global state is deployment-owned and not writable from normal bundle code
 - user-scoped writes are part of normal bundle runtime behavior
 - deployment-scoped bundle writes are still operational/configuration writes
+
+## Platform/global props and secrets
+
+These are not bundle-scoped values.
+
+Use:
+
+- `get_settings()` for effective typed runtime settings
+- `get_secret("canonical.key")` for deployment-scoped platform/global secrets
+- `get_plain("...")` only when you intentionally need the raw descriptor file
+
+Examples:
+
+- ports
+- auth client ids
+- storage backend selection
+- external service deployment keys shared by many bundles
+
+Do not store these in:
+
+- `bundles.yaml`
+- `bundles.secrets.yaml`
+- user props
+- user secrets
+
+Do not expect them from:
+
+- `self.bundle_prop(...)`
+- `kdcube --export-live-bundles`
+
+Operational export rule:
+
+- deployment-scoped bundle export is only for `bundles.yaml` and
+  `bundles.secrets.yaml`
+- platform/global config stays in deployment descriptors and deployment secrets
+- user-scoped data stays operational and is never part of descriptor export
 
 ## Deployment-scoped bundle props
 
