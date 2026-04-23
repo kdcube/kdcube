@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
 title: "How To Configure And Run A Bundle With The New CLI"
-summary: "Planned bundle-development workflow for the deployment-first CLI: init, defaults, info, start, stop, reload, and export, while keeping the same tenant/project runtime isolation model."
+summary: "Planned bundle-development workflow for the deployment-first CLI: init, defaults, info, start, stop, reload, and export, while keeping the same tenant/project runtime isolation model and explicitly defaulting local compose-backed development to one active deployment at a time."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "control-plane"]
-keywords: ["planned deployment first cli", "control plane workflow", "init defaults info start stop", "bundle reload by deployment", "bundle export flow", "tenant project isolation model", "local and remote profile targeting", "future bundle runtime workflow"]
+keywords: ["planned deployment first cli", "control plane workflow", "init defaults info start stop", "bundle reload by deployment", "bundle export flow", "tenant project isolation model", "local and remote profile targeting", "future bundle runtime workflow", "single active local deployment rule", "multiple deployment snapshots on one machine", "concurrent local runtimes advanced mode"]
 see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/service/cicd/design/cli--as-control-plane-README.md
@@ -43,6 +43,9 @@ Important:
 - deployment isolation by `tenant/project` already exists today
 - per-deployment platform snapshots already exist today
 - per-deployment Postgres/Redis/runtime data already exist today
+- many deployment snapshots on one machine are fine
+- many concurrently running local compose-backed deployments should not be the
+  default assumption
 
 So the new CLI does not introduce deployment isolation.
 
@@ -257,6 +260,33 @@ kdcube stop  --workdir ~/.kdcube/demo__news
 ```
 
 Bundle developer rule:
+
+- treat `start` and `stop` as deployment-targeting operations, not as generic
+  compose commands
+
+### Desired local multi-deployment rule
+
+The new CLI should keep this distinction explicit:
+
+- one machine may hold many deployment snapshots
+- one machine should not silently run many local compose-backed deployments at
+  once by default
+
+So when the backend is local compose, the desired behavior is:
+
+1. `start` resolves exactly one deployment
+2. if another local deployment is already active, `start` refuses and tells the
+   operator which one must be stopped first
+3. `stop` only stops the targeted deployment
+4. cloud or remote profiles are different: one local CLI may manage many remote
+   deployments without that local one-active-deployment rule
+
+If the platform later adds true concurrent local multi-instance support, it
+should be explicit and advanced, not accidental. That mode would need:
+
+- per-deployment compose project naming
+- per-deployment host-port allocation
+- explicit runtime discovery and stop semantics
 
 - think in terms of starting or stopping one deployment sandbox
 - not in terms of rebuilding every runtime from scratch each time
