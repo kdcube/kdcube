@@ -81,16 +81,22 @@ bundle, then `kdcube --workdir $WORKDIR --build --upstream`. The plugin's `boots
 helper with `--host-bundles-path` does the same thing in one call. Do not invent other
 workarounds — read the how-to first.
 
-1. Fetch the how-to first:
-   `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`
-2. Fetch the matching descriptor doc under
-   `https://github.com/kdcube/kdcube-ai-app/blob/main/app/ai-app/docs/service/configuration/`
-   (`service-config-README.md`, `assembly-descriptor-README.md`,
+**The plugin ships without docs — they are NOT on disk.** Always fetch via `WebFetch` from
+the raw GitHub URLs below. Only fall back to local `Read` if
+`CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is already set — in that case strip the
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/` prefix and read the repo-relative
+path. Do not ask the user for a local repo.
+
+1. Fetch the how-to first with `WebFetch` and read it in full:
+   `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`
+2. Fetch the matching descriptor doc (also with `WebFetch`). **Header-first gate:** read
+   only the title and first section first, confirm it covers the specific field you need,
+   then read the rest. Base:
+   `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/<filename>`
+   — `service-config-README.md`, `assembly-descriptor-README.md`,
    `bundles-descriptor-README.md`, `bundles-secrets-descriptor-README.md`,
-   `gateway-descriptor-README.md`, `secrets-descriptor-README.md`).
-3. Use `WebFetch` by default. If `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set, read the same
-   files locally instead — that is an opt-in fast path, not the default.
-4. After editing `$WORKDIR/config/bundles.yaml` on macOS, restart `chat-proc` (see the Reload
+   `gateway-descriptor-README.md`, `secrets-descriptor-README.md`.
+3. After editing `$WORKDIR/config/bundles.yaml` on macOS, restart `chat-proc` (see the Reload
    gotcha below), then `reload` + `verify-reload`.
 
 ## Reload flow

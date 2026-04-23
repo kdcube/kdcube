@@ -88,26 +88,42 @@ One KDCube bundle can combine:
 
 ## Read order
 
-**Default source is GitHub.** The plugin has no reliable way to locate the repo on disk, so
-fetch the docs from GitHub with `WebFetch`. Only use local paths if
-`CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is explicitly set — that is an opt-in fast path, not
-the default.
+**The plugin ships without docs — they are NOT on disk.** Always fetch from GitHub with
+`WebFetch`. Do not try to `Read` these paths locally, do not try to `ls` a docs directory,
+do not ask the user to point you at one. The only exception is the opt-in local fast path
+at the bottom of this section, which requires `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` to
+already be set — if it is not set, go straight to `WebFetch`.
 
-All paths below are relative to `https://github.com/kdcube/kdcube-ai-app/blob/main/`.
+All URLs below are complete — pass them to `WebFetch` verbatim. Base (for reference):
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/`.
 
 ### Tier 1 — always read (operational canon)
 
-- `app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring
-- `app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
-- `app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing
-- Reference bundle (read end-to-end): `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/`
+Fetch each with `WebFetch`:
+
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing
+
+Reference bundle `versatile@2026-03-31-13-36` — read end-to-end. Directories are not
+WebFetch-able; fetch these files individually:
+
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/README.md`
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/entrypoint.py`
+- To discover the rest of the tree, fetch
+  `https://api.github.com/repos/kdcube/kdcube-ai-app/contents/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36`
+  then fetch the individual files you need by name (e.g. `skills_descriptor.py`,
+  `tools_descriptor.py`, anything under `agents/`, `skills/`, `tools/`).
 
 ### Tier 2 — read only on demand (when Tier 1 is not enough)
 
-Pull these when the task specifically hits the topic. Do not preload.
+**Header-first gate:** Before reading any Tier 2 doc in full, fetch it and read only the
+title and first section (≈first 30 lines, up to the first `##` heading). Then ask yourself:
+does this doc specifically address what I am implementing right now? If yes — read the rest.
+If no — stop; you have confirmed it is not needed for this task.
 
-**SDK reference deep-dives** (`app/ai-app/docs/sdk/bundle/`) — read the matching file when
-you need more than Tier 1 gave you on a specific feature:
+Pull these when the task specifically hits the topic. Do not preload. All under
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/<filename>`:
 
 - `bundle-index-README.md` — SDK map
 - `bundle-reference-versatile-README.md` — annotated walkthrough of versatile
@@ -126,8 +142,10 @@ you need more than Tier 1 gave you on a specific feature:
   `bundle-interfaces-README.md`, `bundle-lifecycle-README.md`, `bundle-ops-README.md`,
   `bundle-firewall-README.md`, `bundle-platform-properties-README.md` — specialized; read by name when the topic matches.
 
-**Descriptor / service configuration** (`app/ai-app/docs/service/configuration/`) — read the
-matching file **only when editing that specific descriptor**:
+**Descriptor / service configuration** — read the matching file **only when editing that
+specific descriptor**. Apply the same header-first gate: fetch, read the title and first
+section, confirm it covers your specific field, then read in full. Base:
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/<filename>`:
 
 - `service-config-README.md` — overview
 - `assembly-descriptor-README.md` — when editing `assembly.yaml`
@@ -136,7 +154,9 @@ matching file **only when editing that specific descriptor**:
 - `gateway-descriptor-README.md` — when editing `gateway.yaml`
 - `secrets-descriptor-README.md` — when editing `secrets.yaml`
 
-**Specialized example bundles** (`app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/`) — read the one that matches the specialized case:
+**Specialized example bundles** — list via the GitHub contents API, then fetch
+individual files. Base:
+`https://api.github.com/repos/kdcube/kdcube-ai-app/contents/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/<dir>`:
 
 - `kdcube.copilot@2026-04-03-19-05` — knowledge-space / extended resolver
 - `with-isoruntime@2026-02-16-14-00` — isolated exec
@@ -144,15 +164,17 @@ matching file **only when editing that specific descriptor**:
 
 **Suite tests** (read when writing or debugging bundle tests):
 
-- `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
-- `app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_bundle_state.py`
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tests/bundle/test_run_bundle_suite.py`
 
-### Local fast path (opt-in)
+### Local fast path (opt-in — do not ask for it)
 
-If `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set, read the same files from
-`$CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT/<path-above>` with the `Read` tool instead of
-`WebFetch`. This is purely an optimization — do not ask the user for a local path if the env
-var is not already set, just use GitHub.
+If — **and only if** — `CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is already set in the
+environment, read the same paths from
+`$CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT/<repo-relative-path>` with `Read` instead of
+`WebFetch`. Derive the repo-relative path by stripping the
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/` prefix from any URL above.
+If the env var is not set, do not suggest setting it — just use `WebFetch`.
 
 ## Primary example
 

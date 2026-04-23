@@ -29,21 +29,22 @@ path** `/bundles/<relative-from-host_bundles_path>`. The documented fix
 bundles root") is to widen `host_bundles_path` in `assembly.yaml` and rebuild with
 `--build --upstream`. Read that section before editing anything.
 
-When the user asks what a descriptor field means, or needs to edit one, fetch the matching doc
-with `WebFetch` first. Paths are under
-`https://github.com/kdcube/kdcube-ai-app/blob/main/`. If
-`CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is set, read the same path locally instead — that is
-an opt-in fast path, not the default.
+**The plugin ships without docs — they are NOT on disk.** Fetch from GitHub with `WebFetch`
+using the complete URLs below. Do not try to `Read` these paths locally unless
+`CLAUDE_PLUGIN_OPTION_KDCUBE_REPO_ROOT` is already set — in which case strip the raw.github
+prefix and read the same repo-relative path locally. Do not ask the user to point you at a
+local repo.
 
-- `app/ai-app/docs/service/configuration/service-config-README.md` — overview of the workdir
-  layout and how descriptors interact.
-- `app/ai-app/docs/service/configuration/assembly-descriptor-README.md` — `assembly.yaml`.
-- `app/ai-app/docs/service/configuration/bundles-descriptor-README.md` — `bundles.yaml`
-  (bundle registry, `path`, `module`, `config`, `role_models`).
-- `app/ai-app/docs/service/configuration/bundles-secrets-descriptor-README.md` —
-  `bundles.secrets.yaml`.
-- `app/ai-app/docs/service/configuration/gateway-descriptor-README.md` — `gateway.yaml`.
-- `app/ai-app/docs/service/configuration/secrets-descriptor-README.md` — `secrets.yaml`.
+**Header-first gate:** Before reading any descriptor doc in full, fetch it and read only
+the title and first section. Confirm it covers the specific field or problem you need.
+Then read the full content.
+
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/service-config-README.md` — overview of the workdir layout and how descriptors interact.
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/assembly-descriptor-README.md` — `assembly.yaml`.
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/bundles-descriptor-README.md` — `bundles.yaml` (bundle registry, `path`, `module`, `config`, `role_models`).
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/bundles-secrets-descriptor-README.md` — `bundles.secrets.yaml`.
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/gateway-descriptor-README.md` — `gateway.yaml`.
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/secrets-descriptor-README.md` — `secrets.yaml`.
 
 For the operational flow (where to put descriptors, when to reload, props/secrets changes),
-read `app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`.
+fetch `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`.
