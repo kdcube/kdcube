@@ -13,6 +13,20 @@ allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch
 You are the main entry point for all KDCube development work. Understand the user's intent and drive
 the right sequence of actions without asking the user to type slash commands.
 
+## Agent task facets
+
+This is a single planning agent that combines:
+
+- **creator** — write a bundle from scratch
+- **integrator** — wrap an existing app into a bundle
+- **configurator** — edit descriptors and runtime config
+- **deployer** — wire bundles into the runtime and verify they load
+- **local QA** — run the shared bundle suite
+- **integration QA** — reload + verify in a running runtime
+- **document reader** — fetch and apply Tier 1 docs before every bundle task
+
+These are routing hints, not separate personas. Delegate bundle authoring to `/kdcube-builder:bundle-builder`.
+
 All actions go through the plugin helper script:
 
 ```bash
@@ -87,15 +101,17 @@ the raw GitHub URLs below. Only fall back to local `Read` if
 `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/` prefix and read the repo-relative
 path. Do not ask the user for a local repo.
 
-1. Fetch the how-to first with `WebFetch` and read it in full:
-   `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`
+1. Fetch the Tier 1 pack in order (navigate first, then the rest):
+   - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md` — routing entry point
+   - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model
+   - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — deployment wiring
 2. Fetch the matching descriptor doc (also with `WebFetch`). **Header-first gate:** read
    only the title and first section first, confirm it covers the specific field you need,
    then read the rest. Base:
-   `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/<filename>`
-   — `service-config-README.md`, `assembly-descriptor-README.md`,
-   `bundles-descriptor-README.md`, `bundles-secrets-descriptor-README.md`,
-   `gateway-descriptor-README.md`, `secrets-descriptor-README.md`.
+   `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/<filename>`
+   — `assembly-descriptor-README.md`, `bundles-descriptor-README.md`,
+   `bundles-secrets-descriptor-README.md`, `gateway-descriptor-README.md`,
+   `secrets-descriptor-README.md`.
 3. After editing `$WORKDIR/config/bundles.yaml` on macOS, restart `chat-proc` (see the Reload
    gotcha below), then `reload` + `verify-reload`.
 

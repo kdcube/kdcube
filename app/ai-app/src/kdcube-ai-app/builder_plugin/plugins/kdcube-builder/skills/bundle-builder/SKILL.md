@@ -7,6 +7,20 @@ description: Build or repair KDCube bundles. Use the KDCube bundle docs, the ver
 Use this skill when the task is bundle authoring: writing a bundle from scratch, wrapping an
 existing application into a bundle, or adding features to an existing bundle.
 
+## Agent task facets
+
+This skill is one facet of a single planning agent. The agent combines:
+
+- **creator** — write a bundle from scratch
+- **integrator** — wrap an existing app into a bundle
+- **configurator** — edit descriptors (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`)
+- **deployer** — wire bundles into the runtime and verify they load
+- **local QA** — run the shared bundle suite
+- **integration QA** — reload + verify in a running runtime
+- **document reader** — fetch and apply Tier 1 docs before every task
+
+These are routing hints, not separate personas.
+
 ## Authoring rule #1 — lean on the docs (HARD GATE — NO EXCEPTIONS)
 
 **Never write bundle code, edit a descriptor, or touch runtime config from memory.**
@@ -34,13 +48,15 @@ appears to succeed, and nothing works. Reading the docs is cheaper than debuggin
 Read **Tier 1 only** by default. Pull Tier 2 on demand when Tier 1 does not answer the
 specific thing you are about to do.
 
-1. **Tier 1 — always read, every bundle task:**
-   - `how-to-write-bundle-README.md` — authoring
+1. **Tier 1 — always read, every bundle task (read in this order):**
+   - `how-to-navigate-kdcube-docs-README.md` — routing entry point, read **first**; tells you where everything lives
+   - `how-to-test-bundle-README.md` — testing / QA expectations
+   - `how-to-write-bundle-README.md` — authoring / implementation design
+   - `bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model (props, secrets, runtime config)
    - `how-to-configure-and-run-bundle-README.md` — **REQUIRED any time the bundle
      lives outside the current `host_bundles_path`, or any time you touch `bundles.yaml`
      or `assembly.yaml`.** Only source of truth for the host-path / container-path /
      mount-root split.
-   - `how-to-test-bundle-README.md` — testing
    - versatile reference bundle — read end-to-end (structure + `entrypoint.py`)
 2. **Tier 2 — only when Tier 1 is not enough.** See the Tier 2 section below for the
    trigger list. Do not preload Tier 2 "just in case" — it is large and mostly irrelevant
@@ -99,11 +115,13 @@ All URLs below are complete — pass them to `WebFetch` verbatim. Base (for refe
 
 ### Tier 1 — always read (operational canon)
 
-Fetch each with `WebFetch`:
+Fetch each with `WebFetch` **in this order** (navigate first, then the rest):
 
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md` — routing entry point; read first
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing / QA expectations
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-write-bundle-README.md` — authoring / implementation design
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model (props, secrets, runtime config)
 - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
-- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-test-bundle-README.md` — testing
 
 Reference bundle `versatile@2026-03-31-13-36` — read end-to-end. Directories are not
 WebFetch-able; fetch these files individually:
@@ -145,9 +163,8 @@ Pull these when the task specifically hits the topic. Do not preload. All under
 **Descriptor / service configuration** — read the matching file **only when editing that
 specific descriptor**. Apply the same header-first gate: fetch, read the title and first
 section, confirm it covers your specific field, then read in full. Base:
-`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/configuration/<filename>`:
+`https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/<filename>`:
 
-- `service-config-README.md` — overview
 - `assembly-descriptor-README.md` — when editing `assembly.yaml`
 - `bundles-descriptor-README.md` — when editing `bundles.yaml`
 - `bundles-secrets-descriptor-README.md` — when editing `bundles.secrets.yaml`

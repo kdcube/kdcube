@@ -67,6 +67,17 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
 - Noted versatile is NOT a reference for `@cron` / `@venv` → Tier 2 (`bundle-scheduled-jobs`, `bundle-venv`) + how-to §4.1 snippets
 - Dropped macOS docker-restart gotcha from `SKILL.md`
 
+**2026-04-24** — agent-facets section + Tier 1 doc reorder + URL path fix
+- Added **Agent task facets** section to both `bundle-builder/SKILL.md` and `kdcube-dev/SKILL.md`:
+  lists creator/integrator/configurator/deployer/local-QA/integration-QA/document-reader as
+  routing hints (not separate personas); `kdcube-dev` delegates bundle authoring to `bundle-builder`
+- Added `how-to-navigate-kdcube-docs-README.md` as first Tier 1 doc (routing entry point, read
+  before all others) in both skills
+- Added `bundle-runtime-configuration-and-secrets-README.md` to Tier 1 in both skills
+- Reordered Tier 1 fetch sequence: navigate → test → write → config (was: write → configure → test)
+- Fixed URL path for descriptor docs: `docs/service/configuration/` → `docs/configuration/`
+- Removed `service-config-README.md` from descriptor doc list (no longer exists at that path)
+
 **2026-04-23** — codex_plugin + header-first gate
 - Built `codex_plugin/` — Codex CLI port of the builder plugin. Shares `kdcube_local.py`
   and templates from `builder_plugin/` (copied by `install.sh`); adapted to Codex's
