@@ -30,8 +30,15 @@ need a cloud control plane to start.
   widgets, MCP, cron, streaming, storage, and runtime control in one unit
 - a live control plane for enabling, disabling, gating, and hot-reapplying
   bundles and their APIs, widgets, MCP surfaces, and jobs
+- Bundle Admin operations instead of deployment ceremony: add or update the
+  app entry, press save, and apply changes with zero downtime
+- scalable by construction: start on one machine, then keep the same bundle
+  and environment model across machines with shared Redis, Postgres, blob
+  storage, and Git-backed sources
 - RBAC and execution boundaries around the application and its individual
   surfaces
+- a bundle-level outbound firewall for controlling which events are allowed to
+  leave the runtime toward the client
 - an execution model with ReAct Agent, Claude Code, custom Python flows,
   `@venv(...)`, and isolated exec
 - a real trust boundary: trusted tool calls run through bundle tools; untrusted
