@@ -5,6 +5,7 @@ import yaml
 from rich.console import Console
 
 from kdcube_cli.cli import (
+    _bootstrap_repo_for_defaults,
     _build_paths_for_repo,
     _canonical_descriptor_dir_from_initialized_workdir,
     _collect_runtime_info,
@@ -2102,3 +2103,90 @@ def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monk
 
     env_main = (config_dir / ".env").read_text()
     assert f"HOST_BUNDLES_PATH={(tmp_path / 'src').resolve()}" in env_main
+
+
+# ---------------------------------------------------------------------------
+# _bootstrap_repo_for_defaults
+# ---------------------------------------------------------------------------
+
+def _make_fake_repo_with_deployment(base: Path) -> Path:
+    """Create a minimal fake git repo that contains app/ai-app/deployment/assembly.yaml."""
+    repo = base / "repo"
+    (repo / ".git").mkdir(parents=True)
+    deployment = repo / "app" / "ai-app" / "deployment"
+    deployment.mkdir(parents=True)
+    (deployment / "assembly.yaml").write_text("context:\n  tenant: demo-tenant\n  project: demo-project\n")
+    return repo
+
+
+def test_bootstrap_repo_for_defaults_uses_path_provided_repo(tmp_path: Path):
+    repo = _make_fake_repo_with_deployment(tmp_path)
+    console = Console(quiet=True)
+
+    resolved_repo, descriptors_loc = _bootstrap_repo_for_defaults(
+        console,
+        repo="https://example.com/repo.git",
+        repo_path=repo,
+        path_provided=True,
+    )
+
+    assert resolved_repo == repo
+    assert descriptors_loc == repo / "app" / "ai-app" / "deployment"
+    assert (descriptors_loc / "assembly.yaml").exists()
+
+
+def test_bootstrap_repo_for_defaults_path_provided_requires_git_repo(tmp_path: Path):
+    not_a_repo = tmp_path / "not-a-repo"
+    not_a_repo.mkdir()
+    console = Console(quiet=True)
+
+    try:
+        _bootstrap_repo_for_defaults(
+            console,
+            repo="https://example.com/repo.git",
+            repo_path=not_a_repo,
+            path_provided=True,
+        )
+        raise AssertionError("Expected SystemExit for non-git path")
+    except SystemExit as exc:
+        assert "not a git repo" in str(exc).lower()
+
+
+def test_bootstrap_repo_for_defaults_clones_when_path_not_provided(monkeypatch, tmp_path: Path):
+    repo = _make_fake_repo_with_deployment(tmp_path)
+    cloned: list[str] = []
+
+    def fake_ensure_repo(console, repo_url, target):
+        cloned.append(repo_url)
+
+    monkeypatch.setattr("kdcube_cli.cli.ensure_repo", fake_ensure_repo)
+    console = Console(quiet=True)
+
+    resolved_repo, descriptors_loc = _bootstrap_repo_for_defaults(
+        console,
+        repo="https://example.com/repo.git",
+        repo_path=repo,
+        path_provided=False,
+    )
+
+    assert cloned == ["https://example.com/repo.git"]
+    assert resolved_repo == repo
+    assert descriptors_loc == repo / "app" / "ai-app" / "deployment"
+
+
+def test_bootstrap_repo_for_defaults_raises_when_deployment_missing(tmp_path: Path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    # No app/ai-app/deployment directory created
+    console = Console(quiet=True)
+
+    try:
+        _bootstrap_repo_for_defaults(
+            console,
+            repo="https://example.com/repo.git",
+            repo_path=repo,
+            path_provided=True,
+        )
+        raise AssertionError("Expected SystemExit for missing deployment dir")
+    except SystemExit as exc:
+        assert "deployment descriptors" in str(exc).lower()

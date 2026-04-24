@@ -1194,6 +1194,35 @@ def run_installer(
     )
 
 
+def _bootstrap_repo_for_defaults(
+    console: Console,
+    *,
+    repo: str,
+    repo_path: Path,
+    path_provided: bool,
+) -> tuple[Path, Path]:
+    """Ensure the platform repo exists and return (repo_path, descriptors_location).
+
+    Used when --descriptors-location is omitted but a source selector (--latest,
+    --upstream, --release, --build) implies non-interactive mode.  The repo's
+    deployment/ directory is used as the implicit descriptor source so that a
+    plain ``kdcube --build --upstream`` works without pre-prepared descriptors.
+    """
+    if path_provided:
+        if not _is_git_repo(repo_path):
+            raise SystemExit(f"Provided --path is not a git repo: {repo_path}")
+    else:
+        ensure_repo(console, repo, repo_path)
+
+    descriptors_location = repo_path / "app" / "ai-app" / "deployment"
+    if not descriptors_location.is_dir() or not (descriptors_location / "assembly.yaml").exists():
+        raise SystemExit(
+            f"Could not find deployment descriptors under {descriptors_location}. "
+            "Ensure the platform repo contains app/ai-app/deployment/assembly.yaml."
+        )
+    return repo_path, descriptors_location
+
+
 def main() -> None:
     console = Console()
     print_cli_banner()
@@ -1402,11 +1431,6 @@ def main() -> None:
         selected_version_flags = int(bool(args.latest)) + int(bool(args.upstream)) + int(bool(str(args.release or "").strip()))
         if selected_version_flags > 1:
             raise SystemExit("Choose only one of --latest, --upstream, or --release.")
-        if args.upstream and effective_descriptors_location is None:
-            raise SystemExit(
-                "--upstream requires either --descriptors-location or an initialized workdir "
-                "with the canonical descriptor set under config/."
-            )
         if args.upstream and not args.build:
             raise SystemExit("--upstream requires --build because arbitrary upstream commits do not map to release images.")
         if args.proxy_ssl and args.no_proxy_ssl:
@@ -1453,6 +1477,29 @@ def main() -> None:
                 workdir=resolved_workdir,
             )
             return
+        # No-descriptors fast path: when a source selector is given without
+        # --descriptors-location (and no initialized workdir was found), bootstrap
+        # the platform repo and use its deployment/ directory as the descriptor
+        # source.  This lets operators run e.g. ``kdcube --build --upstream``
+        # without pre-preparing a descriptor set.
+        if (
+            effective_descriptors_location is None
+            and not args.secrets_set
+            and not args.secrets_prompt
+            and (args.latest or args.upstream or str(args.release or "").strip() or args.build)
+        ):
+            repo_path, effective_descriptors_location = _bootstrap_repo_for_defaults(
+                console,
+                repo=args.repo,
+                repo_path=repo_path,
+                path_provided=path_provided,
+            )
+            path_provided = True
+            console.print(
+                f"[dim]No --descriptors-location provided. "
+                f"Using repo defaults from:[/dim] {effective_descriptors_location}"
+            )
+
         if (
             not args.secrets_set
             and not args.secrets_prompt
