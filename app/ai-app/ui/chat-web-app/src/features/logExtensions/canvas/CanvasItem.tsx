@@ -8,7 +8,7 @@ import {
 } from "../../../components/chat/ChatInterface/markdownRenderUtils.tsx";
 import {closeUpMarkdown} from "../../../components/WordStreamingEffects.tsx";
 import MermaidDiagram from "../../../components/MermaidDiagram.tsx";
-import {appendCodeMarkdown, cleanupCode} from "../../canvas/utils.ts";
+import {appendCodeMarkdown, cleanupCode, getHighlightLanguage} from "../../canvas/utils.ts";
 import {CanvasArtifact, CanvasArtifactType} from "./types.ts";
 import {ArtifactComponentProps} from "../../extensions/canvasExtensions.ts";
 
@@ -18,7 +18,7 @@ const getCanvasContentType = (format: string | null | undefined) => {
     }
     format = format.toLowerCase();
 
-    if (["markdown", "mermaid", "csv"].includes(format)) return format;
+    if (["markdown", "mermaid", "csv", "code"].includes(format)) return format;
     if (hljs.listLanguages().includes(format)) return "code";
     if (format === "html") return "srcdoc";
     return null
@@ -66,7 +66,8 @@ const CanvasItem = ({item, contentRef}: ArtifactComponentProps) => {
                 </div>
             case "mermaid":
                 return <MermaidDiagram chart={canvasItem.content.content as string}/>
-            case "code":
+            case "code": {
+                const lang = canvasItem.content.contentType === "code" ? getHighlightLanguage(canvasItem.content.name) : canvasItem.content.contentType
                 return <div className={"h-full w-full"} ref={contentRef}>
                     <ReactMarkdown
                         remarkPlugins={remarkPlugins}
@@ -74,9 +75,10 @@ const CanvasItem = ({item, contentRef}: ArtifactComponentProps) => {
                         components={markdownComponentsTight}
                         skipHtml={false}
                     >
-                        {appendCodeMarkdown(cleanupCode(canvasItem.content.content as string), canvasItem.content.contentType)}
+                        {appendCodeMarkdown(cleanupCode(canvasItem.content.content as string), lang)}
                     </ReactMarkdown>
                 </div>
+            }
             case "srcdoc":
                 return <div className={"h-full w-full"} ref={contentRef}>
                     <iframe
