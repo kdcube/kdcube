@@ -9,6 +9,7 @@ from kdcube_cli.cli import (
     _build_paths_for_repo,
     _canonical_descriptor_dir_from_initialized_workdir,
     _check_no_other_local_stack_running,
+    _check_targeted_command_has_workdir,
     _collect_runtime_info,
     _compose_running_services,
     _descriptor_fast_path_reasons,
@@ -2385,3 +2386,48 @@ def test_save_and_load_cli_defaults_roundtrip(monkeypatch, tmp_path: Path):
     loaded = _load_cli_defaults()
 
     assert loaded == original
+
+
+# ---------------------------------------------------------------------------
+# Block 4: Ambiguity refusal — _check_targeted_command_has_workdir
+# ---------------------------------------------------------------------------
+
+
+def test_targeted_command_raises_when_no_workdir_and_no_defaults():
+    import pytest
+    with pytest.raises(SystemExit) as exc_info:
+        _check_targeted_command_has_workdir(
+            is_targeted_command=True,
+            workdir_arg=False,
+            cli_defaults={},
+        )
+    msg = str(exc_info.value)
+    assert "--set-defaults" in msg
+    assert "--default-workdir" in msg
+
+
+def test_targeted_command_passes_when_workdir_arg_provided():
+    # Explicit --workdir resolves ambiguity — should not raise
+    _check_targeted_command_has_workdir(
+        is_targeted_command=True,
+        workdir_arg=True,
+        cli_defaults={},
+    )
+
+
+def test_targeted_command_passes_when_default_workdir_configured():
+    # default_workdir in defaults resolves ambiguity — should not raise
+    _check_targeted_command_has_workdir(
+        is_targeted_command=True,
+        workdir_arg=False,
+        cli_defaults={"default_workdir": "/home/user/.kdcube/kdcube-runtime/tenant__project"},
+    )
+
+
+def test_targeted_command_passes_for_non_targeted_command():
+    # Install commands do not require a pre-existing workdir
+    _check_targeted_command_has_workdir(
+        is_targeted_command=False,
+        workdir_arg=False,
+        cli_defaults={},
+    )

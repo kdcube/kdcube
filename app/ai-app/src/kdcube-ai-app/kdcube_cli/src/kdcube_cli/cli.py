@@ -1207,6 +1207,27 @@ def _save_cli_defaults(data: dict) -> None:
     DEFAULT_DEFAULTS_FILE.write_text(json.dumps(data, indent=2))
 
 
+def _check_targeted_command_has_workdir(
+    *,
+    is_targeted_command: bool,
+    workdir_arg: bool,
+    cli_defaults: dict,
+) -> None:
+    """Raise SystemExit when a targeted command has no resolvable workdir.
+
+    Targeted commands (--stop, --info, --bundle-reload, --export-live-bundles)
+    require an explicit --workdir or a configured default_workdir.  Without
+    either, the CLI would silently fall back to DEFAULT_WORKDIR and either
+    pick the wrong deployment or emit a confusing "multiple candidates" error.
+    """
+    if is_targeted_command and not workdir_arg and "default_workdir" not in cli_defaults:
+        raise SystemExit(
+            "No target workdir specified.\n"
+            "Pass --workdir explicitly or configure a default:\n"
+            "  kdcube --set-defaults --default-workdir <path>"
+        )
+
+
 def _check_no_other_local_stack_running(
     console: Console,
     *,
@@ -1499,6 +1520,16 @@ def main() -> None:
         if args.clean:
             clean_docker_images(console)
             return
+        _check_targeted_command_has_workdir(
+            is_targeted_command=bool(
+                args.stop
+                or args.info
+                or str(args.bundle_reload or "").strip()
+                or args.export_live_bundles
+            ),
+            workdir_arg=workdir_arg,
+            cli_defaults=cli_defaults,
+        )
         if args.export_live_bundles:
             workdir = _resolve_cli_workdir(workdir)
             out_dir = Path(os.path.expanduser(args.out_dir or os.getcwd())).expanduser().resolve()
