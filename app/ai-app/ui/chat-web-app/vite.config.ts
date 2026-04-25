@@ -5,7 +5,6 @@ import basicSsl from '@vitejs/plugin-basic-ssl'
 
 export default defineConfig(({mode}) => {
 
-    // @ts-expect-error because reasons
     const env = loadEnv(mode, process.cwd(), '')
 
     const apiBase = env.VITE_APP_API_BASE ?? 'http://localhost:8010/'
@@ -22,7 +21,7 @@ export default defineConfig(({mode}) => {
         },
         envPrefix: ["VITE_", "CHAT_WEB_APP_"],
         server: {
-            https: env.VITE_HTTPS === 'true',
+            https: env.VITE_HTTPS === 'true' ? {} : undefined,
 
             proxy: {
                 '^/api/integrations/.*': {

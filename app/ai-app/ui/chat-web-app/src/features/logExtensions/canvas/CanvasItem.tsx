@@ -31,7 +31,7 @@ const CanvasItem = ({item, contentRef}: ArtifactComponentProps) => {
 
     const canvasItem = item as CanvasArtifact;
 
-    const [showItemSource, setShowItemSource] = useState<boolean>(false)
+    const [showItemSource, _setShowItemSource] = useState<boolean>(false)
 
     const contentType = useMemo(() => {
         return canvasItem ? getCanvasContentType(canvasItem.content.contentType) : null
@@ -40,10 +40,6 @@ const CanvasItem = ({item, contentRef}: ArtifactComponentProps) => {
     const itemCompleted = useMemo(() => {
         return !!canvasItem?.complete
     }, [canvasItem])
-
-    const showSourceSwitch = useMemo(() => {
-        return itemCompleted && contentType && ["srcdoc", "mermaid", "csv"].includes(contentType)
-    }, [itemCompleted, contentType])
 
     const itemSource = useMemo(() => {
         if (!canvasItem) return null;
