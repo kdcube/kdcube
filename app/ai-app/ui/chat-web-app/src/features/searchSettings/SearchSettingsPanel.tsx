@@ -3,12 +3,14 @@ import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {
     ALL_FORMATS,
     FORMAT_LABELS,
+    AdvancedRagSettings,
     CodeCoreSettings,
     HybridSearchSettings,
     VectorSearchSettings,
     selectHybridSettings,
     selectVectorSettings,
     selectCodeCoreSettings,
+    selectAdvancedRagSettings,
     setHybridEnabled,
     updateHybrid,
     setVectorEnabled,
@@ -17,6 +19,7 @@ import {
     updateCodeCore,
     toggleHybridFormat,
     toggleVectorFormat,
+    updateAdvancedRag,
 } from "./searchSettingsSlice.ts";
 import {ReactNode, useCallback, useMemo, useRef} from "react";
 
@@ -389,6 +392,50 @@ const CodeCoreSection = () => {
     );
 };
 
+// Advanced RAG knobs that aren't covered by the Hybrid section.
+// The pipeline reuses hybrid.{top_k_vector, use_reranking, min_score_threshold,
+// context_window, distance_type} when they're set; this section only exposes
+// the fields that don't already exist there.
+const AdvancedRagSection = () => {
+    const dispatch = useAppDispatch();
+    const settings = useAppSelector(selectAdvancedRagSettings);
+    const hybrid = useAppSelector(selectHybridSettings);
+
+    const onChange = useCallback(
+        (patch: Partial<AdvancedRagSettings>) => dispatch(updateAdvancedRag(patch)),
+        [dispatch],
+    );
+    // The advanced-RAG tool is gated by hybrid.enabled (it runs over the KB)
+    // so we expose the toggle here as a read-only mirror.
+    const enabled = hybrid.enabled;
+
+    return (
+        <Section title="Advanced RAG (multi-step)" enabled={enabled} onToggle={() => { /* mirror of hybrid */ }}>
+            <span className="text-[10px] text-gray-400">
+                Multi-step KB retrieval — query rewrite, entity extraction, dual-pass hybrid, compound rerank.
+                Reuses Hybrid Search settings (top_k, rerank, min_score, context window, distance) when enabled.
+            </span>
+            <SubHeader text="Pipeline steps"/>
+            <CheckboxField label="Rewrite follow-up questions"
+                           checked={settings.enable_query_rewrite}
+                           onChange={v => onChange({enable_query_rewrite: v})}
+                           hint="Resolve pronouns/ellipsis using conversation history before searching."/>
+            <CheckboxField label="Entity-driven second pass"
+                           checked={settings.enable_entity_pass}
+                           onChange={v => onChange({enable_entity_pass: v})}
+                           hint="Extract named entities/IDs from the question and run a second hybrid pass on them."/>
+            <SliderField label="Entity pass top K"
+                         value={settings.entity_top_k} min={1} max={20} step={1}
+                         onChange={v => onChange({entity_top_k: v})}
+                         hint="Chunks fetched in the entity pass. 4-8 is typical."/>
+            <SliderField label="Min priority slots"
+                         value={settings.min_priority_slots} min={0} max={5} step={1}
+                         onChange={v => onChange({min_priority_slots: v})}
+                         hint="Guarantee N rows in the top window contain a priority/entity match (0 = no guarantee)."/>
+        </Section>
+    );
+};
+
 /* ------------------------------------------------------------------ */
 /*  Panel                                                              */
 /* ------------------------------------------------------------------ */
@@ -400,6 +447,7 @@ const SearchSettingsPanel = ({visible, className}: WidgetPanelProps) => {
                 <div className="flex flex-col w-full h-full overflow-y-auto p-3">
                     <h2 className="text-lg font-semibold mb-3">Search Settings</h2>
                     <HybridSection/>
+                    <AdvancedRagSection/>
                     <VectorSection/>
                     <CodeCoreSection/>
                 </div>

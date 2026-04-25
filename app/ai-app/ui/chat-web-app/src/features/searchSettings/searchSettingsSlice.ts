@@ -39,10 +39,21 @@ export interface CodeCoreSettings {
     limit: number;
 }
 
+// Advanced RAG knobs not already covered by hybrid.* (the pipeline reuses
+// hybrid.top_k_vector / use_reranking / min_score_threshold / context_window
+// when present).
+export interface AdvancedRagSettings {
+    enable_query_rewrite: boolean;
+    enable_entity_pass: boolean;
+    entity_top_k: number;
+    min_priority_slots: number;
+}
+
 export interface SearchSettingsState {
     hybrid: HybridSearchSettings;
     vector: VectorSearchSettings;
     codeCore: CodeCoreSettings;
+    advancedRag: AdvancedRagSettings;
 }
 
 export const ALL_FORMATS = [
@@ -113,6 +124,12 @@ const initialState: SearchSettingsState = {
         search_type: "hybrid",
         limit: 10,
     },
+    advancedRag: {
+        enable_query_rewrite: true,
+        enable_entity_pass: true,
+        entity_top_k: 6,
+        min_priority_slots: 0,
+    },
 };
 
 const searchSettingsSlice = createSlice({
@@ -149,6 +166,9 @@ const searchSettingsSlice = createSlice({
             if (idx >= 0) state.vector.formats.splice(idx, 1);
             else state.vector.formats.push(fmt);
         },
+        updateAdvancedRag(state, action: PayloadAction<Partial<AdvancedRagSettings>>) {
+            Object.assign(state.advancedRag, action.payload);
+        },
     },
 });
 
@@ -161,11 +181,13 @@ export const {
     updateCodeCore,
     toggleHybridFormat,
     toggleVectorFormat,
+    updateAdvancedRag,
 } = searchSettingsSlice.actions;
 
 export const selectSearchSettings = (state: RootState) => state.searchSettings;
 export const selectHybridSettings = (state: RootState) => state.searchSettings.hybrid;
 export const selectVectorSettings = (state: RootState) => state.searchSettings.vector;
 export const selectCodeCoreSettings = (state: RootState) => state.searchSettings.codeCore;
+export const selectAdvancedRagSettings = (state: RootState) => state.searchSettings.advancedRag;
 
 export default searchSettingsSlice.reducer;

@@ -205,6 +205,22 @@ class ReactCodeWorkflow(BaseEntrypoint):
                 except Exception:
                     pass
 
+                # Install advanced-RAG runtime on the SDK tool's shared state.
+                # Tool reads RuntimeCtx (search settings, conv ids) at call time.
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.tools._advanced_rag_internal.runtime import AdvancedRAGRuntime
+                    from kdcube_ai_app.apps.chat.sdk.tools.kb_advanced_rag_tools import set_runtime as _set_adv_rag_runtime
+                    adv_runtime = AdvancedRAGRuntime(
+                        kb=kb,
+                        model_service=self.models_service,
+                        conv_store=store,
+                        get_runtime_ctx=lambda: orch.runtime_ctx,
+                        knowledge_enabled_check=lambda: bool(enable_knowledge_search),
+                    )
+                    _set_adv_rag_runtime(adv_runtime)
+                except Exception:
+                    self.logger.log(f"[react.code] advanced RAG runtime install failed: {traceback.format_exc()}", "WARNING")
+
                 res = await orch.process({
                     "request_id": state["request_id"],
                     "tenant": state["tenant"],
@@ -230,6 +246,12 @@ class ReactCodeWorkflow(BaseEntrypoint):
                         await code_graph.close()
                     except Exception:
                         pass
+                # Clear advanced-RAG runtime so the next turn starts clean
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.tools.kb_advanced_rag_tools import set_runtime as _set_adv_rag_runtime
+                    _set_adv_rag_runtime(None)
+                except Exception:
+                    pass
 
             return state
 

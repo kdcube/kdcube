@@ -89,6 +89,144 @@ class KBClient:
     async def close(self):
         if self._pool and not self.shared_pool: await self._pool.close()
 
+    async def expand_neighbors(
+            self,
+            rows: List[Dict[str, Any]],
+            window: int = 1,
+            id_field: str = "id",
+            version_field: str = "version",
+            resource_field: str = "resource_id",
+    ) -> List[Dict[str, Any]]:
+        """
+        For each input row, fetch ±`window` adjacent segments from the same
+        (resource_id, version) and return the merged, deduped set.
+
+        Adjacency uses `extensions->>'segment_order'` (int) when present;
+        otherwise falls back to `(created_at, id)` — best-effort until the
+        ingestion pipeline populates segment_order.
+
+        Each returned row carries:
+          - is_seed: bool              True for original hits
+          - neighbor_offset: int       0 for seed, ±k for neighbors
+          - hit_id: str                id of the seed this neighbor expanded from
+        Seed rows preserve all original input fields. Neighbor rows carry the
+        DB projection (id, version, resource_id, rn, provider, content, title,
+        summary, entities, tags, word_count, sentence_count, processed_at,
+        created_at, event_ts, lineage, extensions).
+        """
+        if window <= 0 or not rows:
+            for r in rows:
+                r.setdefault("is_seed", True)
+                r.setdefault("neighbor_offset", 0)
+                r.setdefault("hit_id", r.get(id_field))
+            return list(rows)
+
+        # build hit triples; skip rows missing required keys
+        triples: list[tuple[str, int, str]] = []
+        seen_seed: dict[tuple[str, int, str], dict] = {}
+        for r in rows:
+            rid = r.get(resource_field)
+            ver = r.get(version_field)
+            sid = r.get(id_field)
+            if rid is None or ver is None or sid is None:
+                continue
+            key = (str(rid), int(ver), str(sid))
+            if key not in seen_seed:
+                triples.append(key)
+                seen_seed[key] = r
+
+        if not triples:
+            return list(rows)
+
+        resource_ids = [t[0] for t in triples]
+        versions     = [t[1] for t in triples]
+        hit_ids      = [t[2] for t in triples]
+
+        sql = f"""
+        WITH input_hits(resource_id, version, hit_id) AS (
+            SELECT * FROM unnest($1::text[], $2::int[], $3::text[])
+        ),
+        target_resources AS (
+            SELECT DISTINCT resource_id, version FROM input_hits
+        ),
+        ordered AS (
+            SELECT
+                rs.id, rs.version, rs.resource_id, rs.rn, rs.provider,
+                rs.content, rs.title, rs.summary, rs.entities, rs.tags,
+                rs.word_count, rs.sentence_count, rs.processed_at,
+                rs.created_at, rs.event_ts, rs.lineage, rs.extensions,
+                ROW_NUMBER() OVER (
+                    PARTITION BY rs.resource_id, rs.version
+                    ORDER BY
+                        COALESCE((rs.extensions->>'segment_order')::int, 2147483647),
+                        rs.created_at,
+                        rs.id
+                ) AS pos
+            FROM {self.schema}.retrieval_segment rs
+            JOIN target_resources tr
+              ON tr.resource_id = rs.resource_id
+             AND tr.version     = rs.version
+        ),
+        hit_pos AS (
+            SELECT o.resource_id, o.version, o.id AS hit_id, o.pos AS hit_pos
+            FROM ordered o
+            JOIN input_hits h
+              ON o.resource_id = h.resource_id
+             AND o.version     = h.version
+             AND o.id          = h.hit_id
+        )
+        SELECT
+            o.id, o.version, o.resource_id, o.rn, o.provider,
+            o.content, o.title, o.summary, o.entities, o.tags,
+            o.word_count, o.sentence_count, o.processed_at,
+            o.created_at, o.event_ts, o.lineage, o.extensions,
+            hp.hit_id,
+            (o.pos - hp.hit_pos)::int AS neighbor_offset
+        FROM ordered o
+        JOIN hit_pos hp
+          ON o.resource_id = hp.resource_id
+         AND o.version     = hp.version
+        WHERE abs(o.pos - hp.hit_pos) <= $4::int
+        ORDER BY o.resource_id, o.version, o.pos
+        """
+
+        async with self._pool.acquire() as con:
+            db_rows = await con.fetch(sql, resource_ids, versions, hit_ids, int(window))
+
+        # dedupe: same segment id may appear under multiple hits -> keep smallest |offset|
+        best: dict[tuple[str, int, str], dict] = {}
+        for r in db_rows:
+            d = dict(r)
+            key = (str(d["resource_id"]), int(d["version"]), str(d["id"]))
+            offset = int(d["neighbor_offset"])
+            d["is_seed"] = (offset == 0 and (key in seen_seed))
+            existing = best.get(key)
+            if existing is None or abs(offset) < abs(int(existing["neighbor_offset"])):
+                best[key] = d
+
+        # promote: when a row is the seed itself, preserve original input fields
+        # (the input rows often carry richer fields like rerank_score, semantic_score, etc.)
+        merged: list[dict] = []
+        for d in best.values():
+            key = (str(d["resource_id"]), int(d["version"]), str(d["id"]))
+            if d["is_seed"] and key in seen_seed:
+                seed = dict(seen_seed[key])
+                seed.update({
+                    "is_seed": True,
+                    "neighbor_offset": 0,
+                    "hit_id": d["id"],
+                })
+                merged.append(seed)
+            else:
+                merged.append(d)
+
+        merged.sort(key=lambda r: (
+            str(r.get(resource_field) or r.get("resource_id") or ""),
+            int(r.get(version_field) or r.get("version") or 0),
+            int(r.get("neighbor_offset") or 0) if r.get("neighbor_offset") is not None else 0,
+        ))
+        return merged
+
     async def hybrid_search(
             self, *, query:str, embedding:list[float] | None,
             top_n:int=8, include_expired:bool=False,

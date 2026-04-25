@@ -195,6 +195,20 @@ class ReactWorkflow(BaseEntrypoint):
                 except Exception:
                     pass
 
+                # Install advanced-RAG runtime on the SDK tool's shared state.
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.tools._advanced_rag_internal.runtime import AdvancedRAGRuntime
+                    from kdcube_ai_app.apps.chat.sdk.tools.kb_advanced_rag_tools import set_runtime as _set_adv_rag_runtime
+                    adv_runtime = AdvancedRAGRuntime(
+                        kb=kb,
+                        model_service=self.models_service,
+                        conv_store=store,
+                        get_runtime_ctx=lambda: orch.runtime_ctx,
+                    )
+                    _set_adv_rag_runtime(adv_runtime)
+                except Exception:
+                    pass
+
                 # Execute the workflow, passing the full turn state
                 res = await orch.process({
                     "request_id": state["request_id"],
@@ -214,6 +228,12 @@ class ReactWorkflow(BaseEntrypoint):
                 state["followups"] = res.get("followups") or []
             except Exception as e:
                 await self.report_turn_error(state=state, exc=e, title="Turn Error")
+            finally:
+                try:
+                    from kdcube_ai_app.apps.chat.sdk.tools.kb_advanced_rag_tools import set_runtime as _set_adv_rag_runtime
+                    _set_adv_rag_runtime(None)
+                except Exception:
+                    pass
 
             return state
 

@@ -56,6 +56,11 @@ TOOLS_SPECS: List[Dict[str, Any]] = [
         "alias": "code_graph",
         "use_sk": True,
     },
+    {
+        "module": "kdcube_ai_app.apps.chat.sdk.tools.kb_advanced_rag_tools",  # Multi-step RAG over the KB — SDK level
+        "alias": "rag",
+        "use_sk": True,
+    },
 ]
 
 MCP_TOOL_SPECS: List[Dict[str, Any]] = [

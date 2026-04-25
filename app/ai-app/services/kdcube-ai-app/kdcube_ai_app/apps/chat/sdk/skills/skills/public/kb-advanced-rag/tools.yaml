@@ -1,0 +1,4 @@
+tools:
+  - id: rag.advanced_rag_search
+    role: search
+    why: Multi-step KB retrieval — query rewrite, entity extraction, dual-pass hybrid search, compound rerank, optional neighbors. Prefer over react.search_knowledge for context-dependent or multi-hop questions.
