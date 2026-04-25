@@ -151,10 +151,22 @@ class ReactCodeWorkflow(BaseEntrypoint):
                     from kdcube_ai_app.apps.chat.sdk.retrieval.code_graph_client import NullCodeGraphClient
                     code_graph = NullCodeGraphClient()
 
-            # Read feature toggles from bundle props
+            # Read feature toggles from bundle props as defaults
             features = self.bundle_prop("features", default={})
             enable_code_graph = features.get("enable_code_graph", True)
             enable_knowledge_search = features.get("enable_knowledge_search", True)
+
+            # Per-turn overrides from UI payload (state["search_settings"]).
+            # Shape mirrors chat-web-app SearchSettingsState: {hybrid, vector, codeCore}.
+            ui_settings = state.get("search_settings") or {}
+            if isinstance(ui_settings, dict) and ui_settings:
+                hybrid_cfg = ui_settings.get("hybrid") or {}
+                vector_cfg = ui_settings.get("vector") or {}
+                code_cfg = ui_settings.get("codeCore") or {}
+                enable_knowledge_search = bool(
+                    hybrid_cfg.get("enabled", False) or vector_cfg.get("enabled", False)
+                )
+                enable_code_graph = bool(code_cfg.get("enabled", enable_code_graph))
 
             # When code graph feature is disabled, swap to null client
             if not enable_code_graph:
@@ -185,6 +197,11 @@ class ReactCodeWorkflow(BaseEntrypoint):
                 try:
                     orch.runtime_ctx.knowledge_search_fn = knowledge_resolver.search_knowledge
                     orch.runtime_ctx.knowledge_read_fn = knowledge_resolver.read_knowledge
+                except Exception:
+                    pass
+                try:
+                    if isinstance(ui_settings, dict) and ui_settings:
+                        orch.runtime_ctx.search_settings = ui_settings
                 except Exception:
                     pass
 
@@ -470,6 +487,11 @@ class ReactCodeWorkflow(BaseEntrypoint):
         return config
 
     async def execute_core(self, *, state: Dict[str, Any], thread_id: str, params: Dict[str, Any]):
+        # Forward per-turn UI search settings payload into graph state so the
+        # orchestrate node can apply toggles and pass preferences to tools.
+        search_settings = (params or {}).get("search_settings")
+        if isinstance(search_settings, dict) and search_settings:
+            state["search_settings"] = search_settings
         return await self.graph.ainvoke(state, config={"configurable": {"thread_id": thread_id}})
 
 

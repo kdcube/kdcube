@@ -118,6 +118,7 @@ export interface ChatRequest {
     // we forward this to the server for routing
     turn_id?: string;
     bundle_id?: string;
+    payload?: Record<string, unknown>;
 }
 
 interface StepData {

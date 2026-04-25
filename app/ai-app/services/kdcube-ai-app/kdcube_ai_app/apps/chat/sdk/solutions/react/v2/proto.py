@@ -97,6 +97,9 @@ class RuntimeCtx:
     outdir: Optional[str] = None
     bundle_storage: Optional[str] = None
     exec_runtime: Dict[str, Any] = field(default_factory=dict)
+    # Per-turn search / retrieval preferences forwarded from the UI payload.
+    # Shape mirrors chat-web-app SearchSettingsState (hybrid/vector/codeCore).
+    search_settings: Dict[str, Any] = field(default_factory=dict)
     # Expected signature:
     #   (query: str, root: str = "", max_hits: int = 20, keywords: Optional[List[str]] = None, **kwargs) -> List[Dict]
     # Implementations may be sync or async; callers will await if needed.

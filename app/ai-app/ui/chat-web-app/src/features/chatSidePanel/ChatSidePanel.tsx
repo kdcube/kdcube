@@ -41,6 +41,8 @@ import {getChatPagePath} from "../chat/configHelper.ts";
 import {showDebugControls} from "../../BuildConfig.ts";
 import DebugPanel from "../debugPanel/DebugPanel.tsx";
 import {selectCurrentBundle} from "../bundles/bundlesSlice.ts";
+import SearchSettingsPanel from "../searchSettings/SearchSettingsPanel.tsx";
+import VectorDbIcon from "../../components/icons/VectorDbIcon.tsx";
 
 interface MenuButtonProps {
     children: ReactNode | ReactNode[];
@@ -326,6 +328,7 @@ type Panels =
     | "conv_browser"
     | "redis_browser"
     | "economic_usage"
+    | "search_settings"
     | "debug"
     | null
 
@@ -349,6 +352,9 @@ const ChatSidePanel = () => {
         switch (visiblePanel) {
             case "conversations":
                 panelWidth = 500
+                break
+            case "search_settings":
+                panelWidth = 320
                 break
         }
 
@@ -409,6 +415,13 @@ const ChatSidePanel = () => {
                 >
                     <IconContainer icon={Database} size={1.5}/>
                 </MenuButton>
+                <MenuButton
+                    onClick={() => {
+                        onPanelButtonClick("search_settings");
+                    }}
+                >
+                    <VectorDbIcon size={24}/>
+                </MenuButton>
                 {showDebugControls && <MenuButton
                     onClick={() => {
                         onPanelButtonClick("debug");
@@ -437,6 +450,8 @@ const ChatSidePanel = () => {
                                            className={"w-full h-full absolute left-0 top-0"}/>
                         <EconomicUsagePanel visible={visiblePanel === "economic_usage"}
                                             className={"w-full h-full absolute left-0 top-0"}/>
+                        <SearchSettingsPanel visible={visiblePanel === "search_settings"}
+                                             className={"w-full h-full absolute left-0 top-0"}/>
                         {showDebugControls && <DebugPanel visible={visiblePanel === "debug"}
                                                           className={"w-full h-full absolute left-0 top-0"}/>}
                     </div>

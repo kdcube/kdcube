@@ -8,6 +8,7 @@ import {
 } from "../chatController/chatBase.ts";
 import {v4 as uuidv4} from "uuid";
 import {AppDispatch, AppStore, RootState} from "../../app/store.ts";
+import {selectSearchSettings} from "../searchSettings/searchSettingsSlice.ts";
 import SocketIOChat from "../chatController/socketIOChat.ts";
 import {
     chatCompleted,
@@ -427,6 +428,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         tenant: selectTenant(state),
                         turn_id: turnId,
                         bundle_id: selectCurrentBundle(state) ?? undefined,
+                        payload: {search_settings: selectSearchSettings(state)},
                     }
 
                     console.info(

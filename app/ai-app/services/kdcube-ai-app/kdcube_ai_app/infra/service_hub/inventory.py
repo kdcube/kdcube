@@ -3010,6 +3010,7 @@ class BundleState(TypedDict, total=False):
     error_message: Optional[str]
     step_logs: Optional[list[dict]]
     start_time: Optional[float]
+    search_settings: Optional[Dict[str, Any]]
 
 APP_STATE_KEYS = [
     "request_id", "tenant", "project", "user", "session_id",

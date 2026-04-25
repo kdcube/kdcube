@@ -13,6 +13,7 @@ import chatSettingsSlice from "../features/chat/chatSettingsSlice.ts";
 import popupNotificationsReducer from "../features/popupNotifications/popupsSlice.ts";
 import {bundlesApiSlice} from "../features/bundles/bundlesAPI.ts";
 import bundlesSlice from "../features/bundles/bundlesSlice.ts";
+import searchSettingsSlice from "../features/searchSettings/searchSettingsSlice.ts";
 
 export const store = configureStore({
     devTools:true,
@@ -24,6 +25,7 @@ export const store = configureStore({
         conversations: conversationsSlice,
         popupNotifications: popupNotificationsReducer,
         bundles:bundlesSlice,
+        searchSettings: searchSettingsSlice,
         [suggestedQuestionsApiSlice.reducerPath]: suggestedQuestionsApiSlice.reducer,
         [widgetPanelsApiSlice.reducerPath]: widgetPanelsApiSlice.reducer,
         [bundlesApiSlice.reducerPath]: bundlesApiSlice.reducer,
