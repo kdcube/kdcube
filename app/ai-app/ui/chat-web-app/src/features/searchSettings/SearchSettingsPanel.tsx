@@ -11,6 +11,7 @@ import {
     selectVectorSettings,
     selectCodeCoreSettings,
     selectAdvancedRagSettings,
+    selectIngestionStatus,
     setHybridEnabled,
     updateHybrid,
     setVectorEnabled,
@@ -20,8 +21,23 @@ import {
     toggleHybridFormat,
     toggleVectorFormat,
     updateAdvancedRag,
+    startIngestion,
+    ingestionFileUploaded,
+    ingestionFileFailedUpload,
+    ingestionFileDispatched,
+    ingestionFileFailedDispatch,
+    ingestionEnterProcessingPhase,
+    ingestionResourceIndexed,
+    ingestionFinish,
+    clearIngestionStatus,
 } from "./searchSettingsSlice.ts";
-import {ReactNode, useCallback, useMemo, useRef} from "react";
+import {selectProject} from "../chat/chatSettingsSlice.ts";
+import {deriveStage, dispatchProcessing, listResources, uploadFile} from "./kbIngestionService.ts";
+import {ReactNode, useCallback, useEffect, useMemo, useRef, useState} from "react";
+import {
+    selectConfigAssistantMode,
+    setMode as setConfigAssistantMode,
+} from "../configAssistant/configAssistantSlice.ts";
 
 /* ------------------------------------------------------------------ */
 /*  Reusable controls                                                  */
@@ -277,6 +293,220 @@ const CODE_SEARCH_TYPE_OPTIONS = [
 /*  Section contents                                                   */
 /* ------------------------------------------------------------------ */
 
+// MIME type guess from filename extension. Used to filter the picked folder
+// against the user's chosen `formats`. Browsers populate File.type for some
+// extensions but not all (e.g. .md is often empty), so we map the common ones.
+const EXT_TO_MIME: Record<string, string> = {
+    pdf: "application/pdf",
+    md: "text/markdown",
+    markdown: "text/markdown",
+    txt: "text/plain",
+    csv: "text/csv",
+    html: "text/html",
+    htm: "text/html",
+    json: "application/json",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    xml: "application/xml",
+    yml: "application/x-yaml",
+    yaml: "application/x-yaml",
+};
+
+function guessMime(file: File): string {
+    if (file.type) return file.type;
+    const ext = (file.name.split(".").pop() || "").toLowerCase();
+    return EXT_TO_MIME[ext] || "application/octet-stream";
+}
+
+interface IngestionControlsProps {
+    formats: string[];
+}
+
+const IngestionControls = ({formats}: IngestionControlsProps) => {
+    const dispatch = useAppDispatch();
+    const project = useAppSelector(selectProject);
+    const status = useAppSelector(selectIngestionStatus);
+    const folderInputRef = useRef<HTMLInputElement>(null);
+    const [pickedFiles, setPickedFiles] = useState<File[]>([]);
+    const [pickedFolderName, setPickedFolderName] = useState<string | null>(null);
+
+    const eligibleFiles = useMemo(() => {
+        if (!pickedFiles.length || !formats.length) return pickedFiles;
+        const allowed = new Set(formats);
+        return pickedFiles.filter(f => allowed.has(guessMime(f)));
+    }, [pickedFiles, formats]);
+
+    const onPickFolder = useCallback(() => folderInputRef.current?.click(), []);
+
+    const onFolderChosen = useCallback((files: FileList | null) => {
+        if (!files || !files.length) return;
+        const arr = Array.from(files);
+        // The first relativePath segment is the folder name.
+        const rel = (arr[0] as File & {webkitRelativePath?: string}).webkitRelativePath || "";
+        const folder = rel.split("/")[0] || "(selection)";
+        setPickedFiles(arr);
+        setPickedFolderName(folder);
+    }, []);
+
+    const onClear = useCallback(() => {
+        setPickedFiles([]);
+        setPickedFolderName(null);
+        if (folderInputRef.current) folderInputRef.current.value = "";
+        dispatch(clearIngestionStatus());
+    }, [dispatch]);
+
+    const isRunning = status.phase !== "idle" && status.phase !== "done";
+
+    const onApply = useCallback(async () => {
+        if (!project) {
+            dispatch(ingestionFileFailedUpload({error: "No project context — cannot ingest."}));
+            return;
+        }
+        if (!eligibleFiles.length) return;
+
+        dispatch(startIngestion({
+            folderName: pickedFolderName || "(selection)",
+            selectedCount: eligibleFiles.length,
+            skippedCount: pickedFiles.length - eligibleFiles.length,
+        }));
+
+        const dispatchedResources: {id: string; version: string | number}[] = [];
+
+        for (const file of eligibleFiles) {
+            try {
+                const up = await uploadFile(project, file);
+                dispatch(ingestionFileUploaded({resourceId: up.resource_id}));
+                try {
+                    await dispatchProcessing(project, up.resource_metadata, "");
+                    dispatch(ingestionFileDispatched());
+                    dispatchedResources.push({
+                        id: up.resource_metadata.id,
+                        version: up.resource_metadata.version,
+                    });
+                } catch (e: unknown) {
+                    const msg = e instanceof Error ? e.message : String(e);
+                    dispatch(ingestionFileFailedDispatch({error: `${file.name}: ${msg}`}));
+                }
+            } catch (e: unknown) {
+                const msg = e instanceof Error ? e.message : String(e);
+                dispatch(ingestionFileFailedUpload({error: `${file.name}: ${msg}`}));
+            }
+        }
+
+        if (dispatchedResources.length === 0) {
+            dispatch(ingestionFinish());
+            return;
+        }
+        dispatch(ingestionEnterProcessingPhase());
+    }, [dispatch, project, eligibleFiles, pickedFolderName, pickedFiles.length]);
+
+    // Poll resource processing status while there are active jobs.
+    useEffect(() => {
+        if (!project) return;
+        if (status.phase !== "processing" && status.phase !== "dispatching") return;
+        if (status.activeResourceIds.length === 0) return;
+
+        let cancelled = false;
+        const seenDone = new Set<string>();
+
+        const tick = async () => {
+            try {
+                const items = await listResources(project);
+                if (cancelled) return;
+                const byId = new Map(items.map(r => [String(r.id), r]));
+                for (const rid of status.activeResourceIds) {
+                    const item = byId.get(rid);
+                    if (!item) continue;
+                    if (deriveStage(item) === "done" && !seenDone.has(rid)) {
+                        seenDone.add(rid);
+                        dispatch(ingestionResourceIndexed({resourceId: rid}));
+                    }
+                }
+            } catch {
+                // Polling errors are non-fatal — try again next tick.
+            }
+        };
+
+        const id = window.setInterval(tick, 3000);
+        // Tick once immediately so the status updates without waiting 3s.
+        tick();
+        return () => { cancelled = true; window.clearInterval(id); };
+    }, [project, status.phase, status.activeResourceIds, dispatch]);
+
+    const summary = (() => {
+        if (status.phase === "idle") return null;
+        const parts: string[] = [];
+        parts.push(`${status.uploadedCount}/${status.selectedCount} uploaded`);
+        if (status.failedUploadCount) parts.push(`${status.failedUploadCount} failed upload`);
+        if (status.dispatchedCount) parts.push(`${status.dispatchedCount} dispatched`);
+        if (status.indexedCount) parts.push(`${status.indexedCount} indexed`);
+        if (status.failedDispatchCount) parts.push(`${status.failedDispatchCount} failed dispatch`);
+        if (status.skippedCount) parts.push(`${status.skippedCount} skipped (format)`);
+        return parts.join(" · ");
+    })();
+
+    return (
+        <div className="flex flex-col gap-1 border-b border-gray-100 pb-2 mb-1">
+            <span className="text-xs text-gray-600">Ingest folder into the KB</span>
+            <div className="flex items-center gap-2">
+                <button
+                    type="button"
+                    onClick={onPickFolder}
+                    disabled={isRunning}
+                    className="text-xs px-2 py-1 rounded border border-gray-200 bg-white hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                >
+                    {pickedFolderName ? "Change folder" : "Choose folder..."}
+                </button>
+                {pickedFolderName && (
+                    <button
+                        type="button"
+                        onClick={onClear}
+                        disabled={isRunning}
+                        className="text-xs text-gray-400 hover:text-gray-600 disabled:opacity-50 cursor-pointer"
+                    >
+                        clear
+                    </button>
+                )}
+                {pickedFolderName && (
+                    <span className="text-[11px] text-gray-500 font-mono truncate">
+                        {pickedFolderName} — {eligibleFiles.length}/{pickedFiles.length} files
+                    </span>
+                )}
+            </div>
+            <input
+                ref={folderInputRef}
+                type="file"
+                /* @ts-expect-error webkitdirectory is non-standard but supported in Chromium/Edge/Firefox */
+                webkitdirectory=""
+                directory=""
+                multiple
+                className="hidden"
+                onChange={e => onFolderChosen(e.target.files)}
+            />
+            <button
+                type="button"
+                onClick={onApply}
+                disabled={isRunning || !pickedFolderName || eligibleFiles.length === 0 || !project}
+                className="text-xs px-3 py-1.5 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+            >
+                {isRunning ? "Ingesting..." : "Apply settings & ingest"}
+            </button>
+            {summary && (
+                <div className="mt-1 text-[11px] text-gray-600 font-mono whitespace-pre-wrap">
+                    {summary}
+                    {status.lastError && (
+                        <div className="text-red-600 mt-0.5 break-all">{status.lastError}</div>
+                    )}
+                </div>
+            )}
+            {!project && (
+                <span className="text-[10px] text-amber-600">No project context — open a chat first so tenant/project resolves.</span>
+            )}
+        </div>
+    );
+};
+
 const HybridSection = () => {
     const dispatch = useAppDispatch();
     const settings = useAppSelector(selectHybridSettings);
@@ -287,8 +517,9 @@ const HybridSection = () => {
 
     return (
         <Section title="Hybrid Search (KB)" enabled={settings.enabled} onToggle={onToggle}>
-            <TextField label="Source Folder" value={settings.source_folder}
-                       placeholder="/path/to/documents"
+            <IngestionControls formats={settings.formats}/>
+            <TextField label="Source Folder (path-only, advisory)" value={settings.source_folder}
+                       placeholder="(used by deferred indexing-config phase; not consumed today)"
                        onChange={v => onChange({source_folder: v})}/>
             <FormatPicker selected={settings.formats} onToggle={onFormatToggle}/>
 
@@ -436,6 +667,35 @@ const AdvancedRagSection = () => {
     );
 };
 
+// Toggles the bundle-developer Configuration Assistant mode. When on, the
+// agent is primed (via persona prompt) to use code_graph.* tools, and the
+// inspect drawer slides in from the right whenever a code_graph.* call lands.
+const ConfigAssistantSection = () => {
+    const dispatch = useAppDispatch();
+    const mode = useAppSelector(selectConfigAssistantMode);
+    const enabled = mode === "config_assistant";
+
+    const onToggle = useCallback(
+        (v: boolean) => dispatch(setConfigAssistantMode(v ? "config_assistant" : null)),
+        [dispatch],
+    );
+
+    return (
+        <Section title="Configuration Assistant" enabled={enabled} onToggle={onToggle}>
+            <span className="text-[11px] text-gray-500 leading-snug">
+                Bundle-developer helper. Activates a slide-in graph + details drawer
+                on the right of the chat when the agent calls code-graph tools, and
+                primes the agent to lean on those tools when answering.
+            </span>
+            <span className="text-[10px] text-gray-400 leading-snug">
+                Best with bundles that already register the <code>code_graph</code> plugin
+                (e.g. <code>react.code</code>). Other bundles can opt in by adding it to
+                their <code>tools_descriptor.py</code>.
+            </span>
+        </Section>
+    );
+};
+
 /* ------------------------------------------------------------------ */
 /*  Panel                                                              */
 /* ------------------------------------------------------------------ */
@@ -446,6 +706,7 @@ const SearchSettingsPanel = ({visible, className}: WidgetPanelProps) => {
             <div className={`${className ?? ""} ${visible ? "" : "pointer-events-none hidden"}`}>
                 <div className="flex flex-col w-full h-full overflow-y-auto p-3">
                     <h2 className="text-lg font-semibold mb-3">Search Settings</h2>
+                    <ConfigAssistantSection/>
                     <HybridSection/>
                     <AdvancedRagSection/>
                     <VectorSection/>

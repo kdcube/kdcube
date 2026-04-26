@@ -17,6 +17,13 @@ export interface ConfigAssistantSelection {
 
 export interface ConfigAssistantState {
     mode: string | null;
+    drawerOpen: boolean;
+    /**
+     * Sticky bit: once the user closes the drawer in this turn/conversation
+     * we don't auto-reopen on subsequent code_core artifacts. Cleared on
+     * conversation change or by an explicit openDrawer().
+     */
+    userClosed: boolean;
     selection: ConfigAssistantSelection;
     scope: {
         packageFilter: string;
@@ -26,6 +33,8 @@ export interface ConfigAssistantState {
 
 const initialState: ConfigAssistantState = {
     mode: null,
+    drawerOpen: false,
+    userClosed: false,
     selection: {kind: null, qualifiedName: null, conceptId: null},
     scope: {packageFilter: "", scopeFilter: "all"},
 };
@@ -36,6 +45,37 @@ const configAssistantSlice = createSlice({
     reducers: {
         setMode(state, action: PayloadAction<string | null>) {
             state.mode = action.payload;
+            // Turning the mode off implicitly closes the drawer.
+            if (action.payload === null) {
+                state.drawerOpen = false;
+                state.userClosed = false;
+            }
+        },
+        openDrawer(state) {
+            state.drawerOpen = true;
+            state.userClosed = false;
+        },
+        closeDrawer(state) {
+            state.drawerOpen = false;
+            state.userClosed = true;
+        },
+        toggleDrawer(state) {
+            if (state.drawerOpen) {
+                state.drawerOpen = false;
+                state.userClosed = true;
+            } else {
+                state.drawerOpen = true;
+                state.userClosed = false;
+            }
+        },
+        /** Auto-open trigger from artifact arrival; respects the userClosed bit. */
+        ensureDrawerOpen(state) {
+            if (!state.userClosed) state.drawerOpen = true;
+        },
+        /** Reset on conversation change so a new conversation starts fresh. */
+        resetDrawerStickiness(state) {
+            state.userClosed = false;
+            state.drawerOpen = false;
         },
         selectClass(state, action: PayloadAction<string | null>) {
             const qn = action.payload;
@@ -73,6 +113,11 @@ const configAssistantSlice = createSlice({
 
 export const {
     setMode,
+    openDrawer,
+    closeDrawer,
+    toggleDrawer,
+    ensureDrawerOpen,
+    resetDrawerStickiness,
     selectClass,
     selectConcept,
     clearSelection,
@@ -82,6 +127,7 @@ export const {
 } = configAssistantSlice.actions;
 
 export const selectConfigAssistantMode = (state: RootState) => state.configAssistant.mode;
+export const selectConfigAssistantDrawerOpen = (state: RootState) => state.configAssistant.drawerOpen;
 export const selectConfigAssistantSelection = (state: RootState) => state.configAssistant.selection;
 export const selectConfigAssistantScope = (state: RootState) => state.configAssistant.scope;
 

@@ -10,15 +10,13 @@ import Dummy from "./components/chat/Dummy.tsx";
 import AuthCallback from "./features/auth/AuthCallback.tsx";
 import WithAuthRequired from "./features/auth/WithAuthRequired.tsx";
 import ChatPage from "./components/chat/ChatPage.tsx";
-import ConfigAssistantPage from "./components/configAssistant/ConfigAssistantPage.tsx";
 import {useAppSelector} from "./app/store.ts";
-import {selectChatPath, selectConfigAssistantPath, selectRoutesPrefix} from "./features/chat/chatSettingsSlice.ts";
+import {selectChatPath, selectRoutesPrefix} from "./features/chat/chatSettingsSlice.ts";
 
 
 function AppRouter() {
     const routePrefix = useAppSelector(selectRoutesPrefix)
     const chatPagePath = useAppSelector(selectChatPath)
-    const configAssistantPath = useAppSelector(selectConfigAssistantPath)
 
     const withAuthRequired = useCallback((children: ReactNode | ReactNode[]) => {
         return <WithAuthRequired>{children}</WithAuthRequired>
@@ -28,23 +26,17 @@ function AppRouter() {
         return withAuthRequired(<ChatPage/>)
     }, [withAuthRequired])
 
-    const configAssistantPage = useMemo(() => {
-        return withAuthRequired(<ConfigAssistantPage/>)
-    }, [withAuthRequired])
-
     return useMemo(() => {
         return <Router>
             <Routes>
                 <Route path={`${routePrefix}/callback`} element={<AuthCallback/>}/>
                 <Route path={chatPagePath} element={chatPage}/>
                 <Route path={`${chatPagePath}/:conversationID`} element={chatPage}/>
-                <Route path={configAssistantPath} element={configAssistantPage}/>
-                <Route path={`${configAssistantPath}/:conversationID`} element={configAssistantPage}/>
                 <Route path={`${routePrefix}/dummy`} element={withAuthRequired(<Dummy/>)}/>
                 <Route path='*' element={<NotFoundPage/>}/>
             </Routes>
         </Router>
-    }, [routePrefix, chatPagePath, configAssistantPath, chatPage, configAssistantPage, withAuthRequired])
+    }, [routePrefix, chatPagePath, chatPage, withAuthRequired])
 }
 
 export default AppRouter

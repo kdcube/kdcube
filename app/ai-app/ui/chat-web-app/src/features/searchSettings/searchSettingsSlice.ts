@@ -49,11 +49,32 @@ export interface AdvancedRagSettings {
     min_priority_slots: number;
 }
 
+// Transient ingestion state for the "Apply settings & ingest" button in the
+// search settings panel. Lives in Redux so progress survives panel toggles.
+export type IngestionPhase = "idle" | "uploading" | "dispatching" | "processing" | "done";
+
+export interface IngestionState {
+    phase: IngestionPhase;
+    folderName: string | null;
+    selectedCount: number;
+    skippedCount: number;
+    uploadedCount: number;
+    failedUploadCount: number;
+    dispatchedCount: number;
+    failedDispatchCount: number;
+    indexedCount: number;
+    activeResourceIds: string[];
+    lastError: string | null;
+    startedAt: number | null;
+    finishedAt: number | null;
+}
+
 export interface SearchSettingsState {
     hybrid: HybridSearchSettings;
     vector: VectorSearchSettings;
     codeCore: CodeCoreSettings;
     advancedRag: AdvancedRagSettings;
+    ingestion: IngestionState;
 }
 
 export const ALL_FORMATS = [
@@ -130,6 +151,21 @@ const initialState: SearchSettingsState = {
         entity_top_k: 6,
         min_priority_slots: 0,
     },
+    ingestion: {
+        phase: "idle",
+        folderName: null,
+        selectedCount: 0,
+        skippedCount: 0,
+        uploadedCount: 0,
+        failedUploadCount: 0,
+        dispatchedCount: 0,
+        failedDispatchCount: 0,
+        indexedCount: 0,
+        activeResourceIds: [],
+        lastError: null,
+        startedAt: null,
+        finishedAt: null,
+    },
 };
 
 const searchSettingsSlice = createSlice({
@@ -169,6 +205,57 @@ const searchSettingsSlice = createSlice({
         updateAdvancedRag(state, action: PayloadAction<Partial<AdvancedRagSettings>>) {
             Object.assign(state.advancedRag, action.payload);
         },
+        startIngestion(state, action: PayloadAction<{folderName: string; selectedCount: number; skippedCount: number}>) {
+            state.ingestion = {
+                ...initialState.ingestion,
+                phase: "uploading",
+                folderName: action.payload.folderName,
+                selectedCount: action.payload.selectedCount,
+                skippedCount: action.payload.skippedCount,
+                startedAt: Date.now(),
+            };
+        },
+        ingestionFileUploaded(state, action: PayloadAction<{resourceId: string}>) {
+            state.ingestion.uploadedCount += 1;
+            state.ingestion.activeResourceIds.push(action.payload.resourceId);
+        },
+        ingestionFileFailedUpload(state, action: PayloadAction<{error: string}>) {
+            state.ingestion.failedUploadCount += 1;
+            state.ingestion.lastError = action.payload.error;
+        },
+        ingestionFileDispatched(state) {
+            state.ingestion.dispatchedCount += 1;
+            if (state.ingestion.phase === "uploading") {
+                state.ingestion.phase = "dispatching";
+            }
+        },
+        ingestionFileFailedDispatch(state, action: PayloadAction<{error: string}>) {
+            state.ingestion.failedDispatchCount += 1;
+            state.ingestion.lastError = action.payload.error;
+        },
+        ingestionEnterProcessingPhase(state) {
+            if (state.ingestion.phase !== "done") {
+                state.ingestion.phase = "processing";
+            }
+        },
+        ingestionResourceIndexed(state, action: PayloadAction<{resourceId: string}>) {
+            state.ingestion.indexedCount += 1;
+            state.ingestion.activeResourceIds = state.ingestion.activeResourceIds.filter(
+                id => id !== action.payload.resourceId,
+            );
+            const totalDone = state.ingestion.indexedCount + state.ingestion.failedUploadCount + state.ingestion.failedDispatchCount;
+            if (totalDone >= state.ingestion.selectedCount && state.ingestion.activeResourceIds.length === 0) {
+                state.ingestion.phase = "done";
+                state.ingestion.finishedAt = Date.now();
+            }
+        },
+        ingestionFinish(state) {
+            state.ingestion.phase = "done";
+            state.ingestion.finishedAt = Date.now();
+        },
+        clearIngestionStatus(state) {
+            state.ingestion = {...initialState.ingestion};
+        },
     },
 });
 
@@ -182,6 +269,15 @@ export const {
     toggleHybridFormat,
     toggleVectorFormat,
     updateAdvancedRag,
+    startIngestion,
+    ingestionFileUploaded,
+    ingestionFileFailedUpload,
+    ingestionFileDispatched,
+    ingestionFileFailedDispatch,
+    ingestionEnterProcessingPhase,
+    ingestionResourceIndexed,
+    ingestionFinish,
+    clearIngestionStatus,
 } = searchSettingsSlice.actions;
 
 export const selectSearchSettings = (state: RootState) => state.searchSettings;
@@ -189,5 +285,6 @@ export const selectHybridSettings = (state: RootState) => state.searchSettings.h
 export const selectVectorSettings = (state: RootState) => state.searchSettings.vector;
 export const selectCodeCoreSettings = (state: RootState) => state.searchSettings.codeCore;
 export const selectAdvancedRagSettings = (state: RootState) => state.searchSettings.advancedRag;
+export const selectIngestionStatus = (state: RootState) => state.searchSettings.ingestion;
 
 export default searchSettingsSlice.reducer;

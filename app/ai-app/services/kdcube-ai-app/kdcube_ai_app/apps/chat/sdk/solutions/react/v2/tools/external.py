@@ -417,11 +417,13 @@ async def handle_external_tool(*,
     tool_err = tool_response.get("error") if isinstance(tool_response, dict) else None
 
     # Configuration Assistant: surface successful code_graph.* tool results
-    # as a typed subsystem artifact so the inspect panel tabs can populate
-    # without reading the timeline. Emission is silent if mode != config_assistant.
+    # as a typed subsystem artifact so the inspect drawer can populate
+    # without reading the timeline. Always emits when the tool succeeds —
+    # gating happens on the FE (the drawer self-hides unless the user has
+    # turned on Configuration Assistant in settings). The persona-prompt
+    # mode swap stays gated by mode in decision.py.
     if (
-        getattr(ctx_browser.runtime_ctx, "mode", None) == "config_assistant"
-        and tool_id.startswith("code_graph.")
+        tool_id.startswith("code_graph.")
         and tool_err is None
         and output is not None
     ):
