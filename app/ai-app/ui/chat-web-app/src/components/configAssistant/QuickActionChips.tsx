@@ -9,8 +9,8 @@ import {useCallback, useMemo} from "react";
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {setUserMessage} from "../../features/chat/chatStateSlice.ts";
 import {
-    selectConfigAssistantInspect,
     selectConfigAssistantMode,
+    selectConfigAssistantSelection,
 } from "../../features/configAssistant/configAssistantSlice.ts";
 
 interface Chip {
@@ -49,11 +49,11 @@ const FRESH_CHIPS: ReadonlyArray<Chip> = [
 function QuickActionChips() {
     const dispatch = useAppDispatch();
     const mode = useAppSelector(selectConfigAssistantMode);
-    const inspect = useAppSelector(selectConfigAssistantInspect);
+    const selection = useAppSelector(selectConfigAssistantSelection);
 
     const chips = useMemo<ReadonlyArray<Chip>>(() => {
-        if (!inspect.selectedQualifiedName) return FRESH_CHIPS;
-        const qn = inspect.selectedQualifiedName;
+        if (selection.kind !== "class" || !selection.qualifiedName) return FRESH_CHIPS;
+        const qn = selection.qualifiedName;
         return [
             {label: "Show callers", prompt: `Show me the callers of ${qn}.`},
             {label: "Show tests", prompt: `Show me the tests covering ${qn}.`},
@@ -61,7 +61,7 @@ function QuickActionChips() {
             {label: "Generate similar", prompt: `Generate a tool similar to ${qn}, adapted for my doc-RAG bundle.`},
             {label: "What concepts?", prompt: `What concepts does ${qn} embody, and which style policies govern it?`},
         ];
-    }, [inspect.selectedQualifiedName]);
+    }, [selection.kind, selection.qualifiedName]);
 
     const onChipClick = useCallback(
         (prompt: string) => () => {
