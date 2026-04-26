@@ -84,6 +84,9 @@ class WithReactWorkflow(BaseWorkflow):
         self.runtime_ctx.debug_log_announce = True
         self.runtime_ctx.debug_log_sources_pool = True
         self.runtime_ctx.max_iterations = 15       # ReAct loop iteration cap
+        self.runtime_ctx.reactive_event_iteration_credit_enabled = True
+        self.runtime_ctx.reactive_event_iteration_credit_per_event = 1
+        self.runtime_ctx.reactive_event_iteration_credit_cap = 15
         self.runtime_ctx.debug_timeline = True
 
     async def construct_turn_and_scratchpad(self, payload: dict) -> CTurnScratchpad:

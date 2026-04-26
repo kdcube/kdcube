@@ -172,3 +172,30 @@ def test_build_announce_text_includes_current_turn_live_events(tmp_path):
     assert "• steer seq=8 explicit=True" in announce_text
     assert "text=(empty stop control)" in announce_text
     assert "old turn event should stay out of announce" not in announce_text
+
+
+def test_build_announce_text_explains_reactive_iteration_bonus(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_123",
+        outdir=str(tmp_path / "out"),
+        workspace_implementation="custom",
+    )
+
+    announce_text = build_announce_text(
+        iteration=3,
+        max_iterations=16,
+        base_max_iterations=15,
+        reactive_iteration_credit=1,
+        started_at="2026-04-11T10:00:00Z",
+        timezone="UTC",
+        runtime_ctx=runtime,
+        timeline_blocks=[],
+        constraints=None,
+        feedback_updates=None,
+        feedback_incorporated=False,
+        mode="full",
+    )
+
+    assert "ANNOUNCE — Iteration 4/16 (15 + 1 reactive bonus)" in announce_text
+    assert "iterations" in announce_text
+    assert "(base 15 + 1 bonus from live reactive events)" in announce_text

@@ -723,11 +723,18 @@ class ReactSolverV2:
         *,
         iteration: int,
         max_iterations: int,
+        base_max_iterations: Optional[int] = None,
+        reactive_iteration_credit: int = 0,
         force_sanitize: bool = False,
     ) -> List[Dict[str, Any]]:
         if not self.ctx_browser:
             return []
-        await self._update_announce(iteration=iteration, max_iterations=max_iterations)
+        await self._update_announce(
+            iteration=iteration,
+            max_iterations=max_iterations,
+            base_max_iterations=base_max_iterations,
+            reactive_iteration_credit=reactive_iteration_credit,
+        )
         return await self.ctx_browser.timeline.render(
             cache_last=True,
             force_sanitize=force_sanitize,
@@ -735,7 +742,14 @@ class ReactSolverV2:
             include_announce=True,
         )
 
-    async def _update_announce(self, *, iteration: int, max_iterations: int) -> None:
+    async def _update_announce(
+        self,
+        *,
+        iteration: int,
+        max_iterations: int,
+        base_max_iterations: Optional[int] = None,
+        reactive_iteration_credit: int = 0,
+    ) -> None:
         if not self.ctx_browser:
             return
         try:
@@ -757,6 +771,8 @@ class ReactSolverV2:
             active_block = build_announce_text(
                 iteration=iteration,
                 max_iterations=max_iterations,
+                base_max_iterations=base_max_iterations,
+                reactive_iteration_credit=reactive_iteration_credit,
                 started_at=getattr(self.scratchpad, "started_at", "") or "",
                 timezone=getattr(runtime_ctx, "timezone", None) if runtime_ctx else None,
                 runtime_ctx=runtime_ctx,
@@ -1590,6 +1606,8 @@ class ReactSolverV2:
         await self._update_announce(
             iteration=iteration,
             max_iterations=int(state.get("max_iterations") or 0),
+            base_max_iterations=int(state.get("base_max_iterations") or 0),
+            reactive_iteration_credit=int(state.get("reactive_iteration_credit") or 0),
         )
         model_kind = state.get("next_decision_model") or "strong"
         role = f"{self.MODULE_AGENT_NAME}.{self.DECISION_AGENT_NAME}.{model_kind}"
@@ -2313,6 +2331,8 @@ class ReactSolverV2:
                 final_text = build_announce_text(
                     iteration=int(state.get("iteration") or 0),
                     max_iterations=int(state.get("max_iterations") or 0),
+                    base_max_iterations=int(state.get("base_max_iterations") or 0),
+                    reactive_iteration_credit=int(state.get("reactive_iteration_credit") or 0),
                     started_at=getattr(self.scratchpad, "started_at", "") or "",
                     timezone=getattr(runtime_ctx, "timezone", None) if runtime_ctx else None,
                     runtime_ctx=runtime_ctx,

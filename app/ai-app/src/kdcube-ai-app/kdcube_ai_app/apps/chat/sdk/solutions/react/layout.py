@@ -512,6 +512,8 @@ def build_announce_text(
     *,
     iteration: int,
     max_iterations: int,
+    base_max_iterations: Optional[int] = None,
+    reactive_iteration_credit: int = 0,
     started_at: Optional[str],
     timezone: Optional[str],
     timeline_blocks: List[Dict[str, Any]],
@@ -539,6 +541,10 @@ def build_announce_text(
         return [top, mid, bot]
 
     iter_total = int(max_iterations)
+    iter_base_total = int(base_max_iterations if base_max_iterations is not None else max_iterations)
+    iter_bonus = max(0, int(reactive_iteration_credit or 0))
+    if iter_base_total <= 0:
+        iter_base_total = iter_total
     iter_display = int(iteration) + 1
     if iter_total > 0:
         iter_display = max(1, min(iter_display, iter_total))
@@ -556,6 +562,8 @@ def build_announce_text(
             title = "Turn completed with these stats"
         else:
             title = f"ANNOUNCE — Iteration {iter_display}/{iter_total}"
+            if iter_bonus > 0 and iter_total > iter_base_total:
+                title += f" ({iter_base_total} + {iter_bonus} reactive bonus)"
         lines.extend(_mk_box(title))
         lines.append("")
 
@@ -568,7 +576,10 @@ def build_announce_text(
     filled = max(0, min(filled, bar_len))
     bar = ("█" * filled) + ("░" * (bar_len - filled))
     lines.append("[BUDGET]")
-    lines.append(f"  iterations  {bar}  {remaining_iter} remaining")
+    budget_line = f"  iterations  {bar}  {remaining_iter} remaining"
+    if iter_bonus > 0 and iter_total > iter_base_total:
+        budget_line += f"  (base {iter_base_total} + {iter_bonus} bonus from live reactive events)"
+    lines.append(budget_line)
     if started_at:
         try:
             ts = datetime.datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp()

@@ -17,6 +17,7 @@ This doc describes how the **announce** block is used for ReAct v2.
 - An **ephemeral tail block** added by the runtime for each decision round.
 - Contains ANNOUNCE️:
   - iteration
+  - explicit iteration-budget explanation when live reactive credits increased the turn ceiling
   - open-plan summary with plan ids, snapshot refs, and status markers (if any exist)
   - compact live-turn external event summary (`followup`, `steer`) when present
   - compact workspace status
@@ -139,6 +140,20 @@ ANNOUNCE only shows current-turn live events. Historical preserved event blocks 
   repo_status: dirty
   current_turn_publish: pending
 ```
+
+When a live reactive event increased the turn budget, ANNOUNCE must explain that explicitly instead of silently changing the denominator:
+
+```text
+╔══════════════════════════════════════════════════════════════╗
+║  ANNOUNCE — Iteration 4/16 (15 + 1 reactive bonus)          ║
+╚══════════════════════════════════════════════════════════════╝
+
+[BUDGET]
+  iterations  ██░░░░░░░░  12 remaining  (base 15 + 1 bonus from live reactive events)
+  time_elapsed_in_turn   2m41s
+```
+
+This avoids the misleading shape where the user only sees the ceiling jump from `15` to `16` with no cause given.
 
 ## Notes
 - ANNOUNCE is the open/current plan presentation layer; React does not rely on a separate persistent `react.plan.active` tail artifact.
