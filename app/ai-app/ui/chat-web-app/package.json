@@ -13,6 +13,7 @@
   "dependencies": {
     "@reduxjs/toolkit": "^2.10.1",
     "@types/js-yaml": "^4.0.9",
+    "@xyflow/react": "^12.10.2",
     "dompurify": "^3.2.6",
     "fuse.js": "^7.1.0",
     "js-yaml": "^4.1.0",
