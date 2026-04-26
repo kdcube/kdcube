@@ -37,6 +37,8 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     EXTERNAL_TURN_EVENTS_GUIDE,
     ANNOUNCE_INTERPRETATION_GUIDE,
     SUGGESTED_FOLLOWUPS_GUIDE,
+    REACT_ARTIFACTS_AND_PATHS,
+    REACT_PLANNING,
 )
 
 WORK_WITH_DOCUMENTS_AND_IMAGES = """
@@ -226,75 +228,6 @@ def build_decision_system_text(
         "If multiple tools are needed, emit one tool call now and use later rounds for the rest.\n"
     )
 
-    artifacts_and_paths = """
-[Artifacts & Paths (authoritative)]
-
-Where to look in the visible context:
-- The timeline is ordered **oldest → newest** (newest at bottom). Each turn begins with `[TURN <turn_id>]`.
-- Within a turn, user prompt/attachments appear first, followed by AI assistant contributions such as tool call/result blocks and artifacts produced.
-
-### Context artifacts discovery and access (CRITICAL)
-You use these paths to: 
-1) bind content into tool params with "ref:<artifact path>"; 
-2) to load content with react.read in react loop tool;
-3) to read content in your code (exec snippets) with ctx_tools.fetch_ctx.
-
-CRITICAL: You never use the filesystem paths in these cases
-CRITICAL: Filesystem paths can be used in exec snippets, in react.write, react.patch, rendering_tools.write_*
-
-#### Path usage (Decision-only)
-- react.read (react) requires LOGICAL paths (ar:/fi:/tc:/so:/su:/ks:/sk:).
-- ctx_tools.fetch_ctx (code) requires LOGICAL paths too, but only supports ar:/tc:/so:.
-- Tools that **write or patch files** expect **physical paths**:  
-  - Prefer current-turn form: `react.write(path="files/<scope>/draft.md", channel=..., content=..., kind=...)` for durable workspace state
-  - Prefer current-turn form: `react.write(path="outputs/<scope>/report.md", channel=..., content=..., kind=...)` for non-workspace deliverables
-  - Prefer current-turn form: `react.patch(path="files/<scope>/draft.md", patch="...")`
-  - Prefer current-turn form: `rendering_tools.write_pdf(path="outputs/<scope>/report.pdf", content=...)`
-  - code which you generate for execution can use physical paths (relative to outdir).
-- If you pass a logical path to a physical‑path tool (or vice versa), the runtime will rewrite it and log a protocol notice.
-- Keep workspace organization tidy: when you are continuing the same project, reuse its existing top-level scope instead of inventing a sibling scope.
-- If ANNOUNCE or the visible local workspace already shows `files/<scope>/...` scopes, continue inside the matching existing scope.
-- If the old scope name is clearly weak, temporary, or misleading, you may rename the project to a better canonical scope.
-- Treat that as a deliberate rename/migration of the project tree, not as a sibling continuation.
-- Only create a genuinely separate new top-level scope when the user explicitly wants a separate project or fork.
-- Use `outputs/<scope>/...` for reports, exports, test results, and similar artifacts that should not be committed into workspace history.
-- Reserve `outputs/tmp/...` only for disposable scratch outputs.
-
-### Using Search/Fetch results (SPECIAL RULE)
-- Search/fetch tool calls result are list of {sid, url, text, content, ..}, and the content (snippet of data from that source) can be large. 
-  Therefore the timeline management process can truncate such results in the visible context as the timeline progresses (older/large data pruning).
-  However, the results of such tools are added in the sources_pool. 
-- Whenever some sids are invisible/truncated while you need them, you can bring the selected sids into visibilty by reading them from sources pool with react.read(paths=["so:sources_pool[sid1, sid2, ..]"]) using slice operator, for the enumeration of SIDs `so:sources_pool[1,3,5]` or for range of sids `so:sources_pool[2:6]`
-"""
-
-    PLANNING = """
-Planning (optional, use react.plan only when it helps).
-- Use react.plan to create, activate, replace, or close a plan. Open plans appear in ANNOUNCE immediately.
-- Use it when the work is multi-step, ambiguous, or likely to span turns.
-- If the current plan still applies, do NOT call react.plan (treat it as active).
-- mode="new": create a new plan with ordered steps.
-- mode="activate": target an older open `plan_id` and make that lineage current again.
-- mode="replace": target an existing `plan_id`, supersede it, and issue a replacement plan with new steps.
-- mode="close": explicitly close a target `plan_id` when it is no longer relevant.
-- For activate/replace/close, `plan_id` is required and must come from ANNOUNCE or another visible plan reference.
-- `steps` are required for new/replace.
-- Freshly created plans and replacement plans become current immediately.
-- The current plan remains current across turns until it is closed, completed, replaced, or another open plan is activated.
-- ANNOUNCE lists open plans, but only the plan tagged `(current)` is current.
-- If you do not see `(current)` on a plan, do NOT acknowledge it; activate it first.
-- If the current plan completes or is closed, another open plan does NOT become current automatically.
-- If you want to continue an older open plan, do NOT just start writing step-status notes for it. First call `react.plan(mode="activate", plan_id=...)` so it becomes the current lineage.
-- Important: step-status notes are applied before the tool call of that round. So do not combine progress acknowledgements with a `react.plan` lifecycle change in the same decision. Activate/replace/close first; acknowledge progress in a later round.
-
-Your goal is to make best-effort progress toward the plan this turn without inventing facts.
-Use tools to gather evidence; if progress is blocked, vague, or would benefit from user input,
-ask the user for clarification and continue later.
-
-Maintain a natural, progressive dialogue:
-- Avoid redundant questions.
-- Ask only for the missing info you need to proceed.
-- When you are done for this turn, close with a clear final_answer and actionable suggested_followups.
-"""
     protocol = (
         "CRITICAL: you are the agent which must for in custom protocol which you must obey. This is not similar to tool calling protocol. You MUST NOT include multiple actions at a time in your response. This is a gross mistake.\n"
         "CRITICAL: you have 3 channels and you must always write the proper content inside each channel.\n"
@@ -378,7 +311,7 @@ You are the Decision module inside a ReAct loop.
 {EXEC_SNIPPET_RULES}
 {SOURCES_AND_CITATIONS_V2}
 {WORK_WITH_DOCUMENTS_AND_IMAGES}
-{PLANNING}
+{REACT_PLANNING}
 
 [CORE RESPONSIBILITIES]
 - Choose action:
@@ -613,7 +546,7 @@ It is preferable to use react.write for streaming large content and use renderin
 - Example tool_call (load sources + artifact + skill):
   {{"tool_id":"react.read","params":["so:sources_pool[2,3]","fi:<turn_id>.files/some_art.md","sk:<skill id or num>"]}}
 
-{artifacts_and_paths}
+{REACT_ARTIFACTS_AND_PATHS}
 """
 
     # Tool/skills catalogs
