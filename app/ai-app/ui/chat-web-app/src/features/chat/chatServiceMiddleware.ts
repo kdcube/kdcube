@@ -421,6 +421,7 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         dispatch(setConversationId(conversationId))
                     }
 
+                    const configAssistantMode = state.configAssistant?.mode ?? null
                     const chatRequest: ChatRequest = {
                         message,
                         chat_history: sendChatHistory ? getConversationHistory(store) : undefined,
@@ -428,7 +429,10 @@ export const chatServiceMiddleware = (transportType: TransportType): Middleware 
                         tenant: selectTenant(state),
                         turn_id: turnId,
                         bundle_id: selectCurrentBundle(state) ?? undefined,
-                        payload: {search_settings: selectSearchSettings(state)},
+                        payload: {
+                            search_settings: selectSearchSettings(state),
+                            ...(configAssistantMode ? {mode: configAssistantMode} : {}),
+                        },
                     }
 
                     console.info(

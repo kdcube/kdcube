@@ -14,6 +14,7 @@ import popupNotificationsReducer from "../features/popupNotifications/popupsSlic
 import {bundlesApiSlice} from "../features/bundles/bundlesAPI.ts";
 import bundlesSlice from "../features/bundles/bundlesSlice.ts";
 import searchSettingsSlice from "../features/searchSettings/searchSettingsSlice.ts";
+import configAssistantSlice from "../features/configAssistant/configAssistantSlice.ts";
 
 export const store = configureStore({
     devTools:true,
@@ -26,6 +27,7 @@ export const store = configureStore({
         popupNotifications: popupNotificationsReducer,
         bundles:bundlesSlice,
         searchSettings: searchSettingsSlice,
+        configAssistant: configAssistantSlice,
         [suggestedQuestionsApiSlice.reducerPath]: suggestedQuestionsApiSlice.reducer,
         [widgetPanelsApiSlice.reducerPath]: widgetPanelsApiSlice.reducer,
         [bundlesApiSlice.reducerPath]: bundlesApiSlice.reducer,

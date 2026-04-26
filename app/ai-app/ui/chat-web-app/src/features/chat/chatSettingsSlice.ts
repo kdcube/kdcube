@@ -60,6 +60,7 @@ export const selectTenant = (state: RootState) => state.chatSettings.settings.te
 export const selectProject = (state: RootState) => state.chatSettings.settings.project
 export const selectRoutesPrefix = (state: RootState) => state.chatSettings.settings.routesPrefix
 export const selectChatPath = (state: RootState) => state.chatSettings.settings.routesPrefix + "/chat"
+export const selectConfigAssistantPath = (state: RootState) => state.chatSettings.settings.routesPrefix + "/config-assistant"
 export const selectIdTokenHeaderName = (state: RootState) => {
     return ((state.chatSettings.settings.auth as unknown) as Record<string, string | undefined>).idTokenHeaderName ?? null
 }

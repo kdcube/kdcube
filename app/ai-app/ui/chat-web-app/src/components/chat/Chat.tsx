@@ -4,7 +4,7 @@
  */
 
 // Chat.tsx
-import React, {useCallback, useEffect, useMemo, useRef, useState} from "react";
+import React, {ReactNode, useCallback, useEffect, useMemo, useRef, useState} from "react";
 
 import ChatInterface from "./ChatInterface/ChatInterface.tsx";
 import {useAppSelector} from "../../app/store.ts";
@@ -18,7 +18,16 @@ import {getCanvasArtifactTypes, getCanvasItemLinkGenerator} from "../../features
 import useSharedConfigProvider from "../../features/sharedConfigProvider/sharedConfigProvider.tsx";
 import ConversationHeader from "../../features/conversationHeader/ConversationHeader.tsx";
 
-const SingleChatApp: React.FC = () => {
+interface SingleChatAppProps {
+    /**
+     * Optional right-side panel rendered in place of (or alongside) the
+     * default ChatCanvas. Used by pages such as the Configuration Assistant
+     * to inject their own inspect panel without duplicating the chat shell.
+     */
+    rightPanel?: ReactNode;
+}
+
+const SingleChatApp: React.FC<SingleChatAppProps> = ({rightPanel}) => {
     const currentTurn = useAppSelector(selectCurrentTurn);
     const conversationId = useAppSelector(selectConversationId);
     const chatCanvasRef = useRef<HTMLDivElement>(null);
@@ -81,12 +90,13 @@ const SingleChatApp: React.FC = () => {
                             <AnimatedExpander contentRef={chatCanvasRef} expanded={!!canvasItemLink}>
                                 <ChatCanvas ref={chatCanvasRef}/>
                             </AnimatedExpander>
+                            {rightPanel}
                         </ChatCanvasContext>
                     </div>
                 </div>
             </div>
         </div>
-    }, [canvasItemLink, chatCanvasContextValue])
+    }, [canvasItemLink, chatCanvasContextValue, rightPanel])
 };
 
 export default SingleChatApp;
