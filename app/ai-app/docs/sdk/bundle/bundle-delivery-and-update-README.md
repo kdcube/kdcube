@@ -43,16 +43,16 @@ kdcube --descriptors-location <dir> --build
 4. after code or descriptor changes:
 
 ```bash
-kdcube --workdir <runtime-workdir> --bundle-reload <bundle_id>
+kdcube reload <bundle_id> --workdir <runtime-workdir>
 ```
 
 Example:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --bundle-reload versatile@2026-03-31-13-36
+kdcube reload versatile@2026-03-31-13-36 --workdir ~/.kdcube/kdcube-runtime
 ```
 
-`--bundle-reload` is descriptor-authoritative:
+`kdcube reload` is descriptor-authoritative:
 
 - reapplies the bundle registry from descriptor/env state
 - rebuilds descriptor-backed bundle props from `bundles.yaml`
@@ -73,7 +73,7 @@ Local mode is the only mode where editing mounted descriptors directly is the no
 Typical change:
 
 1. edit `bundles.yaml` and/or `bundles.secrets.yaml`
-2. run `kdcube --bundle-reload <bundle_id>`
+2. run `kdcube reload <bundle_id>`
 
 ### Runtime-only override
 

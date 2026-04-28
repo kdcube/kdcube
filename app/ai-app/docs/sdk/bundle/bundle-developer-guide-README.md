@@ -352,10 +352,10 @@ kdcube --descriptors-location <dir> --build
 4. after each code or descriptor change, reload:
 
 ```bash
-kdcube --workdir <runtime-workdir> --bundle-reload my.bundle@1.0.0
+kdcube reload my.bundle@1.0.0 --workdir <runtime-workdir>
 ```
 
-What `--bundle-reload` does:
+What `kdcube reload` does:
 
 - reapplies the bundle registry from descriptor/env state
 - rebuilds descriptor-backed bundle props from `bundles.yaml`
@@ -367,7 +367,7 @@ Use this when you changed:
 - `bundles.yaml`
 - `bundles.secrets.yaml`
 
-If your bundle uses local bundle storage, `--bundle-reload` does not wipe that storage automatically.
+If your bundle uses local bundle storage, `kdcube reload` does not wipe that storage automatically.
 Design your subsystem roots intentionally:
 - stable bundle root for all bundle-managed local data
 - explicit `_subsystem` roots for mutable local working state

@@ -123,10 +123,10 @@ If you are developing a mounted local bundle:
 4. after bundle code or descriptor changes, reload:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --bundle-reload <bundle_id>
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime
 ```
 
-`--bundle-reload`:
+`reload`:
 
 - reapplies the bundle registry from the active descriptor/env state
 - rebuilds descriptor-backed bundle props from `bundles.yaml`
@@ -141,13 +141,13 @@ Bundle docs:
 ## 6. Stop the local stack
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --stop
+kdcube stop --workdir ~/.kdcube/kdcube-runtime
 ```
 
 Remove local volumes too:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
+kdcube stop --workdir ~/.kdcube/kdcube-runtime --remove-volumes
 ```
 
 ## Quick mental model

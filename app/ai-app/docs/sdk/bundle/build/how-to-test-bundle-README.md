@@ -630,7 +630,7 @@ kdcube --descriptors-location <dir> --build
 Then after code/descriptor changes:
 
 ```bash
-kdcube --workdir <runtime-workdir> --bundle-reload <bundle_id>
+kdcube reload <bundle_id> --workdir <runtime-workdir>
 ```
 
 This is important because a bundle may pass tests but still fail during descriptor-driven runtime resolution.

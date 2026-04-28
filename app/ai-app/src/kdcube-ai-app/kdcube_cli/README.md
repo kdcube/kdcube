@@ -7,13 +7,6 @@ repository (if needed) and launches the guided setup wizard.
 
 This README describes the current implemented CLI behavior.
 
-It does not describe the planned deployment-first CLI redesign with
-`kdcube init`, `kdcube defaults`, `kdcube start/stop`, `kdcube reload`, and
-profile-driven local/cloud targeting. That future model is design-only today
-and is tracked in:
-
-- `app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md`
-
 Short version of the current model:
 
 - the CLI bootstraps or reuses a concrete runtime snapshot under a namespaced
@@ -241,8 +234,7 @@ For `aws-sm` deployments, you can also export the current effective live
 deployment-scoped bundle descriptors directly from AWS Secrets Manager:
 
 ```bash
-kdcube \
-  --export-live-bundles \
+kdcube export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \
@@ -307,16 +299,8 @@ what is incomplete.
 | `--latest` | With `--descriptors-location`, resolve the latest platform release instead of using `assembly.yaml -> platform.ref`. |
 | `--upstream` | With `--build`, use the latest upstream repo state (`origin/main`) instead of a released platform ref. Requires either `--descriptors-location` or an initialized runtime with the canonical descriptor set under `config/`. |
 | `--release <ref>` | With `--descriptors-location`, use the given platform release instead of `assembly.yaml -> platform.ref`. |
-| `--bundle-reload <bundle_id>` | Reapply `config/bundles.yaml` from the active runtime workspace and clear proc bundle caches for local development. |
-| `--info` | Print resolved runtime info for the selected workdir, including descriptor paths, install metadata, and host/container bundle mount mappings. |
-| `--export-live-bundles` | Export effective live `bundles.yaml` and `bundles.secrets.yaml` from the active bundle authority: workspace descriptors when present, otherwise AWS SM grouped bundle docs. |
-| `--tenant <id>` / `--project <id>` | Scope for `--export-live-bundles` when exporting from AWS SM. Ignored when workspace descriptors are exported directly. |
-| `--out-dir <dir>` | Output directory for `--export-live-bundles`. |
-| `--aws-region <region>` | AWS region for `--export-live-bundles` when exporting from AWS SM. |
-| `--aws-profile <profile>` | AWS profile for `--export-live-bundles` when exporting from AWS SM. |
-| `--aws-sm-prefix <prefix>` | Explicit AWS SM prefix for `--export-live-bundles` when exporting from AWS SM. |
-| `--stop` | Stop the local Docker Compose stack for the selected workdir. |
-| `--remove-volumes` | With `--stop`, also remove local volumes. |
+| `--info` | Print global CLI state (defaults, running deployment). With `--workdir`, print resolved runtime info for that workdir: descriptor paths, install metadata, and host/container bundle mount mappings. |
+| `--remove-volumes` | With `kdcube stop`, also remove local volumes. |
 | `--reset-config` | Re‑prompt for config values without deleting files. |
 | `--reset` | Alias for `--reset-config`. |
 | `--clean` | Clean local Docker cache and unused KDCube images. |
@@ -326,6 +310,75 @@ what is incomplete.
 | `--no-proxy-ssl` | Force non‑SSL proxy config (overrides assembly descriptor). |
 | `--dry-run` | Generate env files and print their paths without running Docker. |
 | `--dry-run-print-env` | With `--dry-run`, also print the full env file contents. |
+
+### Subcommands
+
+| Subcommand | Purpose |
+|---|---|
+| `kdcube init [--workdir <path>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>\|--build] [-i]` | Initialize a workdir (stage descriptors, generate env files) **without** starting Docker. |
+| `kdcube start [--workdir <path>] [--build]` | Start the Docker Compose stack for an already-initialized workdir. |
+| `kdcube stop [--workdir <path>] [--remove-volumes]` | Stop the local Docker Compose stack. |
+| `kdcube reload <bundle_id> [--workdir <path>]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. |
+| `kdcube export [--workdir <path>] [--tenant <id>] [--project <id>] [--out-dir <dir>] [--aws-region <region>]` | Export effective live `bundles.yaml` and `bundles.secrets.yaml`. |
+| `kdcube defaults [--default-workdir <path>] [--default-tenant <t>] [--default-project <p>]` | Save persistent operator defaults to `~/.kdcube/cli-defaults.json`. |
+
+### Operator defaults (`kdcube defaults`)
+
+`kdcube defaults` persists values to `~/.kdcube/cli-defaults.json`:
+
+| Field | Flag | Purpose |
+|---|---|---|
+| `default_workdir` | `--default-workdir` | Fallback workdir when `--workdir` is omitted from a subcommand |
+| `default_tenant` | `--default-tenant` | Displayed in global `--info`; used by `kdcube export` as fallback tenant |
+| `default_project` | `--default-project` | Displayed in global `--info`; used by `kdcube export` as fallback project |
+
+`kdcube start`, `kdcube stop`, `kdcube reload`, and `kdcube export` resolve the
+target workdir with the following precedence:
+
+1. `--workdir` passed explicitly → use it.
+2. `--workdir` omitted, `default_workdir` present in `cli-defaults.json` → use that.
+3. Neither provided → error with a hint to run `kdcube defaults --default-workdir <path>`.
+
+`kdcube --info` (without `--workdir`) reads `cli-defaults.json` and displays the
+configured values, or reports that no defaults are set.
+
+### Single-deployment guard (`cli-lock.json`)
+
+`~/.kdcube/cli-lock.json` is a per-machine deployment lock written on start and
+cleared on stop.
+
+Format:
+
+```json
+{
+  "tenant": "...",
+  "project": "...",
+  "workdir": "...",
+  "docker_dir": "...",
+  "env_file": "..."
+}
+```
+
+**Guard at start (`kdcube start`)** — reads the lock and runs `docker compose ps`:
+
+- No lock → proceed.
+- Lock matches the target `tenant/project` → proceed (same deployment restart).
+- Lock points to a **different** deployment and services are **live** → abort with
+  a message showing what is running and how to stop it first.
+- Lock exists but services are **not live** (stale) → lock cleared automatically,
+  start proceeds.
+
+**Guard at stop (`kdcube stop`)** — before stopping:
+
+1. Runs `docker compose ps` for the target workdir — nothing running →
+   `"Deployment is not running"`.
+2. Something running and lock matches the target `tenant/project` → stop and
+   clear the lock.
+3. Something running but lock points to a **different** deployment → abort.
+
+**`kdcube --info` and stale locks** — global `--info` verifies the lock via
+`docker compose ps`. If the recorded deployment is no longer running, the lock is
+reported as stale and cleared automatically.
 
 ### Use a local checkout (dev)
 
@@ -351,22 +404,28 @@ kdcube --clean
 Stop the local stack:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --stop
+kdcube stop --workdir ~/.kdcube/kdcube-runtime
 ```
 
 Stop and remove volumes:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
+kdcube stop --workdir ~/.kdcube/kdcube-runtime --remove-volumes
+```
+
+Inspect global CLI state (defaults + running deployment):
+
+```bash
+kdcube --info
 ```
 
 Inspect the resolved runtime, including how local non-git bundles are mounted:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime/acme__prod_demo --info
+kdcube --info --workdir ~/.kdcube/kdcube-runtime/acme__prod_demo
 ```
 
-When `--workdir` points at the base workspace root, `--stop` resolves the
+When `--workdir` points at the base workspace root, `kdcube stop` resolves the
 single matching runtime namespace automatically. If there are multiple runtime
 namespaces under that base workspace, pass the concrete namespaced runtime path
 explicitly.
@@ -708,7 +767,7 @@ For local host-edited bundle development:
 - define the bundle with `path: /bundles/...`
 - set `assembly.paths.host_bundles_path` to the matching host root
 - run KDCube through the CLI compose path
-- use `kdcube --bundle-reload <bundle_id>` after code changes
+- use `kdcube reload <bundle_id>` after code changes
 
 For AWS deployment:
 
