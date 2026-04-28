@@ -1,39 +1,72 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.23.17"
+  ref: "2026.4.28.2229"
   description: |
-    This release focuses on making deployment-scoped overrides for built-in and reserved
-    bundles durable under the file-backed bundle authority model.
+    This release focuses on frontend runtime configuration, registration/security
+    hardening support, chat timeline correctness, CLI/deployment improvements, and
+    preparation for richer agent-driven interaction flows.
 
     Highlights
 
-    - Explicitly configured built-in or reserved bundles now keep their deployment-scoped
-      descriptor properties when the authoritative bundle store is persisted and reloaded.
-    - Bundle admin and deployment-authored prop overrides for reserved bundles no longer disappear
-      after file-backed registry rewrites or reload-driven reconciliation.
-    - This closes a real regression in the file-backed authority flow where reserved bundle ids
-      were accepted on input but were dropped from the persisted authoritative view.
+    - Added server-published frontend runtime config through
+      `GET /api/cp-frontend-config`, with a shared config builder used by runtime
+      services and deployment tooling.
+    - Aligned frontend auth configuration around the descriptor-facing modes
+      `simple`, `cognito`, and `delegated`, while keeping legacy `hardcoded`
+      browser config as a compatibility alias for `simple`.
+    - Updated nginx and local/deployment frontend routing so browser clients can
+      retrieve server-published config without relying on self-served static config.
+    - Improved chat timeline ordering so followup user messages, timeline notes,
+      assistant attempts, and subsystem widgets render according to their persisted
+      event timestamps.
+    - Added CLI command/subcommand and descriptor handling improvements, including
+      safer deployment guards and better targeted command behavior.
+    - Strengthened runtime and bundle configuration documentation around AWS session
+      scoping, gateway control, descriptor configuration, and bundle runtime config.
+    - Added and refined agent-preparation work in the React runtime/event stream area,
+      including live event handling and temporal turn/event documentation.
+    - Made platform release GitHub Actions safer to rerun by skipping already-existing
+      release images where appropriate.
 
     Runtime work in this release line:
 
-    - The authoritative bundle store now preserves explicitly configured reserved bundle ids when
-      computing the persisted registry shape.
-    - Reserved bundle prop writes now survive the same save/reload cycle as normal deployment
-      bundles, so file-backed authority behavior is consistent across bundle classes.
-    - This is especially important for built-in bundles such as
-      `kdcube.copilot@2026-04-03-19-05`, where deployment config may override selected role
-      models or other non-secret bundle properties.
+    - Ingress can now publish browser runtime config directly from platform settings,
+      reducing operational coupling to frontend image/static config files.
+    - Frontend clients can consume server-published tenant, project, route prefix,
+      debug, auth, and Turnstile development-token settings.
+    - Chat history restoration preserves more persisted timestamps for thinking,
+      citations, assistant attempts, and user followups, which improves temporal
+      consistency when replaying conversations.
+    - Runtime event handling has been prepared for richer agent scenarios where
+      agents need to react to ongoing user actions within the same conversation
+      timeline.
+    - Deployment descriptors and docs now describe frontend runtime config as a
+      first-class `assembly.frontend.config` section.
 
     Validation and regression coverage:
 
-    - Added regression coverage for reserved bundle props surviving authoritative-store reload.
-    - Added regression coverage for later reserved bundle prop updates continuing to persist after
-      reload.
+    - TypeScript checks passed for the OSS frontend changes.
+    - Python compile checks passed for the shared frontend config builder.
+    - Terraform formatting checks passed for the touched deployment Terraform trees.
+    - Added and updated tests around CLI descriptor behavior, local sidecars, runtime
+      context, singleton request context, conversation scoping, and chat continuation
+      handling.
 
     Changelog
 
-    - Preserved explicitly configured reserved bundles in the authoritative descriptor store.
-    - Fixed loss of deployment-scoped props for built-in bundles under file-backed authority.
-    - Added reserved-bundle persistence regressions to prevent future reload/save regressions.
+    - Added shared frontend runtime config builder and public control-plane frontend
+      config endpoint.
+    - Updated OSS frontend config loading and route-prefix behavior.
+    - Replaced new descriptor/browser examples of `hardcoded` auth with `simple`.
+    - Added compatibility handling for legacy `hardcoded` frontend auth config.
+    - Fixed chat timeline ordering for followups, timeline text, subsystem widgets,
+      and assistant attempts.
+    - Improved conversation history restoration for external/followup user messages
+      and attachments.
+    - Added gateway maintenance documentation including anonymous rate-limit reset
+      guidance.
+    - Expanded bundle, descriptor, runtime config, and agent/runtime documentation.
+    - Added Node sidecar bridge example and runtime support improvements.
+    - Improved release workflow rerun behavior for existing release images.
 config:
-    version: "2026.4.23.17"
+    version: "2026.4.28.2229"
