@@ -32,11 +32,14 @@ sequence of commands, descriptor edits, and bundle-authoring steps.
 - [skills.md](./skills.md) — skill catalog and the `kdcube-dev` intent map that
   routes natural-language requests.
 - [bundle-authoring.md](./bundle-authoring.md) — how the plugin creates, wraps,
-  and extends bundles; read-order for docs; placement and registration rules.
+  and extends bundles; Tier 1/Tier 2 read-order for docs; placement and
+  registration rules.
 - [runtime-flows.md](./runtime-flows.md) — first-time setup (bootstrap /
   use-descriptors) and the reload + verify cycle.
 - [extending.md](./extending.md) — adding subcommands and skills, gotchas to
   know before changing the plugin.
+- [codex.md](./codex.md) — the Codex CLI port of the plugin: differences from
+  the Claude Code plugin, prompt files, configuration, install / uninstall.
 
 ## Install and distribution
 

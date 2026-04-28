@@ -67,7 +67,28 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
 - Noted versatile is NOT a reference for `@cron` / `@venv` → Tier 2 (`bundle-scheduled-jobs`, `bundle-venv`) + how-to §4.1 snippets
 - Dropped macOS docker-restart gotcha from `SKILL.md`
 
-**2026-04-24** — agent-facets section + Tier 1 doc reorder + URL path fix
+**2026-04-22** — `819b3eeb`
+- Restored 5 YAML descriptor templates lost when the plugin was originally moved
+  to the clean branch: `assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`,
+  `gateway.yaml`, `secrets.yaml` — these are the templates used by `cmd_bootstrap`
+  to generate a fresh descriptor profile
+
+**2026-04-23** — `488d0125` — Codex CLI port + header-first gate
+- Built `codex_plugin/` — Codex CLI port of the builder plugin. Shares `kdcube_local.py`
+  and templates from `builder_plugin/` (copied by `install.sh`); adapted to Codex's
+  extension model: `AGENTS.md` as always-in-context rule block + `prompts/*.md` as slash
+  commands
+- Prompt files: `kdcube-dev`, `kdcube-bundle-builder`, `kdcube-bootstrap`,
+  `kdcube-use-descriptors`, `kdcube-runtime`, `kdcube-verify-reload`, `kdcube-cli`,
+  `kdcube-ui-test` (8 total)
+- `install.sh`: idempotent, copies runtime + templates from sibling `builder_plugin/`,
+  merges `AGENTS.md` block between HTML markers (`<!-- kdcube-builder:begin/end -->`)
+- `uninstall.sh`: strips prompt files and AGENTS.md block, removes runtime dir
+- Added **header-first gate** to both plugins (builder + codex): Tier 2 docs and
+  descriptor docs — fetch, read title + first section only, decide if full read needed;
+  Tier 1 docs stay always-full-read
+
+**2026-04-24** — `13a764e8` — Agent facets + Tier 1 doc reorder + URL path fix
 - Added **Agent task facets** section to both `bundle-builder/SKILL.md` and `kdcube-dev/SKILL.md`:
   lists creator/integrator/configurator/deployer/local-QA/integration-QA/document-reader as
   routing hints (not separate personas); `kdcube-dev` delegates bundle authoring to `bundle-builder`
@@ -75,23 +96,8 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
   before all others) in both skills
 - Added `bundle-runtime-configuration-and-secrets-README.md` to Tier 1 in both skills
 - Reordered Tier 1 fetch sequence: navigate → test → write → config (was: write → configure → test)
-- Fixed URL path for descriptor docs: `docs/service/configuration/` → `docs/configuration/`
+- Fixed URL path for descriptor docs in builder_plugin skills: `docs/service/configuration/` → `docs/configuration/`
 - Removed `service-config-README.md` from descriptor doc list (no longer exists at that path)
-
-**2026-04-23** — codex_plugin + header-first gate
-- Built `codex_plugin/` — Codex CLI port of the builder plugin. Shares `kdcube_local.py`
-  and templates from `builder_plugin/` (copied by `install.sh`); adapted to Codex's
-  extension model: `AGENTS.md` as always-in-context rule block + `prompts/*.md` as slash
-  commands
-- Prompt files: `kdcube-dev`, `kdcube-bundle-builder`, `kdcube-bootstrap`,
-  `kdcube-use-descriptors`, `kdcube-runtime`, `kdcube-verify-reload`, `kdcube-cli`,
-  `kdcube-ui-test` (8 total; last 4 were missing and added)
-- `install.sh`: idempotent, copies runtime + templates from sibling `builder_plugin/`,
-  merges `AGENTS.md` block between HTML markers (`<!-- kdcube-builder:begin/end -->`)
-- `uninstall.sh`: strips prompt files and AGENTS.md block, removes runtime dir
-- Added **header-first gate** to both plugins (builder + codex): Tier 2 docs and
-  descriptor docs — fetch, read title + first section only, decide if full read needed;
-  Tier 1 docs stay always-full-read
 
 ---
 
