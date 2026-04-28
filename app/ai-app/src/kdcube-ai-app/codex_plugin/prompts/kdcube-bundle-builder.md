@@ -10,6 +10,11 @@ application into a bundle, or adding features to an existing bundle.
 Decorators, import paths, descriptor fields, runtime paths, and mount semantics change
 between releases — guessing them produces bundles that "load" but silently misbehave.
 
+**`.kdcube-runtime` is read-only.** You may read files under `$WORKDIR` (typically
+`~/.kdcube/kdcube-runtime`) to inspect current state, but must never write or edit them.
+Register bundles and update descriptors exclusively via `kdcube_local.py bootstrap` or
+the `kdcube` CLI. Bundle source files outside `$WORKDIR` are editable as normal.
+
 **This rule is absolute.** It applies every single time, including:
 
 - "small" edits to an existing bundle
@@ -168,24 +173,28 @@ the bundle directory happens to sit directly under `host_bundles_path` with that
 
 ### Write a bundle from scratch
 
-1. Resolve `$WORKDIR` and `$BUNDLES_YAML` (ask if the workdir is not found).
+1. Resolve `$WORKDIR` (ask if not found).
 2. Read Tier 1 (3 how-to docs + versatile reference bundle end-to-end).
 3. If the task hits a specialized feature (`@cron`, `@venv`, KS, Node bridge, isolated
    exec, specific descriptor edit), pull the matching Tier 2 doc.
 4. Pick a host directory (default `~/.kdcube/bundles/<bundle-id>/`). Create it and write
    `entrypoint.py` + `__init__.py`.
-5. Register in `$BUNDLES_YAML` using the correct container path.
+5. Register the bundle via CLI — **do not edit `$WORKDIR` files directly**:
+   ```bash
+   python3 "${KDCUBE_BUILDER_ROOT:-$HOME/.codex/kdcube-builder}/kdcube_local.py" bootstrap <bundle-id> <bundle-path>
+   ```
+   Pass `--host-bundles-path <parent>` if the bundle lives outside the current mount root.
 6. Run bundle tests, then reload + verify-reload.
 
 ### Wrap an existing application into a bundle
 
-1. Resolve `$WORKDIR` and `$BUNDLES_YAML`.
+1. Resolve `$WORKDIR` (ask if not found).
 2. Read the existing app's code to understand entry points, APIs, and data.
 3. Read Tier 1.
 4. Map the app's functionality to bundle primitives (`@api`, `@ui_main`, `@cron`, etc.).
 5. Pick a host directory. Copy the app source in (or under a subdir) and call it from
    `entrypoint.py`. Do not modify the original app tree.
-6. Register, run tests, reload + verify-reload.
+6. Register via `kdcube_local.py bootstrap` (see step 5 above), run tests, reload + verify-reload.
 
 ### Add a feature to an existing bundle
 

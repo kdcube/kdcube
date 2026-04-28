@@ -20,5 +20,9 @@ Key points:
 - Docs are NOT on disk — fetch from GitHub; only fall back to local `Read` if
   `KDCUBE_REPO_ROOT` is set.
 - For bundle authoring specifically, hand off to `/kdcube-bundle-builder`.
+- **`.kdcube-runtime` is read-only.** You may read files under `$WORKDIR` to inspect
+  current state, but must never write or edit them. All runtime config mutations —
+  descriptors, config files, secrets — must go through the helper script or the `kdcube`
+  CLI. Bundle source files outside `$WORKDIR` are editable as normal.
 
 Start with one short status line telling the user what you're doing, then execute.

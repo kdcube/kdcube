@@ -37,5 +37,8 @@ python3 "${KDCUBE_BUILDER_ROOT:-$HOME/.codex/kdcube-builder}/kdcube_local.py" <a
 - After `reload`, always follow up with `verify-reload <bundle-id>` to confirm the cache rotated.
 - After `bundle-tests`, summarize pass / fail clearly.
 - `bundle-tests` needs `KDCUBE_REPO_ROOT` pointing at a local `kdcube-ai-app` clone — if unset, ask the user.
+- **`.kdcube-runtime` is read-only.** You may read files under `$WORKDIR` (e.g.
+  `~/.kdcube/kdcube-runtime`) to inspect current state, but must never write or edit them
+  directly. All runtime config mutations must go through this helper script or the `kdcube` CLI.
 
 CLI docs: https://pypi.org/project/kdcube-cli/

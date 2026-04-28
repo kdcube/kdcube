@@ -134,10 +134,11 @@ path. Do not ask the user for a local repo.
   the bundle was never in the proc cache. Recheck the `id` and `path` in `bundles.yaml`.
 - Any container restart (secrets injection, `stop`/`start`, Docker restart) drops the proc
   cache — reload every active bundle immediately after.
-- **macOS Docker Desktop + edits to `bundles.yaml`:** Docker Desktop on macOS does not
-  refresh a file-level bind mount when the host file's inode changes, and the Edit/Write
-  tools replace inodes. After editing `$WORKDIR/config/bundles.yaml` the container still
-  reads the old file until you restart `chat-proc`:
+- **macOS Docker Desktop + `bundles.yaml` changes:** Docker Desktop on macOS does not
+  refresh a file-level bind mount when the host file's inode changes. Since `$WORKDIR`
+  config files are read-only for the AI (use `kdcube_local.py bootstrap` or the `kdcube`
+  CLI to update them), any change made via CLI that rewrites `$WORKDIR/config/bundles.yaml`
+  requires restarting `chat-proc` so the container picks up the new inode:
   ```bash
   docker restart all_in_one_kdcube-chat-proc-1
   ```
@@ -224,3 +225,9 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/kdcube_local.py" verify-reload <bundle_id
 - **Before creating or editing a bundle** — resolve `$WORKDIR` (probe `~/.kdcube/kdcube-runtime` first, then ask the user if missing). The bundle directory can live anywhere on the host; register it in `bundles.yaml` with the **container path** (`/bundles/<bundle-id>`). If the host dir is outside the current `HOST_BUNDLES_PATH`, re-bootstrap so its parent becomes the mount root.
 - **Always pair `reload` with `verify-reload`** — reload alone does not confirm the new code is live.
 - **`--secrets-prompt` is interactive** — never run it from Claude Code. Use `--secrets-set` instead.
+- **`.kdcube-runtime` is read-only — never use `Edit` or `Write` tools on any file inside
+  `$WORKDIR`.** You may `Read` files there to inspect current state (e.g. check `bundles.yaml`
+  or `assembly.yaml`). All mutations — descriptor edits, config changes, secrets — must go
+  through the `kdcube` CLI or the `kdcube_local.py` helper script. Bundle source files that
+  live outside `$WORKDIR` (e.g. `~/.kdcube/bundles/<id>/` or a user-specified directory) are
+  editable as normal.

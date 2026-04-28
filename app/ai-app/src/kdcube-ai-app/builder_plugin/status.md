@@ -88,6 +88,15 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
   descriptor docs — fetch, read title + first section only, decide if full read needed;
   Tier 1 docs stay always-full-read
 
+**2026-04-29** — `.kdcube-runtime` read-only rule
+- Added hard rule across all 6 skill/prompt files (builder_plugin + codex_plugin): AI may
+  `Read` files in `$WORKDIR` to inspect state, but must never use `Edit`/`Write` tools there
+- All runtime config mutations (descriptors, config files, secrets) must go through `kdcube`
+  CLI or `kdcube_local.py` helper exclusively
+- Workflows in `bundle-builder` (both plugins): registration step replaced with
+  `kdcube_local.py bootstrap` call instead of direct `bundles.yaml` edit
+- macOS Docker gotcha in `kdcube-dev/SKILL.md` reformulated to reflect read-only constraint
+
 **2026-04-24** — `13a764e8` — Agent facets + Tier 1 doc reorder + URL path fix
 - Added **Agent task facets** section to both `bundle-builder/SKILL.md` and `kdcube-dev/SKILL.md`:
   lists creator/integrator/configurator/deployer/local-QA/integration-QA/document-reader as
