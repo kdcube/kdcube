@@ -218,3 +218,5 @@ app/ai-app/ui/chat-web-app/src/**/*.js
 /app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v3/debug/
 /app/ai-app/src/kdcube-ai-app/kdcube_cli/operational/
 /app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/debug/rendering/
+/app/ai-app/docs/sdk/agents/react/design/custom-external-events-handover-README.md
+/app/ai-app/docs/sdk/agents/react/design/frontend-followup-parity-README.md
