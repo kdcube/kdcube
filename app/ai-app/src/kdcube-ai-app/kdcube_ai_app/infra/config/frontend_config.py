@@ -133,7 +133,7 @@ def _assembly_auth_type(assembly: Mapping[str, Any] | None) -> str:
     if auth_type == "simple" or auth_idp == "simple":
         return "hardcoded"
     if auth_type == "cognito" or auth_idp == "cognito":
-        return "oauth"
+        return "cognito"
     return "hardcoded"
 
 
@@ -187,15 +187,13 @@ def build_frontend_config(
     company = as_text(company_name) or assembly_company or "KDCube"
     auth = copy.deepcopy(merged.get("auth") if isinstance(merged.get("auth"), dict) else {})
     auth_type = as_text(auth.get("authType")) or _assembly_auth_type(assembly)
-    if auth_type == "cognito":
-        auth_type = "oauth"
     auth["authType"] = auth_type
 
     id_token_header = as_text(get_nested(assembly or {}, "auth", "id_token_header_name")) or "X-ID-Token"
     if auth_type == "hardcoded":
         if auth.get("token") in (None, "", "test-admin-token-123"):
             auth["token"] = token
-    elif auth_type == "oauth":
+    elif auth_type in {"cognito", "oauth"}:
         auth.pop("token", None)
         oidc_cfg = copy.deepcopy(auth.get("oidcConfig") if isinstance(auth.get("oidcConfig"), dict) else {})
         region = as_text(cognito_region) or as_text(get_nested(assembly or {}, "auth", "cognito", "region"))
