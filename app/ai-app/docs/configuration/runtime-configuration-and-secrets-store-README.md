@@ -24,7 +24,7 @@ Use this page when you need to know:
 - what Redis does and does not own
 - what changes in local file mode vs `aws-sm`
 - where bundle prop writes persist
-- what `kdcube --export-live-bundles` can reconstruct
+- what `kdcube export` can reconstruct
 
 If you are deciding where a value belongs as a bundle author, start with:
 
@@ -150,7 +150,7 @@ User-scoped bundle state is intentionally outside descriptors.
 
 That is why:
 
-- user state is not exported by `kdcube --export-live-bundles`
+- user state is not exported by `kdcube export`
 - user state is not reconstructed into `bundles.yaml`
 - user state is not reconstructed into `bundles.secrets.yaml`
 
@@ -174,7 +174,7 @@ So `aws-sm` is not “one single JSON blob for everything”.
 
 ## Export and ejection behavior
 
-`kdcube --export-live-bundles` is bundle-state export only.
+`kdcube export` is bundle-state export only.
 
 It reconstructs:
 

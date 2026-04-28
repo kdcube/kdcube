@@ -304,8 +304,7 @@ For ECS / `aws-sm` deployments, the current effective live deployment-scoped
 bundle state can be exported directly from AWS Secrets Manager:
 
 ```bash
-kdcube \
-  --export-live-bundles \
+kdcube export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \
@@ -391,7 +390,7 @@ It is separate from the broader descriptor mounts used by `read_plain(...)`.
 
 In `aws-sm` deployments, `bundles.yaml` is the descriptor/export shape, but the
 live authoritative deployment-scoped bundle state is stored in grouped AWS SM
-documents and can be exported back with `--export-live-bundles`. In that mode,
+documents and can be exported back with `kdcube export`. In that mode,
 mounted `/config/bundles.yaml` is only a deploy snapshot, not the live
 authoritative store.
 
@@ -547,14 +546,138 @@ This is intended for **local development** only.
 
 ## 9) Operational commands
 
+Inspect global CLI state (defaults + running deployment):
+
+```bash
+kdcube --info
+```
+
+Inspect a specific workdir deployment:
+
+```bash
+kdcube --info --workdir ~/.kdcube/kdcube-runtime/acme__prod
+```
+
+Initialize a workdir without starting Docker:
+
+```bash
+kdcube init \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /path/to/descriptors \
+  --latest
+```
+
+Start the stack for an already-initialized workdir:
+
+```bash
+kdcube start --workdir ~/.kdcube/kdcube-runtime/acme__prod
+```
+
+Reload a bundle after descriptor changes:
+
+```bash
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/acme__prod
+```
+
+Export live bundle descriptors:
+
+```bash
+kdcube export --workdir ~/.kdcube/kdcube-runtime/acme__prod --out-dir /tmp/export
+```
+
 Stop the local workdir stack:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --stop
+kdcube stop --workdir ~/.kdcube/kdcube-runtime
 ```
 
 Stop and remove volumes too:
 
 ```bash
-kdcube --workdir ~/.kdcube/kdcube-runtime --stop --remove-volumes
+kdcube stop --workdir ~/.kdcube/kdcube-runtime --remove-volumes
 ```
+
+Save operator defaults:
+
+```bash
+kdcube defaults \
+  --default-workdir ~/.kdcube/kdcube-runtime \
+  --default-tenant acme \
+  --default-project prod
+```
+
+---
+
+## 10) Operator defaults (`kdcube defaults`)
+
+`kdcube defaults` persists values to `~/.kdcube/cli-defaults.json`:
+
+| Field | Flag | Purpose |
+|---|---|---|
+| `default_workdir` | `--default-workdir` | Fallback workdir when `--workdir` is omitted from a subcommand |
+| `default_tenant` | `--default-tenant` | Displayed in global `--info`; used by `kdcube export` as fallback tenant |
+| `default_project` | `--default-project` | Displayed in global `--info`; used by `kdcube export` as fallback project |
+
+`kdcube start`, `kdcube stop`, `kdcube reload`, and `kdcube export` resolve the
+target workdir with the following precedence:
+
+1. `--workdir` passed explicitly → use it.
+2. `--workdir` omitted, `default_workdir` present in `cli-defaults.json` → use
+   that.
+3. Neither provided → error:
+   ```
+   No target workdir specified.
+   Pass --workdir explicitly or configure a default:
+     kdcube defaults --default-workdir <path>
+   ```
+
+`kdcube --info` (without `--workdir`) reads `cli-defaults.json` and displays the
+configured values, or reports that no defaults are set.
+
+---
+
+## 11) Single-deployment guard (`cli-lock.json`)
+
+The file `~/.kdcube/cli-lock.json` is a per-machine deployment lock.
+
+It is written when a deployment starts and cleared when it stops.
+
+Format:
+
+```json
+{
+  "tenant": "...",
+  "project": "...",
+  "workdir": "...",
+  "docker_dir": "...",
+  "env_file": "..."
+}
+```
+
+### Guard at start (`kdcube start`)
+
+Before starting, the CLI reads the lock and runs `docker compose ps` against it:
+
+- No lock → proceed normally.
+- Lock matches the target `tenant/project` → proceed (same deployment restart).
+- Lock points to a **different** deployment and services are **live** → abort with
+  a message showing which deployment is running and how to stop it first.
+- Lock points to a different deployment but services are **not live** (stale) →
+  lock is cleared automatically, start proceeds.
+
+### Guard at stop (`kdcube stop`)
+
+Before stopping, the CLI checks:
+
+1. `docker compose ps` for the target workdir — if nothing is running →
+   `"Deployment is not running"`.
+2. If something is running and the lock matches the target `tenant/project` →
+   stop and clear the lock.
+3. If something is running but the lock points to a **different** deployment →
+   abort with a message identifying the running deployment.
+
+### `kdcube --info` and stale locks
+
+Global `kdcube --info` (without `--workdir`) verifies the recorded lock via
+`docker compose ps`. If the recorded deployment is no longer running, the lock
+is considered stale, reported as such, and cleared automatically.

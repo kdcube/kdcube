@@ -267,8 +267,7 @@ Build from:
 The CLI can export the current live state with IAM only:
 
 ```bash
-kdcube \
-  --export-live-bundles \
+kdcube export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \

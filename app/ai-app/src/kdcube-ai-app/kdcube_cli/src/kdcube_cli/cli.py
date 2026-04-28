@@ -34,6 +34,7 @@ DEFAULT_REPO = "https://github.com/kdcube/kdcube-ai-app.git"
 DEFAULT_DIR = Path.home() / ".kdcube" / "kdcube-ai-app"
 DEFAULT_WORKDIR = Path.home() / ".kdcube" / "kdcube-runtime"
 DEFAULT_DEFAULTS_FILE = Path.home() / ".kdcube" / "cli-defaults.json"
+CLI_LOCK_FILE = Path.home() / ".kdcube" / "cli-lock.json"
 DEFAULT_REPO_DIRNAME = "repo"
 KDCUBE_REPOS = {
     "kdcube-chat-ingress",
@@ -138,6 +139,8 @@ def stop_compose_stack(
             "Pass --workdir for the runtime you want to stop or re-run the installer first."
         )
 
+    _check_before_stop(workdir, env_file, ctx.docker_dir)
+
     cmd = [
         "docker",
         "compose",
@@ -150,10 +153,58 @@ def stop_compose_stack(
         cmd.append("-v")
 
     _run_compose(console, cmd, cwd=ctx.docker_dir)
+    _clear_cli_lock()
     console.print("[green]Docker compose stopped.[/green]")
     console.print(f"[dim]Workdir:[/dim] {workdir}")
     if not remove_volumes:
         console.print("[dim]Host data under the workdir was preserved.[/dim]")
+
+
+def start_compose_stack(
+    console: Console,
+    *,
+    repo_root: Path,
+    workdir: Path,
+    build: bool = False,
+) -> None:
+    ctx = _build_paths_for_repo(repo_root, workdir)
+    env_file = ctx.config_dir / ".env"
+    if not env_file.exists():
+        raise SystemExit(
+            f"Compose env file not found: {env_file}.\n"
+            "Initialize the workdir first:\n"
+            "  kdcube init"
+        )
+    env_main = installer_mod.load_env_file(env_file)
+    token_overrides = installer_mod.generate_runtime_tokens()
+    runtime_env = installer_mod.write_env_overlay(env_file, token_overrides)
+    _tenant, _project = _parse_workdir_namespace(workdir)
+    build_flag = ["--build"] if build else []
+    try:
+        _write_cli_lock(
+            tenant=_tenant, project=_project, workdir=workdir,
+            docker_dir=ctx.docker_dir, env_file=env_file,
+        )
+        _run_compose(
+            console,
+            ["docker", "compose", "--env-file", str(runtime_env), "up", "-d", *build_flag],
+            cwd=ctx.docker_dir,
+        )
+        console.print("[green]Docker compose started.[/green]")
+        proxy_http_port = (
+            env_main.entries.get("KDCUBE_PROXY_HTTP_PORT", (None, None))[1]
+            or env_main.entries.get("KDCUBE_UI_PORT", (None, None))[1]
+            or "80"
+        )
+        routes_prefix = installer_mod.resolve_frontend_routes_prefix(
+            env_main.entries.get("PATH_TO_FRONTEND_CONFIG_JSON", (None, None))[1]
+        )
+        proxy_url = installer_mod.build_ui_url(proxy_http_port, routes_prefix)
+        console.print("Open the UI:")
+        console.print(f"  [link={proxy_url}]{proxy_url}[/link]")
+    finally:
+        if runtime_env.exists():
+            runtime_env.unlink(missing_ok=True)
 
 
 def clean_docker_images(console: Console) -> None:
@@ -580,6 +631,41 @@ def print_runtime_info(console: Console, *, repo_root: Path, workdir: Path) -> N
             f"[dim]Example mapping:[/dim] {host_managed_bundles_path}/repo__bundle.demo__main "
             f"-> {container_managed_bundles_root}/repo__bundle.demo__main"
         )
+
+
+def print_global_info(console: Console, cli_defaults: dict) -> None:
+    console.print("[bold]KDCube Global Info[/bold]")
+
+    has_defaults = bool(cli_defaults)
+    if not has_defaults:
+        console.print("[dim]No defaults configured.[/dim]")
+        console.print(
+            "  Set defaults with: kdcube defaults --default-workdir <path> "
+            "--default-tenant <t> --default-project <p>"
+        )
+    else:
+        console.print(f"[dim]Default workdir:[/dim]  {cli_defaults.get('default_workdir') or '[not set]'}")
+        console.print(f"[dim]Default tenant:[/dim]   {cli_defaults.get('default_tenant') or '[not set]'}")
+        console.print(f"[dim]Default project:[/dim]  {cli_defaults.get('default_project') or '[not set]'}")
+
+    console.print()
+    lock = _read_cli_lock()
+    if lock is None:
+        console.print("[dim]No running deployment recorded.[/dim]")
+        return
+
+    running = _lock_running_services(lock)
+    if running:
+        console.print("[bold]Currently Running Deployment[/bold]")
+        console.print(f"  [dim]Tenant / project:[/dim] {lock.get('tenant') or '?'} / {lock.get('project') or '?'}")
+        console.print(f"  [dim]Workdir:[/dim]          {lock.get('workdir') or '?'}")
+        console.print(f"  [dim]Services:[/dim]         {', '.join(sorted(running))}")
+    else:
+        console.print("[yellow]Stale lock found (recorded deployment is not running).[/yellow]")
+        console.print(f"  Tenant / project: {lock.get('tenant') or '?'} / {lock.get('project') or '?'}")
+        console.print(f"  Workdir: {lock.get('workdir') or '?'}")
+        _clear_cli_lock()
+        console.print("[dim]Stale lock cleared.[/dim]")
 
 
 def _load_bundle_ids_from_descriptor(path: Path) -> set[str]:
@@ -1207,85 +1293,142 @@ def _save_cli_defaults(data: dict) -> None:
     DEFAULT_DEFAULTS_FILE.write_text(json.dumps(data, indent=2))
 
 
-def _check_targeted_command_has_workdir(
+def _parse_workdir_namespace(workdir: Path) -> tuple[str, str]:
+    name = workdir.name
+    if "__" in name:
+        tenant, _, project = name.partition("__")
+        return tenant, project
+    return "", name
+
+
+def _read_cli_lock() -> dict | None:
+    try:
+        return json.loads(CLI_LOCK_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def _write_cli_lock(
     *,
-    is_targeted_command: bool,
-    workdir_arg: bool,
-    cli_defaults: dict,
+    tenant: str,
+    project: str,
+    workdir: Path,
+    docker_dir: Path,
+    env_file: Path,
 ) -> None:
-    """Raise SystemExit when a targeted command has no resolvable workdir.
-
-    Targeted commands (--stop, --info, --bundle-reload, --export-live-bundles)
-    require an explicit --workdir or a configured default_workdir.  Without
-    either, the CLI would silently fall back to DEFAULT_WORKDIR and either
-    pick the wrong deployment or emit a confusing "multiple candidates" error.
-    """
-    if is_targeted_command and not workdir_arg and "default_workdir" not in cli_defaults:
-        raise SystemExit(
-            "No target workdir specified.\n"
-            "Pass --workdir explicitly or configure a default:\n"
-            "  kdcube --set-defaults --default-workdir <path>"
+    CLI_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CLI_LOCK_FILE.write_text(
+        json.dumps(
+            {
+                "tenant": tenant,
+                "project": project,
+                "workdir": str(workdir),
+                "docker_dir": str(docker_dir),
+                "env_file": str(env_file),
+            },
+            indent=2,
         )
+    )
 
 
-def _check_no_other_local_stack_running(
+def _clear_cli_lock() -> None:
+    try:
+        CLI_LOCK_FILE.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def _lock_running_services(lock: dict) -> set[str]:
+    """Return the set of running Docker services for a lock entry, or empty set if stale/inaccessible."""
+    docker_dir = Path(lock["docker_dir"]) if lock.get("docker_dir") else None
+    env_file = Path(lock["env_file"]) if lock.get("env_file") else None
+    if not (docker_dir and env_file and docker_dir.exists() and env_file.exists()):
+        return set()
+    try:
+        return _compose_running_services(docker_dir, env_file)
+    except Exception:
+        return set()
+
+
+def _check_before_start(
     console: Console,
     *,
-    target_workdir: Path,
-    repo_root: Path,
+    tenant: str,
+    project: str,
 ) -> None:
-    """Refuse if any sibling local KDCube compose stack is already running.
+    """Raise SystemExit if a different deployment is already running. Clear stale locks silently."""
+    lock = _read_cli_lock()
+    if lock is None:
+        return
+    lock_tenant = str(lock.get("tenant", "")).strip()
+    lock_project = str(lock.get("project", "")).strip()
+    if lock_tenant == tenant and lock_project == project:
+        return
+    running = _lock_running_services(lock)
+    if running:
+        raise SystemExit(
+            f"Another local KDCube deployment is already running.\n"
+            f"  Tenant  : {lock_tenant}\n"
+            f"  Project : {lock_project}\n"
+            f"  Workdir : {lock.get('workdir', '?')}\n"
+            f"  Services: {', '.join(sorted(running))}\n\n"
+            f"Stop it first, then retry:\n"
+            f"  kdcube stop --workdir {lock.get('workdir', '<workdir>')}"
+        )
+    _clear_cli_lock()
 
-    Scans runtime directories under target_workdir.parent (the base workdir)
-    AND under all sibling base directories at target_workdir.parent.parent
-    (the kdcube home dir, typically ~/.kdcube/).  The broader scan is required
-    because two commands may use different --workdir bases (e.g. kdcube-runtime
-    vs kdcube-runtime2), which would be invisible to a single-level scan.
 
-    Errors from individual candidate checks are silently skipped so a missing
-    or broken sibling does not block the operator.
-    """
-    base_workdir = target_workdir.parent
-    kdcube_home = base_workdir.parent
-
-    all_candidates: list[Path] = list(_runtime_candidates(base_workdir))
-    if kdcube_home.exists() and kdcube_home.is_dir():
-        for sibling_base in sorted(kdcube_home.iterdir()):
-            if sibling_base.is_dir() and sibling_base.resolve() != base_workdir.resolve():
-                all_candidates.extend(_runtime_candidates(sibling_base))
-
-    target_docker_dir: Path | None = None
+def _check_before_stop(workdir: Path, env_file: Path, docker_dir: Path) -> None:
+    """Raise SystemExit if the target deployment is not running or a different one is."""
+    running = set()
     try:
-        target_docker_dir = _build_paths_for_repo(repo_root, target_workdir).docker_dir.resolve()
+        running = _compose_running_services(docker_dir, env_file)
     except Exception:
         pass
 
-    for candidate in all_candidates:
-        if candidate.resolve() == target_workdir.resolve():
-            continue
-        env_file = candidate / "config" / ".env"
-        if not env_file.exists():
-            continue
-        try:
-            ctx = _build_paths_for_repo(repo_root, candidate)
-            # Two workdirs that share the same docker_dir use the same Docker
-            # Compose project name.  docker compose ps would report the
-            # target's own running containers as belonging to this sibling —
-            # a false positive.  They are not independent deployments and
-            # cannot run concurrently regardless of ports, so skip them.
-            if target_docker_dir is not None and ctx.docker_dir.resolve() == target_docker_dir:
-                continue
-            running = _compose_running_services(ctx.docker_dir, env_file)
-        except (SystemExit, Exception):
-            continue
-        if running:
+    if not running:
+        raise SystemExit(
+            f"Deployment is not running.\n"
+            f"  Workdir: {workdir}"
+        )
+
+    target_tenant, target_project = _parse_workdir_namespace(workdir)
+    lock = _read_cli_lock()
+    if lock is not None:
+        lock_tenant = str(lock.get("tenant", "")).strip()
+        lock_project = str(lock.get("project", "")).strip()
+        if lock_tenant != target_tenant or lock_project != target_project:
             raise SystemExit(
-                f"Another local KDCube deployment is already running.\n"
-                f"  Workdir : {candidate}\n"
-                f"  Services: {', '.join(sorted(running))}\n\n"
-                f"Stop it first, then retry:\n"
-                f"  kdcube --workdir {candidate} --stop"
+                f"Cannot stop: a different deployment is currently running.\n"
+                f"  Running  : {lock_tenant} / {lock_project}  ({lock.get('workdir', '?')})\n"
+                f"  Requested: {target_tenant} / {target_project}  ({workdir})\n\n"
+                f"Stop the running deployment first:\n"
+                f"  kdcube stop --workdir {lock.get('workdir', '<workdir>')}"
             )
+
+
+def _resolve_subcommand_workdir(workdir_arg: str | None, cli_defaults: dict) -> Path:
+    if workdir_arg is not None:
+        return Path(os.path.expanduser(workdir_arg)).resolve()
+    if "default_workdir" in cli_defaults:
+        return Path(cli_defaults["default_workdir"]).resolve()
+    raise SystemExit(
+        "No target workdir specified.\n"
+        "Pass --workdir explicitly or configure a default:\n"
+        "  kdcube defaults --default-workdir <path>"
+    )
+
+
+def _resolve_subcommand_repo(path_arg: str, *, workdir: Path) -> Path:
+    meta_repo = _repo_path_from_install_meta(_resolve_cli_workdir(workdir))
+    if meta_repo is not None:
+        return meta_repo
+    return Path(os.path.expanduser(path_arg)).resolve()
+
+
+
+
+
 
 
 def _bootstrap_repo_for_defaults(
@@ -1358,6 +1501,15 @@ def main() -> None:
         help="With --descriptors-location, checkout the selected platform release source and build images locally instead of pulling release images",
     )
     parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help=(
+            "When using the default-descriptor bootstrap (no --descriptors-location), "
+            "prompt for required fields that are missing in the assembly instead of failing"
+        ),
+    )
+    parser.add_argument(
         "--reset-config",
         action="store_true",
         help="Re-run config prompts and allow editing existing values",
@@ -1371,11 +1523,6 @@ def main() -> None:
         "--clean",
         action="store_true",
         help="Clean dangling images, build cache, and old KDCube image tags",
-    )
-    parser.add_argument(
-        "--stop",
-        action="store_true",
-        help="Stop the local Docker Compose stack for the selected workdir",
     )
     parser.add_argument(
         "--remove-volumes",
@@ -1414,21 +1561,6 @@ def main() -> None:
         help="With --dry-run, print full env file contents",
     )
     parser.add_argument(
-        "--bundle-reload",
-        default="",
-        help="Reapply runtime workspace bundles.yaml and clear proc bundle caches for local development. Validates that the given bundle id exists in the current descriptor.",
-    )
-    parser.add_argument(
-        "--info",
-        action="store_true",
-        help="Print resolved runtime info for the selected workdir, including descriptor files, install metadata, and host/container bundle mount mappings.",
-    )
-    parser.add_argument(
-        "--export-live-bundles",
-        action="store_true",
-        help="Export the current effective live bundles.yaml and bundles.secrets.yaml from the active bundle authority.",
-    )
-    parser.add_argument(
         "--tenant",
         default="",
         help="Tenant for --export-live-bundles when exporting from AWS SM. Ignored when exporting workspace descriptors directly.",
@@ -1459,11 +1591,6 @@ def main() -> None:
         help="Explicit AWS Secrets Manager prefix for --export-live-bundles when exporting from AWS SM. Default is kdcube/<tenant>/<project>.",
     )
     parser.add_argument(
-        "--set-defaults",
-        action="store_true",
-        help="Save --default-tenant, --default-project, and --default-workdir as persistent operator defaults",
-    )
-    parser.add_argument(
         "--default-tenant",
         default="",
         help="Default tenant to persist with --set-defaults",
@@ -1478,6 +1605,61 @@ def main() -> None:
         default="",
         help="Default workdir to persist with --set-defaults",
     )
+    parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Print global CLI info (defaults, running deployment) or, when --workdir is given, deployment-level runtime info",
+    )
+
+    subparsers = parser.add_subparsers(dest="command")
+
+    _sp = subparsers.add_parser("stop", help="Stop the local Docker Compose stack")
+    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to stop")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--remove-volumes", action="store_true", help="Also pass -v to docker compose down")
+
+    _sp = subparsers.add_parser("reload", help="Reload a bundle from its descriptor")
+    _sp.add_argument("bundle_id", help="Bundle ID to reload")
+    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+
+    _sp = subparsers.add_parser("export", help="Export live bundle descriptors")
+    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--tenant", default="", help="Tenant for AWS SM export")
+    _sp.add_argument("--project", default="", help="Project for AWS SM export")
+    _sp.add_argument("--out-dir", default="", help="Output directory for exported files")
+    _sp.add_argument("--aws-region", default="", help="AWS region for AWS SM export")
+    _sp.add_argument("--aws-profile", default="", help="AWS profile for AWS SM export")
+    _sp.add_argument("--aws-sm-prefix", default="", help="AWS SM prefix override")
+
+    _sp = subparsers.add_parser("defaults", help="Save persistent operator defaults")
+    _sp.add_argument("--default-tenant", default="", help="Default tenant to persist")
+    _sp.add_argument("--default-project", default="", help="Default project to persist")
+    _sp.add_argument("--default-workdir", default="", help="Default workdir to persist")
+
+    _sp = subparsers.add_parser("start", help="Start the Docker Compose stack for an initialized workdir")
+    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir to start")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--build", action="store_true", help="Build images before starting")
+
+    _sp = subparsers.add_parser("init", help="Initialize a workdir (stage descriptors and env files) without starting Docker")
+    _sp.add_argument("--workdir", default=str(DEFAULT_WORKDIR), help="Base or namespaced runtime workdir")
+    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument("--descriptors-location", default="", help="Directory containing the descriptor set")
+    _sp.add_argument("--latest", action="store_true", help="Use the latest platform release")
+    _sp.add_argument("--upstream", action="store_true", help="Use upstream repo state (requires --build)")
+    _sp.add_argument("--release", default="", help="Use a specific platform release ref")
+    _sp.add_argument("--build", action="store_true", help="Checkout source and build images locally")
+    _sp.add_argument("--tenant", default="", help="Tenant for the deployment namespace")
+    _sp.add_argument("--project", default="", help="Project for the deployment namespace")
+    _sp.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="Prompt for required fields missing in the assembly instead of failing",
+    )
+
     args = parser.parse_args()
 
     def _arg_provided(name: str) -> bool:
@@ -1491,7 +1673,7 @@ def main() -> None:
     repo_path = Path(os.path.expanduser(args.path)).resolve()
     path_provided = _arg_provided("--path")
     workdir_arg = _arg_provided("--workdir")
-    workdir = Path(os.path.expanduser(args.workdir)).expanduser().resolve()
+    workdir = Path(os.path.expanduser(args.workdir or str(DEFAULT_WORKDIR))).expanduser().resolve()
     cli_defaults = _load_cli_defaults()
     if not workdir_arg and "default_workdir" in cli_defaults:
         workdir = Path(cli_defaults["default_workdir"]).resolve()
@@ -1509,7 +1691,7 @@ def main() -> None:
         else implicit_descriptors_location
     )
     try:
-        if args.set_defaults:
+        if args.command == "defaults":
             updates: dict[str, str] = {}
             if args.default_tenant.strip():
                 updates["default_tenant"] = args.default_tenant.strip()
@@ -1522,7 +1704,7 @@ def main() -> None:
             if not updates:
                 raise SystemExit(
                     "Provide at least one of --default-tenant, --default-project, "
-                    "or --default-workdir with --set-defaults."
+                    "or --default-workdir."
                 )
             cli_defaults.update(updates)
             _save_cli_defaults(cli_defaults)
@@ -1530,34 +1712,58 @@ def main() -> None:
             for k, v in cli_defaults.items():
                 console.print(f"  {k}: {v}")
             return
-        if args.clean:
-            clean_docker_images(console)
+        if args.command == "stop":
+            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            stop_compose_stack(
+                console,
+                repo_root=_repo,
+                workdir=_resolve_cli_workdir(_workdir),
+                remove_volumes=args.remove_volumes,
+            )
             return
-        _check_targeted_command_has_workdir(
-            is_targeted_command=bool(
-                args.stop
-                or args.info
-                or str(args.bundle_reload or "").strip()
-                or args.export_live_bundles
-            ),
-            workdir_arg=workdir_arg,
-            cli_defaults=cli_defaults,
-        )
-        if args.export_live_bundles:
-            workdir = _resolve_cli_workdir(workdir)
-            out_dir = Path(os.path.expanduser(args.out_dir or os.getcwd())).expanduser().resolve()
-            bundles_path = None
-            bundles_secrets_path = None
+        if args.info:
+            if _arg_provided("--workdir"):
+                _workdir = Path(os.path.expanduser(args.workdir)).resolve()
+                _repo = _resolve_subcommand_repo(
+                    getattr(args, "path", str(DEFAULT_DIR)), workdir=_workdir
+                )
+                print_runtime_info(
+                    console,
+                    repo_root=_repo,
+                    workdir=_resolve_cli_workdir(_workdir),
+                )
+            else:
+                print_global_info(console, cli_defaults)
+            return
+        if args.command == "reload":
+            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            reload_bundle_from_descriptor(
+                console,
+                repo_root=_repo,
+                workdir=_resolve_cli_workdir(_workdir),
+                bundle_id=str(args.bundle_id).strip(),
+            )
+            return
+        if args.command == "export":
+            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            _resolved = _resolve_cli_workdir(_workdir)
+            _out_dir = Path(os.path.expanduser(args.out_dir or os.getcwd())).resolve()
+            _bundles_path: Path | None = None
+            _bundles_secrets_path: Path | None = None
             try:
-                ctx = _build_paths_for_repo(repo_path, workdir)
-                env_main_path = ctx.config_dir / ".env"
-                env_proc_path = ctx.config_dir / ".env.proc"
-                if env_main_path.exists() and env_proc_path.exists():
-                    env_main = installer_mod.load_env_file(env_main_path)
-                    env_proc = installer_mod.load_env_file(env_proc_path)
-                    sources = _resolve_live_bundle_export_sources(env_main, env_proc)
-                    if sources is not None:
-                        bundles_path, bundles_secrets_path = sources
+                _ctx = _build_paths_for_repo(_repo, _resolved)
+                _env_main = _ctx.config_dir / ".env"
+                _env_proc = _ctx.config_dir / ".env.proc"
+                if _env_main.exists() and _env_proc.exists():
+                    _sources = _resolve_live_bundle_export_sources(
+                        installer_mod.load_env_file(_env_main),
+                        installer_mod.load_env_file(_env_proc),
+                    )
+                    if _sources is not None:
+                        _bundles_path, _bundles_secrets_path = _sources
             except SystemExit:
                 raise
             except Exception:
@@ -1566,16 +1772,141 @@ def main() -> None:
                 console,
                 tenant=str(args.tenant or cli_defaults.get("default_tenant", "") or "").strip(),
                 project=str(args.project or cli_defaults.get("default_project", "") or "").strip(),
-                out_dir=out_dir,
+                out_dir=_out_dir,
                 aws_region=str(args.aws_region or "").strip() or None,
                 aws_profile=str(args.aws_profile or "").strip() or None,
                 aws_sm_prefix=str(args.aws_sm_prefix or "").strip() or None,
-                bundles_path=bundles_path,
-                bundles_secrets_path=bundles_secrets_path,
+                bundles_path=_bundles_path,
+                bundles_secrets_path=_bundles_secrets_path,
             )
             return
-        if args.remove_volumes and not args.stop:
-            raise SystemExit("--remove-volumes can only be used together with --stop.")
+        if args.command == "start":
+            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
+            _resolved = _resolve_cli_workdir(_workdir)
+            _t, _p = _parse_workdir_namespace(_resolved)
+            _check_before_start(console, tenant=_t, project=_p)
+            start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=args.build)
+            return
+        if args.command == "init":
+            _init_workdir = Path(os.path.expanduser(args.workdir)).resolve()
+            _init_repo = _resolve_subcommand_repo(args.path, workdir=_init_workdir)
+            _init_descriptors_location: Path | None = None
+            if str(args.descriptors_location or "").strip():
+                _init_descriptors_location = Path(
+                    os.path.expanduser(args.descriptors_location)
+                ).resolve()
+            elif args.latest or args.upstream or str(args.release or "").strip() or args.build:
+                _init_repo, _init_descriptors_location = _bootstrap_repo_for_defaults(
+                    console,
+                    repo=args.path,
+                    repo_path=_init_repo,
+                    path_provided=bool(_arg_provided("--path")),
+                )
+                console.print(
+                    f"[dim]No --descriptors-location provided. "
+                    f"Using repo defaults from:[/dim] {_init_descriptors_location}"
+                )
+            else:
+                raise SystemExit(
+                    "kdcube init requires a descriptor source.\n"
+                    "Pass --descriptors-location <dir>, or use --latest/--upstream/--release/--build "
+                    "to bootstrap from the platform repo."
+                )
+
+            # For --interactive: prompt tenant/project BEFORE resolving/creating the workdir
+            # so the directory is created with the correct namespace from the start.
+            _init_preset_tenant: str | None = None
+            _init_preset_project: str | None = None
+            if args.interactive:
+                _src_assembly = installer_mod.load_release_descriptor_soft(
+                    _init_descriptors_location / "assembly.yaml"
+                ) or {}
+                _t_default, _p_default = installer_mod.descriptor_context_from_assembly(_src_assembly)
+                _init_preset_tenant = installer_mod.ask(
+                    console, "Tenant ID", default=_t_default or "demo-tenant"
+                )
+                _init_preset_project = installer_mod.ask(
+                    console, "Project name", default=_p_default or "demo-project"
+                )
+
+            if _init_preset_tenant and _init_preset_project:
+                _init_resolved = installer_mod.workspace_runtime_dir(
+                    _init_workdir, _init_preset_tenant, _init_preset_project
+                ).resolve()
+            else:
+                _init_resolved = _resolve_cli_workdir(
+                    _init_workdir, descriptors_location=_init_descriptors_location
+                )
+
+            _descriptor_bootstrap = _stage_descriptor_set(
+                repo_root=_init_repo,
+                workdir=_init_resolved,
+                descriptors_location=_init_descriptors_location,
+            )
+
+            if _init_preset_tenant and _init_preset_project:
+                os.environ["KDCUBE_PRESET_TENANT"] = _init_preset_tenant
+                os.environ["KDCUBE_PRESET_PROJECT"] = _init_preset_project
+
+            os.environ["KDCUBE_DESCRIPTORS_LOCATION"] = str(_init_descriptors_location)
+            os.environ["KDCUBE_ASSEMBLY_DESCRIPTOR_PATH"] = str(_descriptor_bootstrap["assembly_path"])
+            os.environ["KDCUBE_ASSEMBLY_USER_SUPPLIED"] = (
+                "0"
+                if _init_descriptors_location.resolve() == (_init_resolved / "config").resolve()
+                else "1"
+            )
+            if _descriptor_bootstrap["secrets_path"]:
+                os.environ["KDCUBE_SECRETS_DESCRIPTOR_PATH"] = str(_descriptor_bootstrap["secrets_path"])
+            if _descriptor_bootstrap["gateway_path"]:
+                os.environ["KDCUBE_GATEWAY_DESCRIPTOR_PATH"] = str(_descriptor_bootstrap["gateway_path"])
+            if _descriptor_bootstrap["bundles_path"]:
+                os.environ["KDCUBE_BUNDLES_DESCRIPTOR_PATH"] = str(_descriptor_bootstrap["bundles_path"])
+            if _descriptor_bootstrap["bundles_secrets_path"]:
+                os.environ["KDCUBE_BUNDLES_SECRETS_PATH"] = str(_descriptor_bootstrap["bundles_secrets_path"])
+            _init_assembly = _descriptor_bootstrap["assembly"]
+            os.environ["KDCUBE_ASSEMBLY_USE_BUNDLES"] = "1" if bool(_get_nested(_init_assembly, "bundles")) else "0"
+            os.environ["KDCUBE_ASSEMBLY_USE_FRONTEND"] = "1" if bool(_get_nested(_init_assembly, "frontend")) else "0"
+            os.environ["KDCUBE_ASSEMBLY_USE_PLATFORM"] = "0"
+            os.environ["KDCUBE_USE_BUNDLES_DESCRIPTOR"] = "1" if _descriptor_bootstrap["bundles_path"] else "0"
+            os.environ["KDCUBE_USE_BUNDLES_SECRETS"] = "1" if _descriptor_bootstrap["bundles_secrets_path"] else "0"
+
+            _init_release_ref: str | None = None
+            _init_mode = "release"
+            if args.upstream:
+                _init_release_ref = _checkout_repo_upstream(console, _init_repo)
+                _init_mode = "upstream"
+            elif args.latest:
+                _init_release_ref = _read_remote_ref(_init_repo) or _read_local_ref(_init_repo)
+                if not _init_release_ref:
+                    raise SystemExit(
+                        "Could not resolve the latest platform release. "
+                        "Check platform.repo or pass a repo that contains release.yaml."
+                    )
+            elif str(args.release or "").strip():
+                _init_release_ref = str(args.release).strip()
+            else:
+                _init_release_ref = (
+                    str(_get_nested(_init_assembly, "platform", "ref") or "").strip() or None
+                )
+                if not _init_release_ref:
+                    raise SystemExit(
+                        "assembly platform.ref is required unless --latest, --upstream, or --release is used."
+                    )
+
+            if args.build:
+                if not args.upstream:
+                    _checkout_repo_ref(console, _init_repo, _init_release_ref)
+                if _init_mode != "upstream":
+                    _init_mode = "skip"
+
+            if not args.interactive:
+                os.environ["KDCUBE_CLI_NONINTERACTIVE"] = "1"
+            run_installer(console, _init_repo, _init_resolved, _init_mode, _init_release_ref, None, True)
+            return
+        if args.clean:
+            clean_docker_images(console)
+            return
         selected_version_flags = int(bool(args.latest)) + int(bool(args.upstream)) + int(bool(str(args.release or "").strip()))
         if selected_version_flags > 1:
             raise SystemExit("Choose only one of --latest, --upstream, or --release.")
@@ -1589,42 +1920,6 @@ def main() -> None:
             os.environ["KDCUBE_PROXY_SSL"] = "0"
         if args.dry_run_print_env:
             os.environ["KDCUBE_DRY_RUN_PRINT_ENV"] = "1"
-        if args.stop:
-            stop_compose_stack(
-                console,
-                repo_root=_resolve_cli_repo_path(
-                    repo_path,
-                    workdir=workdir,
-                    path_provided=path_provided,
-                ),
-                workdir=_resolve_cli_workdir(workdir),
-                remove_volumes=args.remove_volumes,
-            )
-            return
-        if args.bundle_reload:
-            reload_bundle_from_descriptor(
-                console,
-                repo_root=_resolve_cli_repo_path(
-                    repo_path,
-                    workdir=workdir,
-                    path_provided=path_provided,
-                ),
-                workdir=_resolve_cli_workdir(workdir),
-                bundle_id=str(args.bundle_reload).strip(),
-            )
-            return
-        if args.info:
-            resolved_workdir = _resolve_cli_workdir(workdir)
-            print_runtime_info(
-                console,
-                repo_root=_resolve_cli_repo_path(
-                    repo_path,
-                    workdir=resolved_workdir,
-                    path_provided=path_provided,
-                ),
-                workdir=resolved_workdir,
-            )
-            return
         # No-descriptors fast path: when a source selector is given without
         # --descriptors-location (and no initialized workdir was found), bootstrap
         # the platform repo and use its deployment/ directory as the descriptor
@@ -1708,11 +2003,12 @@ def main() -> None:
                 upstream=bool(args.upstream),
                 release=str(args.release or "").strip() or None,
             )
-            if reasons:
+            if reasons and not args.interactive:
                 rendered = "\n".join(f"  - {reason}" for reason in reasons)
                 raise SystemExit(
                     "Descriptor directory is not valid for non-interactive install.\n"
-                    f"{rendered}"
+                    f"{rendered}\n\n"
+                    "Use -i to configure missing fields interactively."
                 )
 
             platform_repo = str(_get_nested(assembly, "platform", "repo") or args.repo).strip()
@@ -1750,12 +2046,21 @@ def main() -> None:
                 console.print("[green]Descriptor set is complete. Running non-interactive source build install.[/green]")
             else:
                 console.print("[green]Descriptor set is complete. Running non-interactive release-image install.[/green]")
-            os.environ["KDCUBE_CLI_NONINTERACTIVE"] = "1"
+            if not args.interactive:
+                os.environ["KDCUBE_CLI_NONINTERACTIVE"] = "1"
             if not args.dry_run:
-                _check_no_other_local_stack_running(
-                    console, target_workdir=workdir, repo_root=repo_path
-                )
+                _t, _p = _parse_workdir_namespace(workdir)
+                _check_before_start(console, tenant=_t, project=_p)
             run_installer(console, repo_path, workdir, install_mode, release_ref, None, args.dry_run)
+            if not args.dry_run:
+                try:
+                    _lctx = _build_paths_for_repo(repo_path, workdir)
+                    _write_cli_lock(
+                        tenant=_t, project=_p, workdir=workdir,
+                        docker_dir=_lctx.docker_dir, env_file=_lctx.config_dir / ".env",
+                    )
+                except Exception:
+                    pass
             return
 
         assembly_descriptor_path: Path | None = None
@@ -2051,10 +2356,20 @@ def main() -> None:
         if args.reset_config or args.reset:
             os.environ["KDCUBE_RESET_CONFIG"] = "1"
         if not args.dry_run:
-            _check_no_other_local_stack_running(
-                console, target_workdir=_resolve_cli_workdir(workdir), repo_root=repo_path
-            )
+            _resolved_wdir = _resolve_cli_workdir(workdir)
+            _t, _p = _parse_workdir_namespace(_resolved_wdir)
+            _check_before_start(console, tenant=_t, project=_p)
         run_installer(console, repo_path, workdir, mode, release_ref, docker_namespace, args.dry_run)
+        if not args.dry_run:
+            try:
+                _resolved_wdir = _resolve_cli_workdir(workdir)
+                _lctx = _build_paths_for_repo(repo_path, _resolved_wdir)
+                _write_cli_lock(
+                    tenant=_t, project=_p, workdir=_resolved_wdir,
+                    docker_dir=_lctx.docker_dir, env_file=_lctx.config_dir / ".env",
+                )
+            except Exception:
+                pass
     except FileNotFoundError as exc:
         detail = str(exc).strip()
         if detail:

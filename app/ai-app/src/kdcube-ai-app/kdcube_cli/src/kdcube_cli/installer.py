@@ -2116,7 +2116,12 @@ def gather_configuration(
     descriptor_project = _get_nested(assembly_data, "context", "project")
     tenant_default = str(descriptor_tenant) if descriptor_tenant else existing_tenant or "demo-tenant"
     project_default = str(descriptor_project) if descriptor_project else existing_project or "demo-project"
-    if default_local_bootstrap_mode and not force_prompt:
+    preset_tenant = os.getenv("KDCUBE_PRESET_TENANT", "").strip()
+    preset_project = os.getenv("KDCUBE_PRESET_PROJECT", "").strip()
+    if preset_tenant and preset_project and not force_prompt:
+        tenant = preset_tenant
+        project = preset_project
+    elif default_local_bootstrap_mode and not force_prompt:
         tenant = tenant_default
         project = project_default
     else:
@@ -4017,6 +4022,11 @@ def run_setup(
             console.print("\n[bold]Runtime secrets to inject:[/bold]")
             for key in sorted(runtime_secrets.keys()):
                 console.print(f"  - {key}")
+            apply_runtime_secrets_to_file_descriptors(
+                config_dir=config_dir,
+                runtime_secrets=runtime_secrets,
+            )
+            console.print("[dim]Secrets persisted to staged descriptors.[/dim]")
         return
 
     if install_mode == "release":

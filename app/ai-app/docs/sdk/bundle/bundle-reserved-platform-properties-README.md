@@ -170,7 +170,7 @@ Storage summary:
 | Where do I set it? | `config.embedding` in bundle props |
 | Is it in secrets? | no |
 | Is it in PostgreSQL `user_bundle_props`? | no |
-| Is it exportable by `kdcube --export-live-bundles`? | yes |
+| Is it exportable by `kdcube export`? | yes |
 
 ## `economics.reservation_amount_dollars`
 
@@ -337,7 +337,7 @@ Storage summary:
 |---|---|
 | Where is it configured? | `config.execution.runtime` in bundle props |
 | Where is it persisted on `aws-sm`? | bundle descriptor doc in AWS SM |
-| Where is it exported from? | `kdcube --export-live-bundles` reconstructs it into `bundles.yaml` |
+| Where is it exported from? | `kdcube export` reconstructs it into `bundles.yaml` |
 
 ## `mcp.services`
 
@@ -401,8 +401,7 @@ Reserved platform properties are not exported separately. They are exported as
 part of the bundle descriptor `config`:
 
 ```bash
-kdcube \
-  --export-live-bundles \
+kdcube export \
   --tenant <tenant> \
   --project <project> \
   --aws-region <region> \
