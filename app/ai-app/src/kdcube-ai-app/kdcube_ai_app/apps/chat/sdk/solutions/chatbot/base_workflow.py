@@ -4,7 +4,6 @@
 # chat/sdk/solutions/chatbot/base_workflow.py
 
 import asyncio
-import hashlib
 import os, time, datetime, json, re
 import pathlib
 import random
@@ -1261,11 +1260,12 @@ class BaseWorkflow():
         extra_instructions = str(additional_instructions or "").strip()
         try:
             if extra_instructions:
-                digest = hashlib.sha256(extra_instructions.encode("utf-8")).hexdigest()[:12]
-                preview = re.sub(r"\s+", " ", extra_instructions)[:200]
+                compact = re.sub(r"\s+", " ", extra_instructions)
+                head = compact[:220]
+                tail = compact[-220:]
                 self.logger.log(
                     f"[react.{react_version}] agent admin customization provided "
-                    f"len={len(extra_instructions)} sha256={digest} preview={preview!r}",
+                    f"len={len(extra_instructions)} head={head!r} tail={tail!r}",
                     level="INFO",
                 )
             else:
