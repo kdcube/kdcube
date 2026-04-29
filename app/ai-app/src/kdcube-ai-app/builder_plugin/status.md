@@ -97,6 +97,20 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
   `kdcube_local.py bootstrap` call instead of direct `bundles.yaml` edit
 - macOS Docker gotcha in `kdcube-dev/SKILL.md` reformulated to reflect read-only constraint
 
+**2026-04-29** — CLI docs + subcommand surface update (builder + codex)
+- Updated `kdcube-cli` skill (both plugins) to the current subcommand-based CLI surface:
+  `kdcube init`, `kdcube start`, `kdcube stop`, `kdcube reload <bundle_id>`,
+  `kdcube export`, `kdcube defaults`, `kdcube --info` (replacing old `--stop`/`--descriptors-location`/`--export-live-bundles` flags)
+- Added **Reference docs** table with 4 raw GitHub URLs to authoritative CLI docs —
+  agent fetches via WebFetch instead of relying on embedded summaries
+- New sections: Init flow (source selectors `--latest`/`--upstream`/`--release`/`--build`),
+  Reload flow (CLI-native `kdcube reload` + Python verify), Defaults flow, Single-deployment guard (`cli-lock.json`)
+- Updated `verify-reload` skill (both plugins): notes that `kdcube reload` is the CLI-native
+  reload command; Python helper is verification only
+- Sources: `kdcube_cli/README.md`, `docs/service/cicd/cli-README.md`,
+  `docs/service/cicd/design/cli--as-control-plane-README.md`,
+  `docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md`
+
 **2026-04-24** — `13a764e8` — Agent facets + Tier 1 doc reorder + URL path fix
 - Added **Agent task facets** section to both `bundle-builder/SKILL.md` and `kdcube-dev/SKILL.md`:
   lists creator/integrator/configurator/deployer/local-QA/integration-QA/document-reader as

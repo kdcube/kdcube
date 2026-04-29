@@ -13,7 +13,11 @@ Print the output verbatim.
 
 Operational rules:
 
-- Run this immediately after `/kdcube-builder:local-runtime reload <bundle-id>` to confirm the reload took effect.
-- If the helper exits non-zero, report the error and tell the user the bundle may not have been reloaded — do not retry automatically.
-- If the output contains `eviction: None`, warn the user that the bundle was not in the proc cache at reload time (normal on first load, unexpected on a re-deploy).
+- The CLI-native reload command is `kdcube reload <bundle_id> --workdir <workdir>`.
+  This skill verifies that the reload actually took effect in proc — run it immediately
+  after `kdcube reload` or `/kdcube-builder:local-runtime reload <bundle-id>`.
+- If the helper exits non-zero, report the error and tell the user the bundle may not have
+  been reloaded — do not retry automatically.
+- If the output contains `eviction: None`, warn the user that the bundle was not in the
+  proc cache at reload time (normal on first load, unexpected on a re-deploy).
 - Do not call this skill before a `reload` — it checks current proc state, not a pending one.

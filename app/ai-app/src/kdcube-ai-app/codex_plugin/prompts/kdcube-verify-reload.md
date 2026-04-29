@@ -15,8 +15,9 @@ Print the output verbatim.
 
 ## Rules
 
-- Always run this **immediately after** `/kdcube-runtime reload <bundle-id>` — the reload
-  call returns before the proc cache actually rotates.
+- The CLI-native reload command is `kdcube reload <bundle_id> --workdir <workdir>`.
+  This prompt verifies that the reload actually took effect in proc — always run it
+  immediately after `/kdcube-runtime reload <bundle-id>` or `kdcube reload`.
 - If the helper exits non-zero, report the error and tell the user the bundle may not be
   live — do not retry automatically.
 - If the output contains `eviction: None`, warn the user that the bundle was not in the
