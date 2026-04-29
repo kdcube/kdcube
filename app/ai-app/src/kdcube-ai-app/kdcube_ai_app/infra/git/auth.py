@@ -190,6 +190,11 @@ def normalize_git_remote_url(
     return ssh_url_to_https_url(str(git_url or "").strip())
 
 
+def _git_repo_cmd(repo_root: pathlib.Path, args: list[str]) -> list[str]:
+    repo = str(pathlib.Path(repo_root).resolve())
+    return ["git", "-c", f"safe.directory={repo}", "-C", repo, *args]
+
+
 def ensure_git_commit_identity(
     *,
     repo_root: pathlib.Path,
@@ -205,7 +210,7 @@ def ensure_git_commit_identity(
 
     def _git_config_get(key: str) -> str:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "config", "--get", key],
+            _git_repo_cmd(repo_root, ["config", "--get", key]),
             capture_output=True,
             text=True,
             env=git_env,
@@ -217,7 +222,7 @@ def ensure_git_commit_identity(
     current_name = _git_config_get("user.name")
     if current_name != name:
         subprocess.run(
-            ["git", "-C", str(repo_root), "config", "user.name", name],
+            _git_repo_cmd(repo_root, ["config", "user.name", name]),
             check=True,
             capture_output=True,
             env=git_env,
@@ -226,7 +231,7 @@ def ensure_git_commit_identity(
     current_email = _git_config_get("user.email")
     if current_email != email:
         subprocess.run(
-            ["git", "-C", str(repo_root), "config", "user.email", email],
+            _git_repo_cmd(repo_root, ["config", "user.email", email]),
             check=True,
             capture_output=True,
             env=git_env,

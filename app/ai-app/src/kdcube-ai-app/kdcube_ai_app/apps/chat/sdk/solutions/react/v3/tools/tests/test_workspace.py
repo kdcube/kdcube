@@ -545,7 +545,9 @@ def test_stage_current_turn_text_workspace_surfaces_git_stderr(tmp_path, monkeyp
     real_run = mod.subprocess.run
 
     def _fake_run(cmd, *args, **kwargs):
-        if cmd == ["git", "-C", str(turn_root), "add", "--sparse", "-u", "--", "."]:
+        if cmd and cmd[0] == "git" and str(turn_root) in cmd and cmd[-4:] == ["ls-files", "-z", "--", "."]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=b"files/a.txt\0", stderr=b"")
+        if cmd and cmd[0] == "git" and str(turn_root) in cmd and cmd[-5:] == ["add", "--sparse", "-u", "--", "."]:
             return subprocess.CompletedProcess(
                 cmd,
                 128,
@@ -818,7 +820,7 @@ async def test_hydrate_workspace_paths_git_dedupes_version_fetch_per_turn(tmp_pa
     )
     ctx = FakeBrowser(runtime)
 
-    import kdcube_ai_app.apps.chat.sdk.solutions.react.v2.git_workspace as gw
+    import kdcube_ai_app.apps.chat.sdk.solutions.react.git_workspace as gw
 
     original = gw._ensure_local_version_ref
     calls: list[str] = []

@@ -72,6 +72,11 @@ def _run_checked(
     return proc
 
 
+def _git_cmd(repo_root: pathlib.Path, args: List[str]) -> List[str]:
+    repo = str(pathlib.Path(repo_root).resolve())
+    return ["git", "-c", f"safe.directory={repo}", "-C", repo, *args]
+
+
 def _run_git_checked(
     repo_root: pathlib.Path,
     args: List[str],
@@ -79,12 +84,12 @@ def _run_git_checked(
     op: str,
     env: Optional[Dict[str, str]] = None,
 ) -> subprocess.CompletedProcess:
-    return _run_checked(["git", "-C", str(repo_root), *args], op=op, env=env)
+    return _run_checked(_git_cmd(repo_root, args), op=op, env=env)
 
 
 def _git_has_tracked_files(*, repo_root: pathlib.Path) -> bool:
     proc = subprocess.run(
-        ["git", "-C", str(repo_root), "ls-files", "-z", "--", "."],
+        _git_cmd(repo_root, ["ls-files", "-z", "--", "."]),
         check=False,
         capture_output=True,
         text=False,
@@ -121,7 +126,7 @@ def describe_current_turn_git_repo(
     repo_status = "unknown"
     try:
         proc = subprocess.run(
-            ["git", "-C", str(turn_root), "status", "--short", "--untracked-files=all"],
+            _git_cmd(turn_root, ["status", "--short", "--untracked-files=all"]),
             check=True,
             capture_output=True,
             text=True,
@@ -148,7 +153,7 @@ def summarize_current_turn_git_lineage_scopes(
         return []
     try:
         subprocess.run(
-            ["git", "-C", str(turn_root), "rev-parse", "--verify", "workspace"],
+            _git_cmd(turn_root, ["rev-parse", "--verify", "workspace"]),
             check=True,
             capture_output=True,
         )
@@ -156,7 +161,7 @@ def summarize_current_turn_git_lineage_scopes(
         return []
     try:
         proc = subprocess.run(
-            ["git", "-C", str(turn_root), "ls-tree", "-r", "--name-only", "workspace", "--", "files"],
+            _git_cmd(turn_root, ["ls-tree", "-r", "--name-only", "workspace", "--", "files"]),
             check=True,
             capture_output=True,
             text=True,
@@ -183,7 +188,7 @@ def summarize_current_turn_git_lineage_scopes(
 
 def _run_git_capture(repo_root: pathlib.Path, args: List[str], *, env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        ["git", "-C", str(repo_root), *args],
+        _git_cmd(repo_root, args),
         check=True,
         capture_output=True,
         env=env,
@@ -215,28 +220,28 @@ def _ensure_workspace_repo(
             capture_output=True,
         )
         subprocess.run(
-            ["git", "-C", str(repo_root), "remote", "add", "origin", repo_url],
+            _git_cmd(repo_root, ["remote", "add", "origin", repo_url]),
             check=True,
             capture_output=True,
             env=env,
         )
         try:
             subprocess.run(
-                ["git", "-C", str(repo_root), "config", "--unset-all", "remote.origin.fetch"],
+                _git_cmd(repo_root, ["config", "--unset-all", "remote.origin.fetch"]),
                 check=True,
                 capture_output=True,
             )
         except subprocess.CalledProcessError:
             pass
         subprocess.run(
-            ["git", "-C", str(repo_root), "config", "remote.origin.tagOpt", "--no-tags"],
+            _git_cmd(repo_root, ["config", "remote.origin.tagOpt", "--no-tags"]),
             check=True,
             capture_output=True,
         )
     else:
         try:
             subprocess.run(
-                ["git", "-C", str(repo_root), "remote", "set-url", "origin", repo_url],
+                _git_cmd(repo_root, ["remote", "set-url", "origin", repo_url]),
                 check=True,
                 capture_output=True,
                 env=env,
@@ -249,7 +254,7 @@ def _ensure_workspace_repo(
 def _git_has_ref(*, repo_root: pathlib.Path, ref_name: str) -> bool:
     try:
         subprocess.run(
-            ["git", "-C", str(repo_root), "show-ref", "--verify", "--quiet", ref_name],
+            _git_cmd(repo_root, ["show-ref", "--verify", "--quiet", ref_name]),
             check=True,
             capture_output=True,
         )
@@ -267,7 +272,7 @@ def _ensure_local_version_ref(*, repo_root: pathlib.Path, runtime_ctx: Any, vers
     if _git_has_ref(repo_root=repo_root, ref_name=local_ref):
         return local_ref
     subprocess.run(
-        ["git", "-C", str(repo_root), "fetch", "--no-tags", "origin", f"+{remote_ref}:{local_ref}"],
+        _git_cmd(repo_root, ["fetch", "--no-tags", "origin", f"+{remote_ref}:{local_ref}"]),
         check=True,
         capture_output=True,
         env=env,
@@ -283,7 +288,7 @@ def _ensure_local_lineage_branch_ref(*, repo_root: pathlib.Path, runtime_ctx: An
     local_ref = "refs/heads/workspace"
     try:
         subprocess.run(
-            ["git", "-C", str(repo_root), "fetch", "--no-tags", "origin", f"+{remote_ref}:{local_ref}"],
+            _git_cmd(repo_root, ["fetch", "--no-tags", "origin", f"+{remote_ref}:{local_ref}"]),
             check=True,
             capture_output=True,
             env=env,
@@ -303,7 +308,7 @@ def _fetch_ref_into_turn_repo(
     target_ref: str,
 ) -> str:
     subprocess.run(
-        ["git", "-C", str(turn_root), "fetch", "--no-tags", str(source_repo_root), f"+{source_ref}:{target_ref}"],
+        _git_cmd(turn_root, ["fetch", "--no-tags", str(source_repo_root), f"+{source_ref}:{target_ref}"]),
         check=True,
         capture_output=True,
     )
@@ -345,12 +350,12 @@ def ensure_current_turn_git_workspace(
     name, email = _workspace_commit_identity(runtime_ctx)
     _ensure_git_commit_identity(repo_root=turn_root, name=name, email=email)
     subprocess.run(
-        ["git", "-C", str(turn_root), "config", "advice.detachedHead", "false"],
+        _git_cmd(turn_root, ["config", "advice.detachedHead", "false"]),
         check=True,
         capture_output=True,
     )
     subprocess.run(
-        ["git", "-C", str(turn_root), "config", "core.sparseCheckout", "true"],
+        _git_cmd(turn_root, ["config", "core.sparseCheckout", "true"]),
         check=True,
         capture_output=True,
     )
@@ -360,18 +365,18 @@ def ensure_current_turn_git_workspace(
 
     if lineage_ref:
         subprocess.run(
-            ["git", "-C", str(turn_root), "fetch", "--no-tags", str(repo_root), f"+{lineage_ref}:refs/heads/workspace"],
+            _git_cmd(turn_root, ["fetch", "--no-tags", str(repo_root), f"+{lineage_ref}:refs/heads/workspace"]),
             check=True,
             capture_output=True,
         )
         subprocess.run(
-            ["git", "-C", str(turn_root), "checkout", "-f", "workspace"],
+            _git_cmd(turn_root, ["checkout", "-f", "workspace"]),
             check=True,
             capture_output=True,
         )
     else:
         subprocess.run(
-            ["git", "-C", str(turn_root), "checkout", "--orphan", "workspace"],
+            _git_cmd(turn_root, ["checkout", "--orphan", "workspace"]),
             check=True,
             capture_output=True,
         )
@@ -382,7 +387,7 @@ def ensure_current_turn_git_workspace(
 def _git_path_is_file(*, repo_root: pathlib.Path, ref_name: str, tree_path: str) -> bool:
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "cat-file", "-t", f"{ref_name}:{tree_path}"],
+            _git_cmd(repo_root, ["cat-file", "-t", f"{ref_name}:{tree_path}"]),
             check=True,
             capture_output=True,
             text=True,
@@ -395,7 +400,7 @@ def _git_path_is_file(*, repo_root: pathlib.Path, ref_name: str, tree_path: str)
 def _git_list_tree(*, repo_root: pathlib.Path, ref_name: str, tree_path: str) -> List[str]:
     try:
         proc = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-tree", "-r", "--name-only", ref_name, "--", tree_path],
+            _git_cmd(repo_root, ["ls-tree", "-r", "--name-only", ref_name, "--", tree_path]),
             check=True,
             capture_output=True,
             text=True,
@@ -432,7 +437,7 @@ def _write_blob(target: pathlib.Path, data: bytes) -> None:
 def _git_has_head(*, repo_root: pathlib.Path) -> bool:
     try:
         subprocess.run(
-            ["git", "-C", str(repo_root), "rev-parse", "--verify", "HEAD"],
+            _git_cmd(repo_root, ["rev-parse", "--verify", "HEAD"]),
             check=True,
             capture_output=True,
         )
@@ -443,7 +448,7 @@ def _git_has_head(*, repo_root: pathlib.Path) -> bool:
 
 def _git_head_sha(*, repo_root: pathlib.Path) -> str:
     proc = subprocess.run(
-        ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+        _git_cmd(repo_root, ["rev-parse", "HEAD"]),
         check=True,
         capture_output=True,
         text=True,
@@ -453,7 +458,7 @@ def _git_head_sha(*, repo_root: pathlib.Path) -> str:
 
 def _git_has_staged_changes(*, repo_root: pathlib.Path) -> bool:
     proc = subprocess.run(
-        ["git", "-C", str(repo_root), "diff", "--cached", "--quiet", "--exit-code"],
+        _git_cmd(repo_root, ["diff", "--cached", "--quiet", "--exit-code"]),
         check=False,
         capture_output=True,
     )
@@ -462,7 +467,7 @@ def _git_has_staged_changes(*, repo_root: pathlib.Path) -> bool:
 
 def _git_is_dirty(*, repo_root: pathlib.Path) -> bool:
     proc = subprocess.run(
-        ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=all"],
+        _git_cmd(repo_root, ["status", "--porcelain", "--untracked-files=all"]),
         check=True,
         capture_output=True,
         text=True,
@@ -488,7 +493,7 @@ def _workspace_path_is_skipped(path: pathlib.Path, *, turn_root: pathlib.Path) -
 
 def _git_path_is_ignored(*, repo_root: pathlib.Path, rel_path: str) -> bool:
     proc = subprocess.run(
-        ["git", "-C", str(repo_root), "check-ignore", "-q", "--no-index", "--", rel_path],
+        _git_cmd(repo_root, ["check-ignore", "-q", "--no-index", "--", rel_path]),
         check=False,
         capture_output=True,
     )
@@ -558,8 +563,11 @@ def publish_current_turn_git_workspace(
     has_head = _git_has_head(repo_root=turn_root)
     committed = False
     if not has_head:
-        commit_args = ["git", "-C", str(turn_root), "commit", "--allow-empty", "-m", f"React workspace snapshot {turn_id}"]
-        _run_checked(commit_args, op="create initial workspace snapshot commit")
+        _run_git_checked(
+            turn_root,
+            ["commit", "--allow-empty", "-m", f"React workspace snapshot {turn_id}"],
+            op="create initial workspace snapshot commit",
+        )
         committed = True
     elif _git_has_staged_changes(repo_root=turn_root):
         _run_git_checked(
@@ -637,25 +645,25 @@ def checkout_current_turn_git_workspace(
         source_ref=local_ref,
         target_ref=f"refs/kdcube-local/checkout/{version}",
     )
-    subprocess.run(
-        ["git", "-C", str(turn_root), "sparse-checkout", "set", "--cone", "files"],
-        check=True,
-        capture_output=True,
+    _run_git_checked(
+        turn_root,
+        ["sparse-checkout", "set", "--cone", "files"],
+        op="configure sparse checkout",
     )
-    subprocess.run(
-        ["git", "-C", str(turn_root), "checkout", "-f", "workspace"],
-        check=True,
-        capture_output=True,
+    _run_git_checked(
+        turn_root,
+        ["checkout", "-f", "workspace"],
+        op="checkout workspace branch",
     )
-    subprocess.run(
-        ["git", "-C", str(turn_root), "reset", "--hard", checkout_ref],
-        check=True,
-        capture_output=True,
+    _run_git_checked(
+        turn_root,
+        ["reset", "--hard", checkout_ref],
+        op="reset workspace to requested version",
     )
-    subprocess.run(
-        ["git", "-C", str(turn_root), "clean", "-fd", "--", "files"],
-        check=True,
-        capture_output=True,
+    _run_git_checked(
+        turn_root,
+        ["clean", "-fd", "--", "files"],
+        op="clean workspace files",
     )
     return {
         "turn_root": str(turn_root),
