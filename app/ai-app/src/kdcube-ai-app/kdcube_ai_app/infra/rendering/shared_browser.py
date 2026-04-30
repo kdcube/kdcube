@@ -8,6 +8,7 @@ from typing import Optional
 import asyncio
 import os
 import sys
+from pathlib import Path
 
 import logging
 
@@ -99,6 +100,9 @@ class SharedBrowserService:
 
     async def start(self):
         """Launch Playwright + Chromium once."""
+        if not os.getenv("PLAYWRIGHT_BROWSERS_PATH") and Path("/opt/ms-playwright").exists():
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
+
         if async_playwright is None:
             raise RuntimeError(
                 "Playwright not installed. Run: pip install playwright && "

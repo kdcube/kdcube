@@ -402,7 +402,7 @@ class RenderingTools:
 
             mermaid_css_bits: List[str] = []
             mermaid_cfg: Dict[str, Any] = {
-                "startOnLoad": True,
+                "startOnLoad": False,
                 "theme": mermaid_theme or "default",
                 "securityLevel": "loose",
                 "logLevel": "debug",
@@ -411,6 +411,7 @@ class RenderingTools:
             user_cfg = _coerce_dict(mermaid_config)
             if user_cfg:
                 mermaid_cfg.update(user_cfg)
+            mermaid_cfg["startOnLoad"] = False
 
             theme_vars = _coerce_dict(mermaid_theme_variables)
             if mermaid_font_size_px and mermaid_font_size_px > 0:
@@ -476,27 +477,58 @@ class RenderingTools:
     <body>
         <div id="error"></div>
         <div id="canvas">
-          <div class="mermaid">
-    {html_lib.escape(content)}
-          </div>
+          <div id="mermaid-container" class="mermaid"></div>
         </div>
         <script>
-            mermaid.initialize({json.dumps(mermaid_cfg)});
-           // Capture errors
+            const mermaidSource = {json.dumps(content)};
+            function formatMermaidError(err, hash) {{
+                const parts = [];
+                if (err) {{
+                    if (err.str) parts.push(err.str);
+                    if (err.message) parts.push(err.message);
+                    if (err.stack) parts.push(err.stack);
+                    if (parts.length === 0) {{
+                        try {{ parts.push(JSON.stringify(err)); }}
+                        catch (_) {{ parts.push(String(err)); }}
+                    }}
+                }}
+                if (hash) {{
+                    try {{ parts.push('hash=' + JSON.stringify(hash)); }}
+                    catch (_) {{ parts.push('hash=' + String(hash)); }}
+                }}
+                return parts.filter(Boolean).join('\\n') || 'Unknown Mermaid error';
+            }}
             window.addEventListener('error', (e) => {{
-                document.getElementById('error').textContent = 'Error: ' + e.message + '\\n' + e.error?.stack;
-            }});      
-            mermaid.parseError = function(err, hash) {{
-                document.getElementById('error').textContent = 'Mermaid Parse Error:\\n' + err;
-            }};                  
-            window.addEventListener('load', () => {{
-                Promise.resolve(mermaid.run && mermaid.run())
-                    .catch((err) => {{
-                        document.getElementById('error').textContent = 'Mermaid Render Error:\\n' + err;
-                    }})
-                    .finally(() => {{
-                        setTimeout(() => {{ window.__RENDER_READY__ = true; }}, 150);
-                    }});
+                window.__MERMAID_ERROR__ = 'Error: ' + e.message + '\\n' + (e.error?.stack || '');
+                document.getElementById('error').textContent = window.__MERMAID_ERROR__;
+            }});
+            if (window.mermaid) {{
+                mermaid.parseError = function(err, hash) {{
+                    window.__MERMAID_PARSE_ERROR__ = 'Mermaid Parse Error:\\n' + formatMermaidError(err, hash);
+                }};
+            }}
+            window.addEventListener('load', async () => {{
+                try {{
+                    if (!window.mermaid) {{
+                        throw new Error('Mermaid library failed to load');
+                    }}
+                    mermaid.initialize({json.dumps(mermaid_cfg)});
+                    const diagramId = 'kdcube_mermaid_diagram_' + Date.now() + '_' + Math.floor(Math.random() * 1000000);
+                    const result = await mermaid.render(diagramId, mermaidSource);
+                    const container = document.getElementById('mermaid-container');
+                    container.innerHTML = result.svg;
+                    if (result.bindFunctions) {{
+                        result.bindFunctions(container);
+                    }}
+                    window.__MERMAID_ERROR__ = '';
+                    window.__MERMAID_PARSE_ERROR__ = '';
+                    document.getElementById('error').textContent = '';
+                }} catch (err) {{
+                    window.__MERMAID_ERROR__ = formatMermaidError(err);
+                    document.getElementById('error').textContent = 'Mermaid Render Error:\\n' + window.__MERMAID_ERROR__;
+                }} finally {{
+                    setTimeout(() => {{ window.__RENDER_READY__ = true; }}, 150);
+                }}
             }});
         </script>
     </body>
@@ -619,64 +651,98 @@ class RenderingTools:
                     height = max(float(box.get("height", 0)) + pad * 2, 1)
                     return {"x": x, "y": y, "width": width, "height": height}
 
+                async def _screenshot_serialized_svg(svg_content: str) -> None:
+                    svg_bg = "transparent" if isinstance(background, str) and background.strip().lower() in {"transparent", "none"} else (background or "white")
+                    svg_html = f"""<!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <style>
+                    html, body {{ margin: 0; padding: 0; background: {svg_bg}; }}
+                    #svg-root {{ display: inline-block; padding: {canvas_pad}px; background: {svg_bg}; }}
+                    svg {{ display: block; }}
+                </style>
+            </head>
+            <body>
+                <div id="svg-root">{svg_content}</div>
+            </body>
+            </html>"""
+                    png_context = await conv._browser.new_context(
+                        viewport={"width": width or 2400, "height": height or 1600},
+                        device_scale_factor=device_scale_factor or 2,
+                    )
+                    try:
+                        png_page = await png_context.new_page()
+                        svg_data_url = f"data:text/html;charset=utf-8,{urllib.parse.quote(svg_html)}"
+                        await png_page.goto(svg_data_url, wait_until="load")
+                        await png_page.wait_for_timeout(max(int(render_delay_ms or 0), 0))
+                        target = await png_page.query_selector("#svg-root")
+                        element_opts = {"path": str(out_path)}
+                        if isinstance(background, str) and background.strip().lower() in {"transparent", "none"}:
+                            element_opts["omit_background"] = True
+                        if target:
+                            await target.screenshot(**element_opts)
+                        else:
+                            await png_page.screenshot(path=str(out_path), full_page=True)
+                    finally:
+                        await png_context.close()
+
                 if format == "mermaid":
                     try:
                         await page.goto(f"file://{html_path}", wait_until="networkidle")
                         await page.wait_for_function("window.__RENDER_READY__ === true", timeout=30000)
                         await page.wait_for_timeout(max(int(render_delay_ms or 0), 0))
+                        mermaid_error = await page.evaluate(
+                            "() => window.__MERMAID_ERROR__ || window.__MERMAID_PARSE_ERROR__ || document.getElementById('error')?.textContent || ''"
+                        )
                         await _apply_background()
                         await _wait_for_fonts()
                         await _apply_mermaid_svg_scale()
+                        svg_element = await page.query_selector(".mermaid svg")
+                        if not svg_element:
+                            if mermaid_error:
+                                raise RuntimeError(f"Mermaid render failed: {str(mermaid_error)[:2000]}")
+                            raise RuntimeError("Mermaid render completed but no SVG was produced")
 
                         if fit == "content":
-                            element = await page.query_selector("#canvas")
-                            if not element:
-                                element = await page.query_selector(".mermaid svg")
-                            if element:
-                                await element.screenshot(**screenshot_opts)
-                            else:
-                                box = await _compute_bbox(".mermaid svg")
-                                if box:
-                                    screenshot_opts["clip"] = _clip_from_box(box)
-                                    screenshot_opts["full_page"] = False
-                                await page.screenshot(**screenshot_opts)
+                            primary_error: Exception | None = None
+                            canvas_element = await page.query_selector("#canvas")
+                            element_opts = {"path": str(out_path)}
+                            if isinstance(background, str) and background.strip().lower() in {"transparent", "none"}:
+                                element_opts["omit_background"] = True
+                            try:
+                                await (canvas_element or svg_element).screenshot(**element_opts)
+                            except Exception as exc:
+                                primary_error = exc
+                                try:
+                                    box = await _compute_bbox(".mermaid svg")
+                                    if box:
+                                        screenshot_opts["clip"] = _clip_from_box(box)
+                                        screenshot_opts["full_page"] = False
+                                    await page.screenshot(**screenshot_opts)
+                                except Exception as clipped_exc:
+                                    svg_content = await svg_element.evaluate("(el) => el.outerHTML")
+                                    try:
+                                        await _screenshot_serialized_svg(svg_content)
+                                    except Exception as serialized_exc:
+                                        raise RuntimeError(
+                                            "Mermaid PNG screenshot failed. "
+                                            f"element={primary_error}; clipped={clipped_exc}; serialized={serialized_exc}"
+                                        ) from serialized_exc
                         elif full_page:
                             await page.screenshot(**screenshot_opts)
                         else:
-                            svg_element = await page.query_selector(".mermaid svg")
-                            if svg_element:
-                                svg_content = await svg_element.evaluate("(el) => el.outerHTML")
-                                svg_html = f"""<!DOCTYPE html>
-            <html>
-            <head>
-                <style>
-                    body {{ margin: 0; padding: 0; background: white; }}
-                    svg {{ 
-                        width: 100vw; 
-                        height: 100vh;
-                        display: block;
-                    }}
-                </style>
-            </head>
-            <body>
-                {svg_content}
-            </body>
-            </html>"""
-                                png_context = await conv._browser.new_context(
-                                    viewport={"width": width or 2400, "height": height or 1600},
-                                    device_scale_factor=device_scale_factor or 2
-                                )
-                                png_page = await png_context.new_page()
-                                svg_data_url = f"data:text/html;charset=utf-8,{urllib.parse.quote(svg_html)}"
-                                await png_page.goto(svg_data_url, wait_until="networkidle")
-                                await png_page.screenshot(path=str(out_path), full_page=False)
-                                await png_context.close()
-                            else:
-                                raise Exception("No SVG found")
+                            svg_content = await svg_element.evaluate("(el) => el.outerHTML")
+                            await _screenshot_serialized_svg(svg_content)
                         
                     except Exception as e:
                         print(f"⚠️ Mermaid SVG extraction failed: {e}")
-                        await page.screenshot(**screenshot_opts)
+                        return _error_result(
+                            code=type(e).__name__,
+                            message=str(e).strip() or "Mermaid PNG rendering failed.",
+                            where="rendering_tools.write_png",
+                            managed=True,
+                        )
                 else:
                     await page.goto(f"file://{html_path}", wait_until="networkidle")
                     await page.wait_for_timeout(max(int(render_delay_ms or 0), 0))

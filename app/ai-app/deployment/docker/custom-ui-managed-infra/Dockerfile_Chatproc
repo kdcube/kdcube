@@ -29,6 +29,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PATH="/opt/venv/bin:$PATH" \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
     DISABLE_AUTOUPDATER=1
 
 WORKDIR /app
@@ -73,7 +74,8 @@ RUN npm install -g @anthropic-ai/claude-code \
 
 COPY --from=builder /opt/venv /opt/venv
 
-RUN python -m playwright install --with-deps chromium
+RUN python -m playwright install --with-deps chromium && \
+    chmod -R a+rX /opt/ms-playwright
 
 # Create non-root user
 RUN groupadd --gid 1000 appuser && \
