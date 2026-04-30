@@ -105,6 +105,7 @@ def test_docker_argv_grants_bwrap_namespace_capabilities(tmp_path):
     assert "--cap-add=NET_ADMIN" in argv
     assert "--security-opt" in argv
     assert "seccomp=unconfined" in argv
+    assert "apparmor=unconfined" in argv
 
 
 @pytest.mark.asyncio

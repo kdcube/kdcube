@@ -87,11 +87,12 @@ When isolation is required, `docker.run_py_in_docker(...)` starts a **py-code-ex
 - The local Docker launcher grants the supervisor container `SYS_ADMIN` and
   `NET_ADMIN` so `bubblewrap` can create mount namespaces and initialize the
   isolated no-network namespace for the executor child.
-- The local Docker launcher uses `seccomp=unconfined` for the supervisor
-  container because Docker's default seccomp profile blocks the `pivot_root`
-  syscall used by `bubblewrap`. This applies to the trusted supervisor
-  container; the untrusted executor child still runs inside the bwrap
-  filesystem sandbox and no-network namespace.
+- The local Docker launcher uses `seccomp=unconfined` and
+  `apparmor=unconfined` for the supervisor container because Docker's default
+  LSM profiles can block the `pivot_root` and mount-propagation steps used by
+  `bubblewrap`. This applies to the trusted supervisor container; the
+  untrusted executor child still runs inside the bwrap filesystem sandbox and
+  no-network namespace.
 - Only `/workspace/work` and `/workspace/out` are writable.
 - `/tmp` is tmpfs.
 - Bundle code roots are mounted read-only under a supervisor-only private root (if used).

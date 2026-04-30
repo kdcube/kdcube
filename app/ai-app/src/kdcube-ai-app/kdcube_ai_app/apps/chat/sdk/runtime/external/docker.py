@@ -391,12 +391,13 @@ def _build_docker_argv(
     """
     argv: list[str] = ["docker", "run", "--rm"]
     # Required by bubblewrap: SYS_ADMIN for mount namespaces, NET_ADMIN for
-    # initializing loopback inside the isolated no-network namespace, and an
-    # unconfined seccomp profile because Docker's default profile blocks
-    # bubblewrap's pivot_root syscall before untrusted code starts.
+    # initializing loopback inside the isolated no-network namespace, and
+    # relaxed Docker LSM profiles because the trusted supervisor container must
+    # let bwrap create a stricter child sandbox before untrusted code starts.
     argv += ["--cap-add=SYS_ADMIN"]
     argv += ["--cap-add=NET_ADMIN"]
     argv += ["--security-opt", "seccomp=unconfined"]
+    argv += ["--security-opt", "apparmor=unconfined"]
     argv += ["--network", network_mode]
 
     # Optional extra args (e.g. --cpus, --memory) if you ever need them
