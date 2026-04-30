@@ -1,72 +1,84 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.28.2229"
+  ref: "2026.4.30.317"
   description: |
-    This release focuses on frontend runtime configuration, registration/security
-    hardening support, chat timeline correctness, CLI/deployment improvements, and
-    preparation for richer agent-driven interaction flows.
+    This release focuses on isolated code execution hardening, execution artifact
+    safety, runtime diagnostics, CLI descriptor-scoped local testing, and follow-up
+    refinements for agent runtime customization.
 
     Highlights
 
-    - Added server-published frontend runtime config through
-      `GET /api/cp-frontend-config`, with a shared config builder used by runtime
-      services and deployment tooling.
-    - Aligned frontend auth configuration around the descriptor-facing modes
-      `simple`, `cognito`, and `delegated`, while keeping legacy `hardcoded`
-      browser config as a compatibility alias for `simple`.
-    - Updated nginx and local/deployment frontend routing so browser clients can
-      retrieve server-published config without relying on self-served static config.
-    - Improved chat timeline ordering so followup user messages, timeline notes,
-      assistant attempts, and subsystem widgets render according to their persisted
-      event timestamps.
-    - Added CLI command/subcommand and descriptor handling improvements, including
-      safer deployment guards and better targeted command behavior.
-    - Strengthened runtime and bundle configuration documentation around AWS session
-      scoping, gateway control, descriptor configuration, and bundle runtime config.
-    - Added and refined agent-preparation work in the React runtime/event stream area,
-      including live event handling and temporal turn/event documentation.
-    - Made platform release GitHub Actions safer to rerun by skipping already-existing
-      release images where appropriate.
+    - Hardened the isolated Python execution runtime with a filesystem sandbox for
+      generated code, a sanitized environment, restricted filesystem view, no direct
+      network namespace for executor code, and explicit runtime/tool boundary
+      handling.
+    - Added per-execution supervisor socket authentication and clearer separation
+      between the privileged supervisor process and the generated-code executor.
+    - Improved execution error propagation so runtime, sandbox, Docker, and program
+      failures are visible in service logs and in the exec tool result returned to
+      the agent.
+    - Added generated file and workspace output limits with clearer handling of
+      oversized outputs, missing contracted outputs, and partial execution artifacts.
+    - Fixed generated file download handling in the frontend and tightened generated
+      artifact validation on the backend.
+    - Improved React git workspace persistence by avoiding empty workspace commits
+      and handling safe-directory ownership issues.
+    - Strengthened agent admin customization wording and logging so deployment-level
+      runtime instructions are injected and diagnosable without exposing the full
+      instruction block to end users.
+    - Extended the CLI so descriptor-based local deployments resolve tenant/project
+      scoped runtime directories consistently.
+    - Added local dirty-source testing for the CLI through `init --path`, which
+      copies tracked and non-ignored local platform files into the scoped runtime
+      repository before building.
+    - Improved local descriptor storage handling so host-friendly `file://` or
+      absolute storage paths are mapped to container-visible storage mounts.
 
     Runtime work in this release line:
 
-    - Ingress can now publish browser runtime config directly from platform settings,
-      reducing operational coupling to frontend image/static config files.
-    - Frontend clients can consume server-published tenant, project, route prefix,
-      debug, auth, and Turnstile development-token settings.
-    - Chat history restoration preserves more persisted timestamps for thinking,
-      citations, assistant attempts, and user followups, which improves temporal
-      consistency when replaying conversations.
-    - Runtime event handling has been prepared for richer agent scenarios where
-      agents need to react to ongoing user actions within the same conversation
-      timeline.
-    - Deployment descriptors and docs now describe frontend runtime config as a
-      first-class `assembly.frontend.config` section.
+    - The generated-code executor now runs with a minimal environment and only the
+      runtime paths required for Python, installed packages, fonts, rendering, and
+      declared work/output directories.
+    - Supervisor tool calls remain available through the controlled supervisor
+      boundary, so web/search/rendering/tool workflows continue to work while direct
+      filesystem and environment disclosure is reduced.
+    - Runtime diagnostics now preserve useful stderr/stdout tails, infra log excerpts,
+      program log tails, missing output reports, and execution IDs for production
+      debugging.
+    - Docker-based local and EC2-backed execution paths now pass the required sandbox
+      capabilities to the `py-code-exec` container while keeping generated code inside
+      the inner filesystem sandbox.
+    - CLI `init`, `start`, `stop`, `build`, and info flows are more consistent with
+      descriptor-scoped runtime directories and install metadata.
 
     Validation and regression coverage:
 
-    - TypeScript checks passed for the OSS frontend changes.
-    - Python compile checks passed for the shared frontend config builder.
-    - Terraform formatting checks passed for the touched deployment Terraform trees.
-    - Added and updated tests around CLI descriptor behavior, local sidecars, runtime
-      context, singleton request context, conversation scoping, and chat continuation
+    - Added bubblewrap argument and sandbox construction tests.
+    - Added runtime shutdown, Docker launcher, Fargate payload, supervisor auth, and
+      secure tool stub tests.
+    - Added exec tool tests for output validation, runtime failure reporting, and
+      artifact handling.
+    - Added React workspace tests for non-empty workspace publishing and safe-directory
       handling.
+    - Added CLI descriptor tests for scoped runtime resolution, install metadata,
+      local dirty-source copy, and local storage path mapping.
+    - Focused runtime/exec/chatbot tests passed.
+    - React workspace tests passed with importlib pytest mode.
+    - CLI descriptor tests passed with the CLI source path on `PYTHONPATH`.
 
     Changelog
 
-    - Added shared frontend runtime config builder and public control-plane frontend
-      config endpoint.
-    - Updated OSS frontend config loading and route-prefix behavior.
-    - Replaced new descriptor/browser examples of `hardcoded` auth with `simple`.
-    - Added compatibility handling for legacy `hardcoded` frontend auth config.
-    - Fixed chat timeline ordering for followups, timeline text, subsystem widgets,
-      and assistant attempts.
-    - Improved conversation history restoration for external/followup user messages
-      and attachments.
-    - Added gateway maintenance documentation including anonymous rate-limit reset
-      guidance.
-    - Expanded bundle, descriptor, runtime config, and agent/runtime documentation.
-    - Added Node sidecar bridge example and runtime support improvements.
-    - Improved release workflow rerun behavior for existing release images.
+    - Added filesystem sandbox construction for isolated generated-code execution.
+    - Added sanitized executor environment and explicit runtime dependency mounts.
+    - Added supervisor socket auth for tool calls from generated code.
+    - Improved Docker execution diagnostics and final exec tool reports.
+    - Enforced generated file and workspace output limits through runtime config.
+    - Fixed generated artifact download behavior and output packaging checks.
+    - Improved React workspace git publication safety.
+    - Improved deployment-level agent admin customization handling.
+    - Added descriptor-scoped CLI runtime resolution and local dirty-source build
+      support.
+    - Updated CLI and execution runtime documentation for the new local and sandbox
+      behavior.
 config:
-    version: "2026.4.28.2229"
+    version: "2026.4.30.317"
