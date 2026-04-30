@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -102,11 +103,7 @@ def _compose_env_from_cmd(cmd: list[str]) -> dict[str, str] | None:
 
 def _run_compose(console: Console, cmd: list[str], *, cwd: Path) -> None:
     console.print(f"[dim]$ {' '.join(cmd)}[/dim]")
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_compose_env_from_cmd(cmd))
-    if proc.stdout:
-        console.print(proc.stdout.strip())
-    if proc.stderr:
-        console.print(proc.stderr.strip())
+    proc = subprocess.run(cmd, cwd=cwd, env=_compose_env_from_cmd(cmd))
     if proc.returncode != 0:
         raise SystemExit(f"Command failed with exit code {proc.returncode}.")
 
@@ -251,7 +248,7 @@ def build_compose_images(
     )
     _run_compose(
         console,
-        ["docker", "build", "-t", "py-code-exec:latest", "-f", "Dockerfile_Exec", "../../.."],
+        ["docker", "build", "--progress=plain", "-t", "py-code-exec:latest", "-f", "Dockerfile_Exec", "../../.."],
         cwd=ctx.docker_dir,
     )
     console.print("[green]Docker images built. The stack was not started.[/green]")
@@ -403,6 +400,14 @@ def _is_git_repo(path: Path) -> bool:
     return path.exists() and (path / ".git").is_dir()
 
 
+def _is_platform_source_tree(path: Path) -> bool:
+    return (
+        path.exists()
+        and (path / "app" / "ai-app").is_dir()
+        and (path / "app" / "ai-app" / "deployment").is_dir()
+    )
+
+
 def _default_repo_path_for_workdir(workdir: Path) -> Path:
     return workdir / DEFAULT_REPO_DIRNAME
 
@@ -425,7 +430,7 @@ def _repo_path_from_install_meta(workdir: Path) -> Path | None:
     if not raw:
         return None
     path = Path(raw).expanduser().resolve()
-    return path if _is_git_repo(path) else None
+    return path if (_is_git_repo(path) or _is_platform_source_tree(path)) else None
 
 
 def _canonical_descriptor_dir_from_initialized_workdir(workdir: Path) -> Path | None:
@@ -1189,6 +1194,55 @@ def _stage_descriptor_set(
     )
 
 
+def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Path) -> Path:
+    if not _is_git_repo(source_repo):
+        raise SystemExit(f"init --path requires a local git repo: {source_repo}")
+
+    target = _default_repo_path_for_workdir(workdir)
+    console.print(f"[dim]Copying local platform source:[/dim] {source_repo} -> {target}")
+
+    try:
+        proc = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+            cwd=source_repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        details = (exc.stderr or exc.stdout or "").strip()
+        raise SystemExit(f"Could not enumerate local source files in {source_repo}.{(' ' + details) if details else ''}") from exc
+
+    files = [line.strip() for line in (proc.stdout or "").splitlines() if line.strip()]
+    if not files:
+        raise SystemExit(f"No source files found to copy from {source_repo}")
+
+    if target.exists():
+        shutil.rmtree(target)
+    target.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    for rel in files:
+        src = (source_repo / rel).resolve()
+        try:
+            src.relative_to(source_repo)
+        except ValueError:
+            continue
+        if not src.exists() and not src.is_symlink():
+            continue
+        dst = target / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_symlink():
+            link_to = os.readlink(src)
+            dst.symlink_to(link_to)
+        elif src.is_file():
+            shutil.copy2(src, dst)
+        copied += 1
+
+    console.print(f"[dim]Copied local platform source files:[/dim] {copied}")
+    return target
+
+
 def ensure_repo(console: Console, repo: str, target: Path) -> None:
     if target.exists() and (target / ".git").is_dir():
         console.print(f"Repo already exists at {target}")
@@ -1716,7 +1770,11 @@ def main() -> None:
 
     _sp = subparsers.add_parser("init", help="Initialize a workdir (stage descriptors and env files) without starting Docker")
     _sp.add_argument("--workdir", default=str(DEFAULT_WORKDIR), help="Base or namespaced runtime workdir")
-    _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
+    _sp.add_argument(
+        "--path",
+        default=str(DEFAULT_DIR),
+        help="Local platform repo path. Without --upstream/--latest/--release, init copies this source into the runtime workdir.",
+    )
     _sp.add_argument("--descriptors-location", default="", help="Directory containing the descriptor set")
     _sp.add_argument("--latest", action="store_true", help="Use the latest platform release")
     _sp.add_argument("--upstream", action="store_true", help="Use upstream repo state instead of assembly platform.ref")
@@ -1853,8 +1911,8 @@ def main() -> None:
             return
         if args.command == "start":
             _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
-            _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
             _resolved = _resolve_cli_workdir(_workdir)
+            _repo = _resolve_subcommand_repo(args.path, workdir=_resolved)
             _t, _p = _parse_workdir_namespace(_resolved)
             _check_before_start(console, tenant=_t, project=_p)
             start_compose_stack(console, repo_root=_repo, workdir=_resolved, build=args.build)
@@ -1864,6 +1922,8 @@ def main() -> None:
             _init_path_provided = bool(_arg_provided("--path"))
             _init_repo = Path(os.path.expanduser(args.path)).resolve()
             _init_descriptors_location: Path | None = None
+            _init_version_selector = bool(args.upstream or args.latest or str(args.release or "").strip())
+            _init_local_source_copy = _init_path_provided and not _init_version_selector
             if str(args.descriptors_location or "").strip():
                 _init_descriptors_location = Path(
                     os.path.expanduser(args.descriptors_location)
@@ -1918,6 +1978,13 @@ def main() -> None:
                     path_provided=_init_path_provided,
                     descriptors_location=_init_descriptors_location,
                 )
+            if _init_local_source_copy:
+                _init_repo = _copy_dirty_local_source(
+                    console,
+                    source_repo=_init_repo,
+                    workdir=_init_resolved,
+                )
+                _init_path_provided = True
 
             _descriptor_bootstrap = _stage_descriptor_set(
                 repo_root=_init_repo,
@@ -1951,13 +2018,14 @@ def main() -> None:
             os.environ["KDCUBE_USE_BUNDLES_DESCRIPTOR"] = "1" if _descriptor_bootstrap["bundles_path"] else "0"
             os.environ["KDCUBE_USE_BUNDLES_SECRETS"] = "1" if _descriptor_bootstrap["bundles_secrets_path"] else "0"
 
-            _ensure_descriptor_platform_repo(
-                console,
-                repo_path=_init_repo,
-                path_provided=_init_path_provided,
-                assembly=_init_assembly,
-                fallback_repo=args.repo,
-            )
+            if not _init_local_source_copy:
+                _ensure_descriptor_platform_repo(
+                    console,
+                    repo_path=_init_repo,
+                    path_provided=_init_path_provided,
+                    assembly=_init_assembly,
+                    fallback_repo=args.repo,
+                )
 
             _init_release_ref: str | None = None
             _init_mode = "release"
@@ -1982,12 +2050,14 @@ def main() -> None:
                         "assembly platform.ref is required unless --latest, --upstream, or --release is used."
                     )
 
+            if _init_local_source_copy:
+                _init_mode = "skip"
             if args.build:
-                if not args.upstream:
+                if not args.upstream and not _init_local_source_copy:
                     _checkout_repo_ref(console, _init_repo, _init_release_ref)
                 if _init_mode != "upstream":
                     _init_mode = "skip"
-            elif not _init_path_provided and not args.upstream:
+            elif not _init_path_provided and not args.upstream and not _init_local_source_copy:
                 _checkout_repo_ref(console, _init_repo, _init_release_ref)
 
             if not args.interactive:

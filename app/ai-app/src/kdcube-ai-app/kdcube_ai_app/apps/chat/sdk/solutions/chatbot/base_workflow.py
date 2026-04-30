@@ -84,6 +84,37 @@ def _react_shared_symbol(module_suffix: str, name: str):
         name,
     )
 
+
+def _cleanup_turn_workspace(runtime_ctx: Any, logger: Any) -> None:
+    import shutil
+
+    parents: dict[pathlib.Path, list[pathlib.Path]] = {}
+    for attr in ("workdir", "outdir"):
+        path_str = getattr(runtime_ctx, attr, None) if runtime_ctx else None
+        if not path_str:
+            continue
+        p = pathlib.Path(path_str)
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
+            logger.log(f"[workflow] cleaned up turn workspace: {p}", level="INFO")
+        if p.name in {"work", "out"}:
+            parents.setdefault(p.parent, []).append(p)
+
+    for parent, paths in parents.items():
+        if not parent.name.startswith("ctx_v2_"):
+            continue
+        cache = parent / ".react_workspace_git"
+        if cache.exists():
+            shutil.rmtree(cache, ignore_errors=True)
+            logger.log(f"[workflow] cleaned up turn workspace git cache: {cache}", level="INFO")
+        try:
+            parent.rmdir()
+            logger.log(f"[workflow] cleaned up empty turn workspace root: {parent}", level="INFO")
+        except OSError:
+            if any(path.exists() for path in paths):
+                logger.log(f"[workflow] turn workspace root retained after partial cleanup: {parent}", level="WARNING")
+
+
 def _ttl_for(user_type: str, requested: int) -> int:
     ttl_map = {
         "anonymous": 1,
@@ -1847,16 +1878,7 @@ class BaseWorkflow():
         try:
             from kdcube_ai_app.apps.chat.sdk.config import get_settings
             if not get_settings().SOLUTION_RETAIN_TURN_WORKSPACE:
-                import shutil
-                runtime_ctx = getattr(self, "runtime_ctx", None)
-                for attr in ("workdir", "outdir"):
-                    path_str = getattr(runtime_ctx, attr, None) if runtime_ctx else None
-                    if path_str:
-                        import pathlib
-                        p = pathlib.Path(path_str)
-                        if p.exists():
-                            shutil.rmtree(p, ignore_errors=True)
-                            self.logger.log(f"[workflow] cleaned up turn workspace: {p}", level="INFO")
+                _cleanup_turn_workspace(getattr(self, "runtime_ctx", None), self.logger)
         except Exception:
             self.logger.log(traceback.format_exc(), "ERROR")
 

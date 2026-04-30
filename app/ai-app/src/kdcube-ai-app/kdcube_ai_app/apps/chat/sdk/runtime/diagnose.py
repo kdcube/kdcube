@@ -135,7 +135,15 @@ def extract_error_lines(text: str) -> str:
     if not text:
         return ""
     lines = text.splitlines()
-    hits = [ln for ln in lines if re.search(r"\\bERROR\\b", ln, flags=re.IGNORECASE)]
+    hits = [
+        ln for ln in lines
+        if (
+            re.search(r"\bERROR\b", ln, flags=re.IGNORECASE)
+            or "Exception" in ln
+            or ln.startswith("bwrap:")
+            or ln.startswith("bubblewrap:")
+        )
+    ]
     if not hits:
         return ""
     return "\n".join(hits)

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
-from kdcube_ai_app.apps.chat.sdk.runtime import iso_runtime
+from kdcube_ai_app.apps.chat.sdk.runtime import bubblewrap, iso_runtime
 
 
 def test_exec_limit_bytes_supports_units_and_disable():
@@ -86,6 +86,25 @@ class _FakeCompletedProc:
 
     async def communicate(self):
         return self._stdout, self._stderr
+
+
+def test_docker_argv_grants_bwrap_namespace_capabilities(tmp_path):
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir()
+    outdir.mkdir()
+
+    argv = docker_runtime._build_docker_argv(
+        image="py-code-exec:latest",
+        host_workdir=workdir,
+        host_outdir=outdir,
+        network_mode="host",
+    )
+
+    assert "--cap-add=SYS_ADMIN" in argv
+    assert "--cap-add=NET_ADMIN" in argv
+    assert "--security-opt" in argv
+    assert "seccomp=unconfined" in argv
 
 
 @pytest.mark.asyncio
@@ -351,6 +370,42 @@ async def test_run_py_in_docker_returns_runtime_failure_on_timeout(tmp_path, mon
 
 
 @pytest.mark.asyncio
+async def test_run_py_in_docker_merges_child_runtime_logs_on_failure(tmp_path, monkeypatch):
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "logs").mkdir(parents=True, exist_ok=True)
+    (workdir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (outdir / "logs" / "runtime.err.log").write_text(
+        "[stderr]\nTraceback (most recent call last):\nNameError: name 'web_tools' is not defined\n",
+        encoding="utf-8",
+    )
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeCompletedProc(returncode=1, stderr=b"entrypoint failed\n")
+
+    monkeypatch.setattr(docker_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+    monkeypatch.setattr(docker_runtime, "check_and_apply_cloud_environment", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(docker_runtime, "_resolve_redis_url_for_container", lambda url, logger=None: url)
+    monkeypatch.setattr(docker_runtime, "_translate_container_path_to_host", lambda path: path)
+    monkeypatch.setattr(docker_runtime, "_is_running_in_docker", lambda: False)
+    monkeypatch.setattr(docker_runtime, "get_settings", lambda: SimpleNamespace(REDIS_URL="redis://example"))
+
+    result = await docker_runtime.run_py_in_docker(
+        workdir=workdir,
+        outdir=outdir,
+        runtime_globals={"EXECUTION_ID": "exec-runtime-log-failure"},
+        tool_module_names=[],
+        logger=SimpleNamespace(log=lambda *_args, **_kwargs: None),
+    )
+
+    assert result["ok"] is False
+    assert "entrypoint failed" in result["stderr_tail"]
+    assert "NameError: name 'web_tools' is not defined" in result["stderr_tail"]
+    assert result["error_summary"] == "NameError: name 'web_tools' is not defined"
+
+
+@pytest.mark.asyncio
 async def test_iso_runtime_terminates_child_process_when_cancelled(tmp_path, monkeypatch):
     fake_proc = _FakeProc()
 
@@ -379,3 +434,77 @@ async def test_iso_runtime_terminates_child_process_when_cancelled(tmp_path, mon
 
     assert fake_proc.terminate_calls == 1
     assert fake_proc.kill_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_iso_runtime_bubblewrap_mounts_declared_workdir_not_output_dir(tmp_path, monkeypatch):
+    workdir = tmp_path / "work"
+    outdir = tmp_path / "out"
+    workdir.mkdir()
+    outdir.mkdir()
+    entry_path = workdir / "main.py"
+    entry_path.write_text("print('ok')\n", encoding="utf-8")
+
+    captured = {}
+
+    def _fake_mk_bwrap_argv(**kwargs):
+        captured.update(kwargs)
+        return ["python", "-c", "print('ok')"]
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeCompletedProc(returncode=0, stdout=b"ok\n")
+
+    monkeypatch.setattr(bubblewrap, "bwrap_available", lambda: True)
+    monkeypatch.setattr(bubblewrap, "mk_bwrap_argv", _fake_mk_bwrap_argv)
+    monkeypatch.setattr(iso_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    result = await iso_runtime._run_subprocess(
+        entry_path=entry_path,
+        cwd=outdir,
+        env={
+            "WORKDIR": str(workdir),
+            "OUTPUT_DIR": str(outdir),
+            "EXECUTION_ID": "exec-bwrap-workdir",
+            "EXEC_REQUIRE_FS_SANDBOX": "1",
+        },
+        timeout_s=60,
+        outdir=outdir,
+        allow_network=False,
+        exec_id="exec-bwrap-workdir",
+    )
+
+    assert result["ok"] is True
+    assert captured["host_cwd"] == workdir
+    assert captured["host_outdir"] == outdir
+    assert captured["entry_path"] == entry_path
+    assert captured["uid"] == 1001
+    assert captured["gid"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_iso_runtime_failure_tail_includes_stdout_diagnostics(tmp_path, monkeypatch):
+    outdir = tmp_path / "out"
+    outdir.mkdir()
+
+    async def _fake_create_subprocess_exec(*_args, **_kwargs):
+        return _FakeCompletedProc(
+            returncode=1,
+            stdout=b"diagnostic before crash\nValueError: bad input\n",
+            stderr=b"",
+        )
+
+    monkeypatch.setattr(iso_runtime.asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    result = await iso_runtime._run_subprocess(
+        entry_path=tmp_path / "entry.py",
+        cwd=outdir,
+        env={"EXECUTION_ID": "exec-stdout-error"},
+        timeout_s=60,
+        outdir=outdir,
+        allow_network=True,
+        exec_id="exec-stdout-error",
+    )
+
+    assert result["ok"] is False
+    assert "diagnostic before crash" in result["stderr_tail"]
+    assert result["error_summary"] == "ValueError: bad input"

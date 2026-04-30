@@ -9,6 +9,8 @@ import re
 import pathlib
 import traceback
 import uuid
+import tarfile
+import zipfile
 from typing import Any, Dict, Optional, Annotated, Tuple, List
 
 import semantic_kernel as sk
@@ -63,6 +65,67 @@ TEXT_MIME_TYPES = {
     "text/csv",
 }
 EXEC_USER_CODE_FILENAME = "user_code.py"
+ARCHIVE_MIME_TYPES = {
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-tar",
+    "application/gzip",
+    "application/x-gzip",
+}
+ARCHIVE_SUFFIXES = {
+    ".zip",
+    ".tar",
+    ".tgz",
+    ".gz",
+    ".tar.gz",
+    ".tar.bz2",
+    ".tar.xz",
+}
+INTERNAL_ARCHIVE_TOP_LEVEL = {
+    ".kdcube",
+    "_etc",
+    "_exec-workspace",
+    "_home",
+    "_kdcube-supervisor",
+    "_opt",
+    "_proc",
+    "_root",
+    "_run",
+    "_sys",
+    "_tmp",
+    "_usr",
+    "_var",
+    "_workspace",
+    "_workspace_out",
+    "bin",
+    "boot",
+    "dev",
+    "etc",
+    "exec-workspace",
+    "home",
+    "kdcube-supervisor",
+    "lib",
+    "lib64",
+    "logs",
+    "opt",
+    "proc",
+    "root",
+    "run",
+    "sbin",
+    "sys",
+    "tmp",
+    "usr",
+    "var",
+    "workspace",
+    "workspace_out",
+}
+INTERNAL_ARCHIVE_FILENAMES = {
+    "docker.err.log",
+    "docker.out.log",
+    "infra.log",
+    "runtime.err.log",
+    "supervisor.log",
+}
 
 
 def _is_text_mime(mime: str) -> bool:
@@ -71,6 +134,104 @@ def _is_text_mime(mime: str) -> bool:
     if mime.startswith("text/"):
         return True
     return mime in TEXT_MIME_TYPES
+
+
+def _is_archive_path(path: pathlib.Path, mime: str) -> bool:
+    suffixes = "".join(path.suffixes[-2:]).lower()
+    return (
+        (mime or "").lower() in ARCHIVE_MIME_TYPES
+        or path.suffix.lower() in ARCHIVE_SUFFIXES
+        or suffixes in ARCHIVE_SUFFIXES
+    )
+
+
+def _archive_entry_violation(name: str) -> Optional[str]:
+    raw = str(name or "").replace("\\", "/").strip()
+    if not raw:
+        return "empty archive entry name"
+    if raw.startswith("/") or re.match(r"^[A-Za-z]:/", raw) or raw.startswith("//"):
+        return f"absolute archive entry is not allowed: {raw}"
+    parts = [part for part in raw.split("/") if part not in {"", "."}]
+    if any(part == ".." for part in parts):
+        return f"path traversal archive entry is not allowed: {raw}"
+    if not parts:
+        return "empty archive entry name"
+    lowered = [part.lower() for part in parts]
+    if lowered[0] in INTERNAL_ARCHIVE_TOP_LEVEL:
+        return f"archive appears to contain internal runtime path: {raw}"
+    if any(part in INTERNAL_ARCHIVE_FILENAMES for part in lowered):
+        return f"archive appears to contain internal runtime log: {raw}"
+    if any(part in {"kdcube-supervisor", ".kdcube"} for part in lowered):
+        return f"archive appears to contain internal runtime path: {raw}"
+    return None
+
+
+def _validate_archive_egress(path: pathlib.Path) -> Optional[str]:
+    try:
+        if zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as archive:
+                for info in archive.infolist():
+                    violation = _archive_entry_violation(info.filename)
+                    if violation:
+                        return violation
+            return None
+    except Exception as exc:
+        return f"archive validation failed: {exc}"
+
+    try:
+        if tarfile.is_tarfile(path):
+            with tarfile.open(path) as archive:
+                for member in archive.getmembers():
+                    violation = _archive_entry_violation(member.name)
+                    if violation:
+                        return violation
+            return None
+    except Exception as exc:
+        return f"archive validation failed: {exc}"
+    return None
+
+
+def _validate_contract_artifact_egress(
+    *,
+    path: pathlib.Path,
+    outdir: pathlib.Path,
+    rel: str,
+    mime: str,
+) -> Optional[Dict[str, str]]:
+    try:
+        if path.is_symlink():
+            return {
+                "code": "artifact_symlink_blocked",
+                "message": "contracted output must be a regular file, not a symlink",
+            }
+        resolved_outdir = outdir.resolve()
+        resolved_path = path.resolve()
+        try:
+            resolved_path.relative_to(resolved_outdir)
+        except ValueError:
+            return {
+                "code": "artifact_path_escape_blocked",
+                "message": "contracted output resolves outside the execution output directory",
+            }
+        if not path.is_file():
+            return {
+                "code": "artifact_not_regular_file",
+                "message": "contracted output must be a regular file",
+            }
+    except Exception as exc:
+        return {
+            "code": "artifact_path_validation_failed",
+            "message": f"contracted output path validation failed: {exc}",
+        }
+
+    if _is_archive_path(pathlib.Path(rel), mime):
+        violation = _validate_archive_egress(path)
+        if violation:
+            return {
+                "code": "artifact_internal_path_blocked",
+                "message": violation,
+            }
+    return None
 
 
 def _strip_exec_banner(text: str) -> str:
@@ -125,6 +286,34 @@ def _build_exec_loader_wrapper(*, user_code_filename: str = EXEC_USER_CODE_FILEN
         "    asyncio.run(_main())",
         "",
     ])
+
+
+def _runtime_result_error_tail(payload: Any) -> Tuple[str, str]:
+    if not isinstance(payload, dict):
+        return "", ""
+    err = payload.get("error")
+    if not isinstance(err, dict):
+        return "", ""
+
+    parts: List[str] = []
+    for key in ("where", "error", "code", "description", "message", "details"):
+        val = err.get(key)
+        if val is None or val == "":
+            continue
+        parts.append(f"{key}: {val}")
+    text = "\n".join(parts).strip()
+    summary = str(err.get("description") or err.get("message") or err.get("error") or "").strip()
+    return summary, text[-8000:] if len(text) > 8000 else text
+
+
+def _load_runtime_result_error(result_path: pathlib.Path) -> Tuple[str, str]:
+    try:
+        if not result_path.exists() or not result_path.is_file():
+            return "", ""
+        payload = json.loads(result_path.read_text(encoding="utf-8", errors="ignore"))
+        return _runtime_result_error_tail(payload)
+    except Exception:
+        return "", ""
 
 
 def _normalize_artifacts_spec(artifacts: Any) -> Tuple[Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]]:
@@ -429,7 +618,14 @@ def _build_exec_error_payload(
             "error": runtime_code,
             "description": desc,
             "managed": True,
-            "details": {"missing": missing, "errors": errors, "run": run_res or {}, "stderr_tail": infra_text},
+            "details": {
+                "missing": missing,
+                "errors": errors,
+                "run": run_res or {},
+                "stderr_tail": infra_text,
+                "runtime_code": runtime_code,
+                "runtime_message": runtime_message,
+            },
         }
 
     if missing:
@@ -515,6 +711,8 @@ class ExecTools:
             "  `Path(OUTPUT_DIR) / \"<turn_id>/files/my_file.ext\"` or `Path(OUTPUT_DIR) / \"<turn_id>/outputs/report.txt\"`.\n"
             "- Network access is disabled in the sandbox; any network calls will fail.\n"
             "- Read/write outside OUTPUT_DIR or the current workdir is not permitted.\n"
+            "- The runtime filesystem view is restricted; do not inspect, list, copy, archive, or report system/runtime paths.\n"
+            "- Contracted archive outputs are rejected if they contain internal/system path snapshots.\n"
             "- File MIME is inferred from filename extension (no mime in contract).\n"
             "\n"
             "AGENT GUIDANCE FOR RESULTS\n"
@@ -701,6 +899,17 @@ async def run_exec_tool(
             },
         }
 
+    runtime_result_summary, runtime_result_tail = _load_runtime_result_error(outdir / result_filename)
+    if isinstance(run_res, dict) and (runtime_result_summary or runtime_result_tail):
+        if runtime_result_summary and not str(run_res.get("error_summary") or "").strip():
+            run_res["error_summary"] = runtime_result_summary
+        if runtime_result_tail:
+            existing_tail = str(run_res.get("stderr_tail") or "").strip()
+            if runtime_result_tail not in existing_tail:
+                run_res["stderr_tail"] = (
+                    existing_tail + "\n" + runtime_result_tail
+                ).strip() if existing_tail else runtime_result_tail
+
     # 4) build artifacts by checking requested files
     out_dyn: Dict[str, Any] = {}
     missing: List[str] = []
@@ -716,6 +925,19 @@ async def run_exec_tool(
                 "filename": rel,
                 "code": "missing_file" if not p.exists() else "empty_file",
                 "message": "file not produced" if not p.exists() else "file is empty",
+            })
+            continue
+        egress_error = _validate_contract_artifact_egress(
+            path=p,
+            outdir=outdir,
+            rel=rel,
+            mime=a.get("mime") or "",
+        )
+        if egress_error:
+            errors.append({
+                "artifact_id": a["name"],
+                "filename": rel,
+                **egress_error,
             })
             continue
         # Validate produced file with heuristics
@@ -843,9 +1065,9 @@ async def run_exec_tool(
             seen.add(b)
             uniq.append(b)
         infra_tracebacks = "\n\n".join(uniq)
-    infra_has_err = bool(infra_error_lines or infra_tracebacks)
+    infra_has_err = bool(infra_error_lines or infra_tracebacks or (infra_text.strip() and not bool((run_res or {}).get("ok", True))))
 
-    runtime_ok, _, runtime_message = _runtime_error_details(run_res if isinstance(run_res, dict) else {})
+    runtime_ok, runtime_code, runtime_message = _runtime_error_details(run_res if isinstance(run_res, dict) else {})
     ok = len(missing) == 0 and len(errors) == 0 and runtime_ok
     error = _build_exec_error_payload(
         missing=missing,
@@ -853,6 +1075,18 @@ async def run_exec_tool(
         run_res=run_res if isinstance(run_res, dict) else {},
         infra_text=infra_text,
     )
+
+    if logger is not None and not runtime_ok:
+        try:
+            logger.log(
+                "[exec.tool] runtime failure "
+                f"code={runtime_code} summary={runtime_message}",
+                level="ERROR",
+            )
+            if infra_text.strip():
+                logger.log(f"[exec.tool] runtime diagnostics tail\n{infra_text[-4000:]}", level="ERROR")
+        except Exception:
+            pass
 
     # Build human-readable report text
     lines: List[str] = []
@@ -900,6 +1134,10 @@ async def run_exec_tool(
             lines.append(infra_error_lines.strip())
         if infra_tracebacks:
             lines.append(infra_tracebacks.strip())
+        if not infra_error_lines and not infra_tracebacks:
+            infra_display = _strip_exec_banner(infra_text).strip()
+            if infra_display:
+                lines.append(infra_display[-2000:])
 
     user_log_display = _strip_exec_banner(user_log_tail)
     if user_log_display:

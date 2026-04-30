@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -8,14 +9,17 @@ from kdcube_cli.cli import (
     _bootstrap_repo_for_defaults,
     _build_paths_for_repo,
     _canonical_descriptor_dir_from_initialized_workdir,
-    _check_no_other_local_stack_running,
-    _check_targeted_command_has_workdir,
+    _check_before_start,
     _collect_runtime_info,
     _compose_running_services,
     _descriptor_fast_path_reasons,
     _load_bundle_ids_from_descriptor,
     _load_cli_defaults,
+    _copy_dirty_local_source,
+    _repo_path_from_install_meta,
     _resolve_cli_repo_path,
+    _resolve_subcommand_repo,
+    _resolve_subcommand_workdir,
     _resolve_cli_workdir,
     _save_cli_defaults,
 )
@@ -168,6 +172,62 @@ def test_resolve_cli_repo_path_prefers_install_meta_repo_root(tmp_path: Path):
         path_provided=False,
     )
     assert resolved == repo_dir.resolve()
+
+
+def test_repo_path_from_install_meta_accepts_staged_platform_source_without_git(tmp_path: Path):
+    runtime_dir = tmp_path / "workspace" / "demo_tenant__project_one"
+    config_dir = runtime_dir / "config"
+    config_dir.mkdir(parents=True)
+    staged_repo = runtime_dir / "platform-source" / "kdcube-ai-app"
+    (staged_repo / "app" / "ai-app" / "deployment").mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(json.dumps({"repo_root": str(staged_repo.resolve())}))
+
+    resolved = _repo_path_from_install_meta(runtime_dir)
+
+    assert resolved == staged_repo.resolve()
+
+
+def test_subcommand_repo_uses_install_meta_after_base_workdir_resolves_to_runtime(tmp_path: Path):
+    base_workdir = tmp_path / "workspace"
+    runtime_dir = base_workdir / "demo_tenant__project_one"
+    config_dir = runtime_dir / "config"
+    config_dir.mkdir(parents=True)
+    (config_dir / ".env").write_text("")
+    staged_repo = runtime_dir / "platform-source" / "kdcube-ai-app"
+    (staged_repo / "app" / "ai-app" / "deployment").mkdir(parents=True)
+    (config_dir / "install-meta.json").write_text(json.dumps({"repo_root": str(staged_repo.resolve())}))
+
+    resolved_workdir = _resolve_cli_workdir(base_workdir)
+    resolved_repo = _resolve_subcommand_repo(tmp_path / "default-repo", workdir=resolved_workdir)
+
+    assert resolved_workdir == runtime_dir.resolve()
+    assert resolved_repo == staged_repo.resolve()
+
+
+def test_copy_dirty_local_source_copies_tracked_and_untracked_nonignored_files(tmp_path: Path):
+    source_repo = tmp_path / "source"
+    source_repo.mkdir()
+    subprocess.run(["git", "init"], cwd=source_repo, check=True, capture_output=True, text=True)
+    (source_repo / ".gitignore").write_text("ignored.txt\nignored-dir/\n", encoding="utf-8")
+    tracked = source_repo / "app" / "ai-app" / "deployment" / "assembly.yaml"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("context: {}\n", encoding="utf-8")
+    subprocess.run(["git", "add", ".gitignore", str(tracked.relative_to(source_repo))], cwd=source_repo, check=True)
+    untracked = source_repo / "app" / "ai-app" / "README.md"
+    untracked.write_text("local change\n", encoding="utf-8")
+    (source_repo / "ignored.txt").write_text("secret local data\n", encoding="utf-8")
+    ignored_dir_file = source_repo / "ignored-dir" / "data.txt"
+    ignored_dir_file.parent.mkdir()
+    ignored_dir_file.write_text("secret local data\n", encoding="utf-8")
+
+    workdir = tmp_path / "runtime"
+    copied_repo = _copy_dirty_local_source(Console(file=None), source_repo=source_repo, workdir=workdir)
+
+    assert (copied_repo / "app" / "ai-app" / "deployment" / "assembly.yaml").read_text(encoding="utf-8") == "context: {}\n"
+    assert (copied_repo / "app" / "ai-app" / "README.md").read_text(encoding="utf-8") == "local change\n"
+    assert not (copied_repo / ".git").exists()
+    assert not (copied_repo / "ignored.txt").exists()
+    assert not (copied_repo / "ignored-dir" / "data.txt").exists()
 
 
 def test_canonical_descriptor_dir_from_initialized_workdir_uses_runtime_config(tmp_path: Path):
@@ -1203,6 +1263,8 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
             "auth": {"type": "simple"},
             "proxy": {"ssl": False},
             "storage": {
+                "kdcube": f"file://{tmp_path / 'seed-kdcube'}",
+                "bundles": f"file://{tmp_path / 'seed-bundles'}",
                 "workspace": {"type": "git", "repo": "https://github.com/example/workspace.git"},
                 "claude_code_session": {"type": "git", "repo": "https://github.com/example/workspace.git"},
             },
@@ -1250,10 +1312,10 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
         "PLATFORM_DESCRIPTORS_DIR=/config",
     ]
     assert "HOST_GATEWAY_YAML_DESCRIPTOR_PATH=" not in env_main
-    assert f"HOST_KDCUBE_STORAGE_PATH={(tmp_path / 'kdcube-storage').resolve()}" in env_main
+    assert f"HOST_KDCUBE_STORAGE_PATH={(tmp_path / 'seed-kdcube').resolve()}" in env_main
     assert f"HOST_BUNDLES_PATH={(tmp_path / 'bundles-root').resolve()}" in env_main
     assert f"HOST_MANAGED_BUNDLES_PATH={(tmp_path / 'managed-bundles').resolve()}" in env_main
-    assert f"HOST_BUNDLE_STORAGE_PATH={(tmp_path / 'bundle-storage').resolve()}" in env_main
+    assert f"HOST_BUNDLE_STORAGE_PATH={(tmp_path / 'seed-bundles').resolve()}" in env_main
     assert f"HOST_EXEC_WORKSPACE_PATH={(tmp_path / 'exec-workspace').resolve()}" in env_main
     assert f"KDCUBE_CONFIG_DIR={config_dir}" in env_main
     assert "BUNDLES_ROOT=/bundles" in env_main
@@ -1261,10 +1323,12 @@ def test_gather_configuration_keeps_proc_and_ingress_env_minimal_for_user_descri
     assert "BUNDLE_STORAGE_ROOT=/bundle-storage" in env_main
 
     assembly_data = yaml.safe_load(assembly_path.read_text())
-    assert assembly_data["paths"]["host_kdcube_storage_path"] == str((tmp_path / "kdcube-storage").resolve())
+    assert assembly_data["storage"]["kdcube"] == "file:///kdcube-storage"
+    assert assembly_data["storage"]["bundles"] == "file:///bundle-storage"
+    assert assembly_data["paths"]["host_kdcube_storage_path"] == str((tmp_path / "seed-kdcube").resolve())
     assert assembly_data["paths"]["host_bundles_path"] == str((tmp_path / "bundles-root").resolve())
     assert assembly_data["paths"]["host_managed_bundles_path"] == str((tmp_path / "managed-bundles").resolve())
-    assert assembly_data["paths"]["host_bundle_storage_path"] == str((tmp_path / "bundle-storage").resolve())
+    assert assembly_data["paths"]["host_bundle_storage_path"] == str((tmp_path / "seed-bundles").resolve())
     assert assembly_data["paths"]["host_exec_workspace_path"] == str((tmp_path / "exec-workspace").resolve())
     assert assembly_data["platform"]["services"]["ingress"]["log"]["log_dir"] == "/logs"
     assert assembly_data["platform"]["services"]["proc"]["log"]["log_dir"] == "/logs"
@@ -2197,150 +2261,63 @@ def test_bootstrap_repo_for_defaults_raises_when_deployment_missing(tmp_path: Pa
 
 
 # ---------------------------------------------------------------------------
-# _check_no_other_local_stack_running
+# _check_before_start
 # ---------------------------------------------------------------------------
 
-def _make_minimal_runtime(base: Path, namespace: str, compose_mode: str = "all-in-one") -> Path:
-    """Create a minimal initialized runtime directory with a .env file."""
-    runtime = base / namespace
-    config = runtime / "config"
-    config.mkdir(parents=True)
-    env_content = f'KDCUBE_COMPOSE_MODE="{compose_mode}"\n'
-    (config / ".env").write_text(env_content)
-    return runtime
+
+def test_check_before_start_passes_without_lock(monkeypatch):
+    monkeypatch.setattr("kdcube_cli.cli._read_cli_lock", lambda: None)
+
+    _check_before_start(Console(quiet=True), tenant="tenant-a", project="project-a")
 
 
-def _make_minimal_repo(base: Path) -> Path:
-    """Create a minimal fake repo with stubs for all supported compose modes."""
-    repo = base / "repo"
-    for mode in ("all_in_one_kdcube", "custom-ui-managed-infra"):
-        compose_dir = repo / "app" / "ai-app" / "deployment" / "docker" / mode
-        compose_dir.mkdir(parents=True)
-        (compose_dir / "docker-compose.yaml").write_text(
-            "services:\n  chat-proc:\n    image: stub\n"
-        )
-    lib_root = repo / "app" / "ai-app" / "src" / "kdcube-ai-app"
-    (lib_root / "kdcube_ai_app").mkdir(parents=True)
-    return repo
-
-
-def test_check_no_other_local_stack_running_passes_when_no_siblings(monkeypatch, tmp_path: Path):
-    repo = _make_minimal_repo(tmp_path)
-    target = _make_minimal_runtime(tmp_path / "workspace", "tenant-a__proj-a")
-
-    monkeypatch.setattr("kdcube_cli.cli._compose_running_services", lambda *a, **kw: set())
-
-    console = Console(quiet=True)
-    # Should not raise
-    _check_no_other_local_stack_running(console, target_workdir=target, repo_root=repo)
-
-
-def test_check_no_other_local_stack_running_passes_for_target_itself(monkeypatch, tmp_path: Path):
-    repo = _make_minimal_repo(tmp_path)
-    workspace = tmp_path / "workspace"
-    target = _make_minimal_runtime(workspace, "tenant-a__proj-a")
-
-    # Target itself reports running services — still allowed
-    monkeypatch.setattr("kdcube_cli.cli._compose_running_services", lambda *a, **kw: {"chat-proc"})
-
-    console = Console(quiet=True)
-    _check_no_other_local_stack_running(console, target_workdir=target, repo_root=repo)
-
-
-def test_check_no_other_local_stack_running_refuses_when_sibling_is_active(monkeypatch, tmp_path: Path):
-    repo = _make_minimal_repo(tmp_path)
-    workspace = tmp_path / "workspace"
-    # target uses default all-in-one; sibling uses a different compose mode so
-    # they have different docker_dirs and are truly independent deployments.
-    target = _make_minimal_runtime(workspace, "tenant-a__proj-a", compose_mode="all-in-one")
-    _make_minimal_runtime(workspace, "tenant-b__proj-b", compose_mode="custom-ui-managed-infra")
-
-    def fake_running_services(docker_dir, env_file):
-        if "tenant-b__proj-b" in str(env_file):
-            return {"chat-proc", "chat-ingress"}
-        return set()
-
-    monkeypatch.setattr("kdcube_cli.cli._compose_running_services", fake_running_services)
-
-    console = Console(quiet=True)
-    try:
-        _check_no_other_local_stack_running(console, target_workdir=target, repo_root=repo)
-        raise AssertionError("Expected SystemExit when a sibling stack is running")
-    except SystemExit as exc:
-        msg = str(exc)
-        assert "tenant-b__proj-b" in msg
-        assert "chat-ingress" in msg or "chat-proc" in msg
-        assert "--stop" in msg
-
-
-def test_check_no_other_local_stack_running_skips_broken_sibling(monkeypatch, tmp_path: Path):
-    repo = _make_minimal_repo(tmp_path)
-    workspace = tmp_path / "workspace"
-    target = _make_minimal_runtime(workspace, "tenant-a__proj-a")
-    _make_minimal_runtime(workspace, "tenant-b__proj-b")
-
-    def fake_running_services(docker_dir, env_file):
-        raise RuntimeError("docker not available")
-
-    monkeypatch.setattr("kdcube_cli.cli._compose_running_services", fake_running_services)
-
-    console = Console(quiet=True)
-    # Should not raise — broken sibling is silently skipped
-    _check_no_other_local_stack_running(console, target_workdir=target, repo_root=repo)
-
-
-def test_check_no_other_local_stack_running_refuses_when_sibling_base_is_active(
-    monkeypatch, tmp_path: Path
-):
-    # Two different --workdir bases under the same kdcube home
-    # (e.g. kdcube-runtime vs kdcube-runtime2).  The guard must fire when the
-    # sibling uses a DIFFERENT docker_dir (different compose project name) —
-    # those are truly independent deployments that could conflict on ports.
-    repo = _make_minimal_repo(tmp_path)
-    base1 = tmp_path / "kdcube-runtime"
-    base2 = tmp_path / "kdcube-runtime2"
-    # sibling uses a different compose mode → different docker_dir → independent
-    _make_minimal_runtime(base1, "tenant-a__proj-a", compose_mode="custom-ui-managed-infra")
-    target = _make_minimal_runtime(base2, "tenant-b__proj-b", compose_mode="all-in-one")
-
-    def fake_running_services(docker_dir, env_file):
-        if "tenant-a__proj-a" in str(env_file):
-            return {"chat-proc", "chat-ingress"}
-        return set()
-
-    monkeypatch.setattr("kdcube_cli.cli._compose_running_services", fake_running_services)
-
-    console = Console(quiet=True)
-    try:
-        _check_no_other_local_stack_running(console, target_workdir=target, repo_root=repo)
-        raise AssertionError("Expected SystemExit when a sibling base stack is running")
-    except SystemExit as exc:
-        msg = str(exc)
-        assert "tenant-a__proj-a" in msg
-        assert "--stop" in msg
-
-
-def test_check_no_other_local_stack_running_skips_sibling_with_same_docker_dir(
-    monkeypatch, tmp_path: Path
-):
-    # Both workdirs use the same docker_dir (same compose project name).
-    # docker compose ps from the sibling would report the target's own
-    # containers — a false positive.  Guard must not fire in this case.
-    repo = _make_minimal_repo(tmp_path)
-    base1 = tmp_path / "kdcube-runtime"
-    base2 = tmp_path / "kdcube-runtime2"
-    _make_minimal_runtime(base1, "tenant-a__proj-a")
-    target = _make_minimal_runtime(base2, "tenant-b__proj-b")
-
-    # Sibling reports running services — but same docker_dir as target
+def test_check_before_start_passes_for_same_locked_deployment(monkeypatch):
     monkeypatch.setattr(
-        "kdcube_cli.cli._compose_running_services",
-        lambda docker_dir, env_file: {"chat-proc"},
+        "kdcube_cli.cli._read_cli_lock",
+        lambda: {"tenant": "tenant-a", "project": "project-a"},
     )
 
-    console = Console(quiet=True)
-    # Should not raise — sibling shares docker_dir with target (false positive)
-    _check_no_other_local_stack_running(console, target_workdir=target, repo_root=repo)
+    _check_before_start(Console(quiet=True), tenant="tenant-a", project="project-a")
+
+
+def test_check_before_start_refuses_when_different_locked_deployment_is_running(monkeypatch):
+    monkeypatch.setattr(
+        "kdcube_cli.cli._read_cli_lock",
+        lambda: {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "workdir": "/tmp/workspace/tenant-a__project-a",
+        },
+    )
+    monkeypatch.setattr("kdcube_cli.cli._lock_running_services", lambda _lock: {"chat-proc", "chat-ingress"})
+
+    try:
+        _check_before_start(Console(quiet=True), tenant="tenant-b", project="project-b")
+        raise AssertionError("Expected SystemExit when another deployment is running")
+    except SystemExit as exc:
+        msg = str(exc)
+        assert "tenant-a" in msg
+        assert "project-a" in msg
+        assert "chat-ingress" in msg or "chat-proc" in msg
+        assert "kdcube stop --workdir" in msg
+
+
+def test_check_before_start_clears_stale_different_lock(monkeypatch):
+    cleared = []
+    monkeypatch.setattr(
+        "kdcube_cli.cli._read_cli_lock",
+        lambda: {
+            "tenant": "tenant-a",
+            "project": "project-a",
+            "workdir": "/tmp/workspace/tenant-a__project-a",
+        },
+    )
+    monkeypatch.setattr("kdcube_cli.cli._lock_running_services", lambda _lock: set())
+    monkeypatch.setattr("kdcube_cli.cli._clear_cli_lock", lambda: cleared.append(True))
+
+    _check_before_start(Console(quiet=True), tenant="tenant-b", project="project-b")
+
+    assert cleared == [True]
 
 
 # ---------------------------------------------------------------------------
@@ -2418,45 +2395,31 @@ def test_save_and_load_cli_defaults_roundtrip(monkeypatch, tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# Block 4: Ambiguity refusal — _check_targeted_command_has_workdir
+# Block 4: Targeted command workdir resolution
 # ---------------------------------------------------------------------------
 
 
-def test_targeted_command_raises_when_no_workdir_and_no_defaults():
-    import pytest
-    with pytest.raises(SystemExit) as exc_info:
-        _check_targeted_command_has_workdir(
-            is_targeted_command=True,
-            workdir_arg=False,
-            cli_defaults={},
-        )
-    msg = str(exc_info.value)
-    assert "--set-defaults" in msg
+def test_resolve_subcommand_workdir_raises_when_no_workdir_and_no_defaults():
+    try:
+        _resolve_subcommand_workdir(None, {})
+        raise AssertionError("Expected SystemExit when no workdir can be resolved")
+    except SystemExit as exc:
+        msg = str(exc)
+    assert "--workdir" in msg
     assert "--default-workdir" in msg
 
 
-def test_targeted_command_passes_when_workdir_arg_provided():
-    # Explicit --workdir resolves ambiguity — should not raise
-    _check_targeted_command_has_workdir(
-        is_targeted_command=True,
-        workdir_arg=True,
-        cli_defaults={},
-    )
+def test_resolve_subcommand_workdir_uses_explicit_workdir(tmp_path: Path):
+    explicit = tmp_path / "runtime"
+
+    resolved = _resolve_subcommand_workdir(str(explicit), {"default_workdir": str(tmp_path / "other")})
+
+    assert resolved == explicit.resolve()
 
 
-def test_targeted_command_passes_when_default_workdir_configured():
-    # default_workdir in defaults resolves ambiguity — should not raise
-    _check_targeted_command_has_workdir(
-        is_targeted_command=True,
-        workdir_arg=False,
-        cli_defaults={"default_workdir": "/home/user/.kdcube/kdcube-runtime/tenant__project"},
-    )
+def test_resolve_subcommand_workdir_uses_default_workdir(tmp_path: Path):
+    default = tmp_path / "default-runtime"
 
+    resolved = _resolve_subcommand_workdir(None, {"default_workdir": str(default)})
 
-def test_targeted_command_passes_for_non_targeted_command():
-    # Install commands do not require a pre-existing workdir
-    _check_targeted_command_has_workdir(
-        is_targeted_command=False,
-        workdir_arg=False,
-        cli_defaults={},
-    )
+    assert resolved == default.resolve()

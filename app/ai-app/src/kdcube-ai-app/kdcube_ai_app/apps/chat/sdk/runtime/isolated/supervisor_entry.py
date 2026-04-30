@@ -7,6 +7,7 @@ import socket
 import struct
 import os, base64, json
 import asyncio
+import hmac
 from typing import Dict, Any, Callable, Optional
 
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
@@ -14,12 +15,18 @@ from kdcube_ai_app.apps.chat.sdk.tools.io_tools import tools as agent_io_tools
 
 
 class PrivilegedSupervisor:
-    def __init__(self, socket_path: str = "/tmp/supervisor.sock", logger: Optional[AgentLogger] = None):
+    def __init__(
+        self,
+        socket_path: str = "/tmp/supervisor.sock",
+        logger: Optional[AgentLogger] = None,
+        auth_token: Optional[str] = None,
+    ):
         self.socket_path = socket_path
         self.allowed_child_pid: Optional[int] = None
         self.registered_tools: dict[str, Callable[..., Any]] = {}
         self.log = logger or AgentLogger("supervisor")
         self.alias_to_dyn: Dict[str, str] = {}
+        self.auth_token = auth_token if auth_token is not None else os.environ.get("SUPERVISOR_AUTH_TOKEN", "")
 
         # Remove old socket
         try:
@@ -38,6 +45,31 @@ class PrivilegedSupervisor:
     def set_alias_map(self, alias_map: Dict[str, str]):
         """Register alias→dyn_module_name mapping."""
         self.alias_to_dyn = alias_map or {}
+
+    @staticmethod
+    def _allowed_peer_uids() -> set[int]:
+        raw = os.environ.get("SUPERVISOR_ALLOWED_UIDS")
+        if raw:
+            out: set[int] = set()
+            for part in raw.split(","):
+                part = part.strip()
+                if not part:
+                    continue
+                try:
+                    out.add(int(part))
+                except ValueError:
+                    continue
+            if out:
+                return out
+        return {1001}
+
+    def _auth_error(self, request: dict) -> Optional[str]:
+        if not self.auth_token:
+            return "Supervisor auth token is not configured"
+        supplied = request.get("auth_token") if isinstance(request, dict) else None
+        if not isinstance(supplied, str) or not hmac.compare_digest(supplied, self.auth_token):
+            return "Unauthorized supervisor request"
+        return None
 
     def _resolve_tool_fn(self, tool_id: str) -> Optional[Callable[..., Any]]:
         fn = self.registered_tools.get(tool_id)
@@ -124,11 +156,6 @@ class PrivilegedSupervisor:
             )
             pid, uid, gid = struct.unpack('3i', creds)
 
-            # Enforce UID (uid=1001 is executor)
-            if uid != 1001:
-                conn.sendall(b'{"ok": false, "error": "Wrong UID"}')
-                return
-
             # Read complete request (loop until EOF from client's shutdown)
             chunks = []
             while True:
@@ -143,6 +170,17 @@ class PrivilegedSupervisor:
                 return
 
             request = json.loads(data.decode("utf-8"))
+            auth_error = self._auth_error(request)
+            if auth_error:
+                conn.sendall(json.dumps({"ok": False, "error": auth_error}).encode("utf-8"))
+                return
+            allowed_uids = self._allowed_peer_uids()
+            if uid not in allowed_uids:
+                self.log.log(
+                    f"[supervisor] Non-standard peer UID {uid} for authenticated request "
+                    f"(allowed_hint={sorted(allowed_uids)})",
+                    level="WARNING",
+                )
             result = self.execute_privileged_operation(request)
 
             # Send complete response
@@ -252,13 +290,6 @@ class PrivilegedSupervisor:
 
             self.log.log(f"[supervisor] Connection from PID={pid}, UID={uid}, GID={gid}", level="INFO")
 
-            # Enforce UID (executor runs as 1001)
-            if uid != 1001:
-                self.log.log(f"[supervisor] Rejected connection from UID {uid} (expected 1001)", level="WARNING")
-                writer.write(b'{"ok": false, "error": "Wrong UID"}')
-                await writer.drain()
-                return
-
             # Read complete request until EOF
             chunks = []
             while True:
@@ -277,6 +308,19 @@ class PrivilegedSupervisor:
             self.log.log(f"[supervisor] Received {len(data)} bytes of request data", level="INFO")
 
             request = json.loads(data.decode("utf-8"))
+            auth_error = self._auth_error(request)
+            if auth_error:
+                self.log.log(f"[supervisor] Rejected unauthorized socket request: {auth_error}", level="WARNING")
+                writer.write(json.dumps({"ok": False, "error": auth_error}).encode("utf-8"))
+                await writer.drain()
+                return
+            allowed_uids = self._allowed_peer_uids()
+            if uid not in allowed_uids:
+                self.log.log(
+                    f"[supervisor] Non-standard peer UID {uid} for authenticated request "
+                    f"(allowed_hint={sorted(allowed_uids)})",
+                    level="WARNING",
+                )
 
             # ✅ Await the async method
             result = await self.execute_privileged_operation(request)

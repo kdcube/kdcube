@@ -125,7 +125,24 @@ If `--path` is omitted, the CLI clones or reuses the platform checkout under:
 ```
 
 You can still pass `--path` explicitly if you want to force a specific local
-checkout.
+checkout. In descriptor-driven `init`, explicit `--path` means “stage this local
+source tree into the runtime workdir and use that staged copy”. The CLI copies
+tracked files plus untracked files that are not ignored by git, so dirty local
+source changes can be tested without copying `.git`, local runtime data, or
+other gitignored paths.
+
+```bash
+kdcube init \
+  --descriptors-location /path/to/descriptors \
+  --workdir /path/to/workspace \
+  --path /path/to/kdcube-ai-app \
+  --build
+```
+
+`--workdir` answers “where should this runtime live?”. `--path` answers “which
+local platform source tree should this runtime use?”. If `--upstream`,
+`--latest`, or `--release` is also provided, that version selector wins and
+`--path` is only the local repo/cache location for the selected source.
 
 Or pull the latest platform release from the platform repo instead of
 `assembly.yaml -> platform.ref`:
@@ -237,6 +254,8 @@ Choose exactly one source selector:
 - `--upstream` for the latest upstream repo state
 - `--latest` for the latest released platform ref
 - `--release <ref>` for a specific released ref
+- explicit `--path <repo>` without the selectors above for dirty local source
+  staging
 - otherwise `assembly.yaml -> platform.ref`
 
 For `aws-sm` deployments, you can also export the current effective live
@@ -276,6 +295,7 @@ When the descriptor set is complete, the CLI:
 - resolves the effective runtime as `<workspace>/<safe_tenant>__<safe_project>`
 - stages the descriptors into `<runtime>/config`
 - clones or reuses the platform repo under `<runtime>/repo` when `--path` is omitted
+- copies the explicit local `--path` repo into `<runtime>/repo` when no version selector is used
 - skips interactive prompts
 - runs a release install directly
 
@@ -302,7 +322,7 @@ what is incomplete.
 | Option | Purpose |
 |---|---|
 | `--repo <url>` | Git repo URL (default: official kdcube repo). |
-| `--path <repo>` | Use a specific local repo checkout for templates and builds. If omitted in descriptor mode, the checkout defaults to `<workspace>/<tenant>__<project>/repo`. |
+| `--path <repo>` | For `kdcube init` without `--upstream`, `--latest`, or `--release`, copy this local platform checkout into the runtime and use the staged copy. With a version selector, use this path as the local repo/cache location. If omitted in descriptor mode, the checkout defaults to `<workspace>/<tenant>__<project>/repo`. |
 | `--workdir <path>` | Base workspace root. In descriptor mode the effective runtime becomes `<workdir>/<tenant>__<project>`. If it already points to an initialized runtime with `config/install-meta.json` and the canonical descriptor set under `config/`, the CLI can reuse that runtime non-interactively. |
 | `--descriptors-location <dir>` | Use a folder containing `assembly.yaml`, `secrets.yaml`, `gateway.yaml`, and optional bundle descriptors. |
 | `--latest` | With `--descriptors-location`, resolve the latest platform release instead of using `assembly.yaml -> platform.ref`. |
@@ -325,7 +345,7 @@ what is incomplete.
 
 | Subcommand | Purpose |
 |---|---|
-| `kdcube init [--workdir <path>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>] [--build] [-i]` | Initialize a workdir (stage descriptors, generate env files). With `--build`, also build images **without** starting containers. |
+| `kdcube init [--workdir <path>] [--path <repo>] [--descriptors-location <dir>] [--latest\|--upstream\|--release <ref>] [--build] [-i]` | Initialize a workdir (stage descriptors, generate env files). Explicit `--path` stages that local source tree unless a version selector is used. With `--build`, also build images **without** starting containers. |
 | `kdcube start [--workdir <path>] [--build]` | Start the Docker Compose stack for an already-initialized workdir. `--build` is a convenience rebuild before start, not required if `init --build` was already run. |
 | `kdcube stop [--workdir <path>] [--remove-volumes]` | Stop the local Docker Compose stack. |
 | `kdcube reload <bundle_id> [--workdir <path>]` | Reapply `bundles.yaml` from the active runtime and clear proc bundle caches. |
@@ -398,6 +418,22 @@ kdcube --path /Users/you/src/kdcube/kdcube-ai-app
 
 When `--path` is provided, the wizard **uses that repo for templates and local builds**
 and **does not show the Install source menu**.
+
+For the descriptor `init` path, use `--path` when you need to test uncommitted
+platform changes:
+
+```bash
+kdcube init \
+  --descriptors-location /path/to/descriptors \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --path /Users/you/src/kdcube/kdcube-ai-app \
+  --build
+```
+
+This copies the dirty local checkout into the namespaced runtime workdir and
+builds from the staged copy. Do not combine this flow with `--upstream`,
+`--latest`, or `--release`, because those flags explicitly select a managed
+version instead of the dirty local source.
 
 Re-run prompts (edit existing values):
 
@@ -552,6 +588,13 @@ That first local bootstrap is descriptor-first and local-first:
 - `storage.kdcube=/kdcube-storage`
 - `storage.bundles=/bundle-storage`
 - `bundles.default_bundle_id=versatile@2026-03-31-13-36`
+
+When a seed descriptor sets `storage.kdcube` or `storage.bundles` to a host
+`file://...` path, `init` treats that as a host-side storage root. The staged
+runtime descriptor is rewritten to the container paths `file:///kdcube-storage`
+and `file:///bundle-storage`, and compose mounts the selected host roots there.
+This keeps descriptors portable while still allowing local host storage during
+CLI testing.
 
 On a fresh default run, the installer asks only for:
 

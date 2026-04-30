@@ -96,6 +96,8 @@ def test_build_external_exec_env_matches_required_runtime_payload():
 
     assert docker_env["RUNTIME_GLOBALS_JSON"] == fargate_env["RUNTIME_GLOBALS_JSON"]
     assert docker_env["RUNTIME_TOOL_MODULES"] == fargate_env["RUNTIME_TOOL_MODULES"]
+    assert docker_env["SUPERVISOR_SOCKET_PATH"] == "/tmp/supervisor.sock"
+    assert fargate_env["SUPERVISOR_SOCKET_PATH"] == "/tmp/supervisor.sock"
     assert json.loads(docker_env["RUNTIME_GLOBALS_JSON"])["PORTABLE_SPEC_JSON"] == runtime_globals["PORTABLE_SPEC_JSON"]
     assert json.loads(fargate_env["RUNTIME_GLOBALS_JSON"])["PORTABLE_SPEC_JSON"] == runtime_globals["PORTABLE_SPEC_JSON"]
     for key in ("WORKDIR", "OUTPUT_DIR", "LOG_DIR", "LOG_FILE_PREFIX", "BUNDLE_ROOT", "EXEC_BUNDLE_ROOT", "BUNDLE_ID"):

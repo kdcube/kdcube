@@ -234,6 +234,31 @@ kdcube init \
   --workdir ~/.kdcube/kdcube-runtime
 ```
 
+`--workdir` controls where the runtime is installed. In descriptor mode the CLI
+reads `assembly.yaml -> context.tenant/project` and creates the concrete runtime
+under:
+
+```text
+<workdir>/<safe_tenant>__<safe_project>
+```
+
+`--path` controls the local platform source tree only when you explicitly pass
+it to `init`. Without `--upstream`, `--latest`, or `--release`, explicit
+`--path` means: copy this dirty local checkout into the concrete runtime and
+use that staged copy. The copy includes tracked files plus untracked files that
+are not ignored by git, and excludes `.git` plus gitignored runtime/data files.
+
+```bash
+kdcube init \
+  --descriptors-location /path/to/descriptors \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --path /path/to/kdcube-ai-app \
+  --build
+```
+
+If `--upstream`, `--latest`, or `--release` is provided, that version selector
+wins and `--path` is only the local repo/cache path for the selected source.
+
 Expected folder contents:
 
 - `assembly.yaml`
@@ -286,6 +311,8 @@ Choose exactly one source selector:
 - `--upstream` for the latest upstream repo state
 - `--latest` for the latest released platform ref
 - `--release <ref>` for a specific released ref
+- explicit `--path <repo>` without the selectors above for dirty local source
+  staging
 - otherwise `assembly.yaml -> platform.ref`
 
 Build rule:
@@ -377,6 +404,9 @@ Local bundle root contract:
 - `assembly.paths.host_kdcube_storage_path` becomes `HOST_KDCUBE_STORAGE_PATH`
 - `assembly.paths.host_bundle_storage_path` becomes `HOST_BUNDLE_STORAGE_PATH`
 - `assembly.paths.host_exec_workspace_path` becomes `HOST_EXEC_WORKSPACE_PATH`
+- if `assembly.storage.kdcube` is a local host `file://...` URI, init uses that host path as `HOST_KDCUBE_STORAGE_PATH` and rewrites the staged runtime descriptor to `file:///kdcube-storage`
+- if `assembly.storage.bundles` is a local host `file://...` URI, init uses that host path as `HOST_BUNDLE_STORAGE_PATH` and rewrites the staged runtime descriptor to `file:///bundle-storage`
+- compose mounts `HOST_KDCUBE_STORAGE_PATH` into proc/ingress/metrics as `/kdcube-storage`
 - `assembly.paths.host_bundles_path` is installer-facing config for non-managed local path bundles and is written to `HOST_BUNDLES_PATH`
 - compose mounts `HOST_BUNDLES_PATH` into proc as `BUNDLES_ROOT` (normally `/bundles`)
 - non-managed local bundle entries in `bundles.yaml` must therefore use the container-visible path, for example:
@@ -590,6 +620,19 @@ kdcube init \
   --upstream \
   --build
 ```
+
+Initialize and build from dirty local platform sources:
+
+```bash
+kdcube init \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /path/to/descriptors \
+  --path /path/to/kdcube-ai-app \
+  --build
+```
+
+Use this for uncommitted platform changes. Do not combine this flow with
+`--upstream`, `--latest`, or `--release`.
 
 Start the stack for an already-initialized workdir:
 

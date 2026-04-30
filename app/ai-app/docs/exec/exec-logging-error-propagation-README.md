@@ -81,6 +81,8 @@ Current source split:
 - **Infra errors** are detected by scanning `infra.log` for:
   - `ERROR` lines (case-insensitive)
   - `Traceback`
+  - launcher/runtime lines that do not use Python logging format, for example
+    `bwrap:` or `bubblewrap:`
 
 Diagnostics always slice logs by the most recent execution banner:
 `===== EXECUTION <exec_id> START ... =====`, so per-run log extraction is reliable.
@@ -207,16 +209,21 @@ Typical shape:
 | Field | What it is | Where it is produced |
 | --- | --- | --- |
 | `run_res.error` | explicit backend error string, if the backend sets one | local and Docker timeout paths set `error=\"timeout\"`; Fargate copies `ExternalExecResult.error` |
-| `run_res.error_summary` | one-line backend summary extracted from raw stderr text | Docker extracts it from `docker.err.log`; local and Fargate extract it from `runtime.err.log` by scanning for the first line matching `\\b\\w+Error\\b` or containing `Exception` |
-| `run_res.stderr_tail` | last tail slice of backend stderr text | Docker takes it from `docker.err.log`; local and Fargate take it from `runtime.err.log` |
+| `run_res.error_summary` | one-line backend summary extracted from diagnostic text | Docker starts from `docker.err.log` and, on failure, also merges child `runtime.err.log` and `user.log`; local and Fargate extract it from `runtime.err.log` by scanning for the first meaningful error line, including Python errors/exceptions and launcher lines such as `bwrap:` |
+| `run_res.stderr_tail` | tail slice of backend diagnostic text | Docker starts from `docker.err.log` and, on failure, appends child `runtime.err.log` / `user.log`; local and Fargate take it from `runtime.err.log` |
 
 Mode-by-mode source map:
 
 | Runtime mode | `run_res.error` | `run_res.error_summary` | `run_res.stderr_tail` |
 | --- | --- | --- | --- |
-| local / in-process isolated executor | explicit timeout/error string only when backend sets one | derived from `out/logs/runtime.err.log` | tail of `out/logs/runtime.err.log` |
-| Docker | explicit timeout/error string only when backend sets one | derived from `out/logs/docker.err.log` | tail of `out/logs/docker.err.log` |
+| local / in-process isolated executor | explicit timeout/error string only when backend sets one | derived from captured child diagnostics in `out/logs/runtime.err.log` | tail of captured child diagnostics in `out/logs/runtime.err.log` |
+| Docker | explicit timeout/error string only when backend sets one | derived from `docker.err.log`; if the container started and child logs exist, child runtime/user logs are merged into the summary source; launcher failures such as `bwrap:` are also recognized | tail of `docker.err.log` plus child `runtime.err.log` / `user.log` on failure |
 | Fargate | copied from `ExternalExecResult.error` | derived from `out/logs/runtime.err.log`, with fallback to `run_res.error` | tail of `out/logs/runtime.err.log` |
+
+Supervisor socket failures are reported through the same path. For example,
+missing socket, reset socket, unauthorized supervisor token, or tool-resolution
+failure should appear in the program traceback, `runtime.err.log`, the Docker
+runtime diagnostics tail, and the final `[exec.tool] final report`.
 
 ### How the final report is assembled
 
@@ -224,19 +231,40 @@ The final human-readable report is built in this order inside `exec_tools.py`:
 
 1. `run_res` is received from the selected runtime backend
 2. produced files are validated against the declared output contract
-3. `merge_infra_logs(...)` builds `infra.log` from raw infra logs
-4. `user.log` is sliced to the current execution banner
-5. `infra.log` is sliced to the current execution banner
-6. `run_res.stderr_tail` and `run_res.error_summary` are appended into the in-memory infra text if they are not already present there
-7. `_runtime_error_details(run_res)` resolves the runtime classification:
+3. if `exec_result_*.json` already contains a managed error, its summary/details are merged into `run_res` before report assembly
+4. `merge_infra_logs(...)` builds `infra.log` from raw infra logs
+5. `user.log` is sliced to the current execution banner
+6. `infra.log` is sliced to the current execution banner
+7. `run_res.stderr_tail` and `run_res.error_summary` are appended into the in-memory infra text if they are not already present there
+8. `_runtime_error_details(run_res)` resolves the runtime status fields:
    - `runtime_ok`
    - runtime `code`
    - runtime `message`
-8. `_build_exec_error_payload(...)` decides the primary error payload:
+9. `_build_exec_error_payload(...)` decides the primary error payload:
    - runtime failure first
    - otherwise missing contracted outputs
    - otherwise artifact validation failure
-9. `report_text` is assembled from that payload plus the log tails
+10. `report_text` is assembled from that payload plus the log tails
+
+There is no hidden retryability or infra-vs-program decision layer here. The
+tool result carries the evidence and lets the agent/operator reason:
+
+- runtime `code`
+- runtime `message`
+- full `run_res`
+- merged infra tail
+- user program tail
+- contract/artifact errors
+
+For production diagnosis, the proc service also logs runtime failures directly:
+
+```text
+[exec.tool] runtime failure code=<code> summary=<summary>
+[exec.tool] runtime diagnostics tail
+...
+[exec.tool] final report
+...
+```
 
 Typical final report shape:
 

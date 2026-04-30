@@ -533,7 +533,7 @@ ls -la
 # Should contain:
 # - result.json (final output)
 # - *.json (tool call logs)
-# - runtime.out.log, runtime.err.log
+# - logs/user.log, logs/runtime.err.log, logs/infra.log
 # - Any generated files (charts, documents, etc.)
 ```
 
@@ -542,7 +542,7 @@ ls -la
 **Test network isolation:**
 ```bash
 # Executor should NOT be able to reach network
-# This is enforced by unshare(CLONE_NEWNET) - no verification needed from outside
+# This is enforced inside the executor child; the supervisor keeps network access for approved tools.
 
 # Verify supervisor CAN reach services:
 docker logs chat-chat | grep "supervisor"

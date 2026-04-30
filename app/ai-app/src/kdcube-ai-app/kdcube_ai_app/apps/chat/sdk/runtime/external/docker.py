@@ -135,6 +135,39 @@ def _can_preflight_translated_host_path(path: pathlib.Path) -> bool:
     return False
 
 
+def _read_tail(path: pathlib.Path, *, max_chars: int = 4000) -> str:
+    try:
+        if not path.exists() or not path.is_file():
+            return ""
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        return text[-max_chars:] if text else ""
+    except Exception:
+        return ""
+
+
+def _append_unique_text(base: str, extra: str, *, max_chars: int = 8000) -> str:
+    base = (base or "").strip()
+    extra = (extra or "").strip()
+    if not extra:
+        return base
+    if extra in base:
+        return base
+    merged = (base + "\n" + extra).strip() if base else extra
+    return merged[-max_chars:] if len(merged) > max_chars else merged
+
+
+def _error_summary_from_text(text: str) -> str:
+    for line in (text or "").splitlines():
+        if (
+                re.search(r"\b\w+Error\b", line)
+                or "Exception" in line
+                or line.startswith("bwrap:")
+                or line.startswith("bubblewrap:")
+        ):
+            return line.strip()
+    return ""
+
+
 def _extract_accounting_storage_uri(runtime_globals: Dict[str, Any], base_env: Dict[str, str]) -> str:
     spec_json = runtime_globals.get("PORTABLE_SPEC_JSON")
     if isinstance(spec_json, str) and spec_json.strip():
@@ -357,8 +390,13 @@ def _build_docker_argv(
       - uses `image` as the container image
     """
     argv: list[str] = ["docker", "run", "--rm"]
-    # CRITICAL: Allow network namespace creation (unshare) for isolation
+    # Required by bubblewrap: SYS_ADMIN for mount namespaces, NET_ADMIN for
+    # initializing loopback inside the isolated no-network namespace, and an
+    # unconfined seccomp profile because Docker's default profile blocks
+    # bubblewrap's pivot_root syscall before untrusted code starts.
     argv += ["--cap-add=SYS_ADMIN"]
+    argv += ["--cap-add=NET_ADMIN"]
+    argv += ["--security-opt", "seccomp=unconfined"]
     argv += ["--network", network_mode]
 
     # Optional extra args (e.g. --cpus, --memory) if you ever need them
@@ -716,7 +754,12 @@ async def run_py_in_docker(
             stderr_tail = tail
             if err_txt:
                 for line in err_txt.splitlines():
-                    if re.search(r"\\b\\w+Error\\b", line) or "Exception" in line:
+                    if (
+                            re.search(r"\b\w+Error\b", line)
+                            or "Exception" in line
+                            or line.startswith("bwrap:")
+                            or line.startswith("bubblewrap:")
+                    ):
                         error_summary = line.strip()
                         break
             if timed_out and not error_summary:
@@ -728,6 +771,15 @@ async def run_py_in_docker(
     except Exception:
         # Best-effort only
         pass
+
+    if timed_out or proc.returncode != 0:
+        log_dir = outdir / "logs"
+        runtime_tail = _read_tail(log_dir / "runtime.err.log", max_chars=4000)
+        user_tail = _read_tail(log_dir / "user.log", max_chars=4000)
+        stderr_tail = _append_unique_text(stderr_tail, runtime_tail)
+        stderr_tail = _append_unique_text(stderr_tail, user_tail)
+        if not error_summary:
+            error_summary = _error_summary_from_text(stderr_tail)
 
     if timed_out:
         log.log(f"[docker.exec] Timeout after {to}s", level="ERROR")

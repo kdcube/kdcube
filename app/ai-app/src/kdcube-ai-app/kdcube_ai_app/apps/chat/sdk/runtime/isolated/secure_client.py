@@ -6,14 +6,16 @@
 import asyncio
 import json
 import base64
+import os
 from typing import Any, Dict
 
 
 class ToolStub:
     """Client for calling tools via the privileged supervisor socket."""
 
-    def __init__(self, socket_path: str = '/tmp/supervisor.sock'):
+    def __init__(self, socket_path: str = '/tmp/supervisor.sock', auth_token: str | None = None):
         self.socket_path = socket_path
+        self.auth_token = auth_token if auth_token is not None else os.environ.get("SUPERVISOR_AUTH_TOKEN", "")
 
     @staticmethod
     def _encode_params(params: dict) -> dict:
@@ -39,20 +41,24 @@ class ToolStub:
                 result[key] = value
         return result
 
-    async def call_tool(self, tool_id: str, params: dict, reason: str | None = None) -> dict:
-        """
-        Call the privileged supervisor for a tool execution.
-        Now ASYNC to properly integrate with the executor's event loop.
-        """
-        # Encode any bytes parameters
+    def _build_payload(self, tool_id: str, params: dict, reason: str | None = None) -> dict:
         encoded_params = self._encode_params(params or {})
-
         payload = {
             "tool_id": tool_id,
             "params": encoded_params,
         }
         if reason:
             payload["reason"] = reason
+        if self.auth_token:
+            payload["auth_token"] = self.auth_token
+        return payload
+
+    async def call_tool(self, tool_id: str, params: dict, reason: str | None = None) -> dict:
+        """
+        Call the privileged supervisor for a tool execution.
+        Now ASYNC to properly integrate with the executor's event loop.
+        """
+        payload = self._build_payload(tool_id=tool_id, params=params or {}, reason=reason)
 
         try:
             # Use asyncio Unix socket connection

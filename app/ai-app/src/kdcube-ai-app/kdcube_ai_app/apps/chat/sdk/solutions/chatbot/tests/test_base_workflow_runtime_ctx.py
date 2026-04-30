@@ -32,6 +32,51 @@ def _payload(*, tenant: str, project: str, user_id: str = "u1", turn_id: str = "
     )
 
 
+def test_cleanup_turn_workspace_removes_git_cache_and_empty_ctx_root(tmp_path):
+    parent = tmp_path / "ctx_v2_cleanup"
+    workdir = parent / "work"
+    outdir = parent / "out"
+    cache = parent / ".react_workspace_git" / "tenant__project__user__conversation"
+    workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
+    (workdir / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    (outdir / "result.txt").write_text("ok\n", encoding="utf-8")
+    runtime = SimpleNamespace(workdir=str(workdir), outdir=str(outdir))
+    logs = []
+
+    workflow_mod._cleanup_turn_workspace(
+        runtime,
+        SimpleNamespace(log=lambda message, level="INFO": logs.append((level, message))),
+    )
+
+    assert not parent.exists()
+    assert any("cleaned up turn workspace git cache" in message for _, message in logs)
+
+
+def test_cleanup_turn_workspace_keeps_nonempty_ctx_root(tmp_path):
+    parent = tmp_path / "ctx_v2_cleanup"
+    workdir = parent / "work"
+    outdir = parent / "out"
+    cache = parent / ".react_workspace_git" / "tenant__project__user__conversation"
+    workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+    cache.mkdir(parents=True, exist_ok=True)
+    (parent / "keep.txt").write_text("keep\n", encoding="utf-8")
+    runtime = SimpleNamespace(workdir=str(workdir), outdir=str(outdir))
+
+    workflow_mod._cleanup_turn_workspace(
+        runtime,
+        SimpleNamespace(log=lambda message, level="INFO": None),
+    )
+
+    assert parent.exists()
+    assert (parent / "keep.txt").exists()
+    assert not workdir.exists()
+    assert not outdir.exists()
+    assert not (parent / ".react_workspace_git").exists()
+
+
 def test_react_agent_version_selector_defaults_and_normalizes(monkeypatch):
     monkeypatch.delenv("AI_REACT_AGENT_VERSION", raising=False)
     workflow_mod.get_settings.cache_clear()

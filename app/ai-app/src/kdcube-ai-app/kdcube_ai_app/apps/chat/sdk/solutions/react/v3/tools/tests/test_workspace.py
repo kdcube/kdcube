@@ -406,6 +406,65 @@ def test_publish_current_turn_git_workspace_pushes_lineage_and_version_refs(tmp_
     assert (show_version.stdout or "") == "print('new')\n"
 
 
+def test_publish_current_turn_git_workspace_skips_missing_materialized_workspace(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
+    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo=str(_init_git_workspace_repo(tmp_path)),
+    )
+
+    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+
+    assert result["skipped"] is True
+    assert result["reason"] == "workspace_not_materialized"
+    assert result["committed"] is False
+    assert not (outdir / "turn_ctx").exists()
+    assert not (outdir.parent / ".react_workspace_git").exists()
+
+
+def test_publish_current_turn_git_workspace_skips_unchanged_workspace_without_version_push(tmp_path, monkeypatch):
+    monkeypatch.setenv("GIT_HTTP_TOKEN", "test-token")
+    monkeypatch.setenv("GIT_HTTP_USER", "x-access-token")
+    outdir = tmp_path / "out"
+    outdir.mkdir(parents=True, exist_ok=True)
+    remote_repo = _init_git_workspace_repo(tmp_path)
+    runtime = RuntimeCtx(
+        turn_id="turn_ctx",
+        outdir=str(outdir),
+        workdir=str(tmp_path / "work"),
+        tenant="demo-tenant",
+        project="demo-project",
+        user_id="admin-user",
+        conversation_id="conversation-1",
+        workspace_implementation="git",
+        workspace_git_repo=str(remote_repo),
+    )
+    ensure_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+
+    result = publish_current_turn_git_workspace(runtime_ctx=runtime, outdir=outdir)
+
+    assert result["skipped"] is True
+    assert result["reason"] == "workspace_unchanged"
+    assert result["committed"] is False
+    version_ref = "refs/kdcube/demo-tenant/demo-project/admin-user/conversation-1/versions/turn_ctx"
+    version_exists = subprocess.run(
+        ["git", "-C", str(remote_repo), "show-ref", "--verify", "--quiet", version_ref],
+        check=False,
+        capture_output=True,
+    )
+    assert version_exists.returncode != 0
+
+
 def test_v3_ensure_workspace_repo_rewrites_ssh_origin_to_https_when_pat_is_configured(tmp_path, monkeypatch):
     outdir = tmp_path / "out"
     outdir.mkdir(parents=True, exist_ok=True)

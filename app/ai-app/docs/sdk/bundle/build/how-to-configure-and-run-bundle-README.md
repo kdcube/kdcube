@@ -495,7 +495,6 @@ Recommended command shape:
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors
 ```
@@ -513,6 +512,15 @@ The platform source/ref is selected using:
 - or `--latest`
 - or `--release <ref>`
 - or `--upstream`
+- or explicit `--path /abs/path/to/kdcube-ai-app` when you intentionally want
+  to test a dirty local platform checkout
+
+`--workdir` answers where the runtime should be installed. `--path` answers
+which local platform source tree should be staged for this runtime. In
+descriptor-driven `init`, explicit `--path` without `--upstream`, `--latest`,
+or `--release` copies tracked files plus untracked-but-not-ignored files into
+the namespaced runtime workdir and uses that staged copy. Gitignored
+runtime/data files are not copied.
 
 Use `init --build` when you want images prepared before starting. `start
 --build` remains available as a convenience rebuild before start, but normal
@@ -526,7 +534,6 @@ operator flow is:
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors
 ```
@@ -537,7 +544,6 @@ Use this when you want the normal local runtime based on a released platform ver
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --release 2026.4.23.17
@@ -547,7 +553,6 @@ kdcube init \
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --latest
@@ -557,7 +562,6 @@ kdcube init \
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --build
@@ -566,11 +570,25 @@ kdcube init \
 Use this when you want to build locally from the selected release source before
 starting containers.
 
-### Initialize from upstream `origin/main`
+### Prebuild images from dirty local platform sources
 
 ```bash
 kdcube init \
   --path /abs/path/to/kdcube-ai-app \
+  --workdir ~/.kdcube/kdcube-runtime \
+  --descriptors-location /abs/path/to/descriptors \
+  --build
+```
+
+Use this when you need to test uncommitted platform changes. The CLI copies the
+local checkout into the concrete runtime workdir and builds from that staged
+copy. Do not combine this flow with `--upstream`, `--latest`, or `--release`,
+because those flags explicitly select a managed source version.
+
+### Initialize from upstream `origin/main`
+
+```bash
+kdcube init \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --upstream
@@ -580,7 +598,6 @@ kdcube init \
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors \
   --upstream \
@@ -592,6 +609,8 @@ Important:
 - `--upstream` selects the upstream source/ref and does not require `--build`
 - `--build` on `init` builds images after staging the runtime and does not start containers
 - `--upstream` requires either `--descriptors-location` or an already initialized runtime
+- explicit `--path` without `--upstream`, `--latest`, or `--release` is the dirty-local-source flow
+
 Use this when you are validating current platform source, not when you only need to update bundle descriptors.
 
 ## Inspecting The Runtime You Already Have
@@ -727,7 +746,6 @@ If you edited files in the source descriptor directory passed via `--descriptors
 
 ```bash
 kdcube init \
-  --path /abs/path/to/kdcube-ai-app \
   --workdir ~/.kdcube/kdcube-runtime \
   --descriptors-location /abs/path/to/descriptors
 ```

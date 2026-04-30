@@ -171,6 +171,7 @@ async def run_py_code(
         "HOME",
         # custom socket path, so executor can reach supervisor:
         "SUPERVISOR_SOCKET_PATH",
+        "SUPERVISOR_AUTH_TOKEN",
         # Logging configuration (ADDED)
         "LOG_DIR",
         "LOG_LEVEL",
@@ -186,6 +187,11 @@ async def run_py_code(
         "EXEC_MAX_FILE_BYTES",
         "EXEC_MAX_WORKSPACE_BYTES",
         "EXEC_WORKSPACE_MONITOR_INTERVAL_S",
+        "EXEC_REQUIRE_FS_SANDBOX",
+        "PLAYWRIGHT_BROWSERS_PATH",
+        "SSL_CERT_DIR",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
     }
     for k in SAFE_KEYS:
         v = base_env.get(k)
@@ -223,7 +229,10 @@ async def run_py_code(
     child_env["OUTPUT_DIR"] = str(output_dir)
     child_env["WORKDIR"] = str(workdir)
     child_env["AGENT_IO_CONTEXT"] = "limited"
+    child_env["HOME"] = str(output_dir)
+    child_env["LOG_DIR"] = str(output_dir / "logs")
     child_env["LOG_FILE_PREFIX"] = "executor"
+    child_env.setdefault("EXEC_REQUIRE_FS_SANDBOX", "1")
     # Matplotlib/fontconfig caches must be writable in iso runtime
     mpl_cache_dir = output_dir / ".mplconfig"
     font_cache_dir = output_dir / ".fontconfig"
@@ -279,4 +288,11 @@ async def run_py_code(
             f"[py_code_exec] _run_subprocess finished: ok={ok} returncode={rc}",
             level="INFO",
         )
+        if not ok:
+            summary = str(res.get("error_summary") or res.get("error") or "").strip()
+            tail = str(res.get("stderr_tail") or "").strip()
+            if summary:
+                log.log(f"[py_code_exec] subprocess error summary: {summary}", level="ERROR")
+            if tail:
+                log.log(f"[py_code_exec] subprocess stderr tail:\n{tail[-4000:]}", level="ERROR")
     return res

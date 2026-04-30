@@ -16,6 +16,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from urllib.parse import unquote, urlparse
 
 from rich.console import Console
 from rich.control import Control
@@ -217,6 +218,31 @@ def _normalize_path(value: Optional[str]) -> Optional[str]:
         return str(Path(value).expanduser().resolve())
     except Exception:
         return value
+
+
+def _local_storage_uri_to_path(value: Optional[object]) -> Optional[Path]:
+    if value is None:
+        return None
+    text = str(value).strip().strip("'\"")
+    if not text or text.startswith("{") or text.startswith("["):
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme and parsed.scheme != "file":
+        return None
+    if parsed.scheme == "file":
+        path_text = unquote(parsed.path or "").strip()
+        if not path_text:
+            return None
+        return Path(path_text).expanduser()
+    if text.startswith("/") or text.startswith("~"):
+        return Path(text).expanduser()
+    return None
+
+
+def _is_container_storage_path(path: Optional[Path]) -> bool:
+    if path is None:
+        return False
+    return str(path) in {"/kdcube-storage", "/bundle-storage"}
 
 
 def _as_str(value: object) -> Optional[str]:
@@ -2046,8 +2072,15 @@ def gather_configuration(
         return host_bundles_root_str
 
     def _apply_workspace_local_topology() -> Tuple[str, str, str, str, str]:
+        storage_kdcube_path = _local_storage_uri_to_path(_get_nested(assembly_data, "storage", "kdcube"))
+        storage_bundles_path = _local_storage_uri_to_path(_get_nested(assembly_data, "storage", "bundles"))
         host_storage_local = ensure_directory_root(
-            str(defaults.get("host_kb_storage") or (ctx.workdir / "data/kdcube-storage")),
+            str(
+                storage_kdcube_path
+                if storage_kdcube_path and not _is_container_storage_path(storage_kdcube_path)
+                else defaults.get("host_kb_storage")
+                or (ctx.workdir / "data/kdcube-storage")
+            ),
             label="Host system storage path",
         )
         host_bundles_default = str(defaults.get("host_bundles") or (ctx.workdir / "data/bundles"))
@@ -2067,7 +2100,12 @@ def gather_configuration(
             label="Host managed bundles root",
         )
         host_bundle_storage_local = ensure_directory_root(
-            str(defaults.get("host_bundle_storage") or (ctx.workdir / "data/bundle-storage")),
+            str(
+                storage_bundles_path
+                if storage_bundles_path and not _is_container_storage_path(storage_bundles_path)
+                else defaults.get("host_bundle_storage")
+                or (ctx.workdir / "data/bundle-storage")
+            ),
             label="Host bundle local storage path",
         )
         host_exec_local = ensure_directory_root(
@@ -2089,6 +2127,10 @@ def gather_configuration(
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "bundles_root"], "/bundles")
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "managed_bundles_root"], "/managed-bundles")
         _set_nested(assembly_data, ["platform", "services", "proc", "bundles", "bundle_storage_root"], "/bundle-storage")
+        if storage_kdcube_path is not None or not _get_nested(assembly_data, "storage", "kdcube"):
+            _set_nested(assembly_data, ["storage", "kdcube"], "file:///kdcube-storage")
+        if storage_bundles_path is not None or not _get_nested(assembly_data, "storage", "bundles"):
+            _set_nested(assembly_data, ["storage", "bundles"], "file:///bundle-storage")
         return (
             host_storage_local,
             host_bundles_local,

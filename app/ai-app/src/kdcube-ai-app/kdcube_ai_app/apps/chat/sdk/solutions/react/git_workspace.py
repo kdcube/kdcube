@@ -465,6 +465,15 @@ def _git_has_staged_changes(*, repo_root: pathlib.Path) -> bool:
     return proc.returncode != 0
 
 
+def _workspace_publish_skipped(*, turn_root: pathlib.Path, reason: str) -> Dict[str, Any]:
+    return {
+        "turn_root": str(turn_root),
+        "skipped": True,
+        "reason": reason,
+        "committed": False,
+    }
+
+
 def _git_is_dirty(*, repo_root: pathlib.Path) -> bool:
     proc = subprocess.run(
         _git_cmd(repo_root, ["status", "--porcelain", "--untracked-files=all"]),
@@ -544,6 +553,17 @@ def publish_current_turn_git_workspace(
     if not turn_id:
         raise ValueError("missing_turn_id")
     log = logger or AgentLogger("react.workspace.git")
+    turn_root = pathlib.Path(outdir) / turn_id
+    if not turn_root.exists():
+        return _workspace_publish_skipped(
+            turn_root=turn_root,
+            reason="workspace_not_materialized",
+        )
+    if not (turn_root / ".git").exists() and not (turn_root / "files").exists():
+        return _workspace_publish_skipped(
+            turn_root=turn_root,
+            reason="empty_workspace",
+        )
     turn_root = ensure_current_turn_git_workspace(
         runtime_ctx=runtime_ctx,
         outdir=outdir,
@@ -561,21 +581,23 @@ def publish_current_turn_git_workspace(
 
     _stage_current_turn_text_workspace(turn_root=turn_root)
     has_head = _git_has_head(repo_root=turn_root)
-    committed = False
+    if not _git_has_staged_changes(repo_root=turn_root):
+        return _workspace_publish_skipped(
+            turn_root=turn_root,
+            reason="empty_workspace" if not has_head else "workspace_unchanged",
+        )
     if not has_head:
         _run_git_checked(
             turn_root,
-            ["commit", "--allow-empty", "-m", f"React workspace snapshot {turn_id}"],
+            ["commit", "-m", f"React workspace snapshot {turn_id}"],
             op="create initial workspace snapshot commit",
         )
-        committed = True
-    elif _git_has_staged_changes(repo_root=turn_root):
+    else:
         _run_git_checked(
             turn_root,
             ["commit", "-m", f"React workspace snapshot {turn_id}"],
             op="commit workspace snapshot",
         )
-        committed = True
 
     head_sha = _git_head_sha(repo_root=turn_root)
     _run_git_checked(
@@ -607,7 +629,7 @@ def publish_current_turn_git_workspace(
         "commit_sha": head_sha,
         "lineage_ref": lineage_ref,
         "version_ref": version_ref,
-        "committed": committed,
+        "committed": True,
     }
 
 

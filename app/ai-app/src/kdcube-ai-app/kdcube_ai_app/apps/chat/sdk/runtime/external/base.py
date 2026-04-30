@@ -102,10 +102,13 @@ def build_external_exec_env(
         {
             "WORKDIR": "/workspace/work",
             "OUTPUT_DIR": "/workspace/out",
-            "LOG_DIR": "/workspace/out/logs",
+            "LOG_DIR": "/tmp/kdcube-supervisor/logs",
+            "EXECUTOR_LOG_DIR": "/workspace/out/logs",
             "LOG_FILE_PREFIX": log_file_prefix,
             "EXECUTION_ID": str(exec_id),
             "EXECUTION_SANDBOX": sandbox,
+            "EXEC_REQUIRE_FS_SANDBOX": "1",
+            "SUPERVISOR_SOCKET_PATH": str(env.get("SUPERVISOR_SOCKET_PATH") or "/tmp/supervisor.sock"),
         }
     )
     if include_runtime_payload:

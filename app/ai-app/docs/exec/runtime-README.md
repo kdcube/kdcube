@@ -75,8 +75,8 @@ These are transported separately in external exec.
 │  │ SUPERVISOR           │          │   │ EXECUTOR SUBPROCESS      │  │  │
 │  │ (async server)       │◄─────────┼───│ (main.py loader)         │  │  │
 │  │                      │  Unix    │   │                          │  │  │
-│  │ - Port 0 (no listen) │  Socket  │   │ preexec_fn():            │  │  │
-│  │ - UID 0 (root)       │          │   │  1. unshare(CLONE_NEWNET)│  │  │
+│  │ - Port 0 (no listen) │  Socket  │   │ sandbox launcher:        │  │  │
+│  │ - UID 0 (root)       │          │   │  1. bwrap/no-network     │  │  │
 │  │ - Full network       │          │   │  2. setuid(1001)         │  │  │
 │  │ - Has secrets        │          │   │                          │  │  │
 │  │ - ModelService       │          │   │ Result:                  │  │  │
@@ -84,6 +84,7 @@ These are transported separately in external exec.
 │  │ - Redis comm         │          │   │ - NO network namespace   │  │  │
 │  │                      │          │   │ - Cannot reach Redis     │  │  │
 │  │ Executes:            │          │   │ - Cannot reach internet  │  │  │
+│  │                      │          │   │ - Narrow bwrap FS view   │  │  │
 │  │ • web_search()       │          │   │                          │  │  │
 │  │ • web_fetch()        │          │   │ ENV:                     │  │  │
 │  │ • kb_client.search() │          │   │ - PYTHONPATH=/opt/app ✅ │  │  │
@@ -152,8 +153,9 @@ These are transported separately in external exec.
 │  - /host/outdir/result.json          (final output)                    │
 │  - /host/outdir/web_search-0.json    (tool call audit trail)           │
 │  - /host/outdir/transcription_providers_comparison.xlsx (created file) │
-│  - /host/outdir/runtime.out.log      (stdout)                          │
-│  - /host/outdir/runtime.err.log      (stderr)                          │
+│  - /host/outdir/logs/user.log         (program stdout/stderr)          │
+│  - /host/outdir/logs/runtime.err.log  (inner executor capture)         │
+│  - /host/outdir/logs/docker.err.log   (outer docker capture)           │
 │                                                                         │
 │  Container exits, docker run --rm cleans up                            │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -277,7 +279,7 @@ These are transported separately in external exec.
 │                                                                         │
 │  Layer 2: Network Isolation                                            │
 │  • Container runs with --network host (for supervisor)                 │
-│  • Executor subprocess calls unshare(CLONE_NEWNET)                     │
+│  • Executor child runs in a bwrap/no-network sandbox when available    │
 │  • Creates isolated network namespace with no interfaces               │
 │  • Untrusted code cannot reach network                                 │
 │                                                                         │
@@ -338,8 +340,9 @@ These are transported separately in external exec.
 2. **Tool calls are transparent** - user code calls `await web_search(...)` like normal, but it's proxied
 3. **Bytes are supported** - images, PDFs, Excel files can flow through socket via base64 encoding
 4. **Supervisor is the trust boundary** - it has all privileges and validates all tool calls
-5. **Network isolation doesn't break functionality** - tools that need network run in supervisor
-6. **`--network host` mode** allows supervisor to reach Redis/Postgres on `localhost` while executor remains isolated
+5. **Filesystem isolation is applied to the executor child, not the supervisor** - this preserves tool functionality while preventing untrusted code from browsing runtime internals
+6. **Network isolation doesn't break functionality** - tools that need network run in supervisor
+7. **`--network host` mode** allows supervisor to reach Redis/Postgres on `localhost` while executor remains isolated
 
 ---
 

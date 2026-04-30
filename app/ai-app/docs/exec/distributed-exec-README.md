@@ -26,7 +26,7 @@ spawns a Docker child container on the same host, sharing workdir/outdir via bin
 This is not available in Fargate because:
 
 - Fargate containers cannot access Docker daemon
-- Fargate does not support `--cap-add=SYS_ADMIN` (needed for `unshare(CLONE_NEWNET)`)
+- Fargate does not support the local Docker-child pattern used by proc (`docker run`, bind mounts, and local container capabilities)
 - There is no host filesystem to bind-mount
 
 The Fargate exec task is the replacement:
@@ -35,7 +35,7 @@ The Fargate exec task is the replacement:
 |---|---|---|
 | Workdir sharing | Host bind mount | S3 snapshot + restore |
 | Bundle access | Host bind mount | S3 snapshot + restore |
-| Network isolation | `unshare(CLONE_NEWNET)` | Task-level VPC SG |
+| Network isolation | executor child has no network; supervisor keeps configured Docker network | task-level VPC SG plus executor-child network isolation |
 | Task lifetime | Container exits → docker rm | Task STOPPED |
 | Caller waits | `asyncio.wait_for(proc.communicate())` | Poll `describe_tasks` until STOPPED |
 | Parallel executions | One Docker child per call | One ECS run-task per call |
@@ -47,6 +47,7 @@ Important:
 - it does **not** change the logical result contract seen by the agent
 - the final agent-visible result is still assembled by `exec_tools.py` after the runtime backend returns
 - generated file/workspace limits are configured in `assembly.yaml` under `platform.services.proc.exec` and enforced inside the remote task
+- filesystem isolation applies to the untrusted executor child, not to the supervisor process; the supervisor still needs normal runtime access to execute approved tools and publish logs/results
 
 Important distinction:
 - `BUNDLE_STORAGE_DIR` is supervisor-side runtime plumbing for the isolated task
@@ -200,6 +201,8 @@ This is why runtime-specific failures such as:
 
 still appear to the agent through the same final `report_text` / `error` path documented in [exec-logging-error-propagation-README.md](exec-logging-error-propagation-README.md).
 
+For Docker/local debugging, use `file://` storage roots in the assembly descriptor if you need to inspect execution snapshots and persisted output locally instead of going to S3.
+
 ### 3. Runtime — exec task side (`py_code_exec_entry.py`)
 
 ```
@@ -258,7 +261,7 @@ ECS FARGATE EXEC TASK
 │  ├── run_py_code()     ← main.py loader in executor subprocess
 │  │     executor subprocess:
 │  │       setuid(1001)                  (unprivileged)
-│  │       unshare(CLONE_NEWNET)         (network-isolated — best-effort)
+│  │       bwrap/no-network sandbox      (network + filesystem isolated)
 │  │       executes main.py
 │  │       main.py loads and executes user_code.py
 │  │       tool calls → Unix socket → supervisor

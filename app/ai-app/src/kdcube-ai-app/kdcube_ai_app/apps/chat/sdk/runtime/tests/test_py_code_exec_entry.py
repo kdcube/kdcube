@@ -20,6 +20,8 @@ from kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry import (
     _materialize_runtime_descriptor_payloads,
     _prepare_runtime_environment,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.supervisor_entry import PrivilegedSupervisor
+from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
 from kdcube_ai_app.apps.chat.sdk.runtime.dynamic_module_loader import load_dynamic_module_from_file
 
 
@@ -29,6 +31,41 @@ class _CaptureLogger:
 
     def log(self, message: str, level: str = "INFO") -> None:
         self.messages.append((level, message))
+
+
+def test_supervisor_allowed_peer_uids_default_to_executor_uid(monkeypatch):
+    monkeypatch.delenv("SUPERVISOR_ALLOWED_UIDS", raising=False)
+
+    assert PrivilegedSupervisor._allowed_peer_uids() == {1001}
+
+
+def test_supervisor_allowed_peer_uids_can_be_overridden(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_ALLOWED_UIDS", "42, 43")
+
+    assert PrivilegedSupervisor._allowed_peer_uids() == {42, 43}
+
+
+def test_supervisor_rejects_missing_or_wrong_socket_token(tmp_path):
+    sup = PrivilegedSupervisor.__new__(PrivilegedSupervisor)
+    sup.auth_token = "secret-token"
+
+    assert sup._auth_error({}) == "Unauthorized supervisor request"
+    assert sup._auth_error({"auth_token": "wrong"}) == "Unauthorized supervisor request"
+    assert sup._auth_error({"auth_token": "secret-token"}) is None
+
+
+def test_tool_stub_includes_socket_auth_token(monkeypatch):
+    monkeypatch.setenv("SUPERVISOR_AUTH_TOKEN", "secret-token")
+
+    payload = ToolStub(socket_path="/tmp/supervisor.sock")._build_payload(
+        tool_id="web_tools.web_search",
+        params={"q": "x"},
+        reason="test",
+    )
+
+    assert payload["auth_token"] == "secret-token"
+    assert payload["tool_id"] == "web_tools.web_search"
+    assert payload["params"] == {"q": "x"}
 
 
 def test_hydrate_runtime_payload_from_secret_restores_env(monkeypatch):

@@ -27,6 +27,7 @@ import base64
 import json
 import os
 import pathlib
+import secrets
 import signal
 import importlib
 import sys
@@ -765,13 +766,16 @@ async def _async_main() -> int:
 
     # 🔹 2. Prepare supervisor object & Unix server
     socket_path = os.environ.get("SUPERVISOR_SOCKET_PATH", "/tmp/supervisor.sock")
+    os.environ["SUPERVISOR_SOCKET_PATH"] = socket_path
+    supervisor_auth_token = os.environ.get("SUPERVISOR_AUTH_TOKEN") or secrets.token_urlsafe(32)
+    os.environ["SUPERVISOR_AUTH_TOKEN"] = supervisor_auth_token
     # Remove old socket
     try:
         os.unlink(socket_path)
     except OSError:
         pass
 
-    sup = PrivilegedSupervisor(socket_path=socket_path, logger=logger)
+    sup = PrivilegedSupervisor(socket_path=socket_path, logger=logger, auth_token=supervisor_auth_token)
     alias_map = runtime_globals.get("TOOL_ALIAS_MAP") or {}
     sup.set_alias_map(alias_map)
     logger.log(f"[entry] Set alias map with {len(alias_map)} entries: {list(alias_map.keys())}", level="INFO")
@@ -846,6 +850,11 @@ async def _async_main() -> int:
             if summary:
                 logger.log(f"[entry] ERROR: {summary}", level="ERROR")
                 _append_errors_log(f"[entry] ERROR: {summary}")
+            stderr_tail = str(res.get("stderr_tail") or "").strip()
+            if stderr_tail:
+                tail = stderr_tail[-4000:]
+                logger.log(f"[entry] subprocess stderr tail:\n{tail}", level="ERROR")
+                _append_errors_log(f"[entry] subprocess stderr tail:\n{tail}")
 
     # 🔹 4.5 Dump communicator delta cache from supervisor side
     _dump_delta_cache_file(outdir, logger)
