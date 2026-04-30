@@ -163,7 +163,7 @@ platform:
         py_code_exec_image: "py-code-exec:latest"
         py_code_exec_timeout: 600
         py_code_exec_network_mode: "host"
-        py_code_exec_container_strategy: "combined"
+        py_code_exec_container_strategy: "split"
         max_file_bytes: "100m"
         max_workspace_bytes: "250m"
         workspace_monitor_interval_s: 0.5
@@ -175,7 +175,7 @@ platform:
 | `py_code_exec_image` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_IMAGE` | Docker image for the ISO runtime |
 | `py_code_exec_timeout` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_TIMEOUT` | default Python execution timeout in seconds |
 | `py_code_exec_network_mode` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_NETWORK_MODE` | Docker network mode for the ISO supervisor container |
-| `py_code_exec_container_strategy` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_CONTAINER_STRATEGY` | `combined` keeps the existing single exec container; `split` runs supervisor and generated code in separate containers |
+| `py_code_exec_container_strategy` | `get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_CONTAINER_STRATEGY` | `split` runs supervisor and generated code in separate containers and is the default; `combined` keeps the older single exec container |
 | `max_file_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_FILE_BYTES` | max single generated file size per isolated run |
 | `max_workspace_bytes` | `get_settings().PLATFORM.EXEC.PY.EXEC_MAX_WORKSPACE_BYTES` | max net-new workdir/outdir bytes per isolated run |
 | `workspace_monitor_interval_s` | `get_settings().PLATFORM.EXEC.PY.EXEC_WORKSPACE_MONITOR_INTERVAL_S` | polling interval for workspace quota enforcement |

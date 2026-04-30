@@ -311,6 +311,7 @@ platform:
         py_code_exec_image: "py-code-exec:latest"  # PY_CODE_EXEC_IMAGE
         py_code_exec_timeout: 600              # PY_CODE_EXEC_TIMEOUT
         py_code_exec_network_mode: "host"      # PY_CODE_EXEC_NETWORK_MODE
+        py_code_exec_container_strategy: "split"  # PY_CODE_EXEC_CONTAINER_STRATEGY: combined | split
         max_file_bytes: "100m"                 # Max single file the ISO runtime may create per run; "0"/"unlimited" disables
         max_workspace_bytes: "250m"            # Max net-new workspace/output bytes the ISO runtime may create per run
         workspace_monitor_interval_s: 0.5      # ISO runtime workspace quota polling interval
