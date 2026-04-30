@@ -3,7 +3,7 @@
 
 # chatbot/storage/storage.py
 
-import json, time, os, mimetypes, pathlib, tempfile, zipfile
+import json, time, os, pathlib, tempfile, zipfile
 from typing import Optional, Tuple, List, Dict, Any
 from urllib.parse import urlparse, unquote
 
@@ -43,7 +43,7 @@ class ConversationStore:
     Attachments:
       cb/tenants/{tenant}/projects/{project}/attachments/{user_or_fp}/{conversation_id}/{turn_id}/{timestamp-filename}
     Executions:
-      cb/tenants/{tenant}/projects/{project}/executions/{user_or_fp}/{conversation_id}/{turn_id}/{out|pkg}/...
+      cb/tenants/{tenant}/projects/{project}/executions/{user_or_fp}/{conversation_id}/{turn_id}/{ctx_id}/{ctx_id}.zip
     """
 
     def __init__(self, storage_uri: Optional[str] = None):
@@ -442,8 +442,10 @@ class ConversationStore:
         pkg_dir: Optional[str] = None,
     ) -> dict:
         """
-        Copy /out and /pkg trees under /executions/.../{turn_id}/.
-        Returns a manifest with RN per file.
+        Persist one compact execution archive under /executions/.../{turn_id}/{ctx_id}/{ctx_id}.zip.
+
+        The archive contains top-level out/ and pkg/ trees. Keeping one blob avoids
+        slow object-store uploads and expensive browsable-tree writes for every file.
         """
         _, user_or_fp = self._who_and_id(user, fingerprint)
         base = self._join(
@@ -451,63 +453,62 @@ class ConversationStore:
             "executions", user_or_fp, conversation_id, turn_id, codegen_run_id
         )
 
-        async def _zip_tree(src: Optional[str], kind: str) -> Tuple[Optional[str], List[dict], int]:
+        EXCLUDE_DIRS = {".git", "__pycache__", "node_modules", ".pytest_cache", ".venv", "debug"}
+        counts = {"out": 0, "pkg": 0}
+
+        def _add_tree(zf: zipfile.ZipFile, src: Optional[str], archive_root: str) -> None:
             if not src:
-                return None, [], 0
+                return
             srcp = pathlib.Path(src)
             if not srcp.exists():
-                return None, [], 0
+                return
+            for p in srcp.rglob("*"):
+                if not p.is_file():
+                    continue
+                rel_parts = p.relative_to(srcp).parts
+                if any(part in EXCLUDE_DIRS for part in rel_parts):
+                    continue
+                rel_under = str(pathlib.PurePosixPath(archive_root, *rel_parts))
+                zf.write(p, arcname=rel_under)
+                counts[archive_root] = counts.get(archive_root, 0) + 1
 
-            # Define directories to exclude
-            EXCLUDE_DIRS = {".git", "__pycache__", "node_modules", ".pytest_cache", ".venv", "debug"}
-
-            root_rel = self._join(base, f"{kind}.zip")
-            files_meta: List[dict] = []
-            file_count = 0
-            with tempfile.NamedTemporaryFile(prefix=f"exec_{kind}_", suffix=".zip", delete=False) as tmp:
-                zip_path = pathlib.Path(tmp.name)
+        archive_name = f"{codegen_run_id}.zip"
+        archive_rel = self._join(base, archive_name)
+        with tempfile.NamedTemporaryFile(prefix=f"exec_{codegen_run_id}_", suffix=".zip", delete=False) as tmp:
+            zip_path = pathlib.Path(tmp.name)
+        try:
+            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                _add_tree(zf, out_dir, "out")
+                _add_tree(zf, pkg_dir, "pkg")
+            data = zip_path.read_bytes()
+        finally:
             try:
-                with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-                    for p in srcp.rglob("*"):
-                        if not p.is_file():
-                            continue
+                zip_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-                        # Skip if any parent directory is in EXCLUDE_DIRS
-                        if any(part in EXCLUDE_DIRS for part in p.relative_to(srcp).parts):
-                            continue
-
-                        rel_under = str(p.relative_to(srcp)).replace("\\", "/")
-                        zf.write(p, arcname=rel_under)
-                        file_count += 1
-                data = zip_path.read_bytes()
-            finally:
-                try:
-                    zip_path.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            ctype = "application/zip"
-            await self.backend.write_bytes_a(root_rel, data, meta={"ContentType": ctype})
-            url = self._uri_for_path(root_rel)
-            files_meta.append({
-                "key": root_rel,
-                "url": url,
-                "size": len(data),
-                "sha256": self._sha256_bytes(data),
-                "mime": ctype,
-                "kind": kind,
-                "rn": rn_execution_file(tenant, project, user_or_fp, conversation_id, turn_id, role, kind, f"{kind}.zip")
-            })
-            return self._uri_for_path(root_rel), files_meta, file_count
-
-        out_root, out_files, out_count = await _zip_tree(out_dir, "out")
-        pkg_root, pkg_files, pkg_count = await _zip_tree(pkg_dir, "pkg")
-        out_info = {"dir": out_root, "files": out_files, "file_count": out_count}
-        pkg_info = {"dir": pkg_root, "files": pkg_files, "file_count": pkg_count}
+        ctype = "application/zip"
+        await self.backend.write_bytes_a(archive_rel, data, meta={"ContentType": ctype})
+        archive_url = self._uri_for_path(archive_rel)
+        archive_file = {
+            "key": archive_rel,
+            "url": archive_url,
+            "size": len(data),
+            "sha256": self._sha256_bytes(data),
+            "mime": ctype,
+            "kind": "execution_archive",
+            "rn": rn_execution_file(
+                tenant, project, user_or_fp, conversation_id, turn_id, role, "execution_archive", archive_name
+            ),
+        }
+        out_info = {"dir": archive_url, "files": [], "file_count": counts["out"], "archive_prefix": "out/"}
+        pkg_info = {"dir": archive_url, "files": [], "file_count": counts["pkg"], "archive_prefix": "pkg/"}
         return {
+            "archive": archive_file,
             "out": out_info,
             "pkg": pkg_info,
-            "roots": {"out": out_root, "pkg": pkg_root},
-            "files": out_files + pkg_files,
+            "roots": {"archive": archive_url, "out": archive_url, "pkg": archive_url},
+            "files": [archive_file],
         }
 
     async def close(self):

@@ -20,6 +20,19 @@ These are transported separately in external exec.
 
 ## **Diagram 1: Detailed Execution Flow (Docker Mode)**
 
+Docker mode supports two container strategies:
+
+- `combined`: historical layout. One `py-code-exec` container hosts the
+  supervisor and the UID-dropped generated-code executor subprocess.
+- `split`: stronger filesystem isolation. The proc starts separate supervisor
+  and executor sibling containers. The supervisor receives descriptors,
+  runtime storage, bundle code, and network. The executor receives only the
+  work mount, artifact output mount, executor log mount, and supervisor socket.
+
+The diagram below shows the `combined` strategy because it is the baseline
+entrypoint flow. The split filesystem tree is documented in
+[README-iso-runtime.md](README-iso-runtime.md).
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ HOST MACHINE                                                            │
@@ -37,7 +50,8 @@ These are transported separately in external exec.
 │                                      │                                  │
 │                                      ▼                                  │
 │  ┌───────────────────────────────────────────────────────────────┐    │
-│  │ docker run --network host --cap-add=SYS_ADMIN                 │    │
+│  │ docker run (combined strategy)                                │    │
+│  │   --network host --cap-add=SYS_ADMIN                          │    │
 │  │   -v /host/workdir:/workspace/work:rw                         │    │
 │  │   -v /host/outdir:/workspace/out:rw                           │    │
 │  │   -v /host/bundles/<bundle_id>:/bundles/<bundle_id>:ro        │    │
@@ -64,7 +78,7 @@ These are transported separately in external exec.
 │  │       • DON'T apply env_passthrough (keeps PYTHONPATH clean)  │    │
 │  │       • Initialize ModelService, KB client, Redis comm        │    │
 │  │       • Bind into all tool modules                            │    │
-│  │  3. Start PrivilegedSupervisor on /tmp/supervisor.sock        │    │
+│  │  3. Start PrivilegedSupervisor on Unix socket                 │    │
 │  │  4. Launch run_py_code() for executor subprocess              │    │
 │  └───────────────────────┬──────────────────────────────────┬─────────┘    │
 │                          │                                  │             │
@@ -77,8 +91,9 @@ These are transported separately in external exec.
 │  │                      │  Unix    │   │                          │  │  │
 │  │ - Port 0 (no listen) │  Socket  │   │ sandbox launcher:        │  │  │
 │  │ - UID 0 (root)       │          │   │  1. unshare network      │  │  │
-│  │ - Full network       │          │   │  2. setuid(1001)         │  │  │
-│  │ - Has secrets        │          │   │                          │  │  │
+│  │ - Full network       │          │   │  2. clear groups         │  │  │
+│  │ - Has secrets        │          │   │  3. setgid(1000)         │  │  │
+│  │ - Runtime storage    │          │   │  4. setuid(1001)         │  │  │
 │  │ - ModelService       │          │   │ Result:                  │  │  │
 │  │ - KB client          │          │   │ - UID 1001 (unprivileged)│  │  │
 │  │ - Redis comm         │          │   │ - NO network namespace   │  │  │
@@ -111,7 +126,9 @@ These are transported separately in external exec.
 │                                        └──────────────────────────┘  │  │
 │                                                                       │  │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ Unix Socket Protocol (/tmp/supervisor.sock, chmod 0666)        │  │
+│  │ Unix Socket Protocol                                           │  │
+│  │ combined: /tmp/supervisor.sock                                 │  │
+│  │ split:    /supervisor-socket/supervisor.sock                   │  │
 │  │                                                                 │  │
 │  │ Request (Executor → Supervisor):                               │  │
 │  │ {                                                               │  │
@@ -139,9 +156,9 @@ These are transported separately in external exec.
 │  │ }                                                               │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                                                                       │  │
-│  Results written to: /workspace/out/result.json                      │  │
-│  Tool calls logged:  /workspace/out/<tool>_<ts>.json                 │  │
-│  Runtime logs:       /workspace/out/logs/...                         │  │
+│  Artifact writes:    /workspace/out/...                              │  │
+│  Result files:       /workspace/out/exec_result_*.json               │  │
+│  Runtime logs:       proc-side out/logs/...                           │  │
 │  Readonly bundle data: BUNDLE_STORAGE_DIR                            │  │
 └─────────────────────────────────────────────────────────────────────────┘
                                        │
@@ -149,13 +166,13 @@ These are transported separately in external exec.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │ HOST MACHINE                                                            │
 │                                                                         │
-│  Host can read:                                                         │
-│  - /host/outdir/result.json          (final output)                    │
-│  - /host/outdir/web_search-0.json    (tool call audit trail)           │
-│  - /host/outdir/transcription_providers_comparison.xlsx (created file) │
-│  - /host/outdir/logs/user.log         (program stdout/stderr)          │
-│  - /host/outdir/logs/runtime.err.log  (inner executor capture)         │
-│  - /host/outdir/logs/docker.err.log   (outer docker capture)           │
+│  Host can read the proc-side runtime output tree:                     │
+│  - /host/outdir/workdir/turn_<id>/...      (generated artifacts)       │
+│  - /host/outdir/workdir/exec_result_*.json (execution result)          │
+│  - /host/outdir/executed_programs/...      (preserved sources)         │
+│  - /host/outdir/logs/infra.log             (merged infra diagnostics)  │
+│  - /host/outdir/logs/supervisor/...        (supervisor logs)           │
+│  - /host/outdir/logs/executor/...          (executor logs)             │
 │                                                                         │
 │  Container exits, docker run --rm cleans up                            │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -195,17 +212,17 @@ These are transported separately in external exec.
 │                                                                         │
 │  3. DOCKER ISOLATED (isolation="docker") ⭐ PRODUCTION                 │
 │  ┌───────────────────────────────────────────────────────────────┐    │
-│  │ Docker Container → Supervisor + Executor                       │    │
+│  │ Docker runtime → Supervisor + Executor                         │    │
 │  │                                                                │    │
 │  │  Supervisor (root, network, secrets):                         │    │
 │  │  • Executes privileged tools                                  │    │
 │  │  • Has ModelService, KB, Redis                                │    │
 │  │  • Full network access                                        │    │
 │  │                                                                │    │
-│  │  Executor (UID 1001, network isolated):                       │    │
+│  │  Executor (UID 1001/GID 1000, network isolated):              │    │
 │  │  • Runs untrusted user code                                   │    │
 │  │  • NO network (unshare CLONE_NEWNET)                          │    │
-│  │  • Read-only FS except /workspace/{work,out}                  │    │
+│  │  • Read-only FS except work/artifact/log mounts               │    │
 │  │  • Max generated file/workspace size limits are enforced      │    │
 │  │  • Tools proxied to supervisor via Unix socket                │    │
 │  │                                                                │    │
@@ -217,7 +234,7 @@ These are transported separately in external exec.
 │  ┌───────────────────────────────────────────────────────────────┐    │
 │  │ Remote task (ECS/Fargate/other)                                │    │
 │  │                                                                │    │
-│  │  • Host snapshots workdir/outdir to storage                    │    │
+│  │  • Host snapshots workdir/runtime outdir to storage            │    │
 │  │  • Host snapshots bundle code root when bundle-local tools     │    │
 │  │    are needed                                                   │    │
 │  │  • Host snapshots per-bundle readonly data when bundle-local   │    │
@@ -225,7 +242,7 @@ These are transported separately in external exec.
 │  │  • Remote restores input snapshot                              │    │
 │  │  • Executes same supervisor+executor entrypoint                │    │
 │  │  • Uploads output snapshots                                    │    │
-│  │  • Host merges output into local workdir/outdir                │    │
+│  │  • Host merges output into local workdir/runtime outdir        │    │
 │  └───────────────────────────────────────────────────────────────┘    │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -273,20 +290,24 @@ These are transported separately in external exec.
 │                                                                         │
 │  Layer 1: Container Isolation                                          │
 │  • Docker --read-only filesystem                                       │
-│  • Only /workspace/work and /workspace/out writable                    │
-│  • No access to host filesystem                                        │
-│  • --cap-add=SYS_ADMIN (needed for unshare)                            │
+│  • combined: one py-code-exec container with UID-dropped child         │
+│  • split: separate supervisor and executor sibling containers          │
+│  • split executor receives only work, artifact output, executor logs,  │
+│    and supervisor socket mounts                                        │
+│  • split executor uses --network none, --cap-drop=ALL,                 │
+│    no-new-privileges, and narrow UID/ownership capability add-backs    │
 │                                                                         │
 │  Layer 2: Network Isolation                                            │
-│  • Container runs with --network host (for supervisor)                 │
+│  • Supervisor keeps configured network path for approved tools         │
 │  • Executor child runs in an isolated no-network namespace             │
 │  • Creates isolated network namespace with no interfaces               │
 │  • Untrusted code cannot reach network                                 │
 │                                                                         │
 │  Layer 3: Privilege Isolation                                          │
-│  • Supervisor: UID 0 (root) - trusted component                        │
-│  • Executor: UID 1001 (unprivileged) - untrusted code                  │
-│  • setuid() called after unshare()                                     │
+│  • Supervisor: trusted component with runtime access                   │
+│  • Executor: UID 1001 / GID 1000 - untrusted code                      │
+│  • setgroups([1000]), setgid(1000), setuid(1001) after isolation       │
+│  • Executor should not retain supplementary root group                 │
 │                                                                         │
 │  Layer 4: Tool Proxying                                                │
 │  • Untrusted code cannot import real tool modules                      │
@@ -294,10 +315,10 @@ These are transported separately in external exec.
 │  • Supervisor validates & executes with full privileges                │
 │  • Results sanitized (path normalization, etc.)                        │
 │                                                                         │
-│  Layer 5: Resource Limits (TODO)                                       │
-│  • CPU limits (docker --cpus)                                          │
-│  • Memory limits (docker --memory)                                     │
-│  • Timeout enforcement (asyncio.wait_for)                              │
+│  Layer 5: Resource Limits                                              │
+│  • Per-file size limit via RLIMIT_FSIZE                                │
+│  • Net-new workspace/output byte monitor                               │
+│  • Timeout enforcement                                                 │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 
@@ -322,7 +343,7 @@ These are transported separately in external exec.
 │  • Run loader-owned main.py, which executes user_code.py               │
 │  • Execute pure computation                                            │
 │  • Proxy tool calls to supervisor                                      │
-│  • Write result.json                                                   │
+│  • Write exec_result_*.json and generated artifacts                    │
 │                                                                         │
 │  Tool Modules:                                                         │
 │  • io_tools: Wrapper for tool_call(), save_ret()                       │
@@ -342,7 +363,7 @@ These are transported separately in external exec.
 4. **Supervisor is the trust boundary** - it has all privileges and validates all tool calls
 5. **Filesystem isolation is applied to the executor child, not the supervisor** - this preserves tool functionality while preventing untrusted code from browsing runtime internals
 6. **Network isolation doesn't break functionality** - tools that need network run in supervisor
-7. **`--network host` mode** allows supervisor to reach Redis/Postgres on `localhost` while executor remains isolated
+7. **`combined` vs `split` is configurable** - `split` keeps the same tool-call contract while removing supervisor runtime roots, descriptors, bundle mounts, and supervisor logs from the executor filesystem
 
 ---
 
@@ -380,13 +401,13 @@ cb/tenants/<tenant>/projects/<project>/ai-bundle-storage-snapshots/
 ```
 
 ### Flow summary
-- Host creates input snapshots (workdir + outdir).
+- Host creates input snapshots (workdir + runtime outdir).
 - If bundle-local tools are used, host snapshots the bundle code root.
 - If bundle-local readonly data is used, host snapshots the per-bundle readonly storage dir.
 - Remote executor restores input zips before supervisor bootstrap.
 - Remote executor restores bundle code snapshot and bundle readonly data snapshot before running user code.
 - After execution, remote uploads output zips (delta-only by default).
-- Host downloads output zips and merges into local workdir/outdir.
+- Host downloads output zips and merges into local workdir/runtime outdir.
 
 ### Notes
 - Tool call files are timestamp-suffixed; index file is still used for grouping.

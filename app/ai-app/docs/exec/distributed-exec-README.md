@@ -21,8 +21,11 @@ on a dedicated ECS Fargate **exec task** instead of a local Docker sidecar.
 
 ## Why Fargate exec
 
-Docker-on-node (`isolation="docker"`) is the local production mode — the proc container
-spawns a Docker child container on the same host, sharing workdir/outdir via bind mounts.
+Docker-on-node (`isolation="docker"`) is the local production mode. The proc
+container starts local Docker execution containers on the same host and shares
+work/runtime-output surfaces via bind mounts. In the stronger local `split`
+strategy, supervisor and executor are sibling containers; in the historical
+`combined` strategy they share one `py-code-exec` container.
 This is not available in Fargate because:
 
 - Fargate containers cannot access Docker daemon
@@ -35,7 +38,7 @@ The Fargate exec task is the replacement:
 |---|---|---|
 | Workdir sharing | Host bind mount | S3 snapshot + restore |
 | Bundle access | Host bind mount | S3 snapshot + restore |
-| Network isolation | executor child has no network; supervisor keeps configured Docker network | task-level VPC SG plus executor-child network isolation |
+| Network isolation | executor has no network; supervisor keeps configured Docker network | task-level VPC SG plus executor-child network isolation |
 | Task lifetime | Container exits → docker rm | Task STOPPED |
 | Caller waits | `asyncio.wait_for(proc.communicate())` | Poll `describe_tasks` until STOPPED |
 | Parallel executions | One Docker child per call | One ECS run-task per call |
@@ -47,7 +50,12 @@ Important:
 - it does **not** change the logical result contract seen by the agent
 - the final agent-visible result is still assembled by `exec_tools.py` after the runtime backend returns
 - generated file/workspace limits are configured in `assembly.yaml` under `platform.services.proc.exec` and enforced inside the remote task
-- filesystem isolation applies to the untrusted executor child, not to the supervisor process; the supervisor still needs normal runtime access to execute approved tools and publish logs/results
+- filesystem isolation applies to the untrusted generated-code executor, not to
+  the supervisor process; the supervisor still needs normal runtime access to
+  execute approved tools and publish logs/results
+- the current Fargate task uses the same supervisor+executor entrypoint inside
+  one remote task/container; local Docker `split` has a different on-host tree,
+  documented in [README-iso-runtime.md](README-iso-runtime.md)
 
 Important distinction:
 - `BUNDLE_STORAGE_DIR` is supervisor-side runtime plumbing for the isolated task
@@ -92,7 +100,7 @@ Important distinction:
 │    EXECUTION_ID           — unique per call                                  │
 │    KDCUBE_RUNTIME_*_YAML_B64 — descriptor payload exports for supervisor     │
 │    WORKDIR=/workspace/work                                                   │
-│    OUTPUT_DIR=/workspace/out                                                 │
+│    OUTPUT_DIR=/workspace/out       — artifact/runtime out root for Fargate   │
 │    LOG_DIR=/workspace/out/logs                                               │
 │    LOG_FILE_PREFIX=executor                                                  │
 │    EXECUTION_SANDBOX=fargate                                                 │
@@ -112,7 +120,7 @@ Important distinction:
 chat-proc (FargateRuntime.run)
 │
 │  1. build_exec_snapshot_workspace()
-│     → lightweight copy of workdir/outdir (strips large blobs)
+│     → lightweight copy of workdir/runtime outdir (strips large blobs)
 │
 │  2. snapshot_exec_input()
 │     → zip work/ + zip out/ (exclude logs/, executed_programs/,
@@ -167,7 +175,7 @@ chat-proc (FargateRuntime.run)
 │     restore_zip_to_dir(output_out_uri, tmp_dir)
 │     → selective merge into local outdir:
 │         logs/    → append
-│         turn_*/  → overwrite
+│         workdir/ or turn_*/ → overwrite, depending on runtime layout
 │
 │  9. Return ExternalExecResult(ok, returncode, error, seconds=elapsed)
 ```
@@ -260,7 +268,8 @@ ECS FARGATE EXEC TASK
 │  │
 │  ├── run_py_code()     ← main.py loader in executor subprocess
 │  │     executor subprocess:
-│  │       setuid(1001)                  (unprivileged)
+│  │       setgroups([1000]), setgid(1000), setuid(1001)
+│  │                                      (unprivileged; no root group)
 │  │       no-network UID-dropped child  (generated-code executor)
 │  │       executes main.py
 │  │       main.py loads and executes user_code.py
@@ -289,7 +298,7 @@ cb/tenants/{tenant}/projects/{project}/
         out.zip       ← outdir snapshot before execution
       output/
         work.zip      ← workdir delta after execution
-        out.zip       ← outdir delta after execution (turn_*, logs/)
+        out.zip       ← outdir delta after execution (artifacts/workdir, logs/)
 
   ai-bundle-snapshots/
     {bundle_id}.{version}.zip
@@ -300,6 +309,7 @@ cb/tenants/{tenant}/projects/{project}/
     {bundle_id}.{sha}.zip
     {bundle_id}.{sha}.sha256
       ← per-bundle readonly data snapshot (content-addressed)
+```
 
 ---
 
@@ -307,7 +317,7 @@ cb/tenants/{tenant}/projects/{project}/
 
 Distributed exec transports three physical classes of data into the child runtime:
 - `WORKDIR=/workspace/work`
-- `OUTPUT_DIR=/workspace/out`
+- `OUTPUT_DIR=/workspace/out` (Fargate/current external task artifact/runtime out root)
 - readonly per-bundle data restored to supervisor-side `BUNDLE_STORAGE_DIR`
 
 But the agent should not be taught to browse `BUNDLE_STORAGE_DIR` directly.
@@ -330,7 +340,6 @@ This keeps:
 - transport concerns in the distributed exec runtime
 - namespace semantics in the bundle
 - agent-visible outcome in the normal exec reporting path
-```
 
 **Snapshot filter** — excluded from both input and output zips:
 - `logs/` directory
@@ -338,6 +347,11 @@ This keeps:
 - `sources_pool.json`, `sources_used.json`
 - `tool_calls_index.json`
 - `__pycache__/`, `.git/`
+
+Local Docker `split` mode stores generated artifacts under `out/workdir/` on
+the proc side and exposes that leaf as `OUTPUT_DIR=/workspace/out` to the
+executor. Fargate currently keeps the historical `/workspace/out` task-local
+layout and snapshots it as the remote runtime output directory.
 
 ---
 
@@ -468,7 +482,7 @@ Injected via `containerOverrides.environment` at `run_task` call time:
 | Variable | Set by | Purpose |
 |---|---|---|
 | `WORKDIR` | fargate.py | `/workspace/work` — where main.py loader and user_code.py live |
-| `OUTPUT_DIR` | fargate.py | `/workspace/out` — artifacts, result.json |
+| `OUTPUT_DIR` | fargate.py | `/workspace/out` — artifact/runtime output root for current Fargate task |
 | `LOG_DIR` | fargate.py | `/workspace/out/logs` |
 | `LOG_FILE_PREFIX` | fargate.py | `executor` |
 | `EXECUTION_ID` | fargate.py | Unique run ID |
@@ -480,6 +494,11 @@ Injected via `containerOverrides.environment` at `run_task` call time:
 | `REDIS_CLIENT_NAME` | fargate.py | `exec` |
 | `AWS_REGION` etc. | task def + fargate.py | AWS SDK config |
 | All proc secrets | task definition | Postgres, API keys, SM, etc. |
+
+These values are available to the remote task supervisor because approved tools
+need runtime services. The generated-code executor child receives a filtered
+minimal environment; descriptor payload env vars and secret-bearing runtime env
+vars are not inherited by generated code.
 
 **`RUNTIME_GLOBALS_JSON` keys** (passed from proc caller):
 

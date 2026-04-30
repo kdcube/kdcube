@@ -32,6 +32,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.workspace import (
     extract_workspace_turn_roots,
     hydrate_workspace_paths,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
+    artifact_outdir_for,
+    resolve_artifact_path,
+    runtime_outdir_for_artifact_outdir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +143,7 @@ async def read_artifact_for_react(
             )
         except Exception:
             pass
-        abs_path = outdir / physical_path
+        abs_path = resolve_artifact_path(outdir, physical_path)
         if not abs_path.exists():
             return {
                 "artifact": artifact,
@@ -442,7 +447,7 @@ async def rehost_files_from_timeline(
                     expected_size = target_artifact.get("size_bytes")
                     if not isinstance(expected_size, int):
                         expected_size = None
-                    target = outdir / target_key
+                    target = resolve_artifact_path(outdir, target_key, prefer_existing=False)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         needs_rehost = not target.exists()
@@ -594,18 +599,20 @@ def build_exec_snapshot_workspace(
             continue
     git_turn_roots: set[str] = set()
     for turn_id in extract_workspace_turn_roots(code):
-        if (outdir / turn_id / ".git").exists():
+        artifact_outdir = artifact_outdir_for(outdir)
+        if (artifact_outdir / turn_id / ".git").exists():
             git_turn_roots.add(turn_id)
     for phys in file_paths:
         if not isinstance(phys, str) or not phys.strip() or phys.startswith("fi:"):
             continue
         root_name = phys.split("/", 1)[0]
-        if root_name and (outdir / root_name / ".git").exists():
+        artifact_outdir = artifact_outdir_for(outdir)
+        if root_name and (artifact_outdir / root_name / ".git").exists():
             git_turn_roots.add(root_name)
 
     copied_git_roots: set[str] = set()
     for turn_id in sorted(git_turn_roots):
-        src_root = outdir / turn_id
+        src_root = artifact_outdir_for(outdir) / turn_id
         if not src_root.exists():
             continue
         _copy_tree(src_root, snap_out / turn_id)
@@ -634,7 +641,7 @@ def build_exec_snapshot_workspace(
         root_name = phys.split("/", 1)[0]
         if root_name in copied_git_roots:
             continue
-        src = outdir / phys
+        src = resolve_artifact_path(outdir, phys)
         if src.exists():
             if src.is_dir():
                 _copy_tree(src, snap_out / phys)
@@ -1020,7 +1027,8 @@ class ApplicationHostingService:
         import pathlib as _pathlib
 
         files_rehosted: List[Dict[str, Any]] = []
-        base = _pathlib.Path(outdir) if outdir else None
+        base = artifact_outdir_for(_pathlib.Path(outdir), create=False) if outdir else None
+        runtime_base = _pathlib.Path(outdir) if outdir else None
         for a in (files or []):
             info = self._extract_file_fields(a)
             if not info:
@@ -1033,7 +1041,10 @@ class ApplicationHostingService:
 
             p = _pathlib.Path(rel_or_abs)
             if not p.is_absolute():
-                p = (base / rel_or_abs).resolve() if base else p.resolve()
+                if runtime_base is not None:
+                    p = resolve_artifact_path(runtime_base, rel_or_abs).resolve()
+                else:
+                    p = (base / rel_or_abs).resolve() if base else p.resolve()
             try:
                 data = p.read_bytes()
             except Exception as ex:
@@ -1059,7 +1070,13 @@ class ApplicationHostingService:
                 try:
                     physical_path = str(p.relative_to(base))
                 except Exception:
-                    physical_path = str(p)
+                    if runtime_base:
+                        try:
+                            physical_path = str(p.relative_to(runtime_base))
+                        except Exception:
+                            physical_path = str(p)
+                    else:
+                        physical_path = str(p)
             files_rehosted.append({
                 "slot": info.get("slot") or "",
                 "key": key,
@@ -1098,6 +1115,11 @@ class ApplicationHostingService:
         if not (tenant and project and conversation_id and turn_id and codegen_run_id):
             return None
         try:
+            if outdir:
+                try:
+                    outdir = str(runtime_outdir_for_artifact_outdir(pathlib.Path(outdir)))
+                except Exception:
+                    pass
             return await self.store.put_execution_snapshot(
                 tenant=tenant,
                 project=project,

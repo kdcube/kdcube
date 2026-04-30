@@ -26,6 +26,8 @@ from kdcube_ai_app.apps.chat.sdk.runtime.diagnose import (
     remap_traceback_line_numbers,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
+    artifact_outdir_for,
+    resolve_artifact_path,
     snapshot_outdir,
     diff_snapshots,
     format_diff,
@@ -700,7 +702,7 @@ class ExecTools:
             "      raise RuntimeError(resp[\"err\"])\n"
             "\n"
             "FILES & PATHS\n"
-            "- `OUTPUT_DIR` is the runtime output root.\n"
+            "- `OUTPUT_DIR` is the output data/artifact root.\n"
             "- `OUT_DIR` is also available as `Path(OUTPUT_DIR)` if you prefer Path operations.\n"
             "- Input workspace artifacts from context are available by their filenames under OUTPUT_DIR/<turn_id>/files/.\n"
             "- Historical or generated non-workspace artifacts may also be under OUTPUT_DIR/<turn_id>/outputs/.\n"
@@ -824,6 +826,7 @@ async def run_exec_tool(
     # 2) prepare workspace
     workdir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
+    artifact_outdir = artifact_outdir_for(outdir)
 
     (workdir / EXEC_USER_CODE_FILENAME).write_text(code or "", encoding="utf-8")
     (workdir / "main.py").write_text(_build_exec_loader_wrapper(), encoding="utf-8")
@@ -899,7 +902,10 @@ async def run_exec_tool(
             },
         }
 
-    runtime_result_summary, runtime_result_tail = _load_runtime_result_error(outdir / result_filename)
+    runtime_result_path = artifact_outdir / result_filename
+    if not runtime_result_path.exists():
+        runtime_result_path = outdir / result_filename
+    runtime_result_summary, runtime_result_tail = _load_runtime_result_error(runtime_result_path)
     if isinstance(run_res, dict) and (runtime_result_summary or runtime_result_tail):
         if runtime_result_summary and not str(run_res.get("error_summary") or "").strip():
             run_res["error_summary"] = runtime_result_summary
@@ -917,7 +923,7 @@ async def run_exec_tool(
     succeeded: List[Dict[str, Any]] = []
     for a in contract or []:
         rel = a["filename"]
-        p = outdir / rel
+        p = resolve_artifact_path(outdir, rel)
         if not p.exists() or p.stat().st_size <= 0:
             missing.append(rel)
             errors.append({
@@ -927,9 +933,14 @@ async def run_exec_tool(
                 "message": "file not produced" if not p.exists() else "file is empty",
             })
             continue
+        egress_root = artifact_outdir
+        try:
+            p.resolve().relative_to(artifact_outdir.resolve())
+        except Exception:
+            egress_root = outdir
         egress_error = _validate_contract_artifact_egress(
             path=p,
-            outdir=outdir,
+            outdir=egress_root,
             rel=rel,
             mime=a.get("mime") or "",
         )
@@ -946,7 +957,7 @@ async def run_exec_tool(
             stats = analyze_write_tool_output(
                 file_path=str(rel),
                 mime=a.get("mime") or "",
-                output_dir=outdir,
+                output_dir=artifact_outdir,
                 artifact_id=a.get("name"),
             )
         except Exception:
@@ -1017,10 +1028,16 @@ async def run_exec_tool(
                 read_log_tail(runtime_path, max_chars=INFRA_LOG_TAIL_CHARS),
                 exec_id,
             )
-        user_log_tail = extract_exec_segment(
-            read_log_tail(outdir / "logs/user.log", max_chars=USER_LOG_TAIL_CHARS),
-            exec_id,
-        )
+        user_log_text = ""
+        for user_log_path in (
+                outdir / "logs" / "executor" / "user.log",
+                outdir / "logs" / "user.log",
+                artifact_outdir / "logs" / "user.log",
+        ):
+            user_log_text = read_log_tail(user_log_path, max_chars=USER_LOG_TAIL_CHARS)
+            if user_log_text:
+                break
+        user_log_tail = extract_exec_segment(user_log_text, exec_id)
     except Exception:
         pass
 
@@ -1172,7 +1189,7 @@ async def run_exec_tool(
         "errors": errors,
         "succeeded": succeeded,
     }
-    result_path = outdir / result_filename
+    result_path = artifact_outdir / result_filename
     try:
         result_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
@@ -1210,6 +1227,7 @@ async def run_exec_tool(
         "result_filename": result_filename,
         "workdir": str(workdir),
         "outdir": str(outdir),
+        "artifact_outdir": str(artifact_outdir),
         "artifacts": artifacts_list,
         "sources_pool": [],
         "error": error,
@@ -1271,7 +1289,8 @@ async def run_exec_tool_side_effects(
     """
     Execute code without a contract and report side-effects by diffing outdir.
     """
-    before = snapshot_outdir(outdir)
+    artifact_outdir = artifact_outdir_for(outdir)
+    before = snapshot_outdir(artifact_outdir)
     envelope = await run_exec_tool_no_contract(
         tool_manager=tool_manager,
         logger=logger,
@@ -1282,11 +1301,11 @@ async def run_exec_tool_side_effects(
         exec_id=exec_id,
         exec_runtime=exec_runtime,
     )
-    after = snapshot_outdir(outdir)
+    after = snapshot_outdir(artifact_outdir)
     diff = diff_snapshots(before, after)
     diff_text = format_diff(diff)
 
-    items = build_items_from_diff(outdir, diff)
+    items = build_items_from_diff(artifact_outdir, diff)
     items.extend(build_deleted_notices(diff))
 
     report_text = (envelope.get("report_text") or "").strip()

@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     emit_hosted_files,
     infer_format_from_path
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
 
 TOOL_SPEC = {
     "id": "react.write",
@@ -295,7 +296,7 @@ async def handle_react_write(*, react: Any, ctx_browser: Any, state: Dict[str, A
             hosted=hosted,
             should_emit=(kind == "file" and channel != "internal"),
         )
-        abs_path = pathlib.Path(state["outdir"]) / artifact_name
+        abs_path = resolve_artifact_path(pathlib.Path(state["outdir"]), artifact_name)
         if kind != "display":
             if not abs_path.exists():
                 notice_block(

@@ -19,6 +19,7 @@ from kdcube_ai_app.infra.service_hub.multimodality import (
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import prepare_summary_artifact
 from kdcube_ai_app.apps.chat.sdk.tools.citations import extract_local_paths_any
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, resolve_artifact_path
 
 
 def unwrap_llm_content_payload(payload: Any) -> Any:
@@ -158,15 +159,19 @@ def resolve_cited_file_sources_from_content(
         if not candidate:
             continue
         rel_path = pathlib.Path(candidate)
-        fs_path = outdir / rel_path
+        artifact_outdir = artifact_outdir_for(outdir, create=False)
+        fs_path = resolve_artifact_path(outdir, str(rel_path), create_root=False)
         try:
             fs_path = fs_path.resolve()
         except Exception:
             continue
         try:
-            rel_path = fs_path.relative_to(outdir)
+            rel_path = fs_path.relative_to(artifact_outdir)
         except Exception:
-            continue
+            try:
+                rel_path = fs_path.relative_to(outdir)
+            except Exception:
+                continue
         if not fs_path.exists() or not fs_path.is_file():
             continue
 

@@ -154,7 +154,7 @@ EXEC_SNIPPET_RULES = f"""
 - `code` which you emit in channel:code is a SNIPPET inserted inside an async main(); do NOT generate boilerplate or your own main.
 - The snippet SHOULD use async operations (await where needed).
 - Do NOT import tools from the catalog; invoke tools via `await agent_io_tools.tool_call(...)`.
-- OUTPUT_DIR is the primary runtime output root.
+- OUTPUT_DIR is the output data/artifact root.
 - OUT_DIR is also available as `Path(OUTPUT_DIR)` if that is more convenient.
 - Do NOT assign, redefine, or shadow `OUTPUT_DIR` or `OUT_DIR`. They are provided by the runtime.
 - Do NOT substitute hard-coded paths such as `Path(\"/workspace/out\")` for `OUTPUT_DIR` / `OUT_DIR`.

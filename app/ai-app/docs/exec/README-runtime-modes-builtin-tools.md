@@ -17,7 +17,9 @@ This document explains where built-in tools run (in-process vs isolated subproce
 
 - `none` (in-process): tool code runs in the main server process.
 - `local` (isolated subprocess): tool code runs in a separate Python process on the same host (no supervisor).
-- `docker`: tool code runs inside a Docker container with a **supervisor** that executes tools. The exec sandbox itself is locked down (no network, no secrets, limited FS).
+- `docker`: tool code runs with a Docker **supervisor** that executes approved
+  tools. The generated-code executor itself is locked down (no network, no
+  secrets, limited filesystem).
 
 The runtime selector lives in `kdcube_ai_app/apps/chat/sdk/tools/tools_insights.py` (`tool_isolation`).
 
@@ -38,9 +40,24 @@ Native libraries (HTML parsers, PDFs, browser bindings) can crash the process. I
 
 ## How isolation works (high level)
 
-Execution uses the ISO runtime (`kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`). For `local`, it spawns a standalone subprocess via `py_code_exec_entry.py`. For `docker`, the supervisor runs inside the container and brokers tool execution while the exec sandbox stays restricted (no network, no secrets).
+Execution uses the ISO runtime (`kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`). For `local`, it spawns a standalone subprocess via `py_code_exec_entry.py`. For `docker`, the supervisor brokers tool execution while the exec sandbox stays restricted (no network, no secrets).
+
+Docker currently supports two strategies:
+
+- `combined`: supervisor and generated-code executor run inside one
+  `py-code-exec` container. This preserves the historical layout.
+- `split`: supervisor and executor run in sibling containers. The executor
+  container receives only work, artifact output, executor logs, and the
+  supervisor socket. Descriptor payloads, bundle mounts, storage mounts,
+  supervisor logs, and platform runtime roots are not mounted into the
+  executor container.
 
 In both isolated modes, the runtime still executes `work/main.py`, but that file is now a stable platform loader. The actual verbatim agent program body is written to `work/user_code.py`, and preserved copies live under `out/executed_programs/<execution_id>/`.
+
+In split Docker, generated artifacts are written under the proc-side
+`out/workdir/` subtree. Executor logs are under `out/logs/executor/`; supervisor
+logs and merged infra logs remain proc-side under `out/logs/` but are not
+visible to generated code.
 
 Sources are merged back into the main sources pool; artifacts and logs are recorded in the same way as in-process tools.
 

@@ -15,7 +15,8 @@ def _prepare_workspace_for_executor(
         output_dir: pathlib.Path,
         executor_uid: int = 1001,
         executor_gid: Optional[int] = None,
-        logger: Optional[AgentLogger] = None
+        logger: Optional[AgentLogger] = None,
+        include_logs: bool = True,
 ) -> None:
     """
     Ensure output directories are writable by executor user.
@@ -27,9 +28,9 @@ def _prepare_workspace_for_executor(
 
     log = logger or AgentLogger("workspace_prep")
 
-    # Ensure logs directory exists
-    logs_dir = output_dir / "logs"
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    logs_dir = output_dir / "logs" if include_logs else None
+    if logs_dir is not None:
+        logs_dir.mkdir(parents=True, exist_ok=True)
 
     # Try to chown to executor user (requires root). Keep group as chat's GID for shared writes.
     try:
@@ -54,7 +55,8 @@ def _prepare_workspace_for_executor(
                 timeout=5,
             )
             os.chmod(output_dir, 0o777)
-            os.chmod(logs_dir, 0o777)
+            if logs_dir is not None:
+                os.chmod(logs_dir, 0o777)
         except Exception as chmod_err:
             log.log(
                 f"[workspace_prep] chmod after chown failed: {chmod_err}",
@@ -78,7 +80,8 @@ def _prepare_workspace_for_executor(
             except Exception:
                 pass
             os.chmod(output_dir, 0o777)
-            os.chmod(logs_dir, 0o777)
+            if logs_dir is not None:
+                os.chmod(logs_dir, 0o777)
             log.log(
                 f"[workspace_prep] Made {output_dir} world-writable (fallback)",
                 level="WARNING"
@@ -97,7 +100,8 @@ def _prepare_workspace_for_executor(
         )
         try:
             os.chmod(output_dir, 0o777)
-            os.chmod(logs_dir, 0o777)
+            if logs_dir is not None:
+                os.chmod(logs_dir, 0o777)
         except Exception as chmod_err:
             log.log(
                 f"[workspace_prep] chmod fallback failed: {chmod_err}",
@@ -143,8 +147,8 @@ async def run_py_code(
     workdir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    _prepare_workspace_for_executor(workdir, executor_uid=1001, executor_gid=None, logger=log)
-    _prepare_workspace_for_executor(output_dir, executor_uid=1001, executor_gid=None, logger=log)
+    _prepare_workspace_for_executor(workdir, executor_uid=1001, executor_gid=None, logger=log, include_logs=False)
+    _prepare_workspace_for_executor(output_dir, executor_uid=1001, executor_gid=None, logger=log, include_logs=False)
 
     main_path = workdir / "main.py"
     if not main_path.exists():
@@ -225,21 +229,25 @@ async def run_py_code(
     src = _inject_header_after_future(src, injected_header)
     main_path.write_text(src, encoding="utf-8")
 
-    # OUTPUT_DIR / WORKDIR inside this container
+    # OUTPUT_DIR remains the user-visible artifact/data root.
     child_env["OUTPUT_DIR"] = str(output_dir)
     child_env["WORKDIR"] = str(workdir)
     child_env["AGENT_IO_CONTEXT"] = "limited"
-    child_env["HOME"] = str(output_dir)
-    child_env["LOG_DIR"] = str(output_dir / "logs")
+    executor_private_root = pathlib.Path(child_env.get("EXECUTOR_PRIVATE_ROOT") or "/tmp/kdcube-executor")
+    executor_log_dir = pathlib.Path(child_env.get("EXECUTOR_LOG_DIR") or child_env.get("LOG_DIR") or (output_dir / "logs"))
+    executor_home = pathlib.Path(child_env.get("HOME") or (executor_private_root / "home"))
+    executor_cache = executor_private_root / "cache"
+    executor_config = executor_private_root / "config"
+    mpl_cache_dir = executor_private_root / "mplconfig"
+    font_cache_dir = executor_private_root / "fontconfig"
+    for private_dir in (executor_log_dir, executor_home, executor_cache, executor_config, mpl_cache_dir, font_cache_dir):
+        private_dir.mkdir(parents=True, exist_ok=True)
+    child_env["HOME"] = str(executor_home)
+    child_env["LOG_DIR"] = str(executor_log_dir)
     child_env["LOG_FILE_PREFIX"] = "executor"
-    # Matplotlib/fontconfig caches must be writable in iso runtime
-    mpl_cache_dir = output_dir / ".mplconfig"
-    font_cache_dir = output_dir / ".fontconfig"
-    mpl_cache_dir.mkdir(parents=True, exist_ok=True)
-    font_cache_dir.mkdir(parents=True, exist_ok=True)
     child_env["MPLCONFIGDIR"] = str(mpl_cache_dir)
-    child_env["XDG_CACHE_HOME"] = str(output_dir)
-    child_env["XDG_CONFIG_HOME"] = str(output_dir)
+    child_env["XDG_CACHE_HOME"] = str(executor_cache)
+    child_env["XDG_CONFIG_HOME"] = str(executor_config)
     child_env["FONTCONFIG_PATH"] = str(font_cache_dir)
     child_env["MPLBACKEND"] = "Agg"
     # RUNTIME_TOOL_MODULES:

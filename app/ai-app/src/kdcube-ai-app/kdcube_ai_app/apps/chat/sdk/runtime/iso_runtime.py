@@ -24,6 +24,21 @@ _DEFAULT_EXEC_MAX_WORKSPACE_BYTES = 250 * 1024 * 1024
 _DEFAULT_EXEC_WORKSPACE_MONITOR_INTERVAL_S = 0.5
 
 
+def _drop_executor_identity(*, executor_uid: int, executor_gid: int, logger=None) -> None:
+    """
+    Drop generated-code subprocess identity without inheriting root's supplementary groups.
+
+    This must run while the child is still privileged. Keeping root as a supplementary
+    group is unnecessary and widens filesystem permission checks for group-readable files.
+    """
+    os.setgroups([executor_gid])
+    os.umask(0o002)
+    os.setgid(executor_gid)
+    os.setuid(executor_uid)
+    if logger is not None:
+        logger.info("[executor] Dropped to UID %s GID %s groups=[%s]", executor_uid, executor_gid, executor_gid)
+
+
 def _pick_runtime_cfg(cfg: Dict[str, Any], *keys: str) -> Any:
     for key in keys:
         if key in cfg:
@@ -476,13 +491,9 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
             else:
                 log.info("[executor] Network isolation already provided by container runtime")
 
-            # 2. Drop to unprivileged user
-            # Ensure group-writable files so chat (gid 1000) can update context.json
-            os.umask(0o002)
-            os.setgid(EXECUTOR_GID)
-            os.setuid(EXECUTOR_UID)
-
-            log.info(f"[executor] Network isolated and dropped to UID {EXECUTOR_UID}")
+            # 2. Drop to unprivileged user without keeping root as a supplementary group.
+            _drop_executor_identity(executor_uid=EXECUTOR_UID, executor_gid=EXECUTOR_GID, logger=log)
+            log.info(f"[executor] Network isolated and dropped to UID {EXECUTOR_UID} GID {EXECUTOR_GID}")
         except Exception as e:
             log.error(f"[executor] Isolation failed: {e}")
             raise
@@ -594,7 +605,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
             except Exception:
                 pass
         try:
-            log_dir = outdir / "logs"
+            log_dir = pathlib.Path(env.get("LOG_DIR") or (outdir / "logs"))
             err_path = log_dir / "runtime.err.log"
             log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -658,7 +669,7 @@ async def _run_subprocess(entry_path: pathlib.Path, *,
         _cleanup_limit_violation_files(resource_violation, workspace_baseline, log)
         summary = str(resource_violation.get("error_summary") or "execution output exceeded filesystem limits")
         try:
-            log_dir = outdir / "logs"
+            log_dir = pathlib.Path(env.get("LOG_DIR") or (outdir / "logs"))
             log_dir.mkdir(parents=True, exist_ok=True)
             with open(log_dir / "runtime.err.log", "ab") as f:
                 f.write(f"[runtime] ERROR: {summary}\n".encode("utf-8", errors="ignore"))
@@ -743,7 +754,7 @@ except Exception:
     pass
 
 # --- Redirect user stdout/stderr to dedicated logs ---
-_user_log_dir = OUT_DIR / "logs"
+_user_log_dir = Path(os.environ.get("LOG_DIR") or (OUT_DIR / "logs"))
 try:
     _user_log_dir.mkdir(parents=True, exist_ok=True)
     _user_out = open(_user_log_dir / "user.log", "a", buffering=1)
@@ -1694,7 +1705,7 @@ result_filename = (
 print(f"Effective result filename: {result_filename}")
 
 # --- Redirect user stdout/stderr to dedicated logs (after header prints) ---
-_user_log_dir = OUT_DIR / "logs"
+_user_log_dir = Path(os.environ.get("LOG_DIR") or (OUT_DIR / "logs"))
 try:
     _user_log_dir.mkdir(parents=True, exist_ok=True)
     _user_out = open(_user_log_dir / "user.log", "a", buffering=1)
@@ -2318,7 +2329,7 @@ class _InProcessRuntime:
         child_env = os.environ.copy()
         child_env["OUTPUT_DIR"] = str(output_dir)
         child_env["WORKDIR"] = str(workdir)
-        child_env["LOG_DIR"] = str(output_dir / "logs")
+        child_env["LOG_DIR"] = str(pathlib.Path(child_env.get("LOG_DIR") or (output_dir / "logs")))
         child_env["LOG_FILE_PREFIX"] = "executor"
         if extra_env:
             for k, v in extra_env.items():

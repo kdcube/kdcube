@@ -74,12 +74,16 @@ def _default_infra_sources(log_dir: Path) -> List[Tuple[str, str]]:
     sources: List[Tuple[str, str]] = []
     if not log_dir.exists():
         return sources
-    for path in sorted(log_dir.glob("*.log")):
+    for path in sorted(log_dir.rglob("*.log")):
         name = path.name
         if name in {"user.log", "infra.log"}:
             continue
-        label = name.replace(".log", "")
-        sources.append((name, label))
+        try:
+            rel = path.relative_to(log_dir).as_posix()
+        except Exception:
+            rel = name
+        label = rel[:-4] if rel.endswith(".log") else rel
+        sources.append((rel, label))
     return sources
 
 
@@ -247,10 +251,15 @@ def collect_exec_diagnostics(
     user_code_start_line = find_user_code_start_line(sandbox_root / "work" / "main.py")
     if not user_code_start_line:
         user_code_start_line = find_user_code_start_line(outdir / "main.py")
-    user_out = extract_exec_segment(
-        read_log_tail(log_dir / "user.log", max_chars=log_max_chars),
-        exec_id,
-    )
+    user_log = ""
+    for user_log_path in (
+            log_dir / "executor" / "user.log",
+            log_dir / "user.log",
+    ):
+        user_log = read_log_tail(user_log_path, max_chars=log_max_chars)
+        if user_log:
+            break
+    user_out = extract_exec_segment(user_log, exec_id)
     infra_path = log_dir / "infra.log"
     runtime_err = extract_exec_segment(
         read_log_tail(infra_path if infra_path.exists() else (outdir / "logs" / "runtime.err.log"),

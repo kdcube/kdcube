@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools_.search_files import search_files
 from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import _safe_relpath
 from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import physical_path_to_logical_path
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
 
 
 TOOL_SPEC = {
@@ -77,10 +78,13 @@ async def handle_react_search_files(*, ctx_browser: Any, state: Dict[str, Any], 
     root_kind = "outdir"
     normalized_root = "outdir"
     root_virtual_prefix = ""
+    artifact_outdir = artifact_outdir_for(outdir, create=False)
+    if not artifact_outdir.exists():
+        artifact_outdir = outdir
     if root_sel:
         root_sel_lc = root_sel.lower()
         if root_sel_lc == "outdir":
-            root_dir = outdir
+            root_dir = artifact_outdir
             normalized_root = "outdir"
             root_virtual_prefix = ""
         elif root_sel_lc.startswith("outdir/"):
@@ -96,7 +100,7 @@ async def handle_react_search_files(*, ctx_browser: Any, state: Dict[str, Any], 
                 )
                 state["last_tool_result"] = []
                 return state
-            root_dir = outdir / rel
+            root_dir = artifact_outdir / rel
             normalized_root = f"outdir/{rel}"
             root_virtual_prefix = rel
         elif root_sel_lc == "workdir":

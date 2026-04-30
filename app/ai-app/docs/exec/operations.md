@@ -512,6 +512,7 @@ docker compose logs chat | grep "docker.exec"
 
 # Look for:
 # [docker.exec] Running in Docker-in-Docker mode
+# [docker.exec] Container strategy: combined|split
 # [docker.exec] Container paths: workdir=/exec-workspace/codegen_xxx/pkg
 # [docker.exec] Host paths: workdir=/path/to/host/exec-workspace/codegen_xxx/pkg
 ```
@@ -531,10 +532,21 @@ ls -la /path/to/deployment/exec-workspace/codegen_*
 cd /path/to/exec-workspace/codegen_xxx/out
 ls -la
 # Should contain:
-# - result.json (final output)
-# - *.json (tool call logs)
-# - logs/user.log, logs/runtime.err.log, logs/infra.log
-# - Any generated files (charts, documents, etc.)
+# - workdir/                 (artifact output root in split Docker)
+# - executed_programs/       (preserved main.py/user_code.py)
+# - logs/                    (docker, supervisor, executor, infra logs)
+# - timeline/tool-call files (runtime metadata)
+#
+# In split Docker, generated files are under:
+ls -la workdir/
+ls -la logs/executor/
+ls -la logs/supervisor/
+#
+# Expected log files include:
+# - logs/infra.log
+# - logs/docker.out.log and logs/docker.err.log
+# - logs/supervisor/supervisor.log
+# - logs/executor/user.log, runtime.err.log, executor.log
 ```
 
 ### Verify Security
@@ -549,11 +561,37 @@ docker logs chat-chat | grep "supervisor"
 # Should show successful Redis/Postgres connections
 ```
 
-**Test privilege separation:**
+**Test privilege separation and filesystem visibility:**
 ```bash
-# Check executor runs as UID 1001 (in container logs):
+# Check executor runs as UID 1001 / GID 1000 and does not retain root group:
 docker logs <py-code-exec-container-id> | grep "UID"
 ```
+
+From an isolated execution test, ask generated code to report only names and
+metadata, not file contents:
+
+```text
+Use isolated code execution only. Report:
+1. os.getuid(), os.getgid(), os.getgroups()
+2. immediate names under /workspace/logs and /workspace/logs/*
+3. exists/listable/readable for:
+   - /tmp/kdcube-supervisor
+   - /tmp/kdcube-runtime-descriptors
+   - /managed-bundles
+   - /bundle-storage
+   - /kdcube-storage
+   - /bundles
+Do not print file contents.
+```
+
+Expected in split Docker:
+
+- `uid=1001`, `gid=1000`, and groups do not include `0(root)`.
+- `/workspace/logs` contains only `executor/`.
+- Supervisor logs, `infra.log`, `docker.out.log`, and `docker.err.log` are not
+  visible from the executor.
+- Supervisor runtime roots, descriptors, bundle mounts, and storage mounts do
+  not exist inside the executor container.
 
 ---
 
@@ -690,7 +728,8 @@ Execution completes but `/exec-workspace/codegen_xxx` doesn't exist on host.
 
 Only supervisor has credentials:
 ```bash
-# Check supervisor logs (not executor):
+# Check supervisor logs (not executor).
+# In split Docker these are persisted under out/logs/supervisor/supervisor.log.
 docker logs chat-chat | grep "AWS"
 # Should show credentials being passed to supervisor only
 ```

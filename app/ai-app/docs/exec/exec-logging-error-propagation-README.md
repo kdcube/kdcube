@@ -15,7 +15,8 @@ see_also:
 The isolated executor produces **two distinct log streams**:
 
 1) **Program/user logs**  
-   - `out/logs/user.log`  
+   - combined/local/Fargate: `out/logs/user.log`
+   - split Docker: `out/logs/executor/user.log`
    - Contains **all program output in order** (stdout, stderr, and optionally `logging.*`
      calls from user code).
    - Each execution is prefixed with:
@@ -26,9 +27,41 @@ The isolated executor produces **two distinct log streams**:
 2) **Runtime/infra logs**  
    - `out/logs/infra.log` (merged)
    - Component logs (source inputs) that get merged:
-     - `runtime.err.log`, `docker.err.log`, `py_code_exec_entry.log`, etc.
+     - combined/local/Fargate: files such as `runtime.err.log`, `docker.err.log`,
+       `supervisor.log`, `executor.log`
+     - split Docker: `docker.*`, `supervisor/supervisor.log`,
+       `executor/runtime.err.log`, `executor/executor.log`
    - `infra.log` is appended per execution by merging the component logs that
      contain the matching execution banner.
+
+Canonical proc-side layout in split Docker mode:
+
+```text
+out/
+  logs/
+    docker.out.log
+    docker.err.log
+    infra.log
+    supervisor/
+      supervisor.log
+    executor/
+      executor.log
+      runtime.err.log
+      user.log
+```
+
+The generated-code executor should see only its executor log mount:
+
+```text
+/workspace/logs/
+  executor/
+    user.log
+    runtime.err.log
+    executor.log
+```
+
+It should not see `supervisor/`, `infra.log`, `docker.err.log`, or
+`docker.out.log`.
 
 ### Separation rules
 - In the executor header, `sys.stdout` is redirected to `user.log`.
@@ -166,19 +199,19 @@ These are the current log files produced by the platform execution stack itself.
 
 | File | Producer | Runtime mode(s) | Used for |
 | --- | --- | --- | --- |
-| `user.log` | executor header in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`; redirected stdout/stderr in the untrusted executor | local, Docker, Fargate | program output shown later as `Program log (tail)` |
-| `runtime.err.log` | `_run_subprocess(...)` in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`; inner executor process inside the exec container | local, Docker, Fargate | raw stderr source for local/Fargate runtime summaries; also merged into `infra.log` |
+| `user.log` or `executor/user.log` | executor header in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`; redirected stdout/stderr in the untrusted executor | local, Docker, Fargate | program output shown later as `Program log (tail)` |
+| `runtime.err.log` or `executor/runtime.err.log` | `_run_subprocess(...)` in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/iso_runtime.py`; inner executor process inside the exec container | local, Docker, Fargate | raw stderr source for local/Fargate runtime summaries; also merged into `infra.log` |
 | `docker.out.log` | outer Docker launcher in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/docker.py` | Docker only | merged into `infra.log` |
 | `docker.err.log` | outer Docker launcher in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/external/docker.py` | Docker only | raw stderr source for Docker runtime summaries; also merged into `infra.log` |
-| `supervisor.log` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py` via `logging_config.configure_logging()` with `LOG_FILE_PREFIX=supervisor` | Docker, Fargate | merged into `infra.log` |
-| `executor.log` | untrusted executor subprocess via `LOG_FILE_PREFIX=executor` | local, Docker, Fargate | merged into `infra.log` |
+| `supervisor.log` or `supervisor/supervisor.log` | `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/runtime/isolated/py_code_exec_entry.py` via `logging_config.configure_logging()` with `LOG_FILE_PREFIX=supervisor` | Docker, Fargate | merged into `infra.log` |
+| `executor.log` or `executor/executor.log` | untrusted executor subprocess via `LOG_FILE_PREFIX=executor` | local, Docker, Fargate | merged into `infra.log` |
 | `infra.log` | `merge_infra_logs(...)` in `diagnose.py` | created during diagnostics/report assembly | synthesized merged infra view later shown as `Infra errors (infra.log)` |
 
 Important notes:
 
 - `runtime.out.log` is mentioned in a few older comments/docs, but the current code path does not create it.
 - `errors.log` exists only as a legacy/helper reader in `logging_utils.py`; it is not part of the current mainline exec report assembly.
-- `merge_infra_logs(...)` merges every `*.log` file under `out/logs` except `user.log` and `infra.log`, so extra `.log` files created by future platform code or custom code can also appear inside `infra.log`. The table above lists the current platform-generated set.
+- `merge_infra_logs(...)` recursively merges every `*.log` file under `out/logs` except `user.log` and `infra.log`, so nested split-mode logs and extra future component logs can also appear inside `infra.log`. The table above lists the current platform-generated set.
 
 ### Transient backend fields in `run_res`
 
@@ -313,7 +346,7 @@ The full returned envelope also carries structured fields such as:
 | `File errors:` | artifact validation list | no log file; produced by output validation after execution |
 | `Missing contracted outputs:` | contract reconciliation | no log file; produced by comparing declared outputs with actual files |
 | `Infra errors (infra.log):` | `extract_error_lines(infra_text)` and `extract_traceback_blocks(infra_text)` | `infra_text` starts from the per-exec `infra.log` segment and then may have `run_res.stderr_tail` / `run_res.error_summary` appended in memory |
-| `Program log (tail):` | per-exec segment from `user.log` | raw `out/logs/user.log` |
+| `Program log (tail):` | per-exec segment from `user.log` | raw `out/logs/user.log` or split-mode `out/logs/executor/user.log` |
 
 ### Contracted files, logs-only, and hybrid outputs
 
@@ -437,12 +470,12 @@ So today the safest rule is:
 ```mermaid
 flowchart TD
     subgraph RawLogs[Persisted files under out/logs]
-        U[user.log]
-        R[runtime.err.log]
+        U[user.log or executor/user.log]
+        R[runtime.err.log or executor/runtime.err.log]
         DO[docker.out.log]
         DE[docker.err.log]
-        S[supervisor.log]
-        E[executor.log]
+        S[supervisor.log or supervisor/supervisor.log]
+        E[executor.log or executor/executor.log]
     end
 
     subgraph Backend[Transient backend fields]

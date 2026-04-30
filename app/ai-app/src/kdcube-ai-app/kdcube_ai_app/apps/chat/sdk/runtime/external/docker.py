@@ -26,10 +26,18 @@ from kdcube_ai_app.infra.config import (
     prepare_external_runtime_globals,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.executor_payload import build_executor_runtime_globals
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import (
+    ARTIFACT_OUTPUT_ENV,
+    RUNTIME_OUTPUT_ENV,
+    artifact_outdir_for,
+)
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 
 _DEFAULT_IMAGE = get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_IMAGE
 _DEFAULT_TIMEOUT_S = get_settings().PLATFORM.EXEC.PY.PY_CODE_EXEC_TIMEOUT
+_RUNTIME_OUT_CONTAINER = "/workspace/runtime-out"
+_ARTIFACT_OUT_CONTAINER = "/workspace/out"
+_EXECUTOR_LOG_CONTAINER = "/workspace/logs/executor"
 _SUPERVISOR_PRIVATE_ROOT = pathlib.Path("/tmp/kdcube-supervisor")
 _SUPERVISOR_PRIVATE_BUNDLES_ROOT = _SUPERVISOR_PRIVATE_ROOT / "bundles"
 _SUPERVISOR_PRIVATE_BUNDLE_STORAGE_ROOT = _SUPERVISOR_PRIVATE_ROOT / "bundle-storage"
@@ -145,6 +153,14 @@ def _read_tail(path: pathlib.Path, *, max_chars: int = 4000) -> str:
         return text[-max_chars:] if text else ""
     except Exception:
         return ""
+
+
+def _read_tail_any(paths: list[pathlib.Path], *, max_chars: int = 4000) -> str:
+    for path in paths:
+        text = _read_tail(path, max_chars=max_chars)
+        if text:
+            return text
+    return ""
 
 
 def _append_unique_text(base: str, extra: str, *, max_chars: int = 8000) -> str:
@@ -524,6 +540,8 @@ def _build_split_supervisor_argv(
         socket_volume: str,
         host_workdir: pathlib.Path,
         host_outdir: pathlib.Path,
+        host_runtime_outdir: pathlib.Path | None = None,
+        host_artifact_outdir: pathlib.Path | None = None,
         extra_env: Dict[str, str],
         extra_args: list[str] | None = None,
         bundle_root: pathlib.Path | None = None,
@@ -533,17 +551,22 @@ def _build_split_supervisor_argv(
         rw_mounts: list[tuple[pathlib.Path, str]] | None = None,
         network_mode: str | None = None,
 ) -> list[str]:
+    runtime_mount = host_runtime_outdir or host_outdir
+    artifact_mount = host_artifact_outdir or host_outdir
     argv: list[str] = [
         "docker", "run", "--rm",
         "--name", name,
         "--network", network_mode or "host",
         "--read-only",
         "-v", f"{_path(host_workdir)}:/workspace/work:rw",
-        "-v", f"{_path(host_outdir)}:/workspace/out:rw",
+        "-v", f"{_path(artifact_mount)}:{_ARTIFACT_OUT_CONTAINER}:rw",
+        "-v", f"{_path(runtime_mount)}:{_RUNTIME_OUT_CONTAINER}:rw",
         "-v", f"{socket_volume}:/supervisor-socket:rw",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m",
         "-e", "WORKDIR=/workspace/work",
-        "-e", "OUTPUT_DIR=/workspace/out",
+        "-e", f"OUTPUT_DIR={_ARTIFACT_OUT_CONTAINER}",
+        "-e", f"{ARTIFACT_OUTPUT_ENV}={_ARTIFACT_OUT_CONTAINER}",
+        "-e", f"{RUNTIME_OUTPUT_ENV}={_RUNTIME_OUT_CONTAINER}",
         "-e", "EXEC_CONTAINER_ROLE=supervisor",
         "-e", "SUPERVISOR_SOCKET_PATH=/supervisor-socket/supervisor.sock",
     ]
@@ -559,7 +582,7 @@ def _build_split_supervisor_argv(
     for host_path, container_path in (rw_mounts or []):
         argv += ["-v", f"{_path(host_path)}:{container_path}:rw"]
     for k, v in (extra_env or {}).items():
-        if k in {"WORKDIR", "OUTPUT_DIR", "EXEC_CONTAINER_ROLE", "SUPERVISOR_SOCKET_PATH"}:
+        if k in {"WORKDIR", "OUTPUT_DIR", ARTIFACT_OUTPUT_ENV, RUNTIME_OUTPUT_ENV, "EXEC_CONTAINER_ROLE", "SUPERVISOR_SOCKET_PATH"}:
             continue
         argv += ["-e", f"{k}={v}"]
     argv.append(image)
@@ -573,9 +596,12 @@ def _build_split_executor_argv(
         socket_volume: str,
         host_workdir: pathlib.Path,
         host_outdir: pathlib.Path,
+        host_artifact_outdir: pathlib.Path | None = None,
+        host_logdir: pathlib.Path | None = None,
         extra_env: Dict[str, str],
         timeout_s: int,
 ) -> list[str]:
+    artifact_mount = host_artifact_outdir or host_outdir
     argv: list[str] = [
         "docker", "run", "--rm",
         "--name", name,
@@ -588,20 +614,34 @@ def _build_split_executor_argv(
         "--security-opt", "no-new-privileges",
         "--read-only",
         "-v", f"{_path(host_workdir)}:/workspace/work:rw",
-        "-v", f"{_path(host_outdir)}:/workspace/out:rw",
+        "-v", f"{_path(artifact_mount)}:{_ARTIFACT_OUT_CONTAINER}:rw",
         "-v", f"{socket_volume}:/supervisor-socket:rw",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
         "-e", "WORKDIR=/workspace/work",
-        "-e", "OUTPUT_DIR=/workspace/out",
-        "-e", "HOME=/workspace/out",
+        "-e", f"OUTPUT_DIR={_ARTIFACT_OUT_CONTAINER}",
+        "-e", f"{ARTIFACT_OUTPUT_ENV}={_ARTIFACT_OUT_CONTAINER}",
+        "-e", "HOME=/tmp/kdcube-executor/home",
+        "-e", f"LOG_DIR={_EXECUTOR_LOG_CONTAINER}",
+        "-e", f"EXECUTOR_LOG_DIR={_EXECUTOR_LOG_CONTAINER}",
         "-e", "EXEC_CONTAINER_ROLE=executor",
         "-e", "EXEC_NETWORK_PREISOLATED=1",
         "-e", "SUPERVISOR_SOCKET_PATH=/supervisor-socket/supervisor.sock",
         "-e", "PYTHONDONTWRITEBYTECODE=1",
         "-e", f"PY_CODE_EXEC_TIMEOUT={timeout_s}",
     ]
+    if host_logdir is not None:
+        argv += ["-v", f"{_path(host_logdir)}:{_EXECUTOR_LOG_CONTAINER}:rw"]
     for k, v in (extra_env or {}).items():
-        if k in {"WORKDIR", "OUTPUT_DIR", "EXEC_CONTAINER_ROLE", "SUPERVISOR_SOCKET_PATH"}:
+        if k in {
+            "WORKDIR",
+            "OUTPUT_DIR",
+            ARTIFACT_OUTPUT_ENV,
+            "HOME",
+            "LOG_DIR",
+            "EXECUTOR_LOG_DIR",
+            "EXEC_CONTAINER_ROLE",
+            "SUPERVISOR_SOCKET_PATH",
+        }:
             continue
         argv += ["-e", f"{k}={v}"]
     argv.append(image)
@@ -633,6 +673,10 @@ async def _run_py_in_split_docker_prepared(
     executor_name = f"kdcube-executor-{safe_exec_id}-{unique_suffix}"[:120]
     socket_volume = f"kdcube-supervisor-socket-{safe_exec_id}-{unique_suffix}"[:120]
     supervisor_auth_token = secrets.token_urlsafe(32)
+    host_runtime_outdir = host_outdir
+    host_artifact_outdir = artifact_outdir_for(host_runtime_outdir, create=False)
+    host_executor_logdir = host_runtime_outdir / "logs" / "executor"
+    host_supervisor_logdir = host_runtime_outdir / "logs" / "supervisor"
 
     if _can_preflight_translated_host_path(host_workdir):
         _prepare_split_executor_tree(host_workdir)
@@ -642,6 +686,15 @@ async def _run_py_in_split_docker_prepared(
         _prepare_split_executor_tree(host_outdir)
     else:
         log.log(f"[docker.exec.split] host outdir is not locally visible; skipping chmod: {host_outdir}", level="INFO")
+    for label, path in (
+            ("artifact outdir", host_artifact_outdir),
+            ("executor logdir", host_executor_logdir),
+            ("supervisor logdir", host_supervisor_logdir),
+    ):
+        if _can_preflight_translated_host_path(path):
+            _prepare_split_executor_tree(path)
+        else:
+            log.log(f"[docker.exec.split] host {label} is not locally visible; skipping chmod: {path}", level="INFO")
 
     volume_rc, volume_out, volume_err = await _docker_control(["docker", "volume", "create", socket_volume])
     if volume_rc != 0:
@@ -660,9 +713,11 @@ async def _run_py_in_split_docker_prepared(
     supervisor_env["SUPERVISOR_SOCKET_PATH"] = "/supervisor-socket/supervisor.sock"
     supervisor_env["EXEC_CONTAINER_ROLE"] = "supervisor"
     supervisor_env["EXECUTION_SANDBOX"] = "docker-split-supervisor"
-    supervisor_env["HOME"] = "/workspace/out"
-    supervisor_env["LOG_DIR"] = "/workspace/out/logs"
+    supervisor_env["HOME"] = "/tmp/kdcube-supervisor/home"
+    supervisor_env["LOG_DIR"] = f"{_RUNTIME_OUT_CONTAINER}/logs/supervisor"
     supervisor_env["LOG_FILE_PREFIX"] = "supervisor"
+    supervisor_env[ARTIFACT_OUTPUT_ENV] = _ARTIFACT_OUT_CONTAINER
+    supervisor_env[RUNTIME_OUTPUT_ENV] = _RUNTIME_OUT_CONTAINER
     supervisor_env["PLAYWRIGHT_BROWSERS_PATH"] = "/opt/ms-playwright"
 
     exec_runtime_globals = build_executor_runtime_globals(runtime_globals)
@@ -687,8 +742,10 @@ async def _run_py_in_split_docker_prepared(
             "SUPERVISOR_AUTH_TOKEN": supervisor_auth_token,
             "SUPERVISOR_SOCKET_PATH": "/supervisor-socket/supervisor.sock",
             "SUPERVISOR_CONNECT_TIMEOUT_S": "10",
-            "LOG_DIR": "/workspace/out/logs",
+            "LOG_DIR": _EXECUTOR_LOG_CONTAINER,
+            "EXECUTOR_LOG_DIR": _EXECUTOR_LOG_CONTAINER,
             "LOG_FILE_PREFIX": "executor",
+            ARTIFACT_OUTPUT_ENV: _ARTIFACT_OUT_CONTAINER,
             "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright",
             "RUNTIME_GLOBALS_JSON": json.dumps(exec_runtime_globals, ensure_ascii=False, default=str),
             "RUNTIME_TOOL_MODULES": "[]",
@@ -701,6 +758,8 @@ async def _run_py_in_split_docker_prepared(
         socket_volume=socket_volume,
         host_workdir=host_workdir,
         host_outdir=host_outdir,
+        host_runtime_outdir=host_runtime_outdir,
+        host_artifact_outdir=host_artifact_outdir,
         extra_env=supervisor_env,
         extra_args=extra_docker_args or [],
         bundle_root=bundle_root,
@@ -716,6 +775,8 @@ async def _run_py_in_split_docker_prepared(
         socket_volume=socket_volume,
         host_workdir=host_workdir,
         host_outdir=host_outdir,
+        host_artifact_outdir=host_artifact_outdir,
+        host_logdir=host_executor_logdir,
         extra_env=executor_env,
         timeout_s=to,
     )
@@ -821,8 +882,20 @@ async def _run_py_in_split_docker_prepared(
         if part
     )
     stderr_tail = docker_err_text[-4000:] if docker_err_text else ""
-    runtime_tail = _read_tail(log_dir / "runtime.err.log", max_chars=4000)
-    user_tail = _read_tail(log_dir / "user.log", max_chars=4000)
+    runtime_tail = _read_tail_any(
+        [
+            log_dir / "executor" / "runtime.err.log",
+            log_dir / "runtime.err.log",
+        ],
+        max_chars=4000,
+    )
+    user_tail = _read_tail_any(
+        [
+            log_dir / "executor" / "user.log",
+            log_dir / "user.log",
+        ],
+        max_chars=4000,
+    )
     stderr_tail = _append_unique_text(stderr_tail, runtime_tail)
     stderr_tail = _append_unique_text(stderr_tail, user_tail)
     error_summary = _error_summary_from_text(stderr_tail)

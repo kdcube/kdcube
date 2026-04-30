@@ -1579,6 +1579,8 @@ class ReactSolverV2:
                 return ""
             try:
                 p = pathlib.Path(path_value)
+                if p.name == "workdir" and p.parent.name == "out" and p.parent.parent.name:
+                    return p.parent.parent.name
                 if p.name in {"work", "out"} and p.parent.name:
                     return p.parent.name
                 return p.name

@@ -22,6 +22,7 @@ from kdcube_ai_app.infra.git.auth import (
     normalize_git_remote_url as _normalize_git_remote_url,
 )
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, runtime_outdir_for_artifact_outdir
 
 _SKIP_WORKSPACE_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "logs", "executed_programs"}
 
@@ -100,9 +101,13 @@ def _git_has_tracked_files(*, repo_root: pathlib.Path) -> bool:
 
 
 def _workspace_cache_root(*, runtime_ctx: Any, outdir: pathlib.Path) -> pathlib.Path:
-    root = pathlib.Path(outdir).parent / ".react_workspace_git"
+    root = runtime_outdir_for_artifact_outdir(pathlib.Path(outdir)).parent / ".react_workspace_git"
     segs = workspace_lineage_segments(runtime_ctx)
     return root / f"{segs['tenant']}__{segs['project']}__{segs['user_id']}__{segs['conversation_id']}"
+
+
+def _artifact_outdir(outdir: pathlib.Path) -> pathlib.Path:
+    return artifact_outdir_for(pathlib.Path(outdir))
 
 
 def _workspace_lineage_repo_root(*, runtime_ctx: Any, outdir: pathlib.Path) -> pathlib.Path:
@@ -117,7 +122,7 @@ def describe_current_turn_git_repo(
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
     if not turn_id:
         return {}
-    turn_root = pathlib.Path(outdir) / turn_id
+    turn_root = _artifact_outdir(outdir) / turn_id
     if not (turn_root / ".git").exists():
         return {
             "repo_mode": "sparse git repo",
@@ -148,7 +153,7 @@ def summarize_current_turn_git_lineage_scopes(
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
     if not turn_id:
         return []
-    turn_root = pathlib.Path(outdir) / turn_id
+    turn_root = _artifact_outdir(outdir) / turn_id
     if not (turn_root / ".git").exists():
         return []
     try:
@@ -336,7 +341,7 @@ def ensure_current_turn_git_workspace(
     repo_root = _ensure_workspace_repo(runtime_ctx=runtime_ctx, outdir=outdir, logger=log)
     lineage_ref = _ensure_local_lineage_branch_ref(repo_root=repo_root, runtime_ctx=runtime_ctx)
 
-    turn_root = pathlib.Path(outdir) / turn_id
+    turn_root = _artifact_outdir(outdir) / turn_id
     git_dir = turn_root / ".git"
     if git_dir.exists():
         return turn_root
@@ -553,7 +558,7 @@ def publish_current_turn_git_workspace(
     if not turn_id:
         raise ValueError("missing_turn_id")
     log = logger or AgentLogger("react.workspace.git")
-    turn_root = pathlib.Path(outdir) / turn_id
+    turn_root = _artifact_outdir(outdir) / turn_id
     if not turn_root.exists():
         return _workspace_publish_skipped(
             turn_root=turn_root,
@@ -753,7 +758,7 @@ async def hydrate_files_from_git_workspace(
                 errors.append(err)
                 continue
 
-        target_root = pathlib.Path(outdir) / turn_id / "files"
+        target_root = _artifact_outdir(outdir) / turn_id / "files"
         if await asyncio.to_thread(_git_path_is_file, repo_root=repo_root, ref_name=local_ref, tree_path=tree_path):
             try:
                 data = await asyncio.to_thread(_git_read_blob, repo_root=repo_root, ref_name=local_ref, tree_path=tree_path)

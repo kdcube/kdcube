@@ -7,6 +7,7 @@ import pytest
 
 from kdcube_ai_app.apps.chat.sdk.runtime.external import docker as docker_runtime
 from kdcube_ai_app.apps.chat.sdk.runtime import iso_runtime
+from kdcube_ai_app.apps.chat.sdk.runtime.diagnose import merge_infra_logs
 
 
 def test_exec_limit_bytes_supports_units_and_disable():
@@ -14,6 +15,24 @@ def test_exec_limit_bytes_supports_units_and_disable():
     assert iso_runtime._as_limit_bytes("1.5gb") == int(1.5 * 1024 * 1024 * 1024)
     assert iso_runtime._as_limit_bytes("disabled", default=123) is None
     assert iso_runtime._as_limit_bytes("", default=123) == 123
+
+
+def test_drop_executor_identity_clears_root_supplementary_group(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(iso_runtime.os, "setgroups", lambda groups: calls.append(("setgroups", groups)))
+    monkeypatch.setattr(iso_runtime.os, "umask", lambda mask: calls.append(("umask", mask)))
+    monkeypatch.setattr(iso_runtime.os, "setgid", lambda gid: calls.append(("setgid", gid)))
+    monkeypatch.setattr(iso_runtime.os, "setuid", lambda uid: calls.append(("setuid", uid)))
+
+    iso_runtime._drop_executor_identity(executor_uid=1001, executor_gid=1000)
+
+    assert calls == [
+        ("setgroups", [1000]),
+        ("umask", 0o002),
+        ("setgid", 1000),
+        ("setuid", 1001),
+    ]
 
 
 def test_workspace_limit_violation_detects_new_large_file(tmp_path):
@@ -112,6 +131,8 @@ def test_docker_argv_grants_network_namespace_capability(tmp_path):
 def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(tmp_path):
     workdir = tmp_path / "work"
     outdir = tmp_path / "out"
+    artifact_outdir = outdir / "workdir"
+    executor_logdir = outdir / "logs" / "executor"
     workdir.mkdir()
     outdir.mkdir()
 
@@ -121,6 +142,8 @@ def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(t
         socket_volume="socket-volume",
         host_workdir=workdir,
         host_outdir=outdir,
+        host_artifact_outdir=artifact_outdir,
+        host_logdir=executor_logdir,
         extra_env={
             "RUNTIME_GLOBALS_JSON": "{}",
             "SUPERVISOR_AUTH_TOKEN": "secret",
@@ -133,10 +156,22 @@ def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(t
     assert "--network" in argv
     assert "none" in argv
     assert "--cap-drop=ALL" in argv
+    assert "--cap-add=CHOWN" in argv
+    assert "--cap-add=SETUID" in argv
+    assert "--cap-add=SETGID" in argv
+    assert "--cap-add=FOWNER" in argv
     assert "--cap-add=SYS_ADMIN" not in argv
+    assert "--cap-add=NET_ADMIN" not in argv
     assert "--read-only" in argv
     assert "no-new-privileges" in argv
+    assert any(item == f"{artifact_outdir}:/workspace/out:rw" for item in argv)
+    assert not any(item == f"{outdir}:/workspace/out:rw" for item in argv)
+    assert any(item == f"{executor_logdir}:/workspace/logs/executor:rw" for item in argv)
+    assert not any(item.endswith(":/workspace/logs:rw") for item in argv)
+    assert all("/workspace/runtime-out" not in item for item in argv)
+    assert all("/workspace/logs/supervisor" not in item for item in argv)
     assert any(item == "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" for item in argv)
+    assert any(item == "KDCUBE_ARTIFACT_OUTPUT_DIR=/workspace/out" for item in argv)
     assert all("/tmp/kdcube-supervisor/bundles" not in item for item in argv)
     assert all("KDCUBE_RUNTIME_SECRETS_YAML_B64=" not in item for item in argv)
 
@@ -144,6 +179,7 @@ def test_split_executor_argv_is_networkless_and_does_not_mount_supervisor_data(t
 def test_split_supervisor_argv_uses_writable_home_and_playwright_path(tmp_path):
     workdir = tmp_path / "work"
     outdir = tmp_path / "out"
+    artifact_outdir = outdir / "workdir"
     workdir.mkdir()
     outdir.mkdir()
 
@@ -153,17 +189,48 @@ def test_split_supervisor_argv_uses_writable_home_and_playwright_path(tmp_path):
         socket_volume="socket-volume",
         host_workdir=workdir,
         host_outdir=outdir,
+        host_runtime_outdir=outdir,
+        host_artifact_outdir=artifact_outdir,
         extra_env={
-            "HOME": "/workspace/out",
-            "LOG_DIR": "/workspace/out/logs",
+            "HOME": "/tmp/kdcube-supervisor/home",
+            "LOG_DIR": "/workspace/runtime-out/logs/supervisor",
             "PLAYWRIGHT_BROWSERS_PATH": "/opt/ms-playwright",
         },
     )
 
     assert "--read-only" in argv
-    assert any(item == "HOME=/workspace/out" for item in argv)
-    assert any(item == "LOG_DIR=/workspace/out/logs" for item in argv)
+    assert any(item == f"{artifact_outdir}:/workspace/out:rw" for item in argv)
+    assert any(item == f"{outdir}:/workspace/runtime-out:rw" for item in argv)
+    assert any(item == "HOME=/tmp/kdcube-supervisor/home" for item in argv)
+    assert any(item == "LOG_DIR=/workspace/runtime-out/logs/supervisor" for item in argv)
+    assert any(item == "KDCUBE_RUNTIME_OUTPUT_DIR=/workspace/runtime-out" for item in argv)
     assert any(item == "PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright" for item in argv)
+
+
+def test_split_runtime_logs_are_merged_for_requestor_feedback(tmp_path):
+    log_dir = tmp_path / "out" / "logs"
+    log_dir.mkdir(parents=True)
+    exec_id = "exec-split-logs"
+    header = f"===== EXECUTION {exec_id} START 2026-04-30 10:00:00 =====\n"
+    (log_dir / "docker.err.log").write_text(
+        header
+        + "[split supervisor stderr]\n"
+        + "supervisor tool failed loudly\n"
+        + "[split executor stderr]\n"
+        + "executor user code failed loudly\n",
+        encoding="utf-8",
+    )
+    (log_dir / "runtime.err.log").write_text(
+        header + "runtime wrapped traceback line\n",
+        encoding="utf-8",
+    )
+
+    merged = merge_infra_logs(log_dir=log_dir, exec_id=exec_id, max_chars=4000)
+
+    assert "supervisor tool failed loudly" in merged
+    assert "executor user code failed loudly" in merged
+    assert "runtime wrapped traceback line" in merged
+    assert (log_dir / "infra.log").exists()
 
 
 def test_executor_payload_strips_privileged_runtime_globals():

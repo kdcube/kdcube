@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifacts import (
     physical_path_to_logical_path,
     split_logical_artifact_path,
 )
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, resolve_artifact_path
 
 WORKSPACE_IMPLEMENTATION_CUSTOM = "custom"
 WORKSPACE_IMPLEMENTATION_GIT = "git"
@@ -242,7 +243,7 @@ def workspace_turn_root(*, runtime_ctx: Any) -> pathlib.Path:
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
     if not outdir_raw or not turn_id:
         return pathlib.Path("")
-    outdir = pathlib.Path(outdir_raw)
+    outdir = artifact_outdir_for(pathlib.Path(outdir_raw))
     return outdir / turn_id
 
 
@@ -251,7 +252,7 @@ def current_turn_files_root(*, runtime_ctx: Any) -> pathlib.Path:
     turn_id = str(getattr(runtime_ctx, "turn_id", "") or "").strip()
     if not outdir_raw or not turn_id:
         return pathlib.Path("")
-    return pathlib.Path(outdir_raw) / turn_id / "files"
+    return artifact_outdir_for(pathlib.Path(outdir_raw)) / turn_id / "files"
 
 
 def current_turn_files_nonempty(*, runtime_ctx: Any) -> bool:
@@ -271,7 +272,7 @@ def list_materialized_turn_roots(*, runtime_ctx: Any) -> List[str]:
     outdir_raw = str(getattr(runtime_ctx, "outdir", "") or "").strip()
     if not outdir_raw:
         return []
-    outdir = pathlib.Path(outdir_raw)
+    outdir = artifact_outdir_for(pathlib.Path(outdir_raw), create=False)
     if not outdir.exists():
         return []
     names: List[str] = []
@@ -385,6 +386,7 @@ async def hydrate_workspace_paths(
     normalized = [str(p).strip() for p in (paths or []) if isinstance(p, str) and str(p).strip()]
     if not normalized:
         return {"rehosted": [], "missing": [], "errors": []}
+    outdir = artifact_outdir_for(outdir)
 
     files_paths: List[str] = []
     other_paths: List[str] = []
@@ -582,7 +584,8 @@ async def checkout_workspace_paths(
             outdir=outdir,
         )
 
-    files_root = outdir / turn_id / "files"
+    artifact_outdir = artifact_outdir_for(outdir)
+    files_root = artifact_outdir / turn_id / "files"
     if mode == "replace" and current_turn_files_nonempty(runtime_ctx=runtime_ctx):
         return {
             "mode": mode,
@@ -605,7 +608,7 @@ async def checkout_workspace_paths(
         payload = await hydrate_workspace_paths(
             ctx_browser=ctx_browser,
             paths=[source_physical],
-            outdir=outdir,
+            outdir=artifact_outdir,
         )
         errors.extend(list(payload.get("errors") or []))
         source_prefix = source_physical.rstrip("/")
@@ -646,8 +649,8 @@ async def checkout_workspace_paths(
     for item in staged_sources:
         source_physical = item["source_physical"]
         target_physical = item["target_physical"]
-        src = outdir / source_physical
-        dst = outdir / target_physical
+        src = resolve_artifact_path(outdir, source_physical)
+        dst = resolve_artifact_path(outdir, target_physical, prefer_existing=False)
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
         materialized.append({

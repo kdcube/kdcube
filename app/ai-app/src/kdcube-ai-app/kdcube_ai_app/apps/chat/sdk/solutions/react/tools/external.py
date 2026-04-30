@@ -21,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.artifact_analysis import (
     analyze_write_tool_output,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.execution import execute_tool
+from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for, resolve_artifact_path
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
     notice_block,
@@ -311,7 +312,7 @@ async def handle_external_tool(*,
                 pass
         if paths:
             outdir = pathlib.Path(state["outdir"])
-            missing_local = [p for p in paths if not (outdir / p).exists()]
+            missing_local = [p for p in paths if not resolve_artifact_path(outdir, p).exists()]
             if missing_local:
                 logical_missing = [physical_path_to_logical_path(p) or p for p in missing_local]
                 pull_hint = f"react.pull(paths={json.dumps(logical_missing, ensure_ascii=False)})"
@@ -586,7 +587,7 @@ async def handle_external_tool(*,
                     artifact_stats = analyze_write_tool_output(
                         file_path=file_for_stats,
                         mime=tools_insights.default_mime_for_write_tool(tool_id),
-                        output_dir=pathlib.Path(state["outdir"]),
+                        output_dir=artifact_outdir_for(pathlib.Path(state["outdir"])),
                         artifact_id=artifact_id,
                     )
                 except Exception:
@@ -758,7 +759,7 @@ async def handle_external_tool(*,
 
         mime = (artifact_view.mime or (artifact_view.raw.get("value") or {}).get("mime") or "").strip().lower()
         if visibility == "external" and (mime.startswith("image/") or mime == "application/pdf") and physical_path:
-            abs_path = pathlib.Path(state["outdir"]) / physical_path
+            abs_path = resolve_artifact_path(pathlib.Path(state["outdir"]), physical_path)
             bin_block = build_artifact_binary_block(
                 turn_id=turn_id,
                 tool_call_id=tool_call_id,

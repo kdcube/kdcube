@@ -1303,7 +1303,8 @@ class Timeline:
                 return None
             try:
                 import pathlib
-                fp = (pathlib.Path(outdir) / rel_path).resolve()
+                from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
+                fp = resolve_artifact_path(pathlib.Path(outdir), rel_path).resolve()
                 if not fp.exists():
                     return None
                 return fp.read_text(encoding="utf-8")

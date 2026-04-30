@@ -7,9 +7,54 @@ from pathlib import Path
 from typing import Any, Dict, List, Callable, Optional
 import mimetypes
 
+ARTIFACT_OUTPUT_DIRNAME = "workdir"
+RUNTIME_OUTPUT_ENV = "KDCUBE_RUNTIME_OUTPUT_DIR"
+ARTIFACT_OUTPUT_ENV = "KDCUBE_ARTIFACT_OUTPUT_DIR"
+
 DEFAULT_IGNORE_NAMES = {
     "delta_aggregates.json",
 }
+
+
+def artifact_outdir_for(runtime_outdir: Path, *, create: bool = True) -> Path:
+    """
+    Return the data/artifact root for a runtime outdir.
+
+    The top-level runtime outdir is reserved for timeline/sources/logs/runtime
+    context. Generated or user-visible files live under ``out/workdir`` and are
+    exposed to generated code as OUTPUT_DIR.
+    """
+    root = Path(runtime_outdir)
+    if root.name == ARTIFACT_OUTPUT_DIRNAME:
+        artifact_root = root
+    else:
+        artifact_root = root / ARTIFACT_OUTPUT_DIRNAME
+    if create:
+        artifact_root.mkdir(parents=True, exist_ok=True)
+    return artifact_root
+
+
+def runtime_outdir_for_artifact_outdir(artifact_outdir: Path) -> Path:
+    root = Path(artifact_outdir)
+    if root.name == ARTIFACT_OUTPUT_DIRNAME:
+        return root.parent
+    return root
+
+
+def resolve_artifact_path(outdir: Path, rel: str, *, prefer_existing: bool = True, create_root: bool = True) -> Path:
+    """
+    Resolve an OUTPUT_DIR-relative artifact path against the separated artifact
+    root, with backward compatibility for old layouts where files were directly
+    under the runtime outdir.
+    """
+    runtime_root = Path(outdir)
+    artifact_root = artifact_outdir_for(runtime_root, create=create_root)
+    candidate = artifact_root / rel
+    if prefer_existing and not candidate.exists():
+        legacy = runtime_root / rel
+        if legacy.exists():
+            return legacy
+    return candidate
 
 
 def should_skip_relpath(rel: str) -> bool:
