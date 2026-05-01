@@ -165,11 +165,33 @@ export interface OpenChatStreamResult {
 export interface SubmitChatMessageParams {
   streamId: string
   bundleId: string
-  conversationId: string
+  conversationId?: string | null
   turnId: string
   text: string
   files: File[]
   chatHistory: ChatHistoryItem[]
+}
+
+interface SubmitChatMessageApiResponse {
+  status?: string
+  task_id?: string
+  session_id?: string
+  conversation_id?: string
+  conversation_created?: boolean
+  user_type?: string
+  message_kind?: string | null
+  message?: string
+}
+
+export interface SubmitChatMessageResponse {
+  status?: string
+  taskId?: string
+  sessionId?: string
+  conversationId: string
+  conversationCreated: boolean
+  userType?: string
+  messageKind?: string | null
+  message?: string
 }
 
 interface ResourceByRnResponse {
@@ -362,19 +384,45 @@ export async function requestConversationStatus(conversationId: string, streamId
   })
 }
 
-export async function submitChatMessage(params: SubmitChatMessageParams): Promise<void> {
+async function parseSubmitChatMessageResponse(
+  response: Response,
+  fallbackConversationId?: string | null,
+): Promise<SubmitChatMessageResponse> {
+  const raw = (await response.json().catch(() => null)) as SubmitChatMessageApiResponse | null
+  const conversationId = raw?.conversation_id || fallbackConversationId || ''
+  if (!conversationId) {
+    throw new Error('sse/chat response did not include a conversation_id')
+  }
+
+  return {
+    status: raw?.status,
+    taskId: raw?.task_id,
+    sessionId: raw?.session_id,
+    conversationId,
+    conversationCreated: Boolean(raw?.conversation_created),
+    userType: raw?.user_type,
+    messageKind: raw?.message_kind,
+    message: raw?.message,
+  }
+}
+
+export async function submitChatMessage(params: SubmitChatMessageParams): Promise<SubmitChatMessageResponse> {
   const { tenant, project } = requireScope()
 
+  const message: Record<string, unknown> = {
+    message: params.text,
+    chat_history: params.chatHistory,
+    project,
+    tenant,
+    turn_id: params.turnId,
+    bundle_id: params.bundleId,
+  }
+  if (params.conversationId) {
+    message.conversation_id = params.conversationId
+  }
+
   const payload = {
-    message: {
-      message: params.text,
-      chat_history: params.chatHistory,
-      project,
-      tenant,
-      turn_id: params.turnId,
-      conversation_id: params.conversationId,
-      bundle_id: params.bundleId,
-    },
+    message,
     attachment_meta: params.files.map((file) => ({ filename: file.name })),
   }
 
@@ -407,7 +455,7 @@ export async function submitChatMessage(params: SubmitChatMessageParams): Promis
     throw new Error(`sse/chat failed (${response.status}) ${detail}`)
   }
 
-  await response.json().catch(() => null)
+  return parseSubmitChatMessageResponse(response, params.conversationId)
 }
 
 async function fetchResourceByRN(rn: string): Promise<ResourceByRnResponse> {

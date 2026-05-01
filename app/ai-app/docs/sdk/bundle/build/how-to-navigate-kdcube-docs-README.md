@@ -233,7 +233,10 @@ Then jump only to the row that matches your question.
 | How do I use storage, cache, local bundle storage, or git-backed helpers? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It now contains the compact SDK cheat sheet and points to the deeper storage docs only when needed. |
 | How do I talk to the browser correctly? | [../bundle-client-ui-README.md](../bundle-client-ui-README.md) | It routes you to widget, browser, and transport-facing docs. |
 | How do I run local bundle QA? | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) | It covers local test order, shared suite, and bundle-local tests. |
+| Which interpreter, cwd, env vars, and first smoke tests should an agent use? | [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) | It prevents false failures from the wrong Python, missing `pytest-asyncio`, missing `PYTHONPATH`, or incomplete request fixtures. |
 | How do I run bundle integration QA? | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) | It also covers browser, API, MCP, reload, and cron/runtime validation. |
+| My bundle iframe UI is stale or sends the wrong bundle id. | [how-to-test-bundle-README.md#52a-custom-main-view-ui-contract](how-to-test-bundle-README.md#52a-custom-main-view-ui-contract) | It covers the config bridge, runtime bundle id, SSE conversation-id rule, and UI-loader freshness check. |
+| How do built-in example bundles become available? | [how-to-configure-and-run-bundle-README.md#bundlesyaml](how-to-configure-and-run-bundle-README.md#bundlesyaml) | It explains `bundles_include_examples` versus per-bundle config entries in `bundles.yaml`. |
 | How do I study a known-good bundle? | [../versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md) | It points to the working reference bundle and what to mine from it. |
 | How do I reload or ship a changed bundle? | [../bundle-delivery-and-update-README.md](../bundle-delivery-and-update-README.md) | It explains reload, delivery mode, and deployment-side update flow. |
 

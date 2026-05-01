@@ -3,6 +3,7 @@ openai
 psycopg2-binary
 psycopg[binary]
 pytest
+pytest-asyncio
 coverage
 s3fs
 

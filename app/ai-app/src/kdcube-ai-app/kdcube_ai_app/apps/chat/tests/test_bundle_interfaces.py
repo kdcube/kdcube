@@ -36,6 +36,19 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
 )
 
 
+class _NoopRedis:
+    async def get(self, key):
+        del key
+        return None
+
+
+def _test_app() -> FastAPI:
+    app = FastAPI()
+    app.state.redis_async = _NoopRedis()
+    app.state.pg_pool = None
+    return app
+
+
 def _session(*, user_type: str = "registered", roles: list[str] | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         session_id="session-1",
@@ -69,6 +82,7 @@ def _request(
     return Request(
         {
             "type": "http",
+            "app": _test_app(),
             "method": method,
             "path": path,
             "query_string": query_string,
@@ -1179,18 +1193,10 @@ async def test_call_bundle_op_inner_enforces_public_header_secret(monkeypatch):
         project="project-a",
         bundle_id="bundle.demo",
         payload=integrations.BundleSuggestionsRequest(),
-        request=Request(
-            {
-                "type": "http",
-                "method": "POST",
-                "path": "/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/telegram_webhook",
-                "query_string": b"",
-                "headers": [(b"x-telegram-bot-api-secret-token", b"telegram-secret")],
-                "scheme": "http",
-                "server": ("testserver", 80),
-                "client": ("127.0.0.1", 12345),
-                "http_version": "1.1",
-            }
+        request=_request(
+            method="POST",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/telegram_webhook",
+            headers=[(b"x-telegram-bot-api-secret-token", b"telegram-secret")],
         ),
         operation="telegram_webhook",
         route="public",
@@ -1243,18 +1249,10 @@ async def test_call_bundle_op_inner_supports_bundle_owned_public_auth_with_reque
         project="project-a",
         bundle_id="bundle.demo",
         payload=integrations.BundleSuggestionsRequest(),
-        request=Request(
-            {
-                "type": "http",
-                "method": "POST",
-                "path": "/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/telegram_webhook",
-                "query_string": b"",
-                "headers": [(b"x-telegram-bot-api-secret-token", b"telegram-secret")],
-                "scheme": "http",
-                "server": ("testserver", 80),
-                "client": ("127.0.0.1", 12345),
-                "http_version": "1.1",
-            }
+        request=_request(
+            method="POST",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/public/telegram_webhook",
+            headers=[(b"x-telegram-bot-api-secret-token", b"telegram-secret")],
         ),
         operation="telegram_webhook",
         route="public",
@@ -1367,11 +1365,12 @@ async def test_load_bundle_workflow_rejects_config_scope_override(monkeypatch):
         captured["cfg_req"] = cfg_req
         return SimpleNamespace(ai_bundle_spec=None)
 
-    def _get_workflow_instance(spec, config, *, comm_context, redis):
+    async def _get_workflow_instance(spec, config, *, comm_context, redis, pg_pool=None):
         captured["spec"] = spec
         captured["config"] = config
         captured["comm_context"] = comm_context
         captured["redis"] = redis
+        captured["pg_pool"] = pg_pool
         return _DecoratedWorkflow(), SimpleNamespace()
 
     monkeypatch.setattr(
@@ -1386,7 +1385,7 @@ async def test_load_bundle_workflow_rejects_config_scope_override(monkeypatch):
     )
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
-    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
     monkeypatch.setattr(integrations, "_get_app_redis", lambda request: "redis-client")
 
     with pytest.raises(integrations.HTTPException) as exc:

@@ -223,6 +223,20 @@ Practical hook rule:
 - `on_props_changed(...)` = reconcile long-lived state after effective prop change
 - `pre_run_hook(...)` = request-time validation or lazy reconcile before execution
 
+Async rule:
+
+- lifecycle hooks should be `async def`
+- prefer `async def` for `@api`, `@mcp`, `@ui_widget`, and `@cron` methods
+- do not run blocking setup in a request path
+- if expensive work is only needed once for shared bundle storage, make it idempotent and guard it with a storage signature plus a cross-process lock
+
+Shared-storage rule:
+
+- `singleton` does not mean machine-global or EFS-global setup
+- multiworker proc and ECS tasks can load the same bundle in multiple Python processes
+- `on_bundle_load` may run once per process unless the work is explicitly guarded
+- generated UI builds, indexes, and shared workspace preparation must tolerate concurrent loaders
+
 ## 1C. Bundle Design Decision Matrix
 
 Before writing code, classify the product surface and state model.
@@ -414,6 +428,15 @@ Usually present:
 - `tools_descriptor.py`
 - `skills_descriptor.py`
 - `requirements.txt` when bundle-local Python deps are installed through `@venv(...)`
+
+If the bundle ships a full iframe app:
+
+- put source in `ui-src`
+- declare `ui.main_view` with the source folder and build command in the bundle configuration
+- let the bundle UI loader build into bundle storage
+- use the loader-provided build destination such as `<VI_BUILD_DEST_ABSOLUTE_PATH>` when the build system needs the output path
+- treat `VITE_BUNDLE_ID` or equivalent build-time values as fallbacks; the parent config bridge still supplies the runtime bundle id
+- do not treat the built runtime storage directory as source
 
 ## 4. Copy The Right Reference Pattern
 
@@ -871,11 +894,13 @@ Important runtime consequence:
 
 - request-bound context is rebound on reuse
 - singleton bundles must not treat request state as permanently stored on `self`
+- singleton does not prevent another process, worker, or ECS task from loading the same bundle against the same storage
 
 Practical rule:
 
 - if the bundle is singleton, assume `self` is process-lifetime state
 - request-specific data must come from the current request context, method arguments, or task-local/context-local surfaces
+- shared filesystem or EFS work still needs an explicit shared-storage guard
 
 ### Exclusive operations
 
@@ -1107,6 +1132,15 @@ Do not hardcode:
 - localhost URLs
 - source-folder names in operation URLs
 
+For custom main-view iframe apps, use the same config bridge. The value sent as
+`defaultAppBundleId` is the runtime bundle id selected by the host. Use it for
+`/sse/chat`, `/api`, `/mcp`, and widget calls. A compiled bundle id is only a
+standalone fallback.
+
+For `/sse/chat`, new conversations must omit `conversation_id`. The UI should
+bind the server-generated conversation id from the HTTP ack or the first SSE
+envelope.
+
 ### Separate display and structured API
 
 Recommended pattern:
@@ -1203,6 +1237,8 @@ Rules:
 - use bundle local storage for the working root
 - keep schedule and first-run/default-window settings in bundle props
 - use `@cron(span=...)` as the primary exclusivity control for scheduled jobs
+- assume schedules are reconciled on startup, bundle registry updates, and effective bundle-props changes
+- scheduled logic should read current props through the normal runtime path, not cached startup-only values
 
 For automation that may still need operator control:
 

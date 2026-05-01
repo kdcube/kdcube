@@ -13,6 +13,7 @@ Run with:
 from __future__ import annotations
 
 import pathlib
+import asyncio
 import pytest
 
 
@@ -126,6 +127,6 @@ class TestOnBundleLoad:
     def test_on_bundle_load_does_not_raise_with_no_args(self, bundle):
         """on_bundle_load() called with no extra kwargs does not raise."""
         try:
-            bundle.on_bundle_load()
+            asyncio.run(bundle.on_bundle_load())
         except Exception as exc:
             pytest.fail(f"on_bundle_load() raised unexpectedly: {exc}")

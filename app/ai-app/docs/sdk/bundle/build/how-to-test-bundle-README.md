@@ -74,6 +74,9 @@ Passing local tests is necessary and still not enough.
 
 ## 1. Testing Order
 
+All commands in this page assume the working environment in
+[1A. Working Environment For Agents](#1a-working-environment-for-agents).
+
 Run tests in this order:
 
 1. syntax/import checks
@@ -90,6 +93,54 @@ Runtime-shape rule:
 
 - if the runtime itself may be misconfigured, fix `assembly.yaml`, `bundles.yaml`, and `bundles.secrets.yaml` first
 - use [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) for the exact local runtime contract before debugging widget/API behavior
+
+## 1A. Working Environment For Agents
+
+Before touching bundle code, prove the test environment.
+
+Use this baseline unless the task gives a different active runtime:
+
+```bash
+cd /abs/path/to/kdcube-ai-app
+PY=app/venvs/ai-app/chat-processor/bin/python
+```
+
+If that interpreter does not exist, use the project venv for the runtime you are
+testing. Do not use bare `python3` or bare `pytest` until you have proven they
+point to the same environment.
+
+Readiness checks:
+
+```bash
+$PY -c "import sys; print(sys.executable)"
+$PY -m pytest --version
+$PY -m pip show pytest-asyncio
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+  $PY -m pytest -q \
+  app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/tests/test_singleton_request_context.py::test_singleton_entrypoint_keeps_comm_context_task_local
+```
+
+Interpretation:
+
+- `pytest-asyncio` is required for tests that use `pytest.mark.asyncio`
+- if it is missing, fix the venv/test dependencies before interpreting failures
+- `PYTHONPATH=app/ai-app/src/kdcube-ai-app` is required unless the package is installed in the active venv
+- shared bundle-suite tests require `--bundle-path` or `BUNDLE_UNDER_TEST`
+- route/integration tests should create request objects with an ASGI `app` and `app.state.redis_async`, because production route code reads runtime state from `request.app.state`
+
+First smoke commands:
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+  $PY -m pytest -q \
+  app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/tests/test_bundle_interfaces.py
+```
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app \
+  $PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+  --bundle-path /abs/path/to/bundle
+```
 
 ## 1.1 What This Test Guide Must Prove
 
@@ -123,14 +174,14 @@ Use these as the first actionable checks for each bundle surface.
 ### Syntax and imports
 
 ```bash
-python -m py_compile /abs/path/to/bundle/entrypoint.py
+$PY -m py_compile /abs/path/to/bundle/entrypoint.py
 ```
 
 ### Shared bundle contract
 
 ```bash
 PYTHONPATH=app/ai-app/src/kdcube-ai-app \
-python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+$PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
   --bundle-path /abs/path/to/bundle
 ```
 
@@ -138,7 +189,7 @@ python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
 
 ```bash
 PYTHONPATH=app/ai-app/src/kdcube-ai-app \
-pytest -q /abs/path/to/bundle/tests
+$PY -m pytest -q /abs/path/to/bundle/tests
 ```
 
 ### Authenticated API
@@ -211,7 +262,7 @@ async def sync(self, **kwargs):
 ```
 
 ```bash
-PYTHONPATH=app/ai-app/src/kdcube-ai-app pytest -q /abs/path/to/bundle/tests -k sync
+PYTHONPATH=app/ai-app/src/kdcube-ai-app $PY -m pytest -q /abs/path/to/bundle/tests -k sync
 ```
 
 Reference map:
@@ -227,7 +278,7 @@ Verify that the bundle files can load.
 Typical command:
 
 ```bash
-python -m py_compile /abs/path/to/bundle/entrypoint.py
+$PY -m py_compile /abs/path/to/bundle/entrypoint.py
 ```
 
 If the bundle includes helper modules that build complex HTML/JS strings inside Python:
@@ -248,7 +299,7 @@ Command:
 
 ```bash
 PYTHONPATH=app/ai-app/src/kdcube-ai-app \
-python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+$PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
   --bundle-path /abs/path/to/bundle
 ```
 
@@ -264,7 +315,7 @@ Command:
 
 ```bash
 PYTHONPATH=app/ai-app/src/kdcube-ai-app \
-pytest -q /abs/path/to/bundle/tests
+$PY -m pytest -q /abs/path/to/bundle/tests
 ```
 
 Write bundle-local tests for:
@@ -416,14 +467,14 @@ Useful variants:
 
 ```bash
 PYTHONPATH=app/ai-app/src/kdcube-ai-app \
-python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+$PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
   --bundle-path /abs/path/to/bundle \
   --shared-only
 ```
 
 ```bash
 PYTHONPATH=app/ai-app/src/kdcube-ai-app \
-python -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
+$PY -m kdcube_ai_app.apps.chat.sdk.tests.bundle.run_bundle_suite \
   --bundle-path /abs/path/to/bundle \
   --bundle-only
 ```
@@ -520,6 +571,34 @@ If you see:
 - source-folder name instead of runtime bundle id
 
 the widget is not integrated correctly.
+
+### 5.2A Custom main-view UI contract
+
+For bundles with `ui.main_view` / `ui-src`, test the iframe app as a runtime
+surface, not as a standalone website.
+
+Local source checks:
+
+```bash
+cd /abs/path/to/bundle/ui-src
+npx tsc --noEmit
+```
+
+Runtime checks:
+
+- edit `ui-src`, not the built runtime storage directory
+- do not run `OUTDIR=<bundle_storage_root>/ui npm run build` as the fix
+- request the custom UI HTML through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
+- verify the bundle UI loader refreshes the built files when the source signature changed
+- verify the iframe receives `baseUrl`, tenant, project, auth headers, `streamId`, and `defaultAppBundleId` from the parent config bridge
+- use `defaultAppBundleId` for `/sse/chat`, `/api`, `/mcp`, and widget calls
+- for a new `/sse/chat` conversation, omit `conversation_id`; bind the server-generated id from the ack or first SSE envelope
+
+Failure signals:
+
+- `sse/chat failed (404) {"detail":"Conversation not found"}` usually means the UI sent a local fake `conversation_id` for a new conversation
+- `Unknown bundle_id ...` usually means the iframe used a baked/source id or the runtime registry does not include the selected bundle
+- a stale hashed JS asset after source changes means the loader/static route path must be checked, not manually bypassed
 
 ### 5.3 Read-only load check
 
@@ -641,6 +720,14 @@ Use reload testing after changing:
 - `bundles.yaml`
 - `bundles.secrets.yaml`
 
+For generated custom main-view UI, also test the loader boundary:
+
+- source lives in the bundle `ui-src`
+- runtime serves built files from bundle storage
+- the bundle UI loader owns freshness checks and builds
+- concurrent proc workers or shared EFS storage should result in one build and other workers seeing the completed signature/cache hit
+- manual runtime-storage builds are diagnostic only, not the supported workflow
+
 ## 11. Standalone Helper Testing
 
 If the bundle ships a standalone helper script, test it separately from runtime.
@@ -684,6 +771,17 @@ Symptoms:
 - widget never loads data
 - widget calls malformed routes
 - widget has empty tenant/project/bundle id
+
+### B2. Stale or wrong custom main-view UI
+
+Symptoms:
+
+- iframe still runs an old hashed asset after `ui-src` changed
+- iframe sends a baked bundle id instead of the selected runtime bundle id
+- iframe sends a local fake conversation id for a new SSE chat
+
+Test by requesting the HTML entrypoint through the integrations static route and
+checking browser networking for the actual `/sse/chat` payload.
 
 ### C. Import/manifest discovery failure
 
@@ -762,6 +860,8 @@ Before calling the bundle complete, verify all of these:
 - bundle appears with correct APIs/widgets in integrations listing
 - expected operations are callable through real routes
 - widget networking uses the correct runtime URL shape
+- custom main-view UI uses the host config bridge and selected runtime bundle id
+- generated custom main-view UI is refreshed by the loader, not by manual runtime-storage builds
 - widget respects auth/config handshake
 - runtime identity matches descriptor identity
 - local mutable state goes into bundle local storage

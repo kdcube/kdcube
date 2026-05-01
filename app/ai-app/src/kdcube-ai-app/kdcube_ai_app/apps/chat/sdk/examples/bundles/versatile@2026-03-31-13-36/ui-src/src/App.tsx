@@ -13,6 +13,7 @@ import {
   submitChatMessage,
 } from './service'
 import type {
+  BaseEnvelope,
   BannerTone,
   ChatCompleteEnvelope,
   ChatDeltaEnvelope,
@@ -340,6 +341,18 @@ function updateTurn(
   const turns = state.turns.slice()
   turns[index] = updater(turns[index])
   return { ...state, turns }
+}
+
+function syncConversationFromEnvelope(state: ChatState, env: BaseEnvelope): ChatState {
+  const conversationId = env.conversation?.conversation_id
+  const turnId = env.conversation?.turn_id
+  if (!conversationId || !turnId) return state
+  if (!state.turns.some((turn) => turn.id === turnId)) return state
+  if (state.conversationId && state.conversationId !== conversationId) return state
+  return {
+    ...state,
+    conversationId,
+  }
 }
 
 function upsertArtifact<T extends Artifact>(
@@ -749,17 +762,19 @@ function hydrateHistoricalConversation(conversation: ConversationDTO): ChatTurn[
     }
 
     const sortedTimeline = turn.timeline.slice().sort((left, right) => left.timestamp - right.timestamp)
-    return {
+    const hydratedTurn: ChatTurn = {
       ...turn,
       createdAt: Number.isFinite(turn.createdAt) ? turn.createdAt : Date.now() + turnIndex,
       state: 'completed',
       timeline: sortedTimeline,
     }
+    return hydratedTurn
   }).sort((left, right) => left.createdAt - right.createdAt)
 }
 
 function applyChatStart(state: ChatState, env: ChatStartEnvelope): ChatState {
-  return updateTurn(state, env.conversation.turn_id, (turn) => ({
+  const syncedState = syncConversationFromEnvelope(state, env)
+  return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: 'running',
     timeline: [
@@ -779,7 +794,8 @@ function applyChatStart(state: ChatState, env: ChatStartEnvelope): ChatState {
 }
 
 function applyChatComplete(state: ChatState, env: ChatCompleteEnvelope): ChatState {
-  return updateTurn(state, env.conversation.turn_id, (turn) => ({
+  const syncedState = syncConversationFromEnvelope(state, env)
+  return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: env.data?.error_message ? 'error' : 'completed',
     answer: (env.data?.final_answer as string | undefined) || turn.answer,
@@ -803,7 +819,8 @@ function applyChatComplete(state: ChatState, env: ChatCompleteEnvelope): ChatSta
 
 function applyChatError(state: ChatState, env: ChatErrorEnvelope): ChatState {
   const message = env.data?.error || 'Request failed.'
-  return updateTurn(state, env.conversation.turn_id, (turn) => ({
+  const syncedState = syncConversationFromEnvelope(state, env)
+  return updateTurn(syncedState, env.conversation.turn_id, (turn) => ({
     ...turn,
     state: 'error',
     error: message,
@@ -838,9 +855,10 @@ function applyConvStatus(state: ChatState, env: ConvStatusEnvelope): ChatState {
   if (env.data.state === 'in_progress') return state
   const turns = state.turns.map((turn) => {
     if (turn.state === 'pending' || turn.state === 'running') {
+      const nextState: TurnState = env.data.state === 'error' ? 'error' : 'completed'
       return {
         ...turn,
-        state: env.data.state === 'error' ? 'error' : 'completed',
+        state: nextState,
         error:
           env.data.state === 'error' && turn.error == null
             ? 'Conversation ended with an error.'
@@ -853,7 +871,8 @@ function applyConvStatus(state: ChatState, env: ConvStatusEnvelope): ChatState {
 }
 
 function applyChatStep(state: ChatState, env: ChatStepEnvelope): ChatState {
-  return updateTurn(state, env.conversation.turn_id, (turn) => {
+  const syncedState = syncConversationFromEnvelope(state, env)
+  return updateTurn(syncedState, env.conversation.turn_id, (turn) => {
     const timestamp = timestampValue(env.timestamp)
     const nextStep: TurnStep = {
       step: env.event.step,
@@ -919,7 +938,8 @@ function applyChatDelta(state: ChatState, env: ChatDeltaEnvelope): ChatState {
   const textDelta = env.delta?.text || ''
   const index = env.delta?.index || 0
 
-  return updateTurn(state, turnId, (turn) => {
+  const syncedState = syncConversationFromEnvelope(state, env)
+  return updateTurn(syncedState, turnId, (turn) => {
     let nextTurn: ChatTurn = { ...turn }
     let artifacts = turn.artifacts.slice()
     let timeline = turn.timeline.slice()
@@ -1186,55 +1206,56 @@ function MarkdownBlock({ content, compact = false }: { content: string; compact?
   const normalized = useMemo(() => closeStreamingMarkdown(content), [content])
 
   return (
-    <ReactMarkdown
-      remarkPlugins={markdownPlugins}
-      components={{
-        a: ({ children, href }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-[var(--accent)] underline underline-offset-2"
-          >
-            {children}
-          </a>
-        ),
-        p: ({ children }) => (
-          <p className={compact ? 'my-1 leading-6' : 'my-3 leading-7'}>{children}</p>
-        ),
-        ul: ({ children }) => <ul className={compact ? 'my-1 list-disc pl-5' : 'my-3 list-disc pl-6'}>{children}</ul>,
-        ol: ({ children }) => <ol className={compact ? 'my-1 list-decimal pl-5' : 'my-3 list-decimal pl-6'}>{children}</ol>,
-        li: ({ children }) => <li className="my-1">{children}</li>,
-        blockquote: ({ children }) => (
-          <blockquote className="my-3 border-l-4 border-[rgba(29,109,115,0.22)] pl-4 text-[var(--muted)]">
-            {children}
-          </blockquote>
-        ),
-        pre: ({ children }) => (
-          <pre className="my-3 overflow-x-auto rounded-2xl bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
-            {children}
-          </pre>
-        ),
-        code: ({ inline, children }) =>
-          inline ? (
-            <code className="rounded bg-[rgba(17,32,43,0.08)] px-1.5 py-0.5 text-[0.92em]">
+    <div className="markdown-body text-[15px]">
+      <ReactMarkdown
+        remarkPlugins={markdownPlugins}
+        components={{
+          a: ({ children, href }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="font-medium text-[var(--accent)] underline underline-offset-2"
+            >
               {children}
-            </code>
-          ) : (
-            <code>{children}</code>
+            </a>
           ),
-        table: ({ children }) => (
-          <div className="my-3 overflow-x-auto rounded-2xl border border-[var(--line)]">
-            <table className="min-w-full border-collapse text-sm">{children}</table>
-          </div>
-        ),
-        th: ({ children }) => <th className="border-b border-[var(--line)] px-3 py-2 text-left">{children}</th>,
-        td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
-      }}
-      className="markdown-body text-[15px]"
-    >
-      {normalized}
-    </ReactMarkdown>
+          p: ({ children }) => (
+            <p className={compact ? 'my-1 leading-6' : 'my-3 leading-7'}>{children}</p>
+          ),
+          ul: ({ children }) => <ul className={compact ? 'my-1 list-disc pl-5' : 'my-3 list-disc pl-6'}>{children}</ul>,
+          ol: ({ children }) => <ol className={compact ? 'my-1 list-decimal pl-5' : 'my-3 list-decimal pl-6'}>{children}</ol>,
+          li: ({ children }) => <li className="my-1">{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-3 border-l-4 border-[rgba(29,109,115,0.22)] pl-4 text-[var(--muted)]">
+              {children}
+            </blockquote>
+          ),
+          pre: ({ children }) => (
+            <pre className="my-3 overflow-x-auto rounded-2xl bg-[#11202b] px-4 py-3 text-sm text-[#edf5f6]">
+              {children}
+            </pre>
+          ),
+          code: ({ children, className }) =>
+            className ? (
+              <code className={className}>{children}</code>
+            ) : (
+              <code className="rounded bg-[rgba(17,32,43,0.08)] px-1.5 py-0.5 text-[0.92em]">
+                {children}
+              </code>
+            ),
+          table: ({ children }) => (
+            <div className="my-3 overflow-x-auto rounded-2xl border border-[var(--line)]">
+              <table className="min-w-full border-collapse text-sm">{children}</table>
+            </div>
+          ),
+          th: ({ children }) => <th className="border-b border-[var(--line)] px-3 py-2 text-left">{children}</th>,
+          td: ({ children }) => <td className="border-b border-[var(--line)] px-3 py-2 align-top">{children}</td>,
+        }}
+      >
+        {normalized}
+      </ReactMarkdown>
+    </div>
   )
 }
 
@@ -2264,14 +2285,13 @@ export default function App() {
     if (!draftText && draftFiles.length === 0) return
 
     const turnId = createLocalId('turn')
-    const conversationId = stateRef.current.conversationId || createLocalId('conv')
+    const existingConversationId = stateRef.current.conversationId
 
     setState((previous) => ({
       ...previous,
-      conversationId,
       composerText: '',
       composerFiles: [],
-          turns: [
+      turns: [
         ...previous.turns,
         {
           id: turnId,
@@ -2305,14 +2325,26 @@ export default function App() {
       if (!streamId) {
         throw new Error('No SSE stream is available.')
       }
-      await submitChatMessage({
+      const response = await submitChatMessage({
         streamId,
         bundleId,
-        conversationId,
+        conversationId: existingConversationId,
         turnId,
         text: draftText,
         files: draftFiles,
         chatHistory: buildChatHistory(stateRef.current.turns),
+      })
+      setState((previous) => {
+        const stillOwnsTurn = previous.turns.some((turn) => turn.id === turnId)
+        const canBindConversation =
+          !previous.conversationId ||
+          previous.conversationId === existingConversationId ||
+          previous.conversationId === response.conversationId
+        if (!stillOwnsTurn || !canBindConversation) return previous
+        return {
+          ...previous,
+          conversationId: response.conversationId,
+        }
       })
       void refreshConversationList()
     } catch (error) {
@@ -2323,7 +2355,7 @@ export default function App() {
         service: { request_id: createLocalId('request') },
         conversation: {
           session_id: previous.sessionId || '',
-          conversation_id: conversationId,
+          conversation_id: existingConversationId || previous.conversationId || '',
           turn_id: turnId,
         },
         event: {

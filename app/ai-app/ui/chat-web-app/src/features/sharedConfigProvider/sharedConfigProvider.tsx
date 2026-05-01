@@ -4,6 +4,7 @@ import {store, useAppSelector} from "../../app/store.ts";
 import {selectIdTokenHeaderName, selectProject, selectTenant, selectUseAuthCookies} from "../chat/chatSettingsSlice.ts";
 import {selectAuthToken, selectIdToken} from "../auth/authSlice.ts";
 import {selectStreamId} from "../chat/chatStateSlice.ts";
+import {selectCurrentBundle} from "../bundles/bundlesSlice.ts";
 
 const useSharedConfigProvider = () => {
     const tenant = useAppSelector(selectTenant);
@@ -12,6 +13,7 @@ const useSharedConfigProvider = () => {
     const idToken = useAppSelector(selectIdToken)
     const idTokenHeaderName = useAppSelector(selectIdTokenHeaderName)
     const streamId = useAppSelector(selectStreamId);
+    const currentBundle = useAppSelector(selectCurrentBundle);
 
     useEffect(() => {
         const onIFrameRequest = (event: MessageEvent) => {
@@ -29,7 +31,7 @@ const useSharedConfigProvider = () => {
                     'baseUrl': () => baseUrl,
                     'defaultTenant': () => tenant,
                     'defaultProject': () => project,
-                    'defaultAppBundleId': () => null,
+                    'defaultAppBundleId': () => currentBundle,
                     'streamId': () => streamId
                 };
 
@@ -60,7 +62,7 @@ const useSharedConfigProvider = () => {
         return () => {
             window.removeEventListener("message", onIFrameRequest);
         };
-    }, [tenant, project, authToken, idToken, idTokenHeaderName]);
+    }, [tenant, project, authToken, idToken, idTokenHeaderName, streamId, currentBundle]);
 
 }
 

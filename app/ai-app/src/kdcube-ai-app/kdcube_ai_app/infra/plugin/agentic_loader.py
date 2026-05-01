@@ -1133,6 +1133,19 @@ _manifest_cache: Dict[str, "BundleInterfaceManifest"] = {}
 _bundle_load_done: set[str] = set()
 _bundle_load_inflight: set[str] = set()
 _bundle_load_lock = threading.Lock()
+_bundle_load_tasks: dict[str, asyncio.Task] = {}
+_bundle_load_async_lock = asyncio.Lock()
+_bundle_static_entrypoint_load_done: set[str] = set()
+_bundle_static_entrypoint_load_tasks: dict[str, asyncio.Task] = {}
+_bundle_static_entrypoint_load_lock = asyncio.Lock()
+
+def _cancel_task_if_pending(task: asyncio.Task | None) -> None:
+    if task is None or task.done():
+        return
+    try:
+        task.cancel()
+    except Exception:
+        pass
 
 def _cache_key(spec: AgenticBundleSpec) -> str:
     return f"{Path(spec.path).resolve()}::{spec.module or ''}"
@@ -1152,7 +1165,90 @@ def _bundle_load_key(spec: AgenticBundleSpec, comm_context: ChatTaskPayload) -> 
     t, p = _tp_from_ctx(comm_context)
     return f"{_cache_key(spec)}::{t or 'default'}::{p or 'default'}"
 
-def _maybe_run_bundle_on_load(
+def is_static_bundle_entrypoint_path(path: str) -> bool:
+    cleaned = (path or "index.html").strip().lstrip("/")
+    if not cleaned or cleaned.endswith("/"):
+        return True
+    leaf = cleaned.rsplit("/", 1)[-1]
+    return leaf == "index.html" or "." not in leaf
+
+def static_bundle_entrypoint_load_key(
+    *,
+    tenant: str,
+    project: str,
+    bundle_id: str,
+    storage_root: Any,
+) -> str:
+    storage = str(storage_root or "")
+    return f"{tenant}::{project}::{bundle_id}::{storage}"
+
+async def run_static_bundle_entrypoint_load_once(
+    *,
+    load_key: str,
+    load_coro_factory: Callable[[], Any],
+) -> None:
+    """
+    Process-local coalescing for static main-view entrypoint loads.
+
+    The route remains a thin caller; bundle-load infra owns the "at most once
+    per process" coordination. Cross-process work must still be guarded inside
+    the bundle's on-load implementation, for example by storage signatures and
+    storage-root locks.
+    """
+    async with _bundle_static_entrypoint_load_lock:
+        if load_key in _bundle_static_entrypoint_load_done:
+            return
+        task = _bundle_static_entrypoint_load_tasks.get(load_key)
+        if task is None:
+            task = asyncio.create_task(load_coro_factory())
+            _bundle_static_entrypoint_load_tasks[load_key] = task
+
+    try:
+        await task
+    except Exception:
+        async with _bundle_static_entrypoint_load_lock:
+            if _bundle_static_entrypoint_load_tasks.get(load_key) is task:
+                _bundle_static_entrypoint_load_tasks.pop(load_key, None)
+        raise
+
+    async with _bundle_static_entrypoint_load_lock:
+        if _bundle_static_entrypoint_load_tasks.get(load_key) is task:
+            _bundle_static_entrypoint_load_tasks.pop(load_key, None)
+        _bundle_static_entrypoint_load_done.add(load_key)
+
+def invalidate_static_bundle_entrypoint_loads(
+    *,
+    bundle_id: str | None = None,
+    tenant: str | None = None,
+    project: str | None = None,
+) -> int:
+    def _matches(key: str) -> bool:
+        parts = key.split("::", 3)
+        key_tenant = parts[0] if len(parts) > 0 else ""
+        key_project = parts[1] if len(parts) > 1 else ""
+        key_bundle_id = parts[2] if len(parts) > 2 else ""
+        if tenant is not None and key_tenant != tenant:
+            return False
+        if project is not None and key_project != project:
+            return False
+        if bundle_id is not None and key_bundle_id != bundle_id:
+            return False
+        return True
+
+    removed = 0
+    for key in tuple(_bundle_static_entrypoint_load_done):
+        if not _matches(key):
+            continue
+        _bundle_static_entrypoint_load_done.discard(key)
+        removed += 1
+    for key in tuple(_bundle_static_entrypoint_load_tasks):
+        if not _matches(key):
+            continue
+        _cancel_task_if_pending(_bundle_static_entrypoint_load_tasks.pop(key, None))
+        removed += 1
+    return removed
+
+async def _run_bundle_on_load_hook(
     *,
     instance: Any,
     mod: types.ModuleType,
@@ -1169,12 +1265,6 @@ def _maybe_run_bundle_on_load(
         hook = getattr(mod, "on_bundle_load")
     if hook is None:
         return
-
-    key = _bundle_load_key(spec, comm_context)
-    with _bundle_load_lock:
-        if key in _bundle_load_done or key in _bundle_load_inflight:
-            return
-        _bundle_load_inflight.add(key)
 
     logger = AgentLogger("bundle.on_load", getattr(config, "log_level", "INFO"))
     try:
@@ -1208,30 +1298,72 @@ def _maybe_run_bundle_on_load(
         "logger": logger,
     }
     call_kwargs = _select_supported_kwargs(hook, kwargs)
+    logger.log(
+        f"[bundle.on_load] start: bundle={bundle_id} tenant={tenant} project={project} storage={storage_root}",
+        level="INFO",
+    )
+    if not inspect.iscoroutinefunction(hook):
+        raise TypeError("bundle on_bundle_load hook must be declared with async def")
+    await hook(**call_kwargs)
+    logger.log(
+        f"[bundle.on_load] done: bundle={bundle_id} tenant={tenant} project={project}",
+        level="INFO",
+    )
+
+
+async def _maybe_run_bundle_on_load(
+    *,
+    instance: Any,
+    mod: types.ModuleType,
+    spec: AgenticBundleSpec,
+    config: Any,
+    comm_context: ChatTaskPayload,
+    pg_pool: Optional[Any],
+    redis: Optional[Any],
+) -> None:
+    hook = None
+    if hasattr(instance, "on_bundle_load") and callable(getattr(instance, "on_bundle_load")):
+        hook = getattr(instance, "on_bundle_load")
+    elif hasattr(mod, "on_bundle_load") and callable(getattr(mod, "on_bundle_load")):
+        hook = getattr(mod, "on_bundle_load")
+    if hook is None:
+        return
+
+    key = _bundle_load_key(spec, comm_context)
+    async with _bundle_load_async_lock:
+        if key in _bundle_load_done:
+            return
+        task = _bundle_load_tasks.get(key)
+        if task is None:
+            with _bundle_load_lock:
+                _bundle_load_inflight.add(key)
+            task = asyncio.create_task(
+                _run_bundle_on_load_hook(
+                    instance=instance,
+                    mod=mod,
+                    spec=spec,
+                    config=config,
+                    comm_context=comm_context,
+                    pg_pool=pg_pool,
+                    redis=redis,
+                )
+            )
+            _bundle_load_tasks[key] = task
+
     try:
-        logger.log(
-            f"[bundle.on_load] start: bundle={bundle_id} tenant={tenant} project={project} storage={storage_root}",
-            level="INFO",
-        )
-        res = hook(**call_kwargs)
-        if asyncio.iscoroutine(res):
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.run(res)
-            else:
-                # avoid blocking the request; warn that the hook should be sync
-                loop.create_task(res)
-                logger.log("[bundle.on_load] async hook scheduled in background (prefer sync)", level="WARNING")
-        with _bundle_load_lock:
-            _bundle_load_done.add(key)
-        logger.log(
-            f"[bundle.on_load] done: bundle={bundle_id} tenant={tenant} project={project}",
-            level="INFO",
-        )
+        await task
     except Exception:
+        logger = AgentLogger("bundle.on_load", getattr(config, "log_level", "INFO"))
         logger.log("[bundle.on_load] hook failed:\n" + traceback.format_exc(), level="ERROR")
+        async with _bundle_load_async_lock:
+            if _bundle_load_tasks.get(key) is task:
+                _bundle_load_tasks.pop(key, None)
         raise
+    else:
+        async with _bundle_load_async_lock:
+            if _bundle_load_tasks.get(key) is task:
+                _bundle_load_tasks.pop(key, None)
+            _bundle_load_done.add(key)
     finally:
         with _bundle_load_lock:
             _bundle_load_inflight.discard(key)
@@ -1282,6 +1414,8 @@ async def notify_cached_bundle_props_changed(
     refresh = getattr(instance, "refresh_bundle_props", None)
     if not callable(hook) or not callable(refresh):
         return False
+    if not inspect.iscoroutinefunction(hook):
+        raise TypeError("bundle on_props_changed hook must be declared with async def")
 
     rebind = getattr(instance, "rebind_request_context", None)
     if callable(rebind):
@@ -1304,7 +1438,7 @@ async def notify_cached_bundle_props_changed(
     if previous_props == current_props:
         return False
 
-    result = hook(
+    await hook(
         previous_props=previous_props,
         current_props=current_props,
         reason="bundles.props.update",
@@ -1313,8 +1447,6 @@ async def notify_cached_bundle_props_changed(
         updated_by=updated_by,
         source=source,
     )
-    if inspect.isawaitable(result):
-        await result
     return True
 
 # --------------------------------------------------------------------------------------
@@ -1754,6 +1886,9 @@ def get_workflow_instance(
     Load the bundle at 'spec', discover decorated symbols, instantiate a workflow,
     and return (workflow_instance, module).
 
+    This synchronous helper does not run lifecycle hooks. Runtime paths must use
+    get_workflow_instance_async(), which awaits on_bundle_load().
+
     Notes:
     - ONLY decorated @agentic_workflow_factory / @agentic_workflow are recognized.
     - If both exist, the higher 'priority' wins (tie → factory wins).
@@ -1809,17 +1944,6 @@ def get_workflow_instance(
         instance = _instantiate_symbol("class", symbol, config, extra_kwargs)
         final_singleton = bool(spec.singleton)
 
-    # Optional bundle on-load hook (runs once per spec/tenant/project)
-    _maybe_run_bundle_on_load(
-        instance=instance,
-        mod=mod,
-        spec=spec,
-        config=config,
-        comm_context=comm_context,
-        pg_pool=pg_pool,
-        redis=redis,
-    )
-
     # Cache interface manifest (once per spec key — path::module)
     if key not in _manifest_cache:
         try:
@@ -1833,6 +1957,34 @@ def get_workflow_instance(
     if final_singleton:
         _singleton_cache[key] = (instance, mod)
 
+    return instance, mod
+
+
+async def get_workflow_instance_async(
+        spec: AgenticBundleSpec,
+        config: Any,
+        *,
+        comm_context: ChatTaskPayload,
+        pg_pool: Optional[Any] = None,
+        redis: Optional[Any] = None,
+) -> Tuple[Any, types.ModuleType]:
+    """Async runtime loader that awaits bundle lifecycle hooks."""
+    instance, mod = get_workflow_instance(
+        spec,
+        config,
+        comm_context=comm_context,
+        pg_pool=pg_pool,
+        redis=redis,
+    )
+    await _maybe_run_bundle_on_load(
+        instance=instance,
+        mod=mod,
+        spec=spec,
+        config=config,
+        comm_context=comm_context,
+        pg_pool=pg_pool,
+        redis=redis,
+    )
     return instance, mod
 
 class _StartupCommContext:
@@ -1872,8 +2024,7 @@ async def preload_bundle_async(
     wf_config = create_workflow_config(ConfigRequest())
     wf_config.ai_bundle_spec = bundle_spec
 
-    await asyncio.to_thread(
-        get_workflow_instance,
+    await get_workflow_instance_async(
         spec,
         wf_config,
         comm_context=comm_ctx,
@@ -1887,6 +2038,16 @@ def clear_agentic_caches() -> None:
     _module_cache.clear()
     _singleton_cache.clear()
     _manifest_cache.clear()
+    with _bundle_load_lock:
+        _bundle_load_done.clear()
+        _bundle_load_inflight.clear()
+    for task in tuple(_bundle_load_tasks.values()):
+        _cancel_task_if_pending(task)
+    _bundle_load_tasks.clear()
+    _bundle_static_entrypoint_load_done.clear()
+    for task in tuple(_bundle_static_entrypoint_load_tasks.values()):
+        _cancel_task_if_pending(task)
+    _bundle_static_entrypoint_load_tasks.clear()
 
 
 def _module_matches_bundle_scope(mod: types.ModuleType, bundle_root: Path) -> bool:
@@ -2073,6 +2234,18 @@ def evict_bundle_scope(spec: AgenticBundleSpec, *, drop_sys_modules: bool = True
 
     if _manifest_cache.pop(key, None) is not None:
         evicted_manifests = 1
+
+    with _bundle_load_lock:
+        prefix = f"{key}::"
+        _bundle_load_done.difference_update(
+            item for item in tuple(_bundle_load_done) if item.startswith(prefix)
+        )
+        _bundle_load_inflight.difference_update(
+            item for item in tuple(_bundle_load_inflight) if item.startswith(prefix)
+        )
+    for item in tuple(_bundle_load_tasks):
+        if item.startswith(f"{key}::"):
+            _cancel_task_if_pending(_bundle_load_tasks.pop(item, None))
 
     if drop_sys_modules:
         virtual_roots: set[str] = set()

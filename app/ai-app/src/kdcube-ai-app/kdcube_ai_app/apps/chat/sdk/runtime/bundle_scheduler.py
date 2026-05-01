@@ -422,7 +422,7 @@ async def _invoke_job(
     bundle_config: Any,
 ) -> None:
     """Load the workflow instance and invoke the scheduled method."""
-    from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance
+    from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance_async
 
     # Resolve pg_pool lazily — same singleton used by the rest of the proc process.
     pg_pool = None
@@ -435,7 +435,7 @@ async def _invoke_job(
     _log.info("[scheduler] Job started: bundle=%s method=%s", bundle_id, method_name)
     try:
         comm_context = getattr(bundle_config, "_headless_comm_context", bundle_config)
-        instance, _ = get_workflow_instance(
+        instance, _ = await get_workflow_instance_async(
             bundle_spec,
             bundle_config,
             comm_context=comm_context,
@@ -595,11 +595,12 @@ class BundleSchedulerManager:
                 props=props,
             )
 
-            if not resolve_effective_enabled(manifest.enabled_config, props):
+            manifest_enabled_config = getattr(manifest, "enabled_config", None)
+            if not resolve_effective_enabled(manifest_enabled_config, props):
                 _log.info(
                     "[scheduler] Bundle disabled via enabled_config: bundle=%s enabled_config=%r"
-                    " — skipping all jobs",
-                    bundle_id, manifest.enabled_config,
+                    " - skipping all jobs",
+                    bundle_id, manifest_enabled_config,
                 )
                 continue
 
@@ -626,11 +627,12 @@ class BundleSchedulerManager:
                     )
                     continue
 
-                if not resolve_effective_enabled(job_spec.enabled_config, props):
+                job_enabled_config = getattr(job_spec, "enabled_config", None)
+                if not resolve_effective_enabled(job_enabled_config, props):
                     _log.info(
                         "[scheduler] Job disabled via enabled_config: bundle=%s alias=%s "
                         "enabled_config=%r",
-                        bundle_id, job_spec.alias, job_spec.enabled_config,
+                        bundle_id, job_spec.alias, job_enabled_config,
                     )
                     continue
 

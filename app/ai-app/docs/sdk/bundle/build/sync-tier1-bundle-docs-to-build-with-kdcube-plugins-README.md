@@ -57,6 +57,7 @@ Recommended:
 
 - expose the 5 docs as one Tier 1 pack
 - use [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md) as the first router
+- make [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) the preflight before code or test changes
 - keep the rest of the Tier 1 pack visible as the required baseline
 - branch to deeper docs only after Tier 1
 
@@ -79,10 +80,22 @@ docs, update those links to the current paths.
 
 Do not keep the old scattered doc paths as the primary bundle-authoring route.
 
+## Agent Guardrails
+
+The plugin should steer agents away from these recurring mistakes:
+
+- do not recommend bare `python3` or bare `pytest` before proving the project venv
+- do not interpret async test failures until `pytest-asyncio` is installed in the active venv
+- do not manually build `ui-src` into runtime bundle storage as the fix for stale bundle UI
+- do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`
+- do not treat `bundles.yaml` example config as enabling built-in examples; `bundles_include_examples` owns that
+- do not treat `singleton` as cross-process exclusivity or shared-storage initialization
+
 ## Done When
 
 The plugin handoff is clean when:
 
 - the 5 Tier 1 docs are exposed as one pack
+- the working environment preflight is visible before any test command
 - the plugin can route to the best first page without hiding the rest of Tier 1
 - old hardcoded doc links are updated to current paths

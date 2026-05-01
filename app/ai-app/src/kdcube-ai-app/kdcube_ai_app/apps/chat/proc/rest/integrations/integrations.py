@@ -66,11 +66,14 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     cache_key_for_spec,
     discover_bundle_interface_manifest,
     get_cached_manifest,
-    get_workflow_instance,
+    get_workflow_instance_async,
+    is_static_bundle_entrypoint_path,
     load_bundle_manifest,
     resolve_bundle_api_endpoint,
     resolve_bundle_mcp_endpoint,
     resolve_bundle_widget,
+    run_static_bundle_entrypoint_load_once,
+    static_bundle_entrypoint_load_key,
 )
 from kdcube_ai_app.infra.secrets import (
     SecretsManagerError,
@@ -709,7 +712,7 @@ async def _load_bundle_props_defaults(
     wf_config.ai_bundle_spec = spec_resolved
     redis = _get_app_redis(request)
     pg_pool = _get_app_pg_pool(request)
-    workflow, _mod = get_workflow_instance(
+    workflow, _mod = await get_workflow_instance_async(
         spec, wf_config, comm_context=comm_context, redis=redis, pg_pool=pg_pool,
     )
     defaults = getattr(workflow, "bundle_props_defaults", None) or {}
@@ -1483,7 +1486,12 @@ async def _do_reload_bundles_from_authority(
     settings = get_settings()
     from kdcube_ai_app.infra.plugin.bundle_store import reload_registry_from_authority
     from kdcube_ai_app.infra.plugin.bundle_registry import set_registry_async
-    from kdcube_ai_app.infra.plugin.agentic_loader import clear_agentic_caches, evict_bundle_scope, AgenticBundleSpec
+    from kdcube_ai_app.infra.plugin.agentic_loader import (
+        AgenticBundleSpec,
+        clear_agentic_caches,
+        evict_bundle_scope,
+        invalidate_static_bundle_entrypoint_loads,
+    )
     from kdcube_ai_app.apps.chat.sdk.runtime.local_sidecars import stop_local_sidecars_for_bundle_ids
 
     tenant_id = (payload.tenant if payload else None) or settings.TENANT
@@ -1537,6 +1545,11 @@ async def _do_reload_bundles_from_authority(
                 singleton=bool(target_payload.get("singleton")),
             )
             eviction_result = evict_bundle_scope(target_spec, drop_sys_modules=True)
+            invalidate_static_bundle_entrypoint_loads(
+                bundle_id=requested_bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+            )
         else:
             clear_agentic_caches()
 
@@ -1675,10 +1688,31 @@ async def serve_static_asset(
     storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
     ui_root = storage_root / "ui" if storage_root else None
 
+    should_refresh_entrypoint = is_static_bundle_entrypoint_path(path)
+    load_key = static_bundle_entrypoint_load_key(
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=bundle_id,
+        storage_root=storage_root,
+    )
+    if should_refresh_entrypoint:
+        await run_static_bundle_entrypoint_load_once(
+            load_key=load_key,
+            load_coro_factory=lambda: _load_bundle_props_defaults(
+                bundle_id=bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+                request=request,
+                session=session,
+            ),
+        )
+        storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
+        ui_root = storage_root / "ui" if storage_root else None
+
     if not ui_root or not ui_root.exists():
-        # Build-on-first-request for bundles that expose ui.main_view but were not
-        # instantiated yet in this proc. This triggers on_bundle_load(), which in
-        # turn calls BaseEntrypoint._ensure_ui_build().
+        # Build/refresh on HTML entrypoint requests. This triggers
+        # on_bundle_load(), which calls BaseEntrypoint._ensure_ui_build() and
+        # lets its signature cache decide whether a rebuild is necessary.
         await _load_bundle_props_defaults(
             bundle_id=bundle_id,
             tenant=tenant_id,
@@ -1995,10 +2029,7 @@ async def fetch_bundle_widget(
     )
     runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
     with bind_current_request_context(comm_context, comm=runtime_comm):
-        if inspect.iscoroutinefunction(fn):
-            result = await fn(**extra)
-        else:
-            result = fn(**extra)
+        result = await _invoke_bundle_callable(fn, **extra)
     return {
         "status": "ok",
         "tenant": tenant_id,
@@ -2023,6 +2054,15 @@ def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
         p.kind == inspect.Parameter.VAR_KEYWORD or p.name == name
         for p in params
     )
+
+
+async def _invoke_bundle_callable(fn: Any, **kwargs: Any) -> Any:
+    if inspect.iscoroutinefunction(fn):
+        return await fn(**kwargs)
+    result = await asyncio.to_thread(fn, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def _coerce_optional_int(value: Any) -> int | None:
@@ -2157,10 +2197,7 @@ async def _call_bundle_mcp_inner(
             extra["mcp_path"] = mcp_path
         runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
         with bind_current_request_context(comm_context, comm=runtime_comm):
-            if inspect.iscoroutinefunction(fn):
-                result = await fn(**extra)
-            else:
-                result = fn(**extra)
+            result = await _invoke_bundle_callable(fn, **extra)
         mcp_app = _coerce_bundle_mcp_asgi_app(result, transport=endpoint_spec.transport)
         return await _dispatch_bundle_mcp_request(
             request=request,
@@ -2454,7 +2491,7 @@ async def _load_bundle_workflow(
     redis = _get_app_redis(request)
     pg_pool = _get_app_pg_pool(request)
     try:
-        workflow, _mod = get_workflow_instance(
+        workflow, _mod = await get_workflow_instance_async(
             spec, wf_config, comm_context=comm_context, redis=redis, pg_pool=pg_pool,
         )
     except Exception as e:
@@ -2469,7 +2506,7 @@ async def _load_bundle_workflow(
                 module=admin_spec.module,
                 singleton=bool(admin_spec.singleton),
             )
-            workflow, _mod = get_workflow_instance(
+            workflow, _mod = await get_workflow_instance_async(
                 admin, wf_config, comm_context=comm_context, redis=redis, pg_pool=pg_pool,
             )
             spec_resolved = admin_spec
@@ -2554,10 +2591,7 @@ async def _call_bundle_op_inner(
         )
         runtime_comm = _resolve_bound_runtime_comm(workflow=workflow, comm_context=comm_context)
         with bind_current_request_context(comm_context, comm=runtime_comm):
-            if inspect.iscoroutinefunction(fn):
-                result = await fn(**extra)
-            else:
-                result = fn(**extra)
+            result = await _invoke_bundle_callable(fn, **extra)
     except HTTPException:
         raise
     except Exception as e:

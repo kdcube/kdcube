@@ -106,6 +106,36 @@ def _install_reserved_example(monkeypatch, bundle_id: str, *, path: str = "/bund
     return entry
 
 
+def _install_example_source(monkeypatch, tmp_path: Path, bundle_dir_name: str, *, declared_id: str | None = None):
+    examples_root = tmp_path / "examples"
+    bundle_root = examples_root / bundle_dir_name
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    if declared_id:
+        (bundle_root / "entrypoint.py").write_text(f'BUNDLE_ID = "{declared_id}"\n', encoding="utf-8")
+    else:
+        (bundle_root / "entrypoint.py").write_text("# example bundle\n", encoding="utf-8")
+    monkeypatch.setattr(bundle_store, "_examples_root", lambda: examples_root)
+    monkeypatch.setattr(bundle_store, "_ensure_example_bundle_shared", lambda path: path)
+    return bundle_root
+
+
+def _install_example_settings(monkeypatch, *, include_examples: bool, component: str = "ingress"):
+    monkeypatch.setattr(
+        bundle_store,
+        "get_settings",
+        lambda: SimpleNamespace(
+            GATEWAY_COMPONENT=component,
+            BUNDLES_DESCRIPTOR_PROVIDER="file",
+            PLATFORM=SimpleNamespace(
+                APPLICATIONS=SimpleNamespace(
+                    BUNDLES_INCLUDE_EXAMPLES=include_examples,
+                    BUNDLES_DESCRIPTOR_PROVIDER="file",
+                )
+            ),
+        ),
+    )
+
+
 @pytest.mark.asyncio
 async def test_reset_registry_from_env_removes_stale_bundle_props(monkeypatch, tmp_path: Path):
     redis = _FakeRedis()
@@ -357,6 +387,112 @@ async def test_load_registry_file_authority_preserves_default_example_bundle(mon
 
     assert loaded.default_bundle_id == bundle_id
     assert bundle_id in loaded.bundles
+
+
+@pytest.mark.asyncio
+async def test_load_registry_file_authority_includes_examples_when_enabled_for_ingress(monkeypatch, tmp_path: Path):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "versatile@2026-03-31-13-36"
+
+    _install_example_source(monkeypatch, tmp_path, bundle_id, declared_id="versatile")
+    _install_example_settings(monkeypatch, include_examples=True, component="ingress")
+
+    descriptor_path = tmp_path / "bundles.yaml"
+    descriptor_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "items": [],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    store = bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=descriptor_path.resolve().as_uri())
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+
+    loaded = await bundle_store.load_registry(redis, tenant=tenant, project=project)
+
+    assert bundle_id in loaded.bundles
+    assert loaded.bundles[bundle_id].path == str(tmp_path / "examples" / bundle_id)
+
+
+@pytest.mark.asyncio
+async def test_load_registry_file_authority_ignores_example_descriptor_when_examples_disabled(monkeypatch, tmp_path: Path):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "versatile@2026-03-31-13-36"
+    props_key = bundle_store._props_key(tenant=tenant, project=project, bundle_id=bundle_id)
+
+    _install_example_source(monkeypatch, tmp_path, bundle_id, declared_id="versatile")
+    _install_example_settings(monkeypatch, include_examples=False, component="proc")
+
+    descriptor_path = tmp_path / "bundles.yaml"
+    descriptor_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "default_bundle_id": bundle_id,
+                    "items": [
+                        {
+                            "id": bundle_id,
+                            "config": {"feature": {"enabled": True}},
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    store = bundle_store._FileBundleDescriptorStore(bundles_yaml_uri=descriptor_path.resolve().as_uri())
+    monkeypatch.setattr(bundle_store, "_get_authoritative_bundle_store", lambda tenant, project: store)
+
+    loaded = await bundle_store.load_registry(redis, tenant=tenant, project=project)
+
+    assert bundle_id not in loaded.bundles
+    assert loaded.default_bundle_id == bundle_store.ADMIN_BUNDLE_ID
+    assert await redis.get(props_key) is None
+
+
+@pytest.mark.asyncio
+async def test_reset_registry_from_env_ignores_example_items_when_examples_disabled(monkeypatch, tmp_path: Path):
+    redis = _FakeRedis()
+    tenant = "demo"
+    project = "demo-project"
+    bundle_id = "versatile@2026-03-31-13-36"
+
+    _install_example_source(monkeypatch, tmp_path, bundle_id, declared_id="versatile")
+    _install_example_settings(monkeypatch, include_examples=False, component="proc")
+
+    descriptor_path = tmp_path / "bundles.yaml"
+    descriptor_path.write_text(
+        yaml.safe_dump(
+            {
+                "bundles": {
+                    "version": "1",
+                    "default_bundle_id": bundle_id,
+                    "items": [
+                        {
+                            "id": bundle_id,
+                            "config": {"feature": {"enabled": True}},
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        )
+    )
+    monkeypatch.setenv("BUNDLES_YAML_DESCRIPTOR_PATH", str(descriptor_path.resolve()))
+
+    loaded = await bundle_store.reset_registry_from_env(redis, tenant=tenant, project=project)
+
+    assert bundle_id not in loaded.bundles
+    assert loaded.default_bundle_id == bundle_store.ADMIN_BUNDLE_ID
 
 
 @pytest.mark.asyncio

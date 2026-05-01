@@ -135,8 +135,8 @@ class VersatileEntrypoint(BaseEntrypointWithEconomics):
         g.add_edge("orchestrate", END)
         return g.compile()
 
-    def on_bundle_load(self, **kwargs) -> None:
-        super().on_bundle_load(**kwargs)
+    async def on_bundle_load(self, **kwargs) -> None:
+        await super().on_bundle_load(**kwargs)
         storage_root = self.bundle_storage_root()
         if storage_root:
             (storage_root / "_ops").mkdir(parents=True, exist_ok=True)

@@ -454,6 +454,7 @@ Multiple such bundles can run inside one `tenant/project` environment.
 - bundle mount roots
 - storage roots
 - auth/infra/runtime settings
+- whether built-in example bundles are included in the effective runtime registry
 
 For local path bundles, `assembly.yaml` is where the host-side roots belong.
 
@@ -468,6 +469,13 @@ For local path bundles, `assembly.yaml` is where the host-side roots belong.
 
 Operationally, this is the file that says which application modules are present
 inside the current `tenant/project` environment.
+
+Built-in example bundles are governed by the deployment switch in `assembly.yaml`:
+
+- `platform.applications.bundles.bundles_include_examples: true` includes all packaged example bundles in the effective runtime registry
+- `platform.applications.bundles.bundles_include_examples: false` keeps packaged examples disabled
+- an item in `bundles.yaml` for a packaged example may carry config/props, but it is not the enable switch
+- if examples are disabled, mentioning an example id in `bundles.yaml` must not make that example available
 
 ### `bundles.secrets.yaml`
 
@@ -490,6 +498,10 @@ For non-interactive local install, the descriptor set should be complete and int
 ## Recommended Local Workflow
 
 Use a canonical descriptor directory and let `kdcube` stage it into the runtime.
+
+Before running bundle tests or interpreting failures, use the working
+environment checklist in
+[how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents).
 
 Recommended command shape:
 
@@ -738,6 +750,10 @@ In practice:
 
 Use `kdcube --info` to verify both host/container mappings.
 
+Built-in examples live in the managed-bundle path when the deployment includes
+examples. They do not need one `bundles.yaml` item per example unless you are
+supplying deployment-scoped config for that example.
+
 ## Applying Changes Correctly
 
 ### If you changed the canonical descriptor source directory
@@ -809,6 +825,28 @@ kdcube reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproje
 ```
 
 Use a full reinstall only when code changes depend on wider runtime/platform changes.
+
+### If you changed a custom main-view UI source
+
+For `ui.main_view` bundles, source changes belong in the bundle `ui-src`
+directory.
+
+Do not fix stale UI by manually building into:
+
+```text
+<bundle_storage_root>/ui
+```
+
+The supported path is:
+
+- the iframe requests the HTML entrypoint through `/api/integrations/static/{tenant}/{project}/{bundle_id}`
+- the bundle UI loader checks the `ui-src` signature
+- the loader builds into bundle storage when needed
+- the static route serves the refreshed hashed assets
+
+After changing `ui-src`, reload or reselect the bundle so the iframe requests
+the HTML entrypoint again. If the UI is still stale, inspect loader logs and the
+served hashed asset before changing runtime storage manually.
 
 ## Bundle Props, Secrets, And `enabled_config`
 
@@ -972,6 +1010,8 @@ But for normal bundle development, prefer a descriptor-driven initialized runtim
 - Editing the canonical descriptor source directory and expecting the running runtime to pick it up automatically.
 - Forgetting that the staged runtime files under `workdir/config/` are the active local authority.
 - Passing host paths in `bundles.yaml` instead of runtime-visible `/bundles/...` paths.
+- Treating `bundles.yaml` example config as the switch that enables built-in examples.
+- Manually building a custom bundle UI into runtime storage instead of letting the bundle UI loader refresh it.
 - Mixing `path` with `repo`/`ref`/`subdir` in the same bundle entry.
 - Expecting `--upstream` to rebuild images. It only selects the upstream source/ref; add `init --build` to prebuild images.
 - Assuming the base `--workdir` is the concrete runtime when the CLI has resolved a namespaced runtime under it.
@@ -986,7 +1026,9 @@ If you only remember the essentials, remember these:
 - `--descriptors-location` stages descriptor files into that runtime
 - `bundles.yaml` owns bundle definitions and non-secret deployment props
 - `bundles.secrets.yaml` owns deployment-scoped bundle secrets
+- `bundles_include_examples` in `assembly.yaml` owns built-in example availability
 - local path bundles should use runtime-visible `/bundles/...` paths
+- custom main-view UI source is rebuilt by the bundle UI loader, not by manual runtime-storage builds
 - rerun install when you changed the canonical source descriptor set or runtime topology
 - use `kdcube reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
 - use `kdcube --info --workdir <path>` to inspect the runtime you are actually using

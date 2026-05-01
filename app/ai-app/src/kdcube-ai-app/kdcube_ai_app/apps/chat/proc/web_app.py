@@ -517,7 +517,7 @@ async def lifespan(app: FastAPI):
         """
         import inspect
         from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle_async
-        from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance
+        from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance_async
         from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
 
         cfg_req = ConfigRequest(**(comm_context.config.values or {}))
@@ -532,7 +532,7 @@ async def lifespan(app: FastAPI):
             singleton=bool(spec_resolved.singleton),
         )
         try:
-            workflow, _ = get_workflow_instance(
+            workflow, _ = await get_workflow_instance_async(
                 spec=spec,
                 config=wf_config,
                 comm_context=comm_context,
@@ -550,7 +550,7 @@ async def lifespan(app: FastAPI):
                     module=admin_spec.module,
                     singleton=bool(admin_spec.singleton),
                 )
-                workflow, _ = get_workflow_instance(
+                workflow, _ = await get_workflow_instance_async(
                     spec=admin,
                     config=wf_config,
                     comm_context=comm_context,
@@ -588,8 +588,13 @@ async def lifespan(app: FastAPI):
         command = comm_context.request.operation or params.pop("command", None)
 
         try:
-            result = await (getattr(workflow, command)(**params) if (command and hasattr(workflow, command))
-                            else workflow.run(**params))
+            fn = getattr(workflow, command) if (command and hasattr(workflow, command)) else workflow.run
+            if inspect.iscoroutinefunction(fn):
+                result = await fn(**params)
+            else:
+                result = await asyncio.to_thread(fn, **params)
+                if inspect.isawaitable(result):
+                    result = await result
             return result or {}
         except Exception as e:
             logger.error(traceback.format_exc())

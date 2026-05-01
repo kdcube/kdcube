@@ -76,15 +76,15 @@ async def test_load_bundle_props_defaults_preserves_request_stream_id(monkeypatc
     def _create_workflow_config(_cfg_req):
         return SimpleNamespace(ai_bundle_spec=None)
 
-    def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None):
-        del spec, wf_config, redis
+    async def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None, pg_pool=None):
+        del spec, wf_config, redis, pg_pool
         captured["comm_context"] = comm_context
         workflow = SimpleNamespace(bundle_props_defaults={"demo": True}, configuration={"bundle_version": "1.0.0"})
         return workflow, None
 
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
-    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
 
     result = await integrations._load_bundle_props_defaults(
         bundle_id="bundle.demo",
@@ -116,8 +116,8 @@ async def test_call_bundle_op_inner_preserves_request_stream_id(monkeypatch):
             captured["kwargs"] = dict(kwargs)
             return {"pong": True}
 
-    def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None):
-        del spec, wf_config, redis
+    async def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None, pg_pool=None):
+        del spec, wf_config, redis, pg_pool
         captured["comm_context"] = comm_context
         return _Workflow(), None
 
@@ -133,7 +133,7 @@ async def test_call_bundle_op_inner_preserves_request_stream_id(monkeypatch):
     )
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
-    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
     monkeypatch.setattr(integrations, "get_default_id", lambda: None)
 
     result = await integrations._call_bundle_op_inner(
@@ -175,8 +175,8 @@ async def test_call_bundle_op_inner_preserves_explicit_user_id_payload(monkeypat
             captured["kwargs"] = dict(kwargs)
             return {"ok": True, "target_user_id": kwargs.get("user_id")}
 
-    def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None):
-        del spec, wf_config, comm_context, redis
+    async def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None, pg_pool=None):
+        del spec, wf_config, comm_context, redis, pg_pool
         return _Workflow(), None
 
     monkeypatch.setattr(
@@ -191,7 +191,7 @@ async def test_call_bundle_op_inner_preserves_explicit_user_id_payload(monkeypat
     )
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
-    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
     monkeypatch.setattr(integrations, "get_default_id", lambda: None)
 
     result = await integrations._call_bundle_op_inner(
@@ -248,8 +248,8 @@ async def test_call_bundle_op_inner_binds_runtime_request_context(monkeypatch):
 
     workflow = _Workflow()
 
-    def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None):
-        del spec, wf_config, comm_context, redis
+    async def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None, pg_pool=None):
+        del spec, wf_config, comm_context, redis, pg_pool
         return workflow, None
 
     monkeypatch.setattr(
@@ -264,7 +264,7 @@ async def test_call_bundle_op_inner_binds_runtime_request_context(monkeypatch):
     )
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
-    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
     monkeypatch.setattr(integrations, "get_default_id", lambda: None)
 
     await integrations._call_bundle_op_inner(
@@ -300,8 +300,8 @@ async def test_call_bundle_op_inner_uses_default_bundle_when_omitted(monkeypatch
             captured["kwargs"] = dict(kwargs)
             return {"pong": True}
 
-    def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None):
-        del spec, wf_config, redis
+    async def _get_workflow_instance(spec, wf_config, comm_context=None, redis=None, pg_pool=None):
+        del spec, wf_config, redis, pg_pool
         captured["comm_context"] = comm_context
         return _Workflow(), None
 
@@ -317,7 +317,7 @@ async def test_call_bundle_op_inner_uses_default_bundle_when_omitted(monkeypatch
     )
     monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
     monkeypatch.setattr(integrations, "create_workflow_config", _create_workflow_config)
-    monkeypatch.setattr(integrations, "get_workflow_instance", _get_workflow_instance)
+    monkeypatch.setattr(integrations, "get_workflow_instance_async", _get_workflow_instance)
     monkeypatch.setattr(integrations, "get_default_id", lambda: "bundle.default")
 
     result = await integrations._call_bundle_op_inner(
@@ -337,8 +337,7 @@ async def test_call_bundle_op_inner_uses_default_bundle_when_omitted(monkeypatch
     assert result["ping"] == {"pong": True}
 
 
-@pytest.mark.asyncio
-async def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_path):
+def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_path):
     bundle_root = tmp_path / "bundle"
     bundle_root.mkdir()
     storage_root = tmp_path / "storage"
@@ -363,14 +362,112 @@ async def test_serve_static_asset_builds_ui_on_first_request(monkeypatch, tmp_pa
     monkeypatch.setattr(integrations, "_load_bundle_props_defaults", _load_bundle_props_defaults)
     monkeypatch.setattr(bundle_storage, "storage_for_spec", lambda **kwargs: storage_root)
 
-    response = await integrations.serve_static_asset(
-        tenant="tenant-a",
-        project="project-a",
-        bundle_id="echo.ui@2026-03-30",
-        request=_request(),
-        session=_session(),
+    response = asyncio.run(
+        integrations.serve_static_asset(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="echo.ui@2026-03-30",
+            request=_request(),
+            session=_session(),
+        )
     )
 
     assert isinstance(response, HTMLResponse)
     assert "Echo UI" in response.body.decode("utf-8")
     assert '/api/integrations/static/tenant-a/project-a/echo.ui@2026-03-30/' in response.body.decode("utf-8")
+
+
+def test_serve_static_asset_refreshes_existing_ui_on_entrypoint_request(monkeypatch, tmp_path):
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    storage_root = tmp_path / "storage"
+    ui_root = storage_root / "ui"
+    ui_root.mkdir(parents=True)
+    (ui_root / "index.html").write_text("<html><head></head><body>Stale UI</body></html>", encoding="utf-8")
+    load_calls = []
+
+    async def _resolve_bundle_async(bundle_id, override=None):
+        del override
+        return SimpleNamespace(id=bundle_id, path=str(bundle_root), module="entrypoint", singleton=False, version="v1")
+
+    async def _load_bundle_props_defaults(**kwargs):
+        load_calls.append(kwargs["bundle_id"])
+        (ui_root / "index.html").write_text("<html><head></head><body>Fresh UI</body></html>", encoding="utf-8")
+        return {"ui": {"main_view": {"src_folder": "ui-src"}}}
+
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"),
+    )
+    monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "_load_bundle_props_defaults", _load_bundle_props_defaults)
+    monkeypatch.setattr(bundle_storage, "storage_for_spec", lambda **kwargs: storage_root)
+
+    response = asyncio.run(
+        integrations.serve_static_asset(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="echo.ui@2026-03-30",
+            request=_request(),
+            session=_session(),
+        )
+    )
+
+    assert load_calls == ["echo.ui@2026-03-30"]
+    assert isinstance(response, HTMLResponse)
+    assert "Fresh UI" in response.body.decode("utf-8")
+    assert "Stale UI" not in response.body.decode("utf-8")
+
+    response = asyncio.run(
+        integrations.serve_static_asset(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="echo.ui@2026-03-30",
+            request=_request(),
+            session=_session(),
+        )
+    )
+
+    assert load_calls == ["echo.ui@2026-03-30"]
+    assert isinstance(response, HTMLResponse)
+    assert "Fresh UI" in response.body.decode("utf-8")
+
+
+def test_serve_static_asset_does_not_refresh_existing_asset_request(monkeypatch, tmp_path):
+    bundle_root = tmp_path / "bundle"
+    bundle_root.mkdir()
+    storage_root = tmp_path / "storage"
+    asset = storage_root / "ui" / "assets" / "app.js"
+    asset.parent.mkdir(parents=True)
+    asset.write_text("console.log('cached asset');", encoding="utf-8")
+
+    async def _resolve_bundle_async(bundle_id, override=None):
+        del override
+        return SimpleNamespace(id=bundle_id, path=str(bundle_root), module="entrypoint", singleton=False, version="v1")
+
+    async def _load_bundle_props_defaults(**kwargs):
+        del kwargs
+        raise AssertionError("asset requests should not force a UI refresh")
+
+    monkeypatch.setattr(
+        integrations,
+        "get_settings",
+        lambda: SimpleNamespace(TENANT="tenant-a", PROJECT="project-a"),
+    )
+    monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "_load_bundle_props_defaults", _load_bundle_props_defaults)
+    monkeypatch.setattr(bundle_storage, "storage_for_spec", lambda **kwargs: storage_root)
+
+    response = asyncio.run(
+        integrations.serve_static_asset(
+            tenant="tenant-a",
+            project="project-a",
+            bundle_id="echo.ui@2026-03-30",
+            path="assets/app.js",
+            request=_request(),
+            session=_session(),
+        )
+    )
+
+    assert getattr(response, "path", None) == str(asset)

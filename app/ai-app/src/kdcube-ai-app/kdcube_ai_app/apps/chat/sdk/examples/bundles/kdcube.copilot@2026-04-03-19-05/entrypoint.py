@@ -31,6 +31,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import pathlib
 import os
 import shutil
@@ -274,15 +275,15 @@ class ReactWorkflow(BaseEntrypoint):
         g.add_edge("orchestrate", END)
         return g.compile()
 
-    def on_bundle_load(self, **kwargs) -> None:
+    async def on_bundle_load(self, **kwargs) -> None:
         """Build bundle knowledge space once when this tenant/project bundle instance is loaded."""
-        self._ensure_knowledge_space(reason="on_bundle_load")
+        await asyncio.to_thread(self._ensure_knowledge_space, reason="on_bundle_load")
         return None
 
     async def pre_run_hook(self, *, state: Dict[str, Any]) -> None:
         """Reconcile knowledge space only if load-time prep did not happen or config changed."""
         await super().pre_run_hook(state=state)
-        self._reconcile_knowledge_space(reason="pre_run_hook")
+        await asyncio.to_thread(self._reconcile_knowledge_space, reason="pre_run_hook")
         return None
 
     def _doc_reader_storage_root(self) -> pathlib.Path | None:

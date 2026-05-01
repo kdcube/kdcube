@@ -3,6 +3,7 @@
 # kdcube_ai_app/infra/plugin/bundle_store.py
 
 from __future__ import annotations
+import ast
 import asyncio
 import json, os, time, uuid, threading
 import logging
@@ -11,7 +12,6 @@ import fcntl
 from contextlib import asynccontextmanager
 from typing import Dict, Optional, Tuple, Any, Set
 from pathlib import Path
-from functools import lru_cache
 from pydantic import BaseModel, Field, ValidationError
 import kdcube_ai_app.infra.namespaces as namespaces
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
@@ -203,10 +203,30 @@ def _ensure_example_bundle_shared(bundle_root: Path) -> Path:
         return bundle_root
 
 def _examples_enabled() -> bool:
-    component = (get_settings().GATEWAY_COMPONENT or "ingress").strip().lower()
-    if component != "proc":
-        return False
     return bool(get_settings().PLATFORM.APPLICATIONS.BUNDLES_INCLUDE_EXAMPLES)
+
+def _declared_example_bundle_id(bundle_root: Path) -> Optional[str]:
+    entrypoint = bundle_root / "entrypoint.py"
+    try:
+        tree = ast.parse(entrypoint.read_text(encoding="utf-8"), filename=str(entrypoint))
+    except Exception:
+        return None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(target, ast.Name) and target.id == "BUNDLE_ID" for target in node.targets):
+            continue
+        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            value = node.value.value.strip()
+            return value or None
+    return None
+
+def _example_bundle_id_candidates(bundle_root: Path) -> Set[str]:
+    ids = {bundle_root.name}
+    declared = _declared_example_bundle_id(bundle_root)
+    if declared:
+        ids.add(declared)
+    return ids
 
 def _load_example_bundles() -> Dict[str, "BundleEntry"]:
     if not _examples_enabled():
@@ -238,8 +258,8 @@ def _load_example_bundles() -> Dict[str, "BundleEntry"]:
         )
     return bundles
 
-def _discover_example_bundle_ids() -> Set[str]:
-    if not _examples_enabled():
+def _discover_example_bundle_ids(*, respect_enabled: bool = True) -> Set[str]:
+    if respect_enabled and not _examples_enabled():
         return set()
     root = _examples_root()
     if not root.exists():
@@ -252,28 +272,54 @@ def _discover_example_bundle_ids() -> Set[str]:
             continue
         if not (item / "entrypoint.py").exists():
             continue
-        bundle_path = _ensure_example_bundle_shared(item)
-        try:
-            from kdcube_ai_app.infra.plugin.agentic_loader import get_declared_bundle_id
-            bid = get_declared_bundle_id(bundle_path, "entrypoint") or item.name
-        except Exception:
-            bid = item.name
-        ids.add(bid)
+        ids.update(_example_bundle_id_candidates(item))
     return ids
 
-@lru_cache(maxsize=1)
 def _reserved_bundle_ids() -> Set[str]:
     # Always reserve built-in admin bundle and example bundle ids.
     ids = {ADMIN_BUNDLE_ID}
     try:
-        ids.update(_discover_example_bundle_ids())
+        ids.update(_discover_example_bundle_ids(respect_enabled=True))
     except Exception:
         pass
     return ids
 
+def _is_example_bundle_id(bundle_id: str) -> bool:
+    bid = str(bundle_id or "").strip()
+    if not bid:
+        return False
+    try:
+        return bid in _discover_example_bundle_ids(respect_enabled=False)
+    except Exception:
+        return False
+
+def _drop_disabled_example_bundle_entries(
+    bundles_dict: Dict[str, Dict[str, Any]],
+    props_map: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    props_map = dict(props_map or {})
+    if _examples_enabled():
+        return bundles_dict, props_map
+    example_ids = _discover_example_bundle_ids(respect_enabled=False)
+    if not example_ids:
+        return bundles_dict, props_map
+    filtered = {
+        bid: value
+        for bid, value in (bundles_dict or {}).items()
+        if str(bid or "").strip() not in example_ids
+    }
+    filtered_props = {
+        bid: value
+        for bid, value in props_map.items()
+        if str(bid or "").strip() not in example_ids
+    }
+    return filtered, filtered_props
+
 def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
     if bid == ADMIN_BUNDLE_ID:
         return _admin_bundle_entry()
+    if not _examples_enabled() or not _is_example_bundle_id(bid):
+        return None
     root = _examples_root()
     if not root.exists():
         return None
@@ -298,7 +344,7 @@ def _reserved_bundle_entry(bid: str) -> Optional["BundleEntry"]:
             if not (item / "entrypoint.py").exists():
                 continue
             bundle_path = _ensure_example_bundle_shared(item)
-            if get_declared_bundle_id(bundle_path, "entrypoint") == bid:
+            if get_declared_bundle_id(bundle_path, "entrypoint") == bid or bid in _example_bundle_id_candidates(item):
                 return BundleEntry(
                     id=bid,
                     name=bid,
@@ -1012,6 +1058,8 @@ class _FileBundleDescriptorStore:
                 bundle_id = str(item.get("id") or "").strip()
                 if not bundle_id:
                     continue
+                if not _examples_enabled() and _is_example_bundle_id(bundle_id):
+                    continue
                 try:
                     entry, props = self._bundle_item_entry_and_props(bundle_id, item)
                 except Exception:
@@ -1607,6 +1655,7 @@ async def seed_from_env_if_any(redis, tenant: Optional[str] = None, project: Opt
             default_id = data.get("default_bundle_id") or (next(iter(bundles_dict.keys()), None))
 
         bundles_dict, props_map = _split_bundles_and_props(bundles_dict)
+        bundles_dict, props_map = _drop_disabled_example_bundle_entries(bundles_dict, props_map)
 
         reg = BundlesRegistry(
             default_bundle_id=default_id,
@@ -1642,9 +1691,7 @@ async def reset_registry_from_env(redis, tenant: Optional[str] = None, project: 
         default_id = data.get("default_bundle_id") or (next(iter(bundles_dict.keys()), None))
 
     bundles_dict, props_map = _split_bundles_and_props(bundles_dict)
-
-    if not bundles_dict:
-        raise ValueError("Bundle descriptor authority has no bundles")
+    bundles_dict, props_map = _drop_disabled_example_bundle_entries(bundles_dict, props_map)
 
     reg = BundlesRegistry(
         default_bundle_id=default_id,

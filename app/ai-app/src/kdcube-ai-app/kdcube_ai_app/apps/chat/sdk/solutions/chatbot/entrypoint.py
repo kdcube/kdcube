@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import copy
 import hashlib
@@ -209,7 +210,7 @@ class BaseEntrypoint:
                 return config_attr
         return config_attr
 
-    def on_bundle_load(self, **kwargs) -> None:
+    async def on_bundle_load(self, **kwargs) -> None:
         """
         Optional one-time hook called when the bundle is first loaded
         (per process, per tenant/project). Override in bundles that need
@@ -225,7 +226,7 @@ class BaseEntrypoint:
           - redis
           - logger
         """
-        self._ensure_ui_build()
+        await self._ensure_ui_build()
         return None
 
     async def on_props_changed(
@@ -247,15 +248,18 @@ class BaseEntrypoint:
         """
         return None
 
-    def _ensure_ui_build(self) -> None:
+    async def _ensure_ui_build(self) -> None:
         """
         Build the bundle's custom UI if `ui.main_view` is configured in bundle_props.
         Uses a signature that includes source tree metadata to skip rebuilding when nothing changed.
         Output goes to <bundle_storage_root>/ui/.
         Bundles can override this method to customise the build behaviour.
         """
-        import subprocess
+        import shutil
         import traceback as _tb
+        import uuid as _uuid
+
+        from kdcube_ai_app.infra.plugin.bundle_once import run_once_for_shared_bundle_storage
 
         ui_cfg = (self.bundle_props or {}).get("ui") or {}
         main_view = ui_cfg.get("main_view") or {}
@@ -316,62 +320,101 @@ class BaseEntrypoint:
         source_signature = _ui_source_signature(src_path)
         signature = f"{src_path}|{build_command}|{bundle_delivery_id}|{source_signature}"
 
-        try:
-            if sig_path.read_text(encoding="utf-8").strip() == signature and (build_dest / "index.html").exists():
-                self.logger.log(f"[bundle.ui] build skipped: signature cache hit storage={storage_root}", "INFO")
-                return
-        except Exception:
-            pass
+        async def _build_ui() -> None:
+            tmp_dest = storage_root / f".ui.build.tmp.{os.getpid()}.{_uuid.uuid4().hex}"
+            previous_dest = storage_root / f".ui.previous.{os.getpid()}.{_uuid.uuid4().hex}"
+            swapped_old = False
+            try:
+                shutil.rmtree(tmp_dest, ignore_errors=True)
+                tmp_dest.mkdir(parents=True, exist_ok=True)
+                final_command = build_command.replace("<VI_BUILD_DEST_ABSOLUTE_PATH>", str(tmp_dest))
+                self.logger.log(f"[bundle.ui] build start: src={src_path} dest={build_dest}", "INFO")
 
-        build_dest.mkdir(parents=True, exist_ok=True)
-        final_command = build_command.replace("<VI_BUILD_DEST_ABSOLUTE_PATH>", str(build_dest))
-        self.logger.log(f"[bundle.ui] build start: src={src_path} dest={build_dest}", "INFO")
+                env = os.environ.copy()
+                if bundle_delivery_id:
+                    env["VI_BUNDLE_ID"] = bundle_delivery_id
+                    env["VITE_BUNDLE_ID"] = bundle_delivery_id
+                # Source nvm's bin dir explicitly
+                nvm_bin = os.path.expanduser("~/.nvm/versions/node")
+                if os.path.exists(nvm_bin):
+                    # Find the active version
+                    for version_dir in sorted(os.listdir(nvm_bin), reverse=True):
+                        bin_path = os.path.join(nvm_bin, version_dir, "bin")
+                        if os.path.exists(os.path.join(bin_path, "npm")):
+                            env["PATH"] = bin_path + ":" + env.get("PATH", "")
+                            break
 
-        env = os.environ.copy()
-        if bundle_delivery_id:
-            env["VI_BUNDLE_ID"] = bundle_delivery_id
-            env["VITE_BUNDLE_ID"] = bundle_delivery_id
-        # Source nvm's bin dir explicitly
-        nvm_bin = os.path.expanduser("~/.nvm/versions/node")
-        if os.path.exists(nvm_bin):
-            # Find the active version
-            for version_dir in sorted(os.listdir(nvm_bin), reverse=True):
-                bin_path = os.path.join(nvm_bin, version_dir, "bin")
-                if os.path.exists(os.path.join(bin_path, "npm")):
-                    env["PATH"] = bin_path + ":" + env.get("PATH", "")
-                    break
-
-        try:
-            result = subprocess.run(
-                final_command,
-                shell=True,
-                cwd=str(src_path),
-                capture_output=True,
-                text=True,
-                timeout=600,
-                env=env
-            )
-            if result.returncode != 0:
-                build_output = "\n".join(
-                    part for part in [
-                        (result.stderr or "").strip(),
-                        (result.stdout or "").strip(),
-                    ] if part
+                proc = await asyncio.create_subprocess_shell(
+                    final_command,
+                    cwd=str(src_path),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
+                try:
+                    stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=600)
+                except asyncio.TimeoutError:
+                    proc.kill()
+                    await proc.wait()
+                    raise TimeoutError("UI build timed out after 600s")
+
+                stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
+                stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
+                if proc.returncode != 0:
+                    build_output = "\n".join(
+                        part for part in [
+                            stderr.strip(),
+                            stdout.strip(),
+                        ] if part
+                    )
+                    raise RuntimeError(f"UI build failed (exit={proc.returncode}):\n{build_output[-4000:]}")
+                if not (tmp_dest / "index.html").exists():
+                    raise RuntimeError(f"UI build failed: index.html missing in temp output {tmp_dest}")
+
+                shutil.rmtree(previous_dest, ignore_errors=True)
+                if build_dest.exists():
+                    build_dest.rename(previous_dest)
+                    swapped_old = True
+                try:
+                    tmp_dest.rename(build_dest)
+                except Exception:
+                    if swapped_old and previous_dest.exists() and not build_dest.exists():
+                        previous_dest.rename(build_dest)
+                    raise
+
+                shutil.rmtree(previous_dest, ignore_errors=True)
                 self.logger.log(
-                    f"[bundle.ui] build failed (exit={result.returncode}):\n{build_output[-4000:]}",
-                    "ERROR",
+                    f"[bundle.ui] build done: dest={build_dest} index_html={(build_dest / 'index.html').exists()}",
+                    "INFO",
                 )
-                return
-            sig_path.write_text(f"{signature}\n", encoding="utf-8")
-            self.logger.log(
-                f"[bundle.ui] build done: dest={build_dest} index_html={(build_dest / 'index.html').exists()}",
-                "INFO",
+            finally:
+                shutil.rmtree(tmp_dest, ignore_errors=True)
+
+        try:
+            await run_once_for_shared_bundle_storage(
+                storage_root=storage_root,
+                operation="ui-main-view",
+                signature_path=sig_path,
+                signature=signature,
+                ready=lambda: (build_dest / "index.html").exists(),
+                action=_build_ui,
+                logger=self.logger,
+                owner_metadata={
+                    "bundle_id": bundle_delivery_id,
+                    "src": str(src_path),
+                    "dest": str(build_dest),
+                },
+                lock_wait_seconds=max(1, int(os.environ.get("BUNDLE_UI_BUILD_LOCK_WAIT_SECONDS", "600") or "600")),
+                lock_ttl_seconds=max(30, int(os.environ.get("BUNDLE_UI_BUILD_LOCK_TTL_SECONDS", "900") or "900")),
+                allow_existing_on_timeout=True,
+                log_prefix="[bundle.ui]",
             )
-        except subprocess.TimeoutExpired:
+        except TimeoutError:
             self.logger.log("[bundle.ui] build failed: timeout after 600s", "ERROR")
+            raise
         except Exception:
             self.logger.log(f"[bundle.ui] build failed:\n{_tb.format_exc()}", "ERROR")
+            raise
 
     def bundle_storage_root(self) -> Optional[pathlib.Path]:
         """
