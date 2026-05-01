@@ -1121,6 +1121,7 @@ def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
     for path in [
         data_dir / "kdcube-storage",
         data_dir / "exec-workspace",
+        data_dir / "managed-bundles",
         data_dir / "bundle-storage",
         data_dir / "bundles",
         data_dir / "postgres",

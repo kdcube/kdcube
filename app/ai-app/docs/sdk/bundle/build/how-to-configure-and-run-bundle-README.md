@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
 title: "How To Configure And Run A Bundle"
 summary: "Current bundle-development runtime workflow: tenant/project environment setup, descriptor staging, local-path and git bundles, configuration translation, start/stop/reload loop, configuration/secret scopes, and the rule that one machine may hold many local deployment snapshots but should not be treated as running many local compose-backed KDCubes at once."
 tags: ["sdk", "bundle", "configuration", "runtime", "cli", "bundles.yaml"]
-keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine"]
+keywords: ["local bundle development workflow", "tenant project environment boundary", "descriptor driven runtime setup", "local path bundle loop", "git bundle loop", "bundle reload workflow", "runtime sandbox selection", "bundle config and secret scopes", "bundle configurator workflow", "bundle deployer workflow", "current kdcube cli workflow", "multiple local runtime snapshots", "single active local compose deployment", "run multiple kdcubes on one machine", "kdcube bundle command", "patch bundle config cli", "patch bundle secret cli"]
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/configuration/bundles-descriptor-README.md
@@ -848,17 +848,26 @@ This is required because `kdcube reload` does not read arbitrary external descri
 
 ### If you changed `bundles.yaml` or `bundles.secrets.yaml` inside the active runtime
 
-After editing:
-
-```text
-<runtime>/config/bundles.yaml
-<runtime>/config/bundles.secrets.yaml
-```
-
-apply the change with:
+Use `kdcube bundle` to patch specific keys:
 
 ```bash
-kdcube reload my.bundle@1-0 --workdir ~/.kdcube/kdcube-runtime/mytenant__myproject
+kdcube bundle <bundle_id> \
+  --set-config key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+kdcube bundle <bundle_id> \
+  --set-secret key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+kdcube bundle <bundle_id> \
+  --del-config key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Apply the change with:
+
+```bash
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
 `reload`:
@@ -981,6 +990,28 @@ bundles:
         api:
           shared_token: "replace-me"
 ```
+
+To patch a config or secret key without editing the files by hand, use `kdcube bundle`:
+
+```bash
+# Set a config value
+kdcube bundle <bundle_id> \
+  --set-config key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+# Set a secret
+kdcube bundle <bundle_id> \
+  --set-secret key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+# Delete a config or secret key (raises an error if the key does not exist)
+kdcube bundle <bundle_id> --del-config key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+kdcube bundle <bundle_id> --del-secret key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+`kdcube bundle` only patches the staged files. Run `kdcube reload` afterward to apply the change.
 
 `enabled_config` values belong in bundle props, not in secrets.
 
@@ -1144,6 +1175,7 @@ If you only remember the essentials, remember these:
 - file-producing tools use the React/tool runtime file contract, not a
   `bundles.yaml` switch
 - rerun install when you changed the canonical source descriptor set or runtime topology
+- use `kdcube bundle <bundle_id> --set-config / --set-secret / --del-config / --del-secret` to patch staged config or secrets without editing YAML by hand
 - use `kdcube reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
 - use `kdcube --info --workdir <path>` to inspect the runtime you are actually using
 - use `kdcube export` before overwriting runtime bundle state with older descriptor copies

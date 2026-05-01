@@ -1,9 +1,9 @@
 ---
 id: ks:docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
-summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, and the practical rule that multiple namespaced runtime snapshots may exist on one machine while local compose-backed execution remains one active deployment at a time."
-tags: ["service", "cicd", "cli", "env", "deployment"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace"]
+summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, bundle config and secret patching, and the practical rule that multiple namespaced runtime snapshots may exist on one machine while local compose-backed execution remains one active deployment at a time."
+tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "kdcube bundle command"]
 see_also:
   - ks:docs/service/cicd/release-README.md
   - ks:docs/service/cicd/descriptors-README.md
@@ -435,6 +435,73 @@ Operational rule for `aws-sm` deployments:
 If you skip that step, a later provision can replay stale `BUNDLES_YAML` or
 `BUNDLES_SECRETS_YAML` and overwrite runtime bundle changes.
 
+### 2.3c Patch staged bundle config and secrets
+
+`kdcube bundle` patches the staged descriptor files in the active runtime workdir
+without a full reinstall or manual YAML edit.
+
+**Set a config value by dotted key path:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-config key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+**Delete a config key:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --del-config key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+**Set a secret:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-secret key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+**Delete a secret key:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --del-secret key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Multiple operations can be chained in a single invocation:
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-config model.name claude-3-5-sonnet \
+  --set-config features.debug false \
+  --del-config features.legacy_mode \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Value coercion rules:
+
+| CLI value | Stored as |
+|---|---|
+| `true` / `false` | bool |
+| `42`, `3.14` | int / float |
+| `hello world` | string (no quotes needed) |
+| `'{"a": 1}'` (shell-quoted JSON) | string (the JSON literal) |
+
+`--del-config` and `--del-secret` raise an error if the key does not exist.
+
+After patching, apply the change with:
+
+```bash
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+`kdcube bundle` only patches the staged files under `workdir/config/`.
+It does not push the change live on its own — `kdcube reload` is still required.
+
 ### 2.4 Bundles descriptor (optional)
 
 You can provide a **bundles descriptor** (`bundles.yaml`) and an optional
@@ -650,7 +717,7 @@ kdcube --info
 Inspect a specific workdir deployment:
 
 ```bash
-kdcube --info --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube --info --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
 Initialize a workdir without starting Docker (clones platform repo automatically):
@@ -696,19 +763,38 @@ Use this for uncommitted platform changes. Do not combine this flow with
 Start the stack for an already-initialized workdir:
 
 ```bash
-kdcube start --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
+
+Patch staged bundle config or secrets without editing YAML by hand:
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-config key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+kdcube bundle <bundle_id> \
+  --set-secret key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+kdcube bundle <bundle_id> \
+  --del-config key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Multiple `--set-config`, `--set-secret`, `--del-config`, `--del-secret` flags can be combined in one call.
+After patching, reload the bundle to apply the change.
 
 Reload a bundle after descriptor changes:
 
 ```bash
-kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
 Export live bundle descriptors:
 
 ```bash
-kdcube export --workdir ~/.kdcube/kdcube-runtime/acme__prod --out-dir /tmp/export
+kdcube export --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> --out-dir /tmp/export
 ```
 
 Stop the local workdir stack:

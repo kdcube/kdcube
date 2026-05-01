@@ -1057,6 +1057,26 @@ def _get_nested(data: dict | None, *keys: str):
     return cur
 
 
+def _parse_yaml_scalar(raw: str) -> object:
+    """Parse a CLI string value into a typed YAML scalar (bool, int, float, str, None)."""
+    try:
+        val = yaml.safe_load(raw)
+        if isinstance(val, (bool, int, float, str)) or val is None:
+            return val
+    except Exception:
+        pass
+    return raw
+
+
+def _nested_key_exists(dct: dict, keys: list) -> bool:
+    cur: object = dct
+    for key in keys:
+        if not isinstance(cur, dict) or key not in cur:
+            return False
+        cur = cur[key]
+    return True
+
+
 def _has_value(value: object | None) -> bool:
     if value is None:
         return False
@@ -1752,6 +1772,44 @@ def main() -> None:
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
 
+    _sp = subparsers.add_parser("bundle", help="Patch config or secrets for a staged bundle")
+    _sp.add_argument("bundle_id", help="Bundle ID to patch")
+    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    _sp.add_argument(
+        "--set-config",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        action="append",
+        default=[],
+        dest="set_config",
+        help="Set a config value by dotted key path",
+    )
+    _sp.add_argument(
+        "--set-secret",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        action="append",
+        default=[],
+        dest="set_secret",
+        help="Set a secret value by dotted key path",
+    )
+    _sp.add_argument(
+        "--del-config",
+        metavar="KEY",
+        action="append",
+        default=[],
+        dest="del_config",
+        help="Delete a config key by dotted path",
+    )
+    _sp.add_argument(
+        "--del-secret",
+        metavar="KEY",
+        action="append",
+        default=[],
+        dest="del_secret",
+        help="Delete a secret key by dotted path",
+    )
+
     _sp = subparsers.add_parser("export", help="Export live bundle descriptors")
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
@@ -1878,6 +1936,97 @@ def main() -> None:
                 workdir=_resolve_cli_workdir(_workdir),
                 bundle_id=str(args.bundle_id).strip(),
             )
+            return
+        if args.command == "bundle":
+            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _resolved = _resolve_cli_workdir(_workdir)
+            _config_dir = _resolved / "config"
+            _bundles_path = _config_dir / "bundles.yaml"
+            _bundles_secrets_path = _config_dir / "bundles.secrets.yaml"
+
+            if not _bundles_path.exists():
+                raise SystemExit(
+                    f"bundles.yaml not found at {_bundles_path}.\n"
+                    "Initialize the workdir first."
+                )
+
+            _bundle_id = str(args.bundle_id).strip()
+            _set_config_ops: list[list[str]] = args.set_config or []
+            _set_secret_ops: list[list[str]] = args.set_secret or []
+            _del_config_ops: list[str] = args.del_config or []
+            _del_secret_ops: list[str] = args.del_secret or []
+
+            if not any([_set_config_ops, _set_secret_ops, _del_config_ops, _del_secret_ops]):
+                raise SystemExit(
+                    "No operations specified. "
+                    "Use --set-config, --set-secret, --del-config, or --del-secret."
+                )
+
+            if _set_config_ops or _del_config_ops:
+                _bundles_data = installer_mod.load_release_descriptor(_bundles_path)
+                _b_block = _bundles_data.get("bundles") if isinstance(_bundles_data, dict) else None
+                _b_items = _b_block.get("items", []) if isinstance(_b_block, dict) else []
+                _b_item = next(
+                    (it for it in _b_items if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
+                    None,
+                )
+                if _b_item is None:
+                    raise SystemExit(f"Bundle '{_bundle_id}' not found in {_bundles_path}")
+                _cfg = _b_item.setdefault("config", {})
+                if not isinstance(_cfg, dict):
+                    _cfg = {}
+                    _b_item["config"] = _cfg
+                for _key, _raw in _set_config_ops:
+                    _val = _parse_yaml_scalar(_raw)
+                    installer_mod._set_nested(_cfg, _key.split("."), _val)
+                    console.print(f"[dim]set config[/dim] {_key} = {_val!r}")
+                for _key in _del_config_ops:
+                    _parts = _key.split(".")
+                    if not _nested_key_exists(_cfg, _parts):
+                        raise SystemExit(f"Config key '{_key}' not found in bundle '{_bundle_id}'")
+                    installer_mod._delete_nested(_cfg, _parts)
+                    console.print(f"[dim]del config[/dim] {_key}")
+                installer_mod.save_release_descriptor(_bundles_path, _bundles_data)
+                console.print(f"[green]Updated:[/green] {_bundles_path}")
+
+            if _set_secret_ops or _del_secret_ops:
+                _bs_data = (
+                    installer_mod.load_release_descriptor(_bundles_secrets_path)
+                    if _bundles_secrets_path.exists()
+                    else {"bundles": {"version": "1", "items": []}}
+                )
+                _bs_block = _bs_data.setdefault("bundles", {})
+                if not isinstance(_bs_block, dict):
+                    _bs_block = {}
+                    _bs_data["bundles"] = _bs_block
+                _bs_items = _bs_block.setdefault("items", [])
+                if not isinstance(_bs_items, list):
+                    _bs_items = []
+                    _bs_block["items"] = _bs_items
+                _bs_item = next(
+                    (it for it in _bs_items if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
+                    None,
+                )
+                if _bs_item is None:
+                    _bs_item = {"id": _bundle_id, "secrets": {}}
+                    _bs_items.append(_bs_item)
+                _sec = _bs_item.setdefault("secrets", {})
+                if not isinstance(_sec, dict):
+                    _sec = {}
+                    _bs_item["secrets"] = _sec
+                for _key, _raw in _set_secret_ops:
+                    _val = _parse_yaml_scalar(_raw)
+                    installer_mod._set_nested(_sec, _key.split("."), _val)
+                    console.print(f"[dim]set secret[/dim] {_key}")
+                for _key in _del_secret_ops:
+                    _parts = _key.split(".")
+                    if not _nested_key_exists(_sec, _parts):
+                        raise SystemExit(f"Secret key '{_key}' not found in bundle '{_bundle_id}'")
+                    installer_mod._delete_nested(_sec, _parts)
+                    console.print(f"[dim]del secret[/dim] {_key}")
+                installer_mod.save_release_descriptor(_bundles_secrets_path, _bs_data)
+                console.print(f"[green]Updated:[/green] {_bundles_secrets_path}")
+
             return
         if args.command == "export":
             _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
