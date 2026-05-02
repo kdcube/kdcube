@@ -703,7 +703,6 @@ This is intended for **local development** only.
 ## 8) Future commands (next phase)
 
 - `kdcube doctor` (validate env + filesystem + runtime dependencies)
-- `kdcube compose up` (wrapper around docker compose)
 - `kdcube release tag` (tag + VERSION validation)
 
 ## 9) Operational commands
