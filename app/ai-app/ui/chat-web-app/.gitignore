@@ -23,3 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 /public/private/
+
+
+# Local dev: real frontend config with tokens — never commit
+public/config.json
