@@ -222,6 +222,7 @@ Then jump only to the row that matches your question.
 | Question | Read this doc first | Why |
 | --- | --- | --- |
 | What is a bundle? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It defines bundle as the application unit and `tenant/project` as the environment boundary. |
+| What files do I create first for a new bundle? | [how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist](how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist) | It gives the first-pass README, release, config template, docs/design, docs/journal, entrypoint, and test layout. |
 | I have existing code. How do I wrap it? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It contains the design matrix and process-boundary guidance. |
 | How do I map existing app settings into KDCube settings, bundle props, and user state? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the Tier 1 configuration model and ownership map. |
 | How do I run a bundle locally? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It documents the current local runtime contract and staged descriptor model. |

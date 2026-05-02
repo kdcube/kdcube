@@ -86,6 +86,8 @@ The plugin should steer agents away from these recurring mistakes:
 
 - do not recommend bare `python3` or bare `pytest` before proving the project venv
 - do not interpret async test failures until `pytest-asyncio` is installed in the active venv
+- do not start a new bundle without the skeleton files from `how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist`
+- do not write `/bundles/...` into a seed/source descriptor that is also used by host-side IntelliJ/proc runs; first determine whether you are editing a seed descriptor or a staged runtime descriptor
 - do not manually build `ui-src` into runtime bundle storage as the fix for stale bundle UI
 - do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`
 - do not treat `bundles.yaml` example config as enabling built-in examples; `bundles_include_examples` owns that

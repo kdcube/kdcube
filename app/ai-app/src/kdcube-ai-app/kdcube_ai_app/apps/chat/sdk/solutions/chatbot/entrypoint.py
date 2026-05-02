@@ -116,10 +116,12 @@ class BaseEntrypoint:
 
     @property
     def comm_context(self) -> Optional[ChatTaskPayload]:
-        bound = self._comm_context_cv.get()
-        if bound is not _REQUEST_LOCAL_UNSET:
-            return bound
-        return self._comm_context
+        comm_context_cv = getattr(self, "_comm_context_cv", None)
+        if comm_context_cv is not None:
+            bound = comm_context_cv.get()
+            if bound is not _REQUEST_LOCAL_UNSET:
+                return bound
+        return getattr(self, "_comm_context", None)
 
     @comm_context.setter
     def comm_context(self, value: Optional[ChatTaskPayload]) -> None:
@@ -612,8 +614,8 @@ class BaseEntrypoint:
                 )
             return self.bundle_props
 
-        tenant = state.get("tenant") or getattr(getattr(self.comm_context, "actor", None), "tenant_id", None)
-        project = state.get("project") or getattr(getattr(self.comm_context, "actor", None), "project_id", None)
+        tenant = state.get("tenant")
+        project = state.get("project")
         if not tenant or not project:
             self.bundle_props = defaults
             self._sync_runtime_ctx_bundle_props()
@@ -683,11 +685,12 @@ class BaseEntrypoint:
 
     @property
     def comm(self) -> ChatCommunicator:
-        bound_comm = self._comm_cv.get()
+        comm_cv = getattr(self, "_comm_cv", None)
+        bound_comm = comm_cv.get() if comm_cv is not None else _REQUEST_LOCAL_UNSET
         if bound_comm is not _REQUEST_LOCAL_UNSET:
             if bound_comm is not None:
                 return bound_comm
-        elif self._comm:
+        elif getattr(self, "_comm", None):
             return self._comm
 
         current_comm_context = self.comm_context
@@ -699,7 +702,8 @@ class BaseEntrypoint:
             event_filter=self._event_filter,
         )
         if bound_comm is not _REQUEST_LOCAL_UNSET:
-            self._comm_cv.set(built)
+            if comm_cv is not None:
+                comm_cv.set(built)
         else:
             self._comm = built
         return built

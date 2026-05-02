@@ -671,14 +671,22 @@ bundles:
   items:
     - id: "my.bundle@1-0"
       name: "My Bundle"
-      path: "/bundles/my-repo/src/my_bundle"
+      path: "/Users/you/src/my-repo/src/my_bundle"
       module: "entrypoint"
 ```
 
 This means:
 
-- `path` is the bundle root as seen inside the runtime
+- in a seed/source local descriptor, `path` is the host-visible bundle root
+- after CLI init/staging for a Docker runtime, the runtime copy under
+  `workdir/config/` may be rewritten to the container-visible mount path
 - `module` is resolved inside that root
+
+For a brand-new bundle skeleton, keep the documentary descriptor shapes inside
+the bundle as `config/bundles.template.yaml` and
+`config/bundles.secrets.template.yaml`, then copy/adapt those values into the
+active deployment descriptors. The skeleton checklist lives in
+[how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist](how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist).
 
 Do not keep these on the same entry:
 
@@ -708,18 +716,20 @@ Do not mix local-path and git fields on the same bundle entry.
 
 This is the most common source of mistakes.
 
-Example:
+There are two descriptor copies in the local workflow:
 
-- host root in `assembly.yaml`: `/Users/you/src`
-- runtime bundles root: `/bundles`
+| Descriptor copy | Typical consumer | Local bundle `path` form |
+| --- | --- | --- |
+| seed/source descriptor under `deployment/cicd/.../descriptors/...` | CLI init input, host-side IntelliJ/proc runs | host-visible path, for example `/Users/you/src/my-repo/src/my_bundle` |
+| staged runtime descriptor under `workdir/config/` | the running initialized runtime | whatever the runtime can see; Docker runs may use rewritten `/bundles/...` paths |
 
-If the host bundle path is:
+If the host bundle path in a seed descriptor is:
 
 ```text
 /Users/you/src/my-repo/src/my_bundle
 ```
 
-then the bundle entry in `bundles.yaml` must use the runtime-visible path:
+the CLI can stage/rewrite the runtime copy to:
 
 ```text
 /bundles/my-repo/src/my_bundle
@@ -727,8 +737,11 @@ then the bundle entry in `bundles.yaml` must use the runtime-visible path:
 
 So:
 
-- host path roots belong in `assembly.yaml`
-- runtime-visible bundle paths belong in `bundles.yaml`
+- do not hand-edit seed descriptors to `/bundles/...` when they are also used
+  by host-side runs
+- do not hand-edit staged Docker runtime descriptors back to `/Users/...` if
+  the processor consuming them runs inside the container
+- always check which descriptor copy you are editing before fixing path bugs
 
 ## Managed vs Non-Managed Bundle Roots
 
@@ -858,7 +871,7 @@ Example:
 bundles:
   items:
     - id: "my.bundle@1-0"
-      path: "/bundles/my-repo/src/my_bundle"
+      path: "/Users/you/src/my-repo/src/my_bundle"
       module: "entrypoint"
       config:
         api:
@@ -1009,7 +1022,9 @@ But for normal bundle development, prefer a descriptor-driven initialized runtim
 
 - Editing the canonical descriptor source directory and expecting the running runtime to pick it up automatically.
 - Forgetting that the staged runtime files under `workdir/config/` are the active local authority.
-- Passing host paths in `bundles.yaml` instead of runtime-visible `/bundles/...` paths.
+- Confusing seed/source descriptor paths with staged runtime paths. Local seed
+  descriptors and host-side proc runs need host paths; Docker runtime copies may
+  need rewritten `/bundles/...` paths.
 - Treating `bundles.yaml` example config as the switch that enables built-in examples.
 - Manually building a custom bundle UI into runtime storage instead of letting the bundle UI loader refresh it.
 - Mixing `path` with `repo`/`ref`/`subdir` in the same bundle entry.
@@ -1027,7 +1042,9 @@ If you only remember the essentials, remember these:
 - `bundles.yaml` owns bundle definitions and non-secret deployment props
 - `bundles.secrets.yaml` owns deployment-scoped bundle secrets
 - `bundles_include_examples` in `assembly.yaml` owns built-in example availability
-- local path bundles should use runtime-visible `/bundles/...` paths
+- local path bundle entries must match the descriptor consumer: host paths for
+  seed/source descriptors and host-side proc runs, runtime-visible paths for
+  staged Docker-consumed runtime copies
 - custom main-view UI source is rebuilt by the bundle UI loader, not by manual runtime-storage builds
 - rerun install when you changed the canonical source descriptor set or runtime topology
 - use `kdcube reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction

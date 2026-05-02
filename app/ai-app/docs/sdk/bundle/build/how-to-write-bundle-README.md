@@ -237,6 +237,91 @@ Shared-storage rule:
 - `on_bundle_load` may run once per process unless the work is explicitly guarded
 - generated UI builds, indexes, and shared workspace preparation must tolerate concurrent loaders
 
+## 1B.1 New Bundle Skeleton Checklist
+
+When creating a new bundle from scratch, create the smallest useful skeleton
+before implementing product behavior.
+
+Recommended first-pass shape:
+
+```text
+<bundle-id>/
+  README.md
+  release.yaml
+  entrypoint.py
+  config/
+    bundles.template.yaml
+    bundles.secrets.template.yaml
+  docs/
+    design/
+      <bundle-design>.md
+    journal/
+      journal.md
+  tests/
+```
+
+Add only the implementation folders the first milestone needs, for example:
+
+```text
+  services/
+  tools/
+  ui/
+  ui-src/
+  skills/
+```
+
+Skeleton file rules:
+
+- `README.md` should have front matter with at least bundle id, title, summary,
+  status, tags, module, singleton expectation, primary surfaces, and links to
+  config/design/journal docs
+- `release.yaml` may be empty until the first real release is cut
+- `entrypoint.py` should be loadable and thin, even if it only exposes a safe
+  placeholder workflow/status API at first
+- `config/bundles.template.yaml` documents non-secret deployment props
+- `config/bundles.secrets.template.yaml` documents deployment-scoped bundle
+  secrets only
+- user-owned credentials and user state do not belong in descriptor templates
+- `docs/design/` should contain the structured design that implementation will
+  follow, not only raw notes
+- `docs/journal/journal.md` should track important build decisions and
+  bundle-builder-doc proposals while the bundle is being built
+
+If the bundle needs external human setup before an integration can work, add an
+operator-facing integration homework doc such as:
+
+```text
+docs/integrations/admin-integrational-homework.md
+```
+
+Use that doc for actions outside code, for example creating Telegram bots,
+collecting webhook secrets, or recording which descriptor/secrets keys must be
+filled later. Do not use it for user-owned settings such as a user's personal
+email credentials; those belong in the bundle UI/user settings flow.
+
+Local path descriptor rule:
+
+```yaml
+bundles:
+  version: "1"
+  default_bundle_id: "my.bundle@1-0"
+  items:
+    - id: "my.bundle@1-0"
+      name: "My Bundle"
+      path: "/Users/you/src/my-repo/src/my.bundle@1-0"
+      module: "entrypoint"
+      singleton: false
+      config: {}
+```
+
+For seed/source descriptors used by local CLI setup or host-side processor runs,
+`path` is the host-visible bundle root. The CLI may rewrite the staged runtime
+copy under `workdir/config/` to the container-visible mount path when the
+processor runs inside Docker.
+
+For the full local path contract, use
+[how-to-configure-and-run-bundle-README.md#local-path-bundles](how-to-configure-and-run-bundle-README.md#local-path-bundles).
+
 ## 1C. Bundle Design Decision Matrix
 
 Before writing code, classify the product surface and state model.
@@ -483,6 +568,127 @@ Use dedicated docs for those:
 
 - [bundle-scheduled-jobs-README.md](../bundle-scheduled-jobs-README.md)
 - [bundle-venv-README.md](../bundle-venv-README.md)
+
+### React V2/V3 With Bundle Tools And Skills
+
+Use React when the bundle's behavior should be driven by tools and skills.
+Do not put business behavior directly in a public webhook or REST method if the
+same behavior belongs to the agent.
+
+Canonical examples:
+
+- `versatile@2026-03-31-13-36` for the general descriptor/workflow pattern
+- `kdcube.copilot@2026-04-03-19-05` for a production-style React workflow
+
+Minimal shape:
+
+```text
+my.bundle@1-0/
+  entrypoint.py
+  orchestrator/
+    workflow.py
+  tools_descriptor.py
+  skills_descriptor.py
+  tools/
+    task_tools.py
+    user_memory_tools.py
+  skills/
+    product/
+      tasks/
+        SKILL.md
+        tools.yaml
+      user_memory/
+        SKILL.md
+        tools.yaml
+```
+
+Entrypoint responsibilities:
+
+- register the bundle
+- build the one-node graph that initializes SDK services
+- instantiate the bundle workflow
+- pass the turn state to `workflow.process(...)`
+- keep public/operations APIs thin
+
+Workflow responsibilities:
+
+- construct the turn scratchpad
+- call `start_turn(...)`
+- persist the user message
+- call `build_react(...)` with `tools_descriptor` and `skills_descriptor`
+- run `react.run(...)`
+- call `react.persist_workspace()`
+- call `finish_turn(...)`
+
+Descriptor rules:
+
+- expose bundle-local tools through `tools_descriptor.py`
+- expose skill prompts through `skills_descriptor.py`
+- make skill `when_to_use` rules operational, not vague
+- for stateful skills, distinguish read/retrieval use from write/reconcile use
+- use separate tool aliases for separate domains
+- do not collapse different product concepts into one alias just because they
+  are used by the same agent
+- do not add generic SDK tools unless this bundle actually needs them
+
+Example split:
+
+```python
+TOOLS_SPECS = [
+    {"ref": "tools/task_tools.py", "alias": "tasks", "use_sk": True},
+    {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
+]
+```
+
+React version:
+
+- React V2/V3 is selected by descriptor-backed platform config
+  `ai.react.react_agent_version`
+- do not hardcode the version in bundle code
+- write the bundle against `BaseWorkflow.build_react(...)`
+
+Channel rule:
+
+- React writes to the communicator and timeline
+- the timeline is the durable source of truth for what happened in a turn
+- transport adapters such as Telegram should trigger or route agent work, then
+  derive transport-specific output from the turn result/timeline
+- do not duplicate task or memory business logic in the transport webhook
+
+Stateful asset rule:
+
+- durable user/product assets should have one source-of-truth file per asset
+  under bundle storage when local filesystem storage is appropriate
+- use Markdown with YAML frontmatter for human-editable assets such as tasks or
+  user memories
+- frontmatter carries id, status, ownership, access policy, search labels,
+  relations, schedule, and execution metadata
+- the Markdown body carries the durable human-facing content, such as the task
+  description or memory statement
+- generated SQLite indexes are rebuildable retrieval surfaces, not source of
+  truth
+- expose search tools/APIs for assets that the agent must modify or delete, so
+  the agent can find the right existing asset before changing it
+- tool descriptions should state the intended scenario and sequence, for
+  example search existing memory first, comment it when it matches, and create
+  only when no existing memory captures the durable signal
+- user-visible memory must have explicit policy metadata, for example
+  `access_policy.visible_to_user: true`
+- memory widget data may mark returned user-visible entries and comments as
+  seen when the product explicitly treats widget open as a read receipt
+- scheduled tasks should record the React execution conversation id that will be
+  continued when the task fires
+
+Gate rule:
+
+- a separate gate LLM call is optional
+- use it only when the bundle needs classification/routing/title generation
+  that cannot be handled deterministically
+- for simple task/memory bundles, start with a deterministic prepare step plus
+  the React solver
+
+Use `kdcube.copilot@2026-04-03-19-05/orchestrator/workflow.py` as the workflow
+shape when in doubt.
 
 ## 4.1 Copyable Feature Snippets
 
@@ -1170,6 +1376,11 @@ Do not put destructive or administrative actions into the normal public widget u
 ### Read-only load by default
 
 Initial widget load should not mutate external state.
+
+Exception: a widget may perform a small explicit read-receipt mutation when the
+product defines opening the widget as acknowledgement, such as marking returned
+memory entries/comments as seen. This should be documented in the widget API and
+must not trigger expensive sync, execution, commit, push, or rebuild work.
 
 Prefer:
 

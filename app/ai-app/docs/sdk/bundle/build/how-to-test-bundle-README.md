@@ -142,6 +142,65 @@ PYTHONPATH=app/ai-app/src/kdcube-ai-app \
   --bundle-path /abs/path/to/bundle
 ```
 
+## 1B. Skeleton-Stage Checks
+
+For a brand-new bundle skeleton, prove the contract before adding product logic:
+
+- the bundle has the skeleton files from
+  [how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist](how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist)
+- `entrypoint.py` parses/imports in the project venv
+- `config/bundles.template.yaml` makes clear whether `path:` is a seed/source
+  descriptor host path or a staged runtime/container path
+- seed/source descriptors used by local CLI setup or IntelliJ/proc host runs
+  use host-visible bundle paths
+- deployment-scoped secrets are documented in `config/bundles.secrets.template.yaml`
+- user-owned secrets, such as a user's personal email credentials, are not in
+  descriptor templates
+- `docs/design/` and `docs/journal/journal.md` exist and are updated with the
+  first implementation decisions
+
+Do this before building UI, tools, or scheduler logic. A clean skeleton makes
+later failures narrower.
+
+## 1C. React Tool/Skill Checks
+
+For a React-backed bundle, prove the agent surface before manual testing:
+
+- `entrypoint.py` instantiates the workflow in the same shape as
+  `kdcube.copilot@2026-04-03-19-05`
+- `orchestrator/workflow.py` calls `BaseWorkflow.build_react(...)`
+- `tools_descriptor.py` exposes only the tool aliases the bundle actually needs
+- `skills_descriptor.py` points to bundle-local skills
+- each skill has `SKILL.md`
+- each skill `tools.yaml` references real tool ids from `tools_descriptor.py`
+- distinct product concepts have distinct tool aliases
+- stateful skill `when_to_use` rules clearly separate retrieval from
+  write/reconcile scenarios
+- tool descriptions tell the agent when to search, comment/update, create, or
+  leave the state untouched
+- public webhooks or operations APIs stay thin and do not duplicate React tool
+  business logic
+
+Good React smoke tests:
+
+- descriptor aliases match expected domain names, for example `tasks` and
+  `user_memory`
+- bundle-local storage tests prove each domain writes to its own storage area
+- durable asset tests prove each task/memory is stored as one source-of-truth
+  file and any SQLite index is rebuildable
+- memory tests prove user-visible policy metadata is present and widget-open
+  read receipts mark only returned visible entries/comments as seen
+- task tests prove search can find existing tasks before edit/delete/link
+  operations and task relations/conversation ids are persisted
+- a webhook test proves the public endpoint is exposed and authenticated
+- transport tests prove Telegram or other adapters render/send from the turn
+  result or timeline rather than duplicating task/memory logic
+- a runtime test or manual check proves the webhook triggers the React turn when
+  the bundle is loaded in proc
+
+Do not add a gate-agent test unless the bundle intentionally has a gate.
+For simple React bundles, a deterministic prepare step plus solver is enough.
+
 ## 1.1 What This Test Guide Must Prove
 
 Testing is not only about “does one function work”.
@@ -607,6 +666,8 @@ A bundle widget should usually be read-only on initial load.
 Verify:
 
 - simply opening the widget does not trigger unwanted mutation
+- explicit read-receipt widgets, such as a memory widget, mutate only the
+  documented seen/acknowledged fields for returned visible items
 - sync, push, rebuild, or run-now paths happen only on explicit user action
 
 This is especially important for:

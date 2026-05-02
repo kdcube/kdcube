@@ -134,45 +134,42 @@ Use:
 
 This is for local development only.
 
-The `path` must be container-visible, not host-visible.
+The correct `path` value depends on which descriptor copy is being consumed.
 
 #### Local path bundles: exact rule
 
-The host parent root belongs in `assembly.yaml`.
-The concrete bundle root belongs in `bundles.yaml`.
+Seed/source descriptors under the repository descriptor set are often consumed
+by both:
 
-Use this split:
+- CLI init/staging
+- host-side processor runs, such as IntelliJ launches
 
-```yaml
-# assembly.yaml
-paths:
-  host_bundles_path: "/Users/you/src"
-```
+For those seed/source descriptors, use the host-visible concrete bundle root:
 
 ```yaml
-# bundles.yaml
 bundles:
   version: "1"
   default_bundle_id: "my.bundle@1-0"
+  items:
+    - id: "my.bundle@1-0"
+      path: "/Users/you/src/my-repo/src/my_bundle"
+      module: "entrypoint"
+```
+
+When the CLI stages descriptors into a Docker-backed runtime, the staged copy
+under `workdir/config/` may be rewritten to the runtime-visible mount path:
+
+```yaml
+bundles:
   items:
     - id: "my.bundle@1-0"
       path: "/bundles/my-repo/src/my_bundle"
       module: "entrypoint"
 ```
 
-The host folder:
-
-```text
-/Users/you/src
-```
-
-is mounted into the runtime as:
-
-```text
-/bundles
-```
-
-So the bundle entry must use the container path under `/bundles`, not the host path under `/Users/...`.
+Do not edit the seed/source descriptor to `/bundles/...` only because the
+Docker runtime copy uses that shape. The seed descriptor may still need to run
+from the host.
 
 #### `path` and `module`: only two valid forms
 
@@ -183,7 +180,7 @@ There are exactly two supported shapes for local path bundles.
 If `path` already points to the actual bundle directory, use:
 
 ```yaml
-path: /bundles/my-repo/src/my_bundle
+path: /Users/you/src/my-repo/src/my_bundle
 module: entrypoint
 ```
 
@@ -194,7 +191,7 @@ This is the preferred form because it is explicit and does not depend on loader 
 If `path` points to the parent directory that contains the bundle directory, use:
 
 ```yaml
-path: /bundles/my-repo/src
+path: /Users/you/src/my-repo/src
 module: my_bundle.entrypoint
 ```
 
@@ -208,7 +205,7 @@ Do not mix the two forms without a reason.
 Avoid this hybrid form:
 
 ```yaml
-path: /bundles/my-repo/src/my_bundle
+path: /Users/you/src/my-repo/src/my_bundle
 module: my_bundle.entrypoint
 ```
 
