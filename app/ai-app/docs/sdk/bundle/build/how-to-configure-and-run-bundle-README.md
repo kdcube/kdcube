@@ -14,6 +14,7 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-new-cli-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
 ---
@@ -728,6 +729,11 @@ The parent-subdir shape is useful when a repo contains multiple bundles under
 one source parent. Bundle code must use package-relative bundle-local imports
 with a bundle-root fallback so both shapes load. The authoring rule is in
 [how-to-write-bundle-README.md#1b2-bundle-local-import-rule](how-to-write-bundle-README.md#1b2-bundle-local-import-rule).
+
+When cutting a new git-backed bundle ref, use the optional public release
+procedure in
+[how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
+before updating the active descriptor `ref`.
 
 `module` is a Python import path. Dots are package separators. If the bundle
 directory name itself contains dots, prefer the bundle-root shape unless the

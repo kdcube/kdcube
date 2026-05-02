@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-widget-integration-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
@@ -34,6 +35,7 @@ Use this together with:
 - [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 - [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 - [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
+- [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
 - [versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
 - [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
 - [bundle-runtime-README.md](../bundle-runtime-README.md)
@@ -85,6 +87,11 @@ Run tests in this order:
 4. isolated direct checks for generated HTML/builders if applicable
 5. local runtime reload path
 6. real widget/API/manual runtime checks
+
+After validation passes, use
+[how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
+only if the user agrees to cut a content release, tag it, push it, or update a
+git-backed descriptor ref.
 
 Do not jump straight to browser/manual testing.
 That is the slowest feedback loop and the weakest signal.

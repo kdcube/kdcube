@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
@@ -46,6 +47,7 @@ Use this document together with:
 - [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 - [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 - [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
+- [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
 - [bundle-developer-guide-README.md](../bundle-developer-guide-README.md)
 - [versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
 - [bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
@@ -276,6 +278,8 @@ Skeleton file rules:
   status, tags, module, singleton expectation, primary surfaces, and links to
   config/design/journal docs
 - `release.yaml` may be empty until the first real release is cut
+- when the user agrees to cut a release, fill `release.yaml` using
+  [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
 - `entrypoint.py` should be loadable and thin, even if it only exposes a safe
   placeholder workflow/status API at first
 - `config/bundles.template.yaml` documents non-secret deployment props

@@ -9,6 +9,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
   - ks:docs/sdk/bundle/bundle-storage-and-cache-README.md
@@ -46,7 +47,7 @@ Do not start by reading every bundle doc.
 
 Do treat Tier 1 as one compact pack.
 
-Start with these five Tier 1 pages in this order:
+Start with these five Tier 1 baseline pages in this order:
 
 1. this page
 2. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
@@ -55,6 +56,14 @@ Start with these five Tier 1 pages in this order:
 5. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
 
 Read those five together as one bundle-authoring baseline.
+
+There is also one optional Tier 1 lifecycle procedure:
+
+- [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
+
+Use it when the user agrees that the bundle should be committed, tagged,
+pushed, or wired into a git-backed descriptor ref. It is recommended for
+repeatable bundle work, but it is not an automatic step.
 
 The order helps, but the important rule is:
 
@@ -75,6 +84,7 @@ So the practical Tier 1 reading order is:
 3. bundle design
 4. configuration ownership
 5. local runtime and deployment wiring
+6. optional release lifecycle, only when agreed with the user
 
 ## 2. Which Path Fits Your Job
 
@@ -106,6 +116,7 @@ Start here, then complete the rest of the Tier 1 pack:
 5. [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md)
 6. [../bundle-runtime-README.md](../bundle-runtime-README.md)
 7. [../versatile-reference-bundle-README.md](../versatile-reference-bundle-README.md)
+8. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md), only when the user wants a pinned release
 
 Interpretation:
 
@@ -223,6 +234,7 @@ Then jump only to the row that matches your question.
 | --- | --- | --- |
 | What is a bundle? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It defines bundle as the application unit and `tenant/project` as the environment boundary. |
 | What files do I create first for a new bundle? | [how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist](how-to-write-bundle-README.md#1b1-new-bundle-skeleton-checklist) | It gives the first-pass README, release, config template, docs/design, docs/journal, entrypoint, and test layout. |
+| How do I turn a finished bundle into a release tag and descriptor ref? | [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md) | It is the optional, user-approved lifecycle procedure for release notes, validation, commit/tag/push, and descriptor ref updates. |
 | I have existing code. How do I wrap it? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It contains the design matrix and process-boundary guidance. |
 | How do I map existing app settings into KDCube settings, bundle props, and user state? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the Tier 1 configuration model and ownership map. |
 | How do I run a bundle locally? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It documents the current local runtime contract and staged descriptor model. |

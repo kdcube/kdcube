@@ -10,6 +10,7 @@ see_also:
   - ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
+  - ks:docs/sdk/bundle/build/how-to-release-bundle-content-README.md
 ---
 # Tier 1 Bundle Pack For Build-With-KDCube Plugins
 
@@ -20,13 +21,20 @@ This doc is the contract, not the old tree.
 
 ## Tier 1 Pack
 
-These 5 docs form one compact Tier 1 pack and should be available together:
+These 5 docs form the compact Tier 1 build baseline and should be available together:
 
 1. [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md)
 2. [how-to-test-bundle-README.md](how-to-test-bundle-README.md)
 3. [how-to-write-bundle-README.md](how-to-write-bundle-README.md)
 4. [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md)
 5. [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md)
+
+This optional lifecycle doc should also be available:
+
+6. [how-to-release-bundle-content-README.md](how-to-release-bundle-content-README.md)
+
+It is used only after the user agrees to release, commit, tag, push, or update
+a git-backed descriptor ref.
 
 Preferred reading order:
 
@@ -60,6 +68,7 @@ Recommended:
 - make [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) the preflight before code or test changes
 - keep the rest of the Tier 1 pack visible as the required baseline
 - branch to deeper docs only after Tier 1
+- expose the release procedure as optional and user-approved, not automatic
 
 This can be done in any implementation shape:
 
@@ -92,12 +101,15 @@ The plugin should steer agents away from these recurring mistakes:
 - do not use source folder names or compiled example ids when the host provides `defaultAppBundleId`
 - do not treat `bundles.yaml` example config as enabling built-in examples; `bundles_include_examples` owns that
 - do not treat `singleton` as cross-process exclusivity or shared-storage initialization
+- do not commit, tag, push, or update descriptor refs unless the user has
+  explicitly agreed to the content release values
 
 ## Done When
 
 The plugin handoff is clean when:
 
 - the 5 Tier 1 docs are exposed as one pack
+- the optional release lifecycle doc is available for user-approved releases
 - the working environment preflight is visible before any test command
 - the plugin can route to the best first page without hiding the rest of Tier 1
 - old hardcoded doc links are updated to current paths
