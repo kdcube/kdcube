@@ -1,12 +1,10 @@
 /*
  * SPDX-License-Identifier: MIT
  * GraphPane — top pane of the Configuration Assistant inspect column.
- * Always visible. Click a node to drive the DetailsPane below.
- *
- * v1 ships with a static demo cluster (Bundle ecosystem) so the page has
- * visible content before the bundle starts emitting code_core.graph
- * artifacts. Future iterations will read nodes/edges from the latest
- * code_core.* artifacts in the current turn.
+ * Reactive: rebuilds nodes/edges whenever a new code_core.* artifact lands
+ * in the current turn (define / class_footprint payloads). Falls back to a
+ * small demo cluster when no artifacts have arrived yet so the pane has
+ * visible content.
  */
 import {useCallback, useMemo} from "react";
 import {
@@ -16,175 +14,84 @@ import {
     Edge,
     Node,
     ReactFlow,
-    useEdgesState,
-    useNodesState,
     type NodeMouseHandler,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import {useAppDispatch, useAppSelector} from "../../../app/store.ts";
+import {selectCurrentTurn} from "../../../features/chat/chatStateSlice.ts";
 import {
     ScopeFilter,
     selectClass,
     selectConcept,
     selectConfigAssistantScope,
+    selectConfigAssistantSelection,
     setScopeFilter,
 } from "../../../features/configAssistant/configAssistantSlice.ts";
+import {
+    CODE_CORE_ARTIFACT_TYPE,
+    CodeCoreArtifact,
+} from "../../../features/logExtensions/codeCore/types.ts";
+import {
+    BuiltGraph,
+    NODE_STYLE,
+    SemanticNodeData,
+    buildGraphFromArtifacts,
+} from "./buildGraph.ts";
 
-type GraphScope = "framework" | "my_bundle";
-
-type SemanticNodeData = {
-    label: string;
-    sub?: string;
-    kind: "class" | "concept" | "policy";
-    qualifiedName?: string;
-    conceptId?: string;
-    scope: GraphScope;
+const DEMO: BuiltGraph = {
+    nodes: [
+        {
+            id: "concept:bundle",
+            position: {x: 40, y: 40},
+            data: {label: "Bundle", sub: "concept", kind: "concept", conceptId: "bundle", scope: "framework"},
+            style: NODE_STYLE.concept,
+        },
+        {
+            id: "concept:bundle_entrypoint",
+            position: {x: 280, y: 40},
+            data: {label: "Bundle Entrypoint", sub: "concept", kind: "concept", conceptId: "bundle_entrypoint", scope: "framework"},
+            style: NODE_STYLE.concept,
+        },
+        {
+            id: "concept:knowledge_space",
+            position: {x: 40, y: 200},
+            data: {label: "Knowledge Space", sub: "concept", kind: "concept", conceptId: "knowledge_space", scope: "framework"},
+            style: NODE_STYLE.concept,
+        },
+        {
+            id: "class:BaseEntrypoint",
+            position: {x: 280, y: 200},
+            data: {
+                label: "BaseEntrypoint",
+                sub: "class · demo",
+                kind: "class",
+                scope: "framework",
+                qualifiedName: "kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint.BaseEntrypoint",
+            },
+            style: NODE_STYLE.class,
+        },
+    ],
+    edges: [
+        {
+            id: "demo:e1",
+            source: "concept:bundle",
+            target: "concept:bundle_entrypoint",
+            label: "RELATED_TO",
+            style: {stroke: "#d97706"},
+            labelStyle: {fontSize: 10, fill: "#92400e"},
+        },
+        {
+            id: "demo:e2",
+            source: "class:BaseEntrypoint",
+            target: "concept:bundle_entrypoint",
+            label: "EMBODIES",
+            animated: true,
+            style: {stroke: "#d97706", strokeDasharray: "6 4"},
+            labelStyle: {fontSize: 10, fill: "#92400e"},
+        },
+    ],
 };
-
-const NODE_STYLE: Record<SemanticNodeData["kind"], React.CSSProperties> = {
-    class: {
-        background: "#dbeafe",
-        border: "1px solid #2563eb",
-        color: "#1e3a8a",
-        borderRadius: 8,
-        padding: 10,
-        fontSize: 12,
-        minWidth: 160,
-    },
-    concept: {
-        background: "#fef3c7",
-        border: "1px dashed #d97706",
-        color: "#78350f",
-        borderRadius: 999,
-        padding: "8px 14px",
-        fontSize: 12,
-        fontStyle: "italic",
-        minWidth: 140,
-    },
-    policy: {
-        background: "#ede9fe",
-        border: "1px dashed #7c3aed",
-        color: "#4c1d95",
-        borderRadius: 999,
-        padding: "8px 14px",
-        fontSize: 12,
-        fontStyle: "italic",
-        minWidth: 140,
-    },
-};
-
-const DEMO_NODES: Node<SemanticNodeData>[] = [
-    {
-        id: "concept:bundle",
-        position: {x: 40, y: 40},
-        data: {label: "Bundle", sub: "concept", kind: "concept", conceptId: "bundle", scope: "framework"},
-        style: NODE_STYLE.concept,
-    },
-    {
-        id: "concept:bundle_entrypoint",
-        position: {x: 280, y: 40},
-        data: {
-            label: "Bundle Entrypoint", sub: "concept", kind: "concept",
-            conceptId: "bundle_entrypoint", scope: "framework",
-        },
-        style: NODE_STYLE.concept,
-    },
-    {
-        id: "concept:knowledge_space",
-        position: {x: 40, y: 200},
-        data: {
-            label: "Knowledge Space", sub: "concept", kind: "concept",
-            conceptId: "knowledge_space", scope: "framework",
-        },
-        style: NODE_STYLE.concept,
-    },
-    {
-        id: "class:BaseEntrypoint",
-        position: {x: 280, y: 200},
-        data: {
-            label: "BaseEntrypoint",
-            sub: "class",
-            kind: "class",
-            scope: "framework",
-            qualifiedName:
-                "kdcube_ai_app.apps.chat.sdk.solutions.chatbot.entrypoint.BaseEntrypoint",
-        },
-        style: NODE_STYLE.class,
-    },
-    {
-        id: "class:ReactCodeWorkflow",
-        position: {x: 540, y: 200},
-        data: {
-            label: "ReactCodeWorkflow",
-            sub: "class · react.code",
-            kind: "class",
-            scope: "my_bundle",
-            qualifiedName:
-                "kdcube_ai_app.apps.chat.sdk.examples.bundles.react.code@2026_03_29.entrypoint.ReactCodeWorkflow",
-        },
-        style: NODE_STYLE.class,
-    },
-    {
-        id: "policy:client_lifecycle",
-        position: {x: 40, y: 360},
-        data: {
-            label: "Async Client Lifecycle",
-            sub: "policy",
-            kind: "policy",
-            conceptId: "client_lifecycle",
-            scope: "framework",
-        },
-        style: NODE_STYLE.policy,
-    },
-    {
-        id: "class:KBClient",
-        position: {x: 280, y: 360},
-        data: {
-            label: "KBClient",
-            sub: "class",
-            kind: "class",
-            scope: "framework",
-            qualifiedName: "kdcube_ai_app.apps.chat.sdk.retrieval.kb_client.KBClient",
-        },
-        style: NODE_STYLE.class,
-    },
-];
-
-const DEMO_EDGES: Edge[] = [
-    {
-        id: "e:bundle-be", source: "concept:bundle", target: "concept:bundle_entrypoint",
-        label: "RELATED_TO", style: {stroke: "#d97706"}, labelStyle: {fontSize: 10, fill: "#92400e"},
-    },
-    {
-        id: "e:bundle-ks", source: "concept:bundle", target: "concept:knowledge_space",
-        label: "RELATED_TO", style: {stroke: "#d97706"}, labelStyle: {fontSize: 10, fill: "#92400e"},
-    },
-    {
-        id: "e:base-be", source: "class:BaseEntrypoint", target: "concept:bundle_entrypoint",
-        label: "EMBODIES", animated: true, style: {stroke: "#d97706", strokeDasharray: "6 4"},
-        labelStyle: {fontSize: 10, fill: "#92400e"},
-    },
-    {
-        id: "e:reactcode-base", source: "class:ReactCodeWorkflow", target: "class:BaseEntrypoint",
-        label: "INHERITS", style: {stroke: "#2563eb"}, labelStyle: {fontSize: 10, fill: "#1e3a8a"},
-    },
-    {
-        id: "e:reactcode-bundle", source: "class:ReactCodeWorkflow", target: "concept:bundle",
-        label: "EMBODIES", animated: true, style: {stroke: "#d97706", strokeDasharray: "6 4"},
-        labelStyle: {fontSize: 10, fill: "#92400e"},
-    },
-    {
-        id: "e:kb-ks", source: "class:KBClient", target: "concept:knowledge_space",
-        label: "EMBODIES", animated: true, style: {stroke: "#d97706", strokeDasharray: "6 4"},
-        labelStyle: {fontSize: 10, fill: "#92400e"},
-    },
-    {
-        id: "e:kb-policy", source: "class:KBClient", target: "policy:client_lifecycle",
-        label: "GOVERNED_BY", style: {stroke: "#7c3aed", strokeDasharray: "6 4"},
-        labelStyle: {fontSize: 10, fill: "#4c1d95"},
-    },
-];
 
 const FILTERS: ReadonlyArray<{id: ScopeFilter; label: string}> = [
     {id: "all", label: "All"},
@@ -195,22 +102,73 @@ const FILTERS: ReadonlyArray<{id: ScopeFilter; label: string}> = [
 function GraphPane() {
     const dispatch = useAppDispatch();
     const scope = useAppSelector(selectConfigAssistantScope);
+    const selection = useAppSelector(selectConfigAssistantSelection);
+    const currentTurn = useAppSelector(selectCurrentTurn);
 
-    const [allNodes, , onNodesChange] = useNodesState<Node<SemanticNodeData>>(DEMO_NODES);
-    const [allEdges, , onEdgesChange] = useEdgesState(DEMO_EDGES);
-
-    const visibleNodes = useMemo(() => {
-        if (scope.scopeFilter === "all") return allNodes;
-        return allNodes.filter((n) => n.data.scope === scope.scopeFilter);
-    }, [allNodes, scope.scopeFilter]);
-
-    const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((n) => n.id)), [visibleNodes]);
-
-    const visibleEdges = useMemo(() => {
-        return allEdges.filter(
-            (e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target),
+    // Build the live graph from the current turn's code_core.* artifacts.
+    // Empty -> show the small demo cluster as a friendly default.
+    const live = useMemo<BuiltGraph>(() => {
+        const artifacts = (currentTurn?.artifacts ?? []).filter(
+            (a): a is CodeCoreArtifact => a.artifactType === CODE_CORE_ARTIFACT_TYPE,
         );
-    }, [allEdges, visibleNodeIds]);
+        if (!artifacts.length) return DEMO;
+        return buildGraphFromArtifacts(artifacts);
+    }, [currentTurn]);
+
+    // Apply scope filter + highlight the current selection.
+    const visible = useMemo(() => {
+        const selectedId = selection.kind === "class"
+            ? `class:${selection.qualifiedName}`
+            : selection.kind === "concept" || selection.kind === "policy"
+                ? `concept:${selection.conceptId}`
+                : null;
+
+        const nodes = live.nodes
+            .filter((n) => scope.scopeFilter === "all" || n.data.scope === scope.scopeFilter)
+            .map((n): Node<SemanticNodeData> => {
+                if (n.id === selectedId) {
+                    return {
+                        ...n,
+                        style: {
+                            ...(n.style ?? {}),
+                            boxShadow: "0 0 0 3px rgba(37, 99, 235, 0.45)",
+                            borderColor: "#1e3a8a",
+                        },
+                    };
+                }
+                // Also try matching by conceptId or qualifiedName, in case
+                // the selected node id format differs from how we encoded it.
+                if (
+                    selection.kind === "concept" || selection.kind === "policy"
+                ) {
+                    if (n.data.conceptId === selection.conceptId) {
+                        return {
+                            ...n,
+                            style: {
+                                ...(n.style ?? {}),
+                                boxShadow: "0 0 0 3px rgba(37, 99, 235, 0.45)",
+                            },
+                        };
+                    }
+                }
+                if (selection.kind === "class" && n.data.qualifiedName === selection.qualifiedName) {
+                    return {
+                        ...n,
+                        style: {
+                            ...(n.style ?? {}),
+                            boxShadow: "0 0 0 3px rgba(37, 99, 235, 0.45)",
+                        },
+                    };
+                }
+                return n;
+            });
+
+        const visibleIds = new Set(nodes.map((n) => n.id));
+        const edges: Edge[] = live.edges.filter(
+            (e) => visibleIds.has(e.source) && visibleIds.has(e.target),
+        );
+        return {nodes, edges};
+    }, [live, scope.scopeFilter, selection]);
 
     const onNodeClick = useCallback<NodeMouseHandler<Node<SemanticNodeData>>>(
         (_evt, node) => {
@@ -236,10 +194,23 @@ function GraphPane() {
         [dispatch],
     );
 
+    const isLive = live !== DEMO;
+
     return (
         <div className="flex flex-col h-full">
             <div className="flex flex-row items-center justify-between gap-2 px-3 py-2 border-b border-slate-200 bg-slate-50">
-                <div className="text-xs font-semibold text-slate-700">Graph</div>
+                <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-slate-700">Graph</span>
+                    {isLive ? (
+                        <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                            live
+                        </span>
+                    ) : (
+                        <span className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">
+                            demo
+                        </span>
+                    )}
+                </div>
                 <div className="flex flex-row gap-1">
                     {FILTERS.map((f) => (
                         <button
@@ -260,16 +231,16 @@ function GraphPane() {
             </div>
             <div className="flex-1 min-h-0">
                 <ReactFlow
-                    nodes={visibleNodes}
-                    edges={visibleEdges}
-                    onNodesChange={onNodesChange}
-                    onEdgesChange={onEdgesChange}
+                    nodes={visible.nodes}
+                    edges={visible.edges}
                     onNodeClick={onNodeClick}
                     fitView
                     fitViewOptions={{padding: 0.2}}
                     proOptions={{hideAttribution: true}}
                     panOnScroll
                     zoomOnScroll
+                    nodesDraggable={false}
+                    nodesConnectable={false}
                 >
                     <Background variant={BackgroundVariant.Dots} gap={16} size={1}/>
                     <Controls showInteractive={false}/>
