@@ -18,6 +18,13 @@ import {getCanvasArtifactTypes, getCanvasItemLinkGenerator} from "../../features
 import useSharedConfigProvider from "../../features/sharedConfigProvider/sharedConfigProvider.tsx";
 import ConversationHeader from "../../features/conversationHeader/ConversationHeader.tsx";
 import InspectDrawer from "../configAssistant/InspectDrawer.tsx";
+import {
+    selectConfigAssistantDrawerOpen,
+    selectConfigAssistantMode,
+} from "../../features/configAssistant/configAssistantSlice.ts";
+
+// Width must match the InspectDrawer's `w-[480px]`.
+const DRAWER_WIDTH_PX = 480;
 
 const SingleChatApp: React.FC = () => {
     const currentTurn = useAppSelector(selectCurrentTurn);
@@ -25,6 +32,15 @@ const SingleChatApp: React.FC = () => {
     const chatCanvasRef = useRef<HTMLDivElement>(null);
     const [canvasItemLink, setCanvasItemLink] = useState<CanvasItemLink | null>(null);
     const [overrideCanvasItemLink, setOverrideCanvasItemLink] = useState<boolean>(false);
+
+    // When the Configuration Assistant drawer is open, push the chat layout
+    // left by the drawer's width so the composer / messages aren't covered.
+    const configAssistantMode = useAppSelector(selectConfigAssistantMode);
+    const configAssistantDrawerOpen = useAppSelector(selectConfigAssistantDrawerOpen);
+    const reservedRight =
+        configAssistantMode === "config_assistant" && configAssistantDrawerOpen
+            ? DRAWER_WIDTH_PX
+            : 0;
 
     useSharedConfigProvider()
 
@@ -69,7 +85,11 @@ const SingleChatApp: React.FC = () => {
 
     return useMemo(() => {
         return <div id={SingleChatApp.name}
-                    className="flex flex-col h-full w-full min-h-0 min-w-0 bg-slate-100 overflow-hidden">
+                    className="flex flex-col h-full w-full min-h-0 min-w-0 bg-slate-100 overflow-hidden"
+                    style={{
+                        paddingRight: reservedRight,
+                        transition: "padding-right 300ms ease-out",
+                    }}>
             <ChatHeader/>
 
             <div className={`flex flex-row overflow-hidden flex-1 w-full min-h-0 min-w-0`}>
@@ -91,7 +111,7 @@ const SingleChatApp: React.FC = () => {
                 code_graph.* tools. Self-hides otherwise. */}
             <InspectDrawer/>
         </div>
-    }, [canvasItemLink, chatCanvasContextValue])
+    }, [canvasItemLink, chatCanvasContextValue, reservedRight])
 };
 
 export default SingleChatApp;
