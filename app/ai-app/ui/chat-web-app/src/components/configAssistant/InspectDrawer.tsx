@@ -19,11 +19,13 @@ import {
     closeDrawer,
     ensureDrawerOpen,
     resetDrawerStickiness,
+    selectClass,
+    selectConcept,
     selectConfigAssistantDrawerOpen,
     selectConfigAssistantMode,
     toggleDrawer,
 } from "../../features/configAssistant/configAssistantSlice.ts";
-import {CODE_CORE_ARTIFACT_TYPE} from "../../features/logExtensions/codeCore/types.ts";
+import {CODE_CORE_ARTIFACT_TYPE, CodeCoreArtifact} from "../../features/logExtensions/codeCore/types.ts";
 import GraphPane from "./panes/GraphPane.tsx";
 import DetailsPane from "./panes/DetailsPane.tsx";
 
@@ -41,18 +43,51 @@ function InspectDrawer() {
     }, [conversationId, dispatch]);
 
     // Watch for new code_core.* artifacts in the current turn; auto-open
-    // when one appears (respecting the userClosed bit).
+    // (respecting the userClosed bit) AND auto-select the subject of the
+    // latest one so the DetailsPane populates without a manual graph click.
     const lastSeenCount = useRef(0);
     useEffect(() => {
         if (mode !== "config_assistant") {
             lastSeenCount.current = 0;
             return;
         }
-        const count = (currentTurn?.artifacts ?? []).filter(
-            (a) => a.artifactType === CODE_CORE_ARTIFACT_TYPE,
-        ).length;
+        const artifacts = (currentTurn?.artifacts ?? []).filter(
+            (a): a is CodeCoreArtifact => a.artifactType === CODE_CORE_ARTIFACT_TYPE,
+        );
+        const count = artifacts.length;
         if (count > lastSeenCount.current) {
             dispatch(ensureDrawerOpen());
+
+            // Auto-select the subject of the most recent artifact.
+            const latest = artifacts[artifacts.length - 1];
+            if (latest) {
+                const kind = latest.content.kind;
+                const payload = latest.content.payload as Record<string, unknown> | null;
+                if (kind === "define" && payload && Array.isArray(payload.matches)) {
+                    const first = payload.matches[0] as
+                        | {id?: string; kind?: string}
+                        | undefined;
+                    if (first?.id) {
+                        dispatch(
+                            selectConcept({
+                                conceptId: first.id,
+                                isPolicy: first.kind === "policy",
+                            }),
+                        );
+                    }
+                } else if (
+                    kind === "class_footprint"
+                    && payload
+                    && Array.isArray(payload.footprint)
+                ) {
+                    const fp = payload.footprint[0] as
+                        | {qualified_name?: string}
+                        | undefined;
+                    if (fp?.qualified_name) {
+                        dispatch(selectClass(fp.qualified_name));
+                    }
+                }
+            }
         }
         lastSeenCount.current = count;
     }, [currentTurn, mode, dispatch]);
