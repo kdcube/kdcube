@@ -19,12 +19,15 @@ import useSharedConfigProvider from "../../features/sharedConfigProvider/sharedC
 import ConversationHeader from "../../features/conversationHeader/ConversationHeader.tsx";
 import InspectDrawer from "../configAssistant/InspectDrawer.tsx";
 import {
+    selectConfigAssistantDrawerMaximized,
     selectConfigAssistantDrawerOpen,
     selectConfigAssistantMode,
 } from "../../features/configAssistant/configAssistantSlice.ts";
 
-// Width must match the InspectDrawer's `w-[480px]`.
-const DRAWER_WIDTH_PX = 480;
+// Widths must match the InspectDrawer's class names.
+const DRAWER_WIDTH_DEFAULT_PX = 640;
+// `w-[min(1100px,90vw)]` — clamped to 90vw on smaller viewports.
+const drawerMaximizedWidthPx = (vw: number) => Math.min(1100, vw * 0.9);
 
 const SingleChatApp: React.FC = () => {
     const currentTurn = useAppSelector(selectCurrentTurn);
@@ -37,9 +40,20 @@ const SingleChatApp: React.FC = () => {
     // left by the drawer's width so the composer / messages aren't covered.
     const configAssistantMode = useAppSelector(selectConfigAssistantMode);
     const configAssistantDrawerOpen = useAppSelector(selectConfigAssistantDrawerOpen);
+    const configAssistantDrawerMaximized = useAppSelector(selectConfigAssistantDrawerMaximized);
+    const [vw, setVw] = useState<number>(
+        typeof window !== "undefined" ? window.innerWidth : 1280,
+    );
+    useEffect(() => {
+        const onResize = () => setVw(window.innerWidth);
+        window.addEventListener("resize", onResize);
+        return () => window.removeEventListener("resize", onResize);
+    }, []);
     const reservedRight =
         configAssistantMode === "config_assistant" && configAssistantDrawerOpen
-            ? DRAWER_WIDTH_PX
+            ? configAssistantDrawerMaximized
+                ? drawerMaximizedWidthPx(vw)
+                : DRAWER_WIDTH_DEFAULT_PX
             : 0;
 
     useSharedConfigProvider()

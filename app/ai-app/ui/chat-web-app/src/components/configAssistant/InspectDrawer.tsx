@@ -11,7 +11,7 @@
  * on conversation change).
  */
 import {useCallback, useEffect, useRef} from "react";
-import {ChevronsLeft, ChevronsRight, X} from "lucide-react";
+import {ChevronsLeft, ChevronsRight, Maximize2, Minimize2, X} from "lucide-react";
 
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
 import {selectConversationId, selectCurrentTurn} from "../../features/chat/chatStateSlice.ts";
@@ -21,9 +21,11 @@ import {
     resetDrawerStickiness,
     selectClass,
     selectConcept,
+    selectConfigAssistantDrawerMaximized,
     selectConfigAssistantDrawerOpen,
     selectConfigAssistantMode,
     toggleDrawer,
+    toggleDrawerMaximized,
 } from "../../features/configAssistant/configAssistantSlice.ts";
 import {CODE_CORE_ARTIFACT_TYPE, CodeCoreArtifact} from "../../features/logExtensions/codeCore/types.ts";
 import GraphPane from "./panes/GraphPane.tsx";
@@ -33,6 +35,7 @@ function InspectDrawer() {
     const dispatch = useAppDispatch();
     const mode = useAppSelector(selectConfigAssistantMode);
     const open = useAppSelector(selectConfigAssistantDrawerOpen);
+    const maximized = useAppSelector(selectConfigAssistantDrawerMaximized);
     const conversationId = useAppSelector(selectConversationId);
     const currentTurn = useAppSelector(selectCurrentTurn);
 
@@ -94,6 +97,7 @@ function InspectDrawer() {
 
     const onClose = useCallback(() => dispatch(closeDrawer()), [dispatch]);
     const onToggle = useCallback(() => dispatch(toggleDrawer()), [dispatch]);
+    const onMaximize = useCallback(() => dispatch(toggleDrawerMaximized()), [dispatch]);
 
     if (mode !== "config_assistant") return null;
 
@@ -116,12 +120,13 @@ function InspectDrawer() {
                 </button>
             )}
 
-            {/* Drawer surface */}
+            {/* Drawer surface — width grows when maximized so the graph has room. */}
             <aside
                 className={[
-                    "fixed top-0 right-0 z-30 h-screen w-[480px] max-w-[92vw]",
+                    "fixed top-0 right-0 z-30 h-screen",
+                    maximized ? "w-[min(1100px,90vw)]" : "w-[640px] max-w-[92vw]",
                     "bg-white border-l border-slate-200 shadow-2xl",
-                    "transition-transform duration-300 ease-out",
+                    "transition-[transform,width] duration-300 ease-out",
                     open ? "translate-x-0" : "translate-x-full",
                 ].join(" ")}
                 aria-hidden={!open}
@@ -134,6 +139,15 @@ function InspectDrawer() {
                         </span>
                     </div>
                     <div className="flex items-center gap-1">
+                        <button
+                            type="button"
+                            onClick={onMaximize}
+                            className="p-1 rounded hover:bg-slate-200 text-slate-500"
+                            title={maximized ? "Restore size" : "Expand"}
+                            aria-label={maximized ? "Restore drawer" : "Maximize drawer"}
+                        >
+                            {maximized ? <Minimize2 size={14}/> : <Maximize2 size={14}/>}
+                        </button>
                         <button
                             type="button"
                             onClick={onToggle}

@@ -13,6 +13,7 @@
  * but readable; works for the typical 1–3 artifacts per turn.
  */
 import {Edge, Node} from "@xyflow/react";
+import dagre from "dagre";
 
 import {CodeCoreArtifact} from "../../../features/logExtensions/codeCore/types.ts";
 
@@ -59,27 +60,36 @@ const STYLE: Record<SemanticNodeKind, React.CSSProperties> = {
     },
 };
 
-const ROW_HEIGHT = 220;
-const NEIGHBOUR_RADIUS = 200;
-const FOCAL_X = 360;
 const FRAMEWORK_BUNDLE_HINTS = ["framework"];
+
+// Approximate render dimensions per kind; dagre uses these to space nodes.
+// They don't have to be exact — just close enough to avoid overlap.
+const NODE_WIDTH: Record<SemanticNodeKind, number> = {
+    class: 200,
+    concept: 180,
+    policy: 200,
+};
+const NODE_HEIGHT: Record<SemanticNodeKind, number> = {
+    class: 56,
+    concept: 44,
+    policy: 44,
+};
 
 interface MutableGraph {
     nodes: Map<string, Node<SemanticNodeData>>;
     edges: Map<string, Edge>;
-    rowIdx: number;
 }
 
 const ensureNode = (
     g: MutableGraph,
     id: string,
     data: SemanticNodeData,
-    pos: {x: number; y: number},
 ): void => {
     if (g.nodes.has(id)) return;
     g.nodes.set(id, {
         id,
-        position: pos,
+        // Position is filled in by the dagre layout pass below.
+        position: {x: 0, y: 0},
         data,
         style: STYLE[data.kind],
     });
@@ -128,18 +138,6 @@ const ensureEdge = (
     });
 };
 
-const fanPosition = (rowIdx: number, slot: number, total: number): {x: number; y: number} => {
-    if (total <= 0) return {x: FOCAL_X, y: rowIdx * ROW_HEIGHT};
-    // Half-circle fan from -60° to +60° (relative to vertical down) below the focal node.
-    const start = -Math.PI / 3;
-    const end = Math.PI / 3;
-    const t = total === 1 ? 0.5 : slot / (total - 1);
-    const angle = start + (end - start) * t;
-    const x = FOCAL_X + Math.sin(angle) * NEIGHBOUR_RADIUS;
-    const y = rowIdx * ROW_HEIGHT + 130 + Math.cos(angle) * NEIGHBOUR_RADIUS * 0.6;
-    return {x, y};
-};
-
 const shortName = (qn: string): string => {
     if (!qn) return qn;
     const parts = qn.split(".");
@@ -157,80 +155,57 @@ const ingestDefine = (
     const id = `concept:${match.id}`;
     const isPolicy = match.kind === "policy";
     const focalKind: SemanticNodeKind = isPolicy ? "policy" : "concept";
-    const rowIdx = g.rowIdx++;
 
-    ensureNode(
-        g,
-        id,
-        {
-            label: String(match.name ?? match.id ?? "Concept"),
-            sub: isPolicy ? "policy" : "concept",
-            kind: focalKind,
-            conceptId: String(match.id ?? ""),
-            scope: FRAMEWORK_BUNDLE_HINTS.includes(String(match.scope ?? "framework"))
-                ? "framework"
-                : "my_bundle",
-        },
-        {x: FOCAL_X, y: rowIdx * ROW_HEIGHT},
-    );
+    ensureNode(g, id, {
+        label: String(match.name ?? match.id ?? "Concept"),
+        sub: isPolicy ? "policy" : "concept",
+        kind: focalKind,
+        conceptId: String(match.id ?? ""),
+        scope: FRAMEWORK_BUNDLE_HINTS.includes(String(match.scope ?? "framework"))
+            ? "framework"
+            : "my_bundle",
+    });
 
     const related = Array.isArray(match.related) ? (match.related as Array<Record<string, unknown>>) : [];
     const realized = Array.isArray(match.realized_by) ? (match.realized_by as string[]) : [];
     const applied = Array.isArray(match.applied_to) ? (match.applied_to as string[]) : [];
-    const neighbours = related.length + realized.length + applied.length;
-    let slot = 0;
 
     for (const rel of related) {
         if (!rel.id) continue;
         const relId = `concept:${rel.id}`;
-        ensureNode(
-            g,
-            relId,
-            {
-                label: String(rel.name ?? rel.id ?? "Concept"),
-                sub: rel.kind === "policy" ? "policy" : "concept",
-                kind: rel.kind === "policy" ? "policy" : "concept",
-                conceptId: String(rel.id ?? ""),
-                scope: "framework",
-            },
-            fanPosition(rowIdx, slot++, neighbours),
-        );
+        ensureNode(g, relId, {
+            label: String(rel.name ?? rel.id ?? "Concept"),
+            sub: rel.kind === "policy" ? "policy" : "concept",
+            kind: rel.kind === "policy" ? "policy" : "concept",
+            conceptId: String(rel.id ?? ""),
+            scope: "framework",
+        });
         ensureEdge(g, `${id}->${relId}:related`, id, relId, "RELATED_TO", "related");
     }
 
     for (const qn of realized) {
         if (!qn) continue;
         const cid = `class:${qn}`;
-        ensureNode(
-            g,
-            cid,
-            {
-                label: shortName(qn),
-                sub: "class",
-                kind: "class",
-                qualifiedName: qn,
-                scope: "framework",
-            },
-            fanPosition(rowIdx, slot++, neighbours),
-        );
+        ensureNode(g, cid, {
+            label: shortName(qn),
+            sub: "class",
+            kind: "class",
+            qualifiedName: qn,
+            scope: "framework",
+        });
         ensureEdge(g, `${id}->${cid}:realized_by`, id, cid, "REALIZED_BY", "realized_by");
     }
 
     for (const qn of applied) {
         if (!qn) continue;
         const cid = `class:${qn}`;
-        ensureNode(
-            g,
-            cid,
-            {
-                label: shortName(qn),
-                sub: "class",
-                kind: "class",
-                qualifiedName: qn,
-                scope: "framework",
-            },
-            fanPosition(rowIdx, slot++, neighbours),
-        );
+        ensureNode(g, cid, {
+            label: shortName(qn),
+            sub: "class",
+            kind: "class",
+            qualifiedName: qn,
+            scope: "framework",
+        });
         // For policies, the inverse edge is "governed_by" from class -> policy.
         ensureEdge(g, `${cid}->${id}:governed_by`, cid, id, "GOVERNED_BY", "governed_by");
     }
@@ -245,20 +220,14 @@ const ingestClassFootprint = (
     if (!fp || !fp.qualified_name) return;
     const qn = String(fp.qualified_name);
     const id = `class:${qn}`;
-    const rowIdx = g.rowIdx++;
 
-    ensureNode(
-        g,
-        id,
-        {
-            label: String(fp.name ?? shortName(qn)),
-            sub: "class",
-            kind: "class",
-            qualifiedName: qn,
-            scope: "framework",
-        },
-        {x: FOCAL_X, y: rowIdx * ROW_HEIGHT},
-    );
+    ensureNode(g, id, {
+        label: String(fp.name ?? shortName(qn)),
+        sub: "class",
+        kind: "class",
+        qualifiedName: qn,
+        scope: "framework",
+    });
 
     const concepts = Array.isArray(payload.concepts) ? (payload.concepts as Array<Record<string, unknown>>) : [];
     const policies = Array.isArray(payload.style_policies)
@@ -267,59 +236,42 @@ const ingestClassFootprint = (
     const ancestors = Array.isArray(fp.ancestors)
         ? ((fp.ancestors as string[]).filter((s) => !!s))
         : [];
-    const neighbours = concepts.length + policies.length + ancestors.length;
-    let slot = 0;
 
     for (const c of concepts) {
         if (!c.id) continue;
         const cid = `concept:${c.id}`;
-        ensureNode(
-            g,
-            cid,
-            {
-                label: String(c.name ?? c.id ?? "Concept"),
-                sub: "concept",
-                kind: "concept",
-                conceptId: String(c.id ?? ""),
-                scope: "framework",
-            },
-            fanPosition(rowIdx, slot++, neighbours),
-        );
+        ensureNode(g, cid, {
+            label: String(c.name ?? c.id ?? "Concept"),
+            sub: "concept",
+            kind: "concept",
+            conceptId: String(c.id ?? ""),
+            scope: "framework",
+        });
         ensureEdge(g, `${id}->${cid}:embodies`, id, cid, "EMBODIES", "embodies");
     }
 
     for (const p of policies) {
         if (!p.id) continue;
         const pid = `policy:${p.id}`;
-        ensureNode(
-            g,
-            pid,
-            {
-                label: String(p.name ?? p.id ?? "Policy"),
-                sub: "policy",
-                kind: "policy",
-                conceptId: String(p.id ?? ""),
-                scope: "framework",
-            },
-            fanPosition(rowIdx, slot++, neighbours),
-        );
+        ensureNode(g, pid, {
+            label: String(p.name ?? p.id ?? "Policy"),
+            sub: "policy",
+            kind: "policy",
+            conceptId: String(p.id ?? ""),
+            scope: "framework",
+        });
         ensureEdge(g, `${id}->${pid}:governed_by`, id, pid, "GOVERNED_BY", "governed_by");
     }
 
     for (const ancestorQn of ancestors) {
         const aid = `class:${ancestorQn}`;
-        ensureNode(
-            g,
-            aid,
-            {
-                label: shortName(ancestorQn),
-                sub: "class",
-                kind: "class",
-                qualifiedName: ancestorQn,
-                scope: "framework",
-            },
-            fanPosition(rowIdx, slot++, neighbours),
-        );
+        ensureNode(g, aid, {
+            label: shortName(ancestorQn),
+            sub: "class",
+            kind: "class",
+            qualifiedName: ancestorQn,
+            scope: "framework",
+        });
         ensureEdge(g, `${id}->${aid}:inherits`, id, aid, "INHERITS", "inherits");
     }
 };
@@ -329,13 +281,51 @@ export interface BuiltGraph {
     edges: Edge[];
 }
 
+/**
+ * Run a dagre top-down layout over the collected nodes/edges so the graph
+ * looks like a real network instead of hand-positioned blobs.
+ */
+const layoutWithDagre = (
+    nodes: Node<SemanticNodeData>[],
+    edges: Edge[],
+): Node<SemanticNodeData>[] => {
+    if (!nodes.length) return nodes;
+    const dg = new dagre.graphlib.Graph();
+    dg.setGraph({rankdir: "TB", nodesep: 38, ranksep: 70, marginx: 20, marginy: 20});
+    dg.setDefaultEdgeLabel(() => ({}));
+
+    for (const n of nodes) {
+        dg.setNode(n.id, {
+            width: NODE_WIDTH[n.data.kind],
+            height: NODE_HEIGHT[n.data.kind],
+        });
+    }
+    for (const e of edges) {
+        dg.setEdge(e.source, e.target);
+    }
+
+    dagre.layout(dg);
+
+    return nodes.map((n) => {
+        const meta = dg.node(n.id);
+        if (!meta) return n;
+        return {
+            ...n,
+            // dagre returns the centre — xyflow expects the top-left of the node.
+            position: {
+                x: meta.x - NODE_WIDTH[n.data.kind] / 2,
+                y: meta.y - NODE_HEIGHT[n.data.kind] / 2,
+            },
+        };
+    });
+};
+
 export function buildGraphFromArtifacts(
     artifacts: ReadonlyArray<CodeCoreArtifact>,
 ): BuiltGraph {
     const g: MutableGraph = {
         nodes: new Map(),
         edges: new Map(),
-        rowIdx: 0,
     };
 
     for (const a of artifacts) {
@@ -353,9 +343,11 @@ export function buildGraphFromArtifacts(
         }
     }
 
+    const rawNodes = Array.from(g.nodes.values());
+    const edges = Array.from(g.edges.values());
     return {
-        nodes: Array.from(g.nodes.values()),
-        edges: Array.from(g.edges.values()),
+        nodes: layoutWithDagre(rawNodes, edges),
+        edges,
     };
 }
 

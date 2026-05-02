@@ -18,6 +18,8 @@ export interface ConfigAssistantSelection {
 export interface ConfigAssistantState {
     mode: string | null;
     drawerOpen: boolean;
+    /** When true the drawer expands to ~90vw so the graph has real room. */
+    drawerMaximized: boolean;
     /**
      * Sticky bit: once the user closes the drawer in this turn/conversation
      * we don't auto-reopen on subsequent code_core artifacts. Cleared on
@@ -34,6 +36,7 @@ export interface ConfigAssistantState {
 const initialState: ConfigAssistantState = {
     mode: null,
     drawerOpen: false,
+    drawerMaximized: false,
     userClosed: false,
     selection: {kind: null, qualifiedName: null, conceptId: null},
     scope: {packageFilter: "", scopeFilter: "all"},
@@ -67,6 +70,9 @@ const configAssistantSlice = createSlice({
                 state.drawerOpen = true;
                 state.userClosed = false;
             }
+        },
+        toggleDrawerMaximized(state) {
+            state.drawerMaximized = !state.drawerMaximized;
         },
         /** Auto-open trigger from artifact arrival; respects the userClosed bit. */
         ensureDrawerOpen(state) {
@@ -116,6 +122,7 @@ export const {
     openDrawer,
     closeDrawer,
     toggleDrawer,
+    toggleDrawerMaximized,
     ensureDrawerOpen,
     resetDrawerStickiness,
     selectClass,
@@ -128,6 +135,7 @@ export const {
 
 export const selectConfigAssistantMode = (state: RootState) => state.configAssistant.mode;
 export const selectConfigAssistantDrawerOpen = (state: RootState) => state.configAssistant.drawerOpen;
+export const selectConfigAssistantDrawerMaximized = (state: RootState) => state.configAssistant.drawerMaximized;
 export const selectConfigAssistantSelection = (state: RootState) => state.configAssistant.selection;
 export const selectConfigAssistantScope = (state: RootState) => state.configAssistant.scope;
 
