@@ -19,7 +19,7 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import {useAppDispatch, useAppSelector} from "../../../app/store.ts";
-import {selectCurrentTurn} from "../../../features/chat/chatStateSlice.ts";
+import {selectLatestTurn} from "../../../features/chat/chatStateSlice.ts";
 import {
     ScopeFilter,
     selectClass,
@@ -103,17 +103,18 @@ function GraphPane() {
     const dispatch = useAppDispatch();
     const scope = useAppSelector(selectConfigAssistantScope);
     const selection = useAppSelector(selectConfigAssistantSelection);
-    const currentTurn = useAppSelector(selectCurrentTurn);
+    const latestTurn = useAppSelector(selectLatestTurn);
 
-    // Build the live graph from the current turn's code_core.* artifacts.
+    // Build the live graph from the latest turn's code_core.* artifacts
+    // (in-progress OR just-completed — see selectLatestTurn).
     // Empty -> show the small demo cluster as a friendly default.
     const live = useMemo<BuiltGraph>(() => {
-        const artifacts = (currentTurn?.artifacts ?? []).filter(
+        const artifacts = (latestTurn?.artifacts ?? []).filter(
             (a): a is CodeCoreArtifact => a.artifactType === CODE_CORE_ARTIFACT_TYPE,
         );
         if (!artifacts.length) return DEMO;
         return buildGraphFromArtifacts(artifacts);
-    }, [currentTurn]);
+    }, [latestTurn]);
 
     // Apply scope filter + highlight the current selection.
     const visible = useMemo(() => {

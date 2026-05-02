@@ -68,6 +68,11 @@ import {
     WebFetchSubsystemEventDataSubtype
 } from "../logExtensions/webFetch/types.ts";
 import {ServiceErrorArtifactType} from "../logExtensions/service/types.ts";
+import {
+    CODE_CORE_ARTIFACT_TYPE,
+    CodeCoreArtifact,
+    subTypeToKind,
+} from "../logExtensions/codeCore/types.ts";
 import {exampleConversationData} from "./debug.ts";
 import {setCurrentBundle} from "../bundles/bundlesSlice.ts";
 
@@ -753,6 +758,43 @@ const chatStateSlice = createSlice({
                             } as WebFetchSubsystemEventData
                             break
                         default:
+                            // Configuration Assistant: subsystem events with sub_type
+                            // "code_core.<kind>" are emitted from the bundle's tool
+                            // pipeline whenever a code_graph.* call succeeds.
+                            if (subtype && subtype.startsWith("code_core.")) {
+                                const kind = subTypeToKind(subtype) ?? "unknown";
+                                const callId = (env.extra?.execution_id as string | undefined)
+                                    ?? name
+                                    ?? `${kind}-${timestamp}`;
+                                let payload: unknown = null;
+                                if (textDelta) {
+                                    try {
+                                        payload = JSON.parse(textDelta);
+                                    } catch {
+                                        payload = textDelta;
+                                    }
+                                }
+                                reducer = () => {
+                                    turn.artifacts = turn.artifacts.filter(
+                                        (a) =>
+                                            a.artifactType !== CODE_CORE_ARTIFACT_TYPE
+                                            || (a as CodeCoreArtifact).content.callId !== callId,
+                                    );
+                                    const artifact: CodeCoreArtifact = {
+                                        artifactType: CODE_CORE_ARTIFACT_TYPE,
+                                        timestamp,
+                                        content: {kind, callId, payload, timestamp},
+                                    };
+                                    turn.artifacts.push(artifact);
+                                };
+                                data = {
+                                    name,
+                                    subtype,
+                                    title,
+                                    text: textDelta,
+                                } as SubsystemEventData;
+                                break;
+                            }
                             console.warn("unknown subsystem event subtype", env)
                             data = {
                                 name,
@@ -858,6 +900,23 @@ export const selectUserInputLocked = (state: RootState) => state.chatState.userI
 export const selectUserInputLockMessage = (state: RootState) => state.chatState.userInputLockMessage
 export const selectCurrentTurn = (state: RootState) => {
     return Object.entries(state.chatState.turns).map(([_unused, v]) => v).find(t => t.state === "inProgress")
+}
+/**
+ * Latest turn in this conversation, regardless of state. Falls back to the
+ * in-progress turn while one exists; otherwise the most recently-finished
+ * one (by turn order). Used by surfaces that need to keep showing the most
+ * recent turn's artifacts after the turn completes (e.g. the inspect drawer).
+ */
+export const selectLatestTurn = (state: RootState) => {
+    const turns = state.chatState.turns;
+    const order = state.chatState.turnOrder;
+    const inProgress = Object.values(turns).find(t => t.state === "inProgress");
+    if (inProgress) return inProgress;
+    for (let i = order.length - 1; i >= 0; i--) {
+        const t = turns[order[i]];
+        if (t) return t;
+    }
+    return undefined;
 }
 export const selectTurns = (state: RootState) => state.chatState.turns
 export const selectTurnOrder = (state: RootState) => state.chatState.turnOrder

@@ -429,8 +429,24 @@ async def handle_external_tool(*,
     ):
         try:
             kind = tool_id.split(".", 1)[1]
+            # SK kernel functions return JSON-encoded strings; everything else
+            # might already be a dict/list. Normalize so we always emit a
+            # single-level JSON-encoded string the FE can JSON.parse() once.
+            if isinstance(output, str):
+                stripped = output.strip()
+                if stripped.startswith(("{", "[")):
+                    payload_text = stripped
+                else:
+                    payload_text = json.dumps(stripped, ensure_ascii=False)
+            else:
+                payload_text = json.dumps(output, ensure_ascii=False, default=str)
+            react.log.log(
+                f"[config_assistant] emitting code_core.{kind} "
+                f"(tool_call_id={tool_call_id}, payload_chars={len(payload_text)})",
+                "INFO",
+            )
             await react.comm.delta(
-                text=json.dumps(output, ensure_ascii=False, default=str),
+                text=payload_text,
                 index=0,
                 marker="subsystem",
                 agent="config_assistant.code_core",
@@ -441,8 +457,14 @@ async def handle_external_tool(*,
                 format="json",
                 title=f"code_core.{kind}",
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            try:
+                react.log.log(
+                    f"[config_assistant] code_core emit failed for {tool_id}: {exc!r}",
+                    "WARNING",
+                )
+            except Exception:
+                pass
 
     merged_sources_inline = False
     remapped_source_sids: List[int] = []

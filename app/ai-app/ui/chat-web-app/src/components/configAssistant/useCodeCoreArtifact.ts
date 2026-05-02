@@ -1,19 +1,23 @@
 import {useMemo} from "react";
 
 import {useAppSelector} from "../../app/store.ts";
-import {selectCurrentTurn} from "../../features/chat/chatStateSlice.ts";
+import {selectLatestTurn} from "../../features/chat/chatStateSlice.ts";
 import {CODE_CORE_ARTIFACT_TYPE, CodeCoreArtifact} from "../../features/logExtensions/codeCore/types.ts";
 
 /**
  * Returns the most recent CodeCoreArtifact for the given kinds in the
- * current turn, or null if none yet. Used by inspect-panel tabs to render
- * tool-call results without subscribing to the raw stream.
+ * latest turn (in-progress or just-completed), or null if none yet.
+ *
+ * Reads from selectLatestTurn rather than selectCurrentTurn so that the
+ * artifact stays visible after the turn completes (chat moves the turn
+ * out of "inProgress" state at chat_complete, which otherwise would clear
+ * the inspect drawer the moment the agent finishes answering).
  */
 export function useCodeCoreArtifact(kinds: ReadonlyArray<string>): CodeCoreArtifact | null {
-    const currentTurn = useAppSelector(selectCurrentTurn);
+    const latestTurn = useAppSelector(selectLatestTurn);
     return useMemo(() => {
-        if (!currentTurn) return null;
-        const filtered = currentTurn.artifacts.filter(
+        if (!latestTurn) return null;
+        const filtered = latestTurn.artifacts.filter(
             (a) => a.artifactType === CODE_CORE_ARTIFACT_TYPE,
         ) as CodeCoreArtifact[];
         const matching = filtered.filter((a) => kinds.includes(a.content.kind));
@@ -22,5 +26,5 @@ export function useCodeCoreArtifact(kinds: ReadonlyArray<string>): CodeCoreArtif
         return matching.reduce((latest, cur) =>
             (cur.content.timestamp > latest.content.timestamp ? cur : latest),
         );
-    }, [currentTurn, kinds]);
+    }, [latestTurn, kinds]);
 }

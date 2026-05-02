@@ -14,7 +14,7 @@ import {useCallback, useEffect, useRef} from "react";
 import {ChevronsLeft, ChevronsRight, Maximize2, Minimize2, X} from "lucide-react";
 
 import {useAppDispatch, useAppSelector} from "../../app/store.ts";
-import {selectConversationId, selectCurrentTurn} from "../../features/chat/chatStateSlice.ts";
+import {selectConversationId, selectLatestTurn} from "../../features/chat/chatStateSlice.ts";
 import {
     closeDrawer,
     ensureDrawerOpen,
@@ -37,7 +37,7 @@ function InspectDrawer() {
     const open = useAppSelector(selectConfigAssistantDrawerOpen);
     const maximized = useAppSelector(selectConfigAssistantDrawerMaximized);
     const conversationId = useAppSelector(selectConversationId);
-    const currentTurn = useAppSelector(selectCurrentTurn);
+    const latestTurn = useAppSelector(selectLatestTurn);
 
     // Reset drawer stickiness when the conversation changes — a new
     // conversation starts fresh, last-turn close doesn't carry over.
@@ -54,7 +54,7 @@ function InspectDrawer() {
             lastSeenCount.current = 0;
             return;
         }
-        const artifacts = (currentTurn?.artifacts ?? []).filter(
+        const artifacts = (latestTurn?.artifacts ?? []).filter(
             (a): a is CodeCoreArtifact => a.artifactType === CODE_CORE_ARTIFACT_TYPE,
         );
         const count = artifacts.length;
@@ -93,7 +93,7 @@ function InspectDrawer() {
             }
         }
         lastSeenCount.current = count;
-    }, [currentTurn, mode, dispatch]);
+    }, [latestTurn, mode, dispatch]);
 
     const onClose = useCallback(() => dispatch(closeDrawer()), [dispatch]);
     const onToggle = useCallback(() => dispatch(toggleDrawer()), [dispatch]);
