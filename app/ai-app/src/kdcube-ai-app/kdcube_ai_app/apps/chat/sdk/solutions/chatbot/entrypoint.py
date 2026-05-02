@@ -250,77 +250,89 @@ class BaseEntrypoint:
         """
         return None
 
-    async def _ensure_ui_build(self) -> None:
-        """
-        Build the bundle's custom UI if `ui.main_view` is configured in bundle_props.
-        Uses a signature that includes source tree metadata to skip rebuilding when nothing changed.
-        Output goes to <bundle_storage_root>/ui/.
-        Bundles can override this method to customise the build behaviour.
-        """
+    @staticmethod
+    def _ui_source_signature(root: pathlib.Path) -> str:
+        ignored_dirs = {"node_modules", ".git", "dist", "build", ".vite", ".vite-temp", "__pycache__"}
+        ignored_suffixes = {".tsbuildinfo"}
+        sha = hashlib.sha256()
+        for path in sorted(root.rglob("*")):
+            rel = path.relative_to(root)
+            if any(part in ignored_dirs for part in rel.parts):
+                continue
+            if path.is_dir():
+                continue
+            if path.suffix in ignored_suffixes:
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            sha.update(rel.as_posix().encode("utf-8"))
+            sha.update(b"\0")
+            sha.update(str(stat.st_size).encode("ascii"))
+            sha.update(b"\0")
+            sha.update(str(stat.st_mtime_ns).encode("ascii"))
+            sha.update(b"\n")
+        return sha.hexdigest()
+
+    @staticmethod
+    def _ui_config_enabled(cfg: Dict[str, Any]) -> bool:
+        value = cfg.get("enabled", True)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value != 0
+        return str(value).strip().lower() not in {"false", "disable", "disabled", "off", "0"}
+
+    def _resolve_ui_src_path(self, *, src_folder: str, bundle_root: str) -> pathlib.Path:
+        src_path = pathlib.Path(src_folder)
+        if not src_path.is_absolute():
+            return (pathlib.Path(bundle_root) / src_folder).resolve()
+        return src_path.resolve()
+
+    async def _ensure_static_ui_app_build(
+        self,
+        *,
+        kind: str,
+        cfg: Dict[str, Any],
+        build_dest: pathlib.Path,
+        signature_path: pathlib.Path,
+        operation: str,
+    ) -> None:
         import shutil
         import traceback as _tb
         import uuid as _uuid
 
         from kdcube_ai_app.infra.plugin.bundle_once import run_once_for_shared_bundle_storage
 
-        ui_cfg = (self.bundle_props or {}).get("ui") or {}
-        main_view = ui_cfg.get("main_view") or {}
-        src_folder = (main_view.get("src_folder") or "").strip()
-        build_command = (main_view.get("build_command") or "").strip()
+        src_folder = str(cfg.get("src_folder") or cfg.get("source_dir") or "").strip()
+        build_command = str(cfg.get("build_command") or "").strip()
 
         if not src_folder or not build_command:
             return
 
         storage_root = self.bundle_storage_root()
         if not storage_root:
-            self.logger.log("[bundle.ui] build skipped: storage_root unavailable", "WARNING")
+            self.logger.log(f"[bundle.ui] {kind} build skipped: storage_root unavailable", "WARNING")
             return
 
         bundle_root = self._bundle_root()
         if not bundle_root:
-            self.logger.log("[bundle.ui] build skipped: bundle_root unavailable", "WARNING")
+            self.logger.log(f"[bundle.ui] {kind} build skipped: bundle_root unavailable", "WARNING")
             return
 
-        # Resolve src_folder: absolute as-is, relative → relative to bundle_root
-        src_path = pathlib.Path(src_folder)
-        if not src_path.is_absolute():
-            src_path = (pathlib.Path(bundle_root) / src_folder).resolve()
-        else:
-            src_path = src_path.resolve()
+        src_path = self._resolve_ui_src_path(src_folder=src_folder, bundle_root=bundle_root)
 
         if not src_path.exists():
-            self.logger.log(f"[bundle.ui] build skipped: src_folder not found: {src_folder!r}", "WARNING")
+            self.logger.log(f"[bundle.ui] {kind} build skipped: src_folder not found: {src_folder!r}", "WARNING")
             return
 
-        def _ui_source_signature(root: pathlib.Path) -> str:
-            ignored_dirs = {"node_modules", ".git", "dist", "build", ".vite", ".vite-temp", "__pycache__"}
-            ignored_suffixes = {".tsbuildinfo"}
-            sha = hashlib.sha256()
-            for path in sorted(root.rglob("*")):
-                rel = path.relative_to(root)
-                if any(part in ignored_dirs for part in rel.parts):
-                    continue
-                if path.is_dir():
-                    continue
-                if path.suffix in ignored_suffixes:
-                    continue
-                try:
-                    stat = path.stat()
-                except OSError:
-                    continue
-                sha.update(rel.as_posix().encode("utf-8"))
-                sha.update(b"\0")
-                sha.update(str(stat.st_size).encode("ascii"))
-                sha.update(b"\0")
-                sha.update(str(stat.st_mtime_ns).encode("ascii"))
-                sha.update(b"\n")
-            return sha.hexdigest()
+        build_dest.parent.mkdir(parents=True, exist_ok=True)
+        signature_path.parent.mkdir(parents=True, exist_ok=True)
 
-        build_dest = storage_root / "ui"
-        sig_path = storage_root / ".ui.signature"
         bundle_delivery_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or "")
-        source_signature = _ui_source_signature(src_path)
-        signature = f"{src_path}|{build_command}|{bundle_delivery_id}|{source_signature}"
+        source_signature = self._ui_source_signature(src_path)
+        signature = f"{kind}|{src_path}|{build_command}|{bundle_delivery_id}|{source_signature}"
 
         async def _build_ui() -> None:
             tmp_dest = storage_root / f".ui.build.tmp.{os.getpid()}.{_uuid.uuid4().hex}"
@@ -330,16 +342,14 @@ class BaseEntrypoint:
                 shutil.rmtree(tmp_dest, ignore_errors=True)
                 tmp_dest.mkdir(parents=True, exist_ok=True)
                 final_command = build_command.replace("<VI_BUILD_DEST_ABSOLUTE_PATH>", str(tmp_dest))
-                self.logger.log(f"[bundle.ui] build start: src={src_path} dest={build_dest}", "INFO")
+                self.logger.log(f"[bundle.ui] {kind} build start: src={src_path} dest={build_dest}", "INFO")
 
                 env = os.environ.copy()
                 if bundle_delivery_id:
                     env["VI_BUNDLE_ID"] = bundle_delivery_id
                     env["VITE_BUNDLE_ID"] = bundle_delivery_id
-                # Source nvm's bin dir explicitly
                 nvm_bin = os.path.expanduser("~/.nvm/versions/node")
                 if os.path.exists(nvm_bin):
-                    # Find the active version
                     for version_dir in sorted(os.listdir(nvm_bin), reverse=True):
                         bin_path = os.path.join(nvm_bin, version_dir, "bin")
                         if os.path.exists(os.path.join(bin_path, "npm")):
@@ -363,12 +373,7 @@ class BaseEntrypoint:
                 stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
                 stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
                 if proc.returncode != 0:
-                    build_output = "\n".join(
-                        part for part in [
-                            stderr.strip(),
-                            stdout.strip(),
-                        ] if part
-                    )
+                    build_output = "\n".join(part for part in [stderr.strip(), stdout.strip()] if part)
                     raise RuntimeError(f"UI build failed (exit={proc.returncode}):\n{build_output[-4000:]}")
                 if not (tmp_dest / "index.html").exists():
                     raise RuntimeError(f"UI build failed: index.html missing in temp output {tmp_dest}")
@@ -386,7 +391,7 @@ class BaseEntrypoint:
 
                 shutil.rmtree(previous_dest, ignore_errors=True)
                 self.logger.log(
-                    f"[bundle.ui] build done: dest={build_dest} index_html={(build_dest / 'index.html').exists()}",
+                    f"[bundle.ui] {kind} build done: dest={build_dest} index_html={(build_dest / 'index.html').exists()}",
                     "INFO",
                 )
             finally:
@@ -395,14 +400,15 @@ class BaseEntrypoint:
         try:
             await run_once_for_shared_bundle_storage(
                 storage_root=storage_root,
-                operation="ui-main-view",
-                signature_path=sig_path,
+                operation=operation,
+                signature_path=signature_path,
                 signature=signature,
                 ready=lambda: (build_dest / "index.html").exists(),
                 action=_build_ui,
                 logger=self.logger,
                 owner_metadata={
                     "bundle_id": bundle_delivery_id,
+                    "kind": kind,
                     "src": str(src_path),
                     "dest": str(build_dest),
                 },
@@ -412,11 +418,59 @@ class BaseEntrypoint:
                 log_prefix="[bundle.ui]",
             )
         except TimeoutError:
-            self.logger.log("[bundle.ui] build failed: timeout after 600s", "ERROR")
+            self.logger.log(f"[bundle.ui] {kind} build failed: timeout after 600s", "ERROR")
             raise
         except Exception:
-            self.logger.log(f"[bundle.ui] build failed:\n{_tb.format_exc()}", "ERROR")
+            self.logger.log(f"[bundle.ui] {kind} build failed:\n{_tb.format_exc()}", "ERROR")
             raise
+
+    async def _ensure_ui_build(self) -> None:
+        """
+        Build configured custom UI apps from source folders.
+
+        Supported config:
+        - `ui.main_view.src_folder/build_command` -> <bundle_storage_root>/ui
+        - `ui.web_app_widgets.<alias>.src_folder/build_command`
+          -> <bundle_storage_root>/ui/widgets/<alias>
+
+        Uses a signature that includes source tree metadata to skip rebuilding when nothing changed.
+        Bundles can override this method to customise the build behaviour.
+        """
+        ui_cfg = (self.bundle_props or {}).get("ui") or {}
+        main_view = ui_cfg.get("main_view") or {}
+        widget_cfgs = ui_cfg.get("web_app_widgets") or ui_cfg.get("widgets") or {}
+
+        if not main_view and not widget_cfgs:
+            return
+
+        storage_root = self.bundle_storage_root()
+        if not storage_root:
+            self.logger.log("[bundle.ui] build skipped: storage_root unavailable", "WARNING")
+            return
+
+        if isinstance(main_view, dict) and self._ui_config_enabled(main_view):
+            await self._ensure_static_ui_app_build(
+                kind="main-view",
+                cfg=main_view,
+                build_dest=storage_root / "ui",
+                signature_path=storage_root / ".ui.signature",
+                operation="ui-main-view",
+            )
+
+        if isinstance(widget_cfgs, dict):
+            for alias, raw_cfg in sorted(widget_cfgs.items()):
+                if not isinstance(raw_cfg, dict) or not self._ui_config_enabled(raw_cfg):
+                    continue
+                safe_alias = str(alias or "").strip().replace("/", "_")
+                if not safe_alias:
+                    continue
+                await self._ensure_static_ui_app_build(
+                    kind=f"widget:{safe_alias}",
+                    cfg=raw_cfg,
+                    build_dest=storage_root / "ui" / "widgets" / safe_alias,
+                    signature_path=storage_root / ".ui.widgets" / f"{safe_alias}.signature",
+                    operation=f"ui-widget-{safe_alias}",
+                )
 
     def bundle_storage_root(self) -> Optional[pathlib.Path]:
         """

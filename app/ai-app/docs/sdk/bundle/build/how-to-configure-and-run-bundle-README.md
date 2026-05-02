@@ -434,6 +434,19 @@ A bundle may include:
 
 So a bundle is not only one backend handler and not only one frontend widget.
 
+Widget React apps are configured like main UI apps: the descriptor/effective
+bundle config can enable `ui.web_app_widgets.<alias>` and the bundle code should
+provide `src_folder` plus `build_command` defaults when the widget has source.
+The processor/bundle-loader infra builds the source folder into shared bundle
+storage and serves widget subpaths from the built app. Do not configure widgets
+by pointing the platform directly at a built file.
+
+This is per widget alias. Configuring
+`ui.web_app_widgets.task_memo_webapp.src_folder/build_command` only changes the
+`task_memo_webapp` route. Inherited legacy widgets such as `ai_bundles` keep
+calling their decorated Python method unless `ui.web_app_widgets.ai_bundles`
+also defines `src_folder` and `build_command`.
+
 A real bundle can be a full application module with:
 
 - BE

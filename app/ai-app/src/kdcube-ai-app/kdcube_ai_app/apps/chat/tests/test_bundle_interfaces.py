@@ -592,6 +592,148 @@ async def test_get_bundle_interface_and_widgets_use_decorators(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_static_widget_payload_points_to_widget_app(monkeypatch):
+    class _Workflow(_DecoratedWorkflow):
+        bundle_props = {
+            "ui": {
+                "web_app_widgets": {
+                    "preferences": {
+                        "enabled": True,
+                        "src_folder": "ui-src/preferences",
+                        "build_command": "true",
+                    },
+                },
+            },
+        }
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="bundle.demo"), "tenant-a", "project-a"
+
+    async def _store_get_bundle_props(*args, **kwargs):
+        del args, kwargs
+        return {}
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(integrations, "store_get_bundle_props", _store_get_bundle_props)
+
+    widget_payload = await integrations.fetch_bundle_widget(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.demo",
+        widget_alias="preferences",
+        request=_request(),
+        session=_session(),
+    )
+
+    html = widget_payload["preferences"][0]
+    assert "<iframe" in html
+    assert "CONFIG_REQUEST" in html
+    assert "/api/integrations/bundles/tenant-a/project-a/bundle.demo/widgets/preferences/index.html" in html
+
+
+@pytest.mark.asyncio
+async def test_static_widget_config_is_per_alias_and_keeps_legacy_widgets(monkeypatch):
+    class _Workflow(_DecoratedWorkflow):
+        bundle_props = {
+            "ui": {
+                "web_app_widgets": {
+                    "other_widget": {
+                        "enabled": True,
+                        "src_folder": "widgets/other_widget",
+                        "build_command": "true",
+                    },
+                },
+            },
+        }
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="bundle.demo"), "tenant-a", "project-a"
+
+    async def _store_get_bundle_props(*args, **kwargs):
+        del args, kwargs
+        return {}
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(integrations, "store_get_bundle_props", _store_get_bundle_props)
+
+    widget_payload = await integrations.fetch_bundle_widget(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.demo",
+        widget_alias="preferences",
+        request=_request(),
+        session=_session(),
+    )
+
+    assert widget_payload["preferences"] == ["<p>fp-1</p>"]
+
+
+@pytest.mark.asyncio
+async def test_static_widget_subpaths_fall_back_to_index_html(monkeypatch, tmp_path):
+    class _Workflow(_DecoratedWorkflow):
+        bundle_props = {
+            "ui": {
+                "web_app_widgets": {
+                    "preferences": {
+                        "enabled": True,
+                        "src_folder": "ui-src/preferences",
+                        "build_command": "true",
+                    },
+                },
+            },
+        }
+
+    async def _load_bundle_workflow(**kwargs):
+        del kwargs
+        return _Workflow(), SimpleNamespace(id="bundle.demo"), "tenant-a", "project-a"
+
+    async def _store_get_bundle_props(*args, **kwargs):
+        del args, kwargs
+        return {}
+
+    async def _resolve_bundle_async(*args, **kwargs):
+        del args, kwargs
+        return SimpleNamespace(id="bundle.demo", path=str(tmp_path), module="entrypoint", singleton=False)
+
+    async def _run_static_bundle_entrypoint_load_once(**kwargs):
+        del kwargs
+        return None
+
+    storage_root = tmp_path / "bundle-storage"
+    ui_root = storage_root / "ui" / "widgets" / "preferences"
+    ui_root.mkdir(parents=True)
+    (ui_root / "index.html").write_text(
+        "<!doctype html><html><head></head><body><div id=\"root\"></div></body></html>",
+        encoding="utf-8",
+    )
+
+    from kdcube_ai_app.infra.plugin import bundle_storage
+
+    monkeypatch.setattr(integrations, "_load_bundle_workflow", _load_bundle_workflow)
+    monkeypatch.setattr(integrations, "store_get_bundle_props", _store_get_bundle_props)
+    monkeypatch.setattr(integrations, "resolve_bundle_async", _resolve_bundle_async)
+    monkeypatch.setattr(integrations, "run_static_bundle_entrypoint_load_once", _run_static_bundle_entrypoint_load_once)
+    monkeypatch.setattr(bundle_storage, "storage_for_spec", lambda **kwargs: storage_root)
+
+    response = await integrations.serve_bundle_widget_path(
+        tenant="tenant-a",
+        project="project-a",
+        bundle_id="bundle.demo",
+        widget_alias="preferences",
+        widget_path="settings/profile",
+        request=_request(headers=[(b"accept", b"text/html")]),
+        session=_session(),
+    )
+
+    html = response.body.decode("utf-8")
+    assert response.status_code == 200
+    assert "<base href=\"/api/integrations/bundles/tenant-a/project-a/bundle.demo/widgets/preferences/\">" in html
+    assert "<div id=\"root\"></div>" in html
+
+
+@pytest.mark.asyncio
 async def test_call_bundle_op_inner_supports_decorated_get_api(monkeypatch):
     captured: dict[str, object] = {}
 

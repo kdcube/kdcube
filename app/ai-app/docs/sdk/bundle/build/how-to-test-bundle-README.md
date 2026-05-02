@@ -607,10 +607,43 @@ Test the bundle’s concrete behavior, not just that functions exist.
 
 Widget testing has two layers:
 
-1. static/widget-generation correctness
+1. source/build or static/widget-generation correctness
 2. iframe integration correctness
 
-### 5.1 Widget generation correctness
+### 5.1 Widget source/build correctness
+
+For new React widgets, prefer a source folder declared in bundle config:
+
+```yaml
+ui:
+  web_app_widgets:
+    task_memo_webapp:
+      enabled: true
+      src_folder: widgets/task_memo_webapp
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+Local source checks:
+
+```bash
+cd /abs/path/to/bundle/widgets/task_memo_webapp
+npx tsc --noEmit
+```
+
+Runtime checks:
+
+- open `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}`
+- open `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}/{subpath}`
+- confirm the source folder is built into shared bundle storage and subpaths
+  fall back to the built `index.html`
+- edit widget source and verify the bundle UI loader refreshes the built files
+  from source signature changes
+
+If the widget commits a lockfile, prefer `npm ci` in the build command. If it
+does not, use `npm install --no-package-lock` so loader builds do not create
+source-tree churn.
+
+### 5.1A Legacy widget generation correctness
 
 If the widget HTML is generated from Python:
 

@@ -3,6 +3,7 @@
 
 # chat/proc/rest/integrations/integrations.py
 import asyncio
+import html
 import hmac
 import inspect
 import json
@@ -2022,6 +2023,35 @@ async def _fetch_bundle_widget_payload(
     if not _is_enabled_from_props(_props, widget_spec.enabled_config):
         raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} is not available")
 
+    workflow_props = getattr(workflow, "bundle_props", None) or {}
+    widget_static_cfg = None
+    if not _static_widget_explicitly_disabled(_props or {}, widget_alias=widget_spec.alias):
+        widget_static_cfg = (
+            _static_widget_config(_props or {}, widget_alias=widget_spec.alias)
+            or _static_widget_config(workflow_props, widget_alias=widget_spec.alias)
+        )
+    if widget_static_cfg:
+        result = [_static_widget_iframe_html(
+            tenant=tenant_id,
+            project=project_id,
+            bundle_id=spec_resolved.id,
+            widget_alias=widget_spec.alias,
+            widget_path=widget_path,
+        )]
+        return {
+            "status": "ok",
+            "tenant": tenant_id,
+            "project": project_id,
+            "bundle_id": spec_resolved.id,
+            "widget": {
+                "alias": widget_spec.alias,
+                "icon": widget_spec.icon,
+                "user_types": list(widget_spec.user_types),
+                "roles": list(widget_spec.roles),
+            },
+            widget_alias: result,
+        }
+
     fn = getattr(workflow, widget_spec.method_name)
     extra = _with_implicit_bundle_kwargs(
         _get_query_kwargs(request),
@@ -2050,6 +2080,201 @@ async def _fetch_bundle_widget_payload(
     }
 
 
+def _truthy_config_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    return str(value).strip().lower() not in {"false", "disable", "disabled", "off", "0"}
+
+
+def _raw_static_widget_config(props: Dict[str, Any], *, widget_alias: str) -> Dict[str, Any] | None:
+    ui_cfg = props.get("ui") if isinstance(props, dict) else {}
+    if not isinstance(ui_cfg, dict):
+        return None
+    widget_sets = [
+        ui_cfg.get("web_app_widgets"),
+        ui_cfg.get("widgets"),
+    ]
+    for raw_widgets in widget_sets:
+        if not isinstance(raw_widgets, dict):
+            continue
+        cfg = raw_widgets.get(widget_alias)
+        if not isinstance(cfg, dict):
+            continue
+        return cfg
+    return None
+
+
+def _static_widget_explicitly_disabled(props: Dict[str, Any], *, widget_alias: str) -> bool:
+    cfg = _raw_static_widget_config(props, widget_alias=widget_alias)
+    return isinstance(cfg, dict) and "enabled" in cfg and not _truthy_config_value(cfg.get("enabled"))
+
+
+def _static_widget_config(props: Dict[str, Any], *, widget_alias: str) -> Dict[str, Any] | None:
+    cfg = _raw_static_widget_config(props, widget_alias=widget_alias)
+    if not isinstance(cfg, dict):
+        return None
+    if "enabled" in cfg and not _truthy_config_value(cfg.get("enabled")):
+        return None
+    has_source = bool(str(cfg.get("src_folder") or cfg.get("source_dir") or "").strip())
+    has_build = bool(str(cfg.get("build_command") or "").strip())
+    if has_source and has_build:
+        return cfg
+    return None
+
+
+def _static_widget_iframe_html(
+        *,
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        widget_alias: str,
+        widget_path: str = "",
+) -> str:
+    cleaned_path = str(widget_path or "index.html").strip().lstrip("/") or "index.html"
+    src = (
+        f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}"
+        f"/widgets/{widget_alias}/{cleaned_path}"
+    )
+    return (
+        "<!doctype html><html><head><meta charset=\"utf-8\">"
+        "<style>html,body,#root{margin:0;width:100%;height:100%;overflow:hidden}"
+        "iframe{width:100%;height:100%;border:0;display:block}</style>"
+        "<script>"
+        "(function(){"
+        "var frame=null;"
+        "window.addEventListener('DOMContentLoaded',function(){frame=document.getElementById('widget-frame');});"
+        "window.addEventListener('message',function(event){"
+        "var data=event.data||{};"
+        "if(data.type==='CONFIG_REQUEST'&&frame&&event.source===frame.contentWindow){window.parent.postMessage(data,'*');return;}"
+        "if((data.type==='CONN_RESPONSE'||data.type==='CONFIG_RESPONSE')&&frame&&frame.contentWindow){frame.contentWindow.postMessage(data,'*');}"
+        "});"
+        "})();"
+        "</script>"
+        "</head><body><div id=\"root\">"
+        f"<iframe id=\"widget-frame\" src=\"{html.escape(src, quote=True)}\" title=\"{html.escape(widget_alias, quote=True)}\"></iframe>"
+        "</div></body></html>"
+    )
+
+
+async def _serve_static_widget_app(
+        *,
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        widget_alias: str,
+        widget_path: str,
+        request: Request,
+        session: UserSession,
+):
+    from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
+
+    payload = BundleSuggestionsRequest()
+    workflow, spec_resolved, tenant_id, project_id, _comm_context = _unpack_loaded_bundle_workflow(
+        await _load_bundle_workflow(
+            tenant=tenant,
+            project=project,
+            bundle_id=bundle_id,
+            payload=payload,
+            request=request,
+            session=session,
+        )
+    )
+    widget_spec = resolve_bundle_widget(workflow, alias=widget_alias, bundle_id=spec_resolved.id)
+    if widget_spec is None:
+        raise HTTPException(status_code=404, detail=f"Bundle does not define widget {widget_alias}")
+    if not _endpoint_visible(widget_spec.user_types, widget_spec.roles, session):
+        raise HTTPException(status_code=403, detail=f"Bundle widget {widget_alias} is not visible to this user")
+
+    manifest = discover_bundle_interface_manifest(workflow, bundle_id=spec_resolved.id)
+    _props = await store_get_bundle_props(
+        _get_app_redis(request), tenant=tenant_id, project=project_id, bundle_id=spec_resolved.id,
+    )
+    if not _is_enabled_from_props(_props, manifest.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle {spec_resolved.id} is disabled")
+    if not _is_enabled_from_props(_props, widget_spec.enabled_config):
+        raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} is not available")
+    workflow_props = getattr(workflow, "bundle_props", None) or {}
+    widget_static_cfg = None
+    if not _static_widget_explicitly_disabled(_props or {}, widget_alias=widget_spec.alias):
+        widget_static_cfg = (
+            _static_widget_config(_props or {}, widget_alias=widget_spec.alias)
+            or _static_widget_config(workflow_props, widget_alias=widget_spec.alias)
+        )
+    if not widget_static_cfg:
+        return None
+
+    spec = await resolve_bundle_async(bundle_id, override=None)
+    if not spec:
+        raise HTTPException(status_code=404, detail=f"Bundle '{bundle_id}' not found")
+
+    storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
+    ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
+    cleaned_path = str(widget_path or "index.html").strip().lstrip("/") or "index.html"
+
+    should_refresh_entrypoint = is_static_bundle_entrypoint_path(cleaned_path)
+    load_key = static_bundle_entrypoint_load_key(
+        tenant=tenant_id,
+        project=project_id,
+        bundle_id=f"{bundle_id}::widget::{widget_spec.alias}",
+        storage_root=storage_root,
+    )
+    if should_refresh_entrypoint:
+        await run_static_bundle_entrypoint_load_once(
+            load_key=load_key,
+            load_coro_factory=lambda: _load_bundle_props_defaults(
+                bundle_id=bundle_id,
+                tenant=tenant_id,
+                project=project_id,
+                request=request,
+                session=session,
+            ),
+        )
+        storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
+        ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
+
+    if not ui_root or not ui_root.exists():
+        await _load_bundle_props_defaults(
+            bundle_id=bundle_id,
+            tenant=tenant_id,
+            project=project_id,
+            request=request,
+            session=session,
+        )
+        storage_root = storage_for_spec(spec=spec, tenant=tenant_id, project=project_id, ensure=False)
+        ui_root = storage_root / "ui" / "widgets" / widget_spec.alias if storage_root else None
+        if not ui_root or not ui_root.exists():
+            raise HTTPException(status_code=404, detail=f"Bundle widget '{widget_alias}' does not have a built UI")
+
+    try:
+        target = (ui_root / cleaned_path).resolve()
+        target.relative_to(ui_root.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid widget path")
+
+    if target.is_dir():
+        target = target / "index.html"
+
+    if not target.exists():
+        target = ui_root / "index.html"
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="Not found")
+
+    if target.name == "index.html":
+        base_href = f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_spec.alias}/"
+        content = target.read_text(encoding="utf-8")
+        content = content.replace("<head>", f"<head><base href=\"{base_href}\">", 1)
+        return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
+
+    rel_parts = target.relative_to(ui_root).parts
+    headers = {"Cache-Control": "public, max-age=3600"}
+    if rel_parts and rel_parts[0] == "assets":
+        headers = {"Cache-Control": "public, max-age=31536000, immutable"}
+
+    return FileResponse(str(target), headers=headers)
+
+
 def _widget_payload_content(payload: Dict[str, Any], widget_alias: str) -> str:
     value = payload.get(widget_alias)
     if isinstance(value, list):
@@ -2073,6 +2298,19 @@ async def fetch_bundle_widget(
         request: Request,
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
+    if _request_prefers_widget_html(request):
+        static_response = await _serve_static_widget_app(
+            tenant=tenant,
+            project=project,
+            bundle_id=bundle_id,
+            widget_alias=widget_alias,
+            widget_path="index.html",
+            request=request,
+            session=session,
+        )
+        if static_response is not None:
+            return static_response
+
     payload = await _fetch_bundle_widget_payload(
         tenant=tenant,
         project=project,
@@ -2099,6 +2337,18 @@ async def serve_bundle_widget_path(
         request: Request,
         session: UserSession = Depends(require_auth(RequireUser())),
 ):
+    static_response = await _serve_static_widget_app(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        widget_alias=widget_alias,
+        widget_path=widget_path,
+        request=request,
+        session=session,
+    )
+    if static_response is not None:
+        return static_response
+
     payload = await _fetch_bundle_widget_payload(
         tenant=tenant,
         project=project,

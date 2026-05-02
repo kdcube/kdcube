@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-widget-integration-README.md
 title: "Bundle Widget Integration"
-summary: "Iframe widget contract for bundles: host handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
+summary: "Iframe widget contract for bundles: source-folder widget apps, host handshake, operation URL construction, auth propagation, and the recommended pattern when a capability is both widget and operation."
 tags: ["sdk", "bundle", "widget", "iframe", "frontend", "integrations"]
-keywords: ["iframe widget contract", "host config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "bundle iframe integration"]
+keywords: ["iframe widget contract", "widget source folder", "web app widget build", "host config handshake", "operation url construction", "auth propagation to widget", "widget and operation dual pattern", "bundle iframe integration"]
 see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
@@ -12,14 +12,97 @@ see_also:
 ---
 # Bundle Widget Integration
 
-Use this doc when a bundle widget returns HTML or a small SPA that runs inside the platform iframe shell and must call bundle operations correctly.
+Use this doc when a bundle exposes a widget that runs inside the platform iframe shell and must call bundle operations correctly.
 
 This is the rule:
 
-- the widget HTML is rendered inside an iframe
+- new widget apps should be source folders, not Python-rendered TSX snippets
+- the widget app is rendered inside an iframe
 - the iframe must request runtime config from the parent frame
 - the iframe must build bundle operation URLs from that runtime config
 - the iframe must not hardcode tenant, project, or bundle id from the source tree
+
+## Source Folder Widget Apps
+
+For new React/Vite widgets, keep widget app source under a widget-specific
+folder such as:
+
+```text
+widgets/<widget_alias>/
+  package.json
+  index.html
+  vite.config.js
+  src/
+```
+
+Do not put widget source under `ui-src`. In KDCube docs and examples, `ui-src`
+is the convention for a bundle main view declared by `ui.main_view`.
+
+Declare the widget source in bundle configuration:
+
+```yaml
+ui:
+  web_app_widgets:
+    task_memo_webapp:
+      enabled: true
+      src_folder: widgets/task_memo_webapp
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+The bundle loader builds that source folder into shared bundle storage under:
+
+```text
+<bundle_storage_root>/ui/widgets/<widget_alias>
+```
+
+The widget route serves the built app and supports SPA subpath fallback:
+
+```text
+GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_alias}
+GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_alias}/{widget_path}
+```
+
+Use `npm ci` in `build_command` when the widget source commits a lockfile. For
+early prototype widgets without a lockfile, `npm install --no-package-lock`
+avoids mutating the source folder during loader builds.
+
+The decorated `@ui_widget(...)` method remains the widget discovery/manifest
+surface. Product behavior and data mutations should live behind separate
+structured `@api(route="operations")` methods that the widget calls.
+
+### Per-Alias Selection
+
+Source-folder serving is selected per widget alias.
+
+This config affects only `task_memo_webapp`:
+
+```yaml
+ui:
+  web_app_widgets:
+    task_memo_webapp:
+      enabled: true
+      src_folder: widgets/task_memo_webapp
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+It does not change inherited or legacy widgets such as `ai_bundles`, `opex`, or
+other `@ui_widget` methods on a base class. Those aliases continue to invoke
+their Python method and return method-rendered HTML unless their own alias also
+has `src_folder` and `build_command`.
+
+Do not add `ui.web_app_widgets.<alias>.src_folder/build_command` for an alias
+unless that alias is intentionally migrating to the folder-built widget model.
+
+## Main View Is Separate
+
+Do not confuse widget app source with main-view source.
+
+Use:
+
+- `ui.main_view.src_folder: ui-src` for the bundle main view
+- `ui.web_app_widgets.<alias>.src_folder: widgets/<alias>` for widget apps
+
+Both use the same loader/build/storage paradigm. They are different surfaces.
 
 ## Required Runtime Config
 
@@ -58,7 +141,9 @@ Do not build operation URLs with:
 
 ## Compatibility Pattern
 
-If an existing client still loads the widget through the operations route, keep the widget method decorated with both:
+For source-folder widgets, prefer a minimal decorated widget method plus
+separate structured APIs. If an existing client still loads the widget through
+the operations route, keep the widget method decorated with both:
 
 ```python
 @ui_widget(alias="task-board", user_types=("registered",))
@@ -71,6 +156,10 @@ That means:
 
 - widget discovery/fetch is still driven by `@ui_widget(...)`
 - legacy operation callers can still call the same method through `/operations/task-board`
+
+For a source-folder widget, the method may return only a small compatibility
+fallback because the platform serves the built widget app from bundle storage
+when `ui.web_app_widgets.<alias>.src_folder/build_command` is configured.
 
 If the iframe itself needs a structured backend API, expose a separate alias such as:
 
@@ -195,7 +284,7 @@ window.parent.postMessage(
 
 - Widget load should be read-only by default.
 - Use an explicit in-widget action such as `Refresh` if the widget needs to trigger a syncing bootstrap or other mutating backend operation.
-- If the widget can work from server-seeded tenant/project/bundle defaults, seed them into the HTML as a safe fallback.
+- If the widget can derive tenant/project/bundle defaults from its route, use those only as safe standalone fallbacks.
 - Still keep the parent-frame config handshake, because auth tokens and final runtime scope belong to the host.
 - For platform widgets and iframe clients, the preferred `POST /operations/{alias}` body shape is `{ "data": { ... } }`.
 - The integrations layer also accepts a raw JSON object body and treats it as `data`, so webhook-style service integrations do not need a platform-specific wrapper.
@@ -203,12 +292,17 @@ window.parent.postMessage(
 
 ## Reference Examples
 
-Use these as the current reference implementations:
+Use these as reference implementations for the iframe config handshake and
+operation-call shape:
 
 - [PreferencesBrowser.tsx](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/versatile@2026-03-31-13-36/ui/PreferencesBrowser.tsx)
 - [KnowledgeBaseAdmin.tsx](../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/bundles/kdcube.copilot@2026-04-03-19-05/ui/KnowledgeBaseAdmin.tsx)
 
-These examples show the real pattern:
+Those examples are useful for runtime config and API calls. For new widgets,
+prefer the source-folder layout described above instead of embedding TSX/HTML in
+Python-rendered widget responses.
+
+They show:
 
 - `CONFIG_REQUEST` to the parent frame
 - accept both `CONN_RESPONSE` and `CONFIG_RESPONSE`

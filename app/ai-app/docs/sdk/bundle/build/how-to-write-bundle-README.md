@@ -553,8 +553,8 @@ my_bundle/
   requirements.txt    # optional, but required when bundle-local venv code needs Python deps
   tools/
   skills/
-  ui/                 # optional TSX widget templates
-  ui-src/             # optional full iframe SPA
+  ui-src/             # optional main-view React/Vite source folder
+  widgets/            # optional widget React/Vite source folders
   tests/
 ```
 
@@ -579,6 +579,14 @@ If the bundle ships a full iframe app:
 - use the loader-provided build destination such as `<VI_BUILD_DEST_ABSOLUTE_PATH>` when the build system needs the output path
 - treat `VITE_BUNDLE_ID` or equivalent build-time values as fallbacks; the parent config bridge still supplies the runtime bundle id
 - do not treat the built runtime storage directory as source
+
+If the bundle ships a React widget/web app:
+
+- put the widget app source under a stable widget folder such as `widgets/<widget-alias>`
+- declare `ui.web_app_widgets.<alias>.src_folder` and `build_command`
+- keep the decorated `@ui_widget(alias="<alias>")` method as the manifest/entrypoint surface only
+- expose structured data/mutation APIs separately through `@api(route="operations")`
+- let the loader build the widget into bundle storage; do not render a TSX source file from Python for new widgets
 
 ## 4. Copy The Right Reference Pattern
 
@@ -1370,6 +1378,32 @@ KDCube widgets are React/TSX web apps rendered inside a platform iframe shell.
 Do not create ad hoc HTML fragments unless you are maintaining a legacy widget.
 For a product with several panels, prefer one React widget with internal tabs or
 routes over several disconnected widgets.
+
+New widgets should use the same source-folder/build/storage model as main UI.
+The usual bundle config shape is:
+
+```yaml
+ui:
+  web_app_widgets:
+    task_memo_webapp:
+      enabled: true
+      src_folder: widgets/task_memo_webapp
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+The loader builds that source folder into shared bundle storage under
+`ui/widgets/<alias>`. Browser requests to widget subpaths fall back to the built
+`index.html`, so a single widget can support tabs/routes and later be reused as
+a Telegram WebApp surface.
+
+Use `npm ci` when the widget source folder commits a lockfile. For early
+prototype widgets without a lockfile, `npm install --no-package-lock` avoids
+mutating the source folder during loader builds.
+
+Source-folder behavior is per widget alias. If a subclass inherits other
+`@ui_widget` methods from `BaseEntrypoint`, those widgets continue to use the
+legacy method-rendered HTML path unless their own alias also has
+`ui.web_app_widgets.<alias>.src_folder/build_command`.
 
 ### Required contract
 
