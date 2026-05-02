@@ -698,7 +698,9 @@ Do not keep these on the same entry:
 
 Use a git-backed bundle when you want pinned, managed, versioned delivery.
 
-Typical shape:
+There are two valid shapes.
+
+Bundle-root shape:
 
 ```yaml
 bundles:
@@ -709,6 +711,27 @@ bundles:
       subdir: "src/my_bundle"
       module: "entrypoint"
 ```
+
+Parent-subdir shape:
+
+```yaml
+bundles:
+  items:
+    - id: "my.bundle@1-0"
+      repo: "git@github.com:org/repo.git"
+      ref: "2026.4.23.17"
+      subdir: "src"
+      module: "my_bundle.entrypoint"
+```
+
+The parent-subdir shape is useful when a repo contains multiple bundles under
+one source parent. Bundle code must use package-relative bundle-local imports
+with a bundle-root fallback so both shapes load. The authoring rule is in
+[how-to-write-bundle-README.md#1b2-bundle-local-import-rule](how-to-write-bundle-README.md#1b2-bundle-local-import-rule).
+
+`module` is a Python import path. Dots are package separators. If the bundle
+directory name itself contains dots, prefer the bundle-root shape unless the
+directory layout intentionally matches the dotted package path.
 
 Do not mix local-path and git fields on the same bundle entry.
 
@@ -1028,6 +1051,9 @@ But for normal bundle development, prefer a descriptor-driven initialized runtim
 - Treating `bundles.yaml` example config as the switch that enables built-in examples.
 - Manually building a custom bundle UI into runtime storage instead of letting the bundle UI loader refresh it.
 - Mixing `path` with `repo`/`ref`/`subdir` in the same bundle entry.
+- Using bundle-local imports that only work for one descriptor shape, such as
+  unconditional `from services...` imports when git delivery uses
+  `subdir: "src"` plus `module: "my_bundle.entrypoint"`.
 - Expecting `--upstream` to rebuild images. It only selects the upstream source/ref; add `init --build` to prebuild images.
 - Assuming the base `--workdir` is the concrete runtime when the CLI has resolved a namespaced runtime under it.
 - Using `kdcube reload` before the stack is running.

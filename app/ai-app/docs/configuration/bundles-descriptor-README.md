@@ -108,7 +108,7 @@ This is the normal shape for:
 - any non-local deployment
 - local compose when you want the runtime to resolve bundles from git
 
-Example:
+Bundle-root example:
 
 ```yaml
 bundles:
@@ -118,12 +118,33 @@ bundles:
     - id: "acme.marketing@2-0"
       repo: "git@github.com:example-org/acme-platform.git"
       ref: "main"
-      subdir: "src/acme/bundles/marketing"
-      module: "acme.marketing@2-0.entrypoint"
+      subdir: "src/marketing_bundle"
+      module: "entrypoint"
       config:
         features:
           news: true
 ```
+
+Parent-subdir example:
+
+```yaml
+bundles:
+  version: "1"
+  default_bundle_id: "marketing-bundle@2-0"
+  items:
+    - id: "marketing-bundle@2-0"
+      repo: "git@github.com:example-org/acme-platform.git"
+      ref: "main"
+      subdir: "src"
+      module: "marketing-bundle@2-0.entrypoint"
+      config:
+        features:
+          news: true
+```
+
+`module` is a Python import path, so dots are package separators. If the bundle
+directory name contains literal dots, use the bundle-root shape unless the
+filesystem layout intentionally mirrors the dotted package path.
 
 ### 2. Local path bundles
 
