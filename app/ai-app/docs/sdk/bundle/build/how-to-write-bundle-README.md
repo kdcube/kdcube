@@ -322,6 +322,58 @@ processor runs inside Docker.
 For the full local path contract, use
 [how-to-configure-and-run-bundle-README.md#local-path-bundles](how-to-configure-and-run-bundle-README.md#local-path-bundles).
 
+### 1B.2 Bundle-Local Import Rule
+
+Bundle code must load under both supported descriptor shapes:
+
+```yaml
+# bundle-root shape
+subdir: "src/my_bundle"
+module: "entrypoint"
+```
+
+```yaml
+# parent-subdir shape
+subdir: "src"
+module: "my_bundle.entrypoint"
+```
+
+The same rule applies to local `path:` descriptors:
+
+- `path: /Users/you/src/my-repo/src/my_bundle` with `module: entrypoint`
+- `path: /Users/you/src/my-repo/src` with `module: my_bundle.entrypoint`
+
+`module` is a Python import path. Dots in `module` are package separators, not
+literal characters in a directory name. If the bundle directory name contains a
+dot, prefer the bundle-root descriptor shape unless the filesystem layout
+intentionally mirrors the dotted package path.
+
+So bundle-local imports must not assume that only the bundle root is on
+`sys.path`.
+
+In `entrypoint.py`, use package-relative imports with a bundle-root fallback:
+
+```python
+try:
+    from .services.storage import TaskStorage
+except ImportError:
+    from services.storage import TaskStorage
+```
+
+In a nested module such as `tools/task_tools.py`, use the matching relative
+form:
+
+```python
+try:
+    from ..services.storage import TaskStorage
+except ImportError:
+    from services.storage import TaskStorage
+```
+
+Do not write imports that only work from the processor cwd or only work when the
+bundle root itself is on `sys.path`, such as unconditional
+`from services.storage import TaskStorage`.
+
 ## 1C. Bundle Design Decision Matrix
 
 Before writing code, classify the product surface and state model.

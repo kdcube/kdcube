@@ -236,6 +236,31 @@ Use these as the first actionable checks for each bundle surface.
 $PY -m py_compile /abs/path/to/bundle/entrypoint.py
 ```
 
+For bundles that may be delivered from git or from a repo parent directory,
+also prove both loader import shapes:
+
+```bash
+BUNDLE_PARENT=/abs/path/to/repo/src
+BUNDLE_PACKAGE=my_bundle
+BUNDLE_DIR=$BUNDLE_PARENT/$BUNDLE_PACKAGE
+```
+
+Set `BUNDLE_PACKAGE` to the Python import path used in the descriptor
+`module`, without `.entrypoint`.
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app:$BUNDLE_PARENT \
+  $PY -c "import importlib; importlib.import_module('${BUNDLE_PACKAGE}.entrypoint')"
+```
+
+```bash
+PYTHONPATH=app/ai-app/src/kdcube-ai-app:$BUNDLE_DIR \
+  $PY -c "import importlib; importlib.import_module('entrypoint')"
+```
+
+If the bundle has nested tool modules, import those too. This catches
+bundle-local imports that only work with one descriptor shape.
+
 ### Shared bundle contract
 
 ```bash
