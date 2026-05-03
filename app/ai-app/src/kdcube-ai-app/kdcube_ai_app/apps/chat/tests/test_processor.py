@@ -357,16 +357,14 @@ def test_processor_defaults_to_legacy_lists_scheduler_backend():
     assert processor.get_runtime_metadata()["scheduler_backend"] == SCHEDULER_BACKEND_LEGACY_LISTS
 
 
-def test_processor_accepts_legacy_scheduler_alias_via_env(monkeypatch):
-    monkeypatch.setenv("CHAT_SCHEDULER_BACKEND", "legacy")
-    processor = _build_processor(_MinimalRedis())
+def test_processor_accepts_legacy_scheduler_alias_via_constructor_override():
+    processor = _build_processor(_MinimalRedis(), scheduler_backend="legacy")
     assert processor.scheduler_backend_name == SCHEDULER_BACKEND_LEGACY_LISTS
 
 
 @pytest.mark.asyncio
-async def test_start_processing_fails_fast_for_unimplemented_streams_backend(monkeypatch):
-    monkeypatch.setenv("CHAT_SCHEDULER_BACKEND", "conversation_streams")
-    processor = _build_processor(_MinimalRedis())
+async def test_start_processing_fails_fast_for_unimplemented_streams_backend():
+    processor = _build_processor(_MinimalRedis(), scheduler_backend=SCHEDULER_BACKEND_CONVERSATION_STREAMS)
     with pytest.raises(RuntimeError, match="conversation_streams"):
         await processor.start_processing()
     assert processor.scheduler_backend_name == SCHEDULER_BACKEND_CONVERSATION_STREAMS
