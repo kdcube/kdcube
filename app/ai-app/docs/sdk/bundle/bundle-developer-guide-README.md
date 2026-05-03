@@ -2,8 +2,8 @@
 id: ks:docs/sdk/bundle/bundle-developer-guide-README.md
 title: "Bundle Developer Guide"
 summary: "High-level entrypoint for bundle authors: what a bundle is, how tenant/project environments work, which runtime surfaces exist, and which docs to follow for authoring, config, testing, and delivery."
-tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration"]
-keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "local authoring loop", "bundle documentation map"]
+tags: ["sdk", "bundle", "development", "entrypoint", "workflow", "tools", "skills", "configuration", "background-jobs"]
+keywords: ["bundle authoring entrypoint", "what a bundle is", "tenant project environment", "runtime surfaces overview", "configuration model overview", "reference bundle path", "local authoring loop", "bundle documentation map", "on_job background jobs"]
 see_also:
   - ks:docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
@@ -12,6 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
+  - ks:docs/service/comm/design/jobs-stream-README.md
 ---
 # Bundle Developer Guide
 
@@ -114,7 +115,7 @@ class MyEntrypoint(BaseEntrypoint):
         return g.compile()
 ```
 
-For the exact decorator contract, route mapping, widget/public endpoints, `@cron`, and `@venv`, use:
+For the exact decorator contract, route mapping, widget/public endpoints, `@cron`, `@on_job`, and `@venv`, use:
 
 - [bundle-platform-integration-README.md](bundle-platform-integration-README.md)
 
@@ -131,14 +132,26 @@ For the exact decorator contract, route mapping, widget/public endpoints, `@cron
 | `@ui_main` | entrypoint method | main iframe UI entrypoint |
 | `@on_message` | entrypoint method | message-handler metadata |
 | `@cron(...)` | entrypoint method | scheduled background jobs |
+| `@on_job` | entrypoint method | ready background jobs claimed by proc from the jobs stream |
 | `@venv(...)` | helper function or method | cached subprocess virtualenv execution for selected helpers |
 
 Practical rule:
 
 - most bundles need `@agentic_workflow(...)`, `@bundle_id(...)`, and optionally `@api(...)` / `@mcp(...)` / `@ui_widget(...)`
 - use `@cron(...)` only for scheduled work
+- use `@on_job` when work is submitted to the background job stream and must be executed later by proc
 - use `@venv(...)` only for dependency-heavy leaf helpers, not general orchestration
 - `enabled_config` is available on bundle/workflow, API, MCP, widget, and cron decorators when you need runtime feature gating from bundle props
+
+Background job rule:
+
+- `@cron(...)` decides when something is due; it should stay small and can enqueue ready work
+- `@on_job` receives the ready job envelope later and executes it with a fresh runtime context
+- `@on_job` is not an HTTP route and not a widget operation
+- define at most one `@on_job` method per bundle
+- make `@on_job` async
+- keep bundle-specific job semantics in the job `work_kind`, `metadata`, and `payload`
+- use [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md) for the platform queue contract
 
 Visibility rule:
 

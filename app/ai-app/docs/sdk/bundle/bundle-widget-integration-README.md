@@ -62,6 +62,56 @@ GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_ali
 GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_alias}/{widget_path}
 ```
 
+For Telegram Mini Apps or other public launch surfaces where the static widget
+app must load before platform auth exists, use the public static-widget route:
+
+```text
+GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}
+GET /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}/{widget_path}
+```
+
+That route serves only the built widget app assets. It does not authenticate
+product data. Any public data/action API used by that widget must have its own
+bundle-level auth, for example Telegram WebApp `initData` verification.
+
+## Dual Runtime Pattern
+
+When the same widget app runs in KDCube control plane and Telegram, select the
+transport at runtime:
+
+- if `window.Telegram?.WebApp?.initData` exists, treat it as Telegram
+- otherwise, use the normal KDCube iframe parent config handshake
+
+KDCube control-plane runtime:
+
+- wait for `CONFIG_RESPONSE` or `CONN_RESPONSE`
+- use `baseUrl`, `defaultTenant`, `defaultProject`, `defaultAppBundleId`
+- call `/operations/{alias}`
+- pass KDCube auth headers from the parent config
+
+Telegram Mini App runtime:
+
+- do not wait for the parent config handshake
+- call `window.Telegram.WebApp.ready()` and `expand()` when available
+- serve the app from `/public/widgets/{widget_alias}`
+- call bundle public aliases such as `/public/{telegram_alias}`
+- send the exact `window.Telegram.WebApp.initData` string as
+  `X-Telegram-Init-Data`
+
+Keep the API aliases explicit. A common pattern is:
+
+```ts
+const telegramAliases: Record<string, string> = {
+  task_memo_webapp_data: "telegram_task_memo_webapp_data",
+  tasks_list: "telegram_tasks_list",
+  tasks_create: "telegram_tasks_create",
+  run_task_now: "telegram_run_task_now",
+};
+```
+
+The public route loads the app; the public operation verifies the user. Do not
+trust caller-supplied `user_id` or `fingerprint` in Telegram mode.
+
 Use `npm ci` in `build_command` when the widget source commits a lockfile. For
 early prototype widgets without a lockfile, `npm install --no-package-lock`
 avoids mutating the source folder during loader builds.

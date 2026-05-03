@@ -3,7 +3,7 @@ id: ks:docs/sdk/bundle/build/how-to-write-bundle-README.md
 title: "How To Write A Bundle"
 summary: "Authoring guide for bundle creators and integrators: bundle shape, lifecycle, decorators, runtime surfaces, configuration and storage decisions, and how to turn a product idea or existing app into a deployable bundle."
 tags: ["sdk", "bundle", "authoring", "workflow", "widget", "api", "testing"]
-keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron choices", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
+keywords: ["bundle authoring guide", "bundle creator path", "bundle integrator path", "end to end bundle design", "decorator selection", "runtime surface selection", "widget api mcp cron on_job choices", "configuration and storage decisions", "bundle lifecycle design", "reference authoring patterns"]
 see_also:
   - ks:docs/sdk/bundle/build/how-to-navigate-kdcube-docs-README.md
   - ks:docs/sdk/bundle/build/how-to-test-bundle-README.md
@@ -162,6 +162,7 @@ Keep in Python:
 - `@mcp(...)`
 - `@ui_widget(...)`
 - `@cron(...)`
+- `@on_job`
 - auth and roles
 - props and secrets resolution
 
@@ -198,6 +199,7 @@ When a bundle exists in a real environment, its lifecycle is:
    - widget-driven operation calls
    - MCP endpoint dispatch
    - cron/scheduled job
+   - background job stream / `@on_job`
 6. During execution, the bundle reads:
    - effective bundle props via `bundle_prop(...)`
    - secrets via `get_secret(...)`
@@ -229,6 +231,7 @@ Async rule:
 
 - lifecycle hooks should be `async def`
 - prefer `async def` for `@api`, `@mcp`, `@ui_widget`, and `@cron` methods
+- `@on_job` must be `async def`
 - do not run blocking setup in a request path
 - if expensive work is only needed once for shared bundle storage, make it idempotent and guard it with a storage signature plus a cross-process lock
 
@@ -388,7 +391,7 @@ Before writing code, classify the product surface and state model.
 | Admin console | `@ui_widget` + `@api(route="operations")` | widget -> operations | descriptor-backed config, bundle local storage, DB/Redis | keep admin separate from public/user surface |
 | External webhook/integration | `@api(route="public")` | public HTTP path | bundle props + secrets, external systems | auth boundary must be explicit |
 | Tool-serving integration | `@mcp(...)` | MCP dispatch path | bundle props + secrets, external systems | bundle owns MCP auth |
-| Background automation | `@cron(...)` plus helper service | cron/system path | bundle local storage, DB/Redis, external APIs | do not assume request-bound actor/session |
+| Background automation | `@cron(...)` plus `@on_job` for ready work | cron scan -> Redis job stream -> proc `@on_job` | bundle local storage, DB/Redis, external APIs | cron detects due work; `@on_job` executes it fairly |
 | Mixed product app | combine widget/API/chat/cron intentionally | multiple runtime paths | split state by storage tier | this is common; design boundaries explicitly |
 
 State-placement rule:
@@ -1088,6 +1091,50 @@ Practical rule:
 - do not build cron logic around `self.comm_context.actor`
 - do not depend on request headers or peer state
 - pass explicit tenant/project/bundle scope into subsystem helpers when needed
+- if cron discovers user/task work that may take time, enqueue a background job
+  and handle it in `@on_job` instead of doing all work inside the cron tick
+
+### Background job / `@on_job` path
+
+`@on_job` is for ready work claimed by proc from the background job stream. It
+is not a browser route and is not called through `/operations`.
+
+Use it when:
+
+- a scheduler scan finds due work
+- a widget/API "run now" request should queue work instead of blocking the UI
+- a bundle subsystem needs fair processor claiming and retry behavior
+
+Rules:
+
+- define at most one `@on_job` method in the bundle entrypoint
+- make it `async def`
+- validate `job["work_kind"]`
+- read durable domain ids from `job["payload"]`
+- use `job["metadata"]` only for transport/runtime hints such as
+  `conversation_id`, `turn_id`, or display text
+- update the bundle-owned execution/status/result record from inside the handler
+- treat retry as possible until proc acknowledges the stream message
+
+Minimal pattern:
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import cron, on_job
+
+class MyBundle(BaseEntrypoint):
+    @cron(alias="due-scan", cron_expression="*/5 * * * *", span="system")
+    async def scan_due_work(self):
+        due_items = await self.tasks.find_due_items()
+        for item in due_items:
+            await self.tasks.enqueue_job(item)
+
+    @on_job
+    async def on_job(self, job: dict, **kwargs) -> dict:
+        del kwargs
+        if job.get("work_kind") == "task.execution.due":
+            return await self.tasks.run_execution(job["payload"]["execution_id"])
+        return {"ok": False, "error": {"code": "unsupported_job"}}
+```
 
 ### Tool execution in normal in-process runtime
 
@@ -1461,6 +1508,17 @@ If the widget method accepts `widget_path` or `path`, the platform passes the
 subpath so the React app can select its initial route or tab. This is the
 preferred shape when the same widget will become a Telegram WebApp.
 
+If a source-folder widget must load before platform auth exists, for example as
+a Telegram Mini App, use the public static route for the app shell:
+
+```text
+/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}/{widget_path}
+```
+
+Only static widget assets are public through that route. The widget's data and
+action APIs still need their own bundle-level request auth, such as Telegram
+WebApp `initData` verification on every request.
+
 ### Separate display and structured API
 
 Recommended pattern:
@@ -1551,7 +1609,7 @@ This keeps the access check consistent with the rest of the platform.
 
 ## 13. Scheduled Jobs And Background Pipelines
 
-If the bundle runs background work through `@cron(...)`, treat it as an operational subsystem.
+If the bundle runs background work through `@cron(...)` and `@on_job`, treat it as an operational subsystem.
 
 Rules:
 
@@ -1561,12 +1619,15 @@ Rules:
 - use bundle local storage for the working root
 - keep schedule and first-run/default-window settings in bundle props
 - use `@cron(span=...)` as the primary exclusivity control for scheduled jobs
+- use `@on_job` for the actual ready-work execution when the work is per-user,
+  long-running, retryable, or should be claimed fairly across processors
 - assume schedules are reconciled on startup, bundle registry updates, and effective bundle-props changes
 - scheduled logic should read current props through the normal runtime path, not cached startup-only values
 
 For automation that may still need operator control:
 
 - keep cron for regular background runs
+- make "run now" enqueue the same `@on_job` work shape as a due cron item
 - expose a privileged admin API/widget for:
   - changing schedule
   - changing default window

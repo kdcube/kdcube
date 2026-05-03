@@ -47,6 +47,7 @@ API_METHOD_ATTR = "__bundle_api_method__"
 MCP_ENDPOINT_ATTR = "__bundle_mcp_endpoint__"
 UI_WIDGET_ATTR = "__bundle_ui_widget__"
 ON_MESSAGE_ATTR = "__bundle_on_message__"
+ON_JOB_ATTR = "__bundle_on_job__"
 UI_MAIN_ATTR = "__bundle_ui_main__"
 CRON_JOB_ATTR = "__bundle_cron_job__"
 BUNDLE_VENV_ATTR = "__bundle_venv__"
@@ -113,6 +114,11 @@ class OnMessageSpec:
 
 
 @dataclass(frozen=True)
+class OnJobSpec:
+    method_name: str
+
+
+@dataclass(frozen=True)
 class UIMainSpec:
     method_name: str
 
@@ -138,6 +144,7 @@ class BundleInterfaceManifest:
     mcp_endpoints: tuple[MCPEndpointSpec, ...] = ()
     ui_main: UIMainSpec | None = None
     on_message: OnMessageSpec | None = None
+    on_job: OnJobSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
     enabled_config: str | None = None
 
@@ -476,6 +483,15 @@ def on_message(fn):
         fn,
         ON_MESSAGE_ATTR,
         OnMessageSpec(method_name=getattr(fn, "__name__", "run")),
+    )
+    return fn
+
+
+def on_job(fn):
+    setattr(
+        fn,
+        ON_JOB_ATTR,
+        OnJobSpec(method_name=getattr(fn, "__name__", "on_job")),
     )
     return fn
 
@@ -1672,7 +1688,7 @@ def _instantiate_symbol(kind: str, symbol: Any, config: Any, extra_kwargs: Dict[
 
 def _iter_bundle_callable_members(target: Any):
     cls = target if isinstance(target, type) else target.__class__
-    _bundle_attrs = (API_METHOD_ATTR, UI_WIDGET_ATTR, ON_MESSAGE_ATTR, UI_MAIN_ATTR, CRON_JOB_ATTR)
+    _bundle_attrs = (API_METHOD_ATTR, UI_WIDGET_ATTR, ON_MESSAGE_ATTR, ON_JOB_ATTR, UI_MAIN_ATTR, CRON_JOB_ATTR)
     for name, member in inspect.getmembers(cls, predicate=callable):
         if name.startswith("__"):
             continue
@@ -1706,6 +1722,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
     ui_widgets: list[UIWidgetSpec] = []
     ui_main_spec: UIMainSpec | None = None
     on_message_spec: OnMessageSpec | None = None
+    on_job_spec: OnJobSpec | None = None
     scheduled_jobs: list[CronJobSpec] = []
     seen_api: set[tuple[str, str]] = set()
     seen_mcp: set[tuple[str, str]] = set()
@@ -1780,6 +1797,13 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
                 raise ValueError("Multiple @on_message methods detected on bundle entrypoint")
             on_message_spec = resolved
 
+        current_on_job = getattr(fn, ON_JOB_ATTR, None)
+        if isinstance(current_on_job, OnJobSpec):
+            resolved = OnJobSpec(method_name=member_name)
+            if on_job_spec and on_job_spec.method_name != resolved.method_name:
+                raise ValueError("Multiple @on_job methods detected on bundle entrypoint")
+            on_job_spec = resolved
+
         cron_spec = getattr(fn, CRON_JOB_ATTR, None)
         if isinstance(cron_spec, CronJobSpec):
             scheduled_jobs.append(CronJobSpec(
@@ -1810,6 +1834,7 @@ def discover_bundle_interface_manifest(target: Any, *, bundle_id: str | None = N
         mcp_endpoints=tuple(mcp_endpoints),
         ui_main=ui_main_spec,
         on_message=on_message_spec,
+        on_job=on_job_spec,
         scheduled_jobs=tuple(scheduled_jobs),
     )
 

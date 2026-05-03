@@ -151,6 +151,7 @@ Practical rule:
   - iframe frontend -> `ui.main_view` or widget + operations
   - MCP server -> `@mcp(...)`
   - background sync -> `@cron(...)`
+  - ready background job execution -> `@on_job`
   - assistant workflow -> `@agentic_workflow` / `@on_message`
 
 ### C. I am configuring a bundle or translating an existing app config
@@ -241,7 +242,7 @@ Then jump only to the row that matches your question.
 | Can I run multiple KDCubes on one machine? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It explains the difference between many runtime snapshots on disk and one active local compose-backed deployment by default. |
 | Where do props and secrets belong? | [../../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../../configuration/bundle-runtime-configuration-and-secrets-README.md) | It is the canonical author-facing configuration page. |
 | How do I start, stop, reload, and descriptor-wire a bundle into a project? | [how-to-configure-and-run-bundle-README.md](how-to-configure-and-run-bundle-README.md) | It is the Tier 1 deployer and integrator page for current local runtime operations. |
-| How do I expose widget, API, MCP, or cron? | [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md) | It is the exact decorator and surface contract. |
+| How do I expose widget, API, MCP, cron, or `@on_job`? | [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md) | It is the exact decorator and surface contract. |
 | What runtime helpers exist inside bundle code? | [../bundle-runtime-README.md](../bundle-runtime-README.md) | It explains the bundle runtime objects and capabilities. |
 | How do I use storage, cache, local bundle storage, or git-backed helpers? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It now contains the compact SDK cheat sheet and points to the deeper storage docs only when needed. |
 | How do I talk to the browser correctly? | [../bundle-client-ui-README.md](../bundle-client-ui-README.md) | It routes you to widget, browser, and transport-facing docs. |

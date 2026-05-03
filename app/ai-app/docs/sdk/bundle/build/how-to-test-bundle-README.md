@@ -699,6 +699,16 @@ For a single-widget web app, also open:
 It should return the same React widget shell with the requested panel/route
 selected.
 
+For a source-folder widget intended for a Telegram Mini App, also open:
+
+```text
+/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}/{subpath}
+```
+
+That should load the same static shell without platform login. Then verify the
+widget's public data/action calls separately with the bundle's own auth
+mechanism, such as signed Telegram `initData`.
+
 If you see:
 
 - missing tenant/project/bundle id

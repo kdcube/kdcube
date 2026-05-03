@@ -1,15 +1,16 @@
 ---
 id: ks:docs/sdk/bundle/bundle-platform-integration-README.md
 title: "Bundle Platform Integration"
-summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, and scheduled jobs."
-tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs"]
-keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "scheduled job exposure"]
+summary: "Declarative platform contract for exposing bundle capabilities through decorators, manifest metadata, REST operations, widgets, MCP routes, static UI, public routes, scheduled jobs, and background job handlers."
+tags: ["sdk", "bundle", "integration", "decorators", "widgets", "operations", "mcp", "ui", "manifest", "cron", "scheduled-jobs", "background-jobs"]
+keywords: ["decorator based integration", "bundle manifest contract", "rest operations exposure", "widget exposure", "mcp route exposure", "static ui exposure", "public route exposure", "scheduled job exposure", "on_job background job handler"]
 see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
+  - ks:docs/service/comm/design/jobs-stream-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
@@ -23,6 +24,7 @@ It covers:
 - REST routing for bundle operations, public operations, and bundle MCP endpoints
 - widget discovery and widget fetch
 - bundle main UI entrypoints and static asset serving
+- background job stream dispatch through `@on_job`
 
 For the higher-level inbound/outbound transport map, use
 [bundle-transports-README.md](bundle-transports-README.md).
@@ -47,12 +49,13 @@ Bundles currently support these decorators:
 | `@ui_main` | entrypoint method | Declares the main iframe UI entrypoint. |
 | `@on_message` | entrypoint method | Declares the bundle message handler metadata. |
 | `@cron(...)` | entrypoint method | Declares a scheduled background job managed by proc. |
+| `@on_job` | entrypoint method | Declares the bundle handler for ready background jobs claimed by proc. |
 | `@venv(...)` | helper function or method | Declares that a callable executes in a cached per-bundle subprocess venv. |
 
 Important distinction:
 
 - `@agentic_workflow(...)`, `@agentic_workflow_factory(...)`, `@bundle_id(...)`,
-  `@api(...)`, `@mcp(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`, and `@cron(...)`
+  `@api(...)`, `@mcp(...)`, `@ui_widget(...)`, `@ui_main`, `@on_message`, `@cron(...)`, and `@on_job`
   participate in bundle manifest and runtime interface discovery
 - `@venv(...)` is an execution decorator, not an HTTP/UI manifest decorator
 - most bundles should use `@agentic_workflow(...)`; `@agentic_workflow_factory(...)`
@@ -491,7 +494,39 @@ Current practical pattern:
 - base entrypoints already decorate `run()` with `@on_message`
 - manifest discovery reports the message handler method name
 
-### 1.9 `@cron(...)`
+### 1.9 `@on_job`
+
+Marks the bundle handler for ready background jobs claimed by proc from the
+background jobs stream.
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+
+@on_job
+async def on_job(self, job: dict, **kwargs) -> dict:
+    ...
+```
+
+Current behavior:
+
+- proc discovers at most one `@on_job` method through the manifest discovery path
+- a background job is not an HTTP request and has no public URL
+- the processor claims a Redis Stream job, builds a normal bundle request context,
+  and invokes the discovered `@on_job` method with the job envelope
+- `@on_job` must be async; proc does not wrap it in a sync fallback
+- the job envelope carries platform routing fields plus bundle-owned `work_kind`,
+  `metadata`, and `payload`
+- the bundle owns job semantics: validate `work_kind`, load bundle-owned records,
+  execute the work, and update bundle-owned status/results
+
+Use `@cron(...)` to detect scheduled due work. Use `@on_job` to execute ready
+work that has been enqueued for fair processor claiming.
+
+See:
+
+- [docs/service/comm/design/jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
+
+### 1.10 `@cron(...)`
 
 Marks a method as a recurring scheduled job managed by proc.
 
@@ -554,7 +589,7 @@ For full details on span semantics, cron resolution, and local debug:
 
 - [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
 
-### 1.10 `@venv(...)`
+### 1.11 `@venv(...)`
 
 Marks a callable to execute in a cached per-bundle subprocess venv.
 
@@ -651,7 +686,15 @@ class OnMessageSpec:
     method_name: str
 ```
 
-### 2.5 `UIMainSpec`
+### 2.5 `OnJobSpec`
+
+```python
+@dataclass(frozen=True)
+class OnJobSpec:
+    method_name: str
+```
+
+### 2.6 `UIMainSpec`
 
 ```python
 @dataclass(frozen=True)
@@ -659,7 +702,7 @@ class UIMainSpec:
     method_name: str
 ```
 
-### 2.6 `CronJobSpec`
+### 2.7 `CronJobSpec`
 
 ```python
 @dataclass(frozen=True)
@@ -674,7 +717,7 @@ class CronJobSpec:
     enabled_config: str | None = None
 ```
 
-### 2.7 `BundleInterfaceManifest`
+### 2.8 `BundleInterfaceManifest`
 
 ```python
 @dataclass(frozen=True)
@@ -686,6 +729,7 @@ class BundleInterfaceManifest:
     mcp_endpoints: tuple[MCPEndpointSpec, ...] = ()
     ui_main: UIMainSpec | None = None
     on_message: OnMessageSpec | None = None
+    on_job: OnJobSpec | None = None
     scheduled_jobs: tuple[CronJobSpec, ...] = ()
     enabled_config: str | None = None
 ```
@@ -731,6 +775,7 @@ Current response shape includes:
   - includes `roles`
 - `ui_main`
 - `on_message`
+- `on_job`
 - `scheduled_jobs`
   - includes `method_name`
   - includes `alias`
@@ -777,6 +822,9 @@ Example:
   },
   "on_message": {
     "method_name": "run"
+  },
+  "on_job": {
+    "method_name": "on_job"
   },
   "scheduled_jobs": [
     {
@@ -968,7 +1016,9 @@ Use these rules for new bundles:
 6. Use `@ui_main` when the bundle has a main iframe application.
 7. Use `@on_message` on the bundle message handler. The base entrypoints already
    do this on `run()`.
-8. Use `@cron(...)` for recurring background work. Prefer `span="system"` (the
+8. Use `@on_job` when the bundle receives ready background jobs from the
+   processor job stream. Keep the method async and define at most one per bundle.
+9. Use `@cron(...)` for recurring background work. Prefer `span="system"` (the
    default) unless process-local or instance-local semantics are required.
    See [docs/sdk/bundle/bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md)
    for details on span semantics, `expr_config` resolution, and local debug.
@@ -995,6 +1045,8 @@ Relevant code:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 - base entrypoint widget and `@on_message` usage:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`
+- background job stream:
+  `src/kdcube-ai-app/kdcube_ai_app/infra/jobs/stream.py`
 
 ## 7) Practical examples
 

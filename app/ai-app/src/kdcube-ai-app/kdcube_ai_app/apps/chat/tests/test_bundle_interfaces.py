@@ -25,6 +25,7 @@ from kdcube_ai_app.infra.plugin.agentic_loader import (
     api,
     discover_bundle_interface_manifest,
     mcp,
+    on_job,
     on_message,
     resolve_bundle_message_method,
     resolve_bundle_api_endpoint,
@@ -176,6 +177,10 @@ class _DecoratedWorkflow:
     async def handle_message(self, **kwargs):
         return kwargs
 
+    @on_job
+    async def handle_job(self, **kwargs):
+        return kwargs
+
 
 def test_discover_bundle_interface_manifest_returns_declarative_specs():
     manifest = discover_bundle_interface_manifest(_DecoratedWorkflow(), bundle_id="bundle.demo")
@@ -208,6 +213,7 @@ def test_discover_bundle_interface_manifest_returns_declarative_specs():
     assert manifest.ui_widgets[0].user_types == ("registered",)
     assert manifest.ui_main and manifest.ui_main.method_name == "main_ui"
     assert manifest.on_message and manifest.on_message.method_name == "handle_message"
+    assert manifest.on_job and manifest.on_job.method_name == "handle_job"
 
 
 def test_discover_bundle_interface_manifest_normalizes_legacy_roles_to_user_types_and_raw_roles():

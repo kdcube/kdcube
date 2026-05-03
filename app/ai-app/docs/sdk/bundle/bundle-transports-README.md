@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-transports-README.md
 title: "Bundle Transports"
-summary: "Complete transport map for bundle capabilities: chat, REST operations, widgets, static UI, communicator streams, public routes, and MCP endpoints."
-tags: ["sdk", "bundle", "transport", "protocol", "mcp", "rest", "sse", "socketio", "widgets", "auth"]
-keywords: ["bundle transport map", "chat transport", "operations rest transport", "widget transport", "static ui transport", "communicator streaming", "public route transport", "mcp endpoint transport"]
+summary: "Complete transport map for bundle capabilities: chat, background jobs, REST operations, widgets, static UI, communicator streams, public routes, and MCP endpoints."
+tags: ["sdk", "bundle", "transport", "protocol", "mcp", "rest", "sse", "socketio", "widgets", "auth", "background-jobs"]
+keywords: ["bundle transport map", "chat transport", "background job transport", "on_job transport", "operations rest transport", "widget transport", "static ui transport", "communicator streaming", "public route transport", "mcp endpoint transport"]
 see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
@@ -11,6 +11,7 @@ see_also:
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
+  - ks:docs/service/comm/design/jobs-stream-README.md
 ---
 # Bundle Transports
 
@@ -59,12 +60,19 @@ So:
 | Surface | Decorator / entry | Transport | Routes | Who authenticates | Typical caller |
 | --- | --- | --- | --- | --- | --- |
 | chat turn | `run()` / `@on_message` | platform chat ingress + proc | chat endpoints such as `/sse/chat` or Socket.IO | KDCube | platform chat client |
+| background job | `@on_job` | Redis Stream + proc | no HTTP route; processor operation `__kdcube_on_job__` | producer/platform context | `@cron`, widget/API run-now, internal service |
 | authenticated bundle operation | `@api(route="operations")` | HTTP REST | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{alias}` | KDCube | widget, custom frontend, internal platform UI |
 | public bundle operation | `@api(route="public")` | HTTP REST | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/{alias}` | KDCube or bundle | webhook, external caller |
 | widget fetch | `@ui_widget(...)` | HTTP GET | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{alias}` | KDCube | platform iframe/widget loader |
 | main bundle UI | `@ui_main` | static HTTP asset serving | `/api/integrations/static/{tenant}/{project}/{bundle_id}/...` | KDCube | browser iframe |
 | bundle-authenticated MCP | `@mcp(route="operations")` | MCP over `streamable-http` | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/{alias}` | bundle MCP app | MCP client |
 | public MCP | `@mcp(route="public")` | MCP over `streamable-http` | `/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/mcp/{alias}` | nobody by default | MCP client |
+
+Background jobs are intentionally not URL-addressable. A producer writes a
+ready job to the Redis Stream with tenant/project/bundle/user routing metadata.
+Proc claims it fairly, constructs a normal bundle runtime context, and calls the
+bundle's async `@on_job` handler. Use [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
+for the queue/envelope contract.
 
 ## 3. REST Operations
 

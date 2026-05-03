@@ -807,6 +807,7 @@ def _manifest_to_descriptor(manifest: BundleInterfaceManifest) -> Dict[str, Any]
             for s in manifest.ui_widgets
         ],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
+        "on_job": manifest.on_job.method_name if manifest.on_job else None,
         "scheduled_jobs": [
             {
                 "method_name": s.method_name,
@@ -863,6 +864,7 @@ def _manifest_to_descriptor_filtered(
             if _endpoint_visible(s.user_types, s.roles, session)
         ],
         "on_message": manifest.on_message.method_name if manifest.on_message else None,
+        "on_job": manifest.on_job.method_name if manifest.on_job else None,
         "scheduled_jobs": [
             {
                 "method_name": s.method_name,
@@ -949,7 +951,7 @@ async def get_bundles(
 ):
     """
     Non-admin bundle listing for registered users.
-    Returns bundle descriptors with apis/widgets/on_message filtered by the
+    Returns bundle descriptors with apis/widgets/on_message/on_job filtered by the
     caller's roles. Origin fields (path, module, repo, ref, subdir, git_commit)
     are omitted.
     """
@@ -1947,6 +1949,24 @@ async def get_bundle_interface(
             if manifest.on_message
             else None
         ),
+        "on_job": (
+            {"method_name": manifest.on_job.method_name}
+            if manifest.on_job
+            else None
+        ),
+        "scheduled_jobs": [
+            {
+                "method_name": spec.method_name,
+                "alias": spec.alias,
+                "cron_expression": spec.cron_expression,
+                "expr_config": spec.expr_config,
+                "timezone": spec.timezone,
+                "tz_config": spec.tz_config,
+                "span": spec.span,
+                "enabled_config": spec.enabled_config,
+            }
+            for spec in manifest.scheduled_jobs
+        ],
     }
 
 
@@ -2167,6 +2187,7 @@ async def _serve_static_widget_app(
         widget_path: str,
         request: Request,
         session: UserSession,
+        public: bool = False,
 ):
     from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
 
@@ -2262,7 +2283,8 @@ async def _serve_static_widget_app(
             raise HTTPException(status_code=404, detail="Not found")
 
     if target.name == "index.html":
-        base_href = f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_spec.alias}/"
+        base_route = "public/widgets" if public else "widgets"
+        base_href = f"/api/integrations/bundles/{tenant}/{project}/{bundle_id}/{base_route}/{widget_spec.alias}/"
         content = target.read_text(encoding="utf-8")
         content = content.replace("<head>", f"<head><base href=\"{base_href}\">", 1)
         return HTMLResponse(content=content, headers={"Cache-Control": "no-cache"})
@@ -2362,6 +2384,53 @@ async def serve_bundle_widget_path(
         content=_widget_payload_content(payload, widget_alias),
         headers={"Cache-Control": "no-cache"},
     )
+
+
+@router.get("/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}")
+async def fetch_public_static_bundle_widget(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        widget_alias: str,
+        request: Request,
+):
+    static_response = await _serve_static_widget_app(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        widget_alias=widget_alias,
+        widget_path="index.html",
+        request=request,
+        session=_build_public_api_request_session(request),
+        public=True,
+    )
+    if static_response is None:
+        raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} does not define a public static app")
+    return static_response
+
+
+@router.get("/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}/{widget_path:path}")
+async def serve_public_static_bundle_widget_path(
+        tenant: str,
+        project: str,
+        bundle_id: str,
+        widget_alias: str,
+        widget_path: str,
+        request: Request,
+):
+    static_response = await _serve_static_widget_app(
+        tenant=tenant,
+        project=project,
+        bundle_id=bundle_id,
+        widget_alias=widget_alias,
+        widget_path=widget_path,
+        request=request,
+        session=_build_public_api_request_session(request),
+        public=True,
+    )
+    if static_response is None:
+        raise HTTPException(status_code=404, detail=f"Bundle widget {widget_alias} does not define a public static app")
+    return static_response
 
 
 def _callable_accepts_kwarg(fn: Any, name: str) -> bool:
