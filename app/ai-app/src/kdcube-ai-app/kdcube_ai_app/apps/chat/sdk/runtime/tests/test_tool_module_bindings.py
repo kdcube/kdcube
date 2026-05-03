@@ -53,3 +53,24 @@ def test_bindings_fall_back_to_comm_context_when_tool_subsystem_is_absent():
     assert ctx.kv_cache == {"namespace": "demo"}
 
     set_comm(None)
+
+
+def test_bindings_refresh_integrations_after_initial_bind():
+    calls = []
+
+    class Module:
+        def bind_integrations(self, integrations):
+            calls.append(integrations.get("tool_subsystem"))
+
+    module = Module()
+    svc = object()
+    first = type("_ToolSubsystem", (), {"comm": "first-comm"})()
+    second = type("_ToolSubsystem", (), {"comm": "second-comm"})()
+
+    bind_module_target(module, svc=svc, integrations={"tool_subsystem": first})
+    bind_module_target(module, svc=svc, integrations={"tool_subsystem": second})
+
+    ctx = get_bound_context(module)
+    assert calls == [first, second]
+    assert ctx.tool_subsystem is second
+    assert ctx.communicator == "second-comm"

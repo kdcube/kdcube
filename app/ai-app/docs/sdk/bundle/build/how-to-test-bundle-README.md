@@ -208,6 +208,59 @@ Good React smoke tests:
 Do not add a gate-agent test unless the bundle intentionally has a gate.
 For simple React bundles, a deterministic prepare step plus solver is enough.
 
+## 1D. Runtime Log And Timeline Checks
+
+When a manual SSE, webhook, widget, cron, or `@on_job` test fails, inspect
+runtime logs and the turn timeline before changing bundle code. The final bot
+answer is evidence, but it can be misleading if a tool returned the wrong
+diagnostic.
+
+Find the active log directory from the runtime descriptor or assembly. For local
+development it is usually under the dev workspace:
+
+```bash
+LOG_DIR="${KDCUBE_DEV_WORKSPACE:-$HOME/.kdcube/dev-workspace}/log"
+rg -n "<bundle-id>|<tool-id>|bundle.on_load|allowed_plugins|tool_ids|tool_runtime_not_bound|on_job" "$LOG_DIR"
+```
+
+Replace `<bundle-id>` and `<tool-id>` with the failing bundle and tool aliases.
+
+Prove the sequence:
+
+- proc actually restarted after platform or descriptor changes
+- the bundle resolver found the expected path, git ref, and module
+- `on_bundle_load` ran successfully for the bundle
+- React was built with the expected `allowed_plugins` and `tool_ids`
+- skill loading exposed the expected bundle-local skills
+- the requested tool actually executed, not only appeared in the catalog
+- the turn timeline contains the events needed by the transport adapter
+
+Classify failures by boundary:
+
+- bundle absent, operation absent, or widget absent: descriptor, import, or
+  decorator discovery failure
+- tool missing from `tool_ids`: `tools_descriptor.py`, alias, skill visibility,
+  or React configuration failure
+- tool present but `tool_runtime_not_bound` or "tools are not bound": platform
+  or bundle runtime binding failure, not a user OAuth/configuration failure
+- explicit account/config errors such as "account not connected" or "account not
+  found": user-actionable setup failure
+- webhook returns only an acknowledgement: check the timeline and outbound
+  transport rendering path, because webhook JSON is usually not the bot reply
+
+Multiworker rule:
+
+- check logs across all proc workers
+- a bundle may load in one process while the failing request is served by another
+- after platform code changes, restart proc; a new conversation is not enough
+
+Close the loop:
+
+- keep small, targeted runtime logs for surfaces that are hard to classify, such
+  as `allowed_plugins`, `tool_ids`, resolved bundle path, and job metadata
+- add a regression test at the boundary that failed
+- do not replace an internal runtime error with user setup advice
+
 ## 1.1 What This Test Guide Must Prove
 
 Testing is not only about “does one function work”.

@@ -75,15 +75,14 @@ def apply_bound_context(
 
 
 def bind_module_target(target: Any, *, svc: Any, registry: Any = None, integrations: Mapping[str, Any] | None = None) -> None:
-    if _get(target, "__KDCUBE_BIND_DONE__"):
-        return
+    already_bound = bool(_get(target, "__KDCUBE_BIND_DONE__"))
 
-    if hasattr(target, "bind_service") and callable(target.bind_service):
+    if not already_bound and hasattr(target, "bind_service") and callable(target.bind_service):
         target.bind_service(svc)
-    elif hasattr(target, "set_service") and callable(target.set_service):
+    elif not already_bound and hasattr(target, "set_service") and callable(target.set_service):
         target.set_service(svc)
 
-    if registry is not None and hasattr(target, "bind_registry") and callable(target.bind_registry):
+    if not already_bound and registry is not None and hasattr(target, "bind_registry") and callable(target.bind_registry):
         target.bind_registry(registry)
 
     if integrations is not None and hasattr(target, "bind_integrations") and callable(target.bind_integrations):

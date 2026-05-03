@@ -75,6 +75,9 @@ Practical rule:
 - docs define the intended contract
 - `versatile` shows the reference bundle shape
 - platform source is the last resort for unresolved edge cases
+- when live runtime behavior disagrees with tests or expectations, follow
+  [how-to-test-bundle-README.md#1d-runtime-log-and-timeline-checks](how-to-test-bundle-README.md#1d-runtime-log-and-timeline-checks)
+  before reading platform internals or changing product logic
 
 Configuration/runtime rule:
 
