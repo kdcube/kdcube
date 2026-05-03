@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import pathlib
+import re
+import shlex
 import time
 import traceback
 from contextvars import ContextVar
@@ -248,6 +250,14 @@ class BaseEntrypoint:
         Default behavior is no-op. Override in bundles that need to reconcile
         long-lived side effects when props change.
         """
+        previous_ui = previous_props.get("ui") if isinstance(previous_props, dict) else None
+        current_ui = current_props.get("ui") if isinstance(current_props, dict) else None
+        if previous_ui != current_ui:
+            self.logger.log(
+                f"[bundle.ui] props changed; reconciling UI builds reason={reason} tenant={tenant} project={project}",
+                "INFO",
+            )
+            await self._ensure_ui_build()
         return None
 
     @staticmethod
@@ -283,6 +293,80 @@ class BaseEntrypoint:
         if isinstance(value, int):
             return value != 0
         return str(value).strip().lower() not in {"false", "disable", "disabled", "off", "0"}
+
+    @staticmethod
+    def _prepare_ui_build_command(build_command: str, tmp_dest: pathlib.Path) -> str:
+        """
+        Resolve KDCube UI build placeholders without turning the output directory
+        into a positional build argument.
+        """
+        placeholder = "<VI_BUILD_DEST_ABSOLUTE_PATH>"
+        alt_placeholder = "<VITE_BUILD_DEST_ABSOLUTE_PATH>"
+        placeholder_re = re.escape(placeholder)
+        alt_placeholder_re = re.escape(alt_placeholder)
+        quoted_placeholder_re = (
+            rf"(?:{placeholder_re}|{alt_placeholder_re}|\"{placeholder_re}\"|'{placeholder_re}'|"
+            rf"\"{alt_placeholder_re}\"|'{alt_placeholder_re}')"
+        )
+        tmp_dest_re = re.escape(str(tmp_dest))
+        quoted_tmp_dest_re = rf"(?:{tmp_dest_re}|\"{tmp_dest_re}\"|'{tmp_dest_re}')"
+        tmp_build_dir_arg_re = (
+            rf"(?:{quoted_placeholder_re}|{quoted_tmp_dest_re}|"
+            rf"\"[^\"]*\.ui\.build\.tmp\.[^\"]*\"|'[^']*\.ui\.build\.tmp\.[^']*'|"
+            rf"\S*\.ui\.build\.tmp\.\S*)"
+        )
+        command = str(build_command or "").strip()
+
+        for var_name in ("OUTDIR", "VI_BUILD_DEST_ABSOLUTE_PATH", "VITE_BUILD_DEST_ABSOLUTE_PATH"):
+            command = re.sub(
+                rf"(?<!\S){re.escape(var_name)}=(?:{quoted_placeholder_re}|{quoted_tmp_dest_re})\s+",
+                "",
+                command,
+            )
+
+        # If the temp output path is passed as a positional npm build argument,
+        # npm appends it to the package script and Vite treats the output folder
+        # as the project root. The runner provides this value through env.
+        for separator in ("", r"\s+--"):
+            command = re.sub(
+                rf"(?<!\S)(npm\s+run\s+build){separator}\s+{tmp_build_dir_arg_re}(?=$|\s|[;&|])",
+                r"\1",
+                command,
+            )
+
+        return (
+            command
+            .replace(placeholder, shlex.quote(str(tmp_dest)))
+            .replace(alt_placeholder, shlex.quote(str(tmp_dest)))
+        )
+
+    @staticmethod
+    def _is_standard_npm_ui_build(command: str) -> bool:
+        normalized = re.sub(r"\s+", " ", str(command or "").strip())
+        return normalized == "npm install --no-package-lock && npm run build"
+
+    @staticmethod
+    def _npm_install_args_for_ui_build(command: str) -> Optional[list[str]]:
+        """
+        Recognize npm-install plus npm-run-build commands so the build script can
+        be executed directly. This avoids npm appending descriptor/output args to
+        the package script.
+        """
+        normalized = re.sub(r"\s+", " ", str(command or "").strip())
+        parts = [part.strip() for part in normalized.split("&&", 1)]
+        if len(parts) != 2:
+            return None
+        install_part, build_part = parts
+        try:
+            install_args = shlex.split(install_part)
+            build_args = shlex.split(build_part)
+        except ValueError:
+            return None
+        if len(install_args) < 2 or install_args[:2] != ["npm", "install"]:
+            return None
+        if len(build_args) < 3 or build_args[:3] != ["npm", "run", "build"]:
+            return None
+        return install_args
 
     def _resolve_ui_src_path(self, *, src_folder: str, bundle_root: str) -> pathlib.Path:
         src_path = pathlib.Path(src_folder)
@@ -336,15 +420,41 @@ class BaseEntrypoint:
 
         async def _build_ui() -> None:
             tmp_dest = storage_root / f".ui.build.tmp.{os.getpid()}.{_uuid.uuid4().hex}"
+            tmp_src = storage_root / f".ui.src.tmp.{os.getpid()}.{_uuid.uuid4().hex}"
             previous_dest = storage_root / f".ui.previous.{os.getpid()}.{_uuid.uuid4().hex}"
             swapped_old = False
             try:
                 shutil.rmtree(tmp_dest, ignore_errors=True)
+                shutil.rmtree(tmp_src, ignore_errors=True)
                 tmp_dest.mkdir(parents=True, exist_ok=True)
-                final_command = build_command.replace("<VI_BUILD_DEST_ABSOLUTE_PATH>", str(tmp_dest))
-                self.logger.log(f"[bundle.ui] {kind} build start: src={src_path} dest={build_dest}", "INFO")
+                shutil.copytree(
+                    src_path,
+                    tmp_src,
+                    ignore=shutil.ignore_patterns(
+                        "node_modules",
+                        "dist",
+                        "build",
+                        ".vite",
+                        ".vite-temp",
+                        ".react_workspace_git",
+                        ".git",
+                        "__pycache__",
+                        "*.tsbuildinfo",
+                    ),
+                )
+                final_command = self._prepare_ui_build_command(build_command=build_command, tmp_dest=tmp_dest)
+                self.logger.log(
+                    f"[bundle.ui] {kind} build start: src={src_path} build_src={tmp_src} dest={build_dest}",
+                    "INFO",
+                )
 
                 env = os.environ.copy()
+                env["OUTDIR"] = str(tmp_dest)
+                env["VI_BUILD_DEST_ABSOLUTE_PATH"] = str(tmp_dest)
+                env["VITE_BUILD_DEST_ABSOLUTE_PATH"] = str(tmp_dest)
+                for env_key in list(env.keys()):
+                    if env_key.startswith("npm_"):
+                        env.pop(env_key, None)
                 if bundle_delivery_id:
                     env["VI_BUNDLE_ID"] = bundle_delivery_id
                     env["VITE_BUNDLE_ID"] = bundle_delivery_id
@@ -355,26 +465,70 @@ class BaseEntrypoint:
                         if os.path.exists(os.path.join(bin_path, "npm")):
                             env["PATH"] = bin_path + ":" + env.get("PATH", "")
                             break
+                env["PATH"] = str(tmp_src / "node_modules" / ".bin") + ":" + env.get("PATH", "")
 
-                proc = await asyncio.create_subprocess_shell(
-                    final_command,
-                    cwd=str(src_path),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                )
-                try:
-                    stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=600)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                    raise TimeoutError("UI build timed out after 600s")
+                async def _run_build_process(args: Optional[list[str]] = None, shell_command: Optional[str] = None):
+                    if args:
+                        self.logger.log(f"[bundle.ui] {kind} build command: {' '.join(args)}", "INFO")
+                        proc = await asyncio.create_subprocess_exec(
+                            *args,
+                            cwd=str(tmp_src),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            env=env,
+                        )
+                    else:
+                        self.logger.log(f"[bundle.ui] {kind} build command: {shell_command}", "INFO")
+                        proc = await asyncio.create_subprocess_shell(
+                            str(shell_command or ""),
+                            cwd=str(tmp_src),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            env=env,
+                        )
+                    try:
+                        stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=600)
+                    except asyncio.TimeoutError:
+                        proc.kill()
+                        await proc.wait()
+                        raise TimeoutError("UI build timed out after 600s")
+                    return (
+                        int(proc.returncode or 0),
+                        stdout_b.decode("utf-8", errors="replace") if stdout_b else "",
+                        stderr_b.decode("utf-8", errors="replace") if stderr_b else "",
+                    )
 
-                stdout = stdout_b.decode("utf-8", errors="replace") if stdout_b else ""
-                stderr = stderr_b.decode("utf-8", errors="replace") if stderr_b else ""
-                if proc.returncode != 0:
+                stdout_parts: list[str] = []
+                stderr_parts: list[str] = []
+                exit_code = 0
+                npm_install_args = self._npm_install_args_for_ui_build(final_command)
+                if npm_install_args:
+                    exit_code, stdout, stderr = await _run_build_process(args=npm_install_args)
+                    stdout_parts.append(stdout)
+                    stderr_parts.append(stderr)
+                    if exit_code == 0:
+                        package_json = tmp_src / "package.json"
+                        try:
+                            scripts = json.loads(package_json.read_text(encoding="utf-8")).get("scripts") or {}
+                            build_script = str(scripts.get("build") or "").strip()
+                        except Exception as exc:
+                            raise RuntimeError(f"UI build failed: unable to read scripts.build from {package_json}: {exc}") from exc
+                        if not build_script:
+                            raise RuntimeError(f"UI build failed: scripts.build missing in {package_json}")
+                        build_script = self._prepare_ui_build_command(build_command=build_script, tmp_dest=tmp_dest)
+                        exit_code, stdout, stderr = await _run_build_process(shell_command=build_script)
+                        stdout_parts.append(stdout)
+                        stderr_parts.append(stderr)
+                else:
+                    exit_code, stdout, stderr = await _run_build_process(shell_command=final_command)
+                    stdout_parts.append(stdout)
+                    stderr_parts.append(stderr)
+
+                stdout = "\n".join(part for part in stdout_parts if part)
+                stderr = "\n".join(part for part in stderr_parts if part)
+                if exit_code != 0:
                     build_output = "\n".join(part for part in [stderr.strip(), stdout.strip()] if part)
-                    raise RuntimeError(f"UI build failed (exit={proc.returncode}):\n{build_output[-4000:]}")
+                    raise RuntimeError(f"UI build failed (exit={exit_code}):\n{build_output[-4000:]}")
                 if not (tmp_dest / "index.html").exists():
                     raise RuntimeError(f"UI build failed: index.html missing in temp output {tmp_dest}")
 
@@ -396,6 +550,7 @@ class BaseEntrypoint:
                 )
             finally:
                 shutil.rmtree(tmp_dest, ignore_errors=True)
+                shutil.rmtree(tmp_src, ignore_errors=True)
 
         try:
             await run_once_for_shared_bundle_storage(

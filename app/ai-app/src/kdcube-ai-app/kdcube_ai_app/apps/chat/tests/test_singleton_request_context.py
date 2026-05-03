@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -222,6 +223,223 @@ async def test_base_entrypoint_on_props_changed_fires_on_refresh(monkeypatch):
     assert len(ep.events) == 1
     assert ep.events[0]["reason"] == "refresh_bundle_props"
     assert ep.events[0]["current_props"]["feature"]["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_base_entrypoint_reconciles_ui_builds_on_ui_props_changed(monkeypatch):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _ProbeEntrypoint(entrypoint_mod.BaseEntrypoint):
+        def configuration_defaults(self):
+            return {}
+
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    ep = _ProbeEntrypoint(
+        config=_DummyConfig(bundle_id="bundle.props"),
+        comm_context=_ctx(user_type="registered"),
+    )
+    ep._ensure_ui_build = AsyncMock()
+
+    await ep.on_props_changed(
+        previous_props={"ui": {"web_app_widgets": {}}},
+        current_props={
+            "ui": {
+                "web_app_widgets": {
+                    "task_webapp": {
+                        "enabled": True,
+                        "src_folder": "widgets/task_webapp",
+                        "build_command": "true",
+                    }
+                }
+            }
+        },
+        reason="refresh_bundle_props",
+        tenant="demo",
+        project="demo-project",
+    )
+
+    ep._ensure_ui_build.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_base_entrypoint_does_not_reconcile_ui_builds_on_non_ui_props_changed(monkeypatch):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _ProbeEntrypoint(entrypoint_mod.BaseEntrypoint):
+        def configuration_defaults(self):
+            return {}
+
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    ep = _ProbeEntrypoint(
+        config=_DummyConfig(bundle_id="bundle.props"),
+        comm_context=_ctx(user_type="registered"),
+    )
+    ep._ensure_ui_build = AsyncMock()
+
+    await ep.on_props_changed(
+        previous_props={"feature": {"enabled": False}},
+        current_props={"feature": {"enabled": True}},
+        reason="refresh_bundle_props",
+        tenant="demo",
+        project="demo-project",
+    )
+
+    ep._ensure_ui_build.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_base_entrypoint_ui_build_uses_clean_temp_source_and_outdir_env(monkeypatch, tmp_path):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _ProbeEntrypoint(entrypoint_mod.BaseEntrypoint):
+        def configuration_defaults(self):
+            return {}
+
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    bundle_root = tmp_path / "bundle"
+    src = bundle_root / "widgets" / "probe"
+    src.mkdir(parents=True)
+    (src / "index.html").write_text("<html></html>", encoding="utf-8")
+    stale = src / "node_modules"
+    stale.mkdir()
+    (stale / "stale.txt").write_text("stale", encoding="utf-8")
+
+    storage_root = tmp_path / "storage"
+    ep = _ProbeEntrypoint(
+        config=_DummyConfig(bundle_id="bundle.props"),
+        comm_context=_ctx(user_type="registered"),
+    )
+    ep.bundle_storage_root = lambda: storage_root
+    ep._bundle_root = lambda: str(bundle_root)
+
+    build_dest = storage_root / "ui" / "widgets" / "probe"
+    await ep._ensure_static_ui_app_build(
+        kind="widget:probe",
+        cfg={
+            "src_folder": "widgets/probe",
+            "build_command": "test ! -e node_modules/stale.txt && mkdir -p \"$OUTDIR\" && printf '<html></html>' > \"$OUTDIR/index.html\"",
+        },
+        build_dest=build_dest,
+        signature_path=storage_root / ".ui.widgets" / "probe.signature",
+        operation="ui-widget-probe",
+    )
+
+    assert (build_dest / "index.html").exists()
+    assert not any(storage_root.glob(".ui.src.tmp.*"))
+    assert (src / "node_modules" / "stale.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_base_entrypoint_standard_npm_build_runs_package_script_directly(monkeypatch, tmp_path):
+    monkeypatch.setattr(entrypoint_mod, "get_settings", lambda: SimpleNamespace(TENANT="demo", PROJECT="demo-project"))
+    monkeypatch.setattr(entrypoint_mod, "create_kv_cache_from_env", lambda: None)
+
+    class _ProbeEntrypoint(entrypoint_mod.BaseEntrypoint):
+        def configuration_defaults(self):
+            return {}
+
+        async def execute_core(self, *, state, thread_id, params):
+            del state, thread_id, params
+            return {}
+
+    bundle_root = tmp_path / "bundle"
+    src = bundle_root / "widgets" / "probe"
+    src.mkdir(parents=True)
+    (src / "package.json").write_text(
+        json.dumps(
+            {
+                "scripts": {
+                    "build": "test -n \"$OUTDIR\" && printf '<html></html>' > \"$OUTDIR/index.html\""
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    storage_root = tmp_path / "storage"
+    ep = _ProbeEntrypoint(
+        config=_DummyConfig(bundle_id="bundle.props"),
+        comm_context=_ctx(user_type="registered"),
+    )
+    ep.bundle_storage_root = lambda: storage_root
+    ep._bundle_root = lambda: str(bundle_root)
+
+    build_dest = storage_root / "ui" / "widgets" / "probe"
+    await ep._ensure_static_ui_app_build(
+        kind="widget:probe",
+        cfg={
+            "src_folder": "widgets/probe",
+            "build_command": "npm install && npm run build --outDir <VI_BUILD_DEST_ABSOLUTE_PATH>",
+        },
+        build_dest=build_dest,
+        signature_path=storage_root / ".ui.widgets" / "probe.signature",
+        operation="ui-widget-probe",
+    )
+
+    assert (build_dest / "index.html").exists()
+
+
+def test_base_entrypoint_ui_build_command_uses_placeholder_as_env_only(tmp_path):
+    out_dir = tmp_path / "out"
+
+    command = entrypoint_mod.BaseEntrypoint._prepare_ui_build_command(
+        "npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build",
+        out_dir,
+    )
+    assert command == "npm install --no-package-lock && npm run build"
+
+    command = entrypoint_mod.BaseEntrypoint._prepare_ui_build_command(
+        "npm install --no-package-lock && npm run build <VI_BUILD_DEST_ABSOLUTE_PATH>",
+        out_dir,
+    )
+    assert command == "npm install --no-package-lock && npm run build"
+
+    command = entrypoint_mod.BaseEntrypoint._prepare_ui_build_command(
+        f"npm install --no-package-lock && npm run build {out_dir}",
+        out_dir,
+    )
+    assert command == "npm install --no-package-lock && npm run build"
+
+    command = entrypoint_mod.BaseEntrypoint._prepare_ui_build_command(
+        "npm install --no-package-lock && npm run build ../.ui.build.tmp.8241.4ceeb93/index.html",
+        out_dir,
+    )
+    assert command == "npm install --no-package-lock && npm run build"
+
+    command = entrypoint_mod.BaseEntrypoint._prepare_ui_build_command(
+        "vite build --outDir <VI_BUILD_DEST_ABSOLUTE_PATH>",
+        out_dir,
+    )
+    assert command == f"vite build --outDir {out_dir}"
+
+
+def test_base_entrypoint_standard_npm_ui_build_detection():
+    assert entrypoint_mod.BaseEntrypoint._is_standard_npm_ui_build(
+        "npm install --no-package-lock && npm run build"
+    ) is True
+    assert entrypoint_mod.BaseEntrypoint._is_standard_npm_ui_build("npm run build") is False
+
+
+def test_base_entrypoint_npm_install_args_for_ui_build():
+    assert entrypoint_mod.BaseEntrypoint._npm_install_args_for_ui_build(
+        "npm install --no-package-lock && npm run build"
+    ) == ["npm", "install", "--no-package-lock"]
+    assert entrypoint_mod.BaseEntrypoint._npm_install_args_for_ui_build(
+        "npm install && npm run build --outDir /tmp/.ui.build.tmp.123"
+    ) == ["npm", "install"]
+    assert entrypoint_mod.BaseEntrypoint._npm_install_args_for_ui_build("npm run build") is None
 
 
 @pytest.mark.asyncio
