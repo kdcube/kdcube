@@ -2978,10 +2978,13 @@ class BundleState(TypedDict, total=False):
     error_message: Optional[str]
     step_logs: Optional[list[dict]]
     start_time: Optional[float]
+    turn_log: Optional[dict]
+    timeline: Optional[dict]
 
 APP_STATE_KEYS = [
     "request_id", "tenant", "project", "user", "session_id",
-    "text", "attachments", "final_answer", "followups", "error_message", "step_logs"
+    "text", "attachments", "final_answer", "followups", "error_message", "step_logs",
+    "turn_log", "timeline"
 ]
 
 class FollowupsOutput(BaseModel):

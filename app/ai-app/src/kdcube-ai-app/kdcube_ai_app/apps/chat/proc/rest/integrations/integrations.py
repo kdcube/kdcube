@@ -3,6 +3,7 @@
 
 # chat/proc/rest/integrations/integrations.py
 import asyncio
+import contextlib
 import copy
 import html
 import hmac
@@ -502,23 +503,34 @@ async def _dispatch_bundle_mcp_request(
     }
     params = list(request.query_params.multi_items())
 
-    async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=mcp_app),
-            base_url="http://bundle-mcp.local",
-    ) as client:
-        response = await client.request(
-            request.method,
-            dispatch_path,
-            params=params,
-            headers=headers,
-            content=body,
-        )
+    async with _bundle_mcp_lifespan_context(mcp_app):
+        async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=mcp_app),
+                base_url="http://127.0.0.1:8000",
+        ) as client:
+            response = await client.request(
+                request.method,
+                dispatch_path,
+                params=params,
+                headers=headers,
+                content=body,
+            )
 
     return Response(
         content=response.content,
         status_code=response.status_code,
         headers=_filtered_proxy_headers(response.headers),
     )
+
+
+@contextlib.asynccontextmanager
+async def _bundle_mcp_lifespan_context(mcp_app: Any):
+    lifespan_context = getattr(getattr(mcp_app, "router", None), "lifespan_context", None)
+    if not callable(lifespan_context):
+        yield
+        return
+    async with lifespan_context(mcp_app):
+        yield
 
 
 async def _parse_bundle_request_payload(request: Request) -> Tuple[BundleSuggestionsRequest, List[BundleUploadedFile]]:

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from starlette.responses import JSONResponse
 from starlette.requests import Request
+from starlette.routing import Route
 
 from kdcube_ai_app.apps.chat.proc.rest.integrations import integrations
 from kdcube_ai_app.auth.sessions import UserType
@@ -133,6 +136,20 @@ class _RecordingMCPProvider:
             )
 
         return _app
+
+
+class _LifespanMCPProvider:
+    def streamable_http_app(self):
+        @asynccontextmanager
+        async def _lifespan(app):
+            app.state.started = True
+            yield
+            app.state.stopped = True
+
+        async def _endpoint(request):
+            return JSONResponse({"started": bool(getattr(request.app.state, "started", False))})
+
+        return FastAPI(routes=[Route("/mcp", endpoint=_endpoint, methods=["POST"])], lifespan=_lifespan)
 
 
 class _DecoratedWorkflow:
@@ -925,6 +942,54 @@ async def test_call_bundle_mcp_inner_supports_public_mcp_endpoint(monkeypatch):
     payload = json.loads(response.body.decode("utf-8"))
     assert payload["path"] == "/mcp"
     assert payload["method"] == "GET"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_bundle_mcp_request_runs_asgi_lifespan():
+    mcp_app = _LifespanMCPProvider().streamable_http_app()
+
+    response = await integrations._dispatch_bundle_mcp_request(
+        request=_request(
+            method="POST",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools",
+            body=b'{"jsonrpc":"2.0","id":"1","method":"tools/list"}',
+            headers=[(b"content-type", b"application/json")],
+        ),
+        mcp_app=mcp_app,
+        transport="streamable-http",
+        mcp_path="",
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body.decode("utf-8")) == {"started": True}
+
+
+@pytest.mark.asyncio
+async def test_dispatch_bundle_mcp_request_runs_fastmcp_streamable_http_lifespan():
+    fastmcp = pytest.importorskip("mcp.server.fastmcp")
+    mcp_app = fastmcp.FastMCP("test-tools", stateless_http=True)
+
+    @mcp_app.tool(name="hello")
+    async def _hello():
+        return {"ok": True}
+
+    response = await integrations._dispatch_bundle_mcp_request(
+        request=_request(
+            method="POST",
+            path="/api/integrations/bundles/tenant-a/project-a/bundle.demo/mcp/tools",
+            body=b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}',
+            headers=[
+                (b"content-type", b"application/json"),
+                (b"accept", b"application/json, text/event-stream"),
+            ],
+        ),
+        mcp_app=mcp_app.streamable_http_app(),
+        transport="streamable-http",
+        mcp_path="",
+    )
+
+    assert response.status_code == 200
+    assert b'"name":"hello"' in response.body
 
 
 @pytest.mark.asyncio

@@ -122,6 +122,13 @@ class TestBundleState:
         annotations = BundleState.__annotations__
         assert "attachments" in annotations
 
+    def test_bundle_state_turn_delivery_fields_exist_in_type(self):
+        """BundleState preserves turn-level payloads used by external delivery adapters."""
+        from kdcube_ai_app.infra.service_hub.inventory import BundleState
+        annotations = BundleState.__annotations__
+        assert "turn_log" in annotations
+        assert "timeline" in annotations
+
     def test_state_does_not_leak_between_bundle_instances(self, bundle_dir):
         """Two separate bundle instances do not share state."""
         try:
@@ -169,6 +176,37 @@ class TestBundleState:
 
         for key in APP_STATE_KEYS:
             assert key in out, f"project_app_state() must include '{key}'"
+
+    def test_project_app_state_preserves_turn_delivery_payloads(self, bundle):
+        """project_app_state() preserves turn payloads for external delivery adapters."""
+        turn_log = {"turn_id": "turn_1", "blocks": [{"type": "assistant.completion"}]}
+        timeline = {"turn_id": "turn_1", "blocks": []}
+
+        out = type(bundle).project_app_state({"turn_log": turn_log, "timeline": timeline})
+
+        assert out["turn_log"] == turn_log
+        assert out["timeline"] == timeline
+
+    @pytest.mark.asyncio
+    async def test_bundle_state_graph_preserves_turn_delivery_payloads(self):
+        """StateGraph(BundleState) must not drop turn payloads before project_app_state()."""
+        from langgraph.graph import END, START, StateGraph
+        from kdcube_ai_app.infra.service_hub.inventory import BundleState
+
+        async def node(state: BundleState) -> BundleState:
+            state["turn_log"] = {"turn_id": "turn_1", "blocks": [{"type": "assistant.completion"}]}
+            state["timeline"] = {"turn_id": "turn_1", "blocks": []}
+            return state
+
+        graph = StateGraph(BundleState)
+        graph.add_node("node", node)
+        graph.add_edge(START, "node")
+        graph.add_edge("node", END)
+
+        out = await graph.compile().ainvoke({})
+
+        assert out["turn_log"]["blocks"][0]["type"] == "assistant.completion"
+        assert out["timeline"]["turn_id"] == "turn_1"
 
     def test_project_app_state_includes_bundle_context(self, bundle):
         """project_app_state() includes bundle ID in context."""
