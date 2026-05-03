@@ -1,8 +1,8 @@
 import {useMemo} from "react";
 
-import {useCodeCoreArtifact} from "../useCodeCoreArtifact.ts";
 import AskAgentButton from "./AskAgentButton.tsx";
 import {Section} from "./Section.tsx";
+import {useDefineLookup} from "../useCodeCoreLookup.ts";
 
 interface Props {
     conceptId: string;
@@ -20,18 +20,13 @@ interface SemanticMatch {
     realized_by?: string[];
 }
 
-const KINDS = ["define"] as const;
-
 function ConceptDetails({conceptId}: Props) {
-    const artifact = useCodeCoreArtifact(KINDS);
+    const lookup = useDefineLookup(conceptId);
 
     const match = useMemo<SemanticMatch | null>(() => {
-        if (!artifact) return null;
-        const payload = artifact.content.payload as {matches?: SemanticMatch[]} | null;
-        const matches = payload?.matches ?? [];
-        const exact = matches.find((m) => m.id?.toLowerCase() === conceptId.toLowerCase());
-        return exact ?? matches[0] ?? null;
-    }, [artifact, conceptId]);
+        const matches = lookup.data?.matches ?? [];
+        return matches[0] ?? null;
+    }, [lookup.data]);
 
     const askPrompt = useMemo(
         () =>
@@ -40,12 +35,29 @@ function ConceptDetails({conceptId}: Props) {
     );
 
     if (!match) {
+        if (lookup.loading) {
+            return (
+                <div className="text-sm text-slate-500 italic">
+                    Loading <code className="text-xs">{conceptId}</code>…
+                </div>
+            );
+        }
+        if (lookup.error) {
+            return (
+                <div className="text-sm text-slate-700">
+                    <p className="mb-1 font-medium">{conceptId}</p>
+                    <p className="text-xs text-rose-600 mb-2">Lookup failed: {lookup.error}</p>
+                    <AskAgentButton
+                        label={`Define "${conceptId}"`}
+                        prompt={`Use code_graph.define to define "${conceptId}" and show me where it is realized in code.`}
+                    />
+                </div>
+            );
+        }
         return (
             <div className="text-sm text-slate-700">
                 <p className="mb-1 font-medium">{conceptId}</p>
-                <p className="text-xs text-slate-500">
-                    No concept payload yet for this selection. Ask the agent to load it.
-                </p>
+                <p className="text-xs text-slate-500">No data for this concept yet.</p>
                 <AskAgentButton
                     label={`Define "${conceptId}"`}
                     prompt={`Use code_graph.define to define "${conceptId}" and show me where it is realized in code.`}
@@ -113,6 +125,11 @@ function ConceptDetails({conceptId}: Props) {
             )}
 
             <AskAgentButton label="How do I use this →" prompt={askPrompt}/>
+            {!lookup.fromArtifact && (
+                <div className="text-[10px] text-slate-400 mt-2 italic">
+                    Loaded directly from the code-graph (no agent round-trip).
+                </div>
+            )}
         </div>
     );
 }

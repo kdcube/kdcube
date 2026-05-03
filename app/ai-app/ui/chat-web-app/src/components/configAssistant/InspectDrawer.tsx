@@ -124,7 +124,9 @@ function InspectDrawer() {
             <aside
                 className={[
                     "fixed top-0 right-0 z-30 h-screen",
-                    maximized ? "w-[min(1100px,90vw)]" : "w-[640px] max-w-[92vw]",
+                    maximized
+                        ? "w-[min(1300px,92vw)]"
+                        : "w-[min(820px,55vw)] min-w-[560px]",
                     "bg-white border-l border-slate-200 shadow-2xl",
                     "transition-[transform,width] duration-300 ease-out",
                     open ? "translate-x-0" : "translate-x-full",

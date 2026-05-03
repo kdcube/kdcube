@@ -1,8 +1,8 @@
 import {useMemo} from "react";
 
-import {useCodeCoreArtifact} from "../useCodeCoreArtifact.ts";
 import AskAgentButton from "./AskAgentButton.tsx";
 import {Section} from "./Section.tsx";
+import {useDefineLookup} from "../useCodeCoreLookup.ts";
 
 interface Props {
     policyId: string;
@@ -19,20 +19,14 @@ interface PolicyMatch {
     applied_to?: string[];
 }
 
-const KINDS = ["define"] as const;
-
 function PolicyDetails({policyId}: Props) {
-    const artifact = useCodeCoreArtifact(KINDS);
+    const lookup = useDefineLookup(policyId);
 
     const match = useMemo<PolicyMatch | null>(() => {
-        if (!artifact) return null;
-        const payload = artifact.content.payload as {matches?: PolicyMatch[]} | null;
-        const matches = payload?.matches ?? [];
-        const exact = matches.find(
-            (m) => m.id?.toLowerCase() === policyId.toLowerCase() && m.kind === "policy",
-        );
-        return exact ?? matches.find((m) => m.kind === "policy") ?? null;
-    }, [artifact, policyId]);
+        const matches = lookup.data?.matches ?? [];
+        const policy = matches.find((m) => m.kind === "policy");
+        return policy ?? matches[0] ?? null;
+    }, [lookup.data]);
 
     const askPrompt = useMemo(
         () =>
@@ -41,12 +35,25 @@ function PolicyDetails({policyId}: Props) {
     );
 
     if (!match) {
+        if (lookup.loading) {
+            return <div className="text-sm text-slate-500 italic">Loading <code>{policyId}</code>…</div>;
+        }
+        if (lookup.error) {
+            return (
+                <div className="text-sm text-slate-700">
+                    <p className="mb-1 font-medium">{policyId}</p>
+                    <p className="text-xs text-rose-600 mb-2">Lookup failed: {lookup.error}</p>
+                    <AskAgentButton
+                        label={`Define "${policyId}"`}
+                        prompt={`Use code_graph.define to load the "${policyId}" style policy and show me which classes it governs.`}
+                    />
+                </div>
+            );
+        }
         return (
             <div className="text-sm text-slate-700">
                 <p className="mb-1 font-medium">{policyId}</p>
-                <p className="text-xs text-slate-500">
-                    No policy payload yet for this selection. Ask the agent to load it.
-                </p>
+                <p className="text-xs text-slate-500">No data for this policy yet.</p>
                 <AskAgentButton
                     label={`Define "${policyId}"`}
                     prompt={`Use code_graph.define to load the "${policyId}" style policy and show me which classes it governs.`}
@@ -90,6 +97,11 @@ function PolicyDetails({policyId}: Props) {
             )}
 
             <AskAgentButton label="Apply this in my code →" prompt={askPrompt}/>
+            {!lookup.fromArtifact && (
+                <div className="text-[10px] text-slate-400 mt-2 italic">
+                    Loaded directly from the code-graph.
+                </div>
+            )}
         </div>
     );
 }

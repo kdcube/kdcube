@@ -25,9 +25,10 @@ import {
 } from "../../features/configAssistant/configAssistantSlice.ts";
 
 // Widths must match the InspectDrawer's class names.
-const DRAWER_WIDTH_DEFAULT_PX = 640;
-// `w-[min(1100px,90vw)]` — clamped to 90vw on smaller viewports.
-const drawerMaximizedWidthPx = (vw: number) => Math.min(1100, vw * 0.9);
+// Default: `w-[min(820px,55vw)] min-w-[560px]`
+const drawerDefaultWidthPx = (vw: number) => Math.max(560, Math.min(820, vw * 0.55));
+// Maximized: `w-[min(1300px,92vw)]`
+const drawerMaximizedWidthPx = (vw: number) => Math.min(1300, vw * 0.92);
 
 const SingleChatApp: React.FC = () => {
     const currentTurn = useAppSelector(selectCurrentTurn);
@@ -53,7 +54,7 @@ const SingleChatApp: React.FC = () => {
         configAssistantMode === "config_assistant" && configAssistantDrawerOpen
             ? configAssistantDrawerMaximized
                 ? drawerMaximizedWidthPx(vw)
-                : DRAWER_WIDTH_DEFAULT_PX
+                : drawerDefaultWidthPx(vw)
             : 0;
 
     useSharedConfigProvider()

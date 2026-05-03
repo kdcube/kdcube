@@ -12,6 +12,7 @@ from .integrations import (
     admin_router as integrations_admin_router,
     internal_router as integrations_internal_router,
 )
+from .code_core import router as code_core_router
 
 
 def mount_integrations_routers(app: FastAPI):
@@ -21,6 +22,7 @@ def mount_integrations_routers(app: FastAPI):
     integrations_router.state = app.state
     integrations_admin_router.state = app.state
     integrations_internal_router.state = app.state
+    code_core_router.state = app.state
     app.include_router(
         integrations_router,
         prefix="/api/integrations",
@@ -37,6 +39,12 @@ def mount_integrations_routers(app: FastAPI):
         integrations_internal_router,
         prefix="",
         tags=["Integrations Internal"],
+    )
+    # Code-core HTTP endpoints (Configuration Assistant direct lookups).
+    app.include_router(
+        code_core_router,
+        prefix="/api/integrations",
+        tags=["Code Core"],
     )
     return app
 

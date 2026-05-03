@@ -1,23 +1,11 @@
 import {useMemo} from "react";
 
-import {useCodeCoreArtifact} from "../useCodeCoreArtifact.ts";
 import AskAgentButton from "./AskAgentButton.tsx";
 import {Section} from "./Section.tsx";
+import {useFootprintLookup} from "../useCodeCoreLookup.ts";
 
 interface Props {
     qualifiedName: string;
-}
-
-interface FootprintRecord {
-    name?: string;
-    qualified_name?: string;
-    docstring?: string;
-    file_path?: string;
-    ancestors?: string[];
-    descendants?: string[];
-    methods?: Array<{name?: string; signature?: string; is_abstract?: boolean}>;
-    callers?: string[];
-    tests?: string[];
 }
 
 interface SemanticBadge {
@@ -26,29 +14,19 @@ interface SemanticBadge {
     summary?: string;
 }
 
-interface FootprintPayload {
-    footprint?: FootprintRecord[];
-    concepts?: SemanticBadge[];
-    style_policies?: SemanticBadge[];
-}
-
-const KINDS = ["class_footprint"] as const;
-
 function ClassDetails({qualifiedName}: Props) {
-    const artifact = useCodeCoreArtifact(KINDS);
+    const lookup = useFootprintLookup(qualifiedName);
 
     const data = useMemo(() => {
-        if (!artifact) return null;
-        const payload = artifact.content.payload as FootprintPayload | null;
-        const fp = payload?.footprint?.[0] ?? null;
+        if (!lookup.data) return null;
+        const fp = lookup.data.footprint?.[0];
         if (!fp) return null;
         return {
             footprint: fp,
-            concepts: payload?.concepts ?? [],
-            style_policies: payload?.style_policies ?? [],
-            stale: fp.qualified_name !== qualifiedName,
+            concepts: (lookup.data.concepts ?? []) as SemanticBadge[],
+            style_policies: (lookup.data.style_policies ?? []) as SemanticBadge[],
         };
-    }, [artifact, qualifiedName]);
+    }, [lookup.data]);
 
     const askPrompt = useMemo(
         () =>
@@ -58,22 +36,42 @@ function ClassDetails({qualifiedName}: Props) {
 
     if (!data) {
         const shortName = qualifiedName.split(".").slice(-1)[0] || qualifiedName;
+        if (lookup.loading) {
+            return (
+                <div className="text-sm text-slate-700">
+                    <p className="mb-1 font-medium">{shortName}</p>
+                    <p className="text-[10px] font-mono text-slate-500 mb-2 break-all">{qualifiedName}</p>
+                    <p className="text-xs text-slate-500 italic">Loading footprint…</p>
+                </div>
+            );
+        }
+        if (lookup.error) {
+            return (
+                <div className="text-sm text-slate-700">
+                    <p className="mb-1 font-medium">{shortName}</p>
+                    <p className="text-[10px] font-mono text-slate-500 mb-2 break-all">{qualifiedName}</p>
+                    <p className="text-xs text-rose-600 mb-2">Lookup failed: {lookup.error}</p>
+                    <AskAgentButton
+                        label="Load class_footprint"
+                        prompt={`Use code_graph.class_footprint on ${qualifiedName} and tell me what concepts it embodies and which style policies govern it.`}
+                    />
+                </div>
+            );
+        }
         return (
             <div className="text-sm text-slate-700">
                 <p className="mb-1 font-medium">{shortName}</p>
                 <p className="text-[10px] font-mono text-slate-500 mb-2 break-all">{qualifiedName}</p>
-                <p className="text-xs text-slate-500">
-                    No footprint payload yet. Ask the agent to load it.
-                </p>
+                <p className="text-xs text-slate-500">No footprint loaded yet.</p>
                 <AskAgentButton
-                    label={`Load class_footprint`}
+                    label="Load class_footprint"
                     prompt={`Use code_graph.class_footprint on ${qualifiedName} and tell me what concepts it embodies and which style policies govern it.`}
                 />
             </div>
         );
     }
 
-    const {footprint, concepts, style_policies, stale} = data;
+    const {footprint, concepts, style_policies} = data;
     const methodList = (footprint.methods ?? []).filter((m) => m && m.name);
 
     return (
@@ -83,11 +81,6 @@ function ClassDetails({qualifiedName}: Props) {
                 <p className="text-[10px] font-mono text-slate-500 break-all">
                     {footprint.qualified_name}
                 </p>
-                {stale && (
-                    <p className="text-[10px] text-amber-700 mt-1">
-                        Showing the latest footprint loaded (selection may differ — ask the agent to refresh).
-                    </p>
-                )}
             </div>
 
             {footprint.docstring && (
@@ -168,6 +161,11 @@ function ClassDetails({qualifiedName}: Props) {
             )}
 
             <AskAgentButton label="How do I extend this →" prompt={askPrompt}/>
+            {!lookup.fromArtifact && (
+                <div className="text-[10px] text-slate-400 mt-2 italic">
+                    Loaded directly from the code-graph.
+                </div>
+            )}
         </div>
     );
 }
