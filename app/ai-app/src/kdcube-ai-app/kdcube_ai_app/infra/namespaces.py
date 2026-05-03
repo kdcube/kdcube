@@ -25,6 +25,10 @@ class REDIS:
         CONVERSATION_TIMELINE_OWNER_PREFIX = "kdcube:chat:conversation:timeline-owner"
         SSE_CONNECTIONS_PREFIX = "kdcube:chat:sse:connections"
 
+    class BACKGROUND:
+        JOB_STREAM_PREFIX = "kdcube:background:jobs"
+        JOB_DEDUPE_PREFIX = "kdcube:background:jobs:dedupe"
+
     class INSTANCE:
         HEARTBEAT_PREFIX = "kdcube:heartbeat:instance"
 

@@ -1,18 +1,26 @@
 ---
 id: ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
 title: "Bundle Scheduled Jobs"
-summary: "Guide to bundle cron jobs: decorator contract, expression resolution, enable or disable gates, span semantics, timezone handling, locks, and local debugging."
-tags: ["sdk", "bundle", "cron", "scheduled-jobs", "scheduler", "proc"]
-keywords: ["bundle cron jobs", "cron expression resolution", "enabled config gate", "span semantics", "timezone handling", "scheduler locks", "local cron debugging", "scheduled background work"]
+summary: "Guide to bundle cron jobs: decorator contract, expression resolution, enable or disable gates, span semantics, timezone handling, locks, background job handoff, and local debugging."
+tags: ["sdk", "bundle", "cron", "scheduled-jobs", "scheduler", "proc", "background-jobs"]
+keywords: ["bundle cron jobs", "cron expression resolution", "enabled config gate", "span semantics", "timezone handling", "scheduler locks", "local cron debugging", "scheduled background work", "on_job background job handoff"]
 see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
+  - ks:docs/service/comm/design/jobs-stream-README.md
 ---
 # Bundle Scheduled Jobs
 
 Bundle methods decorated with `@cron` are automatically discovered by proc and
 scheduled as recurring background jobs. No manual wiring or ad hoc loops needed.
+
+Important split:
+
+- `@cron(...)` decides when scheduled work is due
+- `@on_job` handles ready work that has been enqueued to the background job stream
+- long-running or per-user work should usually be enqueued and handled by
+  `@on_job`, not executed inside the scheduler tick
 
 ---
 
@@ -308,3 +316,44 @@ async def scheduled_heartbeat(self) -> None:
 
 Because `expr_config` is set, the inline `cron_expression` is only used when
 no Redis props or YAML config override is present.
+
+---
+
+## Cron to `@on_job` handoff
+
+Use this pattern when one scheduler tick can discover many due user tasks, or
+when the work should be claimed fairly across processors.
+
+```python
+from kdcube_ai_app.infra.jobs.stream import RedisBackgroundJobStream
+from kdcube_ai_app.infra.plugin.agentic_loader import cron, on_job
+
+class MyBundle(BaseEntrypoint):
+    @cron(alias="due-scan", cron_expression="*/5 * * * *", span="system")
+    async def due_scan(self):
+        stream = RedisBackgroundJobStream(self.redis, tenant=self.settings.TENANT, project=self.settings.PROJECT)
+        for item in await self.tasks.find_due_items():
+            execution = await self.tasks.create_queued_execution(item)
+            await stream.enqueue(
+                work_kind="task.execution.due",
+                bundle_id=self.config.ai_bundle_spec.id,
+                user_id=item["user_id"],
+                user_type="registered",
+                queue="registered",
+                job_id=f"job_{execution['id']}",
+                dedupe_key=f"{item['user_id']}:{item['task_id']}:{item['due_slot']}",
+                metadata={"conversation_id": execution["conversation_id"]},
+                payload={"task_id": item["task_id"], "execution_id": execution["id"]},
+            )
+
+    @on_job
+    async def on_job(self, job: dict, **kwargs):
+        del kwargs
+        if job.get("work_kind") == "task.execution.due":
+            return await self.tasks.run_execution(job["payload"]["execution_id"])
+        return {"ok": False, "error": {"code": "unsupported_job"}}
+```
+
+The queued execution or equivalent bundle-owned record should be created before
+enqueue. The stream is the transport; the bundle-owned record is the durable
+source of truth.

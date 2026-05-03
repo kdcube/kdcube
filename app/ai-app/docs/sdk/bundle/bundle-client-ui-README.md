@@ -80,6 +80,25 @@ legacy widgets such as `ai_bundles` from `BaseEntrypoint`; those inherited
 widgets keep using their method-rendered HTML unless their own alias is also
 configured as a source-folder widget.
 
+Source-folder widgets also have a public static route for launch surfaces such
+as Telegram Mini Apps:
+
+```text
+/api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}
+```
+
+Use that only to serve the app shell/assets. Public widget APIs still need their
+own request authentication, such as Telegram `initData` verification.
+
+For one widget codebase that runs in both KDCube and Telegram:
+
+- detect Telegram with `window.Telegram?.WebApp?.initData`
+- in KDCube, wait for iframe parent config and call `/operations/{alias}`
+- in Telegram, skip parent config, call `/public/{telegram_alias}`, and send
+  `X-Telegram-Init-Data`
+- keep admin-only panels behind KDCube-authenticated operations, not Telegram
+  Mini App public APIs
+
 ## Scope
 
 Use these docs when you need to know:

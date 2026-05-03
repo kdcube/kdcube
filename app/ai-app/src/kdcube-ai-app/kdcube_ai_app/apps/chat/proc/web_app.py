@@ -517,7 +517,11 @@ async def lifespan(app: FastAPI):
         """
         import inspect
         from kdcube_ai_app.infra.plugin.bundle_registry import resolve_bundle_async
-        from kdcube_ai_app.infra.plugin.agentic_loader import get_workflow_instance_async
+        from kdcube_ai_app.infra.plugin.agentic_loader import (
+            discover_bundle_interface_manifest,
+            get_workflow_instance_async,
+        )
+        from kdcube_ai_app.infra.jobs.stream import BACKGROUND_JOB_OPERATION
         from kdcube_ai_app.infra.service_hub.inventory import ConfigRequest, create_workflow_config
 
         cfg_req = ConfigRequest(**(comm_context.config.values or {}))
@@ -588,13 +592,22 @@ async def lifespan(app: FastAPI):
         command = comm_context.request.operation or params.pop("command", None)
 
         try:
-            fn = getattr(workflow, command) if (command and hasattr(workflow, command)) else workflow.run
-            if inspect.iscoroutinefunction(fn):
+            if command == BACKGROUND_JOB_OPERATION:
+                manifest = discover_bundle_interface_manifest(workflow, bundle_id=bundle_id)
+                if manifest.on_job is None:
+                    raise RuntimeError(f"Bundle {bundle_id!r} does not implement @on_job")
+                fn = getattr(workflow, manifest.on_job.method_name)
+                if not inspect.iscoroutinefunction(fn):
+                    raise RuntimeError(f"Bundle {bundle_id!r} @on_job handler must be async")
                 result = await fn(**params)
             else:
-                result = await asyncio.to_thread(fn, **params)
-                if inspect.isawaitable(result):
-                    result = await result
+                fn = getattr(workflow, command) if (command and hasattr(workflow, command)) else workflow.run
+                if inspect.iscoroutinefunction(fn):
+                    result = await fn(**params)
+                else:
+                    result = await asyncio.to_thread(fn, **params)
+                    if inspect.isawaitable(result):
+                        result = await result
             return result or {}
         except Exception as e:
             logger.error(traceback.format_exc())

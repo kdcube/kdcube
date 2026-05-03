@@ -10,6 +10,7 @@ import json
 import os
 import time
 import traceback
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,7 +41,23 @@ from kdcube_ai_app.infra.plugin.git_bundle import (
     resolve_managed_bundles_root,
 )
 from kdcube_ai_app.storage.storage import create_storage_backend
-from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload, ServiceCtx, ConversationCtx
+from kdcube_ai_app.apps.chat.sdk.protocol import (
+    ChatTaskAccounting,
+    ChatTaskActor,
+    ChatTaskConfig,
+    ChatTaskMeta,
+    ChatTaskPayload,
+    ChatTaskRequest,
+    ChatTaskRouting,
+    ChatTaskUser,
+    ConversationCtx,
+    ServiceCtx,
+)
+from kdcube_ai_app.infra.jobs.stream import (
+    BACKGROUND_JOB_OPERATION,
+    BACKGROUND_JOB_QUEUE_ORDER,
+    RedisBackgroundJobStream,
+)
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator, ChatCommunicator
 
 
@@ -290,6 +307,14 @@ class EnhancedChatRequestProcessor:
         self._current_load = 0
         self._stop_event = asyncio.Event()
         self._queue_idx = 0
+        self._work_queue_idx = 0
+        self._background_queue_idx = 0
+        self._work_queue_order = ("chat", "background")
+        self._background_jobs = RedisBackgroundJobStream(
+            self.redis,
+            tenant=get_settings().TENANT,
+            project=get_settings().PROJECT,
+        )
         ns_fn = getattr(self.middleware, "ns", None)
         self._inflight_queue_prefix = (
             ns_fn(REDIS.CHAT.PROMPT_QUEUE_INFLIGHT_PREFIX)
@@ -1078,6 +1103,18 @@ class EnhancedChatRequestProcessor:
             return False
 
     async def _ack_claimed_task(self, task_data: Dict[str, Any]) -> None:
+        background_claim = task_data.get("_background_job_claim")
+        if background_claim is not None:
+            try:
+                await self._background_jobs.ack(background_claim)
+            finally:
+                lock_key = task_data.get("_lock_key")
+                started_key = task_data.get("_started_key")
+                if lock_key:
+                    await self.redis.delete(lock_key)
+                if started_key:
+                    await self.redis.delete(started_key)
+            return
         await self._drop_claimed_payload(
             inflight_queue_key=task_data.get("_inflight_queue_key"),
             raw_payload=task_data.get("_raw_payload"),
@@ -1188,7 +1225,7 @@ class EnhancedChatRequestProcessor:
                     await asyncio.sleep(0.05)
                     continue
 
-                task_data = await self._task_scheduler_backend.claim_next_task(self)
+                task_data = await self._claim_next_work_item()
                 if not task_data:
                     await asyncio.sleep(0.05)
                     continue
@@ -1236,6 +1273,153 @@ class EnhancedChatRequestProcessor:
             except Exception as e:
                 logger.error(f"Processing loop error: {e}")
                 await asyncio.sleep(0.5)
+
+    async def _claim_next_work_item(self) -> Optional[Dict[str, Any]]:
+        for _ in range(len(self._work_queue_order)):
+            kind = self._work_queue_order[self._work_queue_idx]
+            self._work_queue_idx = (self._work_queue_idx + 1) % len(self._work_queue_order)
+            if kind == "background":
+                claimed = await self._claim_next_background_job()
+            else:
+                claimed = await self._task_scheduler_backend.claim_next_task(self)
+            if claimed:
+                return claimed
+        return None
+
+    def _next_background_queue_order(self) -> tuple[str, ...]:
+        order = tuple(BACKGROUND_JOB_QUEUE_ORDER)
+        if not order:
+            return ("registered",)
+        idx = self._background_queue_idx % len(order)
+        self._background_queue_idx = (self._background_queue_idx + 1) % len(order)
+        return order[idx:] + order[:idx]
+
+    @staticmethod
+    def _metadata_list(value: Any) -> list[str]:
+        if isinstance(value, (list, tuple, set)):
+            return [str(item) for item in value if str(item or "").strip()]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
+
+    def _background_job_to_chat_task(self, claim) -> Dict[str, Any]:
+        job = claim.job
+        job_payload = job.payload or {}
+        metadata = job.metadata or {}
+        conversation_id = str(
+            metadata.get("conversation_id")
+            or job_payload.get("conversation_id")
+            or f"job_{job.job_id}"
+        ).strip()
+        turn_id = str(
+            metadata.get("turn_id")
+            or job_payload.get("turn_id")
+            or f"job_turn_{job.job_id}"
+        ).strip()
+        request_id = str(metadata.get("request_id") or job.job_id or uuid.uuid4()).strip()
+        message = str(
+            metadata.get("text")
+            or job_payload.get("text")
+            or f"Run background job {job.work_kind} ({job.job_id})"
+        ).strip()
+        payload = ChatTaskPayload(
+            meta=ChatTaskMeta(
+                task_id=job.job_id,
+                created_at=float(job.created_at or time.time()),
+                instance_id=self.middleware.instance_id,
+            ),
+            routing=ChatTaskRouting(
+                bundle_id=job.bundle_id,
+                session_id=conversation_id,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+            ),
+            actor=ChatTaskActor(
+                tenant_id=job.tenant or get_settings().TENANT,
+                project_id=job.project or get_settings().PROJECT,
+            ),
+            user=ChatTaskUser(
+                user_type=job.user_type or job.queue or "registered",
+                user_id=job.user_id or None,
+                fingerprint=str(metadata.get("fingerprint") or "") or None,
+                roles=self._metadata_list(metadata.get("roles")),
+                permissions=self._metadata_list(metadata.get("permissions")),
+                timezone=metadata.get("timezone"),
+            ),
+            request=ChatTaskRequest(
+                message=message,
+                operation=BACKGROUND_JOB_OPERATION,
+                invocation="async",
+                payload={
+                    "job": job.to_dict(),
+                    "job_id": job.job_id,
+                    "work_kind": job.work_kind,
+                    "metadata": metadata,
+                    "payload": job_payload,
+                    "text": message,
+                },
+                request_id=request_id,
+            ),
+            config=ChatTaskConfig(values={}),
+            accounting=ChatTaskAccounting(envelope={"request_id": request_id}),
+        )
+        task_data = payload.model_dump()
+        task_data["_background_job_claim"] = claim
+        task_data["_queue_key"] = claim.stream_key
+        task_data["_ready_queue_key"] = claim.stream_key
+        task_data["_inflight_queue_key"] = None
+        task_data["_raw_payload"] = claim.stream_id
+        return task_data
+
+    async def _claim_next_background_job(self) -> Optional[Dict[str, Any]]:
+        consumer_name = f"{self.middleware.instance_id}:{self.process_id}"
+        claim = await self._background_jobs.claim_next(
+            consumer_name=consumer_name,
+            queue_order=self._next_background_queue_order(),
+            count=1,
+            block_ms=1,
+        )
+        if claim is None:
+            return None
+        task_dict = self._background_job_to_chat_task(claim)
+        logical_id = self._task_logical_id(task_dict)
+        if not logical_id:
+            await self._background_jobs.ack(claim)
+            logger.error("Background job missing job_id; acked stream=%s id=%s", claim.stream_key, claim.stream_id)
+            return None
+        lock_key = self._task_lock_key(logical_id)
+        acquired = await self.redis.set(
+            lock_key,
+            f"{self.middleware.instance_id}:{self.process_id}",
+            nx=True,
+            ex=self.lock_ttl_sec,
+        )
+        if not acquired:
+            logger.info("Background job lock held; leaving pending for retry: job_id=%s", logical_id)
+            return None
+        if self._stop_event.is_set() or self._host_draining:
+            await self.redis.delete(lock_key)
+            return None
+        self._current_load += 1
+        created_at = (task_dict.get("meta") or {}).get("created_at")
+        queue_wait_ms = None
+        if created_at:
+            try:
+                queue_wait_ms = int((time.time() - float(created_at)) * 1000)
+            except Exception:
+                queue_wait_ms = None
+        task_dict["_queue_wait_ms"] = queue_wait_ms
+        task_dict["_lock_key"] = lock_key
+        logger.info(
+            "Process %s acquired background job %s (%s) stream=%s id=%s%s",
+            self.process_id,
+            logical_id,
+            claim.job.queue,
+            claim.stream_key,
+            claim.stream_id,
+            f" queue_wait_ms={queue_wait_ms}" if queue_wait_ms is not None else "",
+        )
+        return task_dict
 
     async def _legacy_pop_any_queue_fair(self) -> Optional[Dict[str, Any]]:
         for _ in range(len(self.QUEUE_ORDER)):

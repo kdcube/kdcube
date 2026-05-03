@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-interfaces-README.md
 title: "Bundle Interfaces"
-summary: "Bundle-facing interface surface: communicator streams, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
-tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge"]
-keywords: ["communicator interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
+summary: "Bundle-facing interface surface: communicator streams, background jobs, operations, widgets, panels, artifacts, and other bundle-visible interfaces exposed by the platform runtime."
+tags: ["sdk", "bundle", "interfaces", "streaming", "sse", "widgets", "operations", "communicator", "knowledge", "background-jobs"]
+keywords: ["communicator interface", "background job interface", "on_job interface", "operations interface", "widget and panel interface", "artifact surface", "bundle visible runtime interfaces", "streaming and interaction surfaces", "knowledge and attachment surfaces"]
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
+  - ks:docs/service/comm/design/jobs-stream-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
@@ -20,6 +21,7 @@ This doc describes how a bundle connects to clients:
 - **Streaming** via SSE/Socket.IO through the async communicator
 - **Widgets + React panels** returned by bundles
 - **Operations API** to invoke bundle methods over REST
+- **Background jobs** claimed by proc from Redis Streams and handled by `@on_job`
 - **Artifacts & attachments** surfaced in the timeline and chat stream events
 - **Execution boundaries** when selected helper functions run through `@venv(...)`
 
@@ -38,6 +40,10 @@ graph LR
   UI -->|"iframe widget"| WIDGET["Bundle Widget (TSX/HTML)"]
   WIDGET -->|"POST /api/integrations/bundles/.../{bundle_id}/operations/{op}"| OPS["Integrations API"]
   OPS -->|invoke workflow op| BUNDLE
+
+  CRON["@cron due scan"] -->|enqueue ready job| JOBS["Redis background job stream"]
+  JOBS -->|claim fairly| PROC
+  PROC -->|"operation=__kdcube_on_job__"| BUNDLE
 
   UI -->|React panel def| PANEL[Bundle App: ai_bundles / svc_gateway]
   PANEL -->|fetch data| OPS
@@ -153,7 +159,59 @@ Important for bundle REST/public API methods:
 
 ---
 
-## 1) Exposing a widget from a bundle
+## 1) Background job interface (`@on_job`)
+
+`@on_job` is the bundle entrypoint for ready background jobs. It is not a
+browser route, public webhook, widget operation, or chat ingress endpoint.
+
+Typical flow:
+
+```mermaid
+flowchart LR
+    S["@cron / API / subsystem"] --> R["create domain record"]
+    R --> Q["enqueue Redis Stream job"]
+    Q --> P["processor claims fairly"]
+    P --> C["build comm_context"]
+    C --> J["@on_job(job=...)"]
+    J --> U["update bundle-owned result/status"]
+```
+
+Rules:
+
+- declare at most one `@on_job` method per bundle
+- define it as `async def`
+- receive a job envelope with platform routing fields plus bundle-owned
+  `work_kind`, `source`, `metadata`, and `payload`
+- validate `work_kind` inside the bundle
+- load durable bundle-owned records by id from `payload`
+- update execution/status/result records in bundle storage
+- assume retry is possible until the stream message is acknowledged
+
+Example:
+
+```python
+from kdcube_ai_app.infra.plugin.agentic_loader import on_job
+
+class MyBundle(BaseEntrypoint):
+    @on_job
+    async def on_job(self, job: dict, **kwargs) -> dict:
+        work_kind = job.get("work_kind")
+        payload = job.get("payload") or {}
+        if work_kind == "task.execution.due":
+            return await self.tasks.run_execution(payload["task_id"], payload["execution_id"])
+        return {"ok": False, "error": {"code": "unsupported_job"}}
+```
+
+Use `@cron(...)` only to discover due work. Use `@on_job` to run the ready work
+after it has been enqueued and claimed by the processor.
+
+See:
+
+- [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
+
+---
+
+## 2) Exposing a widget from a bundle
 
 Bundles can expose a widget by implementing an entrypoint method that returns a list of HTML strings. The SDK embeds the widget in an iframe on the client.
 
@@ -194,7 +252,7 @@ class MyEntrypoint(BaseEntrypoint):
         return [html]
 ```
 
-## 2) Widget config in bundle configuration
+## 3) Widget config in bundle configuration
 
 Widgets are typically declared in the bundle configuration to map a subsystem key to a TSX asset:
 
@@ -211,7 +269,7 @@ def configuration(self):
 
 This allows the entrypoint to locate widget resources relative to the bundle root.
 
-## 3) Auth + backend calls from widgets
+## 4) Auth + backend calls from widgets
 
 Widgets use a configuration handshake (see `ConversationBrowser.tsx` and `AIBundleDashboard.tsx`) to receive:
 - `baseUrl`
@@ -244,7 +302,7 @@ client code and should follow:
 - [bundle-client-communication-README.md](bundle-client-communication-README.md)
 - [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)
 
-## 4) Bundle operations endpoint (loop-back)
+## 5) Bundle operations endpoint (loop-back)
 
 Widgets can call bundle-defined operations via the integrations endpoint:
 
@@ -426,7 +484,7 @@ Concrete example:
 - bundle-operation backend:
   `src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/rest/integrations/integrations.py`
 
-## 5) Reading bundle props from cache
+## 6) Reading bundle props from cache
 
 Bundles can store UI config or parameters in bundle props. The admin UI writes props to Redis (KV cache), and the bundle reads them at runtime. Define defaults in `entrypoint.configuration` and read effective values from `bundle_props` (defaults + overrides).
 
@@ -434,7 +492,7 @@ See: `kdcube_ai_app/apps/chat/sdk/solutions/chatbot/entrypoint.py`.
 
 ---
 
-## 6) Bundle apps (React panels)
+## 7) Bundle apps (React panels)
 
 Bundles can return React app definitions (panels) via the base entrypoint.
 Examples include the admin bundle apps: `ai_bundles`, `svc_gateway`.
@@ -444,7 +502,7 @@ Entry point:
 
 ---
 
-## 7) Files, attachments, and citations
+## 8) Files, attachments, and citations
 
 Bundles can emit files (artifacts) and citations. The platform stores them and
 emits references through SSE so clients can render downloads and previews.

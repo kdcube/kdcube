@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/bundle/bundle-lifecycle-README.md
 title: "Bundle Lifecycle"
-summary: "Lifecycle model for bundles: discovery, load, initialization, invocation, hooks, singleton state, UI build behavior, and which storage or config surfaces exist at each phase."
-tags: ["sdk", "bundle", "lifecycle", "storage", "configuration", "entrypoint"]
-keywords: ["bundle discovery and load", "initialization hooks", "invocation phases", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
+summary: "Lifecycle model for bundles: discovery, load, initialization, invocation, hooks, background jobs, singleton state, UI build behavior, and which storage or config surfaces exist at each phase."
+tags: ["sdk", "bundle", "lifecycle", "storage", "configuration", "entrypoint", "background-jobs"]
+keywords: ["bundle discovery and load", "initialization hooks", "invocation phases", "on_job lifecycle", "background job lifecycle", "singleton bundle state", "ui build lifecycle", "storage availability by phase", "configuration availability by phase", "bundle lifecycle model"]
 see_also:
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
@@ -13,6 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
+  - ks:docs/service/comm/design/jobs-stream-README.md
 ---
 # Bundle Lifecycle
 
@@ -46,7 +47,11 @@ flowchart TD
     D --> I[Instantiate entrypoint]
     I --> L[on_bundle_load once per process per tenant/project]
     L --> Q[Incoming turn or REST operation request]
+    L --> S["@cron due scan"]
+    S --> JQ[Redis background job stream]
+    JQ --> J["@on_job invocation"]
     Q --> B[Build request routing/comm_context + refresh bundle props]
+    J --> B
     B --> C[on_props_changed when effective props changed]
     C --> P[pre_run_hook]
     P --> E[execute_core]
@@ -62,6 +67,8 @@ flowchart TD
 | Instantiation | Per request by default | Entrypoint instance is created with `config`, `comm_context`, `pg_pool`, `redis` |
 | One-time init | Once per process per tenant/project | `on_bundle_load(...)` may prepare indexes, local caches, repos, or other bundle-local assets |
 | Request prep | Every invocation | Request-bound routing/identity is rebuilt, singleton instances are rebound, bundle props are loaded/merged, hooks can run |
+| Scheduled due scan | According to `@cron(...)` | The cron method may detect due work and enqueue ready jobs; it should stay small and idempotent |
+| Background job invocation | When proc claims a jobs-stream item | Proc rebuilds bundle runtime context and invokes the async `@on_job(job=...)` method |
 | Execution | Every invocation | `execute_core(...)` handles the chat turn or bundle operation |
 | Decorated external execution | On demand inside an invocation | `@venv(...)` functions run in a cached per-bundle subprocess venv; the venv is rebuilt only when its `requirements.txt` hash changes |
 | Completion | Every invocation | `post_run_hook(...)` can finalize bookkeeping |
@@ -113,6 +120,7 @@ Important:
 | `on_props_changed(...)` | when effective props changed for the active instance | reconcile long-lived side effects after props refresh |
 | `pre_run_hook(state=...)` | every invocation | last-minute validation or reconciliation |
 | `execute_core(state=..., thread_id=..., params=...)` | every invocation | main bundle logic |
+| `@on_job` handler | each claimed background job | execute ready work from the jobs stream with explicit job metadata/payload |
 | `post_run_hook(state=..., result=...)` | every invocation | final bookkeeping |
 | `rebind_request_context(...)` | singleton reuse only | refresh request-local handles on cached instance before the current call runs |
 
@@ -182,6 +190,39 @@ also exposes request-local helpers via `kdcube_ai_app.apps.chat.sdk.runtime.comm
 Those helpers are bound by the platform for queued `run(...)` execution and for
 REST/widget invocation paths. Use them instead of storing request execution
 context on the shared singleton object.
+
+## Background job invocation
+
+Background jobs use a different inbound path from chat and REST, but they still
+run inside proc with a rebuilt bundle runtime context.
+
+Flow:
+
+1. A producer such as `@cron(...)`, a widget/API "run now" operation, or an
+   internal service detects ready work.
+2. The producer creates any bundle-owned domain record first, for example a
+   queued execution record.
+3. The producer enqueues a job to the Redis background job stream.
+4. The processor claims the stream item, applies the normal task lock, and builds
+   a `ChatTaskPayload` with operation `__kdcube_on_job__`.
+5. Proc loads/rebinds the bundle and calls the discovered async `@on_job` method.
+6. The stream item is acknowledged only after the handler returns.
+
+Lifecycle implications:
+
+- `@on_job` is not called by HTTP routing and has no public URL
+- `@on_job` must be async
+- define at most one `@on_job` handler per bundle
+- the job envelope is the handoff contract; bundle-owned fields live in
+  `work_kind`, `metadata`, and `payload`
+- the handler should assume retry is possible until the stream message is acked
+- cron should decide what is due; `@on_job` should execute the ready job
+- long-running per-user work should be queued as jobs instead of executed inside
+  the scheduler tick
+
+See:
+
+- [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
 
 ## What changes apply to new requests
 

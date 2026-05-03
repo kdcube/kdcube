@@ -67,12 +67,12 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Testing playbook | [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md) |
 | Study the reference bundle | [versatile-reference-bundle-README.md](versatile-reference-bundle-README.md) |
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
-| Decorators, widget/API/public integration | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
+| Decorators, widget/API/public integration, `@on_job` | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
 | Inbound/outbound transports and protocols | [bundle-transports-README.md](bundle-transports-README.md) |
 | Props, secrets, raw descriptor reads | [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md) |
 | Reserved platform-owned prop paths | [bundle-reserved-platform-properties-README.md](bundle-reserved-platform-properties-README.md) |
 | Bundle lifecycle and instance model | [bundle-lifecycle-README.md](bundle-lifecycle-README.md) |
-| Widgets, streaming, operations surface | [bundle-interfaces-README.md](bundle-interfaces-README.md) |
+| Widgets, streaming, operations, background job surface | [bundle-interfaces-README.md](bundle-interfaces-README.md) |
 | Bundle-facing browser/UI entry | [bundle-client-ui-README.md](bundle-client-ui-README.md) |
 | Browser/UI transport contract | [bundle-client-communication-README.md](bundle-client-communication-README.md) |
 | Chat stream event catalog for bundle-facing clients | [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md) |
@@ -80,7 +80,8 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Local reload and deployed registry updates | [bundle-delivery-and-update-README.md](bundle-delivery-and-update-README.md) |
 | Knowledge space (`ks:`) | [bundle-knowledge-space-README.md](bundle-knowledge-space-README.md) |
 | Bundle storage and cache | [bundle-storage-and-cache-README.md](bundle-storage-and-cache-README.md) |
-| Scheduled jobs (`@cron`) | [bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md) |
+| Scheduled jobs (`@cron`) and job handoff (`@on_job`) | [bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md) |
+| Background jobs stream design | [../../service/comm/design/jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md) |
 | Cached subprocess virtualenv helpers (`@venv`) | [bundle-venv-README.md](bundle-venv-README.md) |
 | Outbound event filtering | [bundle-firewall-README.md](bundle-firewall-README.md) |
 | Python-to-Node backend bridge | [bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md) |

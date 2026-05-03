@@ -18,6 +18,7 @@ from kdcube_ai_app.apps.chat.proc.rest.integrations.integrations import (
 from kdcube_ai_app.infra.plugin.agentic_loader import (
     BundleInterfaceManifest,
     CronJobSpec,
+    OnJobSpec,
 )
 
 
@@ -25,6 +26,13 @@ def _make_manifest(jobs: list[CronJobSpec]) -> BundleInterfaceManifest:
     return BundleInterfaceManifest(
         bundle_id="test.bundle",
         scheduled_jobs=tuple(jobs),
+    )
+
+
+def _make_manifest_with_on_job() -> BundleInterfaceManifest:
+    return BundleInterfaceManifest(
+        bundle_id="test.bundle",
+        on_job=OnJobSpec(method_name="on_job"),
     )
 
 
@@ -66,6 +74,14 @@ def test_descriptor_includes_scheduled_jobs():
 def test_descriptor_empty_when_no_jobs():
     desc = _manifest_to_descriptor(_make_manifest([]))
     assert desc["scheduled_jobs"] == []
+
+
+def test_descriptor_includes_on_job():
+    desc = _manifest_to_descriptor(_make_manifest_with_on_job())
+    filtered = _manifest_to_descriptor_filtered(_make_manifest_with_on_job(), _make_session(roles=[]))
+
+    assert desc["on_job"] == "on_job"
+    assert filtered["on_job"] == "on_job"
 
 
 def test_descriptor_multiple_jobs():
