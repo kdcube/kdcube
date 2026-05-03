@@ -1,0 +1,642 @@
+asyncapi: 2.6.0
+info:
+  title: KDCube Chat Ingress Socket.IO API
+  version: 0.1.0
+  description: >
+    Socket.IO contract for the chat ingress ASGI mount. OpenAPI does not model
+    Socket.IO events, so this file documents the event names, directions,
+    payloads, acknowledgement shapes, and server relay envelopes used by
+    kdcube_ai_app.apps.chat.ingress.socketio.chat.
+servers:
+  local:
+    url: localhost:8010
+    protocol: socket.io
+    description: Local ingress service.
+    bindings:
+      socketio:
+        path: /socket.io
+        transports:
+          - websocket
+          - polling
+defaultContentType: application/json
+channels:
+  connect:
+    description: >
+      Socket.IO connection handshake. The client sends the auth object when
+      creating the socket. The server validates origin, loads the base gateway
+      session by user_session_id, optionally upgrades it with bearer/id tokens,
+      joins the resolved session room, and emits session_info.
+    subscribe:
+      operationId: socketConnect
+      message:
+        $ref: "#/components/messages/ConnectAuth"
+      bindings:
+        socketio:
+          eventName: connect
+          builtin: true
+    publish:
+      operationId: socketSessionInfo
+      message:
+        $ref: "#/components/messages/SessionInfo"
+  disconnect:
+    description: Socket.IO disconnect; the server releases the session relay subscription for this sid.
+    subscribe:
+      operationId: socketDisconnect
+      message:
+        $ref: "#/components/messages/Empty"
+      bindings:
+        socketio:
+          eventName: disconnect
+          builtin: true
+  chat_message:
+    description: >
+      Client submits a chat message. The first Socket.IO argument is the JSON
+      envelope. Additional binary arguments, if present, must correspond by
+      order to attachment_meta items. The server acknowledges immediately after
+      queueing, while chat progress streams back on chat_* and conv_status events.
+    subscribe:
+      operationId: socketChatMessage
+      message:
+        $ref: "#/components/messages/ChatMessageRequest"
+      bindings:
+        socketio:
+          eventName: chat_message
+          ack:
+            $ref: "#/components/schemas/ChatMessageAck"
+          binaryArguments:
+            description: Optional bytes/ArrayBuffer values, one per attachment_meta item, after the JSON argument.
+  conv_status.get:
+    description: >
+      Client asks the ingress to publish current conversation state. The handler
+      returns the same status object as an acknowledgement and also emits a
+      conv_status event to the requesting sid.
+    subscribe:
+      operationId: socketConversationStatusGet
+      message:
+        $ref: "#/components/messages/ConversationStatusGet"
+      bindings:
+        socketio:
+          eventName: conv_status.get
+          ack:
+            $ref: "#/components/schemas/ConversationStatus"
+  ping:
+    description: Client liveness probe. The server emits pong with the current UTC timestamp.
+    subscribe:
+      operationId: socketPing
+      message:
+        $ref: "#/components/messages/Ping"
+      bindings:
+        socketio:
+          eventName: ping
+    publish:
+      operationId: socketPong
+      message:
+        $ref: "#/components/messages/Pong"
+  chat_start:
+    description: Server relay event for logical type chat.start.
+    publish:
+      operationId: socketChatStart
+      message:
+        $ref: "#/components/messages/ChatEnvelope"
+      bindings:
+        socketio:
+          eventName: chat_start
+  chat_step:
+    description: Server relay event for logical type chat.step.
+    publish:
+      operationId: socketChatStep
+      message:
+        $ref: "#/components/messages/ChatEnvelope"
+      bindings:
+        socketio:
+          eventName: chat_step
+  chat_delta:
+    description: Server relay event for logical type chat.delta.
+    publish:
+      operationId: socketChatDelta
+      message:
+        $ref: "#/components/messages/ChatEnvelope"
+      bindings:
+        socketio:
+          eventName: chat_delta
+  chat_complete:
+    description: Server relay event for logical type chat.complete.
+    publish:
+      operationId: socketChatComplete
+      message:
+        $ref: "#/components/messages/ChatEnvelope"
+      bindings:
+        socketio:
+          eventName: chat_complete
+  chat_error:
+    description: Server relay event for logical type chat.error.
+    publish:
+      operationId: socketChatError
+      message:
+        $ref: "#/components/messages/ChatEnvelope"
+      bindings:
+        socketio:
+          eventName: chat_error
+  chat_service:
+    description: >
+      Server relay event for service/control events that do not fit start,
+      step, delta, complete, or error. Examples include queue rejections,
+      attachment status, continuation acceptance, and bundle-specific service
+      timeline events.
+    publish:
+      operationId: socketChatService
+      message:
+        $ref: "#/components/messages/ChatEnvelope"
+      bindings:
+        socketio:
+          eventName: chat_service
+  conv_status:
+    description: Server relay event carrying current conversation state.
+    publish:
+      operationId: socketConversationStatus
+      message:
+        $ref: "#/components/messages/ConversationStatusEnvelope"
+      bindings:
+        socketio:
+          eventName: conv_status
+components:
+  messages:
+    Empty:
+      name: empty
+      payload:
+        type: object
+        additionalProperties: false
+    ConnectAuth:
+      name: connect.auth
+      payload:
+        $ref: "#/components/schemas/ConnectAuth"
+    SessionInfo:
+      name: session_info
+      payload:
+        $ref: "#/components/schemas/SessionInfo"
+    ChatMessageRequest:
+      name: chat_message
+      payload:
+        $ref: "#/components/schemas/ChatMessageRequest"
+    ConversationStatusGet:
+      name: conv_status.get
+      payload:
+        $ref: "#/components/schemas/ConversationStatusGet"
+    ConversationStatusEnvelope:
+      name: conv_status
+      payload:
+        $ref: "#/components/schemas/ConversationStatusEnvelope"
+    Ping:
+      name: ping
+      payload:
+        type: object
+        additionalProperties: true
+    Pong:
+      name: pong
+      payload:
+        type: object
+        required:
+          - timestamp
+        properties:
+          timestamp:
+            type: string
+            format: date-time
+        additionalProperties: true
+    ChatEnvelope:
+      name: chat_envelope
+      payload:
+        $ref: "#/components/schemas/ChatEnvelope"
+  schemas:
+    ConnectAuth:
+      type: object
+      required:
+        - user_session_id
+      properties:
+        user_session_id:
+          type: string
+          description: Existing gateway session id created by the control plane before opening Socket.IO.
+        bearer_token:
+          type: string
+          description: Optional platform access token. If omitted, auth cookies are used when present.
+        id_token:
+          type: string
+          description: Optional platform id token. If omitted, auth cookies are used when present.
+        tenant:
+          type: string
+        project:
+          type: string
+      additionalProperties: true
+    SessionInfo:
+      type: object
+      required:
+        - session_id
+        - user_type
+        - connected_at
+      properties:
+        session_id:
+          type: string
+        user_type:
+          type: string
+          enum:
+            - anonymous
+            - registered
+            - privileged
+        user_id:
+          type:
+            - string
+            - "null"
+        username:
+          type:
+            - string
+            - "null"
+        tenant:
+          type:
+            - string
+            - "null"
+        project:
+          type:
+            - string
+            - "null"
+        connected_at:
+          type: string
+          format: date-time
+      additionalProperties: true
+    ChatMessageRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          $ref: "#/components/schemas/ChatMessage"
+        attachment_meta:
+          type: array
+          description: One metadata object per binary argument after the JSON payload.
+          items:
+            $ref: "#/components/schemas/AttachmentMeta"
+      additionalProperties: true
+    ChatMessage:
+      type: object
+      description: >
+        Chat request payload passed through the shared ingress core. Either text
+        or message should contain user text unless the request is an explicit
+        steer message.
+      properties:
+        text:
+          type: string
+        message:
+          type: string
+        conversation_id:
+          type: string
+          description: Existing conversation id. If omitted, ingress creates a new conversation id.
+        turn_id:
+          type: string
+          description: Optional current turn id. If omitted, ingress creates a turn_ id.
+        bundle_id:
+          type: string
+          description: Target bundle id. If omitted, the tenant/project default bundle is used.
+        tenant:
+          type: string
+        tenant_id:
+          type: string
+        project:
+          type: string
+        chat_history:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        operation:
+          type: string
+        command:
+          type: string
+        invocation:
+          type: string
+          enum:
+            - sync
+            - async
+        payload:
+          type: object
+          additionalProperties: true
+        config:
+          type: object
+          additionalProperties: true
+        message_kind:
+          $ref: "#/components/schemas/ContinuationKind"
+        continuation_kind:
+          $ref: "#/components/schemas/ContinuationKind"
+        followup:
+          type: boolean
+        steer:
+          type: boolean
+        target_turn_id:
+          type: string
+        active_turn_id:
+          type: string
+      additionalProperties: true
+    ContinuationKind:
+      type: string
+      enum:
+        - regular
+        - followup
+        - steer
+    AttachmentMeta:
+      type: object
+      properties:
+        filename:
+          type: string
+        name:
+          type: string
+        mime:
+          type: string
+          default: application/octet-stream
+        size:
+          type: integer
+          minimum: 0
+      additionalProperties: true
+    ChatMessageAck:
+      oneOf:
+        - $ref: "#/components/schemas/ChatMessageAckOk"
+        - $ref: "#/components/schemas/ChatMessageAckError"
+    ChatMessageAckOk:
+      type: object
+      required:
+        - ok
+        - status
+        - task_id
+        - session_id
+        - conversation_id
+      properties:
+        ok:
+          type: boolean
+          const: true
+        status:
+          type: string
+          description: processing_started, followup_accepted, steer_accepted, or equivalent queue reason.
+        task_id:
+          type: string
+        session_id:
+          type: string
+        conversation_id:
+          type: string
+        conversation_created:
+          type: boolean
+        user_type:
+          type: string
+        message_kind:
+          type: string
+        message:
+          type: string
+      additionalProperties: true
+    ChatMessageAckError:
+      type: object
+      required:
+        - ok
+        - error
+      properties:
+        ok:
+          type: boolean
+          const: false
+        status:
+          type: integer
+        error_type:
+          type: string
+        error:
+          type: string
+        retry_after:
+          type:
+            - integer
+            - "null"
+        conversation_id:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    ConversationStatusGet:
+      type: object
+      properties:
+        conversation_id:
+          type: string
+        bundle_id:
+          type: string
+      additionalProperties: false
+    ConversationStatus:
+      type: object
+      required:
+        - conversation_id
+        - state
+        - updated_at
+      properties:
+        conversation_id:
+          type: string
+        state:
+          type: string
+          enum:
+            - created
+            - in_progress
+            - idle
+            - error
+        updated_at:
+          type: string
+          format: date-time
+        current_turn_id:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    ConversationStatusEnvelope:
+      type: object
+      required:
+        - type
+        - timestamp
+        - service
+        - conversation
+        - event
+        - data
+      properties:
+        type:
+          type: string
+          const: conv.status
+        timestamp:
+          type: string
+          format: date-time
+        service:
+          $ref: "#/components/schemas/ServiceCtx"
+        conversation:
+          $ref: "#/components/schemas/ConversationCtx"
+        event:
+          type: object
+          properties:
+            step:
+              type: string
+              const: conv.state
+            status:
+              type: string
+          additionalProperties: true
+        data:
+          $ref: "#/components/schemas/ConversationStatusData"
+      additionalProperties: true
+    ConversationStatusData:
+      type: object
+      required:
+        - state
+        - updated_at
+      properties:
+        state:
+          type: string
+          enum:
+            - created
+            - in_progress
+            - idle
+            - error
+        updated_at:
+          type: string
+          format: date-time
+        current_turn_id:
+          type:
+            - string
+            - "null"
+        completion:
+          type: string
+        origin_stream_id:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    ChatEnvelope:
+      type: object
+      required:
+        - type
+        - timestamp
+        - service
+        - conversation
+        - event
+      properties:
+        type:
+          type: string
+          enum:
+            - chat.start
+            - chat.step
+            - chat.delta
+            - chat.complete
+            - chat.error
+            - chat.service
+        timestamp:
+          type: string
+          format: date-time
+        service:
+          $ref: "#/components/schemas/ServiceCtx"
+        conversation:
+          $ref: "#/components/schemas/ConversationCtx"
+        event:
+          $ref: "#/components/schemas/EventCtx"
+        data:
+          nullable: true
+        delta:
+          $ref: "#/components/schemas/DeltaPart"
+        route:
+          type: string
+          description: Optional relay route, commonly chat_service for service events.
+      additionalProperties: true
+    ServiceCtx:
+      type: object
+      required:
+        - request_id
+      properties:
+        request_id:
+          type: string
+        tenant:
+          type:
+            - string
+            - "null"
+        project:
+          type:
+            - string
+            - "null"
+        user:
+          type:
+            - string
+            - "null"
+        bundle_id:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    ConversationCtx:
+      type: object
+      required:
+        - session_id
+        - conversation_id
+      properties:
+        session_id:
+          type: string
+        conversation_id:
+          type: string
+        turn_id:
+          type:
+            - string
+            - "null"
+      additionalProperties: true
+    EventCtx:
+      type: object
+      required:
+        - step
+        - status
+      properties:
+        agent:
+          type:
+            - string
+            - "null"
+        step:
+          type: string
+        status:
+          type: string
+          enum:
+            - started
+            - running
+            - completed
+            - error
+            - skipped
+        title:
+          type:
+            - string
+            - "null"
+        markdown:
+          type: string
+      additionalProperties: true
+    DeltaPart:
+      type: object
+      required:
+        - text
+        - marker
+        - index
+      properties:
+        text:
+          type: string
+        marker:
+          type: string
+          default: answer
+          description: >
+            Open streaming channel hint. Built-in markers include answer,
+            thinking, canvas, timeline_text, and subsystem. Custom markers are
+            allowed, but clients must explicitly support them to render anything
+            more specific than a generic delta.
+          examples:
+            - answer
+            - thinking
+            - canvas
+            - timeline_text
+            - subsystem
+        index:
+          type: integer
+        completed:
+          type: boolean
+          description: Optional per-marker/per-artifact completion signal.
+      additionalProperties: true
+x-kdcube-source:
+  source_module: kdcube_ai_app.apps.chat.ingress.socketio.chat
+  source_file: app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/ingress/socketio/chat.py
+  generated_manually_from_code: true
+  notes:
+    - Socket.IO is mounted by ingress/web_app.py at /socket.io during lifespan startup.
+    - Existing chat-web-app client uses socket.io-client Manager with path /socket.io.
+    - The server relays Redis chat events only to the target sid or session room.

@@ -10,7 +10,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-scheduled-jobs-README.md
   - ks:docs/sdk/bundle/bundle-developer-guide-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
-  - ks:docs/service/comm/design/jobs-stream-README.md
+  - ks:docs/service/jobs/jobs-stream-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
   - ks:docs/sdk/bundle/versatile-reference-bundle-README.md
 ---
@@ -524,7 +524,7 @@ work that has been enqueued for fair processor claiming.
 
 See:
 
-- [docs/service/comm/design/jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
+- [docs/service/jobs/jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
 
 ### 1.10 `@cron(...)`
 

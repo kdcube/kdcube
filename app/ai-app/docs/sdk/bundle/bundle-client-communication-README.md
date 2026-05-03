@@ -298,6 +298,9 @@ Clients should:
 The transport is generic, but there are a few payload styles the platform
 already understands and renders consistently.
 
+`delta.marker` is an open string. The markers below are built in; custom
+markers are allowed but need explicit client support.
+
 ### A) Main answer / thinking text
 
 Use `chat.delta` with marker `answer` or `thinking`.

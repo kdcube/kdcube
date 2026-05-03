@@ -1,0 +1,1657 @@
+openapi: 3.1.0
+info:
+  title: Chat Processor Service
+  description: Queue processor + integrations
+  version: 0.1.0
+paths:
+  /health:
+    get:
+      summary: Health
+      operationId: health_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/integrations/bundles:
+    get:
+      tags:
+      - Integrations
+      summary: Get Bundles
+      description: 'Non-admin bundle listing for registered users.
+
+        Returns bundle descriptors with apis/widgets/on_message/on_job filtered by the
+
+        caller''s roles. Origin fields (path, module, repo, ref, subdir, git_commit)
+
+        are omitted.'
+      operationId: get_bundles_api_integrations_bundles_get
+      parameters:
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/user-secrets:
+    post:
+      tags:
+      - Integrations
+      summary: Set Current User Bundle Secrets
+      operationId: set_current_user_bundle_secrets_api_integrations_bundles__tenant___project___bundle_id__user_secrets_post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserBundleSecretsUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/static/{tenant}/{project}/{bundle_id}:
+    get:
+      tags:
+      - Integrations
+      summary: Bundle Static Asset
+      operationId: bundle_static_asset_api_integrations_static__tenant___project___bundle_id__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/static/{tenant}/{project}/{bundle_id}/{path}:
+    get:
+      tags:
+      - Integrations
+      summary: Bundle Static Asset
+      operationId: bundle_static_asset_api_integrations_static__tenant___project___bundle_id___path__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/{operation}:
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Op Public
+      description: 'Public (no authentication required) bundle operation endpoint.
+
+        The bundle method must declare @api(route="public", ...) to be accessible.
+
+
+        Dynamic bundle operation dispatch. POST requests must use `{ "data": { ... } }`; GET requests pass operation parameters
+        as query params. The response is the KDCube platform wrapper, with the operation result under the operation alias
+        key.'
+      operationId: call_bundle_op_public_api_integrations_bundles__tenant___project___bundle_id__public__operation__post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Operation
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BundleOperationResponseEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleOperationPostEnvelope'
+    get:
+      tags:
+      - Integrations
+      summary: Call Bundle Op Public Get
+      operationId: call_bundle_op_public_get_api_integrations_bundles__tenant___project___bundle_id__public__operation__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Operation
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BundleOperationResponseEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 'Dynamic bundle operation dispatch. POST requests must use `{ "data": { ... } }`; GET requests pass operation
+        parameters as query params. The response is the KDCube platform wrapper, with the operation result under the operation
+        alias key.'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/operations/{operation}:
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Op
+      description: 'Load (or reuse singleton) bundle instance and call its operation (e.g. suggestions()).
+
+        Returns generic JSON from the bundle.
+
+
+        Dynamic bundle operation dispatch. POST requests must use `{ "data": { ... } }`; GET requests pass operation parameters
+        as query params. The response is the KDCube platform wrapper, with the operation result under the operation alias
+        key.'
+      operationId: call_bundle_op_api_integrations_bundles__tenant___project___bundle_id__operations__operation__post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Operation
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BundleOperationResponseEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleOperationPostEnvelope'
+    get:
+      tags:
+      - Integrations
+      summary: Call Bundle Op Get
+      operationId: call_bundle_op_get_api_integrations_bundles__tenant___project___bundle_id__operations__operation__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Operation
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BundleOperationResponseEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 'Dynamic bundle operation dispatch. POST requests must use `{ "data": { ... } }`; GET requests pass operation
+        parameters as query params. The response is the KDCube platform wrapper, with the operation result under the operation
+        alias key.'
+  /api/integrations/bundles/{tenant}/{project}/operations/{operation}:
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Op Default
+      operationId: call_bundle_op_default_api_integrations_bundles__tenant___project__operations__operation__post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: operation
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Operation
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BundleOperationResponseEnvelope'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      description: 'Dynamic bundle operation dispatch. POST requests must use `{ "data": { ... } }`; GET requests pass operation
+        parameters as query params. The response is the KDCube platform wrapper, with the operation result under the operation
+        alias key.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleOperationPostEnvelope'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}:
+    get:
+      tags:
+      - Integrations
+      summary: Get Bundle Interface
+      operationId: get_bundle_interface_api_integrations_bundles__tenant___project___bundle_id__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets:
+    get:
+      tags:
+      - Integrations
+      summary: List Bundle Widgets
+      operationId: list_bundle_widgets_api_integrations_bundles__tenant___project___bundle_id__widgets_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_alias}:
+    get:
+      tags:
+      - Integrations
+      summary: Fetch Bundle Widget
+      operationId: fetch_bundle_widget_api_integrations_bundles__tenant___project___bundle_id__widgets__widget_alias__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: widget_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Widget Alias
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/widgets/{widget_alias}/{widget_path}:
+    get:
+      tags:
+      - Integrations
+      summary: Serve Bundle Widget Path
+      operationId: serve_bundle_widget_path_api_integrations_bundles__tenant___project___bundle_id__widgets__widget_alias___widget_path__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: widget_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Widget Alias
+      - name: widget_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Widget Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}:
+    get:
+      tags:
+      - Integrations
+      summary: Fetch Public Static Bundle Widget
+      operationId: fetch_public_static_bundle_widget_api_integrations_bundles__tenant___project___bundle_id__public_widgets__widget_alias__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: widget_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Widget Alias
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/widgets/{widget_alias}/{widget_path}:
+    get:
+      tags:
+      - Integrations
+      summary: Serve Public Static Bundle Widget Path
+      operationId: serve_public_static_bundle_widget_path_api_integrations_bundles__tenant___project___bundle_id__public_widgets__widget_alias___widget_path__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: widget_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Widget Alias
+      - name: widget_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Widget Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/{endpoint_alias}/{mcp_path}:
+    get:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp
+      operationId: call_bundle_mcp_api_integrations_bundles__tenant___project___bundle_id__mcp__endpoint_alias___mcp_path__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp
+      operationId: call_bundle_mcp_api_integrations_bundles__tenant___project___bundle_id__mcp__endpoint_alias___mcp_path__get_post_api_integrations_bundles_tenant_project_bundle_id_mcp_endpoint_alias_mcp_path
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/mcp/{endpoint_alias}:
+    get:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp
+      operationId: call_bundle_mcp_api_integrations_bundles__tenant___project___bundle_id__mcp__endpoint_alias__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp
+      operationId: call_bundle_mcp_api_integrations_bundles__tenant___project___bundle_id__mcp__endpoint_alias__get_post_api_integrations_bundles_tenant_project_bundle_id_mcp_endpoint_alias
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/mcp/{endpoint_alias}/{mcp_path}:
+    get:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp Public
+      operationId: call_bundle_mcp_public_api_integrations_bundles__tenant___project___bundle_id__public_mcp__endpoint_alias___mcp_path__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp Public
+      operationId: call_bundle_mcp_public_api_integrations_bundles__tenant___project___bundle_id__public_mcp__endpoint_alias___mcp_path__get_post_api_integrations_bundles_tenant_project_bundle_id_public_mcp_endpoint_alias_mcp_path
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/integrations/bundles/{tenant}/{project}/{bundle_id}/public/mcp/{endpoint_alias}:
+    get:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp Public
+      operationId: call_bundle_mcp_public_api_integrations_bundles__tenant___project___bundle_id__public_mcp__endpoint_alias__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Integrations
+      summary: Call Bundle Mcp Public
+      operationId: call_bundle_mcp_public_api_integrations_bundles__tenant___project___bundle_id__public_mcp__endpoint_alias__get_post_api_integrations_bundles_tenant_project_bundle_id_public_mcp_endpoint_alias
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: endpoint_alias
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Endpoint Alias
+      - name: mcp_path
+        in: query
+        required: false
+        schema:
+          type: string
+          default: ''
+          title: Mcp Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/integrations/bundles:
+    get:
+      tags:
+      - Integrations Admin
+      summary: Get Available Bundles
+      description: 'Returns configured bundles for selection in the UI.
+
+        Read from Redis (source of truth), fallback to in-memory if needed.'
+      operationId: get_available_bundles_admin_integrations_bundles_get
+      parameters:
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Integrations Admin
+      summary: Admin Set Bundles
+      operationId: admin_set_bundles_admin_integrations_bundles_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminBundlesUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/integrations/bundles/{bundle_id}/props:
+    get:
+      tags:
+      - Integrations Admin
+      summary: Get Bundle Props
+      operationId: get_bundle_props_admin_integrations_bundles__bundle_id__props_get
+      parameters:
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - Integrations Admin
+      summary: Set Bundle Props
+      operationId: set_bundle_props_admin_integrations_bundles__bundle_id__props_post
+      parameters:
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundlePropsUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/integrations/bundles/{bundle_id}/props/reset-code:
+    post:
+      tags:
+      - Integrations Admin
+      summary: Reset Bundle Props From Code
+      operationId: reset_bundle_props_from_code_admin_integrations_bundles__bundle_id__props_reset_code_post
+      parameters:
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundlePropsResetRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/integrations/bundles/{bundle_id}/secrets:
+    post:
+      tags:
+      - Integrations Admin
+      summary: Set Bundle Secrets
+      operationId: set_bundle_secrets_admin_integrations_bundles__bundle_id__secrets_post
+      parameters:
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleSecretsUpdateRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      tags:
+      - Integrations Admin
+      summary: Get Bundle Secrets
+      operationId: get_bundle_secrets_admin_integrations_bundles__bundle_id__secrets_get
+      parameters:
+      - name: bundle_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Bundle Id
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/integrations/bundles/reload-authority:
+    post:
+      tags:
+      - Integrations Admin
+      summary: Admin Reload Bundles From Authority
+      operationId: admin_reload_bundles_from_authority_admin_integrations_bundles_reload_authority_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/BundleReloadAuthorityRequest'
+              - type: 'null'
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/integrations/bundles/cleanup:
+    post:
+      tags:
+      - Integrations Admin
+      summary: Admin Cleanup Bundles
+      operationId: admin_cleanup_bundles_admin_integrations_bundles_cleanup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BundleCleanupRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /internal/bundles/update:
+    post:
+      tags:
+      - Integrations Internal
+      summary: Internal Set Bundles
+      description: 'Localhost-only bundle update endpoint for CI automation (ecs-bundles-update GA).
+
+        Reachable only via ECS Exec (curl localhost:8020/internal/bundles/update).
+
+        Refuses all connections that did not originate from 127.0.0.1 / ::1.'
+      operationId: internal_set_bundles_internal_bundles_update_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdminBundlesUpdateRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /internal/bundles/reload-authority:
+    post:
+      tags:
+      - Integrations Internal
+      summary: Internal Reload Bundles From Authority
+      description: 'Localhost-only bundle authority reload for local development / CLI automation.
+
+        Re-applies the current authoritative bundle descriptor store and clears bundle caches.'
+      operationId: internal_reload_bundles_from_authority_internal_bundles_reload_authority_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              anyOf:
+              - $ref: '#/components/schemas/BundleReloadAuthorityRequest'
+              - type: 'null'
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    AdminBundlesUpdateRequest:
+      properties:
+        op:
+          type: string
+          title: Op
+          default: merge
+        bundles:
+          additionalProperties:
+            additionalProperties: true
+            type: object
+          type: object
+          title: Bundles
+        default_bundle_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Default Bundle Id
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      type: object
+      required:
+      - bundles
+      title: AdminBundlesUpdateRequest
+    BundleCleanupRequest:
+      properties:
+        drop_sys_modules:
+          type: boolean
+          title: Drop Sys Modules
+          default: true
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      type: object
+      title: BundleCleanupRequest
+    BundlePropsResetRequest:
+      properties:
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      type: object
+      title: BundlePropsResetRequest
+    BundlePropsUpdateRequest:
+      properties:
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+        op:
+          type: string
+          title: Op
+          default: replace
+        props:
+          additionalProperties: true
+          type: object
+          title: Props
+          default: {}
+      type: object
+      title: BundlePropsUpdateRequest
+    BundleReloadAuthorityRequest:
+      properties:
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+        bundle_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bundle Id
+      type: object
+      title: BundleReloadAuthorityRequest
+    BundleSecretsUpdateRequest:
+      properties:
+        tenant:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+        project:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+        mode:
+          type: string
+          title: Mode
+          default: set
+        secrets:
+          additionalProperties: true
+          type: object
+          title: Secrets
+          default: {}
+      type: object
+      title: BundleSecretsUpdateRequest
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    UserBundleSecretsUpdateRequest:
+      properties:
+        mode:
+          type: string
+          title: Mode
+          default: set
+        secrets:
+          additionalProperties: true
+          type: object
+          title: Secrets
+          default: {}
+      type: object
+      title: UserBundleSecretsUpdateRequest
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    BundleOperationPostEnvelope:
+      type: object
+      required:
+      - data
+      properties:
+        data:
+          type: object
+          additionalProperties: true
+          description: Operation parameters. The processor passes this object as keyword args to the decorated bundle API
+            method.
+      additionalProperties: false
+      description: Generic KDCube bundle operation POST envelope.
+    BundleOperationResponseEnvelope:
+      type: object
+      required:
+      - status
+      - tenant
+      - project
+      - bundle_id
+      properties:
+        status:
+          type: string
+          enum:
+          - ok
+        tenant:
+          type: string
+        project:
+          type: string
+        bundle_id:
+          type: string
+      additionalProperties: true
+      description: Platform wrapper. The actual bundle result is returned under a property named exactly like the operation
+        alias.
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Gateway bearer token, when the service route requires platform authentication.
+    IdTokenHeader:
+      type: apiKey
+      in: header
+      name: X-ID-Token
+      description: Platform id-token header. The configured runtime header name may differ.
+servers:
+- url: /
+  description: proc service root
+x-kdcube-openapi-source:
+  component: proc
+  source_module: kdcube_ai_app.apps.chat.proc.web_app
+  generated_from_fastapi_app: true
+  notes:
+  - Import-time routers are mounted from proc/web_app.py.
+  - Bundle-specific decorated APIs are dynamic; this schema documents the processor gateway routes that dispatch them.
+  - Dynamic bundle operation request/response shapes live in each bundle interface contract when available.

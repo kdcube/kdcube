@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import asyncio
-import copy
 from datetime import datetime
 
 from dataclasses import dataclass, field
@@ -763,29 +762,6 @@ class ChatCommunicator:
             pass
 
         await self.emit("chat_delta", env, broadcast=False)
-        # TODO: remove after integration of subsystem channel is completed
-        # if marker == "subsystem":
-        #     try:
-        #         env_tool = copy.deepcopy(env)
-        #         env_tool["delta"]["marker"] = "tool"
-        #         env_tool["text"] = text
-        #         env_tool["idx"] = int(index)
-        #         try:
-        #             self._record_delta(
-        #                 text=text,
-        #                 index=index,
-        #                 agent=agent,
-        #                 marker="tool",
-        #                 format=kwargs.get("format"),
-        #                 artifact_name=kwargs.get("artifact_name"),
-        #                 title=kwargs.get("title"),
-        #                 extra=kwargs,
-        #             )
-        #         except Exception:
-        #             pass
-        #         await self.emit("chat_delta", env_tool, broadcast=False)
-        #     except Exception:
-        #         pass
 
     async def complete(self, *, data: dict):
         env = self._base_env("chat.complete")

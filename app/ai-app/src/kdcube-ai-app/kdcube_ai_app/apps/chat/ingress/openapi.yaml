@@ -1,0 +1,4792 @@
+openapi: 3.1.0
+info:
+  title: Chat API with Modular Socket.IO
+  description: Chat API with gateway integration and modular real-time Socket.IO streaming
+  version: 0.1.0
+paths:
+  /:
+    get:
+      summary: Root
+      description: Root endpoint with API information
+      operationId: root__get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /profile:
+    get:
+      summary: Get Profile
+      description: Get user profile - works for both anonymous and registered users
+      operationId: get_profile_profile_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /health:
+    get:
+      summary: Health Check
+      description: Basic health check
+      operationId: health_check_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /debug/session:
+    get:
+      summary: Debug Session
+      description: Debug endpoint to see current session
+      operationId: debug_session_debug_session_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /admin/circuit-breakers:
+    get:
+      tags:
+      - CB monitoring
+      summary: Get Circuit Breaker Status
+      description: Get circuit breaker status (admin only)
+      operationId: get_circuit_breaker_status_admin_circuit_breakers_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CircuitBreakersResponse'
+  /admin/circuit-breakers/{circuit_name}/reset:
+    post:
+      tags:
+      - CB monitoring
+      summary: Reset Circuit Breaker Endpoint
+      description: Reset a specific circuit breaker (admin only)
+      operationId: reset_circuit_breaker_endpoint_admin_circuit_breakers__circuit_name__reset_post
+      parameters:
+      - name: circuit_name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Circuit Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/throttling/reset:
+    post:
+      tags:
+      - CB monitoring
+      summary: Reset Throttling State
+      description: "Reset throttling/backpressure state.\nPayload:\n  - reset_rate_limits: bool (default True)\n  - reset_backpressure:\
+        \ bool (default True)\n  - reset_throttling_stats: bool (default False)\n  - session_id: str (optional, defaults to\
+        \ current session)\n  - all_sessions: bool (default False, deletes all rate-limit keys)\n  - tenant, project: optional\
+        \ override for namespaced keys"
+      operationId: reset_throttling_state_admin_throttling_reset_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/burst/users:
+    get:
+      tags:
+      - CB monitoring
+      summary: Get Burst Users
+      description: 'Dev-only helper: expose SimpleIDP tokens for burst simulation in the monitoring UI.
+
+        Controlled by MONITORING_BURST_ENABLE=1 and AUTH_PROVIDER=simple.'
+      operationId: get_burst_users_admin_burst_users_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /monitoring/system:
+    get:
+      tags:
+      - CB monitoring
+      summary: Get System Monitoring
+      description: Enhanced system monitoring with chat REST vs other process tracking
+      operationId: get_system_monitoring_monitoring_system_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /admin/gateway/validate-config:
+    post:
+      tags:
+      - CB monitoring
+      summary: Validate Config Changes
+      description: Validate proposed configuration changes (admin only)
+      operationId: validate_config_changes_admin_gateway_validate_config_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Changes
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/gateway/update-config:
+    post:
+      tags:
+      - CB monitoring
+      summary: Update Gateway Config
+      description: Update gateway configuration (admin only)
+      operationId: update_gateway_config_admin_gateway_update_config_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Changes
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/gateway/reset-config:
+    post:
+      tags:
+      - CB monitoring
+      summary: Reset Gateway Config
+      description: 'Reset gateway config to env defaults.
+
+        Optional payload: {"tenant": "...", "project": "..."}.'
+      operationId: reset_gateway_config_admin_gateway_reset_config_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /admin/gateway/clear-cache:
+    post:
+      tags:
+      - CB monitoring
+      summary: Clear Gateway Config Cache Endpoint
+      description: 'Clear cached gateway config for a tenant/project.
+
+        Optional payload: {"tenant": "...", "project": "..."}.'
+      operationId: clear_gateway_config_cache_endpoint_admin_gateway_clear_cache_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Payload
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /debug/capacity-calculation:
+    get:
+      tags:
+      - CB monitoring
+      summary: Debug Capacity Calculation
+      description: Debug endpoint to understand capacity calculations
+      operationId: debug_capacity_calculation_debug_capacity_calculation_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /debug/environment:
+    get:
+      tags:
+      - CB monitoring
+      summary: Debug Environment
+      description: Debug environment variables affecting capacity
+      operationId: debug_environment_debug_environment_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/cb/resources/by-rn:
+    post:
+      tags:
+      - CB Resources
+      summary: Chatbot Content By Rn
+      operationId: chatbot_content_by_rn_api_cb_resources_by_rn_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RNContentRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RNContentResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/resources/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/attachment/{filename}/preview:
+    get:
+      tags:
+      - CB Resources
+      summary: Preview Cb Attachment
+      operationId: preview_cb_attachment_api_cb_resources__tenant___project__conv__owner_id___conversation_id__turn__turn_id__attachment__filename__preview_get
+      parameters:
+      - name: owner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Owner Id
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: turn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Turn Id
+      - name: filename
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Filename
+      - name: attached
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: false
+          title: Attached
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/resources/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/attachment/{filename}/download:
+    get:
+      tags:
+      - CB Resources
+      summary: Download Cb Attachment
+      operationId: download_cb_attachment_api_cb_resources__tenant___project__conv__owner_id___conversation_id__turn__turn_id__attachment__filename__download_get
+      parameters:
+      - name: owner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Owner Id
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: turn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Turn Id
+      - name: filename
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Filename
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/resources/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/exec/{kind}/{path}/preview:
+    get:
+      tags:
+      - CB Resources
+      summary: Preview Cb Exec File
+      operationId: preview_cb_exec_file_api_cb_resources__tenant___project__conv__owner_id___conversation_id__turn__turn_id__exec__kind___path__preview_get
+      parameters:
+      - name: owner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Owner Id
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: turn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Turn Id
+      - name: kind
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Kind
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Path
+      - name: attached
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: boolean
+          - type: 'null'
+          default: false
+          title: Attached
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/resources/{tenant}/{project}/conv/{owner_id}/{conversation_id}/turn/{turn_id}/exec/{kind}/{path}/download:
+    get:
+      tags:
+      - CB Resources
+      summary: Download Cb Exec File
+      operationId: download_cb_exec_file_api_cb_resources__tenant___project__conv__owner_id___conversation_id__turn__turn_id__exec__kind___path__download_get
+      parameters:
+      - name: owner_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Owner Id
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: turn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Turn Id
+      - name: kind
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Kind
+      - name: path
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Path
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}:
+    get:
+      tags:
+      - CB Conversations
+      summary: List Conversations
+      operationId: list_conversations_api_cb_conversations__tenant___project__get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: last_n
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 500
+            minimum: 1
+          - type: 'null'
+          title: Last N
+      - name: started_after
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: ISO8601 timestamp
+          title: Started After
+        description: ISO8601 timestamp
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 3650
+          minimum: 1
+          default: 365
+          title: Days
+      - name: include_titles
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: true
+          title: Include Titles
+      - name: bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: If omitted, the default bundle_id from Redis is used.
+          title: Bundle Id
+        description: If omitted, the default bundle_id from Redis is used.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/{conversation_id}/status:
+    get:
+      tags:
+      - CB Conversations
+      summary: Conversation Status
+      operationId: conversation_status_api_cb_conversations__tenant___project___conversation_id__status_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationStatus'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/{conversation_id}/details:
+    get:
+      tags:
+      - CB Conversations
+      summary: Conversation Details
+      operationId: conversation_details_api_cb_conversations__tenant___project___conversation_id__details_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: If omitted, conversation details are not filtered by bundle_id and bundle ids are inferred from stored
+            rows.
+          title: Bundle Id
+        description: If omitted, conversation details are not filtered by bundle_id and bundle ids are inferred from stored
+          rows.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/{conversation_id}/fetch:
+    post:
+      tags:
+      - CB Conversations
+      summary: Fetch Conversation
+      description: "Fetch UI-visible artifacts for a conversation. Optional:\n  - restrict to a set of turn_ids\n  - materialize\
+        \ payloads from store"
+      operationId: fetch_conversation_api_cb_conversations__tenant___project___conversation_id__fetch_post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: If omitted, conversation fetch is not filtered by bundle_id and bundle ids are inferred from stored
+            rows.
+          title: Bundle Id
+        description: If omitted, conversation fetch is not filtered by bundle_id and bundle ids are inferred from stored rows.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kdcube_ai_app__apps__chat__ingress__conversations__conversations__ConversationFetchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/{conversation_id}:
+    delete:
+      tags:
+      - CB Conversations
+      summary: Delete Conversation
+      description: "Hard-delete a conversation (and related artifacts) for the authenticated user.\n\nThis will:\n  - remove\
+        \ all index rows for this {user_id, conversation_id} (including state, logs, reactions, etc.)\n  - best-effort delete\
+        \ message JSONs, attachments, and execution artifacts in storage.\n\nNOTE: This operation is irreversible."
+      operationId: delete_conversation_api_cb_conversations__tenant___project___conversation_id__delete
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationDeleteResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/{conversation_id}/turns/{turn_id}/feedback:
+    post:
+      tags:
+      - CB Conversations
+      summary: Submit Turn Feedback
+      description: "Submit, update, or clear user feedback for a specific turn.\n\nThis single endpoint handles all feedback\
+        \ operations:\n\n**Add/Update Feedback:**\n- Set reaction to \"ok\", \"not_ok\", or \"neutral\"\n- Optionally include\
+        \ text\n- Replaces any previous user feedback on this turn\n\n**Clear Feedback:**\n- Set reaction to null\n- Removes\
+        \ all user feedback from this turn\n\nArgs:\n    conversation_id: The conversation ID\n    turn_id: The turn ID to\
+        \ provide feedback on\n    req: Feedback request with reaction and optional text\n\nReturns:\n    TurnFeedbackResponse\
+        \ with success status and cleared flag\n\nExamples:\n    # Add positive feedback\n    POST /conversations/{conv_id}/turns/{turn_id}/feedback\n\
+        \    {\n        \"reaction\": \"ok\",\n        \"text\": \"Great explanation!\"\n    }\n\n    # Add neutral comment\n\
+        \    POST /conversations/{conv_id}/turns/{turn_id}/feedback\n    {\n        \"reaction\": \"neutral\",\n        \"\
+        text\": \"Note for later\"\n    }\n\n    # Clear feedback\n    POST /conversations/{conv_id}/turns/{turn_id}/feedback\n\
+        \    {\n        \"reaction\": null\n    }"
+      operationId: submit_turn_feedback_api_cb_conversations__tenant___project___conversation_id__turns__turn_id__feedback_post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      - name: turn_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Turn Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TurnFeedbackRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TurnFeedbackResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/{conversation_id}/turns-with-feedbacks:
+    post:
+      tags:
+      - CB Conversations
+      summary: Fetch Turns With Feedbacks
+      description: "Return all turns in a conversation that have feedbacks (or reactions), each with:\n  - turn_id\n  - full\
+        \ turn_log object (materialized)\n  - assistant message (materialized)\n  - user message (materialized)\n  - feedbacks\
+        \ array (from the turn log payload)\n\nOptional:\n  - limit to specific turn_ids."
+      operationId: fetch_turns_with_feedbacks_api_cb_conversations__tenant___project___conversation_id__turns_with_feedbacks_post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationFeedbackTurnsRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cb/conversations/{tenant}/{project}/feedback/conversations-in-period:
+    post:
+      tags:
+      - CB Conversations
+      summary: Conversations With Feedbacks In Period
+      description: "Aggregate conversations (and optionally turns) that have feedback reactions within a time window.\n\n\
+        Input:\n  - start/end (ISO8601, inclusive)\n  - include_turns: when true, also materializes involved turns and returns\
+        \ `feedbacks` + `reactions`\n  - limit/cursor: pagination over conversations\n\nOutput:\n  - items[] per conversation\
+        \ with feedback_counts {total,user,machine,ok,not_ok,neutral}\n  - optionally turns[] with per-turn summaries (id,\
+        \ ts, feedbacks[], reactions[])\n  - next_cursor for pagination\n\nNotes:\n  - Scopes to the authenticated user and\
+        \ the given {tenant}/{project}\n  - Counts are derived from artifacts tagged 'kind:turn.log.reaction'\n  - Turn details\
+        \ (when include_turns=true) are materialized similarly to /turns-with-feedbacks"
+      operationId: conversations_with_feedbacks_in_period_api_cb_conversations__tenant___project__feedback_conversations_in_period_post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationsInPeriodRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationsInPeriodResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/total:
+    get:
+      tags:
+      - CB opex
+      summary: Get Total Usage
+      description: "Query total usage for all users in given timeframe.\n\nReturns:\n    - total: Aggregated usage metrics\n\
+        \    - rollup: Compact breakdown by (service, provider, model)\n    - user_count: Number of unique users\n    - event_count:\
+        \ Total events processed\n    - cost_estimate: Estimated costs based on price table"
+      operationId: get_total_usage_api_opex_total_get
+      parameters:
+      - name: tenant
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Tenant ID
+          title: Tenant
+        description: Tenant ID
+      - name: project
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Project ID
+          title: Project
+        description: Project ID
+      - name: date_from
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Start date (YYYY-MM-DD)
+          title: Date From
+        description: Start date (YYYY-MM-DD)
+      - name: date_to
+        in: query
+        required: true
+        schema:
+          type: string
+          description: End date (YYYY-MM-DD)
+          title: Date To
+        description: End date (YYYY-MM-DD)
+      - name: app_bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: App bundle ID
+          title: App Bundle Id
+        description: App bundle ID
+      - name: service_types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated service types
+          title: Service Types
+        description: Comma-separated service types
+      - name: hard_file_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Max files to scan
+          title: Hard File Limit
+        description: Max files to scan
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/users:
+    get:
+      tags:
+      - CB opex
+      summary: Get Usage By User
+      description: "Query usage broken down by user.\n\nReturns:\n    - users: Dict of user_id -> {total, rollup}\n    - total_users:\
+        \ Count of users\n    - cost_estimate: Per-user cost estimates"
+      operationId: get_usage_by_user_api_opex_users_get
+      parameters:
+      - name: tenant
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Tenant ID
+          title: Tenant
+        description: Tenant ID
+      - name: project
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Project ID
+          title: Project
+        description: Project ID
+      - name: date_from
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Start date (YYYY-MM-DD)
+          title: Date From
+        description: Start date (YYYY-MM-DD)
+      - name: date_to
+        in: query
+        required: true
+        schema:
+          type: string
+          description: End date (YYYY-MM-DD)
+          title: Date To
+        description: End date (YYYY-MM-DD)
+      - name: app_bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: App bundle ID
+          title: App Bundle Id
+        description: App bundle ID
+      - name: service_types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated service types
+          title: Service Types
+        description: Comma-separated service types
+      - name: hard_file_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Max files to scan
+          title: Hard File Limit
+        description: Max files to scan
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/conversation:
+    get:
+      tags:
+      - CB opex
+      summary: Get Conversation Usage
+      description: "Query usage for a specific conversation.\n\nReturns:\n    - total: Aggregated usage\n    - rollup: Compact\
+        \ breakdown\n    - turns: Usage grouped by turn_id\n    - event_count: Total events\n    - cost_estimate: Estimated\
+        \ costs"
+      operationId: get_conversation_usage_api_opex_conversation_get
+      parameters:
+      - name: tenant
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Tenant ID
+          title: Tenant
+        description: Tenant ID
+      - name: project
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Project ID
+          title: Project
+        description: Project ID
+      - name: user_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: User ID
+          title: User Id
+        description: User ID
+      - name: conversation_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Conversation ID
+          title: Conversation Id
+        description: Conversation ID
+      - name: date_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date (YYYY-MM-DD)
+          title: Date From
+        description: Start date (YYYY-MM-DD)
+      - name: date_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date (YYYY-MM-DD)
+          title: Date To
+        description: End date (YYYY-MM-DD)
+      - name: app_bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: App bundle ID
+          title: App Bundle Id
+        description: App bundle ID
+      - name: service_types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated service types
+          title: Service Types
+        description: Comma-separated service types
+      - name: hard_file_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Max files to scan
+          title: Hard File Limit
+        description: Max files to scan
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/turn:
+    get:
+      tags:
+      - CB opex
+      summary: Get Turn Usage
+      description: "Query usage for a specific turn (async).\n\nReturns:\n    - turn_id: Turn identifier\n    - event_count:\
+        \ Events in this turn\n    - total_usage: Aggregated metrics\n    - tokens: Total tokens\n    - rollup: Compact breakdown\
+        \ by agent\n    - cost_estimate: Estimated costs"
+      operationId: get_turn_usage_api_opex_turn_get
+      parameters:
+      - name: tenant
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Tenant ID
+          title: Tenant
+        description: Tenant ID
+      - name: project
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Project ID
+          title: Project
+        description: Project ID
+      - name: user_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: User ID
+          title: User Id
+        description: User ID
+      - name: conversation_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Conversation ID
+          title: Conversation Id
+        description: Conversation ID
+      - name: turn_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Turn ID
+          title: Turn Id
+        description: Turn ID
+      - name: date_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date (YYYY-MM-DD)
+          title: Date From
+        description: Start date (YYYY-MM-DD)
+      - name: date_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date (YYYY-MM-DD)
+          title: Date To
+        description: End date (YYYY-MM-DD)
+      - name: app_bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: App bundle ID
+          title: App Bundle Id
+        description: App bundle ID
+      - name: service_types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated service types
+          title: Service Types
+        description: Comma-separated service types
+      - name: hard_file_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Max files to scan
+          default: 5000
+          title: Hard File Limit
+        description: Max files to scan
+      - name: use_memory_cache
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Use in-memory cache if available
+          default: false
+          title: Use Memory Cache
+        description: Use in-memory cache if available
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/agents:
+    get:
+      tags:
+      - CB opex
+      summary: Get Agent Usage
+      description: "Query usage broken down by agent.\n\nReturns:\n    - agents: Dict of agent_name -> {total, rollup}\n \
+        \   - total_agents: Count of agents\n    - cost_estimate: Per-agent cost estimates"
+      operationId: get_agent_usage_api_opex_agents_get
+      parameters:
+      - name: tenant
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Tenant ID
+          title: Tenant
+        description: Tenant ID
+      - name: project
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Project ID
+          title: Project
+        description: Project ID
+      - name: date_from
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Start date (YYYY-MM-DD)
+          title: Date From
+        description: Start date (YYYY-MM-DD)
+      - name: date_to
+        in: query
+        required: true
+        schema:
+          type: string
+          description: End date (YYYY-MM-DD)
+          title: Date To
+        description: End date (YYYY-MM-DD)
+      - name: user_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by user ID
+          title: User Id
+        description: Filter by user ID
+      - name: conversation_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by conversation ID
+          title: Conversation Id
+        description: Filter by conversation ID
+      - name: turn_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Filter by turn ID
+          title: Turn Id
+        description: Filter by turn ID
+      - name: app_bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: App bundle ID
+          title: App Bundle Id
+        description: App bundle ID
+      - name: service_types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated service types
+          title: Service Types
+        description: Comma-separated service types
+      - name: hard_file_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Max files to scan
+          title: Hard File Limit
+        description: Max files to scan
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/turn/by-agent:
+    get:
+      tags:
+      - CB opex
+      summary: Get Turn Usage By Agent
+      description: "Query turn usage broken down by agent (highly optimized with prefix filtering).\n\nReturns:\n    - agents:\
+        \ Dict of agent_name -> List[{service, provider, model, spent}]\n    - cost_estimate: Per-agent cost estimates"
+      operationId: get_turn_usage_by_agent_api_opex_turn_by_agent_get
+      parameters:
+      - name: tenant
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Tenant ID
+          title: Tenant
+        description: Tenant ID
+      - name: project
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Project ID
+          title: Project
+        description: Project ID
+      - name: conversation_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Conversation ID
+          title: Conversation Id
+        description: Conversation ID
+      - name: turn_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Turn ID
+          title: Turn Id
+        description: Turn ID
+      - name: user_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: User ID
+          title: User Id
+        description: User ID
+      - name: date_from
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Start date (YYYY-MM-DD)
+          title: Date From
+        description: Start date (YYYY-MM-DD)
+      - name: date_to
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date (YYYY-MM-DD)
+          title: Date To
+        description: End date (YYYY-MM-DD)
+      - name: app_bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: App bundle ID
+          title: App Bundle Id
+        description: App bundle ID
+      - name: service_types
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated service types
+          title: Service Types
+        description: Comma-separated service types
+      - name: hard_file_limit
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          description: Max files to scan
+          default: 5000
+          title: Hard File Limit
+        description: Max files to scan
+      - name: use_memory_cache
+        in: query
+        required: false
+        schema:
+          type: boolean
+          description: Use in-memory cache if available
+          default: false
+          title: Use Memory Cache
+        description: Use in-memory cache if available
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/opex/health:
+    get:
+      tags:
+      - CB opex
+      summary: Health Check
+      description: Health check endpoint for accounting API
+      operationId: health_check_api_opex_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/opex/admin/clear-cache:
+    post:
+      tags:
+      - CB opex
+      summary: Admin Clear Calculator Cache
+      description: 'Clear cached calculator instance (forces recreation with fresh backend).
+
+        Useful after storage configuration changes.'
+      operationId: admin_clear_calculator_cache_api_opex_admin_clear_cache_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/opex/admin/price-table:
+    get:
+      tags:
+      - CB opex
+      summary: Admin Get Price Table
+      description: Get current price table configuration.
+      operationId: admin_get_price_table_api_opex_admin_price_table_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/opex/admin/run-aggregation-range:
+    post:
+      tags:
+      - CB opex
+      summary: Admin Run Aggregation Range
+      description: "Manually backfill daily + monthly aggregates for a date range.\n\nThis uses the same Redis locking as\
+        \ the scheduler, so it is safe to call\non multiple API instances concurrently.\n\nExamples:\n  - /admin/run-aggregation-range?start_date=2025-01-01\n\
+        \    -> backfills from 2025-01-01 up to yesterday.\n  - /admin/run-aggregation-range?start_date=2025-01-01&end_date=2025-01-10\n\
+        \    -> backfills 2025-01-01 .. 2025-01-10."
+      operationId: admin_run_aggregation_range_api_opex_admin_run_aggregation_range_post
+      parameters:
+      - name: start_date
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Start date (YYYY-MM-DD)
+          title: Start Date
+        description: Start date (YYYY-MM-DD)
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: End date (YYYY-MM-DD, inclusive). If omitted, defaults to yesterday in Europe/Berlin.
+          title: End Date
+        description: End date (YYYY-MM-DD, inclusive). If omitted, defaults to yesterday in Europe/Berlin.
+      - name: include_today
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Today
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/cp-frontend-config:
+    get:
+      tags:
+      - CP frontend config
+      summary: Cp Frontend Config
+      operationId: cp_frontend_config_api_cp_frontend_config_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/admin/control-plane/plan-override/grant-trial:
+    post:
+      tags:
+      - CP admin
+      summary: Grant Trial Bonus
+      description: 'Grant 7-day trial with temporary plan override.
+
+
+        **How it works:**
+
+        1. User''s base plan: Free (10 req/day)
+
+        2. You grant trial: 100 req/day for 7 days
+
+        3. During days 1-7: User gets exactly 100 req/day (plan is OVERRIDDEN)
+
+        4. Day 8+: User reverts to base plan (10 req/day)
+
+
+        **Use Cases:**
+
+        - New user registration bonus
+
+        - Marketing campaigns
+
+        - User retention'
+      operationId: grant_trial_bonus_api_admin_control_plane_plan_override_grant_trial_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GrantTrialRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/plan-override/update:
+    post:
+      tags:
+      - CP admin
+      summary: Update Plan Override
+      description: 'Update user''s plan override (supports PARTIAL updates).
+
+
+        **How it works:**
+
+        - Sets specific limits for a period
+
+        - OVERRIDES base plan (does not add)
+
+        - Resets daily/monthly like plan quotas
+
+        - Expires after X days
+
+
+        **Partial Updates:**
+
+        - Only updates fields you provide
+
+        - Other fields stay unchanged (COALESCE in SQL)
+
+
+        **Use Cases:**
+
+        - Promotional campaigns
+
+        - Beta tester credits
+
+        - Apology/compensation
+
+        - Extending existing trials'
+      operationId: update_plan_override_api_admin_control_plane_plan_override_update_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlanOverrideRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/plan-override/user/{user_id}:
+    get:
+      tags:
+      - CP admin
+      summary: Get User Plan Override Balance
+      description: 'Get user''s plan balance (plan override + lifetime budget).
+
+
+        Shows currently active plan override with expiration date.
+
+        Also shows lifetime budget if user has purchased credits.'
+      operationId: get_user_plan_override_balance_api_admin_control_plane_plan_override_user__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: include_expired
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Include Expired
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - CP admin
+      summary: Deactivate Plan Override
+      description: 'Deactivate (soft delete) user''s plan balance.
+
+
+        **WARNING:** This clears BOTH plan override AND lifetime budget!
+
+
+        **Use Cases:**
+
+        1. **Refund Processing**: Remove all credits after issuing refund
+
+        2. **Abuse Prevention**: Revoke all credits from fraudulent accounts
+
+        3. **Policy Violation**: Remove all credits for TOS violations'
+      operationId: deactivate_plan_override_api_admin_control_plane_plan_override_user__user_id__delete
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/plan-override/add-lifetime-credits:
+    post:
+      tags:
+      - CP admin
+      summary: Add Lifetime Credits
+      description: 'Add purchased credits in USD (converted to lifetime tokens).
+
+
+        User''s purchased credits - separate from plan override.
+
+        Balance depletes on use, does NOT reset.'
+      operationId: add_lifetime_credits_api_admin_control_plane_plan_override_add_lifetime_credits_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddLifetimeCreditsRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/plan-override/lifetime-balance/{user_id}:
+    get:
+      tags:
+      - CP admin
+      summary: Get Lifetime Balance
+      description: Get user's lifetime purchased balance (tokens + USD equivalent).
+      operationId: get_lifetime_balance_api_admin_control_plane_plan_override_lifetime_balance__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/user/{user_id}:
+    get:
+      tags:
+      - CP admin
+      summary: Get Subscription
+      operationId: get_subscription_api_admin_control_plane_subscriptions_user__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/list:
+    get:
+      tags:
+      - CP admin
+      summary: List Subscriptions
+      operationId: list_subscriptions_api_admin_control_plane_subscriptions_list_get
+      parameters:
+      - name: provider
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+      - name: user_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/plans:
+    get:
+      tags:
+      - CP admin
+      summary: List Subscription Plans
+      operationId: list_subscription_plans_api_admin_control_plane_subscriptions_plans_get
+      parameters:
+      - name: provider
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Provider
+      - name: active_only
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: true
+          title: Active Only
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - CP admin
+      summary: Upsert Subscription Plan
+      operationId: upsert_subscription_plan_api_admin_control_plane_subscriptions_plans_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertSubscriptionPlanRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/periods/{user_id}:
+    get:
+      tags:
+      - CP admin
+      summary: List Subscription Periods
+      operationId: list_subscription_periods_api_admin_control_plane_subscriptions_periods__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: status
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          default: closed
+          title: Status
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/ledger/{user_id}:
+    get:
+      tags:
+      - CP admin
+      summary: List Subscription Ledger
+      operationId: list_subscription_ledger_api_admin_control_plane_subscriptions_ledger__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: period_key
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Period Key
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 2000
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/reservations/reap:
+    post:
+      tags:
+      - CP admin
+      summary: Reap Subscription Reservations
+      operationId: reap_subscription_reservations_api_admin_control_plane_subscriptions_reservations_reap_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReapSubscriptionReservationsRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/reservations/reap-all:
+    post:
+      tags:
+      - CP admin
+      summary: Reap Subscription Reservations All
+      operationId: reap_subscription_reservations_all_api_admin_control_plane_subscriptions_reservations_reap_all_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReapAllSubscriptionReservationsRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/internal/renew-once:
+    post:
+      tags:
+      - CP admin
+      summary: Renew Internal Subscription Once
+      operationId: renew_internal_subscription_once_api_admin_control_plane_subscriptions_internal_renew_once_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InternalRenewOnceRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/budget/topup:
+    post:
+      tags:
+      - CP admin
+      summary: Topup Subscription Budget
+      operationId: topup_subscription_budget_api_admin_control_plane_subscriptions_budget_topup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopUpSubscriptionBudgetRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/subscriptions/rollover/sweep:
+    post:
+      tags:
+      - CP admin
+      summary: Sweep Subscription Rollovers
+      operationId: sweep_subscription_rollovers_api_admin_control_plane_subscriptions_rollover_sweep_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SweepSubscriptionRolloversRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/policies/quota:
+    get:
+      tags:
+      - CP admin
+      summary: List Quota Policies
+      description: 'List plan quota policies (base policies by plan id).
+
+
+        Shows configured policies for different plans (free, payasyougo, admin, etc.).'
+      operationId: list_quota_policies_api_admin_control_plane_policies_quota_get
+      parameters:
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - CP admin
+      summary: Set Quota Policy
+      description: 'Set the quota policy for a plan.
+
+
+        Defines base rate limits for different plans.
+
+        Supports partial updates via COALESCE.'
+      operationId: set_quota_policy_api_admin_control_plane_policies_quota_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetQuotaPolicyRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/policies/budget:
+    get:
+      tags:
+      - CP admin
+      summary: List Budget Policies
+      description: 'List application budget policies (spending limits per provider).
+
+
+        Shows configured spending limits for AI providers (Anthropic, OpenAI, etc.).
+
+
+        **Admin only.** Requires authentication.'
+      operationId: list_budget_policies_api_admin_control_plane_policies_budget_get
+      parameters:
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          default: 100
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    post:
+      tags:
+      - CP admin
+      summary: Set Budget Policy
+      description: 'Set budget policy for a provider.
+
+
+        Configures spending limits to prevent runaway costs.
+
+        Supports partial updates via COALESCE.'
+      operationId: set_budget_policy_api_admin_control_plane_policies_budget_post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetBudgetPolicyRequest'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/users/{user_id}/quota-breakdown:
+    get:
+      tags:
+      - CP admin
+      summary: Get User Quota Breakdown
+      description: 'Get the detailed quota breakdown for a user.
+
+
+        Shows base plan, plan override, effective policy, and current usage.'
+      operationId: get_user_quota_breakdown_api_admin_control_plane_users__user_id__quota_breakdown_get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: plan_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Plan id override (free, payasyougo, admin, etc.)
+          title: Plan Id
+        description: Plan id override (free, payasyougo, admin, etc.)
+      - name: role
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional role hint (registered, paid, privileged, anonymous)
+          title: Role
+        description: Optional role hint (registered, paid, privileged, anonymous)
+      - name: user_type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'Deprecated: role hint (registered, paid, privileged, anonymous)'
+          title: User Type
+        description: 'Deprecated: role hint (registered, paid, privileged, anonymous)'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/users/{user_id}/budget-breakdown:
+    get:
+      tags:
+      - CP admin
+      summary: Get User Budget Breakdown
+      description: 'Full user budget breakdown (quota + plan override + usage + lifetime credits + reservations).
+
+        REST layer is SQL-free: all orchestration lives in sdk/infra/economics/user_budget.py'
+      operationId: get_user_budget_breakdown_api_admin_control_plane_users__user_id__budget_breakdown_get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: plan_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Plan id override (free, payasyougo, admin, etc.)
+          title: Plan Id
+        description: Plan id override (free, payasyougo, admin, etc.)
+      - name: role
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional role hint (registered, paid, privileged, anonymous)
+          title: Role
+        description: Optional role hint (registered, paid, privileged, anonymous)
+      - name: user_type
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: 'Deprecated: role hint (registered, paid, privileged, anonymous)'
+          title: User Type
+        description: 'Deprecated: role hint (registered, paid, privileged, anonymous)'
+      - name: bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional bundle id for per-bundle windows
+          title: Bundle Id
+        description: Optional bundle id for per-bundle windows
+      - name: include_expired_override
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: true
+          title: Include Expired Override
+      - name: reservations_limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 0
+          default: 50
+          title: Reservations Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/app-budget/topup:
+    post:
+      tags:
+      - CP admin
+      summary: Topup App Budget
+      description: 'Top up application budget (company money).
+
+
+        This is the TENANT/PROJECT budget used to pay for plan-funded requests.'
+      operationId: topup_app_budget_api_admin_control_plane_app_budget_topup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TopUpAppBudgetRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/app-budget/balance:
+    get:
+      tags:
+      - CP admin
+      summary: Get App Budget Balance
+      description: Get current app budget balance.
+      operationId: get_app_budget_balance_api_admin_control_plane_app_budget_balance_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/admin/control-plane/app-budget/absorption-report:
+    get:
+      tags:
+      - CP admin
+      summary: Get App Budget Absorption Report
+      description: 'Report when project budget absorbed wallet/plan shortfalls.
+
+        Aggregated by period (day or month).'
+      operationId: get_app_budget_absorption_report_api_admin_control_plane_app_budget_absorption_report_get
+      parameters:
+      - name: period
+        in: query
+        required: false
+        schema:
+          type: string
+          description: day|month
+          default: month
+          title: Period
+        description: day|month
+      - name: group_by
+        in: query
+        required: false
+        schema:
+          type: string
+          description: none|user|bundle
+          default: none
+          title: Group By
+        description: none|user|bundle
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 730
+          minimum: 1
+          default: 90
+          title: Days
+      - name: format
+        in: query
+        required: false
+        schema:
+          type: string
+          description: json|csv
+          default: json
+          title: Format
+        description: json|csv
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/economics/request-lineage:
+    get:
+      tags:
+      - CP admin
+      summary: Get Request Lineage
+      description: 'Show money lineage for a single request_id (turn_id).
+
+        Pulls budget reservations/ledgers and wallet reservation rows.'
+      operationId: get_request_lineage_api_admin_control_plane_economics_request_lineage_get
+      parameters:
+      - name: request_id
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Turn ID / request_id
+          title: Request Id
+        description: Turn ID / request_id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/health:
+    get:
+      tags:
+      - CP admin
+      summary: Health Check
+      description: Health check for control plane.
+      operationId: health_check_api_admin_control_plane_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/admin/control-plane/economics/reference:
+    get:
+      tags:
+      - CP admin
+      summary: Get Economics Reference
+      description: Return USD/token reference for admin UI conversions.
+      operationId: get_economics_reference_api_admin_control_plane_economics_reference_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/admin/control-plane/clear-cache:
+    post:
+      tags:
+      - CP admin
+      summary: Admin Clear Cache
+      description: 'Clear cached control plane manager (forces recreation with fresh connections).
+
+
+        Useful after configuration changes or to troubleshoot caching issues.'
+      operationId: admin_clear_cache_api_admin_control_plane_clear_cache_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/admin/control-plane/conversations/tenant-projects:
+    get:
+      tags:
+      - CP admin conversations
+      summary: List Tenant Projects
+      operationId: list_tenant_projects_api_admin_control_plane_conversations_tenant_projects_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantProjectListResponse'
+  /api/admin/control-plane/conversations/{tenant}/{project}/users:
+    get:
+      tags:
+      - CP admin conversations
+      summary: List Users
+      operationId: list_users_api_admin_control_plane_conversations__tenant___project__users_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 2000
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: search
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Search
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsersListResponse'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/conversations/{tenant}/{project}/{user_id}/conversations:
+    get:
+      tags:
+      - CP admin conversations
+      summary: List User Conversations
+      operationId: list_user_conversations_api_admin_control_plane_conversations__tenant___project___user_id__conversations_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: last_n
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 500
+            minimum: 1
+          - type: 'null'
+          title: Last N
+      - name: started_after
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Started After
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 3650
+          minimum: 1
+          default: 365
+          title: Days
+      - name: include_titles
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: true
+          title: Include Titles
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/conversations/{tenant}/{project}/{user_id}/conversations/{conversation_id}/details:
+    get:
+      tags:
+      - CP admin conversations
+      summary: Get Conversation Details
+      operationId: get_conversation_details_api_admin_control_plane_conversations__tenant___project___user_id__conversations__conversation_id__details_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/conversations/{tenant}/{project}/{user_id}/conversations/{conversation_id}/fetch:
+    post:
+      tags:
+      - CP admin conversations
+      summary: Fetch Conversation
+      operationId: fetch_conversation_api_admin_control_plane_conversations__tenant___project___user_id__conversations__conversation_id__fetch_post
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/kdcube_ai_app__apps__chat__ingress__control_plane__conversations_browser__ConversationFetchRequest'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/conversations/{tenant}/{project}/{user_id}/export.xlsx:
+    get:
+      tags:
+      - CP admin conversations
+      summary: Export User Conversations
+      operationId: export_user_conversations_api_admin_control_plane_conversations__tenant___project___user_id__export_xlsx_get
+      parameters:
+      - name: tenant
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Tenant
+      - name: project
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Project
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: conversation_ids
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Comma-separated conversation IDs
+          title: Conversation Ids
+        description: Comma-separated conversation IDs
+      - name: days
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 3650
+          minimum: 1
+          default: 365
+          title: Days
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/redis/keys:
+    get:
+      tags:
+      - CP admin redis
+      summary: List Keys
+      operationId: list_keys_api_admin_control_plane_redis_keys_get
+      parameters:
+      - name: prefix
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Prefix
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 2000
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/admin/control-plane/redis/key:
+    get:
+      tags:
+      - CP admin redis
+      summary: Get Key
+      operationId: get_key_api_admin_control_plane_redis_key_get
+      parameters:
+      - name: key
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Key
+      - name: max_items
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 5000
+          minimum: 1
+          default: 200
+          title: Max Items
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      tags:
+      - CP admin redis
+      summary: Delete Key
+      operationId: delete_key_api_admin_control_plane_redis_key_delete
+      parameters:
+      - name: key
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Key
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/stripe/checkout/topup:
+    post:
+      tags:
+      - 'Economics: Checkout'
+      summary: Create Checkout Topup
+      description: Create a Stripe Checkout Session for a one-time lifetime credits purchase.
+      operationId: create_checkout_topup_api_economics_stripe_checkout_topup_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutTopupRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/stripe/checkout/subscription:
+    post:
+      tags:
+      - 'Economics: Checkout'
+      summary: Create Checkout Subscription
+      description: Create a Stripe Checkout Session for a recurring subscription.
+      operationId: create_checkout_subscription_api_economics_stripe_checkout_subscription_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCheckoutSubscriptionRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/webhooks/stripe:
+    post:
+      tags:
+      - 'Economics: Webhooks'
+      summary: Stripe Webhook
+      operationId: stripe_webhook_api_economics_webhooks_stripe_post
+      parameters:
+      - name: Stripe-Signature
+        in: header
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Stripe-Signature
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/admin/subscriptions/create:
+    post:
+      tags:
+      - 'Economics: Admin'
+      summary: Create Subscription
+      operationId: create_subscription_api_economics_admin_subscriptions_create_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSubscriptionRequest'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/admin/stripe/wallet/refund:
+    post:
+      tags:
+      - 'Economics: Admin'
+      summary: Refund Wallet
+      operationId: refund_wallet_api_economics_admin_stripe_wallet_refund_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WalletRefundRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/admin/subscriptions/cancel:
+    post:
+      tags:
+      - 'Economics: Admin'
+      summary: Cancel Subscription
+      operationId: cancel_subscription_api_economics_admin_subscriptions_cancel_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CancelSubscriptionRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/admin/stripe/reconcile:
+    post:
+      tags:
+      - 'Economics: Admin'
+      summary: Reconcile Stripe Requests
+      operationId: reconcile_stripe_requests_api_economics_admin_stripe_reconcile_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StripeReconcileRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/admin/stripe/pending:
+    get:
+      tags:
+      - 'Economics: Admin'
+      summary: List Pending Stripe Requests
+      operationId: list_pending_stripe_requests_api_economics_admin_stripe_pending_get
+      parameters:
+      - name: kind
+        in: query
+        required: false
+        schema:
+          type: string
+          description: all|wallet_refund|subscription_cancel
+          default: all
+          title: Kind
+        description: all|wallet_refund|subscription_cancel
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 2000
+          minimum: 1
+          default: 200
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/me/budget-breakdown:
+    get:
+      tags:
+      - 'Economics: User'
+      summary: Get My Budget Breakdown
+      description: Budget breakdown for the currently authenticated user.
+      operationId: get_my_budget_breakdown_api_economics_me_budget_breakdown_get
+      parameters:
+      - name: bundle_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          description: Optional bundle id. Defaults to __project__ so usage matches tenant/project-wide quota enforcement.
+          title: Bundle Id
+        description: Optional bundle id. Defaults to __project__ so usage matches tenant/project-wide quota enforcement.
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/economics/me/subscription:
+    get:
+      tags:
+      - 'Economics: User'
+      summary: Get My Subscription
+      description: Subscription record for the currently authenticated user.
+      operationId: get_my_subscription_api_economics_me_subscription_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/economics/me/subscription-plans:
+    get:
+      tags:
+      - 'Economics: User'
+      summary: List My Subscription Plans
+      description: List active Stripe subscription plans available to the user.
+      operationId: list_my_subscription_plans_api_economics_me_subscription_plans_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/economics/me/subscription/cancel:
+    post:
+      tags:
+      - 'Economics: User'
+      summary: Cancel My Subscription
+      description: Cancel the authenticated user's subscription at end of current billing period.
+      operationId: cancel_my_subscription_api_economics_me_subscription_cancel_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /api/economics/me/stripe/customer-portal:
+    post:
+      tags:
+      - 'Economics: User'
+      summary: Create My Customer Portal Session
+      description: Create a Stripe Customer Portal session for the authenticated user.
+      operationId: create_my_customer_portal_session_api_economics_me_stripe_customer_portal_post
+      parameters:
+      - name: return_url
+        in: query
+        required: true
+        schema:
+          type: string
+          description: URL to return to after the portal session
+          title: Return Url
+        description: URL to return to after the portal session
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sse/stream:
+    get:
+      tags:
+      - SSE
+      summary: Sse Stream
+      operationId: sse_stream_sse_stream_get
+      parameters:
+      - name: stream_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Stream Id
+      - name: user_session_id
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Session Id
+      - name: bearer_token
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Bearer Token
+      - name: id_token
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Id Token
+      - name: project
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Project
+      - name: tenant
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Tenant
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sse/chat:
+    post:
+      tags:
+      - SSE
+      summary: Sse Chat
+      operationId: sse_chat_sse_chat_post
+      parameters:
+      - name: stream_id
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Stream Id
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_sse_chat_sse_chat_post'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /sse/conv_status.get:
+    post:
+      tags:
+      - SSE
+      summary: Sse Conv Status Get
+      operationId: sse_conv_status_get_sse_conv_status_get_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: Data
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+components:
+  schemas:
+    AddLifetimeCreditsRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+          description: User ID
+        usd_amount:
+          type: number
+          exclusiveMinimum: 0.0
+          title: Usd Amount
+          description: Amount in USD
+        ref_provider:
+          type: string
+          title: Ref Provider
+          description: Reference model provider
+          default: anthropic
+        ref_model:
+          type: string
+          title: Ref Model
+          description: Reference model
+          default: claude-sonnet-4-5-20250929
+        purchase_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Purchase Id
+          description: Payment/transaction ID
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Purchase notes
+      type: object
+      required:
+      - user_id
+      - usd_amount
+      title: AddLifetimeCreditsRequest
+      description: 'Add purchased credits in USD (converted to lifetime tokens).
+
+
+        Balance depletes on use, does NOT reset.
+
+        Completely separate from plan quotas.'
+    Body_sse_chat_sse_chat_post:
+      properties:
+        message:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Message
+        attachment_meta:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Attachment Meta
+        files:
+          items:
+            type: string
+            format: binary
+          type: array
+          title: Files
+          default: []
+      type: object
+      title: Body_sse_chat_sse_chat_post
+    CancelSubscriptionRequest:
+      properties:
+        user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+          description: User ID (optional if stripe_subscription_id provided)
+        stripe_subscription_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Stripe Subscription Id
+          description: Stripe subscription id
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Cancel notes
+      type: object
+      title: CancelSubscriptionRequest
+      description: Cancel a Stripe subscription (at period end).
+    CircuitBreakerStatusResponse:
+      properties:
+        name:
+          type: string
+          title: Name
+        state:
+          type: string
+          title: State
+        failure_count:
+          type: integer
+          title: Failure Count
+        success_count:
+          type: integer
+          title: Success Count
+        total_requests:
+          type: integer
+          title: Total Requests
+        total_failures:
+          type: integer
+          title: Total Failures
+        consecutive_failures:
+          type: integer
+          title: Consecutive Failures
+        current_window_failures:
+          type: integer
+          title: Current Window Failures
+        last_failure_time:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Last Failure Time
+        last_success_time:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Last Success Time
+        opened_at:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Opened At
+      type: object
+      required:
+      - name
+      - state
+      - failure_count
+      - success_count
+      - total_requests
+      - total_failures
+      - consecutive_failures
+      - current_window_failures
+      - last_failure_time
+      - last_success_time
+      - opened_at
+      title: CircuitBreakerStatusResponse
+    CircuitBreakerSummaryResponse:
+      properties:
+        total_circuits:
+          type: integer
+          title: Total Circuits
+        open_circuits:
+          type: integer
+          title: Open Circuits
+        half_open_circuits:
+          type: integer
+          title: Half Open Circuits
+        closed_circuits:
+          type: integer
+          title: Closed Circuits
+      type: object
+      required:
+      - total_circuits
+      - open_circuits
+      - half_open_circuits
+      - closed_circuits
+      title: CircuitBreakerSummaryResponse
+    CircuitBreakersResponse:
+      properties:
+        summary:
+          $ref: '#/components/schemas/CircuitBreakerSummaryResponse'
+        circuits:
+          additionalProperties:
+            $ref: '#/components/schemas/CircuitBreakerStatusResponse'
+          type: object
+          title: Circuits
+      type: object
+      required:
+      - summary
+      - circuits
+      title: CircuitBreakersResponse
+    ConversationDeleteResponse:
+      properties:
+        conversation_id:
+          type: string
+          title: Conversation Id
+        deleted_messages:
+          type: integer
+          title: Deleted Messages
+          description: Rows deleted from conv_messages
+        deleted_storage_messages:
+          type: integer
+          title: Deleted Storage Messages
+          description: Message blobs removed from storage (best-effort)
+        deleted_storage_attachments:
+          type: integer
+          title: Deleted Storage Attachments
+          description: Attachment files removed from storage (best-effort)
+        deleted_storage_executions:
+          type: integer
+          title: Deleted Storage Executions
+          description: Execution snapshot files removed from storage (best-effort)
+      type: object
+      required:
+      - conversation_id
+      - deleted_messages
+      - deleted_storage_messages
+      - deleted_storage_attachments
+      - deleted_storage_executions
+      title: ConversationDeleteResponse
+    ConversationFeedbackTurnsRequest:
+      properties:
+        turn_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Turn Ids
+          description: If provided, restrict to these exact turn IDs. If omitted, server discovers turns with feedbacks.
+        days:
+          type: integer
+          maximum: 3650.0
+          minimum: 1.0
+          title: Days
+          default: 365
+      type: object
+      title: ConversationFeedbackTurnsRequest
+    ConversationListItem:
+      properties:
+        conversation_id:
+          type: string
+          title: Conversation Id
+        last_activity_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Activity At
+        started_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Started At
+        title:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Title
+      type: object
+      required:
+      - conversation_id
+      title: ConversationListItem
+    ConversationListResponse:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+        items:
+          items:
+            $ref: '#/components/schemas/ConversationListItem'
+          type: array
+          title: Items
+      type: object
+      required:
+      - user_id
+      - items
+      title: ConversationListResponse
+    ConversationStatus:
+      properties:
+        conversation_id:
+          type: string
+          title: Conversation Id
+        state:
+          type: string
+          title: State
+        updated_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Updated At
+        meta:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Meta
+      type: object
+      required:
+      - conversation_id
+      - state
+      title: ConversationStatus
+    ConversationsInPeriodRequest:
+      properties:
+        start:
+          type: string
+          title: Start
+          description: ISO8601 timestamp, inclusive
+        end:
+          type: string
+          title: End
+          description: ISO8601 timestamp, inclusive
+        include_turns:
+          type: boolean
+          title: Include Turns
+          description: When true, returns turn details with feedbacks
+          default: false
+        limit:
+          type: integer
+          maximum: 500.0
+          minimum: 1.0
+          title: Limit
+          description: Max conversations to return
+          default: 100
+        cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+          description: Opaque pagination cursor
+      type: object
+      required:
+      - start
+      - end
+      title: ConversationsInPeriodRequest
+    ConversationsInPeriodResponse:
+      properties:
+        tenant:
+          type: string
+          title: Tenant
+        project:
+          type: string
+          title: Project
+        window:
+          $ref: '#/components/schemas/FeedbackPeriodWindow'
+        items:
+          items:
+            $ref: '#/components/schemas/FeedbackConversationItem'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - tenant
+      - project
+      - window
+      - items
+      title: ConversationsInPeriodResponse
+    CreateCheckoutSubscriptionRequest:
+      properties:
+        plan_id:
+          type: string
+          title: Plan Id
+          description: Internal plan ID
+        success_url:
+          type: string
+          title: Success Url
+          description: URL to redirect after successful payment
+        cancel_url:
+          type: string
+          title: Cancel Url
+          description: URL to redirect after cancelled payment
+      type: object
+      required:
+      - plan_id
+      - success_url
+      - cancel_url
+      title: CreateCheckoutSubscriptionRequest
+    CreateCheckoutTopupRequest:
+      properties:
+        amount_usd:
+          type: number
+          exclusiveMinimum: 0.5
+          title: Amount Usd
+          description: Amount in USD (min $0.50)
+        success_url:
+          type: string
+          title: Success Url
+          description: URL to redirect after successful payment
+        cancel_url:
+          type: string
+          title: Cancel Url
+          description: URL to redirect after cancelled payment
+      type: object
+      required:
+      - amount_usd
+      - success_url
+      - cancel_url
+      title: CreateCheckoutTopupRequest
+    CreateSubscriptionRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+        plan_id:
+          type: string
+          title: Plan Id
+          description: Subscription plan id
+        provider:
+          type: string
+          title: Provider
+          description: stripe|internal
+          default: stripe
+        stripe_price_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Stripe Price Id
+        stripe_customer_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Stripe Customer Id
+        monthly_price_cents_hint:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Monthly Price Cents Hint
+      type: object
+      required:
+      - user_id
+      - plan_id
+      title: CreateSubscriptionRequest
+    FeedbackConversationItem:
+      properties:
+        conversation_id:
+          type: string
+          title: Conversation Id
+        last_activity_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Last Activity At
+        started_at:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Started At
+        feedback_counts:
+          $ref: '#/components/schemas/FeedbackCounts'
+        turns:
+          anyOf:
+          - items:
+              $ref: '#/components/schemas/FeedbackTurnSummary'
+            type: array
+          - type: 'null'
+          title: Turns
+      type: object
+      required:
+      - conversation_id
+      - feedback_counts
+      title: FeedbackConversationItem
+    FeedbackCounts:
+      properties:
+        total:
+          type: integer
+          title: Total
+        user:
+          type: integer
+          title: User
+        machine:
+          type: integer
+          title: Machine
+        ok:
+          type: integer
+          title: Ok
+        not_ok:
+          type: integer
+          title: Not Ok
+        neutral:
+          type: integer
+          title: Neutral
+      type: object
+      required:
+      - total
+      - user
+      - machine
+      - ok
+      - not_ok
+      - neutral
+      title: FeedbackCounts
+    FeedbackPeriodWindow:
+      properties:
+        start:
+          type: string
+          title: Start
+        end:
+          type: string
+          title: End
+      type: object
+      required:
+      - start
+      - end
+      title: FeedbackPeriodWindow
+    FeedbackTurnSummary:
+      properties:
+        turn_id:
+          type: string
+          title: Turn Id
+        ts:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ts
+        feedbacks:
+          anyOf:
+          - items:
+              additionalProperties: true
+              type: object
+            type: array
+          - type: 'null'
+          title: Feedbacks
+      type: object
+      required:
+      - turn_id
+      title: FeedbackTurnSummary
+    GrantTrialRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+          description: User ID
+        days:
+          type: integer
+          title: Days
+          description: Trial duration in days
+          default: 7
+        requests_per_day:
+          type: integer
+          title: Requests Per Day
+          description: Requests/day during trial (OVERRIDES base)
+          default: 100
+        requests_per_month:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Requests Per Month
+          description: Requests/month during trial
+        tokens_per_hour:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Hour
+          description: Tokens/hour during trial (OVERRIDES base)
+        tokens_per_day:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Day
+          description: Tokens/day during trial (OVERRIDES base)
+        tokens_per_month:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Month
+          description: Tokens/month during trial
+        usd_per_hour:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Hour
+          description: USD/hour (converted to tokens, overrides tokens_per_hour)
+        usd_per_day:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Day
+          description: USD/day (converted to tokens, overrides tokens_per_day)
+        usd_per_month:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Month
+          description: USD/month (converted to tokens, overrides tokens_per_month)
+        max_concurrent:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Concurrent
+          description: Max concurrent during trial
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Notes
+      type: object
+      required:
+      - user_id
+      title: GrantTrialRequest
+      description: 'Grant temporary plan override (7-day trial).
+
+
+        **IMPORTANT:** This OVERRIDES the user''s base plan, does NOT add to it.
+
+
+        Example:
+
+        - Free user normally has: 10 req/day
+
+        - You grant trial: 100 req/day for 7 days
+
+        - During trial: User gets exactly 100 req/day (NOT 110)
+
+        - After trial expires: User reverts to 10 req/day
+
+
+        These quotas RESET daily/monthly like plan limits.'
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    InternalRenewOnceRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+          description: User id to renew
+        charge_at:
+          anyOf:
+          - type: string
+            format: date-time
+          - type: 'null'
+          title: Charge At
+          description: Optional charge timestamp (default now UTC)
+        idempotency_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Idempotency Key
+          description: Optional explicit idempotency key
+      type: object
+      required:
+      - user_id
+      title: InternalRenewOnceRequest
+    RNContentRequest:
+      properties:
+        rn:
+          type: string
+          title: Rn
+      type: object
+      required:
+      - rn
+      title: RNContentRequest
+    RNContentResponse:
+      properties:
+        rn:
+          type: string
+          title: Rn
+        content_type:
+          type: string
+          title: Content Type
+        content:
+          title: Content
+        metadata:
+          additionalProperties: true
+          type: object
+          title: Metadata
+      type: object
+      required:
+      - rn
+      - content_type
+      - content
+      - metadata
+      title: RNContentResponse
+    ReapAllSubscriptionReservationsRequest:
+      properties:
+        user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+          description: Optional user id to scope the sweep
+        limit_periods:
+          type: integer
+          maximum: 5000.0
+          minimum: 1.0
+          title: Limit Periods
+          default: 500
+        per_period_limit:
+          type: integer
+          maximum: 2000.0
+          minimum: 1.0
+          title: Per Period Limit
+          default: 500
+      type: object
+      title: ReapAllSubscriptionReservationsRequest
+    ReapSubscriptionReservationsRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+        period_key:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Period Key
+          description: Optional explicit period_key; if omitted, uses the active subscription period
+        limit:
+          type: integer
+          maximum: 2000.0
+          minimum: 1.0
+          title: Limit
+          default: 500
+      type: object
+      required:
+      - user_id
+      title: ReapSubscriptionReservationsRequest
+    SetBudgetPolicyRequest:
+      properties:
+        provider:
+          type: string
+          title: Provider
+          description: Provider (anthropic, openai, etc.)
+        usd_per_hour:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Hour
+          description: USD per hour
+        usd_per_day:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Day
+          description: USD per day
+        usd_per_month:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Month
+          description: USD per month
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Notes
+      type: object
+      required:
+      - provider
+      title: SetBudgetPolicyRequest
+      description: Set budget policy for a provider (app spending limits ).
+    SetQuotaPolicyRequest:
+      properties:
+        plan_id:
+          type: string
+          title: Plan Id
+          description: Plan id (free, payasyougo, admin, etc.)
+        max_concurrent:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Concurrent
+          description: Max concurrent requests
+        requests_per_day:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Requests Per Day
+          description: Requests per day
+        requests_per_month:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Requests Per Month
+          description: Requests per month
+        total_requests:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Total Requests
+          description: Total requests
+        tokens_per_hour:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Hour
+          description: Tokens per hour
+        tokens_per_day:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Day
+          description: Tokens per day
+        tokens_per_month:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Month
+          description: Tokens per month
+        usd_per_hour:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Hour
+          description: USD per hour (converted to tokens)
+        usd_per_day:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Day
+          description: USD per day (converted to tokens)
+        usd_per_month:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Month
+          description: USD per month (converted to tokens)
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Notes
+      type: object
+      required:
+      - plan_id
+      title: SetQuotaPolicyRequest
+      description: Set quota policy for a plan (base limits - NO bundle_id!).
+    StripeReconcileRequest:
+      properties:
+        kind:
+          type: string
+          title: Kind
+          description: all|wallet_refund|subscription_cancel
+          default: all
+        limit:
+          type: integer
+          maximum: 2000.0
+          minimum: 1.0
+          title: Limit
+          default: 200
+      type: object
+      title: StripeReconcileRequest
+      description: Reconcile pending Stripe-related requests (refunds/cancels).
+    SweepSubscriptionRolloversRequest:
+      properties:
+        user_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: User Id
+        limit:
+          type: integer
+          maximum: 2000.0
+          minimum: 1.0
+          title: Limit
+          default: 200
+      type: object
+      title: SweepSubscriptionRolloversRequest
+    TenantProjectItem:
+      properties:
+        tenant:
+          type: string
+          title: Tenant
+        project:
+          type: string
+          title: Project
+        schema:
+          type: string
+          title: Schema
+        source:
+          type: string
+          title: Source
+          default: control_plane
+      type: object
+      required:
+      - tenant
+      - project
+      title: TenantProjectItem
+    TenantProjectListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/TenantProjectItem'
+          type: array
+          title: Items
+      type: object
+      required:
+      - items
+      title: TenantProjectListResponse
+    TopUpAppBudgetRequest:
+      properties:
+        usd_amount:
+          type: number
+          exclusiveMinimum: 0.0
+          title: Usd Amount
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+      type: object
+      required:
+      - usd_amount
+      title: TopUpAppBudgetRequest
+      description: Top up application budget (company money).
+    TopUpSubscriptionBudgetRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+        usd_amount:
+          type: number
+          exclusiveMinimum: 0.0
+          title: Usd Amount
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        force_topup:
+          type: boolean
+          title: Force Topup
+          description: Allow multiple topups within the same billing period
+          default: false
+      type: object
+      required:
+      - user_id
+      - usd_amount
+      title: TopUpSubscriptionBudgetRequest
+    TurnFeedbackRequest:
+      properties:
+        reaction:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reaction
+          description: 'Reaction: ''ok'', ''not_ok'', ''neutral'', or null to clear. Required unless clearing.'
+        text:
+          anyOf:
+          - type: string
+            maxLength: 1000
+          - type: 'null'
+          title: Text
+          description: Optional feedback text (ignored when clearing)
+        ts:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Ts
+          description: Optional ISO8601 timestamp (defaults to now)
+      type: object
+      title: TurnFeedbackRequest
+      description: "User feedback on a specific turn.\n\nThis single endpoint handles all feedback operations:\n- Add feedback:\
+        \ Set reaction to \"ok\", \"not_ok\", or \"neutral\"\n- Clear feedback: Set reaction to null\n\nExamples:\n    {\"\
+        reaction\": \"ok\", \"text\": \"Great!\"}          # Add positive feedback\n    {\"reaction\": \"not_ok\", \"text\"\
+        : \"Incorrect\"}   # Add negative feedback\n    {\"reaction\": \"neutral\", \"text\": \"Note\"}       # Add neutral\
+        \ comment\n    {\"reaction\": null}                            # Clear feedback"
+    TurnFeedbackResponse:
+      properties:
+        success:
+          type: boolean
+          title: Success
+        turn_id:
+          type: string
+          title: Turn Id
+        reaction:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Reaction
+        message:
+          type: string
+          title: Message
+        cleared:
+          type: boolean
+          title: Cleared
+          description: True if feedback was cleared
+          default: false
+      type: object
+      required:
+      - success
+      - turn_id
+      - message
+      title: TurnFeedbackResponse
+      description: Response after applying or clearing feedback
+    UpdatePlanOverrideRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+          description: User ID
+        requests_per_day:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Requests Per Day
+          description: Requests/day (OVERRIDES base)
+        requests_per_month:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Requests Per Month
+          description: Requests/month (OVERRIDES base)
+        tokens_per_hour:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Hour
+          description: Tokens/hour (OVERRIDES base)
+        tokens_per_day:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Day
+          description: Tokens/day (OVERRIDES base)
+        tokens_per_month:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Tokens Per Month
+          description: Tokens/month (OVERRIDES base)
+        usd_per_hour:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Hour
+          description: USD/hour (converted to tokens, overrides tokens_per_hour)
+        usd_per_day:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Day
+          description: USD/day (converted to tokens, overrides tokens_per_day)
+        usd_per_month:
+          anyOf:
+          - type: number
+          - type: 'null'
+          title: Usd Per Month
+          description: USD/month (converted to tokens, overrides tokens_per_month)
+        max_concurrent:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Max Concurrent
+          description: Max concurrent (OVERRIDES base)
+        expires_in_days:
+          anyOf:
+          - type: integer
+          - type: 'null'
+          title: Expires In Days
+          description: Days until expiration (None = never)
+          default: 30
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Notes
+      type: object
+      required:
+      - user_id
+      title: UpdatePlanOverrideRequest
+      description: 'Update user''s plan override.
+
+
+        Like trial but more flexible - can set exact limits and expiry.
+
+        Supports PARTIAL UPDATES - only updates fields you provide!
+
+
+        **IMPORTANT:** This OVERRIDES the user''s base plan, does NOT add to it.'
+    UpsertSubscriptionPlanRequest:
+      properties:
+        plan_id:
+          type: string
+          title: Plan Id
+          description: Plan identifier
+        provider:
+          type: string
+          title: Provider
+          description: internal|stripe
+          default: internal
+        stripe_price_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Stripe Price Id
+          description: Stripe price id (required for stripe plans)
+        monthly_price_cents:
+          type: integer
+          minimum: 0.0
+          title: Monthly Price Cents
+          description: Monthly price in cents
+          default: 0
+        active:
+          type: boolean
+          title: Active
+          default: true
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+        metadata:
+          anyOf:
+          - additionalProperties: true
+            type: object
+          - type: 'null'
+          title: Metadata
+      type: object
+      required:
+      - plan_id
+      title: UpsertSubscriptionPlanRequest
+    UsersListResponse:
+      properties:
+        tenant:
+          type: string
+          title: Tenant
+        project:
+          type: string
+          title: Project
+        items:
+          items:
+            type: string
+          type: array
+          title: Items
+      type: object
+      required:
+      - tenant
+      - project
+      - items
+      title: UsersListResponse
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    WalletRefundRequest:
+      properties:
+        user_id:
+          type: string
+          title: User Id
+          description: User ID
+        payment_intent_id:
+          type: string
+          title: Payment Intent Id
+          description: Stripe payment_intent id
+        usd_amount:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0.0
+          - type: 'null'
+          title: Usd Amount
+          description: Refund amount in USD (default = full refundable)
+        notes:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Notes
+          description: Refund notes
+      type: object
+      required:
+      - user_id
+      - payment_intent_id
+      title: WalletRefundRequest
+      description: Refund lifetime credits by Stripe payment_intent_id (partial allowed).
+    kdcube_ai_app__apps__chat__ingress__control_plane__conversations_browser__ConversationFetchRequest:
+      properties:
+        turn_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Turn Ids
+          description: If present, fetch only these turns
+        materialize:
+          type: boolean
+          title: Materialize
+          description: Fetch payloads from store for UI-visible items
+          default: true
+        days:
+          type: integer
+          maximum: 3650.0
+          minimum: 1.0
+          title: Days
+          default: 365
+      type: object
+      title: ConversationFetchRequest
+    kdcube_ai_app__apps__chat__ingress__conversations__conversations__ConversationFetchRequest:
+      properties:
+        turn_ids:
+          anyOf:
+          - items:
+              type: string
+            type: array
+          - type: 'null'
+          title: Turn Ids
+          description: If present, fetch only these turns
+        materialize:
+          type: boolean
+          title: Materialize
+          description: Fetch payloads from store for UI-visible items
+          default: false
+        days:
+          type: integer
+          maximum: 3650.0
+          minimum: 1.0
+          title: Days
+          default: 365
+      type: object
+      title: ConversationFetchRequest
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Gateway bearer token, when the service route requires platform authentication.
+    IdTokenHeader:
+      type: apiKey
+      in: header
+      name: X-ID-Token
+      description: Platform id-token header. The configured runtime header name may differ.
+servers:
+- url: /
+  description: ingress service root
+x-kdcube-openapi-source:
+  component: ingress
+  source_module: kdcube_ai_app.apps.chat.ingress.web_app
+  generated_from_fastapi_app: true
+  notes:
+  - Import-time routers are mounted from ingress/web_app.py.
+  - SSE routes are mounted during lifespan in production and are explicitly mounted by this exporter for documentation.
+  - Socket.IO is an ASGI mount and is documented separately in ingress/socketio.asyncapi.yaml.

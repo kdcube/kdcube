@@ -12,7 +12,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-runtime-README.md
   - ks:docs/sdk/bundle/bundle-delivery-and-update-README.md
-  - ks:docs/service/comm/design/jobs-stream-README.md
+  - ks:docs/service/jobs/jobs-stream-README.md
 ---
 # Bundle Developer Guide
 
@@ -151,7 +151,7 @@ Background job rule:
 - define at most one `@on_job` method per bundle
 - make `@on_job` async
 - keep bundle-specific job semantics in the job `work_kind`, `metadata`, and `payload`
-- use [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md) for the platform queue contract
+- use [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md) for the platform queue contract
 
 Visibility rule:
 

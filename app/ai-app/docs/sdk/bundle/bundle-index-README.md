@@ -81,7 +81,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Knowledge space (`ks:`) | [bundle-knowledge-space-README.md](bundle-knowledge-space-README.md) |
 | Bundle storage and cache | [bundle-storage-and-cache-README.md](bundle-storage-and-cache-README.md) |
 | Scheduled jobs (`@cron`) and job handoff (`@on_job`) | [bundle-scheduled-jobs-README.md](bundle-scheduled-jobs-README.md) |
-| Background jobs stream design | [../../service/comm/design/jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md) |
+| Background jobs stream | [../../service/jobs/jobs-stream-README.md](../../service/jobs/jobs-stream-README.md) |
 | Cached subprocess virtualenv helpers (`@venv`) | [bundle-venv-README.md](bundle-venv-README.md) |
 | Outbound event filtering | [bundle-firewall-README.md](bundle-firewall-README.md) |
 | Python-to-Node backend bridge | [bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md) |

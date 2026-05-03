@@ -15,12 +15,20 @@ def _read_text(path: Path) -> str:
 
 
 def _collect_py_files(root: Path) -> List[Path]:
-    return [p for p in root.rglob("*.py") if p.is_file()]
+    return [
+        p
+        for p in root.rglob("*.py")
+        if p.is_file()
+        and p.name != "__init__.py"
+        and not p.name.startswith("test_")
+        and "tests" not in p.parts
+        and "__pycache__" not in p.parts
+    ]
 
 
 def _scan_event_types(text: str) -> Set[str]:
     out: Set[str] = set()
-    for m in re.finditer(r"\btype\s*[:=]\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
+    for m in re.finditer(r"(?<!\[)\btype\s*[:=]\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
         out.add(m.group(1))
     for m in re.finditer(r"\betype\s*=\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
         out.add(m.group(1))
@@ -29,7 +37,7 @@ def _scan_event_types(text: str) -> Set[str]:
 
 def _scan_markers(text: str) -> Set[str]:
     out: Set[str] = set()
-    for m in re.finditer(r"\bmarker\s*[:=]\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
+    for m in re.finditer(r"(?<!\[)\bmarker\s*[:=]\s*['\"]([a-zA-Z0-9_.-]+)['\"]", text):
         out.add(m.group(1))
     return out
 
@@ -78,7 +86,26 @@ def _build_catalog(root: Path) -> str:
 
     routes |= {"conv_status", "ready", "server_shutdown"}
 
-    event_types = {t for t in event_types if t and not t.startswith("http")}
+    event_prefixes = (
+        "accounting.",
+        "analytics.",
+        "assistant.",
+        "chat.",
+        "conv.",
+        "economics.",
+        "queue.",
+        "rate_limit.",
+        "react.",
+        "solver.",
+        "timeline.",
+        "turn.",
+        "user.",
+    )
+    event_types = {
+        t
+        for t in event_types
+        if t and not t.startswith("http") and t.startswith(event_prefixes)
+    }
 
     parts: List[str] = []
     parts.append("**Generated Event Catalog (static scan)**")
@@ -109,15 +136,15 @@ def _replace_section(doc: str, new_section: str) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=str, default=None, help="Path to app/ai-app root")
-    parser.add_argument("--doc", type=str, default=None, help="Path to bundle-sse-events-README.md")
+    parser.add_argument("--doc", type=str, default=None, help="Path to bundle-chat-stream-events-README.md")
     parser.add_argument("--write", action="store_true", help="Write back to doc")
     args = parser.parse_args()
 
     script_path = Path(__file__).resolve()
-    default_root = script_path.parents[3]
+    default_root = script_path.parents[4]
     root = Path(args.root).resolve() if args.root else default_root
 
-    doc_path = Path(args.doc).resolve() if args.doc else (root / "docs" / "sdk" / "bundle" / "bundle-sse-events-README.md")
+    doc_path = Path(args.doc).resolve() if args.doc else (root / "docs" / "sdk" / "bundle" / "bundle-chat-stream-events-README.md")
 
     section = _build_catalog(root)
 

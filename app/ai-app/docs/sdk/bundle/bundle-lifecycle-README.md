@@ -13,7 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-interfaces-README.md
   - ks:docs/sdk/bundle/bundle-venv-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
-  - ks:docs/service/comm/design/jobs-stream-README.md
+  - ks:docs/service/jobs/jobs-stream-README.md
 ---
 # Bundle Lifecycle
 
@@ -222,7 +222,7 @@ Lifecycle implications:
 
 See:
 
-- [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
+- [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
 
 ## What changes apply to new requests
 

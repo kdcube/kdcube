@@ -307,7 +307,7 @@ That is why:
   which identifies the connected peer, is carried with the HTTP request;
   otherwise they broadcast to the session room
 
-For actual event names, `chat.delta` shape, and predefined markers such as
+For actual event names, `chat.delta` shape, and built-in markers such as
 `answer`, `thinking`, `canvas`, `timeline_text`, and `subsystem`, read:
 
 - [bundle-chat-stream-events-README.md](bundle-chat-stream-events-README.md)

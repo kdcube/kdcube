@@ -409,6 +409,9 @@ Additional metadata is in `extra`:
 
 ### Delta markers
 
+`delta.marker` is an open string, not a closed enum. Platform clients know the
+markers below; custom markers are allowed but need explicit client support.
+
 | Marker          | Meaning                    | Typical usage                 |
 |-----------------|----------------------------|-------------------------------|
 | `answer`        | Assistant response stream  | main answer text              |
@@ -657,22 +660,25 @@ Event `type` values:
 - `chat.followups`
 - `chat.start`
 - `chat.step`
-- `checkbox`
 - `conv.range.summary`
 - `economics.user_underfunded_absorbed`
-- `inline`
+- `queue.continuation.accepted`
 - `rate_limit.ai_services_quota`
 - `rate_limit.attachment_failure`
 - `rate_limit.lane_switch`
 - `rate_limit.warning`
-- `react.tool.call`
-- `react.tool.result`
+- `react.decision.raw`
+- `react.workspace.publish`
 - `solver.react.decision`
+- `timeline.external.accepted`
+- `timeline.external.steer.cancel_requested`
+- `timeline.external.steer.interrupted`
 - `turn.feedback`
 - `turn.header`
 - `user.attachment`
 - `user.attachment.meta`
 - `user.attachment.text`
+- `user.followup`
 - `user.prompt`
 
 Delta markers:
@@ -681,7 +687,6 @@ Delta markers:
 - `subsystem`
 - `thinking`
 - `timeline_text`
-- `tool`
 
 Subsystem `sub_type` values:
 - `code_exec.contract`

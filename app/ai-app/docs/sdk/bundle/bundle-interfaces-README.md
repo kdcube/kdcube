@@ -13,7 +13,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-transports-README.md
   - ks:docs/sdk/bundle/bundle-client-communication-README.md
   - ks:docs/sdk/bundle/bundle-chat-stream-events-README.md
-  - ks:docs/service/comm/design/jobs-stream-README.md
+  - ks:docs/service/jobs/jobs-stream-README.md
 ---
 # Bundle Interfaces (Streaming + Widgets + Operations)
 
@@ -207,7 +207,7 @@ after it has been enqueued and claimed by the processor.
 
 See:
 
-- [jobs-stream-README.md](../../service/comm/design/jobs-stream-README.md)
+- [jobs-stream-README.md](../../service/jobs/jobs-stream-README.md)
 
 ---
 

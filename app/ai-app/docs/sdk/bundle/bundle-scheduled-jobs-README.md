@@ -8,7 +8,7 @@ see_also:
   - ks:docs/sdk/bundle/bundle-platform-integration-README.md
   - ks:docs/configuration/bundle-runtime-configuration-and-secrets-README.md
   - ks:docs/sdk/bundle/bundle-index-README.md
-  - ks:docs/service/comm/design/jobs-stream-README.md
+  - ks:docs/service/jobs/jobs-stream-README.md
 ---
 # Bundle Scheduled Jobs
 
