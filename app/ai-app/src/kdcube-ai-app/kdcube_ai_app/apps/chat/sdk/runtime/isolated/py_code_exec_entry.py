@@ -24,6 +24,7 @@ But our Python entrypoint already uses that as default, so you can skip it.
 # TOOL_ALIAS_MAP, TOOL_MODULE_FILES, BUNDLE_SPEC, RAW_TOOL_SPECS
 import asyncio
 import base64
+import gc
 import json
 import os
 import pathlib
@@ -88,6 +89,40 @@ def _append_errors_log(message: str) -> None:
                 f.write("\n")
     except Exception:
         pass
+
+
+def _run_async_main_with_preclose_gc(coro: Any) -> int:
+    """
+    Run the entrypoint coroutine while giving asyncio subprocess transports a
+    chance to close before the loop is closed.
+
+    Python 3.12 can otherwise print noisy "Exception ignored in
+    BaseSubprocessTransport.__del__: RuntimeError: Event loop is closed" during
+    interpreter shutdown when libraries such as Playwright leave transport
+    cycles for GC. Those messages land in infra logs even when execution
+    succeeded.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(coro)
+        return int(result or 0)
+    finally:
+        try:
+            pending = [task for task in asyncio.all_tasks(loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            shutdown_default_executor = getattr(loop, "shutdown_default_executor", None)
+            if callable(shutdown_default_executor):
+                loop.run_until_complete(shutdown_default_executor())
+            gc.collect()
+            loop.run_until_complete(asyncio.sleep(0))
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
 
 def _load_runtime_globals() -> Dict[str, Any]:
     raw = os.environ.get("RUNTIME_GLOBALS_JSON") or "{}"
@@ -962,7 +997,7 @@ def main() -> None:
         apply_exec_file_size_limit(env=os.environ, logger=bootstrap_logger)
         # Single, global logging setup for this process
         logging_config.configure_logging()
-        rc = asyncio.run(_async_main())
+        rc = _run_async_main_with_preclose_gc(_async_main())
     except Exception as e:
         # last-resort log to stderr; Inventory logger may not be available
         print(f"[py_code_exec_entry] fatal error: {e}", file=sys.stderr)

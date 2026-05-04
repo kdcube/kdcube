@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import asyncio
 import json
 import os
 import types
@@ -20,6 +21,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.isolated.py_code_exec_entry import (
     _materialize_runtime_descriptor_payloads,
     _prepare_runtime_environment,
     _restore_bundle_if_present,
+    _run_async_main_with_preclose_gc,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.supervisor_entry import PrivilegedSupervisor
 from kdcube_ai_app.apps.chat.sdk.runtime.isolated.secure_client import ToolStub
@@ -67,6 +69,25 @@ def test_tool_stub_includes_socket_auth_token(monkeypatch):
     assert payload["auth_token"] == "secret-token"
     assert payload["tool_id"] == "web_tools.web_search"
     assert payload["params"] == {"q": "x"}
+
+
+def test_run_async_main_collects_loop_bound_cycles_before_loop_close():
+    closed: list[str] = []
+
+    class _LoopBoundCycle:
+        def __init__(self, loop):
+            self.loop = loop
+            self.cycle = self
+
+        def __del__(self):
+            self.loop.call_soon(closed.append, "closed")
+
+    async def _main():
+        _LoopBoundCycle(asyncio.get_running_loop())
+        return 7
+
+    assert _run_async_main_with_preclose_gc(_main()) == 7
+    assert closed == ["closed"]
 
 
 def test_hydrate_runtime_payload_from_secret_restores_env(monkeypatch):
