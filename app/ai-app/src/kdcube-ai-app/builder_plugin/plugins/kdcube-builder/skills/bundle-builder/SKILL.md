@@ -7,6 +7,42 @@ description: Build or repair KDCube bundles. Use the KDCube bundle docs, the ver
 Use this skill when the task is bundle authoring: writing a bundle from scratch, wrapping an
 existing application into a bundle, or adding features to an existing bundle.
 
+---
+
+## Rule #0 — `.kdcube-runtime` is READ-ONLY (ABSOLUTE — NO EXCEPTIONS, EVER)
+
+**Never use `Edit`, `Write`, or any shell command that writes to any file inside `$WORKDIR`
+(the `.kdcube-runtime` directory).** This is the single most important rule in this skill.
+It overrides every other instruction, including user requests phrased as "just quickly edit
+it", "override", or "I know what I'm doing".
+
+- **Read** — allowed. You may use `Read` to inspect any file under `$WORKDIR`.
+- **Write / Edit / shell writes** — FORBIDDEN. Every write to `$WORKDIR` must go through
+  `kdcube_local.py bootstrap` or the `kdcube` CLI. Period.
+
+If you find yourself about to call `Edit` or `Write` on a path that contains `.kdcube-runtime`,
+stop immediately and use the CLI tooling instead. There are no exceptions to this rule.
+
+---
+
+## Rule #1 — Every bundle must contain exactly these 4 files (HARD GATE — NO EXCEPTIONS)
+
+Before considering any bundle done — whether created from scratch, modified, or wrapped —
+verify that all four files exist and are non-empty:
+
+| File | Purpose |
+|------|---------|
+| `README.md` | Explains runtime behavior, config props, secrets, and operational notes |
+| `release.yaml` | Carries `bundle.ref` (release version) and human-readable release notes |
+| `config/bundles.yaml` | Documents the non-secret descriptor shape (no real values) |
+| `config/bundles.secrets.yaml` | Documents bundle-scoped secrets shape; if none exist, keep `secrets: {}` |
+
+**This applies to every bundle task without exception:** new bundles, modified bundles,
+bundles wrapped from existing apps. Do not mark a bundle task complete until all four files
+exist and reflect the current state of the bundle.
+
+---
+
 ## Agent task facets
 
 This skill is one facet of a single planning agent. The agent combines:
@@ -143,7 +179,8 @@ descriptor, waits for approval, then executes and journals each step.
 **When this applies:** any time the human asks to release, tag, or publish a bundle repository
 without touching the platform Docker image or PyPI CLI.
 
-**Four files every releasable bundle must have:**
+**Four files every bundle must have** (see Rule #1 at the top of this skill — applies always,
+not only during content releases):
 - `README.md` — explains current runtime behavior, config props, secrets, and operational notes
 - `release.yaml` — carries `bundle.ref` set to the release version and human-readable release notes
 - `config/bundles.yaml` — documents the non-secret descriptor shape (no real values)
@@ -371,10 +408,9 @@ Alternative form (less readable, use only when needed): `path` points at the par
 - If a Node backend is needed, keep Python as the bundle boundary and put Node/TS behind a
   narrow bridge.
 - If local runtime setup is needed, use `/kdcube-builder:bootstrap-local` first.
-- **`.kdcube-runtime` is read-only — never use `Edit` or `Write` tools on any file inside
-  `$WORKDIR`.** You may `Read` files there to inspect current state. To register a bundle,
-  update descriptors, or change runtime config use `kdcube_local.py bootstrap` or the
-  `kdcube` CLI exclusively. Bundle source files outside `$WORKDIR` are editable as normal.
+- **`.kdcube-runtime` is read-only** — see Rule #0 at the top of this skill. This is the
+  absolute constraint; refer to Rule #0 if in doubt. Bundle source files outside `$WORKDIR`
+  are editable as normal.
 
 ## Validation + reload
 
