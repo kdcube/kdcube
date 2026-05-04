@@ -130,6 +130,17 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
 - Fixed URL path for descriptor docs in builder_plugin skills: `docs/service/configuration/` → `docs/configuration/`
 - Removed `service-config-README.md` from descriptor doc list (no longer exists at that path)
 
+**2026-05-04** — Rule #0 + Rule #1 hard gates in `bundle-builder/SKILL.md`
+- **Rule #0** (new, top of file, above all other content): `.kdcube-runtime` is READ-ONLY —
+  absolute, no exceptions, overrides user instructions. Named `Edit`/`Write`/shell writes as
+  explicitly FORBIDDEN; only `Read` is allowed inside `$WORKDIR`. Every write must go through
+  `kdcube_local.py bootstrap` or the `kdcube` CLI.
+- **Rule #1** (new, directly below Rule #0): Every bundle — new, modified, or wrapped —
+  must contain exactly 4 files before the task is considered done: `README.md`, `release.yaml`,
+  `config/bundles.yaml`, `config/bundles.secrets.yaml`. Hard gate, no exceptions.
+- Removed duplicate `.kdcube-runtime` mention from "Authoring rules" section (now points to Rule #0).
+- Content Release section 4-file list updated to reference Rule #1 instead of re-defining the requirement.
+
 ---
 
 ## Cross-tool notes
