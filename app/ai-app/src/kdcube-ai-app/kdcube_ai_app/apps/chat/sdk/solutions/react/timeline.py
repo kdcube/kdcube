@@ -33,6 +33,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.plan import (
 from kdcube_ai_app.apps.chat.sdk.solutions.react.compaction_memory import (
     build_internal_note_compaction_result,
 )
+from kdcube_ai_app.infra.service_hub.multimodality import MODALITY_DOC_MIME, MODALITY_IMAGE_MIME
 
 TIMELINE_KIND = "conv.timeline.v1"
 SOURCES_POOL_KIND = "conv:sources_pool"
@@ -2610,6 +2611,45 @@ class Timeline:
                 return val
             return "\n".join(("  " + line) if line else "  " for line in val.splitlines())
 
+        def _append_base64_model_block(
+            emitted: List[Dict[str, Any]],
+            *,
+            base64_data: Any,
+            mime: Optional[str],
+            path: str,
+            source_style: bool = False,
+        ) -> None:
+            if not base64_data:
+                return
+            mime_norm = (mime or "").strip().lower()
+            if mime_norm in MODALITY_IMAGE_MIME:
+                if source_style:
+                    emitted.append({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": mime_norm, "data": base64_data},
+                    })
+                else:
+                    emitted.append({"type": "image", "data": base64_data, "media_type": mime_norm})
+                return
+            if mime_norm in MODALITY_DOC_MIME:
+                if source_style:
+                    emitted.append({
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": mime_norm, "data": base64_data},
+                    })
+                else:
+                    emitted.append({"type": "document", "data": base64_data, "media_type": mime_norm})
+                return
+
+            lines = [
+                "[BINARY FILE NOT ATTACHED DIRECTLY TO MODEL]",
+                f"media_type: {mime_norm or 'unknown'}",
+            ]
+            if path:
+                lines.append(f"path: {path}")
+            lines.append("reason: direct model attachments support images and PDFs only")
+            emitted.append({"type": "text", "text": "\n".join(lines)})
+
         def _extract_round_id(blk: Dict[str, Any]) -> Optional[str]:
             btype_local = (blk.get("type") or "")
             meta_local = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
@@ -2703,18 +2743,13 @@ class Timeline:
                     if current_round_id:
                         text = _indent_text_block(str(text))
                     emitted_raw.append({"type": "text", "text": str(text)})
-                if base64:
-                    is_image = mime.startswith("image/") if mime else False
-                    if is_image:
-                        emitted_raw.append({
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": mime, "data": base64},
-                        })
-                    else:
-                        emitted_raw.append({
-                            "type": "document",
-                            "source": {"type": "base64", "media_type": mime or "application/octet-stream", "data": base64},
-                        })
+                _append_base64_model_block(
+                    emitted_raw,
+                    base64_data=base64,
+                    mime=mime,
+                    path=path,
+                    source_style=True,
+                )
                 out.extend(emitted_raw)
                 continue
 
@@ -3132,12 +3167,7 @@ class Timeline:
                         extra_text = _indent_text_block(str(extra_text))
                     emitted.append({"type": "text", "text": str(extra_text)})
 
-            if base64:
-                is_image = mime.startswith("image/") if mime else False
-                if is_image:
-                    emitted.append({"type": "image", "data": base64, "media_type": mime or "image/png"})
-                else:
-                    emitted.append({"type": "document", "data": base64, "media_type": mime or "application/pdf"})
+            _append_base64_model_block(emitted, base64_data=base64, mime=mime, path=path)
 
             if not emitted:
                 continue

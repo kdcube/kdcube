@@ -4,6 +4,7 @@
 # chat/sdk/solutions/chatbot/base_workflow.py
 
 import asyncio
+import base64
 import os, time, datetime, json, re
 import pathlib
 import random
@@ -1389,6 +1390,83 @@ class BaseWorkflow():
     async def _ingest_user_attachments(self, *, attachments: list) -> list:
         return await ingest_user_attachments(attachments=attachments, store=self.store)
 
+    async def _materialize_current_turn_user_attachments(self, scratchpad: CTurnScratchpad) -> None:
+        items = getattr(scratchpad, "user_attachments", None) or []
+        if not items:
+            return
+        turn_id = (getattr(scratchpad, "turn_id", "") or getattr(self.runtime_ctx, "turn_id", "") or "").strip()
+        if not turn_id:
+            return
+        outdir_raw = (getattr(self.runtime_ctx, "outdir", "") or "").strip()
+        if not outdir_raw and self.ctx_browser:
+            try:
+                _workdir, outdir = self.ctx_browser._ensure_workspace()
+                outdir_raw = str(outdir)
+            except Exception:
+                outdir_raw = ""
+        if not outdir_raw:
+            return
+
+        attachments_dir = pathlib.Path(outdir_raw) / turn_id / "attachments"
+        attachments_dir.mkdir(parents=True, exist_ok=True)
+        used: Dict[str, int] = {}
+
+        def _safe_name(raw: str, fallback: str) -> str:
+            name = pathlib.PurePath(str(raw or "").strip()).name
+            if not name or name in {".", ".."}:
+                name = fallback
+            count = used.get(name, 0) + 1
+            used[name] = count
+            if count <= 1:
+                return name
+            stem = pathlib.PurePath(name).stem or "attachment"
+            suffix = pathlib.PurePath(name).suffix
+            return f"{stem}_{count}{suffix}"
+
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+            filename = _safe_name(item.get("filename") or item.get("name"), f"attachment_{idx + 1}.bin")
+            data: Optional[bytes] = None
+            b64 = item.get("base64")
+            if isinstance(b64, str) and b64:
+                try:
+                    data = base64.b64decode(b64, validate=False)
+                except Exception as exc:
+                    item["local_materialize_error"] = f"base64_decode_failed: {exc}"
+            if data is None and self.store:
+                src = (
+                    item.get("hosted_uri")
+                    or item.get("source_path")
+                    or item.get("key")
+                    or item.get("rn")
+                    or ""
+                )
+                if src:
+                    try:
+                        data = await self.store.get_blob_bytes(src)
+                    except Exception as exc:
+                        item["local_materialize_error"] = f"read_failed: {exc}"
+            if data is None:
+                item.setdefault("local_materialized", False)
+                item.setdefault("local_materialize_reason", "no_bytes")
+                continue
+            target = attachments_dir / filename
+            try:
+                target.write_bytes(data)
+            except Exception as exc:
+                item["local_materialized"] = False
+                item["local_materialize_error"] = f"write_failed: {exc}"
+                continue
+            rel_path = f"{turn_id}/attachments/{filename}"
+            item["filename"] = filename
+            item["physical_path"] = rel_path
+            item["local_path"] = rel_path
+            item["local_materialized"] = True
+            item["file_exists"] = True
+            item["size"] = item.get("size") or len(data)
+            item["size_bytes"] = item.get("size_bytes") or len(data)
+
     def _attachments_summary_text(self, scratchpad: CTurnScratchpad) -> str:
         items = getattr(scratchpad, "user_attachments", None) or []
         lines: List[str] = []
@@ -1537,6 +1615,7 @@ class BaseWorkflow():
         self.logger.log_step("recv_user_message", {"len": len(scratchpad.user_text)})
 
         # Contribute user prompt + attachments to current turn log
+        await self._materialize_current_turn_user_attachments(scratchpad)
         try:
             build_user_input_blocks = _react_symbol("layout", "build_user_input_blocks")
             _continuation = self.comm_context.continuation if hasattr(self.comm_context, "continuation") else None
