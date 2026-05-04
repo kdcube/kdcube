@@ -67,6 +67,9 @@ Recommended:
 - use [how-to-navigate-kdcube-docs-README.md](how-to-navigate-kdcube-docs-README.md) as the first router
 - make [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) the preflight before code or test changes
 - keep the rest of the Tier 1 pack visible as the required baseline
+- keep [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
+  reachable for source-folder widget work, especially the `OUTDIR` /
+  `<VI_BUILD_DEST_ABSOLUTE_PATH>` build command contract
 - branch to deeper docs only after Tier 1
 - expose the release procedure as optional and user-approved, not automatic
 
@@ -117,5 +120,6 @@ The plugin handoff is clean when:
 - the 5 Tier 1 docs are exposed as one pack
 - the optional release lifecycle doc is available for user-approved releases
 - the working environment preflight is visible before any test command
+- the source-folder widget build contract is discoverable from Tier 1 routing
 - the plugin can route to the best first page without hiding the rest of Tier 1
 - old hardcoded doc links are updated to current paths

@@ -439,6 +439,9 @@ def test_base_entrypoint_npm_install_args_for_ui_build():
     assert entrypoint_mod.BaseEntrypoint._npm_install_args_for_ui_build(
         "npm install && npm run build --outDir /tmp/.ui.build.tmp.123"
     ) == ["npm", "install"]
+    assert entrypoint_mod.BaseEntrypoint._npm_install_args_for_ui_build(
+        "npm install && VITE_APP_OUT_DIR=/tmp/.ui.build.tmp.123 npm run build"
+    ) == ["npm", "install"]
     assert entrypoint_mod.BaseEntrypoint._npm_install_args_for_ui_build("npm run build") is None
 
 

@@ -49,6 +49,67 @@ ui:
       build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
 ```
 
+Build command contract:
+
+- `<VI_BUILD_DEST_ABSOLUTE_PATH>` is the loader-provided temporary output
+  directory
+- the platform injects it through `OUTDIR`,
+  `VI_BUILD_DEST_ABSOLUTE_PATH`, and `VITE_BUILD_DEST_ABSOLUTE_PATH`
+- the widget build system must treat it as an output directory, not as a Vite
+  positional build argument
+- for Vite, configure `build.outDir` from `process.env.OUTDIR`
+- use relative assets, for example `base: './'`
+
+Minimal Vite config:
+
+```ts
+export default defineConfig({
+  base: './',
+  build: {
+    outDir: process.env.OUTDIR || 'dist',
+    emptyOutDir: true,
+  },
+})
+```
+
+Do not put the destination path after `vite build`.
+
+Wrong:
+
+```json
+{
+  "scripts": {
+    "build": "vite build <VI_BUILD_DEST_ABSOLUTE_PATH>"
+  }
+}
+```
+
+Correct:
+
+```json
+{
+  "scripts": {
+    "build": "vite build"
+  }
+}
+```
+
+If the loader log or npm output shows:
+
+```text
+vite build /.../.ui.build.tmp...
+```
+
+then the output path leaked into the command as a positional argument. Vite will
+treat it as the project root/entry and may fail with:
+
+```text
+[UNRESOLVED_ENTRY] Cannot resolve entry module .../.ui.build.tmp.../index.html
+```
+
+Fix the widget build contract; do not manually copy built files into bundle
+storage.
+
 The bundle loader builds that source folder into shared bundle storage under:
 
 ```text
@@ -115,6 +176,25 @@ trust caller-supplied `user_id` or `fingerprint` in Telegram mode.
 Use `npm ci` in `build_command` when the widget source commits a lockfile. For
 early prototype widgets without a lockfile, `npm install --no-package-lock`
 avoids mutating the source folder during loader builds.
+
+For multiple buildable widgets, repeat the same contract per alias:
+
+```yaml
+ui:
+  web_app_widgets:
+    first_widget:
+      enabled: true
+      src_folder: widgets/first_widget
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+    second_widget:
+      enabled: true
+      src_folder: widgets/second_widget
+      build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+Each widget source folder needs its own `package.json` and build config that
+honors `OUTDIR`. One working widget does not prove the second widget's Vite
+config is correct.
 
 The decorated `@ui_widget(...)` method remains the widget discovery/manifest
 surface. Product behavior and data mutations should live behind separate

@@ -459,6 +459,7 @@ class ChatCommunicator:
     room: Optional[str] = None               # default fan-out room (session_id)
     target_sid: Optional[str] = None         # optional exact socket target
     event_filter: Optional[IEventFilter] = None
+    activity_listeners: Set[Callable[[dict], Awaitable[None]]] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self):
         # default room = session_id
@@ -466,6 +467,34 @@ class ChatCommunicator:
         self.target_sid = self.target_sid or self.conversation.get("socket_id")
         self._delta_cache: dict[Tuple[str, str, str, str, str, str, str], _DeltaAggregate] = {}
         # self.event_filter: IEventFilter = self.event_filter or DefaultEventFilter()
+
+    def add_activity_listener(self, cb: Callable[[dict], Awaitable[None]]) -> None:
+        """Subscribe to this communicator's already-enveloped activity stream."""
+        if cb:
+            self.activity_listeners.add(cb)
+
+    def remove_activity_listener(self, cb: Callable[[dict], Awaitable[None]]) -> None:
+        try:
+            self.activity_listeners.discard(cb)
+        except Exception:
+            pass
+
+    async def _notify_activity_listeners(self, *, event: str, data: dict, broadcast: bool) -> None:
+        if not self.activity_listeners:
+            return
+        activity = {
+            "event": event,
+            "broadcast": bool(broadcast),
+            "data": data,
+            "type": (data or {}).get("type") if isinstance(data, dict) else None,
+            "conversation": (data or {}).get("conversation") if isinstance(data, dict) else None,
+            "ts": int(time.time() * 1000),
+        }
+        for cb in list(self.activity_listeners):
+            try:
+                await cb(activity)
+            except Exception:
+                logger.exception("Chat communicator activity listener failed")
 
     # ---------- low-level ----------
     def _build_filter_input(self, socket_event: str, data: dict | None, broadcast: bool) -> EventFilterInput:
@@ -508,6 +537,7 @@ class ChatCommunicator:
             tenant=self.tenant,
             project=self.project,
         )
+        await self._notify_activity_listeners(event=event, data=data, broadcast=broadcast)
 
     # ----- internal buffer helpers -----
     def _record_delta(self, *, text: str, index: int, agent: str, marker: str, format: str, artifact_name: str, title: Optional[str] = None, extra: Optional[dict] = None):

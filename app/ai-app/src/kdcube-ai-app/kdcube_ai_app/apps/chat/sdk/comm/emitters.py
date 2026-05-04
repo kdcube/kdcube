@@ -5,7 +5,7 @@
 
 # Facade first
 from __future__ import annotations
-from typing import Optional, Dict, Any,  Literal
+from typing import Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
@@ -23,7 +23,7 @@ class StartPayload(BaseModel):
 class DeltaPayload(BaseModel):
     text: str
     index: int
-    marker: Literal["thinking", "answer"] = "answer"
+    marker: str = "answer"
     completed: bool = False
     agent: Optional[str] = None
 

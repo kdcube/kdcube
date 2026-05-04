@@ -208,6 +208,74 @@ class TestEventOrdering:
         assert "chat.complete" not in types
 
 
+class TestActivityListeners:
+    """Verify that in-process subscribers can observe communicator activity."""
+
+    @pytest.mark.anyio
+    async def test_activity_listener_receives_enveloped_delta(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        observed = []
+
+        async def _listener(activity):
+            observed.append(activity)
+
+        comm.add_activity_listener(_listener)
+
+        await comm.delta(
+            text="working",
+            index=3,
+            marker="timeline_text",
+            agent="react.decision",
+            format="markdown",
+            artifact_name="react.notes",
+        )
+
+        assert len(observed) == 1
+        activity = observed[0]
+        assert activity["event"] == "chat_delta"
+        assert activity["type"] == "chat.delta"
+        assert activity["data"]["delta"]["text"] == "working"
+        assert activity["data"]["delta"]["marker"] == "timeline_text"
+        assert activity["data"]["extra"]["artifact_name"] == "react.notes"
+
+    @pytest.mark.anyio
+    async def test_activity_listener_can_be_removed(self):
+        relay = _RecordingRelay()
+        comm = _make_comm(relay)
+        observed = []
+
+        async def _listener(activity):
+            observed.append(activity)
+
+        comm.add_activity_listener(_listener)
+        comm.remove_activity_listener(_listener)
+
+        await comm.start(message="hello")
+
+        assert observed == []
+
+    @pytest.mark.anyio
+    async def test_activity_listener_does_not_see_filtered_events(self):
+        class _DenyAllFilter:
+            def allow_event(self, **kwargs):
+                return False
+
+        relay = _RecordingRelay()
+        comm = _make_comm(relay, event_filter=_DenyAllFilter())
+        observed = []
+
+        async def _listener(activity):
+            observed.append(activity)
+
+        comm.add_activity_listener(_listener)
+
+        await comm.step(step="hidden", status="running")
+
+        assert relay.events == []
+        assert observed == []
+
+
 # ---------------------------------------------------------------------------
 # Tests: event filter (bundle fixture)
 # ---------------------------------------------------------------------------

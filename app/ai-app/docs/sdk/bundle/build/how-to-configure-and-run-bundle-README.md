@@ -451,6 +451,18 @@ The processor/bundle-loader infra builds the source folder into shared bundle
 storage and serves widget subpaths from the built app. Do not configure widgets
 by pointing the platform directly at a built file.
 
+For React/Vite widgets, use the build command contract from
+[bundle-widget-integration-README.md#source-folder-widget-apps](../bundle-widget-integration-README.md#source-folder-widget-apps):
+
+```yaml
+build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+The widget Vite config must write to `process.env.OUTDIR`; do not pass the
+temporary output directory as a positional `vite build` argument. If runtime logs
+show `vite build /.../.ui.build.tmp...`, the widget build contract is wrong or
+an older platform runner is active.
+
 This is per widget alias. Configuring
 `ui.web_app_widgets.task_memo_webapp.src_folder/build_command` only changes the
 `task_memo_webapp` route. Inherited legacy widgets such as `ai_bundles` keep

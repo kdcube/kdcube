@@ -362,6 +362,8 @@ class BaseEntrypoint:
             build_args = shlex.split(build_part)
         except ValueError:
             return None
+        while build_args and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", build_args[0]):
+            build_args.pop(0)
         if len(install_args) < 2 or install_args[:2] != ["npm", "install"]:
             return None
         if len(build_args) < 3 or build_args[:3] != ["npm", "run", "build"]:
@@ -452,6 +454,7 @@ class BaseEntrypoint:
                 env["OUTDIR"] = str(tmp_dest)
                 env["VI_BUILD_DEST_ABSOLUTE_PATH"] = str(tmp_dest)
                 env["VITE_BUILD_DEST_ABSOLUTE_PATH"] = str(tmp_dest)
+                env["VITE_APP_OUT_DIR"] = str(tmp_dest)
                 for env_key in list(env.keys()):
                     if env_key.startswith("npm_"):
                         env.pop(env_key, None)

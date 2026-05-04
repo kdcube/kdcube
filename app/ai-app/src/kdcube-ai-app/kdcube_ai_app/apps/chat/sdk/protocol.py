@@ -50,7 +50,7 @@ class EventCtx(_ProtoBase):
 
 class DeltaPart(_ProtoBase):
     text: str
-    marker: Literal["thinking", "answer", "other"] = "answer"
+    marker: str = "answer"
     index: int = 0
 
 

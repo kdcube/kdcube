@@ -794,6 +794,48 @@ If you see:
 
 the widget is not integrated correctly.
 
+### 5.2B Source-folder widget build contract
+
+For React/Vite widgets declared under `ui.web_app_widgets.<alias>`, test the
+loader build contract as well as the browser behavior.
+
+Descriptor shape:
+
+```yaml
+build_command: npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build
+```
+
+Widget source requirements:
+
+- `package.json` script should be `vite build` or equivalent, without the
+  loader output path as a positional argument
+- Vite should use `build.outDir: process.env.OUTDIR || 'dist'`
+- Vite should use relative assets such as `base: './'`
+
+Local source check:
+
+```bash
+cd /abs/path/to/bundle/widgets/<widget_alias>
+OUTDIR=/tmp/kdcube-widget-build npm run build
+test -f /tmp/kdcube-widget-build/index.html
+```
+
+Runtime log check:
+
+- expected: `build command: npm install ...`
+- expected: `build command: tsc -b && vite build` or `build command: vite build`
+- bad: `vite build /.../.ui.build.tmp...`
+
+If you see:
+
+```text
+[UNRESOLVED_ENTRY] Cannot resolve entry module .../.ui.build.tmp.../index.html
+```
+
+then the output directory leaked into Vite as a project/root argument. Fix the
+widget `package.json`/Vite `outDir` contract or update to a platform build
+runner that treats `<VI_BUILD_DEST_ABSOLUTE_PATH>` as an environment value.
+
 ### 5.2A Custom main-view UI contract
 
 For bundles with `ui.main_view` / `ui-src`, test the iframe app as a runtime

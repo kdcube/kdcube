@@ -619,9 +619,15 @@ If the bundle ships a React widget/web app:
 
 - put the widget app source under a stable widget folder such as `widgets/<widget-alias>`
 - declare `ui.web_app_widgets.<alias>.src_folder` and `build_command`
+- use the standard build command shape:
+  `npm install --no-package-lock && OUTDIR=<VI_BUILD_DEST_ABSOLUTE_PATH> npm run build`
+- make Vite write to `process.env.OUTDIR`; do not pass the output directory as
+  `vite build <path>`
 - keep the decorated `@ui_widget(alias="<alias>")` method as the manifest/entrypoint surface only
 - expose structured data/mutation APIs separately through `@api(route="operations")`
 - let the loader build the widget into bundle storage; do not render a TSX source file from Python for new widgets
+- for the full source-folder widget contract, use
+  [bundle-widget-integration-README.md](../bundle-widget-integration-README.md)
 
 ## 4. Copy The Right Reference Pattern
 

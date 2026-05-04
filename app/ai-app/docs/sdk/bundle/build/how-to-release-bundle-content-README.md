@@ -144,6 +144,12 @@ If the bundle is or may be git-managed, run the import-shape checks from
 If runtime behavior changed, also run the relevant manual/API/widget checks
 from the test guide.
 
+If a release changes a buildable widget source folder or widget build
+configuration, also validate the widget build contract from
+[how-to-test-bundle-README.md#52b-source-folder-widget-build-contract](how-to-test-bundle-README.md#52b-source-folder-widget-build-contract).
+At minimum, run the widget build with an explicit temporary `OUTDIR` and confirm
+`index.html` is written there.
+
 If user identity or external auth changed, validate both:
 
 - the KDCube-authenticated path
