@@ -1,84 +1,85 @@
 platform:
   repo: "kdcube-ai-app"
-  ref: "2026.4.30.317"
+  ref: "2026.5.4.1846"
   description: |
-    This release focuses on isolated code execution hardening, execution artifact
-    safety, runtime diagnostics, CLI descriptor-scoped local testing, and follow-up
-    refinements for agent runtime customization.
+    This release focuses on Telegram and React turn delivery reliability,
+    communicator-backed progress streaming, buildable bundle widgets, bundle MCP
+    lifecycle fixes, safer user-attachment handling, reusable bundle tool
+    primitives, scheduler/backend determinism, async secrets support, and updated
+    SDK/bundle documentation.
 
     Highlights
 
-    - Hardened the isolated Python execution runtime with a filesystem sandbox for
-      generated code, a sanitized environment, restricted filesystem view, no direct
-      network namespace for executor code, and explicit runtime/tool boundary
-      handling.
-    - Added per-execution supervisor socket authentication and clearer separation
-      between the privileged supervisor process and the generated-code executor.
-    - Improved execution error propagation so runtime, sandbox, Docker, and program
-      failures are visible in service logs and in the exec tool result returned to
-      the agent.
-    - Added generated file and workspace output limits with clearer handling of
-      oversized outputs, missing contracted outputs, and partial execution artifacts.
-    - Fixed generated file download handling in the frontend and tightened generated
-      artifact validation on the backend.
-    - Improved React git workspace persistence by avoiding empty workspace commits
-      and handling safe-directory ownership issues.
-    - Strengthened agent admin customization wording and logging so deployment-level
-      runtime instructions are injected and diagnosable without exposing the full
-      instruction block to end users.
-    - Extended the CLI so descriptor-based local deployments resolve tenant/project
-      scoped runtime directories consistently.
-    - Added local dirty-source testing for the CLI through `init --path`, which
-      copies tracked and non-ignored local platform files into the scoped runtime
-      repository before building.
-    - Improved local descriptor storage handling so host-friendly `file://` or
-      absolute storage paths are mapped to container-visible storage mounts.
+    - Added communicator activity streaming support so bundle transports can
+      subscribe to typed React/tool progress events and surface long-running work
+      before the final assistant answer is available.
+    - Improved React timeline handling for user attachments and generated
+      artifacts, including hosted/base64 attachment hydration and non-PDF binary
+      files that should be materialized instead of sent directly to model
+      document inputs.
+    - Fixed non-PDF attachment handling so PDFs still use document blocks while
+      other supported files are represented safely and can be inspected through
+      hosted/materialized paths.
+    - Added buildable source-folder bundle widget support, widget subpath serving,
+      and rebuild fixes for multiple widgets and stale/cached widget build
+      inputs.
+    - Fixed bundle MCP lifecycle handling and turn payload state propagation so
+      FastMCP-backed bundle endpoints and recovered turn logs work reliably.
+    - Added reusable bundle tool context primitives and documentation so bundles
+      can share consistent scope binding, result envelopes, and structured tool
+      diagnostics.
+    - Added bundle background job stream support and improved external event
+      owner/turn handling for scheduled or background task flows.
+    - Applied bundle props to REST operations and fixed bundle tool integration
+      rebinding so runtime configuration changes are respected consistently.
+    - Added async secrets runtime support for deployment/runtime paths that need
+      non-blocking secret resolution.
+    - Improved scheduler/backend tests and determinism for processor runtime
+      behavior.
+    - Cleaned up isolated exec subprocess event-loop shutdown so successful code
+      execution does not leave noisy "event loop is closed" warnings.
+    - Expanded SDK, bundle builder, chat interface, path topology, and streaming
+      documentation around the current React/bundle runtime contracts.
 
     Runtime work in this release line:
 
-    - The generated-code executor now runs with a minimal environment and only the
-      runtime paths required for Python, installed packages, fonts, rendering, and
-      declared work/output directories.
-    - Supervisor tool calls remain available through the controlled supervisor
-      boundary, so web/search/rendering/tool workflows continue to work while direct
-      filesystem and environment disclosure is reduced.
-    - Runtime diagnostics now preserve useful stderr/stdout tails, infra log excerpts,
-      program log tails, missing output reports, and execution IDs for production
-      debugging.
-    - Docker-based local and EC2-backed execution paths now pass the required sandbox
-      capabilities to the `py-code-exec` container while keeping generated code inside
-      the inner filesystem sandbox.
-    - CLI `init`, `start`, `stop`, `build`, and info flows are more consistent with
-      descriptor-scoped runtime directories and install metadata.
+    - Telegram-facing bundle flows can now use communicator activity, hosted
+      attachments, recovered turn logs, and generated artifact metadata without
+      depending on local turn workspaces that are cleaned after the turn.
+    - Buildable widget loading now treats each widget as its own source/build
+      contract and avoids stale command/source state when multiple widgets are
+      configured in the same bundle.
+    - Bundle MCP dispatch now initializes the ASGI/FastMCP lifecycle correctly
+      and supports stateless bundle MCP servers.
+    - React user inputs are safer across modalities: PDFs remain first-class
+      model document inputs, images stay image inputs, and other binary files
+      become hosted/materialized artifacts that code/tools can inspect.
 
     Validation and regression coverage:
 
-    - Added bubblewrap argument and sandbox construction tests.
-    - Added runtime shutdown, Docker launcher, Fargate payload, supervisor auth, and
-      secure tool stub tests.
-    - Added exec tool tests for output validation, runtime failure reporting, and
-      artifact handling.
-    - Added React workspace tests for non-empty workspace publishing and safe-directory
-      handling.
-    - Added CLI descriptor tests for scoped runtime resolution, install metadata,
-      local dirty-source copy, and local storage path mapping.
-    - Focused runtime/exec/chatbot tests passed.
-    - React workspace tests passed with importlib pytest mode.
-    - CLI descriptor tests passed with the CLI source path on `PYTHONPATH`.
+    - Added and updated tests for hosted/base64 user attachments, non-PDF
+      timeline attachment handling, widget source-folder builds, bundle MCP
+      lifecycle behavior, bundle tool context/rebinding, background job streams,
+      scheduler/backend determinism, and isolated exec cleanup.
+    - Added documentation and contract checks for bundle widget integration,
+      bundle release workflow, chat interfaces, and turn path prefix guidance.
+    - Focused platform tests were run during the individual fixes in this release
+      line.
 
     Changelog
 
-    - Added filesystem sandbox construction for isolated generated-code execution.
-    - Added sanitized executor environment and explicit runtime dependency mounts.
-    - Added supervisor socket auth for tool calls from generated code.
-    - Improved Docker execution diagnostics and final exec tool reports.
-    - Enforced generated file and workspace output limits through runtime config.
-    - Fixed generated artifact download behavior and output packaging checks.
-    - Improved React workspace git publication safety.
-    - Improved deployment-level agent admin customization handling.
-    - Added descriptor-scoped CLI runtime resolution and local dirty-source build
-      support.
-    - Updated CLI and execution runtime documentation for the new local and sandbox
-      behavior.
+    - Added communicator-backed activity streaming hooks for bundle transports.
+    - Added hosted/base64 user attachment hydration and safer non-PDF handling.
+    - Added source-folder buildable bundle widgets and widget subpath support.
+    - Fixed multiple-widget rebuild behavior and stale widget build inputs.
+    - Fixed bundle MCP lifecycle and stateless bundle MCP compatibility.
+    - Added reusable bundle tool context and related SDK documentation.
+    - Added bundle background job stream support.
+    - Applied bundle props consistently to REST operations.
+    - Fixed bundle tool integration rebinding.
+    - Added async secrets runtime support.
+    - Made processor scheduler/backend tests deterministic.
+    - Cleaned up isolated exec subprocess shutdown.
+    - Updated SDK/bundle/chat documentation for current runtime contracts.
 config:
-    version: "2026.4.30.317"
+    version: "2026.5.4.1846"
