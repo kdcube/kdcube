@@ -131,6 +131,47 @@ def test_timeline_rendering_with_attachment_and_tool_blocks():
     assert doc_blocks, "Expected a document block for the PDF attachment"
 
 
+def test_timeline_does_not_emit_non_pdf_binary_attachment_as_model_document():
+    ctx = RuntimeCtx(turn_id="turn_123", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id=ctx.turn_id, ts=ctx.started_at, text="[TURN turn_123]"),
+        tl._block(
+            type="user.attachment.meta",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            path="fi:turn_123.user.attachments/template.xlsx",
+            text="[USER ATTACHMENT] template.xlsx | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            meta={
+                "filename": "template.xlsx",
+                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "physical_path": "turn_123/attachments/template.xlsx",
+            },
+        ),
+        tl._block(
+            type="user.attachment",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            path="fi:turn_123.user.attachments/template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            base64="WFNTREFUQQ==",
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    assert not any(
+        b.get("type") == "document"
+        and b.get("media_type") != "application/pdf"
+        for b in rendered
+    )
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+    assert "template.xlsx" in text
+    assert "BINARY FILE NOT ATTACHED DIRECTLY TO MODEL" in text
+
+
 def test_timeline_renders_plan_calls_but_hides_internal_plan_snapshots():
     ctx = RuntimeCtx(turn_id="turn_plan", started_at="2026-02-09T00:00:00Z")
     tl = Timeline(runtime=ctx)

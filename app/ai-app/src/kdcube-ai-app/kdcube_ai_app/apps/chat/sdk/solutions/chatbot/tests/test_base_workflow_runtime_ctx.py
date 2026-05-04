@@ -1,3 +1,4 @@
+import base64
 import json
 import time
 from types import SimpleNamespace
@@ -75,6 +76,34 @@ def test_cleanup_turn_workspace_keeps_nonempty_ctx_root(tmp_path):
     assert not workdir.exists()
     assert not outdir.exists()
     assert not (parent / ".react_workspace_git").exists()
+
+
+@pytest.mark.asyncio
+async def test_materialize_current_turn_user_attachments_writes_non_modal_binary(tmp_path):
+    wf = BaseWorkflow.__new__(BaseWorkflow)
+    wf.runtime_ctx = SimpleNamespace(outdir=str(tmp_path), turn_id="turn_abc")
+    wf.ctx_browser = None
+    wf.store = None
+    payload = base64.b64encode(b"XLSXDATA").decode("ascii")
+    scratchpad = SimpleNamespace(
+        turn_id="turn_abc",
+        user_attachments=[
+            {
+                "filename": "template.xlsx",
+                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "base64": payload,
+            }
+        ],
+    )
+
+    await wf._materialize_current_turn_user_attachments(scratchpad)
+
+    target = tmp_path / "turn_abc" / "attachments" / "template.xlsx"
+    assert target.read_bytes() == b"XLSXDATA"
+    item = scratchpad.user_attachments[0]
+    assert item["physical_path"] == "turn_abc/attachments/template.xlsx"
+    assert item["local_materialized"] is True
+    assert item["file_exists"] is True
 
 
 def test_react_agent_version_selector_defaults_and_normalizes(monkeypatch):
