@@ -34,6 +34,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.types import (
     ClaudeCodeBinding,
     ClaudeCodeRunResult,
     ClaudeCodeTurnKind,
+    ClaudeCodeWorkspaceConfig,
 )
 
 
@@ -152,6 +153,7 @@ class ClaudeCodeAgent:
         structured_output_prefixes: Sequence[str] = (),
         on_structured_output=None,
         on_text_chunk=None,
+        workspace_config: ClaudeCodeWorkspaceConfig | None = None,
     ) -> "ClaudeCodeAgent":
         request_context = get_current_request_context()
         if request_context is None:
@@ -175,6 +177,7 @@ class ClaudeCodeAgent:
                 structured_output_prefixes=structured_output_prefixes,
                 on_structured_output=on_structured_output,
                 on_text_chunk=on_text_chunk,
+                workspace_config=workspace_config,
             ),
             binding=_binding_from_request_context(request_context, agent_name=agent_name),
             comm=get_current_comm(),

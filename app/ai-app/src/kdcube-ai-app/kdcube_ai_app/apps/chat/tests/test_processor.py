@@ -24,6 +24,7 @@ from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import (
     snapshot_ctxvars as snapshot_comm_ctxvars,
 )
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
+from kdcube_ai_app.infra.jobs.stream import BackgroundJob, BackgroundJobClaim
 
 
 class _FakePool:
@@ -360,6 +361,48 @@ def test_processor_defaults_to_legacy_lists_scheduler_backend():
 def test_processor_accepts_legacy_scheduler_alias_via_constructor_override():
     processor = _build_processor(_MinimalRedis(), scheduler_backend="legacy")
     assert processor.scheduler_backend_name == SCHEDULER_BACKEND_LEGACY_LISTS
+
+
+def test_background_job_chat_task_carries_accounting_context(_patch_processor_dependencies):
+    processor = _build_processor(_MinimalRedis())
+    claim = BackgroundJobClaim(
+        stream_key="jobs:registered",
+        stream_id="1-0",
+        consumer_name="proc-test",
+        fields={},
+        job=BackgroundJob(
+            job_id="job_exec_1",
+            work_kind="task.execution.due",
+            tenant="demo-tenant",
+            project="demo-project",
+            queue="registered",
+            bundle_id="task-and-memo-app@1-0",
+            user_id="user-123",
+            user_type="registered",
+            metadata={
+                "conversation_id": "task_job_abc",
+                "turn_id": "turn_exec_1",
+                "request_id": "req-job-1",
+                "timezone": "Europe/Berlin",
+            },
+            payload={"task_id": "task-1", "execution_id": "exec-1"},
+        ),
+    )
+
+    task_data = processor._background_job_to_chat_task(claim)
+    envelope = task_data["accounting"]["envelope"]
+
+    assert task_data["actor"]["tenant_id"] == "demo-tenant"
+    assert task_data["actor"]["project_id"] == "demo-project"
+    assert task_data["routing"]["bundle_id"] == "task-and-memo-app@1-0"
+    assert task_data["user"]["user_id"] == "user-123"
+    assert envelope["tenant_id"] == "demo-tenant"
+    assert envelope["project_id"] == "demo-project"
+    assert envelope["user_id"] == "user-123"
+    assert envelope["component"] == "task-and-memo-app@1-0"
+    assert envelope["app_bundle_id"] == "task-and-memo-app@1-0"
+    assert envelope["metadata"]["conversation_id"] == "task_job_abc"
+    assert envelope["metadata"]["turn_id"] == "turn_exec_1"
 
 
 @pytest.mark.asyncio

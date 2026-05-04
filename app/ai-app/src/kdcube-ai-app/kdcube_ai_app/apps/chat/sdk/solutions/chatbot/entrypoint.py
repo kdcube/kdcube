@@ -1050,26 +1050,63 @@ class BaseEntrypoint:
         user_type = state.get("user_type") or "anonymous"
         thread_id = state.get("conversation_id") or state.get("session_id") or "default"
         turn_id = state.get("turn_id")
-
-        await self.refresh_bundle_props(state=state)
-        await self.pre_run_hook(state=state)
-
-        result = await self.execute_core(state=state, thread_id=thread_id, params=params)
-        result = result or {}
-
-        usage_from = datetime.utcnow().date().isoformat()
-        await self.run_accounting(
-            tenant=tenant,
-            project=project,
-            user_id=user_id,
-            user_type=user_type,
-            thread_id=thread_id,
-            turn_id=turn_id,
-            usage_from=usage_from,
+        bundle_id = str(getattr(getattr(self.config, "ai_bundle_spec", None), "id", "") or getattr(self, "BUNDLE_ID", "") or "")
+        request_id = (
+            state.get("request_id")
+            or getattr(getattr(getattr(self, "comm_context", None), "request", None), "request_id", None)
+            or _mid("req")
         )
+        timezone = (
+            state.get("timezone")
+            or getattr(getattr(getattr(self, "comm_context", None), "user", None), "timezone", None)
+        )
+        tenant = tenant or getattr(self.config, "tenant", None) or self.settings.TENANT
+        project = project or getattr(self.config, "project", None) or self.settings.PROJECT
 
-        await self.post_run_hook(state=state, result=result)
-        return self.project_app_state(result)
+        from kdcube_ai_app.infra.accounting import AccountingSystem, _get_storage, with_accounting
+
+        storage = _get_storage()
+        if storage is None or storage.__class__.__name__ == "NoOpAccountingStorage":
+            AccountingSystem.init_storage(create_storage_backend(get_settings().STORAGE_PATH), enabled=True)
+
+        async with with_accounting(
+            bundle_id or "chat.orchestrator",
+            user_id=user_id,
+            session_id=state.get("session_id") or thread_id,
+            user_type=user_type,
+            tenant_id=tenant,
+            project_id=project,
+            request_id=request_id,
+            app_bundle_id=bundle_id,
+            timezone=timezone,
+            conversation_id=thread_id,
+            turn_id=turn_id,
+            metadata={
+                "conversation_id": thread_id,
+                "turn_id": turn_id,
+                "bundle_id": bundle_id,
+                "entrypoint": self.__class__.__name__,
+            },
+        ):
+            await self.refresh_bundle_props(state=state)
+            await self.pre_run_hook(state=state)
+
+            result = await self.execute_core(state=state, thread_id=thread_id, params=params)
+            result = result or {}
+
+            usage_from = datetime.utcnow().date().isoformat()
+            await self.run_accounting(
+                tenant=tenant,
+                project=project,
+                user_id=user_id,
+                user_type=user_type,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                usage_from=usage_from,
+            )
+
+            await self.post_run_hook(state=state, result=result)
+            return self.project_app_state(result)
 
     def _bundle_root(self) -> Optional[str]:
         spec = getattr(self.config, "ai_bundle_spec", None)

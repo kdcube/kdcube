@@ -69,6 +69,7 @@ different:
 | custom instructions | product-specific operating rules | bundle code/config | React `additional_instructions`, Claude `CLAUDE.md` |
 | tools | callable capabilities | bundle descriptors or Claude config | React tool subsystem, Claude allowed tools/MCP |
 | MCP connectivity | how to reach MCP servers and authenticate | bundle config/code | `mcp.services`, `MCP_TOOL_SPECS`, `ClaudeCodeWorkspaceConfig` |
+| MCP server exposure | MCP server implemented by the bundle | bundle entrypoint | `@mcp(...)` plus bundle-owned auth |
 | streaming | progress, deltas, steps, subsystem events | agent runtime | communicator |
 | persistence | durable state, artifacts, workspace/session files | bundle/runtime | bundle storage, conversation store, Claude workspace/session store |
 
@@ -128,9 +129,12 @@ A Claude Code subagent is configured through `ClaudeCodeAgentConfig`,
 | streaming markers | `step_name`, `delta_marker` | controls communicator event labels |
 | structured progress | `structured_output_prefixes`, callbacks | parses caller-defined line-framed JSON from streamed text |
 | MCP servers | `ClaudeCodeWorkspaceConfig.mcp_servers` | SDK writes `.mcp.json` |
+| bundle-served MCP tools | `@mcp(...)` endpoint plus `ClaudeCodeWorkspaceConfig.mcp_servers` | `@mcp(...)` exposes the server; workspace config tells Claude how to reach it |
 | Claude MCP enablement | `enabled_mcp_servers` | SDK writes `.claude/settings.local.json` |
 | Claude allow/deny tools | `allowed_tools`, `denied_tools` in workspace config | SDK writes local Claude settings |
 | Claude instructions | `instructions_markdown` | SDK writes `CLAUDE.md` |
+| Claude Code project skills | `.claude/skills/<skill-name>/SKILL.md` under `workspace_path` | Claude Code discovers native project Skills from this location |
+| KDCube skills | `ClaudeCodeWorkspaceConfig.skill_ids` | SDK resolves active KDCube skills by id/imports and writes native Claude Code project Skills |
 
 The bundle still owns policy:
 
@@ -142,6 +146,100 @@ The bundle still owns policy:
 
 The SDK can write the standard workspace files from `ClaudeCodeWorkspaceConfig`,
 but it does not decide those values automatically.
+
+Skill rule:
+
+- React skills are first-class SDK inputs through `skills_descriptor.py`.
+- Claude Code does not consume KDCube `skills_descriptor.py`, `SKILL.md`, or
+  skill `tools.yaml` directly.
+- To use KDCube skills with Claude Code, pass fully-qualified skill ids to
+  `ClaudeCodeWorkspaceConfig.skill_ids`. The SDK resolves them through the
+  active skills subsystem, expands imports, and writes native Claude Code
+  project Skills under `.claude/skills/<skill-name>/SKILL.md`.
+- For short global guidance, use
+  `ClaudeCodeWorkspaceConfig.instructions_markdown`, which the SDK writes as
+  `CLAUDE.md`.
+- Tool access still has to be wired separately for Claude Code, usually through
+  MCP and `allowed_tools`. If a Claude Code Skill should declare skill-local
+  tool hints, pass Claude MCP/built-in tool names through
+  `ClaudeCodeWorkspaceConfig.skill_allowed_tools`.
+
+`CLAUDE.md` and Skills are not the same:
+
+- `CLAUDE.md` is broad project/workspace instruction loaded as part of the
+  Claude project context.
+- a Claude Code Skill is a discoverable capability folder. Claude reads the
+  Skill metadata, then loads the full `SKILL.md` only when the task matches its
+  description.
+- Skill support files live next to `SKILL.md` and are loaded only when needed.
+
+Native Claude Code project Skill layout:
+
+```text
+workspace/
+  .claude/
+    skills/
+      email-processing/
+        SKILL.md
+        reference.md
+        scripts/
+          helper.py
+```
+
+Minimal native Claude Code `SKILL.md`:
+
+```markdown
+---
+name: Email Processing
+description: Process scoped email candidates and record a structured result. Use when the task asks Claude to classify, summarize, or match email messages through the scoped email MCP tools.
+allowed-tools: mcp__task_memo_email__task_context, mcp__task_memo_email__list_new_messages, mcp__task_memo_email__get_message, mcp__task_memo_email__record_processing_result
+---
+
+# Email Processing
+
+Use only the scoped email MCP tools.
+Call task_context first.
+Inspect only candidate messages returned by the MCP server.
+Call record_processing_result before the final answer.
+```
+
+SDK materialization:
+
+- `ClaudeCodeWorkspaceConfig.skill_ids` writes native Claude Code Skill folders
+  from KDCube skills known to the active skills subsystem.
+- `ClaudeCodeWorkspaceConfig.instructions_markdown` writes `CLAUDE.md`.
+- Skill imports are expanded before materialization.
+- Support files next to the KDCube `SKILL.md` are copied next to the generated
+  Claude Code `SKILL.md`.
+
+Example:
+
+```python
+workspace_config = ClaudeCodeWorkspaceConfig(
+    mcp_servers={
+        "bundle_email": {
+            "type": "http",
+            "url": mcp_url,
+            "headers": {"Authorization": f"Bearer {short_lived_token}"},
+        }
+    },
+    skill_ids=("product.email-analysis",),
+    skill_allowed_tools={
+        "product.email-analysis": (
+            "mcp__bundle_email__task_context",
+            "mcp__bundle_email__list_new_messages",
+            "mcp__bundle_email__get_message",
+            "mcp__bundle_email__record_processing_result",
+        )
+    },
+    allowed_tools=(
+        "mcp__bundle_email__task_context",
+        "mcp__bundle_email__list_new_messages",
+        "mcp__bundle_email__get_message",
+        "mcp__bundle_email__record_processing_result",
+    ),
+)
+```
 
 ## 3. React Bundle Agent Integration
 

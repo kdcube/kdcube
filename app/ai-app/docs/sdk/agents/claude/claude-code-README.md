@@ -45,7 +45,8 @@ Main features:
 - deterministic Claude session binding from current KDCube user + conversation + agent name
 - explicit caller-supplied workspace path
 - optional SDK writing of standard Claude workspace support files:
-  `.mcp.json`, `.claude/settings.local.json`, and `CLAUDE.md`
+  `.mcp.json`, `.claude/settings.local.json`, `CLAUDE.md`, and native
+  `.claude/skills/...` project Skills materialized from KDCube skill ids
 - explicit caller-supplied allowed tools
 - explicit additional writable / accessible directories via `--add-dir`
 - explicit Claude permission mode such as `acceptEdits`
@@ -340,8 +341,8 @@ The SDK includes a helper for standard Claude Code workspace files:
 - `prepare_claude_code_workspace(...)`
 
 Use it when the bundle wants the SDK to write `.mcp.json`,
-`.claude/settings.local.json`, and `CLAUDE.md` before the Claude subprocess
-starts.
+`.claude/settings.local.json`, `CLAUDE.md`, and native Claude Code project
+Skills before the Claude subprocess starts.
 
 Example:
 
@@ -365,6 +366,16 @@ workspace_config = ClaudeCodeWorkspaceConfig(
         "mcp__scoped_data__list_items",
         "mcp__scoped_data__record_result",
     ],
+    skill_ids=[
+        "product.scoped-data-processing",
+    ],
+    skill_allowed_tools={
+        "product.scoped-data-processing": [
+            "mcp__scoped_data__task_context",
+            "mcp__scoped_data__list_items",
+            "mcp__scoped_data__record_result",
+        ],
+    },
     denied_tools=["Bash", "Read", "Edit", "Write", "WebFetch", "WebSearch"],
     instructions_markdown=(
         "# Scoped Data Processor\n\n"
@@ -387,6 +398,17 @@ agent = ClaudeCodeAgent(
 
 When `workspace_config` is set, `ClaudeCodeAgent.run_turn(...)` prepares the
 workspace before checking that `workspace_path` exists.
+
+`skill_ids` are KDCube skill ids known to the active skills subsystem, for
+example `public.pdf-press` or `product.email-analysis`. The SDK expands skill
+imports, writes each resolved skill as a native Claude Code project Skill under
+`<workspace_path>/.claude/skills/<skill-name>/SKILL.md`, and copies support
+files next to the source KDCube `SKILL.md`.
+
+The SDK does not infer Claude tool permissions from KDCube skill `tools.yaml`.
+React tool ids and Claude MCP tool names are different surfaces. Configure MCP
+servers and `allowed_tools` explicitly; use `skill_allowed_tools` only when the
+generated Claude Skill should also declare skill-local Claude tool hints.
 
 The helper does not resolve secrets. The caller must pass already-resolved
 short-lived tokens, headers, or non-secret MCP URLs.
@@ -475,7 +497,7 @@ This first cut does not provide:
 
 It can write standard workspace support files when `workspace_config` is
 provided, but the caller still owns the policy for which MCP servers, headers,
-instructions, and permissions are safe to write.
+instructions, skills, and permissions are safe to write.
 
 The generic runner still does not itself own repo bootstrap/publish policy. That
 is handled by the higher-level Claude workspace/session-store runtime layer.

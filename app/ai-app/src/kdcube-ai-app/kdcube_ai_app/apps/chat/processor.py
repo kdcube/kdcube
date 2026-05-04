@@ -1322,6 +1322,11 @@ class EnhancedChatRequestProcessor:
             or job_payload.get("text")
             or f"Run background job {job.work_kind} ({job.job_id})"
         ).strip()
+        actor_tenant = job.tenant or get_settings().TENANT
+        actor_project = job.project or get_settings().PROJECT
+        user_type = job.user_type or job.queue or "registered"
+        user_id = job.user_id or None
+        timezone = metadata.get("timezone")
         payload = ChatTaskPayload(
             meta=ChatTaskMeta(
                 task_id=job.job_id,
@@ -1335,16 +1340,16 @@ class EnhancedChatRequestProcessor:
                 turn_id=turn_id,
             ),
             actor=ChatTaskActor(
-                tenant_id=job.tenant or get_settings().TENANT,
-                project_id=job.project or get_settings().PROJECT,
+                tenant_id=actor_tenant,
+                project_id=actor_project,
             ),
             user=ChatTaskUser(
-                user_type=job.user_type or job.queue or "registered",
-                user_id=job.user_id or None,
+                user_type=user_type,
+                user_id=user_id,
                 fingerprint=str(metadata.get("fingerprint") or "") or None,
                 roles=self._metadata_list(metadata.get("roles")),
                 permissions=self._metadata_list(metadata.get("permissions")),
-                timezone=metadata.get("timezone"),
+                timezone=timezone,
             ),
             request=ChatTaskRequest(
                 message=message,
@@ -1361,7 +1366,26 @@ class EnhancedChatRequestProcessor:
                 request_id=request_id,
             ),
             config=ChatTaskConfig(values={}),
-            accounting=ChatTaskAccounting(envelope={"request_id": request_id}),
+            accounting=ChatTaskAccounting(
+                envelope={
+                    "user_id": user_id,
+                    "session_id": conversation_id,
+                    "user_type": user_type,
+                    "tenant_id": actor_tenant,
+                    "project_id": actor_project,
+                    "request_id": request_id,
+                    "component": job.bundle_id or "chat.orchestrator",
+                    "app_bundle_id": job.bundle_id,
+                    "timezone": timezone,
+                    "metadata": {
+                        "job_id": job.job_id,
+                        "work_kind": job.work_kind,
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                    },
+                    "seed_system_resources": [],
+                }
+            ),
             bundle_call_context={
                 "kind": "background_job",
                 "job_id": job.job_id,

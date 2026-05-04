@@ -91,6 +91,7 @@ class SkillSpec:
     imports: List[str] = field(default_factory=list)
     when_to_use: List[str] = field(default_factory=list)
     sources: List[Dict[str, Any]] = field(default_factory=list)
+    source_path: Optional[pathlib.Path] = None
 
     # ---- helpers ----
 
@@ -284,6 +285,7 @@ def _load_skill_yaml(path: pathlib.Path) -> SkillSpec:
         created=str(raw.get("created")).strip() if raw.get("created") else None,
         when_to_use=when_to_use,
         imports=_normalize_imports(raw.get("import") or raw.get("imports")),
+        source_path=path,
     )
 
 
@@ -364,6 +366,7 @@ def _load_skill_markdown(path: pathlib.Path) -> SkillSpec:
         created=str(raw.get("created")).strip() if raw.get("created") else None,
         when_to_use=when_to_use,
         imports=_normalize_imports(raw.get("import") or raw.get("imports")),
+        source_path=path,
     )
 
 

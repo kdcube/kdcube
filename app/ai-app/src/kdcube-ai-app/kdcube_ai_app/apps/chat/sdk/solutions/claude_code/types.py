@@ -19,12 +19,19 @@ class ClaudeCodeWorkspaceConfig:
     enabled_mcp_servers: Sequence[str] | None = None
     allowed_tools: Sequence[str] = field(default_factory=tuple)
     denied_tools: Sequence[str] = field(default_factory=tuple)
+    skill_ids: Sequence[str] = field(default_factory=tuple)
+    skill_allowed_tools: Mapping[str, Sequence[str]] = field(default_factory=dict)
     instructions_markdown: str | None = None
     settings: Mapping[str, Any] = field(default_factory=dict)
     mcp_config: Mapping[str, Any] = field(default_factory=dict)
     overwrite: bool = True
 
     def __post_init__(self) -> None:
+        def _normalize_tools(raw_tools: Any) -> tuple[str, ...]:
+            if isinstance(raw_tools, str):
+                raw_tools = [raw_tools]
+            return tuple(str(tool).strip() for tool in raw_tools or () if str(tool).strip())
+
         object.__setattr__(
             self,
             "mcp_servers",
@@ -49,6 +56,20 @@ class ClaudeCodeWorkspaceConfig:
             self,
             "denied_tools",
             tuple(str(tool).strip() for tool in self.denied_tools if str(tool).strip()),
+        )
+        object.__setattr__(
+            self,
+            "skill_ids",
+            tuple(str(skill_id).strip() for skill_id in self.skill_ids if str(skill_id).strip()),
+        )
+        object.__setattr__(
+            self,
+            "skill_allowed_tools",
+            {
+                str(skill_id).strip(): _normalize_tools(tools)
+                for skill_id, tools in dict(self.skill_allowed_tools or {}).items()
+                if str(skill_id).strip()
+            },
         )
         object.__setattr__(self, "settings", dict(self.settings or {}))
         object.__setattr__(self, "mcp_config", dict(self.mcp_config or {}))

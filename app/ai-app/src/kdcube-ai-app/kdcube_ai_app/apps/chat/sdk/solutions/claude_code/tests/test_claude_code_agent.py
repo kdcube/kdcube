@@ -17,6 +17,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ChatTaskUser,
 )
 from kdcube_ai_app.apps.chat.sdk.runtime.comm_ctx import bind_current_request_context
+from kdcube_ai_app.apps.chat.sdk.skills.skills_registry import set_skills_descriptor
 from kdcube_ai_app.apps.chat.sdk.solutions.claude_code import (
     ClaudeCodeAgent,
     ClaudeCodeWorkspaceConfig,
@@ -264,6 +265,63 @@ def test_prepare_claude_code_workspace_writes_mcp_settings_and_instructions(tmp_
     assert settings["enabledMcpjsonServers"] == ["scoped_data"]
     assert settings["permissions"]["allow"] == ["mcp__scoped_data__task_context"]
     assert settings["permissions"]["deny"] == ["Bash", "Read"]
+
+
+def test_prepare_claude_code_workspace_materializes_kdcube_skills(tmp_path: Path):
+    skills_root = tmp_path / "bundle" / "skills"
+    skill_dir = skills_root / "product" / "email-analysis"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "\n".join(
+            [
+                "---",
+                "name: email-analysis",
+                "description: Analyze scoped email candidates.",
+                "namespace: product",
+                "when_to_use:",
+                "  - Classifying email messages",
+                "---",
+                "",
+                "# Email Analysis",
+                "",
+                "Use the scoped email MCP tools only.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (skill_dir / "reference.md").write_text("Reference notes", encoding="utf-8")
+    workspace = tmp_path / "workspace"
+
+    try:
+        set_skills_descriptor({"CUSTOM_SKILLS_ROOT": str(skills_root)})
+        prepared = prepare_claude_code_workspace(
+            workspace,
+            ClaudeCodeWorkspaceConfig(
+                skill_ids=("product.email-analysis",),
+                skill_allowed_tools={
+                    "product.email-analysis": (
+                        "mcp__email__task_context",
+                        "mcp__email__record_processing_result",
+                    )
+                },
+            ),
+        )
+    finally:
+        set_skills_descriptor(None)
+
+    skill_path = workspace / ".claude" / "skills" / "product-email-analysis" / "SKILL.md"
+    support_path = workspace / ".claude" / "skills" / "product-email-analysis" / "reference.md"
+    skill_text = skill_path.read_text(encoding="utf-8")
+
+    assert prepared["materialized_skill_ids"] == ["product.email-analysis"]
+    assert skill_path.exists()
+    assert support_path.read_text(encoding="utf-8") == "Reference notes"
+    assert "name: email-analysis" in skill_text
+    assert "Analyze scoped email candidates." in skill_text
+    assert "Classifying email messages" in skill_text
+    assert "allowed-tools: mcp__email__task_context, mcp__email__record_processing_result" in skill_text
+    assert "Use the scoped email MCP tools only." in skill_text
 
 
 @pytest.mark.asyncio
