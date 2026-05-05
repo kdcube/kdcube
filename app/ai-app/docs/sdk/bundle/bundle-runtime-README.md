@@ -308,6 +308,20 @@ Reusable helper:
   KDCube account id; public integrations may resolve stable external identities.
 - Use `bundle_call_context` for runtime ids that tools need but the model should
   not provide, such as task id, execution id, job metadata, or provider context.
+- `kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context.host_files(...)`
+  hosts current-turn files through the active conversation store and returns the
+  strict `artifact_type: "files"` result payload. Use it only from trusted
+  bundle/catalog tools after the file has been written or materialized.
+- `host_files(...)` requires prepared tool context: an active `ToolSubsystem`
+  with a hosting service, communicator scope for tenant/project/user/
+  conversation/turn, conversation storage, and a readable output directory.
+  `BaseWorkflow.build_react(...)` prepares this for normal tool calls, and
+  `BaseWorkflow.rebind_request_context(...)` refreshes it for cached workflow
+  instances.
+- if that context is not prepared, `host_files(...)` raises a runtime error such
+  as `tools are not bound to the current tool subsystem`,
+  `tool hosting service is unavailable`, `tool communicator is unavailable`, or
+  `bundle storage root is unavailable`.
 
 ### 4) Tool execution in isolated runtime
 
@@ -325,12 +339,21 @@ What happens:
 3. model service, registry, communicator, and integrations are reconstructed
 4. runtime rebuilds the tool subsystem from exported runtime globals
 5. tool modules are loaded and bound with the same canonical names
+6. the trusted runtime rebuilds conversation hosting from runtime storage
+   settings and attaches it to the isolated `ToolSubsystem`
+7. `bootstrap_bind_all(...)` is the SDK utility that performs this isolated
+   runtime preparation; custom isolated runners must call it or provide an
+   equivalent prepared tool context before trusted tools can call
+   `host_files(...)`
 
 Important:
 - isolated execution does not inherit arbitrary live Python objects
 - it receives a reconstructed narrow runtime contract
 - tool code should therefore rely on the documented bound surfaces, not on
   random global host state
+- generated executor code should call catalog tools through
+  `agent_io_tools.tool_call(...)` when it needs trusted capabilities such as
+  mailbox access, file materialization, or `host_files(...)`
 
 ## Runtime surface matrix
 
@@ -349,6 +372,7 @@ Important:
 | `_KV_CACHE` / `KV_CACHE` | no | no | yes when configured | yes when configured |
 | `_CTX_CLIENT` / `CTX_CLIENT` | no | no | yes when available | yes when available |
 | `OUT_DIR` / `WORKDIR` | only inside isolated exec code paths | only inside isolated exec code paths | only when the tool is running inside an execution context | yes |
+| `bundle_tool_context.host_files(...)` | no | no | yes in trusted catalog tools | yes in trusted supervisor/runtime catalog tools |
 
 ## Communicator rules
 

@@ -66,9 +66,9 @@ Use it when the user agrees that the bundle should be committed, tagged,
 pushed, or wired into a git-backed descriptor ref. It is recommended for
 repeatable bundle work, but it is not an automatic step.
 
-When the bundle defines an agent surface, custom tools/skills, MCP connectors,
-bundle-served MCP, or Claude Code subagents, add this focused page to the Tier 1
-pack:
+When the bundle defines an agent surface, custom tools/skills,
+file-producing tools, MCP connectors, bundle-served MCP, or Claude Code
+subagents, add this focused page to the Tier 1 pack:
 
 - [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
 
@@ -156,6 +156,8 @@ Practical rule:
   - webhook -> `@api(route="public")`
   - admin/backend action -> `@api(route="operations")`
   - iframe frontend -> `ui.main_view` or widget + operations
+  - file-producing assistant tool -> `ret.artifact_type == "files"` or
+    trusted tool-side `host_files(...)`
   - MCP server -> `@mcp(...)`
   - background sync -> `@cron(...)`
   - ready background job execution -> `@on_job`
@@ -253,6 +255,7 @@ Then jump only to the row that matches your question.
 | How do I expose widget, API, MCP, cron, or `@on_job`? | [../bundle-platform-integration-README.md](../bundle-platform-integration-README.md) | It is the exact decorator and surface contract. |
 | What runtime helpers exist inside bundle code? | [../bundle-runtime-README.md](../bundle-runtime-README.md) | It explains the bundle runtime objects and capabilities. |
 | How do I use storage, cache, local bundle storage, or git-backed helpers? | [how-to-write-bundle-README.md](how-to-write-bundle-README.md) | It now contains the compact SDK cheat sheet and points to the deeper storage docs only when needed. |
+| How should a bundle tool return files or hosted attachments? | [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md) and [../../tools/custom-tools-README.md](../../tools/custom-tools-README.md) | Use the strict `ret.artifact_type == "files"` protocol or trusted tool-side `host_files(...)`; `host_files(...)` requires prepared tool context from `BaseWorkflow.build_react(...)` or isolated `bootstrap_bind_all(...)`; generated executor code should call a catalog tool through `agent_io_tools.tool_call(...)`. |
 | How do I talk to the browser correctly? | [../bundle-client-ui-README.md](../bundle-client-ui-README.md) | It routes you to widget, browser, and transport-facing docs. |
 | How do I run local bundle QA? | [how-to-test-bundle-README.md](how-to-test-bundle-README.md) | It covers local test order, shared suite, and bundle-local tests. |
 | Which interpreter, cwd, env vars, and first smoke tests should an agent use? | [how-to-test-bundle-README.md#1a-working-environment-for-agents](how-to-test-bundle-README.md#1a-working-environment-for-agents) | It prevents false failures from the wrong Python, missing `pytest-asyncio`, missing `PYTHONPATH`, or incomplete request fixtures. |

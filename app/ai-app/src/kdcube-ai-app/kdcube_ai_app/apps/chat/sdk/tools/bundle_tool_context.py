@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict
+import pathlib
+from typing import Any, Dict, List
 
 from kdcube_ai_app.infra.plugin.bundle_storage import storage_for_spec
 
@@ -13,6 +14,7 @@ __all__ = [
     "ScopedBundleConfig",
     "bind_integrations",
     "error",
+    "host_files",
     "log_tool_error",
     "log_tool_start",
     "log_tool_success",
@@ -64,6 +66,10 @@ def _caller_tool_subsystem() -> Any:
     return None
 
 
+def _current_tool_subsystem() -> Any:
+    return _TOOL_SUBSYSTEM or _caller_tool_subsystem()
+
+
 def _current_bundle_call_context(tool_subsystem: Any) -> Dict[str, Any]:
     value = getattr(tool_subsystem, "bundle_call_context", None)
     if isinstance(value, dict):
@@ -93,7 +99,7 @@ def error(code: str, message: str) -> Dict[str, Any]:
 
 
 def scope() -> Dict[str, Any]:
-    tool_subsystem = _TOOL_SUBSYSTEM or _caller_tool_subsystem()
+    tool_subsystem = _current_tool_subsystem()
     if tool_subsystem is None:
         raise RuntimeError("tools are not bound to the current tool subsystem")
     comm = tool_subsystem.comm
@@ -152,6 +158,123 @@ def scope() -> Dict[str, Any]:
         "bundle_call_context": _current_bundle_call_context(tool_subsystem),
         "comm": comm,
         "entrypoint": ScopedBundleConfig(bundle_props),
+    }
+
+
+def _file_row_to_host_artifact(row: Dict[str, Any]) -> Dict[str, Any]:
+    path = str(
+        row.get("physical_path")
+        or row.get("path")
+        or row.get("local_path")
+        or row.get("artifact_path")
+        or row.get("logical_path")
+        or ""
+    ).strip()
+    filename = str(row.get("filename") or pathlib.PurePosixPath(path).name or "file").strip()
+    mime = str(row.get("mime") or row.get("mime_type") or "application/octet-stream").strip()
+    artifact_id = str(row.get("artifact_id") or row.get("slot") or filename).strip()
+    description = str(row.get("description") or row.get("summary") or filename).strip()
+    return {
+        "type": "file",
+        "artifact_id": artifact_id,
+        "resource_id": artifact_id,
+        "slot": artifact_id,
+        "tool_id": str(row.get("tool_id") or "").strip(),
+        "mime": mime,
+        "description": description,
+        "output": {
+            "type": "file",
+            "path": path,
+            "filename": filename,
+            "mime": mime,
+            "text": row.get("text") if isinstance(row.get("text"), str) else "",
+        },
+    }
+
+
+def _hosted_row_to_file_row(
+    *,
+    hosted: Dict[str, Any],
+    source: Dict[str, Any],
+    emitted: bool,
+) -> Dict[str, Any]:
+    filename = str(hosted.get("filename") or source.get("filename") or "").strip()
+    mime = str(hosted.get("mime") or source.get("mime") or source.get("mime_type") or "application/octet-stream").strip()
+    size = hosted.get("size")
+    out = dict(source)
+    out.update(
+        {
+            "type": "file",
+            "visibility": str(source.get("visibility") or "external").strip() or "external",
+            "hosted": True,
+            "emitted": bool(emitted),
+            "filename": filename,
+            "mime": mime,
+            "mime_type": mime,
+            "hosted_uri": hosted.get("hosted_uri") or source.get("hosted_uri") or "",
+            "key": hosted.get("key") or source.get("key") or "",
+            "rn": hosted.get("rn") or source.get("rn") or "",
+            "physical_path": hosted.get("physical_path") or source.get("physical_path") or source.get("path") or "",
+        }
+    )
+    if size is not None:
+        out["size"] = size
+        out["size_bytes"] = size
+    return out
+
+
+async def host_files(
+    files: List[Dict[str, Any]],
+    *,
+    emit: bool = True,
+    outdir: str | os.PathLike[str] | None = None,
+    turn_id: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Host current-turn files from inside a trusted bundle tool.
+
+    Returns a `ret` payload ready to pass to `ok(...)`:
+      {"artifact_type": "files", "files": [...]}
+    """
+    tool_subsystem = _current_tool_subsystem()
+    if tool_subsystem is None:
+        raise RuntimeError("tools are not bound to the current tool subsystem")
+    hosting_service = getattr(tool_subsystem, "hosting_service", None)
+    if hosting_service is None:
+        raise RuntimeError("tool hosting service is unavailable")
+
+    sc = scope()
+    comm = sc.get("comm")
+    if comm is None:
+        raise RuntimeError("tool communicator is unavailable")
+    svc = getattr(comm, "service", None) or {}
+    outdir_value = str(outdir or sc.get("outdir") or "").strip()
+    turn_value = str(turn_id or sc.get("turn_id") or "").strip()
+    source_rows = [dict(row) for row in (files or []) if isinstance(row, dict)]
+    artifacts = [_file_row_to_host_artifact(row) for row in source_rows]
+    hosted = await hosting_service.host_files_to_conversation(
+        rid=svc.get("request_id") or "",
+        files=artifacts,
+        outdir=outdir_value,
+        tenant=svc.get("tenant") or sc.get("tenant") or "",
+        project=svc.get("project") or sc.get("project") or "",
+        user=svc.get("user") or sc.get("user_id") or getattr(comm, "user_id", None) or "",
+        conversation_id=svc.get("conversation_id") or sc.get("conversation_id") or "",
+        user_type=svc.get("user_type") or sc.get("user_type") or getattr(comm, "user_type", None) or "",
+        turn_id=turn_value,
+    )
+    if emit and hosted:
+        await hosting_service.emit_solver_artifacts(files=hosted, citations=[])
+
+    hosted_files: List[Dict[str, Any]] = []
+    for idx, item in enumerate(hosted or []):
+        source = source_rows[idx] if idx < len(source_rows) else {}
+        hosted_files.append(_hosted_row_to_file_row(hosted=item, source=source, emitted=bool(emit)))
+    return {
+        "artifact_type": "files",
+        "files": hosted_files,
+        "hosted_count": len(hosted_files),
+        "emitted": bool(emit and hosted_files),
     }
 
 

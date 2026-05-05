@@ -364,6 +364,17 @@ Example:
 }
 ```
 
+Hosted files use the `chat.files` event family rather than canvas chunks.
+Those files may be produced by built-in rendering tools, strict custom tool
+results (`ret.artifact_type: "files"`), or trusted catalog tools that call
+`bundle_tool_context.host_files(...)`.
+
+For tool-side hosting, `host_files(...)` must run in a prepared tool context
+with tenant, project, user id, conversation id, turn id, conversation storage,
+and a hosting-capable `ToolSubsystem`. That context is prepared by
+`BaseWorkflow.build_react(...)` in normal flows and `bootstrap_bind_all(...)` in
+isolated execution.
+
 ### D) Compact timeline text
 
 Use `chat.delta` with marker `timeline_text` for short human-readable entries.

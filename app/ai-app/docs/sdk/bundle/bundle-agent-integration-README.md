@@ -110,6 +110,78 @@ react = self.build_react(
 result = await react.run(allowed_plugins=allowed_plugins)
 ```
 
+#### React Tool Results That Produce Files
+
+Normal tool JSON is treated as data, not as deliverable files. A bundle tool
+must still return the standard envelope:
+
+```json
+{"ok": true, "error": null, "ret": {}}
+```
+
+The file declaration goes inside `ret`:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "path": "turn_123/outputs/invoices/invoice.pdf",
+        "filename": "invoice.pdf",
+        "mime_type": "application/pdf",
+        "size_bytes": 12345,
+        "visibility": "external"
+      }
+    ]
+  }
+}
+```
+
+The React runtime unwraps `{ok, error, ret}` first. It then recognizes the
+explicit `ret.artifact_type == "files"` marker in `ret`, copies each declared
+file to the conversation store, and emits normal hosted artifact metadata
+(`hosted_uri`, `key`, `rn`, `physical_path`). This works for one file or many
+files.
+
+Use this for tools that intentionally materialize files, such as fetching a
+specific email attachment. If the user asks for an archive or conversion,
+produce the archive/conversion explicitly and declare that file.
+
+Trusted bundle tools can also host files themselves with
+`kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context.host_files(...)` after
+writing or materializing the file under the current turn output directory. The
+helper uses the active conversation hosting service, emits file events, and
+returns the same `ret.artifact_type: "files"` payload with hosted rows already
+populated.
+
+This tool-side hosting surface is available to catalog tools in normal React
+tool calls, in-memory tool execution, and isolated supervisor/runtime execution.
+Generated executor code should reach it by calling a visible catalog tool
+through `agent_io_tools.tool_call(...)`; that catalog tool is the trusted
+boundary that fetches bytes, writes files, and hosts them.
+
+`host_files(...)` requires prepared runtime scope. The SDK-prepared tool context
+must include an active `ToolSubsystem` with hosting service, tenant, project,
+user id, conversation id, turn id, user type, conversation storage, and a current
+output directory. Normal React bundle flows get this when
+`BaseWorkflow.build_react(...)` creates the tool subsystem, and cached workflows
+refresh the request-bound communicator through
+`BaseWorkflow.rebind_request_context(...)`. Isolated execution gets the same
+context from `bootstrap_bind_all(...)` in
+`kdcube_ai_app.apps.chat.sdk.runtime.bootstrap`.
+
+If the context is missing, `host_files(...)` raises a runtime error such as
+`tools are not bound to the current tool subsystem`,
+`tool hosting service is unavailable`, `tool communicator is unavailable`, or
+`bundle storage root is unavailable`. Tool schemas should not expose
+tenant/project/user/conversation/turn ids for the model to fill in; those ids
+come from runtime prep, job payloads, or opaque references returned by earlier
+tools.
+
 ### Claude Code Agent Inputs
 
 A Claude Code subagent is configured through `ClaudeCodeAgentConfig`,

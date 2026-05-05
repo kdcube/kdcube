@@ -681,6 +681,19 @@ Event `type` values:
 - `user.followup`
 - `user.prompt`
 
+`chat.files` is emitted for hosted file artifacts. Files may come from built-in
+rendering/exec tools, from custom tool results that return
+`ret.artifact_type: "files"`, or from trusted bundle/catalog tools that call
+`bundle_tool_context.host_files(...)`. Clients should treat all of these as the
+same hosted-file surface and use the hosted metadata (`hosted_uri`, `rn`, `key`,
+`filename`, `mime`) supplied in the event payload.
+
+`host_files(...)` itself requires prepared runtime scope in the tool process:
+tenant, project, user id, conversation id, turn id, conversation storage, and a
+hosting-capable `ToolSubsystem`. Normal React workflows prepare that through
+`BaseWorkflow.build_react(...)`; isolated tool execution prepares it through
+`bootstrap_bind_all(...)`.
+
 Delta markers:
 - `answer`
 - `canvas`

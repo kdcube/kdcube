@@ -173,8 +173,8 @@ later failures narrower.
 ## 1C. React Tool/Skill Checks
 
 Use [bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
-as the full contract for React descriptors, MCP connector/server wiring, and
-Claude Code subagent requirements.
+as the full contract for React descriptors, file-producing tools, MCP
+connector/server wiring, and Claude Code subagent requirements.
 
 For a React-backed bundle, prove the agent surface before manual testing:
 
@@ -224,6 +224,20 @@ Good React smoke tests:
   as user id, task id, execution id, conversation id, internal account id, or
   storage paths; those must come from runtime context, job payload, or opaque
   references returned by earlier tools
+- file-producing tool tests verify the strict result envelope:
+  `{"ok": true, "ret": {"artifact_type": "files", "files": [...]}}`
+- if a trusted bundle/catalog tool uses `host_files(...)`, tests or manual
+  runtime checks verify hosted file rows include hosted metadata such as
+  `hosted_uri`, `rn`, or `key`
+- `host_files(...)` checks should run in a prepared tool context with
+  `ToolSubsystem.hosting_service`, tenant, project, user id, conversation id,
+  turn id, conversation storage, and output directory. The normal path is
+  `BaseWorkflow.build_react(...)`; the isolated path is `bootstrap_bind_all(...)`.
+- if generated executor code needs files, tests cover the scenario where it
+  calls a catalog tool through `agent_io_tools.tool_call(...)` rather than
+  trying to host files directly
+- if the tool may run in isolated runtime, include an isolated-runtime check
+  that proves the reconstructed tool subsystem can still host or return files
 
 Do not add a gate-agent test unless the bundle intentionally has a gate.
 For simple React bundles, a deterministic prepare step plus solver is enough.

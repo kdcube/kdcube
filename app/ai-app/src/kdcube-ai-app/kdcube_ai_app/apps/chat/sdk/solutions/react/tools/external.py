@@ -76,6 +76,130 @@ def _extract_tool_source_rows(output: Any) -> List[Dict[str, Any]]:
     return [r for r in data if isinstance(r, dict) and r.get("url")]
 
 
+def _looks_like_declared_file(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return bool(
+        row.get("path")
+        or row.get("physical_path")
+        or row.get("local_path")
+        or row.get("artifact_path")
+        or row.get("logical_path")
+        or row.get("hosted_uri")
+        or row.get("rn")
+        or row.get("key")
+    )
+
+
+def _declared_file_rows(output: Any) -> List[Dict[str, Any]]:
+    """
+    Extract explicitly declared deliverable files from a tool result.
+
+    The result must opt in with the strict marker:
+      {"artifact_type": "files", "files": [...]}
+
+    This marker is the file-hosting contract for external tool results.
+    """
+    data = output
+    if isinstance(data, dict) and "ret" in data:
+        data = data.get("ret")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return []
+    if not isinstance(data, dict):
+        return []
+
+    if str(data.get("artifact_type") or "").strip() != "files":
+        return []
+    candidate = data.get("files")
+    if not isinstance(candidate, list):
+        return []
+    return [dict(row) for row in candidate if _looks_like_declared_file(row)]
+
+
+def _declared_files_to_tool_items(
+    *,
+    output: Any,
+    tool_id: str,
+    default_summary: str = "",
+) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    for idx, row in enumerate(_declared_file_rows(output)):
+        filename = str(row.get("filename") or "").strip()
+        raw_path = str(
+            row.get("physical_path")
+            or row.get("path")
+            or row.get("local_path")
+            or row.get("artifact_path")
+            or row.get("logical_path")
+            or ""
+        ).strip()
+        if not filename:
+            filename = pathlib.PurePosixPath(raw_path).name or f"file_{idx + 1}"
+        mime = str(row.get("mime") or row.get("mime_type") or "").strip() or "application/octet-stream"
+        description = str(row.get("description") or row.get("summary") or filename or "").strip()
+        value = {
+            "type": "file",
+            "path": raw_path,
+            "filename": filename,
+            "mime": mime,
+            "description": description,
+        }
+        for key in (
+            "hosted_uri",
+            "rn",
+            "key",
+            "size",
+            "size_bytes",
+            "local_path",
+            "physical_path",
+            "logical_path",
+            "artifact_path",
+        ):
+            if row.get(key) not in ("", None):
+                value[key] = row[key]
+        already_hosted = bool(
+            row.get("hosted") is True
+            or row.get("already_hosted") is True
+            or ((row.get("hosted_uri") or row.get("rn") or row.get("key")) and not raw_path)
+        )
+        hosted_record = {
+            "slot": str(row.get("slot") or row.get("artifact_id") or "").strip(),
+            "key": row.get("key") or "",
+            "filename": filename,
+            "mime": mime,
+            "size": row.get("size") if row.get("size") is not None else row.get("size_bytes"),
+            "tool_id": tool_id,
+            "description": description,
+            "owner_id": row.get("owner_id") or "",
+            "rn": row.get("rn") or "",
+            "hosted_uri": row.get("hosted_uri") or "",
+            "physical_path": row.get("physical_path") or raw_path,
+        }
+        artifact_id = str(
+            row.get("artifact_id")
+            or row.get("slot")
+            or row.get("resource_id")
+            or f"{tool_id}_file_{idx + 1}"
+        ).strip()
+        items.append(
+            {
+                "artifact_id": artifact_id,
+                "output": value,
+                "artifact_kind": "file",
+                "summary": description or default_summary,
+                "filepath": raw_path,
+                "visibility": normalize_artifact_visibility(row.get("visibility"), default="external"),
+                "already_hosted": already_hosted,
+                "emitted": bool(row.get("emitted")),
+                "hosted_record": hosted_record,
+            }
+        )
+    return items
+
+
 def _remap_tool_sources(
     *,
     ctx_browser: Any,
@@ -484,6 +608,13 @@ async def handle_external_tool(*,
                 "tool_call_id": tool_call_id,
             },
         })
+    declared_file_items: List[Dict[str, Any]] = []
+    if not is_exec:
+        declared_file_items = _declared_files_to_tool_items(
+            output=output,
+            tool_id=tool_id,
+            default_summary=summary or "",
+        )
     for idx, tr in enumerate(items):
         if not isinstance(tr, dict):
             continue
@@ -818,6 +949,175 @@ async def handle_external_tool(*,
                         pending = state.setdefault("pending_sources", [])
                         pending.extend(rows)
 
+    for idx, tr in enumerate(declared_file_items, start=len(items)):
+        if not isinstance(tr, dict):
+            continue
+        artifact_id = (tr.get("artifact_id") or f"{tool_id}_{idx}").strip()
+        output = tr.get("output")
+        artifact_kind = tr.get("artifact_kind") or "file"
+        visibility = normalize_artifact_visibility(tr.get("visibility"), default="external")
+        summary = tr.get("summary") or ""
+        tr_error = _strip_managed(tr.get("error")) if tr.get("error") else None
+        turn_id = (ctx_browser.runtime_ctx.turn_id or "")
+        value = dict(output) if isinstance(output, dict) else {"text": "" if output is None else str(output), "mime": "text/plain"}
+        already_hosted = bool(tr.get("already_hosted"))
+        sources_used: List[Any] = []
+        artifact_view = build_artifact_view(
+            turn_id=turn_id,
+            is_current=True,
+            artifact_id=artifact_id,
+            tool_id=tool_id,
+            value=value,
+            summary=summary,
+            artifact_kind=artifact_kind,
+            visibility=visibility,
+            description=str(value.get("description") or summary or ""),
+            channel=None,
+            sources_used=sources_used,
+            inputs=final_params,
+            call_record_rel=tool_response.get("call_record_rel"),
+            call_record_abs=tool_response.get("call_record_abs"),
+            error=tr_error,
+            content_lineage=content_lineage,
+            tool_call_id=tool_call_id,
+            artifact_stats=None,
+        )
+        hosted = []
+        if visibility == "external":
+            if already_hosted:
+                hosted_record = tr.get("hosted_record")
+                if isinstance(hosted_record, dict) and (
+                    hosted_record.get("hosted_uri") or hosted_record.get("rn") or hosted_record.get("key")
+                ):
+                    hosted = [hosted_record]
+                await emit_hosted_files(
+                    hosting_service=react.hosting_service,
+                    hosted=hosted,
+                    should_emit=bool(hosted and not tr.get("emitted")),
+                )
+            else:
+                hosted = await host_artifact_file(
+                    hosting_service=react.hosting_service,
+                    comm=react.comm,
+                    runtime_ctx=ctx_browser.runtime_ctx,
+                    artifact=artifact_view.raw,
+                    outdir=pathlib.Path(state["outdir"]),
+                )
+                await emit_hosted_files(
+                    hosting_service=react.hosting_service,
+                    hosted=hosted,
+                    should_emit=True,
+                )
+
+        if already_hosted:
+            artifact_path = str(
+                value.get("logical_path")
+                or value.get("artifact_path")
+                or value.get("rn")
+                or value.get("hosted_uri")
+                or tc_result_path(turn_id=turn_id, call_id=tool_call_id)
+            ).strip()
+            physical_path = str(value.get("physical_path") or value.get("local_path") or "").strip()
+        else:
+            artifact_rel = (artifact_view.path or (artifact_view.raw.get("value") or {}).get("path") or artifact_id or "").strip()
+            tr_path = (tr.get("filepath") or "").strip()
+            if tr_path:
+                artifact_rel = tr_path
+            phys_path, rel_path, rewritten = normalize_physical_path(
+                artifact_rel,
+                turn_id=turn_id,
+                allow_generic_fi=True,
+            )
+            if rewritten:
+                original_path = artifact_rel
+                if phys_path and original_path and original_path != phys_path:
+                    notice_block(
+                        ctx_browser=ctx_browser,
+                        tool_call_id=tool_call_id,
+                        code="protocol_violation.path_rewritten",
+                        message="Declared file path contained a turn/files prefix; rewritten to current-turn relative path.",
+                        extra={"original": original_path, "normalized": phys_path},
+                    )
+            artifact_path = (
+                physical_path_to_logical_path(phys_path)
+                if phys_path and visibility == "external"
+                else tc_result_path(turn_id=turn_id, call_id=tool_call_id)
+            )
+            physical_path = phys_path if phys_path and visibility == "external" else ""
+        edited = detect_edit(
+            timeline=getattr(ctx_browser, "timeline", None),
+            artifact_path=artifact_path if artifact_path.startswith("fi:") else "",
+            tool_call_id=tool_call_id,
+        )
+        if visibility == "external" and physical_path:
+            try:
+                merge_sources_pool_for_file_rows(
+                    ctx_browser=ctx_browser,
+                    rows=[{
+                        "physical_path": physical_path,
+                        "artifact_path": artifact_path,
+                        "mime": artifact_view.mime or "",
+                        "size_bytes": artifact_view.size_bytes,
+                        "filename": artifact_view.filename or pathlib.Path(physical_path).name,
+                        "turn_id": turn_id,
+                        "raw": (artifact_view.raw or {}),
+                    }],
+                )
+            except Exception:
+                pass
+        meta_block = build_artifact_meta_block(
+            turn_id=turn_id,
+            tool_call_id=tool_call_id,
+            artifact=artifact_view.raw,
+            artifact_path=artifact_path,
+            physical_path=physical_path,
+            edited=edited,
+        )
+        add_block(ctx_browser, meta_block)
+
+        raw_val = artifact_view.raw or {}
+        raw_value = raw_val.get("value") if isinstance(raw_val.get("value"), dict) else {}
+        meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id}
+        try:
+            meta_text = meta_block.get("text") if isinstance(meta_block, dict) else None
+            if isinstance(meta_text, str) and meta_text.strip():
+                meta_extra["digest"] = meta_text
+        except Exception:
+            pass
+        for key in ("hosted_uri", "rn", "key", "physical_path"):
+            val = raw_value.get(key) or raw_val.get(key)
+            if val:
+                meta_extra[key] = val
+        if not meta_extra.get("physical_path"):
+            legacy = raw_value.get("local_path") or raw_val.get("local_path")
+            if legacy:
+                meta_extra["physical_path"] = legacy
+
+        mime = (artifact_view.mime or (artifact_view.raw.get("value") or {}).get("mime") or "").strip().lower()
+        if visibility == "external" and (mime.startswith("image/") or mime == "application/pdf") and physical_path:
+            abs_path = resolve_artifact_path(pathlib.Path(state["outdir"]), physical_path)
+            bin_block = build_artifact_binary_block(
+                turn_id=turn_id,
+                tool_call_id=tool_call_id,
+                artifact_path=artifact_path,
+                abs_path=abs_path,
+                mime=mime,
+                meta_extra=meta_extra,
+            )
+            if bin_block:
+                add_block(ctx_browser, bin_block)
+        if visibility == "external" and meta_extra and artifact_path:
+            add_block(ctx_browser, {
+                "turn": turn_id,
+                "type": "react.tool.result",
+                "call_id": tool_call_id,
+                "mime": mime or "",
+                "path": artifact_path,
+                "meta": meta_extra,
+            })
+
+    if declared_file_items:
+        items = list(items or []) + declared_file_items
     state["last_tool_result"] = items
     state["last_tool_id"] = tool_id
     return state

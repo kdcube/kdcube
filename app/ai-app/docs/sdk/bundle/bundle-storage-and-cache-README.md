@@ -136,6 +136,17 @@ Practical split:
 - `AIBundleStorage`
   - backend storage API for bundle artifacts
   - separate from the shared local filesystem root
+- `bundle_tool_context.host_files(...)`
+  - current conversation/turn artifact hosting helper for trusted catalog tools
+  - available in normal and isolated supervisor/runtime tool execution
+  - use only after the tool has written or materialized the user-visible file
+  - requires SDK-prepared tool context: hosting service, tenant/project/user/
+    conversation/turn scope, conversation storage, and output directory
+
+Conversation file hosting is separate from durable bundle storage. User-visible
+files produced during a React turn should use the strict tool result contract
+`ret.artifact_type: "files"` with `ret.files[]`, or `host_files(...)` from a
+trusted tool, so the platform can register hosted metadata and emit `chat.files`.
 
 Example pattern used in real bundles:
 - knowledge/index preparation may live under the bundle storage root

@@ -45,6 +45,16 @@ Read in this order:
 6. `skills_descriptor.py`
 7. [bundle-agent-integration-README.md](bundle-agent-integration-README.md) when the bundle has React tools/skills, MCP, or Claude Code subagents
 
+If a bundle tool produces user-visible files, read
+[bundle-agent-integration-README.md](bundle-agent-integration-README.md) and
+[../tools/custom-tools-README.md](../tools/custom-tools-README.md). The bundle
+tool should either return `ret.artifact_type: "files"` with `ret.files[]`, or
+host the files from trusted tool code through `bundle_tool_context.host_files(...)`.
+That helper is available in normal tool execution and in isolated
+supervisor/runtime tool execution after the SDK has prepared the tool context
+with hosting service, tenant/project/user/conversation/turn scope, conversation
+storage, and output directory.
+
 ## Environment Boundary
 
 For bundle authors, `tenant/project` means one isolated environment.

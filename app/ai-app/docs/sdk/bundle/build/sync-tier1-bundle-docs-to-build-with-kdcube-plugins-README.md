@@ -38,7 +38,7 @@ It is used only after the user agrees to release, commit, tag, push, or update
 a git-backed descriptor ref.
 
 This conditional agent-integration doc should be available whenever the bundle
-uses React tools/skills, MCP, or Claude Code:
+uses React tools/skills, file-producing tools, MCP, or Claude Code:
 
 7. [../bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
 
@@ -77,8 +77,8 @@ Recommended:
   reachable for source-folder widget work, especially the `OUTDIR` /
   `<VI_BUILD_DEST_ABSOLUTE_PATH>` build command contract
 - keep [bundle-agent-integration-README.md](../bundle-agent-integration-README.md)
-  reachable for React descriptors, MCP connector/server wiring, and Claude Code
-  subprocess agents
+  reachable for React descriptors, file-producing tool contracts, MCP
+  connector/server wiring, and Claude Code subprocess agents
 - branch to deeper docs only after Tier 1
 - expose the release procedure as optional and user-approved, not automatic
 
@@ -119,6 +119,13 @@ The plugin should steer agents away from these recurring mistakes:
 - do not expose model-facing tool parameters for runtime ids the model cannot
   know; use runtime context, `bundle_call_context`, job payload, or opaque refs
   returned by prior tools
+- file-producing tools use the strict `ret.artifact_type == "files"` protocol
+  with `ret.files[]`, or trusted tool-side `host_files(...)`
+- `host_files(...)` documentation states that it requires prepared tool context
+  from `BaseWorkflow.build_react(...)` or isolated `bootstrap_bind_all(...)`
+- generated executor code gets files by calling a catalog tool through
+  `agent_io_tools.tool_call(...)`; `host_files(...)` is for trusted
+  bundle/catalog tools
 - do not commit, tag, push, or update descriptor refs unless the user has
   explicitly agreed to the content release values
 

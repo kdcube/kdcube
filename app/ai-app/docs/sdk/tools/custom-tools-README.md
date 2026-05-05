@@ -83,6 +83,192 @@ resp = await agent_io_tools.tool_call(
 )
 ```
 
+## 4.1) Declaring Files For React Hosting
+
+Custom tools must return the standard tool envelope:
+
+```json
+{"ok": true, "error": null, "ret": {...}}
+```
+
+If a custom tool intentionally produces files that should be delivered to the
+user, mark the payload inside `ret` as a file result:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "path": "turn_123/outputs/invoices/invoice.pdf",
+        "physical_path": "turn_123/outputs/invoices/invoice.pdf",
+        "filename": "invoice.pdf",
+        "mime_type": "application/pdf",
+        "size_bytes": 12345,
+        "visibility": "external"
+      }
+    ]
+  }
+}
+```
+
+React unwraps `{ok, error, ret}` first, then recognizes
+`ret.artifact_type == "files"`. Each declared file is copied into the
+conversation store and receives hosted artifact metadata such as `hosted_uri`,
+`key`, `rn`, and `physical_path`.
+
+This contract works for one file or many files. The marker and container are
+strict: use `ret.artifact_type: "files"` and `ret.files[]`.
+
+Use this only for deliberate file-producing tools. For example, a tool that
+materializes a requested email attachment can declare that attachment for
+hosting. A tool that merely returns message metadata should not do so.
+
+Example bundle-local tool:
+
+```python
+from pathlib import Path
+from typing import Annotated
+
+try:
+    from semantic_kernel.functions import kernel_function
+except Exception:
+    from semantic_kernel.utils.function_decorator import kernel_function
+
+from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import ok, scope
+
+
+@kernel_function(name="export_report", description="Create a report file")
+async def export_report(
+    filename: Annotated[str, "Output filename"] = "report.txt",
+):
+    sc = scope()
+    turn_id = sc["turn_id"]
+    outdir = Path(sc["outdir"])
+    rel = Path(turn_id) / "outputs" / "reports" / filename
+    target = outdir / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("hello\n", encoding="utf-8")
+
+    return ok({
+        "artifact_type": "files",
+        "files": [{
+            "type": "file",
+            "path": rel.as_posix(),
+            "physical_path": rel.as_posix(),
+            "filename": filename,
+            "mime_type": "text/plain",
+            "size_bytes": target.stat().st_size,
+            "visibility": "external",
+        }],
+    })
+```
+
+Path rules:
+- `path` / `physical_path` should be relative to the current React `OUT_DIR`.
+- Use `turn_<id>/outputs/...` for tool-generated outputs.
+- Use `visibility: "external"` only when the file is intended for user delivery.
+- Do not inline large binary payloads in `ret`; write the file and return a path.
+
+### Hosting From The Tool
+
+Trusted bundle tools can host current-turn files themselves through
+`bundle_tool_context.host_files`. The helper uses the active conversation scope
+and returns the same declared-file payload shape, with hosted fields already
+filled in:
+
+```python
+from kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context import host_files, ok
+
+
+@kernel_function(name="export_report", description="Create and host a report")
+async def export_report():
+    # Write the file under the current OUT_DIR first.
+    hosted = await host_files([
+        {
+            "path": "turn_123/outputs/reports/report.pdf",
+            "filename": "report.pdf",
+            "mime_type": "application/pdf",
+            "visibility": "external",
+        }
+    ])
+    return ok(hosted)
+```
+
+`host_files(...)` returns:
+
+```json
+{
+  "artifact_type": "files",
+  "files": [
+    {
+      "type": "file",
+      "hosted": true,
+      "emitted": true,
+      "hosted_uri": "...",
+      "key": "...",
+      "rn": "...",
+      "filename": "report.pdf",
+      "mime_type": "application/pdf"
+    }
+  ],
+  "hosted_count": 1,
+  "emitted": true
+}
+```
+
+React records those rows as declared files and does not host them again.
+
+Runtime availability:
+- normal React tool calls run with the workflow `ToolSubsystem`, so
+  `host_files(...)` can use the workflow hosting service directly.
+- in-memory tool execution uses the same binding contract.
+- isolated tool execution rebuilds the communicator, conversation store, and
+  hosting-capable `ToolSubsystem` in the trusted supervisor/runtime bootstrap,
+  so a catalog tool running there can also call `host_files(...)`.
+- generated executor code reaches file hosting by calling a catalog tool through
+  `agent_io_tools.tool_call(...)`; the catalog tool is the trusted boundary that
+  writes files and calls `host_files(...)`.
+
+Runtime context required:
+- `host_files(...)` requires a bound `ToolSubsystem` with a hosting service.
+- the bound communicator must carry enough conversation scope to place the
+  artifact: tenant, project, user id, conversation id, turn id, and usually
+  user type.
+- the runtime must also provide conversation storage and an output directory
+  where the declared file path is readable.
+- the model should not pass those runtime ids as tool parameters; they must be
+  prepared by the SDK runtime before the tool runs.
+
+Normal bundle workflows get this preparation when `BaseWorkflow.build_react(...)`
+creates the `ToolSubsystem` with the workflow `ApplicationHostingService`.
+Cached workflows refresh the request-bound communicator through
+`BaseWorkflow.rebind_request_context(...)`.
+
+Isolated execution gets the same preparation from
+`kdcube_ai_app.apps.chat.sdk.runtime.bootstrap.bootstrap_bind_all(...)`. That
+bootstrap restores runtime context, builds the communicator, recreates the
+conversation hosting service, creates the tool subsystem, and binds the tool
+modules. A custom isolated runner must call the SDK bootstrap or perform the
+same preparation before a trusted tool can call `host_files(...)`.
+
+If this preparation is missing, `host_files(...)` fails fast. Typical failures
+are:
+- `RuntimeError("tools are not bound to the current tool subsystem")`
+- `RuntimeError("tool hosting service is unavailable")`
+- `RuntimeError("tool communicator is unavailable")`
+- `RuntimeError("bundle storage root is unavailable")`
+
+Missing tenant, project, user id, conversation id, or turn id should be treated
+as a runtime-preparation bug. Do not ask the LLM to invent those values.
+
+Direct returned declarations and tool-side hosting are equivalent from React's
+point of view. A tool may either return `ret.artifact_type: "files"` with local
+paths, or call `host_files(...)` and return the already-hosted rows.
+
 ## 5) What a tool module receives at runtime
 
 Tool modules are bound centrally by the runtime before use.

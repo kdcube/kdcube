@@ -78,6 +78,7 @@ class ToolSubsystem:
             raw_tool_specs: Optional[List[Dict[str, Any]]] = None,
             tool_runtime: Optional[Dict[str, str]] = None,
             mcp_subsystem: Optional[Any] = None,
+            hosting_service: Optional[Any] = None,
     ):
         self.svc = service
         self.comm = comm
@@ -92,6 +93,7 @@ class ToolSubsystem:
         self.raw_tool_specs = raw_tool_specs or []
         self._tool_runtime = tool_runtime or {}
         self.mcp_subsystem = mcp_subsystem
+        self.hosting_service = hosting_service
         self._mcp_entries: List[Dict[str, Any]] = []
 
         # --- compute bundle_root once ---
@@ -825,6 +827,7 @@ def create_tool_subsystem_with_mcp(
         mcp_tool_specs: Optional[List[Dict[str, Any]]] = None,
         mcp_services_config: Optional[Any] = None,
         mcp_env_json: Optional[str] = None,
+        hosting_service: Optional[Any] = None,
 ):
     """
     Factory to create MCPToolsSubsystem (optional) + ToolSubsystem.
@@ -854,5 +857,6 @@ def create_tool_subsystem_with_mcp(
         raw_tool_specs=raw_tool_specs,
         tool_runtime=tool_runtime,
         mcp_subsystem=mcp_subsystem,
+        hosting_service=hosting_service,
     )
     return tool_subsystem, mcp_subsystem

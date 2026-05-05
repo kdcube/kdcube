@@ -1199,6 +1199,8 @@ For common tool context, prefer:
 - `kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context.scope()`
 - `ok(...)` / `error(...)`
 - `log_tool_start(...)`, `log_tool_success(...)`, `log_tool_error(...)`
+- `host_files(...)` when a trusted bundle/catalog tool has materialized files
+  that should become current-turn hosted artifacts
 
 That helper resolves tenant/project/bundle id, bundle user scope, user type,
 conversation/turn ids, bundle props, bundle storage root, output/work dirs, and
@@ -1220,6 +1222,17 @@ Tool signature rule:
   job payload/context, then read it inside the tool implementation
 - return opaque references for follow-up actions when a later tool needs exact
   storage/execution identity
+- if a tool returns user-visible files, return the standard envelope
+  `{"ok": true, "ret": {"artifact_type": "files", "files": [...]}}` or use
+  `host_files(...)` to host the files inside the tool before returning
+- `host_files(...)` works only after the runtime has prepared the trusted tool
+  context: active `ToolSubsystem`, hosting service, tenant/project/user/
+  conversation/turn scope, conversation storage, and output directory. Normal
+  React workflows prepare this through `BaseWorkflow.build_react(...)`;
+  isolated execution prepares it through `bootstrap_bind_all(...)`.
+- generated executor code should call a catalog tool through
+  `agent_io_tools.tool_call(...)` when it needs file materialization or hosting;
+  `host_files(...)` is for trusted bundle/catalog tools
 
 ### Tool execution in isolated runtime
 
@@ -1233,6 +1246,8 @@ That means:
 - do not rely on random globals from the host process
 - do not rely on live in-memory objects created in the parent process
 - use only the documented portable surfaces
+- trusted catalog tools still receive the reconstructed tool subsystem and can
+  host files with `host_files(...)` when conversation storage is available
 
 If code may run in isolated execution, write it as if only the documented bindings are available.
 
@@ -1482,6 +1497,9 @@ Mental model:
 
 - local bundle storage = instance-visible filesystem
 - `AIBundleStorage` = backend storage API for bundle artifacts
+- hosted conversation files = current-turn user-visible artifacts; use
+  `ret.artifact_type == "files"` with `ret.files[]` or `host_files(...)`
+  instead of treating bundle storage paths as deliverable links
 
 ## 11. Widget Design Rules
 

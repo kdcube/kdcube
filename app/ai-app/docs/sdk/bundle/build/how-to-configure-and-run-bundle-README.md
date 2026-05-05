@@ -926,6 +926,29 @@ After changing `ui-src`, reload or reselect the bundle so the iframe requests
 the HTML entrypoint again. If the UI is still stale, inspect loader logs and the
 served hashed asset before changing runtime storage manually.
 
+### If you changed a file-producing tool
+
+No descriptor flag enables file hosting for a tool. The contract is part of the
+React/tool runtime.
+
+The tool must either:
+
+- return `{"ok": true, "ret": {"artifact_type": "files", "files": [...]}}`
+- or call `host_files(...)` from a trusted bundle/catalog tool after it
+  materializes the files
+
+The runtime must have normal conversation storage for hosted file links to be
+created. Generated executor code should call a catalog tool through
+`agent_io_tools.tool_call(...)` when it needs files. `host_files(...)` is for
+trusted bundle/catalog tools.
+
+`host_files(...)` also requires prepared runtime scope: an active
+`ToolSubsystem` with hosting service, tenant, project, user id, conversation id,
+turn id, conversation storage, and output directory. Normal React workflows
+prepare this through `BaseWorkflow.build_react(...)`; isolated execution
+prepares it through `bootstrap_bind_all(...)`. Without that prep the helper
+raises a runtime error instead of creating an unscoped artifact.
+
 ## Bundle Props, Secrets, And `enabled_config`
 
 Deployment-scoped non-secret bundle config goes in `bundles.yaml`.
@@ -1118,6 +1141,8 @@ If you only remember the essentials, remember these:
   seed/source descriptors and host-side proc runs, runtime-visible paths for
   staged Docker-consumed runtime copies
 - custom main-view UI source is rebuilt by the bundle UI loader, not by manual runtime-storage builds
+- file-producing tools use the React/tool runtime file contract, not a
+  `bundles.yaml` switch
 - rerun install when you changed the canonical source descriptor set or runtime topology
 - use `kdcube reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
 - use `kdcube --info --workdir <path>` to inspect the runtime you are actually using

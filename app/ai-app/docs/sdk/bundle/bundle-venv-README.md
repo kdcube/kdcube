@@ -75,12 +75,17 @@ Not safe:
 - Redis clients
 - framework request objects
 - proc-side globals such as tool/runtime registries
+- `bundle_tool_context.host_files(...)`
 
 Practical rule:
 
 - keep orchestration in proc
 - pass plain data into the `@venv(...)` helper
 - return plain data out
+- if the helper writes or prepares user-visible files, return serializable
+  file metadata to the trusted catalog tool that called it; that catalog tool
+  can then return `ret.artifact_type: "files"` or call
+  `bundle_tool_context.host_files(...)` from the prepared tool context
 
 ## Reload behavior
 

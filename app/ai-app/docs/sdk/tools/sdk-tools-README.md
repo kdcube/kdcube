@@ -31,6 +31,56 @@ They are part of the trusted runtime surface:
 
 In practice, the built-in tools are how the runtime exposes common capabilities without forcing each app to reimplement them.
 
+## File Artifacts From Tools
+
+Rendering and exec tools already produce file artifacts through their native
+contracts. Custom tools can intentionally trigger the same React artifact-hosting
+path by returning the standard envelope with a file marker inside `ret`:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "path": "turn_123/outputs/result.xlsx",
+        "filename": "result.xlsx",
+        "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "visibility": "external"
+      }
+    ]
+  }
+}
+```
+
+React v2 and v3 unwrap `{ok, error, ret}` first. The explicit
+`ret.artifact_type == "files"` marker tells React to host each declared
+file in the conversation store.
+
+The marker and container are strict: `ret.artifact_type: "files"` plus
+`ret.files[]`.
+
+Trusted bundle/catalog tools can also host files before returning by using
+`bundle_tool_context.host_files(...)`. That helper is available in normal
+workflow execution, in-memory tool execution, and isolated execution on the
+trusted supervisor/runtime side. Generated code reaches it by calling a catalog
+tool through `agent_io_tools.tool_call(...)`; the catalog tool owns file
+materialization and hosting.
+
+`host_files(...)` depends on prepared tool runtime context. The prepared context
+must include an active `ToolSubsystem` with a hosting service, communicator scope
+for tenant/project/user/conversation/turn, conversation storage, and a readable
+output directory. Normal React workflows prepare this through
+`BaseWorkflow.build_react(...)`; isolated execution prepares it through
+`bootstrap_bind_all(...)`. Without that preparation the helper raises a runtime
+error such as `tool hosting service is unavailable` or
+`tool communicator is unavailable`.
+
+For full authoring guidance, see [Custom Tools](./custom-tools-README.md).
+
 ## Main built-in tool families
 
 Common built-in families include:

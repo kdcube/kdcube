@@ -1268,6 +1268,7 @@ class BaseWorkflow():
             mcp_tool_specs=mcp_tools_spec or [],
             mcp_services_config=self._resolve_mcp_services_config(),
             mcp_env_json=os.environ.get("MCP_SERVICES") or "",
+            hosting_service=self.hosting_service,
         )
 
         tools = tool_subsystem or ToolSubsystem(
@@ -1280,7 +1281,8 @@ class BaseWorkflow():
                 "kb_client": self.kb
             },
             mcp_subsystem=mcp_subsystem,
-            tool_runtime=tools_runtime
+            tool_runtime=tools_runtime,
+            hosting_service=self.hosting_service,
         )
         skills = SkillsSubsystem(
             descriptor={

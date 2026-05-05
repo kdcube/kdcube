@@ -249,6 +249,7 @@ def _build_tool_subsystem_from_runtime_globals(
         comm: ChatCommunicator,
         registry: Any | None,
         integrations: Dict[str, Any] | None,
+        hosting_service: Any | None = None,
 ) -> Any | None:
     try:
         from kdcube_ai_app.infra.plugin.bundle_registry import BundleSpec
@@ -306,9 +307,32 @@ def _build_tool_subsystem_from_runtime_globals(
             raw_tool_specs=raw_tool_specs,
             tool_runtime=rg.get("TOOL_RUNTIME") if isinstance(rg.get("TOOL_RUNTIME"), dict) else None,
             mcp_subsystem=mcp_subsystem,
+            hosting_service=hosting_service,
         )
     except Exception:
         return None
+
+
+def _make_hosting_service_for_runtime(comm: ChatCommunicator | None) -> Any | None:
+    if comm is None:
+        return None
+    try:
+        from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
+        from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import ApplicationHostingService
+
+        storage_path = get_settings().STORAGE_PATH
+        if not storage_path:
+            return None
+        return ApplicationHostingService(
+            store=ConversationStore(storage_path),
+            comm=comm,
+            logger=logger,
+        )
+    except Exception:
+        logger.debug("failed to create runtime hosting service", exc_info=True)
+        return None
+
+
 def bootstrap_bind_all(spec_json: str, *,
                        module_names: list[str],
                        bootstrap_env: bool = True) -> dict:
@@ -399,6 +423,7 @@ def bootstrap_bind_all(spec_json: str, *,
 
     # 6) Build integrations + tool subsystem
     integrations = _build_integrations_from_spec(spec)
+    hosting_service = _make_hosting_service_for_runtime(comm)
     try:
         if comm:
             tool_subsystem = _build_tool_subsystem_from_runtime_globals(
@@ -407,6 +432,7 @@ def bootstrap_bind_all(spec_json: str, *,
                 comm=comm,
                 registry=registry,
                 integrations=integrations,
+                hosting_service=hosting_service,
             )
             if tool_subsystem is not None:
                 if integrations is None:
@@ -516,12 +542,31 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
     except Exception:
         logger.exception(f"make_chat_comm / set_comm failed {traceback.format_exc()}")
 
+    integrations = _build_integrations_from_spec(spec)
+    hosting_service = _make_hosting_service_for_runtime(comm)
+    try:
+        if comm:
+            tool_subsystem = _build_tool_subsystem_from_runtime_globals(
+                runtime_globals=None,
+                svc=svc,
+                comm=comm,
+                registry=registry,
+                integrations=integrations,
+                hosting_service=hosting_service,
+            )
+            if tool_subsystem is not None:
+                if integrations is None:
+                    integrations = {}
+                integrations["tool_subsystem"] = tool_subsystem
+    except Exception:
+        pass
+
     try:
         bind_into_module(
             tool_module,
             svc=svc,
             registry=registry,
-            integrations=_build_integrations_from_spec(spec),
+            integrations=integrations,
         )
     except Exception:
         logger.exception(f"bind_into_module failed {traceback.format_exc()}")

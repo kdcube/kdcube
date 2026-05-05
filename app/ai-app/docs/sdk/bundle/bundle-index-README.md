@@ -70,7 +70,7 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Testing playbook | [build/how-to-test-bundle-README.md](build/how-to-test-bundle-README.md) |
 | Study the reference bundle | [versatile-reference-bundle-README.md](versatile-reference-bundle-README.md) |
 | Runtime surfaces | [bundle-runtime-README.md](bundle-runtime-README.md) |
-| React, tools/skills, MCP, and Claude Code agent integration | [bundle-agent-integration-README.md](bundle-agent-integration-README.md) |
+| React, tools/skills, MCP, Claude Code, and file-producing tool integration | [bundle-agent-integration-README.md](bundle-agent-integration-README.md) |
 | Decorators, widget/API/public integration, `@on_job` | [bundle-platform-integration-README.md](bundle-platform-integration-README.md) |
 | Inbound/outbound transports and protocols | [bundle-transports-README.md](bundle-transports-README.md) |
 | Props, secrets, raw descriptor reads | [../../configuration/bundle-runtime-configuration-and-secrets-README.md](../../configuration/bundle-runtime-configuration-and-secrets-README.md) |
@@ -89,6 +89,14 @@ Older `docs/sdk/example-bundle` sample docs are no longer part of the bundle pat
 | Cached subprocess virtualenv helpers (`@venv`) | [bundle-venv-README.md](bundle-venv-README.md) |
 | Outbound event filtering | [bundle-firewall-README.md](bundle-firewall-README.md) |
 | Python-to-Node backend bridge | [bundle-node-backend-bridge-README.md](bundle-node-backend-bridge-README.md) |
+
+For files produced by bundle tools, start with
+[bundle-agent-integration-README.md](bundle-agent-integration-README.md) and
+[bundle-runtime-README.md](bundle-runtime-README.md). The strict tool result
+contract is `ret.artifact_type: "files"` plus `ret.files[]`; trusted catalog
+tools may also call `bundle_tool_context.host_files(...)`, including in isolated
+supervisor/runtime execution. `host_files(...)` requires prepared tool context
+from `BaseWorkflow.build_react(...)` or isolated `bootstrap_bind_all(...)`.
 
 Runnable sidecar details:
 - [node-backend-sidecar-README.md](../node/node-backend-sidecar-README.md)

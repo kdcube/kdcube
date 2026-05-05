@@ -510,6 +510,16 @@ Entry point:
 Bundles can emit files (artifacts) and citations. The platform stores them and
 emits references through SSE so clients can render downloads and previews.
 
+Bundle/catalog tools can expose generated or materialized files by returning the
+strict tool result payload `ret.artifact_type: "files"` with `ret.files[]`, or
+by calling `bundle_tool_context.host_files(...)` and returning the hosted rows.
+Both paths produce normal hosted file metadata and `chat.files` stream events.
+The helper is available in normal trusted tool execution and in isolated
+supervisor/runtime tool execution; generated executor code should call a catalog
+tool through `agent_io_tools.tool_call(...)` to use it. The helper requires
+prepared tool context: a hosting-capable `ToolSubsystem`, tenant, project, user
+id, conversation id, turn id, conversation storage, and output directory.
+
 Bundles can also expose **knowledge space files** (read‑only) via `react.read`.
 `ks:` is one bundle-defined logical path space rooted at the bundle's prepared knowledge root.
 Common real-path examples in this repo:

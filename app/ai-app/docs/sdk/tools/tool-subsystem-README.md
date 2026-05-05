@@ -137,6 +137,86 @@ Tool IDs:
 4. In the limited executor, `agent_io_tools.tool_call(...)` delegates to supervisor via `ToolStub`.
 5. Supervisor resolves callable from `TOOL_ALIAS_MAP` and executes through `agent_io_tools.tool_call(...)`.
 6. For `mcp.*` IDs, `agent_io_tools.tool_call(...)` routes to `MCPToolsSubsystem.execute_tool(...)`.
+7. The trusted runtime bootstrap rebuilds a conversation hosting service and
+   attaches it to the runtime `ToolSubsystem`, so catalog tools can use
+   `bundle_tool_context.host_files(...)` in both in-process and isolated
+   supervisor execution.
+
+## File-producing tool result contract
+
+All tools should return the standard envelope:
+
+```json
+{"ok": true, "error": null, "ret": {...}}
+```
+
+When a tool intentionally creates files that should be delivered as artifacts,
+the file declaration belongs inside `ret`:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "path": "turn_123/outputs/report.pdf",
+        "filename": "report.pdf",
+        "mime_type": "application/pdf",
+        "visibility": "external"
+      }
+    ]
+  }
+}
+```
+
+React v2 and v3 unwrap `{ok, error, ret}` before result handling. If
+`ret.artifact_type == "files"`, each declared file is hosted into the
+conversation store and emitted as normal artifact metadata.
+
+The declared `path` / `physical_path` must refer to a file accessible from the
+current React `OUT_DIR`, typically under `turn_<id>/outputs/...`.
+
+Trusted bundle tools can also call
+`kdcube_ai_app.apps.chat.sdk.tools.bundle_tool_context.host_files(...)` after
+writing files. The helper hosts through the active conversation store, emits
+file events, and returns a `ret` payload with `artifact_type: "files"` and
+hosted file rows.
+
+`host_files(...)` is part of the trusted tool runtime surface. It is available
+to bundle/catalog tools executed:
+- in the normal workflow process
+- through in-memory tool execution
+- in isolated execution on the trusted supervisor/runtime side
+
+The helper only works after the runtime has prepared the tool context. Required
+runtime state is:
+- an active `ToolSubsystem`
+- `ToolSubsystem.hosting_service`
+- communicator scope with tenant, project, user id, conversation id, turn id,
+  and user type
+- conversation storage and a readable current output directory
+
+Normal React workflows prepare that state through `BaseWorkflow.build_react(...)`
+and keep it fresh on cached workflows through
+`BaseWorkflow.rebind_request_context(...)`. Isolated execution prepares it in
+`kdcube_ai_app.apps.chat.sdk.runtime.bootstrap.bootstrap_bind_all(...)`, which
+restores context, builds the communicator, recreates the conversation hosting
+service, builds the tool subsystem, and binds modules.
+
+If a tool calls `host_files(...)` without that preparation, it raises a runtime
+error such as `tools are not bound to the current tool subsystem`,
+`tool hosting service is unavailable`, `tool communicator is unavailable`, or
+`bundle storage root is unavailable`. Missing tenant/project/user/conversation/
+turn scope is also a runtime-preparation defect; it should not be filled in by
+the model.
+
+Generated executor code reaches the same capability by calling a catalog tool
+through `agent_io_tools.tool_call(...)`. The generated program does not need to
+construct conversation storage or hosting objects; it asks a visible catalog
+tool to materialize and host the requested files.
 
 ## What survives into isolated execution
 
@@ -150,9 +230,15 @@ process. It reconstructs a narrow portable runtime:
 - communicator from the portable comm descriptor
 - integrations payload such as `kv_cache` and `ctx_client`
 - tool subsystem from exported runtime globals
+- conversation hosting service rebuilt from the runtime storage settings and
+  attached to the tool subsystem
 
 The point is to make a tool module see the same canonical binding contract in
 both proc and isolated execution, while still keeping the runtime portable.
+
+The hosting service is reconstructed inside the trusted runtime, not shipped as
+a live Python object from the host. It uses the runtime `ConversationStore`,
+current communicator, and turn scope restored by bootstrap.
 
 ## Custom dependencies in tool modules
 
