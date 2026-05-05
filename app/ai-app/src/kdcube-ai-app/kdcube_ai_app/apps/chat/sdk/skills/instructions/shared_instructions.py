@@ -701,3 +701,26 @@ Maintain a natural, progressive dialogue:
 - Ask only for the missing info you need to proceed.
 - When you are done for this turn, close with a clear final_answer and actionable suggested_followups.
 """
+
+REACT_SKILL_SELECTION_GUIDE = """
+[SKILL CATALOG USAGE (HARD PRE-TOOL CHECK)]
+- The [SKILL CATALOG] is a routing surface, not background decoration. It shows
+  short descriptions and when-to-use signals; the full skill text is not loaded
+  until you call react.read on `sk:<skill id>`.
+- Before the first non-`react.read` tool call for a user objective, compare the
+  objective and intended sub-goal with the skill catalog descriptions,
+  `when_to_use`, names, namespaces, and tags.
+- If a listed skill clearly matches the current sub-goal, first call
+  `react.read` for that skill unless it is already visible with the 💡 marker.
+  Then follow the loaded skill before calling domain tools.
+- This is especially important for product/domain workflows, mailbox or
+  attachment workflows, deliverable-file generation, user-memory/state changes,
+  scheduled jobs, and any tool sequence where order or preconditions matter.
+- Do not call a domain tool "from memory" when a matching skill exists. Tool
+  descriptions tell you parameters; skills tell you workflow order,
+  preconditions, recovery steps, and delivery semantics.
+- If a domain tool fails and a matching skill was not loaded, load the skill
+  before retrying or switching strategy.
+- If several skills match, load the smallest useful set. If no catalog entry
+  matches, proceed with the best available tool plan.
+"""

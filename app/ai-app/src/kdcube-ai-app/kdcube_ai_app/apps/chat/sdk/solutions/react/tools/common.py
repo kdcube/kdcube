@@ -7,10 +7,13 @@ import time
 import shutil
 import subprocess
 import tempfile
+import logging
 from typing import Any, Dict, Optional, List
 
 import json
 import pathlib
+
+_LOG = logging.getLogger("kdcube.react.artifacts")
 
 
 def add_block(ctx_browser, block: Dict[str, Any]) -> None:
@@ -292,10 +295,41 @@ async def host_artifact_file(
     Best-effort hosting for file artifacts. Mutates artifact in-place with hosted_uri/rn/key/physical_path.
     Returns hosted file records (possibly empty).
     """
+    artifact_value = artifact.get("value") if isinstance(artifact, dict) else {}
+    if not isinstance(artifact_value, dict):
+        artifact_value = {}
+    artifact_log = {
+        "artifact_id": artifact.get("artifact_id") or artifact.get("slot") or artifact.get("resource_id"),
+        "tool_id": artifact.get("tool_id"),
+        "filename": artifact_value.get("filename") or artifact.get("filename"),
+        "path": artifact_value.get("path") or artifact_value.get("physical_path") or artifact.get("path"),
+        "mime": artifact_value.get("mime") or artifact_value.get("mime_type") or artifact.get("mime"),
+        "visibility": artifact.get("visibility"),
+    }
     try:
         if not hosting_service or not comm:
+            _LOG.warning(
+                "[react.artifact.host.skip] reason=missing_runtime hosting_service=%s comm=%s artifact=%s",
+                bool(hosting_service),
+                bool(comm),
+                artifact_log,
+            )
             return []
         svc = comm.service or {}
+        scope_log = {
+            "tenant": svc.get("tenant") or "",
+            "project": svc.get("project") or "",
+            "user": svc.get("user") or getattr(comm, "user_id", None) or "",
+            "conversation_id": svc.get("conversation_id") or getattr(runtime_ctx, "conversation_id", "") or "",
+            "turn_id": getattr(runtime_ctx, "turn_id", "") or "",
+            "request_id": svc.get("request_id") or "",
+        }
+        _LOG.info(
+            "[react.artifact.host.start] scope=%s outdir=%s artifact=%s",
+            scope_log,
+            str(outdir),
+            artifact_log,
+        )
         hosted = await hosting_service.host_files_to_conversation(
             rid=svc.get("request_id") or "",
             files=[artifact],
@@ -308,6 +342,12 @@ async def host_artifact_file(
             turn_id=(getattr(runtime_ctx, "turn_id", "") or ""),
         )
         if not hosted:
+            _LOG.warning(
+                "[react.artifact.host.empty] scope=%s outdir=%s artifact=%s",
+                scope_log,
+                str(outdir),
+                artifact_log,
+            )
             return []
         h0 = hosted[0]
         hosted_uri = (h0.get("hosted_uri") or "").strip()
@@ -327,8 +367,28 @@ async def host_artifact_file(
             artifact["hosted_uri"] = hosted_uri
         if hosted_rn:
             artifact["rn"] = hosted_rn
+        _LOG.info(
+            "[react.artifact.host.success] scope=%s hosted_count=%s artifact=%s hosted=%s",
+            scope_log,
+            len(hosted or []),
+            artifact_log,
+            {
+                "filename": h0.get("filename"),
+                "key": h0.get("key"),
+                "rn": h0.get("rn"),
+                "hosted_uri": h0.get("hosted_uri"),
+                "physical_path": h0.get("physical_path") or h0.get("local_path"),
+                "size": h0.get("size"),
+            },
+        )
         return hosted
-    except Exception:
+    except Exception as exc:
+        _LOG.exception(
+            "[react.artifact.host.error] artifact=%s outdir=%s error=%s",
+            artifact_log,
+            str(outdir),
+            str(exc),
+        )
         return []
 
 
@@ -339,10 +399,36 @@ async def emit_hosted_files(
     should_emit: bool,
 ) -> None:
     if not hosting_service or not hosted or not should_emit:
+        if hosted and should_emit and not hosting_service:
+            _LOG.warning(
+                "[react.artifact.emit.skip] reason=missing_hosting_service hosted_count=%s",
+                len(hosted or []),
+            )
         return
     try:
+        _LOG.info(
+            "[react.artifact.emit.start] hosted_count=%s files=%s",
+            len(hosted or []),
+            [
+                {
+                    "filename": item.get("filename"),
+                    "key": item.get("key"),
+                    "rn": item.get("rn"),
+                    "hosted_uri": item.get("hosted_uri"),
+                    "size": item.get("size"),
+                }
+                for item in list(hosted or [])[:10]
+                if isinstance(item, dict)
+            ],
+        )
         await hosting_service.emit_solver_artifacts(files=hosted, citations=[])
-    except Exception:
+        _LOG.info("[react.artifact.emit.success] hosted_count=%s", len(hosted or []))
+    except Exception as exc:
+        _LOG.exception(
+            "[react.artifact.emit.error] hosted_count=%s error=%s",
+            len(hosted or []),
+            str(exc),
+        )
         return
 
 def infer_format_from_path(path: Optional[str]) -> str:

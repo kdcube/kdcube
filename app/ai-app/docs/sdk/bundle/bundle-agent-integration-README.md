@@ -350,13 +350,22 @@ MCP_TOOL_SPECS = [
 ```python
 CUSTOM_SKILLS_ROOT = "skills"
 
+REACT_DECISION_SKILLS = [
+    "public.*",
+    "product.domain",
+]
+
 AGENTS_CONFIG = {
-    "product.domain": {
-        "include": True,
-        "when_to_use": "Use when the user asks to inspect or update domain assets.",
-    }
+    "solver.react.v2.decision.v2.strong": {"enabled": REACT_DECISION_SKILLS},
+    "solver.react.v2.decision.v2.regular": {"enabled": REACT_DECISION_SKILLS},
 }
 ```
+
+The keys are the React decision agent ids used by the runtime. Use both
+`solver.react.v2.decision.v2.strong` and
+`solver.react.v2.decision.v2.regular` when both model tiers should see the same
+bundle skills. Do not key visibility by the skill id itself. If a bundle has a
+different decision agent name, use the name emitted in runtime/accounting logs.
 
 Each skill's `tools.yaml` should reference real tool ids from the descriptor.
 For example, with alias `domain`, a Python function `search_assets` becomes:
@@ -419,6 +428,19 @@ Runtime context rule:
 - do not ask the model to invent runtime ids or filesystem paths
 - use bundle tool helpers and `bundle_call_context` for ids that should not be
   model-provided
+
+Model-facing tool contract:
+
+- every React-visible tool should return the standard envelope
+  `{ok, error, ret}`
+- every tool description or return annotation should also state the concrete
+  `ret` shape that will appear on the timeline, for example
+  `ret={items:[{id,title,status}],count,next_cursor?}`
+- include exact ids and opaque references in `ret` when later tool calls should
+  reuse them
+- do not rely on hidden service fields or vague phrases such as "returns
+  metadata"; the decision model sees the tool catalog and timeline result, so
+  this contract determines whether it can plan the next step correctly
 
 Multiple agent surfaces are allowed. A bundle can keep separate descriptors for
 normal chat and scheduled job execution:

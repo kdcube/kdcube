@@ -40,6 +40,7 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     SUGGESTED_FOLLOWUPS_GUIDE,
     REACT_ARTIFACTS_AND_PATHS,
     REACT_PLANNING,
+    REACT_SKILL_SELECTION_GUIDE,
 )
 
 _LOG = logging.getLogger("agent.react.v2.decision")
@@ -231,6 +232,7 @@ def build_decision_system_text(
     infra_adapters: Optional[List[Dict[str, Any]]] = None,
     workspace_implementation: str = "custom",
     additional_instructions: Optional[str] = None,
+    skill_consumer: str = "solver.react.v2.decision.v2.strong",
 ) -> str:
     workspace_guide = get_workspace_implementation_guide(workspace_implementation)
     json_hint = (
@@ -307,6 +309,7 @@ You are the Decision module inside a ReAct loop.
 {SOURCES_AND_CITATIONS_V2}
 {WORK_WITH_DOCUMENTS_AND_IMAGES}
 {REACT_PLANNING}
+{REACT_SKILL_SELECTION_GUIDE}
 
 [CORE RESPONSIBILITIES]
 - Choose action:
@@ -552,7 +555,7 @@ It is preferable to use react.write for streaming large content and use renderin
         exclude_tool_ids=[],
     )
     tool_block = build_instruction_catalog_block(
-        consumer="solver.react.decision.v2",
+        consumer=skill_consumer,
         tool_catalog=tool_catalog,
         react_tools=get_react_tools_catalog(),
         include_skill_gallery=True,
@@ -600,6 +603,7 @@ async def react_decision_stream_v2(
         infra_adapters=infra_adapters,
         workspace_implementation=workspace_implementation,
         additional_instructions=additional_instructions,
+        skill_consumer=agent_name,
     )
     system_msg = create_cached_system_message([
         {"text": system_text, "cache": True},

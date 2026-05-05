@@ -183,6 +183,9 @@ For a React-backed bundle, prove the agent surface before manual testing:
 - `orchestrator/workflow.py` calls `BaseWorkflow.build_react(...)`
 - `tools_descriptor.py` exposes only the tool aliases the bundle actually needs
 - `skills_descriptor.py` points to bundle-local skills
+- `skills_descriptor.py` / `job_skills_descriptor.py` visibility filters use
+  the real React decision ids `solver.react.v2.decision.v2.strong` and
+  `solver.react.v2.decision.v2.regular`
 - each skill has `SKILL.md`
 - each skill `tools.yaml` references real tool ids from `tools_descriptor.py`
 - distinct product concepts have distinct tool aliases
@@ -224,6 +227,11 @@ Good React smoke tests:
   as user id, task id, execution id, conversation id, internal account id, or
   storage paths; those must come from runtime context, job payload, or opaque
   references returned by earlier tools
+- tool-description tests or direct signature checks verify model-facing return
+  annotations include the timeline-visible `ret` shape, not only the envelope.
+  For example, assert the annotation contains fields such as
+  `ret={accounts:[...]}` or `ret={messages:[...],claude_code_mcp?...}` when the
+  solver must use those fields in later steps.
 - file-producing tool tests verify the strict result envelope:
   `{"ok": true, "ret": {"artifact_type": "files", "files": [...]}}`
 - if a trusted bundle/catalog tool uses `host_files(...)`, tests or manual
@@ -266,7 +274,11 @@ Prove the sequence:
 - `on_bundle_load` ran successfully for the bundle
 - React was built with the expected `allowed_plugins` and `tool_ids`
 - skill loading exposed the expected bundle-local skills
+- skill visibility was filtered with the actual decision agent id shown in logs
+  and accounting, not a legacy descriptor key
 - the requested tool actually executed, not only appeared in the catalog
+- the tool result block contains the `ret` fields promised by the model-facing
+  tool return annotation
 - the resolved bundle user scope and user type match the path being tested
   (KDCube-authenticated, Telegram/public, cron, or `@on_job`)
 - `bundle_call_context` or job payload contains expected runtime ids for job

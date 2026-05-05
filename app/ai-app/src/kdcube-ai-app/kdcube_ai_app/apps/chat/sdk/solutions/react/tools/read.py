@@ -160,7 +160,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
                 _bump_sources_pool_next_sid,
             )
             from kdcube_ai_app.apps.chat.sdk.tools.citations import rewrite_citation_tokens
-            short_map = build_skill_short_id_map(consumer="solver.react.decision.v2")
+            short_map = build_skill_short_id_map(consumer="solver.react.v2.decision.v2.strong")
 
             def _read_skill_instruction_text(spec: Any, *, variant: str = "full") -> str:
                 instr_text = ""

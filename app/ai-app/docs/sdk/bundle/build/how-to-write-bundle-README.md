@@ -301,6 +301,9 @@ Skeleton file rules:
   follow, not only raw notes
 - `docs/journal/journal.md` should track important build decisions and
   bundle-builder-doc proposals while the bundle is being built
+- update `docs/journal/journal.md` in the same change that alters runtime
+  behavior, tool/skill contracts, storage semantics, user-scope mapping,
+  release shape, or Tier 1 builder guidance
 
 If the bundle needs external human setup before an integration can work, add an
 operator-facing integration homework doc such as:
@@ -741,6 +744,11 @@ Descriptor rules:
 - do not collapse different product concepts into one alias just because they
   are used by the same agent
 - do not add generic SDK tools unless this bundle actually needs them
+- skill visibility filters should use the real React decision agent ids:
+  `solver.react.v2.decision.v2.strong` and
+  `solver.react.v2.decision.v2.regular`
+- avoid stale/legacy consumer ids in bundle descriptors; the ids should match
+  runtime logs, accounting metadata, and model routing
 
 Example split:
 
@@ -1222,6 +1230,15 @@ Tool signature rule:
   job payload/context, then read it inside the tool implementation
 - return opaque references for follow-up actions when a later tool needs exact
   storage/execution identity
+- every model-facing tool description and return annotation must show the
+  standard envelope and the concrete `ret` shape that will appear on the
+  timeline. Do not stop at "Envelope: {ok, error, ret}" or "returns metadata".
+  The solver chooses tools from this text.
+- keep the shape compact but useful:
+  `Envelope: {ok,error,ret}. ret={items:[{id,title,status}],count,next_cursor?}`
+  is better than a long prose paragraph with no fields.
+- if a tool returns provider/user data for later tool calls, include the exact
+  identifiers and fields the model should reuse in the `ret` shape.
 - if a tool returns user-visible files, return the standard envelope
   `{"ok": true, "ret": {"artifact_type": "files", "files": [...]}}` or use
   `host_files(...)` to host the files inside the tool before returning

@@ -223,6 +223,26 @@ def _hosted_row_to_file_row(
     return out
 
 
+def _file_rows_log_summary(rows: List[Dict[str, Any]] | None) -> List[Dict[str, Any]]:
+    summary: List[Dict[str, Any]] = []
+    for row in list(rows or [])[:10]:
+        if not isinstance(row, dict):
+            continue
+        summary.append(
+            {
+                "filename": row.get("filename"),
+                "path": row.get("physical_path") or row.get("path") or row.get("local_path"),
+                "mime": row.get("mime") or row.get("mime_type"),
+                "visibility": row.get("visibility"),
+                "size": row.get("size") if row.get("size") is not None else row.get("size_bytes"),
+                "hosted_uri": row.get("hosted_uri"),
+                "rn": row.get("rn"),
+                "key": row.get("key"),
+            }
+        )
+    return summary
+
+
 async def host_files(
     files: List[Dict[str, Any]],
     *,
@@ -252,19 +272,68 @@ async def host_files(
     turn_value = str(turn_id or sc.get("turn_id") or "").strip()
     source_rows = [dict(row) for row in (files or []) if isinstance(row, dict)]
     artifacts = [_file_row_to_host_artifact(row) for row in source_rows]
-    hosted = await hosting_service.host_files_to_conversation(
-        rid=svc.get("request_id") or "",
-        files=artifacts,
-        outdir=outdir_value,
-        tenant=svc.get("tenant") or sc.get("tenant") or "",
-        project=svc.get("project") or sc.get("project") or "",
-        user=svc.get("user") or sc.get("user_id") or getattr(comm, "user_id", None) or "",
-        conversation_id=svc.get("conversation_id") or sc.get("conversation_id") or "",
-        user_type=svc.get("user_type") or sc.get("user_type") or getattr(comm, "user_type", None) or "",
-        turn_id=turn_value,
+    scope_log = _scope_log_fields(sc)
+    scope_log["request_id"] = svc.get("request_id") or ""
+    _LOG.info(
+        "[bundle.tool.host_files.start] scope=%s emit=%s outdir=%s requested=%s files=%s",
+        scope_log,
+        bool(emit),
+        outdir_value,
+        len(source_rows),
+        _file_rows_log_summary(source_rows),
+    )
+    try:
+        hosted = await hosting_service.host_files_to_conversation(
+            rid=svc.get("request_id") or "",
+            files=artifacts,
+            outdir=outdir_value,
+            tenant=svc.get("tenant") or sc.get("tenant") or "",
+            project=svc.get("project") or sc.get("project") or "",
+            user=svc.get("user") or sc.get("user_id") or getattr(comm, "user_id", None) or "",
+            conversation_id=svc.get("conversation_id") or sc.get("conversation_id") or "",
+            user_type=svc.get("user_type") or sc.get("user_type") or getattr(comm, "user_type", None) or "",
+            turn_id=turn_value,
+        )
+    except Exception as exc:
+        _LOG.exception(
+            "[bundle.tool.host_files.error] scope=%s emit=%s outdir=%s requested=%s files=%s error=%s",
+            scope_log,
+            bool(emit),
+            outdir_value,
+            len(source_rows),
+            _file_rows_log_summary(source_rows),
+            str(exc),
+        )
+        raise
+    _LOG.info(
+        "[bundle.tool.host_files.success] scope=%s requested=%s hosted=%s files=%s",
+        scope_log,
+        len(source_rows),
+        len(hosted or []),
+        _file_rows_log_summary(hosted if isinstance(hosted, list) else []),
     )
     if emit and hosted:
-        await hosting_service.emit_solver_artifacts(files=hosted, citations=[])
+        _LOG.info(
+            "[bundle.tool.host_files.emit.start] scope=%s hosted=%s files=%s",
+            scope_log,
+            len(hosted or []),
+            _file_rows_log_summary(hosted if isinstance(hosted, list) else []),
+        )
+        try:
+            await hosting_service.emit_solver_artifacts(files=hosted, citations=[])
+        except Exception as exc:
+            _LOG.exception(
+                "[bundle.tool.host_files.emit.error] scope=%s hosted=%s error=%s",
+                scope_log,
+                len(hosted or []),
+                str(exc),
+            )
+            raise
+        _LOG.info(
+            "[bundle.tool.host_files.emit.success] scope=%s hosted=%s",
+            scope_log,
+            len(hosted or []),
+        )
 
     hosted_files: List[Dict[str, Any]] = []
     for idx, item in enumerate(hosted or []):
