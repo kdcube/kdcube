@@ -94,6 +94,56 @@ workdir/
 Execution runs in a containerized environment (no network, workdir-only access),
 so attachments are accessible as local files for program logic.
 
+### 2.5 Tool-materialized attachments
+
+Some bundle tools can materialize attachments that did not arrive through chat
+ingress. Example: an email tool fetches an invoice PDF from a connected mailbox.
+
+Those tools should return the standard tool envelope and explicitly mark the
+payload as a declared file result:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "source_type": "file",
+        "visibility": "external",
+        "filename": "invoice.pdf",
+        "mime_type": "application/pdf",
+        "physical_path": "turn_123/outputs/email-attachments/invoice.pdf",
+        "logical_path": "fi:turn_123.outputs/email-attachments/invoice.pdf"
+      }
+    ]
+  }
+}
+```
+
+The marker tells React that the files are intentional deliverable artifacts. It
+then hosts `external` files into conversation storage and emits file events for
+transport delivery.
+
+The same bundle tool can host immediately with
+`bundle_tool_context.host_files(...)` and return the hosted rows. This works in
+normal tool execution and in isolated execution on the trusted supervisor/runtime
+side. Generated executor code should reach this capability by calling a visible
+catalog tool through `agent_io_tools.tool_call(...)`; that catalog tool performs
+the mailbox fetch, writes the attachment bytes, and hosts the resulting files.
+
+Immediate hosting requires the tool runtime to be prepared with tenant, project,
+user id, conversation id, turn id, conversation storage, and a hosting-capable
+`ToolSubsystem`. Normal React workflows prepare this through
+`BaseWorkflow.build_react(...)`; isolated execution prepares it through
+`bootstrap_bind_all(...)`. If that context is missing, `host_files(...)` raises a
+runtime error and the attachment is not hosted.
+
+The only currently recognized `artifact_type` family is declared files.
+See `docs/hosting/files-storage-system-README.md` for the row fields.
+
 ```mermaid
 sequenceDiagram
     participant U as User

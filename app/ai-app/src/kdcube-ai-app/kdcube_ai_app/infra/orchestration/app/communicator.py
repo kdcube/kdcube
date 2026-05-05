@@ -78,6 +78,9 @@ class ServiceCommunicator:
         self._listeners: List[Callable[[dict], Any]] = []
 
     # ---------- resiliency helpers ----------
+    def _has_active_subscriptions(self) -> bool:
+        return bool(self._subscribed_channels or self._subscribed_patterns)
+
     def listener_alive(self) -> bool:
         return self._listen_task is not None and not self._listen_task.done()
 
@@ -89,6 +92,7 @@ class ServiceCommunicator:
             "task_id": id(t) if t else None,
             "listener_alive": self.listener_alive(),
             "subscribed_channels": list(self._subscribed_channels),
+            "subscribed_patterns": list(self._subscribed_patterns),
             "last_message_ts": self._last_message_ts,
         }
     # ---------- channel helpers ----------
@@ -269,9 +273,10 @@ class ServiceCommunicator:
         if not self._pubsub:
             raise RuntimeError("Call subscribe() before listen().")
 
-        logger.info(
-            "[ServiceCommunicator] listen() started on %r (id=%s), subscribed=%s",
-            self, id(self), self._subscribed_channels
+        log = logger.info if self._has_active_subscriptions() else logger.debug
+        log(
+            "[ServiceCommunicator] listen() started on %r (id=%s), channels=%s patterns=%s",
+            self, id(self), self._subscribed_channels, self._subscribed_patterns
         )
         async for msg in self._pubsub.listen():
             mtype = msg.get("type")
@@ -326,17 +331,28 @@ class ServiceCommunicator:
                             except Exception as cb_err:
                                 logger.error("[ServiceCommunicator] on_message error: %s", cb_err)
 
-                    logger.error(
+                    if not self._has_active_subscriptions():
+                        logger.debug(
+                            "[ServiceCommunicator] listen() ended with no active subscriptions "
+                            "self_id=%s pubsub_id=%s",
+                            id(self), id(self._pubsub)
+                        )
+                        await asyncio.sleep(backoff)
+                        backoff = min(backoff * 2, 10.0)
+                        continue
+
+                    logger.warning(
                         "[ServiceCommunicator] listen() ended WITHOUT exception "
-                        "self_id=%s pubsub_id=%s subscribed=%s",
-                        id(self), id(self._pubsub), self._subscribed_channels
+                        "self_id=%s pubsub_id=%s channels=%s patterns=%s",
+                        id(self), id(self._pubsub), self._subscribed_channels, self._subscribed_patterns
                     )
                     raise RuntimeError("pubsub listen ended without exception")
                 except asyncio.CancelledError:
                     logger.info("[ServiceCommunicator] listener cancelled self_id=%s", id(self))
                     raise
                 except Exception as e:
-                    logger.error("[ServiceCommunicator] listener error self_id=%s err=%s", id(self), e)
+                    log = logger.warning if self._has_active_subscriptions() else logger.debug
+                    log("[ServiceCommunicator] listener error self_id=%s err=%s", id(self), e)
                     # attempt to reconnect with backoff
                     await self._reconnect_pubsub()
                     await asyncio.sleep(backoff)
@@ -394,7 +410,8 @@ class ServiceCommunicator:
             await self._pubsub.subscribe(*self._subscribed_channels)
         if self._subscribed_patterns:
             await self._pubsub.psubscribe(*self._subscribed_patterns)
-        logger.info(
+        log = logger.info if self._has_active_subscriptions() else logger.debug
+        log(
             "[ServiceCommunicator] Reconnected pubsub self_id=%s pubsub_id=%s channels=%s patterns=%s",
             id(self), id(self._pubsub), self._subscribed_channels, self._subscribed_patterns
         )

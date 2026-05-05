@@ -239,6 +239,15 @@ Exceptions raised by a scheduled job are caught, logged with full traceback,
 and the scheduler loop continues with future ticks.
 A single failing job does not affect other jobs or proc.
 
+If a scheduled job runs a React turn or calls bundle catalog tools, file
+artifacts follow the same tool contract as chat turns: return
+`ret.artifact_type: "files"` with `ret.files[]`, or use
+`bundle_tool_context.host_files(...)` from trusted tool code. Delivery still
+depends on the job having a conversation/transport target in its runtime
+context. `host_files(...)` also depends on the runtime-prepared tool context:
+tenant, project, user id, conversation id, turn id, conversation storage, and a
+hosting-capable `ToolSubsystem`.
+
 ---
 
 ## Multiple cron methods on one bundle

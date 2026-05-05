@@ -63,6 +63,53 @@ Sources pool rows may include `base64` for binary/pdf/image items. To avoid prom
 
 ---
 
+**Declared File Tool Results**
+
+Custom tools can ask React to host files by returning a marked file payload
+inside the standard `{ok, error, ret}` envelope:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "visibility": "external",
+        "physical_path": "turn_123/outputs/report.pdf",
+        "filename": "report.pdf",
+        "mime_type": "application/pdf"
+      }
+    ]
+  }
+}
+```
+
+`artifact_type` currently recognizes only the declared-file family. The only
+valid value is `files`. Other artifact concepts such as `display`,
+`search`, or normal `file` artifact kinds exist in timeline/artifact metadata,
+but they are not separate `artifact_type` values.
+
+Declared files still follow the same artifact hosting and prompt-safety limits:
+
+- The file must already exist where `physical_path` points or be identified by
+  an existing hosted `rn`/`key`/`hosted_uri`.
+- `visibility=external` files are hosted as conversation artifacts.
+- Base64 included in timeline/sources rows is capped by the source-pool limits
+  above.
+
+Trusted tools can also host with `bundle_tool_context.host_files(...)`, but only
+after the SDK has prepared the tool runtime. That preparation must provide an
+active tool subsystem with a hosting service, communicator scope for
+tenant/project/user/conversation/turn, conversation storage, and an output
+directory. Normal React workflows prepare it in `BaseWorkflow.build_react(...)`;
+isolated execution prepares it in `bootstrap_bind_all(...)`. Without that
+context, the helper raises a runtime error and no hosted artifact is created.
+
+---
+
 **Timeline Truncation (TTL / Smart Pruning)**
 (From `kdcube_ai_app/apps/chat/sdk/solutions/react/v2/session.py`)
 

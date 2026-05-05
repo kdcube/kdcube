@@ -126,6 +126,62 @@ reachable from the process/container that runs `claude`.
 Use `ClaudeCodeWorkspaceConfig` / `prepare_claude_code_workspace(...)` from the
 Claude Code SDK when you want the SDK to write the standard workspace files.
 
+## MCP Tool Results And React File Hosting
+
+When MCP tools are called through the React tool subsystem, their result is
+handled by the same tool-result pipeline as bundle-local tools. A tool should
+return the standard envelope when it is using the KDCube tool contract:
+
+```json
+{"ok": true, "error": null, "ret": {...}}
+```
+
+If an MCP-backed tool intentionally materializes files into the current React
+`OUT_DIR`, it can opt into artifact hosting by putting a file declaration inside
+`ret`:
+
+```json
+{
+  "ok": true,
+  "error": null,
+  "ret": {
+    "artifact_type": "files",
+    "files": [
+      {
+        "type": "file",
+        "path": "turn_123/outputs/export.csv",
+        "filename": "export.csv",
+        "mime_type": "text/csv",
+        "visibility": "external"
+      }
+    ]
+  }
+}
+```
+
+React v2 and v3 unwrap the envelope and host declared files only when
+`ret.artifact_type == "files"`. The declared path must be accessible from
+the React runtime, usually as an `OUT_DIR`-relative path under
+`turn_<id>/outputs/...`. Remote MCP services that cannot write to that workspace
+should return data or already-hosted references through an explicit product tool
+contract instead of relying on automatic local hosting.
+
+Bundle-local tools that call MCP internally may also host files themselves with
+`bundle_tool_context.host_files(...)` after materializing the files. That helper
+runs in the trusted bundle tool runtime, including isolated supervisor
+execution. A pure remote MCP server does not receive the KDCube conversation
+hosting service; it should either return the strict file declaration for files
+that exist in the React workspace, or return product data that a bundle-local
+tool can materialize and host.
+
+For `host_files(...)` to work, the bundle-local tool must be running inside a
+prepared KDCube tool context: active `ToolSubsystem`, hosting service,
+communicator scope with tenant/project/user/conversation/turn, conversation
+storage, and output directory. The normal React path prepares this in
+`BaseWorkflow.build_react(...)`; isolated execution prepares it through
+`bootstrap_bind_all(...)`. If the tool context is not prepared, the helper raises
+a runtime error instead of producing an unscoped hosted file.
+
 ## HTTP reachability and localhost
 
 For HTTP, `url` means "reachable from the MCP client process", not "reachable

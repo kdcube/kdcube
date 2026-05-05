@@ -638,6 +638,11 @@ Important current rule:
 - prefer plain module-level helpers or other easily serializable callables
 - do not use it for methods that depend on live proc-owned objects or shared singleton state
 - the venv child does **not** receive proc-bound runtime bindings such as `self.comm`, `self.comm_context`, `get_current_comm()`, `get_current_request_context()`, `TOOL_SUBSYSTEM`, `COMMUNICATOR`, `KV_CACHE`, `CTX_CLIENT`, DB pools, Redis clients, or framework request objects
+- a `@venv(...)` helper should not call `bundle_tool_context.host_files(...)`
+  directly. Return serializable data or write files for the trusted catalog tool
+  that called the helper; that catalog tool can then declare
+  `ret.artifact_type: "files"` or call `host_files(...)` from the prepared tool
+  context.
 - changing bundle Python source still requires the normal proc-side bundle reload path; `@venv(...)` only controls the helper execution environment
 
 ## 2) Metadata model

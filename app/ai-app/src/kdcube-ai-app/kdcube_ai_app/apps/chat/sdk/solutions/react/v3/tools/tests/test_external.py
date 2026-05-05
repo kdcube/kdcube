@@ -32,11 +32,13 @@ class _HostingRecorder:
             return []
         artifact = files[0]
         value = artifact.get("value") if isinstance(artifact.get("value"), dict) else {}
+        filename = (value.get("filename") or "secret.txt").strip()
+        path = value.get("path") or ""
         return [{
-            "rn": "ef:test:artifact:secret.txt",
-            "hosted_uri": "s3://bucket/secret.txt",
-            "key": "artifact/secret.txt",
-            "physical_path": value.get("path") or "",
+            "rn": f"ef:test:artifact:{filename}",
+            "hosted_uri": f"s3://bucket/{filename}",
+            "key": f"artifact/{filename}",
+            "physical_path": path,
         }]
 
     async def emit_solver_artifacts(self, *, files, citations):
@@ -186,6 +188,244 @@ async def test_external_exec_internal_file_is_not_hosted_but_keeps_file_path(mon
         and (b.get("text") or "") == "top secret\n"
         for b in ctx.timeline.blocks
     )
+
+
+@pytest.mark.asyncio
+async def test_external_tool_declared_files_are_hosted_and_emitted(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "email.materialize_email_attachments",
+                "params": {"message_ids_json": "[\"m1\"]"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    first = tmp_path / "turn_exec" / "outputs" / "email-attachments" / "acct" / "m1" / "invoice.pdf"
+    second = tmp_path / "turn_exec" / "outputs" / "email-attachments" / "acct" / "m1" / "terms.txt"
+    first.parent.mkdir(parents=True, exist_ok=True)
+    first.write_bytes(b"%PDF-1.4\n")
+    second.write_text("terms\n", encoding="utf-8")
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "artifact_type": "files",
+                "files": [
+                    {
+                        "artifact_path": "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf",
+                        "logical_path": "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf",
+                        "physical_path": "turn_exec/outputs/email-attachments/acct/m1/invoice.pdf",
+                        "filename": "invoice.pdf",
+                        "mime_type": "application/pdf",
+                        "size_bytes": first.stat().st_size,
+                        "visibility": "external",
+                    },
+                    {
+                        "path": "turn_exec/outputs/email-attachments/acct/m1/terms.txt",
+                        "filename": "terms.txt",
+                        "mime": "text/plain",
+                        "visibility": "external",
+                    },
+                ],
+            },
+            "summary": "",
+        }
+
+    class _Comm:
+        user_id = "u1"
+        user_type = "admin"
+        service = {
+            "tenant": "tenant1",
+            "project": "project1",
+            "user": "u1",
+            "user_type": "admin",
+            "conversation_id": "conv1",
+            "request_id": "req1",
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting, comm=_Comm())
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="email_files")
+
+    assert len(hosting.host_calls) == 2
+    assert len(hosting.emit_calls) == 2
+    assert len(out["last_tool_result"]) == 3
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf"
+        and (b.get("meta") or {}).get("hosted_uri") == "s3://bucket/invoice.pdf"
+        for b in ctx.timeline.blocks
+    )
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/email-attachments/acct/m1/terms.txt"
+        and (b.get("meta") or {}).get("hosted_uri") == "s3://bucket/terms.txt"
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_tool_self_hosted_declared_files_are_not_rehosted(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "email.materialize_email_attachments",
+                "params": {},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "artifact_type": "files",
+                "files": [{
+                    "type": "file",
+                    "hosted": True,
+                    "emitted": True,
+                    "hosted_uri": "s3://bucket/invoice.pdf",
+                    "rn": "rn:invoice",
+                    "key": "artifact/invoice.pdf",
+                    "physical_path": "turn_exec/outputs/email-attachments/acct/m1/invoice.pdf",
+                    "filename": "invoice.pdf",
+                    "mime_type": "application/pdf",
+                    "visibility": "external",
+                }],
+            },
+            "summary": "",
+        }
+
+    class _Comm:
+        user_id = "u1"
+        user_type = "admin"
+        service = {"tenant": "tenant1", "project": "project1", "user": "u1", "conversation_id": "conv1"}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting, comm=_Comm())
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="hosted_files")
+
+    assert hosting.host_calls == []
+    assert hosting.emit_calls == []
+    assert len(out["last_tool_result"]) == 2
+    assert any(
+        b.get("type") == "react.tool.result"
+        and (b.get("meta") or {}).get("hosted_uri") == "s3://bucket/invoice.pdf"
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
+async def test_external_tool_plain_files_field_is_not_hosted_without_marker(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "some.bundle_tool",
+                "params": {},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "files": [{
+                    "physical_path": "turn_exec/outputs/report.pdf",
+                    "filename": "report.pdf",
+                    "mime_type": "application/pdf",
+                }],
+            },
+            "summary": "",
+        }
+
+    class _Comm:
+        user_id = "u1"
+        user_type = "admin"
+        service = {"tenant": "tenant1", "project": "project1", "user": "u1", "conversation_id": "conv1"}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting, comm=_Comm())
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="plain_files")
+
+    assert hosting.host_calls == []
+    assert hosting.emit_calls == []
+    assert len(out["last_tool_result"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_external_tool_rejects_non_artifact_type_file_markers(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "some.bundle_tool",
+                "params": {},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "kdcube_result_type": "files",
+                "artifact_kind": "files",
+                "artifacts": {
+                    "files": [{
+                        "physical_path": "turn_exec/outputs/report.pdf",
+                        "filename": "report.pdf",
+                        "mime_type": "application/pdf",
+                    }]
+                },
+            },
+            "summary": "",
+        }
+
+    class _Comm:
+        user_id = "u1"
+        user_type = "admin"
+        service = {"tenant": "tenant1", "project": "project1", "user": "u1", "conversation_id": "conv1"}
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v3.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting, comm=_Comm())
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="legacy_files")
+
+    assert hosting.host_calls == []
+    assert hosting.emit_calls == []
+    assert len(out["last_tool_result"]) == 1
 
 
 @pytest.mark.asyncio

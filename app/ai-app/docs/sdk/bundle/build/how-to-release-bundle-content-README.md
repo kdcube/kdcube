@@ -87,6 +87,10 @@ Rules:
 - `docs/journal/journal.md` records important implementation and release
   decisions
 - tests prove the bundle contract before release
+- if the bundle has tools that produce user-visible files or attachments,
+  docs/tests describe the `ret.artifact_type == "files"` protocol or the
+  `host_files(...)` tool-side hosting path, including the prepared runtime
+  context required for `host_files(...)`
 
 For a brand-new bundle, `release.yaml` may be empty during skeleton work. Fill
 it only when the user agrees to cut a release.
@@ -149,6 +153,12 @@ configuration, also validate the widget build contract from
 [how-to-test-bundle-README.md#52b-source-folder-widget-build-contract](how-to-test-bundle-README.md#52b-source-folder-widget-build-contract).
 At minimum, run the widget build with an explicit temporary `OUTDIR` and confirm
 `index.html` is written there.
+
+If a release changes file-producing tools or attachment materialization, also
+validate the tool result contract from
+[how-to-test-bundle-README.md#1c-react-toolskill-checks](how-to-test-bundle-README.md#1c-react-toolskill-checks).
+Confirm the runtime produces hosted file metadata, and include the isolated
+runtime path when the tool can execute there.
 
 If user identity or external auth changed, validate both:
 
