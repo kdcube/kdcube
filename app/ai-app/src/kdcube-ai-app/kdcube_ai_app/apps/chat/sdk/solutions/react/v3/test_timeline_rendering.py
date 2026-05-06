@@ -274,3 +274,96 @@ def test_timeline_renders_interrupted_raw_generation_even_when_raw_hidden():
     assert "checkpoint: decision.after" in text_dump
     assert "cancelled_phase: decision" in text_dump
     assert "<channel:thinking>draft</channel:thinking>" in text_dump
+
+
+def test_hidden_old_blocks_render_as_minimal_retrieval_refs():
+    ctx = RuntimeCtx(turn_id="turn_current", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id="turn_old", ts="2026-02-08T00:00:00Z", text="[TURN turn_old]"),
+        tl._block(
+            type="user.prompt",
+            author="user",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:01Z",
+            path="ar:turn_old.user.prompt",
+            text="long old user request",
+        ),
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:02Z",
+            mime="application/json",
+            path="tc:turn_old.tc_abc.call",
+            text='{"tool_id":"email.process_user_emails","tool_call_id":"tc_abc","params":{"mailbox":"INBOX"}}',
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:03Z",
+            mime="application/json",
+            path="tc:turn_old.tc_abc.result",
+            text='{"tool_id":"email.process_user_emails","tool_call_id":"tc_abc","result":{"messages":[]}}',
+        ),
+        tl._block(
+            type="assistant.completion",
+            author="assistant",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:04Z",
+            path="ar:turn_old.assistant.completion",
+            text="old answer",
+        ),
+        tl._block(
+            type="conv.working.summary",
+            author="assistant",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:04Z",
+            path="ws:turn_old.conv.working.summary",
+            text=(
+                "Goal: Fetch old email.\n"
+                "Outcome: Completed from cached data.\n"
+                "Key facts:\n"
+                "- Gmail scan returned no messages.\n"
+                "Refs:\n"
+                "- user: ar:turn_old.user.prompt\n"
+                "- result: tc:turn_old.tc_abc.result"
+            ),
+            meta={"kind": "working_summary"},
+        ),
+        tl._block(
+            type="system.message",
+            author="system",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:05Z",
+            path="ar:turn_old.system.message.cache_pruned",
+            text="Context was pruned because the session TTL was exceeded.",
+            meta={"kind": "cache_ttl_pruned"},
+        ),
+    ])
+    for path in [
+        "ar:turn_old.user.prompt",
+        "tc:turn_old.tc_abc.call",
+        "tc:turn_old.tc_abc.result",
+        "ar:turn_old.assistant.completion",
+        "ar:turn_old.system.message.cache_pruned",
+    ]:
+        tl.hide_paths([path], "[TRUNCATED] verbose replacement")
+
+    rendered = _run(tl.render(cache_last=False))
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[WORKING SUMMARY]" in text
+    assert "[path: ws:turn_old.conv.working.summary]" in text
+    assert "Goal: Fetch old email." in text
+    assert "Outcome: Completed from cached data." in text
+    assert "- result: tc:turn_old.tc_abc.result" in text
+    assert "[pruned user message]" not in text
+    assert "[pruned tool call]" not in text
+    assert "[pruned tool result]" not in text
+    assert "[ASSISTANT MESSAGE]" not in text
+    assert "read=react.read" not in text
+    assert "ROUND 1" not in text
+    assert "Params:" not in text
+    assert "cache_pruned" not in text

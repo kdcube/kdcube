@@ -1,7 +1,11 @@
+import json
+import logging
 from typing import Any, Callable, Dict, List, Optional, Awaitable
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.browser import ContextBrowser
 from kdcube_ai_app.infra.service_hub.errors import ServiceException, is_context_limit_error
+
+_LOG = logging.getLogger("kdcube.react.cache")
 
 def _system_text_for_compaction(
         system_message_token_count_fn: Optional[Callable[[], int]],
@@ -45,7 +49,16 @@ def _debug_cache_points(ctx_browser: ContextBrowser, blocks: List[dict], label: 
         for idx in cache_idx:
             sig = sigs[idx] if idx < len(sigs) else {}
             points.append({"idx": idx, "type": sig.get("type"), "path": sig.get("path")})
-        print(f"[cache_points:{label}] count={trace.get('count')} points={points}")
+        head = points[:4]
+        tail = points[-4:] if len(points) > 4 else []
+        payload = {
+            "count": trace.get("count"),
+            "total_blocks": len(blocks),
+            "head": head,
+            "tail": tail,
+            "omitted": max(0, len(points) - len(head) - len(tail)),
+        }
+        _LOG.info("[cache_points:%s] %s", label, json.dumps(payload, ensure_ascii=False, default=str))
     except Exception:
         pass
 
@@ -85,7 +98,11 @@ async def retry_with_compaction(
         if not sanitize_on_fail or not is_context_limit_error(exc.err):
             raise
         try:
-            print(f"[compaction] context-limit detected; forcing sanitize (error={exc.err.error_type}, message={exc.err.message})")
+            _LOG.warning(
+                "[compaction] context-limit detected; forcing sanitize error=%s message=%s",
+                exc.err.error_type,
+                exc.err.message,
+            )
         except Exception:
             pass
         if emit_status:

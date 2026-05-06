@@ -23,8 +23,17 @@ DEFAULT_MAX_DICT_KEYS = 80
 DEFAULT_MAX_BASE64_CHARS = 4000
 DEFAULT_MAX_TOOL_TEXT_CHARS = 400
 DEFAULT_KEEP_RECENT_IMAGES = 2
-DEFAULT_KEEP_INTACT_TURNS = 2
+DEFAULT_KEEP_INTACT_TURNS = 1
 DEFAULT_MAX_IMAGE_PDF_B64_SUM = 1_000_000
+DEFAULT_REPLACEMENT_MAX_TOKENS = 240
+
+SUPPRESS_OLD_TTL_REPLACEMENT_TYPES = {
+    "react.round.start",
+    "react.thinking",
+    "react.notes",
+    "react.notice",
+    "stage.suggested_followups",
+}
 
 
 @dataclass
@@ -37,6 +46,7 @@ class TruncationConfig:
     max_tool_text_chars: int = DEFAULT_MAX_TOOL_TEXT_CHARS
     keep_recent_images: int = DEFAULT_KEEP_RECENT_IMAGES
     max_image_pdf_b64_sum: int = DEFAULT_MAX_IMAGE_PDF_B64_SUM
+    replacement_max_tokens: int = DEFAULT_REPLACEMENT_MAX_TOKENS
 
 
 def build_truncation_config(runtime: Any, cfg: Optional[TruncationConfig] = None) -> TruncationConfig:
@@ -73,6 +83,7 @@ def build_truncation_config(runtime: Any, cfg: Optional[TruncationConfig] = None
     _apply("cache_truncation_max_tool_text_chars")
     _apply("cache_truncation_keep_recent_images", minimum=0)
     _apply("cache_truncation_max_image_pdf_b64_sum")
+    _apply("cache_truncation_replacement_max_tokens")
     return cfg
 
 
@@ -583,11 +594,187 @@ def _build_file_replacement(block: Dict[str, Any]) -> str:
 
 
 def _build_generic_replacement(block: Dict[str, Any], cfg: TruncationConfig) -> str:
+    meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+    if meta.get("kind") == "cache_ttl_pruned":
+        return "[cache prune notice hidden; logical paths still exist. Use visible content first, react.read(path) only if needed.]"
     text = block.get("text")
     if isinstance(text, str) and text.strip():
         trimmed, _ = _truncate_text_block(text, cfg)
         return "[TRUNCATED] " + trimmed
     return "[TRUNCATED]"
+
+
+def _is_turn_finalize_stats_block(block: Dict[str, Any]) -> bool:
+    if not isinstance(block, dict):
+        return False
+    if (block.get("type") or "").strip() == "react.turn.finalize":
+        return True
+    text = block.get("text")
+    return isinstance(text, str) and "Turn completed with these stats" in text and "[BUDGET]" in text
+
+
+def _token_count_safe(text: str) -> int:
+    try:
+        return token_count(text or "")
+    except Exception:
+        return max(1, int(len(text or "") / 4))
+
+
+def _ttl_retrieval_stub(
+    block: Dict[str, Any],
+    *,
+    call_meta: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    path = (block.get("path") or "").strip()
+    btype = (block.get("type") or "").strip() or "block"
+    meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+    call_id = (block.get("call_id") or meta.get("tool_call_id") or "").strip()
+    tool_id = (block.get("tool_id") or meta.get("tool_id") or "").strip()
+    if call_id and not tool_id and isinstance(call_meta, dict):
+        tool_id = str((call_meta.get(call_id) or {}).get("tool_id") or "").strip()
+    if not tool_id and btype in {"react.tool.call", "react.tool.result"}:
+        payload = _parse_json(block.get("text") or "") if isinstance(block.get("text"), str) else None
+        if isinstance(payload, dict):
+            tool_id = str(payload.get("tool_id") or "").strip()
+
+    if btype == "user.prompt":
+        kind = "user"
+    elif btype == "assistant.completion":
+        kind = "assistant"
+    elif btype == "react.tool.call":
+        kind = "tool_call"
+    elif btype == "react.tool.result":
+        kind = "tool_result"
+    elif path.startswith("fi:"):
+        kind = "file"
+    elif path.startswith("sk:"):
+        kind = "skill"
+    elif path.startswith("so:"):
+        kind = "source"
+    else:
+        kind = btype.replace(".", "_") or "block"
+
+    parts = [f"{kind}:"]
+    if path:
+        parts.append(f"path={path}")
+    if tool_id:
+        parts.append(f"tool={tool_id}")
+    if call_id:
+        parts.append(f"call_id={call_id}")
+    mime = (block.get("mime") or block.get("media_type") or meta.get("mime") or "").strip()
+    if mime:
+        parts.append(f"mime={mime}")
+    return " ".join(parts)
+
+
+_TTL_REPLACEMENT_KEEP_KEYS = (
+    "path",
+    "path=",
+    "tool_id",
+    "tool_call_id",
+    "call_id",
+    "artifact_path",
+    "physical_path",
+    "filename",
+    "mime",
+    "url",
+    "sid",
+    "react.read",
+)
+
+
+def _compact_replacement_json(replacement: str, cfg: TruncationConfig) -> Optional[str]:
+    payload = _parse_json(replacement)
+    if payload is None:
+        return None
+    max_chars = max(80, min(int(getattr(cfg, "max_tool_text_chars", DEFAULT_MAX_TOOL_TEXT_CHARS)), 320))
+    max_items = max(3, min(int(getattr(cfg, "max_list_items", DEFAULT_MAX_LIST_ITEMS)), 8))
+    max_keys = max(8, min(int(getattr(cfg, "max_dict_keys", DEFAULT_MAX_DICT_KEYS)), 16))
+    trimmed, did = _truncate_value(
+        payload,
+        max_chars=max_chars,
+        max_list_items=max_items,
+        max_dict_keys=max_keys,
+        skip_ref=True,
+    )
+    return _format_json(trimmed, True if did else False)
+
+
+def _compact_replacement_lines(replacement: str, cfg: TruncationConfig) -> str:
+    max_line_chars = max(80, min(int(getattr(cfg, "max_tool_text_chars", DEFAULT_MAX_TOOL_TEXT_CHARS)), 320))
+    kept: List[str] = []
+    seen: set[str] = set()
+    for raw in (replacement or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        lower = line.lower()
+        keep = not kept or any(key in lower for key in _TTL_REPLACEMENT_KEEP_KEYS)
+        if not keep:
+            continue
+        line, _ = _truncate_str(line, max_line_chars)
+        if line in seen:
+            continue
+        kept.append(line)
+        seen.add(line)
+        if len(kept) >= 12:
+            break
+    return "\n".join(kept).strip()
+
+
+def _bound_ttl_replacement(
+    *,
+    block: Dict[str, Any],
+    replacement: str,
+    cfg: TruncationConfig,
+    call_meta: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> str:
+    """Bound replacement text created by automatic TTL pruning.
+
+    Explicit react.hide replacements are intentionally not routed through this
+    helper. They must preserve caller-supplied text exactly.
+    """
+    if not isinstance(replacement, str) or not replacement:
+        return replacement
+    try:
+        max_tokens = int(getattr(cfg, "replacement_max_tokens", DEFAULT_REPLACEMENT_MAX_TOKENS))
+    except Exception:
+        max_tokens = DEFAULT_REPLACEMENT_MAX_TOKENS
+    max_tokens = max(24, max_tokens)
+    requested_tokens = _token_count_safe(replacement)
+    original_text = block.get("text") if isinstance(block.get("text"), str) else ""
+    original_tokens = _token_count_safe(original_text) if original_text else 0
+    growth_limit = max(original_tokens + 64, original_tokens * 2)
+    if requested_tokens <= max_tokens and (original_tokens <= 0 or requested_tokens <= growth_limit):
+        return replacement
+
+    candidates: List[str] = []
+    compact_json = _compact_replacement_json(replacement, cfg)
+    if compact_json:
+        candidates.append(compact_json)
+    compact_lines = _compact_replacement_lines(replacement, cfg)
+    if compact_lines:
+        candidates.append(compact_lines)
+    candidates.append(_ttl_retrieval_stub(block, call_meta=call_meta))
+
+    selected = candidates[-1]
+    for candidate in candidates:
+        if candidate and _token_count_safe(candidate) <= max_tokens:
+            selected = candidate
+            break
+
+    path = (block.get("path") or "").strip()
+    try:
+        logger.info(
+            "[cache_ttl_prune.replacement_capped] path=%s requested_tokens=%s stored_tokens=%s max_tokens=%s",
+            path,
+            requested_tokens,
+            _token_count_safe(selected),
+            max_tokens,
+        )
+    except Exception:
+        pass
+    return selected
 
 
 def _build_skill_prune_message(path: str) -> str:
@@ -604,8 +791,14 @@ def _build_skill_prune_message(path: str) -> str:
     elif label.startswith("tc:"):
         kind = "tool result"
     if label:
-        return f"[content removed by pruning, reread with react.read if needed: {kind} {label}]"
-    return "[content removed by pruning, reread with react.read if needed]"
+        return (
+            f"[content removed by pruning at this location: {kind} {label}. "
+            "It may still be visible elsewhere in the current timeline; only use react.read if you cannot see it.]"
+        )
+    return (
+        "[content removed by pruning at this location. It may still be visible elsewhere in the current timeline; "
+        "only use react.read if you cannot see it.]"
+    )
 
 
 def _build_prune_message_text(ttl_seconds: int) -> str:
@@ -613,8 +806,9 @@ def _build_prune_message_text(ttl_seconds: int) -> str:
         "[SYSTEM MESSAGE] Context was pruned because the session TTL "
         f"({ttl_seconds}s) was exceeded. Some blocks were hidden. "
         "Pruning does NOT remove artifacts: their logical paths (fi:/ar:/so:/sk:) still exist. "
-        "Check recent tool calls/notes for relevant artifact paths and use react.read(path) to restore them if needed. "
-        "If the needed content is already visible, use it directly and do NOT call react.read or react.memsearch."
+        "Do not assume a path must be re-read just because pruning happened: first scan the currently visible timeline. "
+        "If the needed content or an ACTIVE 💡 skill block is visible, use it directly. "
+        "Use react.read(path) only when the exact needed content is not visible."
     )
 
 
@@ -817,9 +1011,9 @@ def apply_cache_ttl_pruning(
     skip_types = {
         "turn.header",
         "conv.range.summary",
+        "conv.working.summary",
         "react.note",
         "react.note.preserved",
-        "react.round.start",
         "user.followup",
         "user.followup.preserved",
         "user.steer",
@@ -827,25 +1021,31 @@ def apply_cache_ttl_pruning(
     }
 
     # Build replacements for pruned turns (reverse order for most recent per path).
-    path_replacements: Dict[str, str] = {}
+    path_replacements: Dict[str, Tuple[Dict[str, Any], str]] = {}
     for blk in reversed(blocks):
         if not isinstance(blk, dict):
             continue
         if (blk.get("type") or "") in skip_types:
             continue
         path = (blk.get("path") or "").strip()
-        if not path or path in path_replacements:
-            continue
         turn_id = _extract_turn_id(blk)
         if skip_old_turns:
             break
         if turn_id and turn_id in recent_turns:
             continue
+        if not path and _is_turn_finalize_stats_block(blk) and turn_id:
+            blk["type"] = "react.turn.finalize"
+            blk["path"] = f"ar:{turn_id}.react.turn.finalize"
+            path = (blk.get("path") or "").strip()
+        if not path or path in path_replacements:
+            continue
 
         btype = (blk.get("type") or "").strip()
-        if btype in {"react.notes", "react.plan.history", "react.round.start"}:
+        if btype == "react.plan.history":
             continue
-        if path.startswith("sk:"):
+        if btype in SUPPRESS_OLD_TTL_REPLACEMENT_TYPES:
+            rep = ""
+        elif path.startswith("sk:"):
             rep = _build_skill_prune_message(path)
         elif btype == "react.tool.call":
             payload = _parse_json(blk.get("text") or "") or {}
@@ -876,12 +1076,13 @@ def apply_cache_ttl_pruning(
         else:
             rep = _build_generic_replacement(blk, cfg)
 
-        path_replacements[path] = rep
+        path_replacements[path] = (blk, rep)
 
     hidden_paths: List[str] = []
     if not skip_old_turns:
-        for path, rep in path_replacements.items():
+        for path, (src_blk, rep) in path_replacements.items():
             try:
+                rep = _bound_ttl_replacement(block=src_blk, replacement=rep, cfg=cfg, call_meta=call_meta)
                 timeline.hide_paths([path], rep)
                 hidden_paths.append(path)
             except Exception:
@@ -918,7 +1119,9 @@ def apply_cache_ttl_pruning(
 
         if tool_id == "react.read" and path.startswith("sk:"):
             try:
-                timeline.hide_paths([path], _build_skill_prune_message(path))
+                rep = _build_skill_prune_message(path)
+                rep = _bound_ttl_replacement(block=blk, replacement=rep, cfg=cfg, call_meta=call_meta)
+                timeline.hide_paths([path], rep)
                 hidden_recent_paths.add(path)
             except Exception:
                 pass
@@ -935,6 +1138,7 @@ def apply_cache_ttl_pruning(
                 else:
                     view = _get_view(tool_id)
                     rep = view.build_result_replacement(tool_result_block=blk, payload=payload or {}, cfg=cfg)
+                rep = _bound_ttl_replacement(block=blk, replacement=rep, cfg=cfg, call_meta=call_meta)
                 timeline.hide_paths([path], rep)
                 hidden_recent_paths.add(path)
             except Exception:
@@ -966,6 +1170,7 @@ def apply_cache_ttl_pruning(
             if path not in keep_image_paths and path not in hidden_recent_paths:
                 rep = _build_file_replacement(blk)
                 try:
+                    rep = _bound_ttl_replacement(block=blk, replacement=rep, cfg=cfg, call_meta=call_meta)
                     timeline.hide_paths([path], rep)
                     hidden_recent_paths.add(path)
                 except Exception:
@@ -974,6 +1179,7 @@ def apply_cache_ttl_pruning(
         if len(base64) > cfg.max_base64_chars and path not in hidden_recent_paths:
             rep = _build_file_replacement(blk)
             try:
+                rep = _bound_ttl_replacement(block=blk, replacement=rep, cfg=cfg, call_meta=call_meta)
                 timeline.hide_paths([path], rep)
                 hidden_recent_paths.add(path)
             except Exception:
@@ -1040,7 +1246,7 @@ def apply_cache_ttl_pruning(
     except Exception:
         pass
     try:
-        def _format_paths(paths: List[str], limit: int = 20) -> str:
+        def _format_paths(paths: List[str], limit: int = 5) -> str:
             if not paths:
                 return ""
             sample = paths[:limit]

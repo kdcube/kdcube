@@ -1411,6 +1411,7 @@ class BaseEntrypoint:
 
     def configuration_defaults(self) -> Dict[str, Any]:
         sonnet_45 = "claude-sonnet-4-5-20250929"
+        sonnet_46 = "claude-sonnet-4-6"
         haiku_3 = "claude-3-5-haiku-20241022"
         haiku_4 = "claude-haiku-4-5-20251001"
 
@@ -1433,6 +1434,8 @@ class BaseEntrypoint:
                 "solver.react.v2.decision.v2.strong": {"provider": "anthropic", "model": sonnet_45}, # Solver — hard reasoning
                 "solver.react.v2.decision.v2.regular": {"provider": "anthropic", "model": haiku_4},  # Solver — routine steps
                 "solver.react.summary": {"provider": "anthropic", "model": haiku_4},
+                "context.compaction.summary": {"provider": "anthropic", "model": sonnet_46},
+                "context.compaction.turn_prefix": {"provider": "anthropic", "model": sonnet_46},
 
                 "tool.generator": {"provider": "anthropic", "model": sonnet_45},
                 "tool.generator.strong": {"provider": "anthropic", "model": sonnet_45},

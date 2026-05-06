@@ -10,6 +10,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.runtime import (
     run_claude_code_turn,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.types import (
+    CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
+    CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX,
     ClaudeCodeAgentConfig,
     ClaudeCodeBinding,
     ClaudeCodeRunResult,
@@ -23,6 +25,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.workspace import (
 
 __all__ = [
     "ClaudeCodeAgent",
+    "CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX",
+    "CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX",
     "ClaudeCodeAgentConfig",
     "ClaudeCodeBinding",
     "ClaudeCodeRunResult",

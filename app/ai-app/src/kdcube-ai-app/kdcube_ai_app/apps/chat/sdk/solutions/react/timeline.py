@@ -12,7 +12,7 @@ import time
 import datetime as _dt
 import pathlib
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable, Tuple
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.caching import (
     cache_point_indices,
@@ -692,6 +692,40 @@ def resolve_artifact_from_timeline(timeline: Dict[str, Any], path: str) -> Optio
         return {"kind": "sources_pool", "items": resolve_sources_pool_selector(timeline, p)}
 
     blocks = _collect_blocks(timeline)
+    working_summary_suffix = ".conv.working.summary"
+    if p.startswith("ws:") and p.endswith(working_summary_suffix):
+        turn_id = p[len("ws:") : -len(working_summary_suffix)].strip()
+        if turn_id:
+            latest_summary = None
+            for b in reversed(blocks):
+                if not isinstance(b, dict):
+                    continue
+                if (b.get("type") or "").strip() != "conv.working.summary":
+                    continue
+                if (b.get("turn_id") or "").strip() != turn_id:
+                    continue
+                if not isinstance(b.get("text"), str) or not b.get("text").strip():
+                    continue
+                latest_summary = b
+                break
+            if isinstance(latest_summary, dict):
+                meta = latest_summary.get("meta") if isinstance(latest_summary.get("meta"), dict) else {}
+                art: Dict[str, Any] = {
+                    "path": p,
+                    "kind": "display",
+                    "mime": (latest_summary.get("mime") or "text/markdown").strip(),
+                    "sources_used": [],
+                    "text": latest_summary.get("text") or "",
+                    "source_path": (latest_summary.get("path") or "").strip(),
+                    "alias": True,
+                }
+                if latest_summary.get("ts"):
+                    art["ts"] = latest_summary.get("ts")
+                for key, val in meta.items():
+                    if key in art or val is None:
+                        continue
+                    art[key] = val
+                return art
     if p.startswith("ar:plan.latest:"):
         plan_id = p[len("ar:plan.latest:") :].strip()
         latest_block = latest_plan_block_by_id(blocks, plan_id, include_preserved=True)
@@ -1543,15 +1577,34 @@ class Timeline:
             total += self._estimate_block_tokens(b)
         return total
 
+    def _estimate_model_message_tokens(self, blocks: List[Dict[str, Any]]) -> int:
+        total = 0
+        for b in blocks or []:
+            if not isinstance(b, dict):
+                continue
+            text = b.get("text")
+            if isinstance(text, str) and text.strip():
+                try:
+                    total += token_count(text)
+                except Exception:
+                    total += max(1, int(len(text) / 4))
+            base64 = b.get("base64")
+            if isinstance(base64, str) and base64:
+                total += max(1, int(len(base64) / 4))
+        return total
+
     def _estimate_block_tokens(self, block: Dict[str, Any]) -> int:
         if not isinstance(block, dict):
             return 0
         text = block.get("text")
         meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
         if block.get("hidden") or meta.get("hidden"):
-            replacement = block.get("replacement_text") or meta.get("replacement_text")
-            if isinstance(replacement, str) and replacement.strip():
-                text = replacement
+            try:
+                text = self._hidden_retrieval_stub(block)
+            except Exception:
+                replacement = block.get("replacement_text") or meta.get("replacement_text")
+                if isinstance(replacement, str) and replacement.strip():
+                    text = replacement
         if isinstance(text, str) and text.strip():
             try:
                 return token_count(text)
@@ -1595,6 +1648,44 @@ class Timeline:
         if btype == "react.tool.result":
             return True
         return self._is_cut_point_block(block)
+
+    def _working_summary_blocks_for_turns(
+        self,
+        *,
+        blocks: List[Dict[str, Any]],
+        turn_ids: List[str],
+        exclude_blocks: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
+        turn_set = {str(t or "").strip() for t in (turn_ids or []) if str(t or "").strip()}
+        if not turn_set:
+            return []
+        exclude_paths = {
+            str(b.get("path") or "").strip()
+            for b in (exclude_blocks or [])
+            if isinstance(b, dict) and str(b.get("path") or "").strip()
+        }
+        out: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        for blk in blocks or []:
+            if not isinstance(blk, dict):
+                continue
+            if (blk.get("type") or "").strip() != "conv.working.summary":
+                continue
+            turn_id = (blk.get("turn_id") or blk.get("turn") or "").strip()
+            if turn_id not in turn_set:
+                continue
+            text = blk.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            path = (blk.get("path") or "").strip()
+            if path and path in exclude_paths:
+                continue
+            key = path or f"{turn_id}:{len(out)}"
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(blk)
+        return out
 
     def _find_last_summary_index(self, blocks: List[Dict[str, Any]]) -> int:
         for idx in range(len(blocks) - 1, -1, -1):
@@ -1774,29 +1865,510 @@ class Timeline:
             )
         return preserved
 
+    @staticmethod
+    def _one_line_preview(value: Any, *, limit: int = 160) -> str:
+        if value is None:
+            return ""
+        if not isinstance(value, str):
+            try:
+                value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            except Exception:
+                value = str(value)
+        text = " ".join(str(value).split())
+        if not text:
+            return ""
+        if len(text) <= limit:
+            return text
+        return text[: max(0, limit - 1)].rstrip() + "…"
+
+    @staticmethod
+    def _path_basename_for_stub(path: str) -> str:
+        raw = (path or "").strip().rstrip("/")
+        if not raw:
+            return ""
+        raw = raw.split(":", 1)[-1] if ":" in raw else raw
+        return raw.rsplit("/", 1)[-1] if "/" in raw else raw
+
+    def _tool_call_hint_for_stub(self, payload: Dict[str, Any]) -> str:
+        params = payload.get("params")
+        if not isinstance(params, dict):
+            return self._one_line_preview(params, limit=160)
+
+        bits: List[str] = []
+
+        def add_value(label: str, value: Any, *, limit: int = 90) -> None:
+            preview = self._one_line_preview(value, limit=limit)
+            if preview:
+                bits.append(f"{label}={json.dumps(preview, ensure_ascii=False)}")
+
+        for key in ("account", "mailbox", "message_id", "task_id", "path", "filename"):
+            if params.get(key):
+                add_value(key, params.get(key), limit=80)
+
+        for key in ("query", "search_query", "q", "title", "subject"):
+            if params.get(key):
+                add_value(key, params.get(key), limit=120)
+                break
+
+        for key in ("queries", "urls", "paths"):
+            val = params.get(key)
+            if isinstance(val, list) and val:
+                shown = val[:2]
+                suffix = f" (+{len(val) - 2})" if len(val) > 2 else ""
+                add_value(key, f"{shown}{suffix}", limit=130)
+                break
+
+        if params.get("content") and not any(bit.startswith("content=") for bit in bits):
+            add_value("content", params.get("content"), limit=120)
+
+        if not bits:
+            keys = [str(k) for k in params.keys()][:8]
+            if keys:
+                bits.append("params=" + ",".join(keys))
+
+        return " ".join(bits[:5])
+
+    def _tool_result_hint_for_stub(self, payload: Any) -> str:
+        if isinstance(payload, list):
+            return f"items={len(payload)}"
+        if not isinstance(payload, dict):
+            return self._one_line_preview(payload, limit=160)
+
+        bits: List[str] = []
+
+        def add_value(label: str, value: Any, *, limit: int = 100) -> None:
+            preview = self._one_line_preview(value, limit=limit)
+            if preview:
+                bits.append(f"{label}={json.dumps(preview, ensure_ascii=False)}")
+
+        err = payload.get("error")
+        if isinstance(err, dict):
+            code = err.get("code") or payload.get("code") or "error"
+            msg = err.get("message") or payload.get("message") or ""
+            bits.append(f"status=error")
+            add_value("error", f"{code} {msg}".strip(), limit=120)
+        elif payload.get("code") and payload.get("message"):
+            bits.append("status=error")
+            add_value("error", f"{payload.get('code')} {payload.get('message')}", limit=120)
+        elif "ok" in payload:
+            bits.append(f"ok={str(bool(payload.get('ok'))).lower()}")
+        elif payload.get("artifact_path"):
+            bits.append("status=success")
+
+        if payload.get("artifact_path"):
+            add_value("artifact", payload.get("artifact_path"), limit=130)
+        if payload.get("file_count") is not None:
+            bits.append(f"file_count={payload.get('file_count')}")
+        if payload.get("total_tokens") is not None:
+            bits.append(f"tokens={payload.get('total_tokens')}")
+
+        paths = payload.get("paths")
+        if isinstance(paths, list):
+            bits.append(f"paths={len(paths)}")
+        visible = payload.get("exists_in_visible_context")
+        if isinstance(visible, list) and visible:
+            add_value("already_visible", visible[:3], limit=130)
+
+        result = payload.get("result")
+        if isinstance(result, dict):
+            for key in ("message", "summary", "status", "new_count", "count", "file_count"):
+                if result.get(key) is not None:
+                    add_value(key, result.get(key), limit=100)
+                    break
+            messages = result.get("messages")
+            if isinstance(messages, list):
+                bits.append(f"messages={len(messages)}")
+        elif result is not None:
+            add_value("result", result, limit=120)
+
+        if not bits:
+            for key in ("message", "summary", "status"):
+                if payload.get(key):
+                    add_value(key, payload.get(key), limit=120)
+                    break
+        if not bits:
+            keys = [str(k) for k in payload.keys()][:8]
+            if keys:
+                bits.append("keys=" + ",".join(keys))
+
+        return " ".join(bits[:6])
+
+    def _hidden_retrieval_stub(self, block: Dict[str, Any], *, include_path: bool = True) -> str:
+        path = (block.get("path") or "").strip()
+        btype = (block.get("type") or "").strip() or "block"
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        call_id = (block.get("call_id") or meta.get("tool_call_id") or "").strip()
+        if not call_id and path:
+            call_id = self._call_id_from_path_for_stub(path)
+        tool_id = (block.get("tool_id") or meta.get("tool_id") or "").strip()
+        payload = None
+        if not tool_id and btype in {"react.tool.call", "react.tool.result"}:
+            payload = _maybe_parse_json(block.get("text") or "") if isinstance(block.get("text"), str) else None
+            if isinstance(payload, dict):
+                tool_id = (payload.get("tool_id") or "").strip()
+
+        if btype == "user.prompt":
+            kind = "user"
+        elif btype == "assistant.completion":
+            kind = "assistant"
+        elif btype == "react.tool.call":
+            kind = "tool_call"
+        elif btype == "react.tool.result":
+            kind = "tool_result"
+        elif path.startswith("fi:"):
+            kind = "file"
+        elif path.startswith("sk:"):
+            kind = "skill"
+        elif path.startswith("so:"):
+            kind = "source"
+        else:
+            kind = btype.replace(".", "_")
+
+        parts = [f"{kind}:"]
+        if include_path and path:
+            parts.append(f"path={path}")
+        if tool_id:
+            parts.append(f"tool={tool_id}")
+        if call_id:
+            parts.append(f"call_id={call_id}")
+        mime = (block.get("mime") or block.get("media_type") or meta.get("mime") or "").strip()
+        if include_path and mime and path.startswith("fi:"):
+            parts.append(f"mime={mime}")
+        if include_path and path.startswith("fi:"):
+            filename = self._path_basename_for_stub(path)
+            if filename:
+                parts.append(f"file={json.dumps(filename, ensure_ascii=False)}")
+
+        hint = ""
+        if btype == "react.tool.call":
+            if payload is None:
+                payload = _maybe_parse_json(block.get("text") or "") if isinstance(block.get("text"), str) else None
+            if isinstance(payload, dict):
+                hint = self._tool_call_hint_for_stub(payload)
+        elif btype == "react.tool.result":
+            if payload is None:
+                payload = _maybe_parse_json(block.get("text") or "") if isinstance(block.get("text"), str) else None
+            if payload is not None:
+                hint = self._tool_result_hint_for_stub(payload)
+        elif btype in {"user.prompt", "assistant.completion"} or path.startswith(("sk:", "so:", "fi:")):
+            hint = self._one_line_preview(block.get("text"), limit=180)
+        else:
+            hint = self._one_line_preview(block.get("text"), limit=140)
+        if hint:
+            parts.append(f"hint={json.dumps(hint, ensure_ascii=False)}")
+        return " ".join(parts)
+
+    @staticmethod
+    def _call_id_from_path_for_stub(path: str) -> str:
+        if not path:
+            return ""
+        try:
+            if ".tool_calls." in path:
+                tail = path.split(".tool_calls.", 1)[1]
+                return tail.split(".", 1)[0]
+            if path.startswith("tc:"):
+                tail = path[len("tc:"):]
+                parts = tail.split(".")
+                if len(parts) >= 3:
+                    return parts[1]
+        except Exception:
+            return ""
+        return ""
+
+    @staticmethod
+    def _is_turn_finalize_stats_block(block: Dict[str, Any]) -> bool:
+        if not isinstance(block, dict):
+            return False
+        btype = (block.get("type") or "").strip()
+        if btype == "react.turn.finalize":
+            return True
+        text = block.get("text")
+        if not isinstance(text, str):
+            return False
+        return "Turn completed with these stats" in text and "[BUDGET]" in text
+
+    @staticmethod
+    def _parse_json_block_text(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        text = block.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return None
+        try:
+            payload = json.loads(text)
+        except Exception:
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    @staticmethod
+    def _extract_finalize_section_lines(text: str, section: str, *, keep_prefixes: Tuple[str, ...]) -> List[str]:
+        if not isinstance(text, str) or not text:
+            return []
+        target = f"[{section}]"
+        lines = text.splitlines()
+        out: List[str] = []
+        active = False
+        for raw in lines:
+            stripped = raw.strip()
+            if stripped == target:
+                active = True
+                continue
+            if active and stripped.startswith("[") and stripped.endswith("]"):
+                break
+            if not active or not stripped:
+                continue
+            normalized = stripped.lstrip("-• ").strip()
+            if any(normalized.startswith(prefix) for prefix in keep_prefixes):
+                out.append(normalized)
+        return out
+
+    def _build_turn_status_stub(self, *, turn_id: str, blocks: List[Dict[str, Any]]) -> str:
+        turn_id = (turn_id or "").strip()
+        state: Dict[str, Any] = {}
+        exit_payload: Dict[str, Any] = {}
+        publish_payload: Dict[str, Any] = {}
+        finalize_text = ""
+
+        for block in blocks or []:
+            if not isinstance(block, dict):
+                continue
+            if (block.get("turn_id") or "").strip() != turn_id:
+                continue
+            btype = (block.get("type") or "").strip()
+            if btype == "react.state":
+                payload = self._parse_json_block_text(block) or {}
+                if payload:
+                    state = payload
+            elif btype == "react.exit":
+                payload = self._parse_json_block_text(block) or {}
+                if payload:
+                    exit_payload = payload
+            elif btype == "react.workspace.publish":
+                payload = self._parse_json_block_text(block) or {}
+                if payload:
+                    publish_payload = payload
+            elif self._is_turn_finalize_stats_block(block):
+                text = block.get("text")
+                if isinstance(text, str) and text.strip():
+                    finalize_text = text
+
+        lines = ["[TURN STATUS]"]
+        if turn_id:
+            lines.append(f"turn_id: {turn_id}")
+
+        iteration = state.get("iteration")
+        max_iterations = state.get("max_iterations")
+        try:
+            round_used = int(iteration) + 1
+            round_total = int(max_iterations)
+            if round_total > 0:
+                lines.append(f"rounds: {max(1, min(round_used, round_total))}/{round_total}")
+        except Exception:
+            pass
+
+        reason = (
+            state.get("exit_reason")
+            or exit_payload.get("reason")
+            or state.get("reason")
+            or ""
+        )
+        if str(reason or "").strip():
+            lines.append(f"exit_reason: {str(reason).strip()}")
+
+        error = state.get("error") or exit_payload.get("error") or ""
+        if str(error or "").strip() and str(error).strip().lower() not in {"none", "null"}:
+            lines.append(f"error: {self._one_line_preview(error, limit=180)}")
+
+        budget_lines = self._extract_finalize_section_lines(
+            finalize_text,
+            "BUDGET",
+            keep_prefixes=("time_elapsed_in_turn", "iterations"),
+        )
+        for item in budget_lines:
+            if item.startswith("time_elapsed_in_turn"):
+                lines.append(item.replace("   ", ": ", 1) if ": " not in item else item)
+                break
+
+        plan_lines = self._extract_finalize_section_lines(
+            finalize_text,
+            "OPEN PLANS",
+            keep_prefixes=("plans:", "plan_id=", "snapshot_ref=", "last_update_turn="),
+        )
+        if plan_lines:
+            lines.append("plans:")
+            for item in plan_lines[:5]:
+                lines.append(f"  - {item}")
+
+        workspace_lines = self._extract_finalize_section_lines(
+            finalize_text,
+            "WORKSPACE",
+            keep_prefixes=(
+                "implementation:",
+                "current_turn_root:",
+                "current_turn_publish:",
+                "last_published_turn:",
+                "publish_error:",
+                "repo_mode:",
+                "repo_status:",
+                "checked_out_from:",
+            ),
+        )
+        if publish_payload:
+            status = str(publish_payload.get("status") or "").strip()
+            impl = str(publish_payload.get("workspace_implementation") or "").strip()
+            if impl and not any(item.startswith("implementation:") for item in workspace_lines):
+                workspace_lines.insert(0, f"implementation: {impl}")
+            if status and not any(item.startswith("current_turn_publish:") for item in workspace_lines):
+                workspace_lines.append(f"current_turn_publish: {status}")
+            msg = str(publish_payload.get("message") or publish_payload.get("error") or "").strip()
+            if msg:
+                workspace_lines.append(f"publish_error: {self._one_line_preview(msg, limit=160)}")
+        if workspace_lines:
+            lines.append("workspace:")
+            for item in workspace_lines[:8]:
+                lines.append(f"  - {item}")
+
+        return "\n".join(lines).strip()
+
     def _apply_hidden_replacements(self, blocks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not blocks:
             return []
-        out: List[Dict[str, Any]] = []
-        hidden_seen: set[str] = set()
+        session_cfg = getattr(self.runtime, "session", None)
+        summary_mode = str(getattr(session_cfg, "pruned_turn_summary_mode", "working_summary") or "working_summary").strip().lower()
+        use_working_summaries = summary_mode in {"working_summary", "summary", "on", "true", "1"}
+        working_summaries_by_turn: Dict[str, List[Dict[str, Any]]] = {}
+        if use_working_summaries:
+            for blk in blocks:
+                if not isinstance(blk, dict):
+                    continue
+                if (blk.get("type") or "").strip() != "conv.working.summary":
+                    continue
+                turn_id = (blk.get("turn_id") or "").strip()
+                text = str(blk.get("text") or "").strip()
+                if turn_id and text:
+                    working_summaries_by_turn.setdefault(turn_id, []).append(blk)
+        turn_status_blocks: Dict[str, List[Dict[str, Any]]] = {}
         for blk in blocks:
             if not isinstance(blk, dict):
                 continue
+            btype = (blk.get("type") or "").strip()
             meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
             if not (blk.get("hidden") or meta.get("hidden")):
+                continue
+            if btype not in {"react.state", "react.exit", "react.workspace.publish", "react.turn.finalize"} and not self._is_turn_finalize_stats_block(blk):
+                continue
+            turn_id = (blk.get("turn_id") or "").strip()
+            if turn_id:
+                turn_status_blocks.setdefault(turn_id, []).append(blk)
+        out: List[Dict[str, Any]] = []
+        hidden_seen: set[str] = set()
+        emitted_working_summary_paths: set[str] = set()
+        emitted_turn_status: set[str] = set()
+        emitted_pruned_turn_data: set[str] = set()
+        for blk in blocks:
+            if not isinstance(blk, dict):
+                continue
+            btype = (blk.get("type") or "").strip()
+            turn_id = (blk.get("turn_id") or "").strip()
+            blk_path = (blk.get("path") or "").strip()
+            if btype == "conv.working.summary" and blk_path in emitted_working_summary_paths:
+                continue
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            if not (blk.get("hidden") or meta.get("hidden")):
+                if btype == "conv.working.summary" and blk_path:
+                    emitted_working_summary_paths.add(blk_path)
                 out.append(blk)
                 continue
             path = (blk.get("path") or "").strip()
+            is_turn_status_source = (
+                turn_id
+                and turn_id in turn_status_blocks
+                and (
+                    btype in {"react.state", "react.exit", "react.workspace.publish", "react.turn.finalize"}
+                    or self._is_turn_finalize_stats_block(blk)
+                )
+            )
             if not path or path in hidden_seen:
+                if is_turn_status_source and turn_id not in working_summaries_by_turn and turn_id not in emitted_turn_status:
+                    status_text = self._build_turn_status_stub(turn_id=turn_id, blocks=turn_status_blocks.get(turn_id) or [])
+                    if status_text:
+                        out.append({
+                            "type": "react.pruned.turn_status",
+                            "author": "react",
+                            "turn_id": turn_id,
+                            "path": f"ar:{turn_id}.react.turn.status",
+                            "text": status_text,
+                            "hidden": False,
+                            "meta": {"pruned_turn_status": True},
+                        })
+                        emitted_turn_status.add(turn_id)
+                continue
+            if turn_id and turn_id in working_summaries_by_turn:
+                for summary_src in working_summaries_by_turn.get(turn_id) or []:
+                    summary_path = str(summary_src.get("path") or "").strip()
+                    if summary_path and summary_path in emitted_working_summary_paths:
+                        continue
+                    summary_blk = dict(summary_src)
+                    summary_blk.pop("base64", None)
+                    summary_blk.pop("replacement_text", None)
+                    summary_meta = summary_blk.get("meta") if isinstance(summary_blk.get("meta"), dict) else {}
+                    summary_meta = dict(summary_meta)
+                    summary_meta["pruned_turn_summary"] = True
+                    summary_blk["meta"] = summary_meta
+                    summary_blk["hidden"] = False
+                    out.append(summary_blk)
+                    if summary_path:
+                        emitted_working_summary_paths.add(summary_path)
+                hidden_seen.add(path)
+                continue
+            if is_turn_status_source:
+                if turn_id not in emitted_turn_status:
+                    status_text = self._build_turn_status_stub(turn_id=turn_id, blocks=turn_status_blocks.get(turn_id) or [])
+                    if status_text:
+                        repl_blk = dict(blk)
+                        repl_blk.pop("base64", None)
+                        repl_blk["type"] = "react.pruned.turn_status"
+                        repl_blk["path"] = f"ar:{turn_id}.react.turn.status"
+                        repl_blk["text"] = status_text
+                        repl_blk["hidden"] = False
+                        repl_blk["ts"] = ""
+                        repl_meta = dict(meta)
+                        repl_meta["pruned_turn_status"] = True
+                        repl_blk["meta"] = repl_meta
+                        out.append(repl_blk)
+                        emitted_turn_status.add(turn_id)
+                hidden_seen.add(path)
                 continue
             repl = (blk.get("replacement_text") or meta.get("replacement_text") or "").strip()
             if not repl:
                 continue
+            if meta.get("kind") == "cache_ttl_pruned":
+                hidden_seen.add(path)
+                continue
             hidden_seen.add(path)
+            if turn_id and turn_id not in emitted_pruned_turn_data:
+                out.append({
+                    "type": "react.pruned.turn_data",
+                    "author": "react",
+                    "turn_id": turn_id,
+                    "path": f"ar:{turn_id}.react.pruned.turn_data",
+                    "text": (
+                        "[PRUNED TURN DATA]\n"
+                        f"turn_id: {turn_id}\n"
+                        "retrieval_rows: logical paths and hints for hidden historical blocks"
+                    ),
+                    "hidden": False,
+                    "ts": "",
+                    "meta": {"pruned_turn_data": True},
+                })
+                emitted_pruned_turn_data.add(turn_id)
             repl_blk = dict(blk)
             repl_blk.pop("base64", None)
-            repl_blk["text"] = repl
+            repl_meta = dict(meta)
+            repl_meta["pruned_retrieval_stub"] = True
+            repl_blk["meta"] = repl_meta
+            repl_blk["text"] = self._hidden_retrieval_stub(blk, include_path=True)
             repl_blk["hidden"] = False
+            repl_blk["type"] = "react.pruned.ref"
+            repl_blk["ts"] = ""
             out.append(repl_blk)
         return out
 
@@ -1843,11 +2415,11 @@ class Timeline:
             replacement_for_block = replacement_text if not replacement_assigned else ""
             if not replacement_assigned:
                 replacement_assigned = True
-            blk["replacement_text"] = replacement_for_block or ""
             try:
                 original_tokens = token_count(original_text or "")
             except Exception:
                 original_tokens = 0
+            blk["replacement_text"] = replacement_for_block or ""
             try:
                 replacement_tokens = token_count(replacement_for_block or "") if replacement_for_block else 0
             except Exception:
@@ -1856,7 +2428,9 @@ class Timeline:
             tokens_hidden += delta
             if delta < 0:
                 try:
-                    logger.warning(
+                    grew_by = replacement_tokens - original_tokens
+                    log = logger.warning if grew_by > max(64, original_tokens) else logger.debug
+                    log(
                         "[timeline.hide_paths] replacement longer than original: path=%s tool_call_id=%s original_tokens=%s replacement_tokens=%s",
                         path,
                         (blk.get("meta") or {}).get("tool_call_id"),
@@ -1948,15 +2522,33 @@ class Timeline:
         block_est = self._estimate_blocks_tokens(blocks)
         total_est = sys_est + block_est
         if not force and total_est <= int(max_tokens * 0.9):
+            logger.info(
+                "[context.compaction:skip] reason=within_budget force=%s total_est=%s max_tokens=%s threshold=%s blocks=%s",
+                force,
+                total_est,
+                max_tokens,
+                int(max_tokens * 0.9),
+                len(blocks),
+            )
             return blocks
 
         boundary_start = self._find_last_summary_index(blocks) + 1
         boundary_end = len(blocks)
         if boundary_start >= boundary_end:
+            logger.warning(
+                "[context.compaction:no_effect] reason=no_boundary_room boundary_start=%s boundary_end=%s blocks=%s force=%s total_est=%s max_tokens=%s",
+                boundary_start,
+                boundary_end,
+                len(blocks),
+                force,
+                total_est,
+                max_tokens,
+            )
             return blocks
 
         context_budget = max(1, int(max_tokens - sys_est))
         keep_recent_tokens = max(1, int(context_budget * 0.7))
+        recent_start: Optional[int] = None
         if keep_recent_turns > 0:
             recent_start = self._find_recent_turn_start_index(
                 blocks,
@@ -1974,11 +2566,80 @@ class Timeline:
             boundary_end,
             keep_recent_tokens,
         )
+        if force and cut_index <= boundary_start and recent_start is not None and recent_start > boundary_start:
+            cut_index = recent_start
+            turn_start_index = -1
+            is_split_turn = False
         if cut_index <= boundary_start:
+            logger.warning(
+                "[context.compaction:no_effect] reason=no_cut_point boundary_start=%s cut_index=%s recent_start=%s keep_recent_tokens=%s force=%s total_est=%s max_tokens=%s",
+                boundary_start,
+                cut_index,
+                recent_start,
+                keep_recent_tokens,
+                force,
+                total_est,
+                max_tokens,
+            )
             return blocks
 
         if is_split_turn and turn_start_index < boundary_start:
             turn_start_index = boundary_start
+        if is_split_turn and turn_start_index != -1:
+            split_turn_id_candidate = (
+                blocks[turn_start_index].get("turn_id")
+                or blocks[turn_start_index].get("turn")
+                or ""
+            ).strip()
+            current_turn_id = (self.runtime.turn_id or "").strip()
+            if split_turn_id_candidate and current_turn_id and split_turn_id_candidate != current_turn_id:
+                next_turn_start_index = -1
+                for idx in range(turn_start_index + 1, boundary_end):
+                    idx_turn_id = (
+                        blocks[idx].get("turn_id")
+                        or blocks[idx].get("turn")
+                        or ""
+                    ).strip()
+                    if idx_turn_id != split_turn_id_candidate and self._is_turn_start_block(blocks[idx]):
+                        next_turn_start_index = idx
+                        break
+                logger.info(
+                    "[context.compaction:retry] reason=split_non_current_turn action=compact_full_non_current_turn "
+                    "split_turn_id=%s current_turn_id=%s old_cut_index=%s turn_start_index=%s next_turn_start_index=%s",
+                    split_turn_id_candidate,
+                    current_turn_id,
+                    cut_index,
+                    turn_start_index,
+                    next_turn_start_index,
+                )
+                if next_turn_start_index <= boundary_start:
+                    logger.warning(
+                        "[context.compaction:no_effect] reason=split_non_current_turn_no_next_boundary "
+                        "split_turn_id=%s current_turn_id=%s boundary_start=%s cut_index=%s turn_start_index=%s next_turn_start_index=%s",
+                        split_turn_id_candidate,
+                        current_turn_id,
+                        boundary_start,
+                        cut_index,
+                        turn_start_index,
+                        next_turn_start_index,
+                    )
+                    return blocks
+                cut_index = next_turn_start_index
+                turn_start_index = -1
+                is_split_turn = False
+        logger.info(
+            "[context.compaction:start] force=%s blocks=%s total_est=%s max_tokens=%s boundary_start=%s cut_index=%s turn_start_index=%s split_turn=%s history_blocks_estimated=%s keep_recent_tokens=%s",
+            force,
+            len(blocks),
+            total_est,
+            max_tokens,
+            boundary_start,
+            cut_index,
+            turn_start_index,
+            is_split_turn,
+            max(0, (turn_start_index if is_split_turn else cut_index) - boundary_start),
+            keep_recent_tokens,
+        )
 
         previous_summary: Optional[str] = None
         for idx in range(boundary_start - 1, -1, -1):
@@ -1998,6 +2659,11 @@ class Timeline:
             for blk in blocks[boundary_start:history_end]
             if not self._is_compaction_summary_block(blk)
         ]
+        history_working_summary_blocks = self._working_summary_blocks_for_turns(
+            blocks=blocks,
+            turn_ids=extract_turn_ids_from_blocks(history_blocks),
+            exclude_blocks=history_blocks,
+        )
         summary: Optional[str] = None
         if not history_blocks and previous_summary:
             summary = previous_summary
@@ -2008,6 +2674,7 @@ class Timeline:
                 blocks=history_blocks,
                 max_tokens=800,
                 previous_summary=previous_summary,
+                working_summary_blocks=history_working_summary_blocks,
             )
 
         turn_prefix_blocks: List[Dict[str, Any]] = []
@@ -2016,19 +2683,53 @@ class Timeline:
 
         prefix_summary: Optional[str] = None
         if turn_prefix_blocks:
+            prefix_working_summary_blocks = self._working_summary_blocks_for_turns(
+                blocks=blocks,
+                turn_ids=extract_turn_ids_from_blocks(turn_prefix_blocks),
+                exclude_blocks=turn_prefix_blocks,
+            )
             from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import summarize_turn_prefix_progressive
             prefix_summary = await summarize_turn_prefix_progressive(
                 svc=self.svc,
                 blocks=turn_prefix_blocks,
                 max_tokens=400,
+                working_summary_blocks=prefix_working_summary_blocks,
             )
             if not prefix_summary:
-                return blocks
+                if turn_start_index > boundary_start:
+                    logger.warning(
+                        "[context.compaction:retry] reason=empty_turn_prefix_summary action=compact_history_only "
+                        "prefix_blocks=%s old_cut_index=%s new_cut_index=%s turn_start_index=%s",
+                        len(turn_prefix_blocks),
+                        cut_index,
+                        turn_start_index,
+                        turn_start_index,
+                    )
+                    cut_index = turn_start_index
+                    is_split_turn = False
+                    turn_prefix_blocks = []
+                    prefix_summary = None
+                else:
+                    logger.warning(
+                        "[context.compaction:no_effect] reason=empty_turn_prefix_summary_no_safe_history_cut "
+                        "prefix_blocks=%s cut_index=%s turn_start_index=%s boundary_start=%s",
+                        len(turn_prefix_blocks),
+                        cut_index,
+                        turn_start_index,
+                        boundary_start,
+                    )
+                    return blocks
 
         if summary is None and not history_blocks and not previous_summary:
             summary = "No prior history."
 
         if summary is None:
+            logger.warning(
+                "[context.compaction:no_effect] reason=empty_history_summary history_blocks=%s previous_summary=%s cut_index=%s",
+                len(history_blocks),
+                bool(previous_summary),
+                cut_index,
+            )
             return blocks
 
         if prefix_summary:
@@ -2162,6 +2863,17 @@ class Timeline:
                 })
             except Exception:
                 pass
+        logger.info(
+            "[context.compaction:applied] compacted_blocks=%s inserted_blocks=%s covered_turns=%s split_turn=%s split_turn_id=%s summary_chars=%s before_blocks=%s after_blocks=%s",
+            len(compacted_blocks),
+            inserted_blocks,
+            len(covered_turn_ids),
+            bool(is_split_turn),
+            split_turn_id,
+            len(summary or ""),
+            len(blocks),
+            len(updated_blocks),
+        )
         return updated_blocks
 
     async def render(
@@ -2175,10 +2887,8 @@ class Timeline:
         keep_recent_turns: int = 6,
         debug_log: Optional[Callable[[str], None]] = None,
         debug_print: bool = False,
-        debug_cache_trace: bool = True,
+        debug_cache_trace: bool = False,
     ) -> List[Dict[str, Any]]:
-        if debug_cache_trace and not debug_log and not debug_print:
-            debug_print = True
         if self._lock is None:
             return await self._render_locked(
                 cache_last=cache_last,
@@ -2201,6 +2911,7 @@ class Timeline:
                 keep_recent_turns=keep_recent_turns,
                 debug_log=debug_log,
                 debug_print=debug_print,
+                debug_cache_trace=debug_cache_trace,
             )
 
     async def _render_locked(
@@ -2214,13 +2925,12 @@ class Timeline:
         keep_recent_turns: int = 6,
         debug_log: Optional[Callable[[str], None]] = None,
         debug_print: bool = False,
-        debug_cache_trace: bool = True,
+        debug_cache_trace: bool = False,
     ) -> List[Dict[str, Any]]:
-        if debug_cache_trace and not debug_log and not debug_print:
-            debug_print = True
         self.apply_session_cache_ttl_pruning()
         blocks = self._collect_blocks()
         if self.runtime.max_tokens:
+            render_forces_sanitize = bool(force_sanitize)
             before_tokens = None
             after_tokens = None
             compacted_tokens = None
@@ -2231,12 +2941,39 @@ class Timeline:
                     await self.runtime.on_before_compaction({"before_tokens": before_tokens})
                 except Exception:
                     pass
+            try:
+                visible_probe = self._slice_after_compaction_summary(blocks)
+                visible_probe = self._apply_hidden_replacements(visible_probe)
+                visible_probe = self._append_tail_blocks(
+                    blocks=visible_probe,
+                    include_sources=include_sources,
+                    include_announce=include_announce,
+                )
+                msg_probe = self._blocks_to_message_blocks(visible_probe)
+                rendered_tokens = self._estimate_model_message_tokens(msg_probe)
+                rendered_limit = int((self.runtime.max_tokens or 0) * 0.9)
+                rendered_block_limit = 700
+                if rendered_tokens > rendered_limit or len(msg_probe) > rendered_block_limit:
+                    render_forces_sanitize = True
+                    try:
+                        logging.getLogger("kdcube.react.cache").info(
+                            "[compaction:render_probe] forcing sanitize rendered_tokens=%s limit=%s "
+                            "message_blocks=%s block_limit=%s",
+                            rendered_tokens,
+                            rendered_limit,
+                            len(msg_probe),
+                            rendered_block_limit,
+                        )
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             blocks = await self.sanitize_context_blocks(
                 system_text=system_text or "",
                 blocks=blocks,
                 max_tokens=int(self.runtime.max_tokens or 28000),
                 keep_recent_turns=keep_recent_turns,
-                force=force_sanitize,
+                force=render_forces_sanitize,
             )
             if self.runtime.on_after_compaction:
                 try:
@@ -2810,6 +3547,13 @@ class Timeline:
                 if text:
                     lines.append(text)
                 text = "\n".join(lines).strip()
+            elif btype == "conv.working.summary":
+                lines = ["[WORKING SUMMARY]"]
+                if path:
+                    lines.append(f"[path: {path}]")
+                if text:
+                    lines.append(text)
+                text = "\n".join(lines).strip()
             elif btype == "turn.feedback":
                 lines = []
                 origin = (meta.get("origin") or "").strip().lower() if isinstance(meta, dict) else ""
@@ -3076,9 +3820,40 @@ class Timeline:
                                 if not p:
                                     continue
                                 tok = row.get("tokens")
+                                status = (row.get("status") or "").strip()
                                 if tok:
-                                    lines.append(f"- {p} (tokens={tok})")
+                                    suffix = f"tokens={tok}"
+                                    if status == "exists_in_visible_context":
+                                        suffix += ", already visible"
+                                    elif status:
+                                        suffix += f", status={status}"
+                                    lines.append(f"- {p} ({suffix})")
+                                elif status == "exists_in_visible_context":
+                                    lines.append(f"- {p} (already visible in current context)")
+                                elif status:
+                                    lines.append(f"- {p} (status={status})")
                                 else:
+                                    lines.append(f"- {p}")
+                        visible = payload.get("exists_in_visible_context") or []
+                        visible_refs = payload.get("visible_context_refs") or {}
+                        if isinstance(visible, list) and visible:
+                            lines.append(
+                                "Already visible in current context; no new content was loaded for these paths:"
+                            )
+                            for p in visible:
+                                if isinstance(p, str) and p:
+                                    ref = visible_refs.get(p) if isinstance(visible_refs, dict) else None
+                                    if isinstance(ref, dict):
+                                        visible_at = (ref.get("visible_at") or "").strip()
+                                        tool_result_path = (ref.get("tool_result_path") or "").strip()
+                                        bits = []
+                                        if visible_at:
+                                            bits.append(visible_at)
+                                        if tool_result_path:
+                                            bits.append(f"see {tool_result_path}")
+                                        if bits:
+                                            lines.append(f"- {p} (already visible at {'; '.join(bits)})")
+                                            continue
                                     lines.append(f"- {p}")
                         missing = payload.get("missing") or []
                         if missing:

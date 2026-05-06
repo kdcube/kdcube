@@ -331,6 +331,33 @@ def test_rewrite_exec_code_paths_does_not_double_prefix_telegram_turn_id():
     ]
 
 
+def test_rewrite_exec_code_paths_is_artifact_segment_aware():
+    code = (
+        'current = "turn_13083704/outputs/email-attachments/acct/msg/invoice.pdf"\n'
+        'relative = "outputs/email-attachments/acct/msg/receipt.pdf"\n'
+        'user_file = "attachments/uploaded.pdf"\n'
+        'url = "https://example.com/attachments/not-local.pdf"\n'
+    )
+
+    rewritten, rewrites = rewrite_exec_code_paths(code, turn_id="turn_13083704")
+
+    assert 'current = "turn_13083704/outputs/email-attachments/acct/msg/invoice.pdf"' in rewritten
+    assert 'relative = "turn_13083704/outputs/email-attachments/acct/msg/receipt.pdf"' in rewritten
+    assert 'user_file = "turn_13083704/attachments/uploaded.pdf"' in rewritten
+    assert 'url = "https://example.com/attachments/not-local.pdf"' in rewritten
+    assert "turn_13083704/outputs/email-turn_13083704/attachments" not in rewritten
+    assert rewrites == [
+        {
+            "original": "outputs/email-attachments/acct/msg/receipt.pdf",
+            "rewritten": "turn_13083704/outputs/email-attachments/acct/msg/receipt.pdf",
+        },
+        {
+            "original": "attachments/uploaded.pdf",
+            "rewritten": "turn_13083704/attachments/uploaded.pdf",
+        },
+    ]
+
+
 def test_build_exec_output_contract_rejects_invalid_visibility():
     contract, normalized, err = build_exec_output_contract([
         {
@@ -401,6 +428,43 @@ def test_contract_artifact_egress_allows_normal_archive(tmp_path):
     )
 
     assert err is None
+
+
+def test_contract_artifact_egress_rejects_corrupt_zip(tmp_path):
+    outdir = tmp_path / "out"
+    archive_path = outdir / "turn_1" / "outputs" / "broken.zip"
+    archive_path.parent.mkdir(parents=True)
+    archive_path.write_bytes(b"not a zip")
+
+    err = _validate_contract_artifact_egress(
+        path=archive_path,
+        outdir=outdir,
+        rel="turn_1/outputs/broken.zip",
+        mime="application/zip",
+    )
+
+    assert err is not None
+    assert err["code"] == "artifact_internal_path_blocked"
+    assert "not a readable zip archive" in err["message"]
+
+
+def test_contract_artifact_egress_rejects_empty_zip(tmp_path):
+    outdir = tmp_path / "out"
+    archive_path = outdir / "turn_1" / "outputs" / "empty.zip"
+    archive_path.parent.mkdir(parents=True)
+    with zipfile.ZipFile(archive_path, "w"):
+        pass
+
+    err = _validate_contract_artifact_egress(
+        path=archive_path,
+        outdir=outdir,
+        rel="turn_1/outputs/empty.zip",
+        mime="application/zip",
+    )
+
+    assert err is not None
+    assert err["code"] == "artifact_internal_path_blocked"
+    assert "zip archive has no files" in err["message"]
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,8 @@ from typing import Any, Awaitable, Callable, Literal, Mapping, Sequence
 ClaudeCodeTurnKind = Literal["regular", "followup", "steer"]
 ClaudeCodeStructuredEventCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 ClaudeCodeTextChunkCallback = Callable[[str], Awaitable[None] | None]
+CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX = "EXECUTIVE_JOURNAL"
+CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX = "EXECUTIVE_JOURNAL_CODE"
 
 
 @dataclass(frozen=True)
@@ -93,6 +95,11 @@ class ClaudeCodeAgentConfig:
     permission_mode: str | None = "acceptEdits"
     timeout_seconds: float | None = None
     structured_output_prefixes: Sequence[str] = field(default_factory=tuple)
+    executive_journal_prefixes: Sequence[str] = (
+        CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX,
+        CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
+    )
+    executive_journal_max_entries: int = 100
     on_structured_output: ClaudeCodeStructuredEventCallback | None = None
     on_text_chunk: ClaudeCodeTextChunkCallback | None = None
     workspace_config: ClaudeCodeWorkspaceConfig | None = None
@@ -124,6 +131,16 @@ class ClaudeCodeAgentConfig:
             "structured_output_prefixes",
             tuple(str(prefix).strip() for prefix in self.structured_output_prefixes if str(prefix).strip()),
         )
+        object.__setattr__(
+            self,
+            "executive_journal_prefixes",
+            tuple(str(prefix).strip() for prefix in self.executive_journal_prefixes if str(prefix).strip()),
+        )
+        try:
+            max_entries = int(self.executive_journal_max_entries or 0)
+        except Exception as exc:
+            raise ValueError("executive_journal_max_entries must be numeric") from exc
+        object.__setattr__(self, "executive_journal_max_entries", max(0, max_entries))
         object.__setattr__(self, "model", str(self.model or "").strip() or None)
         if self.permission_mode is not None:
             object.__setattr__(self, "permission_mode", str(self.permission_mode).strip() or None)
@@ -167,3 +184,4 @@ class ClaudeCodeRunResult:
     timed_out: bool = False
     timeout_seconds: float | None = None
     structured_events: list[dict[str, Any]] = field(default_factory=list)
+    executive_journal: list[dict[str, Any]] = field(default_factory=list)

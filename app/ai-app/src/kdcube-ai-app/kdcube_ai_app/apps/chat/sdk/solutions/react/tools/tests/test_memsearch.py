@@ -139,3 +139,78 @@ async def test_memsearch_attachment_target_includes_external_followup_attachment
         "role": "attachment",
         "ts": "2026-04-26T10:00:00Z",
     }]
+
+
+@pytest.mark.asyncio
+async def test_memsearch_summary_target_includes_working_summary_blocks(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_current",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+        user_id="user_1",
+    )
+    ctx = FakeBrowser(runtime)
+    captured_search = {}
+
+    async def _search(**kwargs):
+        captured_search.update(kwargs)
+        return "turn_prev", [{
+            "turn_id": "turn_prev",
+            "score": 0.9,
+            "sim": 0.89,
+            "rec": 0.92,
+            "matched_via_role": "assistant",
+            "source_query": "Anthropic invoices zip",
+            "ts": "2026-05-05T19:37:00Z",
+        }]
+
+    ctx.search = _search
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "conv.working.summary",
+                "author": "assistant",
+                "turn_id": "turn_prev",
+                "ts": "2026-05-05T19:37:00Z",
+                "path": "ws:turn_prev.conv.working.summary.attempt.1",
+                "text": "Goal: Create ZIP with all Anthropic April 2026 invoice PDFs.\nOutcome: Failed at hosted artifact boundary.",
+                "meta": {
+                    "kind": "working_summary",
+                    "summary_scope": "completion_attempt",
+                    "assistant_completion_attempt_index": 1,
+                },
+            }
+        ],
+        "sources_pool": [],
+    }
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "query": "Anthropic invoices zip",
+                    "targets": ["summary"],
+                    "top_k": 3,
+                }
+            }
+        }
+    }
+
+    out = await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms2")
+
+    assert captured_search["targets"] == [{"where": "assistant", "query": "Anthropic invoices zip"}]
+    hits = out["last_tool_result"]
+    assert len(hits) == 1
+    snippets = hits[0]["snippets"]
+    assert len(snippets) == 1
+    assert snippets[0]["role"] == "summary"
+    assert snippets[0]["path"] == "ws:turn_prev.conv.working.summary.attempt.1"
+    assert "Anthropic April 2026" in snippets[0]["text"]
+
+    summary = _latest_summary_payload(ctx)
+    assert summary["hits"][0]["snippets"] == [{
+        "path": "ws:turn_prev.conv.working.summary.attempt.1",
+        "role": "summary",
+        "ts": "2026-05-05T19:37:00Z",
+    }]

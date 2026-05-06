@@ -45,8 +45,10 @@ class RuntimeSessionConfig:
     cache_truncation_max_base64_chars: int = 4000
     cache_truncation_keep_recent_images: int = 2
     cache_truncation_max_image_pdf_b64_sum: int = 1_000_000
-    keep_recent_turns: int = 10
-    keep_recent_intact_turns: int = 2
+    keep_recent_turns: int = 6
+    keep_recent_intact_turns: int = 1
+    working_summary_enabled: bool = True
+    pruned_turn_summary_mode: str = "working_summary"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -61,6 +63,8 @@ class RuntimeSessionConfig:
             "cache_truncation_max_image_pdf_b64_sum": self.cache_truncation_max_image_pdf_b64_sum,
             "keep_recent_turns": self.keep_recent_turns,
             "keep_recent_intact_turns": self.keep_recent_intact_turns,
+            "working_summary_enabled": bool(self.working_summary_enabled),
+            "pruned_turn_summary_mode": self.pruned_turn_summary_mode,
         }
 
 

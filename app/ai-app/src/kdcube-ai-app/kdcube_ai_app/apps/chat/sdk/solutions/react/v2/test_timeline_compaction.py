@@ -654,12 +654,67 @@ def test_cache_ttl_pruning_keeps_internal_notes_visible():
         ttl_seconds=1,
         buffer_seconds=0,
         keep_recent_turns=0,
+        keep_recent_intact_turns=0,
     )
 
     assert res.get("status") in {"pruned", "pruned_light", "no_effect"}
     note_block = next(b for b in tl.blocks if b.get("type") == "react.note")
     assert not note_block.get("hidden")
     assert "fi:turn_old.files/memory/key-artifacts.md" not in (res.get("hidden_paths") or [])
+
+
+def test_cache_ttl_pruning_keeps_working_summary_visible():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    tl.blocks = [
+        {
+            "type": "turn.header",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "text": "[TURN turn_old]",
+        },
+        {
+            "type": "conv.working.summary",
+            "author": "assistant",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:02:00Z",
+            "path": "ws:turn_old.conv.working.summary.attempt.1",
+            "text": "Goal: old task\nOutcome: first useful result",
+            "meta": {"kind": "working_summary", "summary_scope": "completion_attempt"},
+        },
+        {
+            "type": "conv.working.summary",
+            "author": "assistant",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:02:30Z",
+            "path": "ws:turn_old.conv.working.summary",
+            "text": "Goal: old task\nOutcome: final useful result",
+            "meta": {"kind": "working_summary"},
+        },
+        {
+            "type": "assistant.completion",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:03:00Z",
+            "path": "ar:turn_old.assistant.completion",
+            "text": "done",
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+
+    assert res.get("status") in {"pruned", "pruned_light", "no_effect"}
+    summary_blocks = [b for b in tl.blocks if b.get("type") == "conv.working.summary"]
+    assert len(summary_blocks) == 2
+    assert all(not b.get("hidden") for b in summary_blocks)
+    assert "ws:turn_old.conv.working.summary.attempt.1" not in (res.get("hidden_paths") or [])
+    assert "ws:turn_old.conv.working.summary" not in (res.get("hidden_paths") or [])
 
 
 def test_cache_ttl_pruning_keeps_external_turn_events_visible():
@@ -717,6 +772,77 @@ def test_cache_ttl_pruning_keeps_external_turn_events_visible():
     assert "ar:turn_old.external.steer.evt_2" not in hidden_paths
 
 
+@pytest.mark.asyncio
+async def test_render_compacts_when_pruned_skeleton_has_too_many_message_blocks(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    async def _fake_summary(*args, **kwargs):
+        return "compacted rendered skeleton"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "compacted turn prefix"
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_cur", max_tokens=80000)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = []
+    for idx in range(760):
+        tid = f"turn_{idx}"
+        blocks.append({
+            "type": "turn.header",
+            "turn_id": tid,
+            "text": f"TURN {tid}",
+        })
+        blocks.append({
+            "type": "user.prompt",
+            "author": "user",
+            "turn_id": tid,
+            "path": f"ar:{tid}.user.prompt",
+            "text": "x",
+            "hidden": True,
+            "replacement_text": f"[pruned user] path=ar:{tid}.user.prompt hint=\"x\"",
+        })
+    tl.blocks = blocks
+
+    rendered = await tl.render(cache_last=False, include_sources=False, include_announce=False)
+
+    assert any(b.get("type") == "conv.range.summary" for b in tl.blocks)
+    assert len(rendered) < 760
+    assert "compacted rendered skeleton" in rendered[0]["text"]
+
+
+def test_cache_ttl_pruning_collapses_old_prune_notices():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    tl.blocks = [
+        {
+            "type": "system.message",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "path": "ar:turn_old.system.message.cache_pruned",
+            "text": "Context was pruned because the session TTL was exceeded. " * 20,
+            "meta": {"kind": "cache_ttl_pruned"},
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+
+    assert res.get("status") in {"pruned", "pruned_light"}
+    block = tl.blocks[0]
+    assert block.get("hidden") is True
+    assert "cache prune notice hidden" in block.get("replacement_text", "")
+    assert "session TTL was exceeded" not in block.get("replacement_text", "")
+
+
 def test_compaction_serializer_marks_external_turn_events():
     from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
         _serialize_context_blocks_for_compaction,
@@ -743,3 +869,28 @@ def test_compaction_serializer_marks_external_turn_events():
     assert "also include the quantum angle" in text
     assert "[User Steer During Turn]:" in text
     assert "stop and summarize" in text
+
+
+def test_compaction_serializer_accepts_numeric_metadata_fields():
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
+        _serialize_context_blocks_for_compaction,
+    )
+
+    text = _serialize_context_blocks_for_compaction(
+        [
+            {
+                "type": "react.tool.result",
+                "turn_id": "turn_old",
+                "ts": 1778032340.800,
+                "path": "tc:turn_old.tc_result.result",
+                "call_id": 12345,
+                "tool_id": "email.process_user_emails",
+                "text": "",
+            },
+        ]
+    )
+
+    assert "[Tool result]:" in text
+    assert "ts=1778032340.8" in text
+    assert "call_id=12345" in text
+    assert "path=tc:turn_old.tc_result.result" in text

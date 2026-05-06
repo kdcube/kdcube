@@ -211,6 +211,32 @@ def test_build_args_includes_session_allowed_tools_and_agent(tmp_path: Path):
     assert args[-1] == "Explain the repo"
 
 
+@pytest.mark.asyncio
+async def test_run_turn_closes_stdin_when_prompt_is_passed_as_argument(monkeypatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    comm, _ = _make_comm()
+    ctx = _ctx()
+    captured_kwargs: list[dict] = []
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        del args
+        captured_kwargs.append(kwargs)
+        return _FakeProcess(stdout_lines=[], stderr_lines=[], returncode=0)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    with bind_current_request_context(ctx, comm=comm):
+        agent = ClaudeCodeAgent.from_current_context(
+            agent_name="kb-writer",
+            workspace_path=workspace,
+        )
+        await agent.run_turn("Explain the repo")
+
+    assert captured_kwargs
+    assert captured_kwargs[0]["stdin"] is asyncio.subprocess.DEVNULL
+
+
 def test_build_args_includes_selected_model(tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -506,6 +532,49 @@ async def test_run_turn_collects_structured_events_from_streamed_chunks(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_run_turn_collects_executive_journal_from_standard_prefix(monkeypatch, tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    comm, emitter = _make_comm()
+    ctx = _ctx()
+
+    outputs = [
+        json.dumps({"message": {"content": [{"type": "text", "text": "EXECUTIVE_JOURNAL searched scoped messages; found two candidates\nStill working"}]}}) + "\n",
+        json.dumps({"message": {"content": [{"type": "text", "text": "EXECUTIVE_JOURNAL_CODE print('checkpoint')\nDone"}]}}) + "\n",
+    ]
+
+    async def _fake_create_subprocess_exec(*args, **kwargs):
+        del args, kwargs
+        return _FakeProcess(stdout_lines=outputs, stderr_lines=[], returncode=0)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_create_subprocess_exec)
+
+    with bind_current_request_context(ctx, comm=comm):
+        agent = ClaudeCodeAgent.from_current_context(
+            agent_name="kb-writer",
+            workspace_path=workspace,
+        )
+        result = await agent.run_turn("Summarize repo")
+
+    completed_steps = [
+        envelope
+        for _, envelope in emitter.events
+        if envelope.get("type") == "chat.step" and envelope.get("event", {}).get("status") == "completed"
+    ]
+
+    assert result.status == "completed"
+    assert len(result.executive_journal) == 2
+    assert result.executive_journal[0]["prefix"] == "EXECUTIVE_JOURNAL"
+    assert result.executive_journal[0]["channel"] == "note"
+    assert result.executive_journal[0]["text"] == "searched scoped messages; found two candidates"
+    assert result.executive_journal[0]["captured_at"]
+    assert result.executive_journal[1]["prefix"] == "EXECUTIVE_JOURNAL_CODE"
+    assert result.executive_journal[1]["channel"] == "code"
+    assert result.executive_journal[1]["code"] == "print('checkpoint')"
+    assert completed_steps[-1]["data"]["executive_journal"] == result.executive_journal
+
+
+@pytest.mark.asyncio
 async def test_run_turn_timeout_marks_failure_and_emits_timeout_metadata(monkeypatch, tmp_path: Path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -535,6 +604,8 @@ async def test_run_turn_timeout_marks_failure_and_emits_timeout_metadata(monkeyp
     assert result.status == "failed"
     assert result.timed_out is True
     assert result.timeout_seconds == pytest.approx(0.01)
+    assert result.duration_ms is not None
+    assert result.duration_ms >= 0
     assert "timeout" in (result.error_message or "").lower()
     assert error_steps[-1]["data"]["timed_out"] is True
     assert error_steps[-1]["data"]["timeout_seconds"] == pytest.approx(0.01)

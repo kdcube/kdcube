@@ -41,6 +41,7 @@ def record_assistant_completion_attempt(
     answer_text: str,
     ts: Optional[str],
     iteration: Optional[int] = None,
+    working_summary_text: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     text = str(answer_text or "").strip()
     if not text:
@@ -58,6 +59,9 @@ def record_assistant_completion_attempt(
             entry["iteration"] = int(iteration)
         except Exception:
             pass
+    working_summary = str(working_summary_text or "").strip()
+    if working_summary:
+        entry["working_summary"] = working_summary
     try:
         sources_used = citations_module.extract_citation_sids_any(text)
     except Exception:
@@ -102,6 +106,9 @@ def _normalized_assistant_completion_entries(
                 item["sources_used"] = list(extracted)
         if raw.get("iteration") is not None:
             item["iteration"] = raw.get("iteration")
+        working_summary = str(raw.get("working_summary") or "").strip()
+        if working_summary:
+            item["working_summary"] = working_summary
         normalized.append(item)
 
     latest_text = str(final_answer_text or "").strip()
@@ -312,6 +319,68 @@ def build_assistant_completion_blocks(
             meta=meta or None,
         ))
     return blocks
+
+
+def build_working_summary_blocks(
+    *,
+    runtime: RuntimeCtx,
+    summary_text: str = "",
+    ended_at: Optional[str],
+    block_factory,
+) -> List[Dict[str, Any]]:
+    # Canonical working-summary paths are read aliases, not persisted blocks.
+    # The only persisted summary records are generated from React
+    # <channel:summary> completion attempts.
+    return []
+
+
+def build_working_summary_attempt_blocks(
+    *,
+    runtime: RuntimeCtx,
+    summary_text: str = "",
+    attempt_index: int,
+    attempt_count: Optional[int] = None,
+    assistant_completion_path: Optional[str] = None,
+    iteration: Optional[int] = None,
+    ts: Optional[str] = None,
+    block_factory,
+) -> List[Dict[str, Any]]:
+    tid = (getattr(runtime, "turn_id", None) or "").strip()
+    text = str(summary_text or "").strip()
+    if not tid or not text:
+        return []
+    try:
+        idx = max(1, int(attempt_index))
+    except Exception:
+        idx = 1
+    meta: Dict[str, Any] = {
+        "kind": "working_summary",
+        "created_by": "react",
+        "source_channel": "summary",
+        "summary_scope": "completion_attempt",
+        "assistant_completion_attempt_index": idx,
+        "covered_turn_ids": [tid],
+        "covered_until_turn_id": tid,
+    }
+    if attempt_count is not None:
+        try:
+            meta["assistant_completion_attempt_count"] = int(attempt_count)
+        except Exception:
+            pass
+    if assistant_completion_path:
+        meta["assistant_completion_path"] = str(assistant_completion_path)
+    if iteration is not None:
+        meta["iteration"] = iteration
+    return [block_factory(
+        type="conv.working.summary",
+        author="assistant",
+        turn_id=tid,
+        ts=(ts or getattr(runtime, "started_at", "") or "").strip(),
+        path=f"ws:{tid}.conv.working.summary.attempt.{idx}",
+        text=text,
+        mime="text/markdown",
+        meta=meta,
+    )]
 
 
 def build_interrupted_generation_blocks(

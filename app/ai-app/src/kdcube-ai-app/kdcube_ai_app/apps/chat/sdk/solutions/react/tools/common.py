@@ -8,15 +8,98 @@ import shutil
 import subprocess
 import tempfile
 import logging
+import os
 from typing import Any, Dict, Optional, List
 
 import json
 import pathlib
 
 _LOG = logging.getLogger("kdcube.react.artifacts")
+_TOOL_LOG_DEFAULT_MAX_CHARS = 120_000
+
+
+def _tool_log_max_chars() -> int:
+    try:
+        return max(4_000, int(os.getenv("KDCUBE_REACT_TOOL_LOG_MAX_CHARS", str(_TOOL_LOG_DEFAULT_MAX_CHARS))))
+    except Exception:
+        return _TOOL_LOG_DEFAULT_MAX_CHARS
+
+
+def _clip_log_text(text: str, *, max_chars: Optional[int] = None) -> str:
+    max_len = max_chars or _tool_log_max_chars()
+    if len(text) <= max_len:
+        return text
+    omitted = len(text) - max_len
+    return f"{text[:max_len]}\n[TRUNCATED by react tool logger: omitted {omitted} chars]"
+
+
+def _safe_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        try:
+            return str(value)
+        except Exception:
+            return "<unserializable>"
+
+
+def _turn_from_path(path: str) -> str:
+    if not path:
+        return ""
+    if path.startswith("tc:"):
+        rest = path[3:]
+        return rest.split(".", 1)[0]
+    if path.startswith("fi:"):
+        rest = path[3:]
+        return rest.split("/", 1)[0]
+    return ""
+
+
+def _tool_block_log_body(block: Dict[str, Any]) -> str:
+    text = block.get("text")
+    if isinstance(text, str) and text.strip():
+        return _clip_log_text(text)
+
+    payload: Dict[str, Any] = {}
+    for key in ("path", "mime", "ts", "meta"):
+        value = block.get(key)
+        if value not in (None, "", {}, []):
+            payload[key] = value
+    if "base64" in block:
+        try:
+            payload["base64"] = f"<omitted {len(str(block.get('base64') or ''))} chars>"
+        except Exception:
+            payload["base64"] = "<omitted>"
+    return _clip_log_text(_safe_json(payload))
+
+
+def _log_tool_block(block: Dict[str, Any]) -> None:
+    try:
+        btype = (block.get("type") or "").strip()
+        if btype not in {"react.tool.call", "react.tool.result"}:
+            return
+        meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+        path = (block.get("path") or "").strip()
+        turn_id = str(block.get("turn") or block.get("turn_id") or _turn_from_path(path) or "").strip()
+        call_id = str(block.get("call_id") or meta.get("tool_call_id") or "").strip()
+        tool_id = str(block.get("tool_id") or meta.get("tool_id") or "").strip()
+        marker = "[react.tool.call]" if btype == "react.tool.call" else "[react.tool.result]"
+        _LOG.info(
+            "%s turn_id=%s call_id=%s tool_id=%s path=%s mime=%s\n%s",
+            marker,
+            turn_id,
+            call_id,
+            tool_id,
+            path,
+            block.get("mime") or "",
+            _tool_block_log_body(block),
+        )
+    except Exception:
+        pass
 
 
 def add_block(ctx_browser, block: Dict[str, Any]) -> None:
+    _log_tool_block(block)
     try:
         ctx_browser.contribute(blocks=[block])
     except Exception:

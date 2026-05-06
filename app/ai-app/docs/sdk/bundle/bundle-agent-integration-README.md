@@ -739,6 +739,9 @@ Current Claude Code customization knobs exposed by the SDK runner:
 - `timeout_seconds`
 - `step_name` and `delta_marker` for communicator events
 - `structured_output_prefixes`, `on_structured_output`, and `on_text_chunk`
+- `executive_journal_prefixes` and `executive_journal_max_entries` for the
+  standard `EXECUTIVE_JOURNAL {...}` checkpoint channel captured in
+  `ClaudeCodeRunResult.executive_journal`
 - `workspace_config` for SDK-managed `.mcp.json`,
   `.claude/settings.local.json`, and `CLAUDE.md`
 

@@ -7,7 +7,9 @@ import asyncio
 import json
 import logging
 import os
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -30,6 +32,8 @@ from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.streaming import (
     is_usage_bearing_message_event,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.claude_code.types import (
+    CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
+    CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX,
     ClaudeCodeAgentConfig,
     ClaudeCodeBinding,
     ClaudeCodeRunResult,
@@ -151,6 +155,8 @@ class ClaudeCodeAgent:
         permission_mode: str | None = "acceptEdits",
         timeout_seconds: float | None = None,
         structured_output_prefixes: Sequence[str] = (),
+        executive_journal_prefixes: Sequence[str] | None = None,
+        executive_journal_max_entries: int = 100,
         on_structured_output=None,
         on_text_chunk=None,
         workspace_config: ClaudeCodeWorkspaceConfig | None = None,
@@ -175,6 +181,15 @@ class ClaudeCodeAgent:
                 permission_mode=permission_mode,
                 timeout_seconds=timeout_seconds,
                 structured_output_prefixes=structured_output_prefixes,
+                executive_journal_prefixes=(
+                    executive_journal_prefixes
+                    if executive_journal_prefixes is not None
+                    else (
+                        CLAUDE_CODE_EXECUTIVE_JOURNAL_PREFIX,
+                        CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX,
+                    )
+                ),
+                executive_journal_max_entries=executive_journal_max_entries,
                 on_structured_output=on_structured_output,
                 on_text_chunk=on_text_chunk,
                 workspace_config=workspace_config,
@@ -238,13 +253,16 @@ class ClaudeCodeAgent:
         resolved_from_stream = False
         timed_out = False
         structured_events: list[dict[str, Any]] = []
+        executive_journal: list[dict[str, Any]] = []
         structured_buffer = ""
+        started_at = time.monotonic()
 
         process = await asyncio.create_subprocess_exec(
             self.config.command,
             *self.build_args(prompt, resume_existing=resume_existing),
             cwd=str(workspace_path),
             env=self._build_env(kind=kind),
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -261,15 +279,89 @@ class ClaudeCodeAgent:
             except Exception:
                 self.logger.exception("[ClaudeCodeAgent] structured output callback failed")
 
+        def _structured_prefixes() -> tuple[str, ...]:
+            out: list[str] = []
+            seen: set[str] = set()
+            for prefix in tuple(self.config.structured_output_prefixes) + tuple(self.config.executive_journal_prefixes):
+                if prefix and prefix not in seen:
+                    out.append(prefix)
+                    seen.add(prefix)
+            return tuple(sorted(out, key=len, reverse=True))
+
+        def _record_executive_journal(record: dict[str, Any]) -> None:
+            if self.config.executive_journal_max_entries <= 0:
+                return
+            executive_journal.append(dict(record))
+            overflow = len(executive_journal) - self.config.executive_journal_max_entries
+            if overflow > 0:
+                del executive_journal[:overflow]
+
+        def _journal_channel_from_payload(prefix: str, payload: Any) -> str:
+            if prefix == CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX:
+                return "code"
+            if isinstance(payload, Mapping):
+                channel = str(payload.get("channel") or "").strip().lower()
+                if channel in {"note", "struct", "code"}:
+                    return channel
+                if isinstance(payload.get("code"), str):
+                    return "code"
+                return "struct"
+            if isinstance(payload, list):
+                return "struct"
+            return "note"
+
         async def _ingest_structured_line(raw_line: str) -> None:
             stripped = raw_line.strip()
             if not stripped:
                 return
-            for prefix in self.config.structured_output_prefixes:
+            journal_prefixes = set(self.config.executive_journal_prefixes)
+            structured_prefixes = set(self.config.structured_output_prefixes)
+            for prefix in _structured_prefixes():
                 if not stripped.startswith(prefix):
+                    continue
+                if len(stripped) > len(prefix) and not stripped[len(prefix)].isspace():
                     continue
                 payload_raw = stripped[len(prefix):].strip()
                 if not payload_raw:
+                    return
+                if prefix in journal_prefixes:
+                    record = {
+                        "prefix": prefix,
+                        "captured_at": datetime.now(timezone.utc).isoformat(),
+                        "raw_line": stripped,
+                    }
+                    try:
+                        parsed = json.loads(payload_raw)
+                    except json.JSONDecodeError:
+                        if prefix == CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX:
+                            record["channel"] = "code"
+                            record["code"] = payload_raw
+                        else:
+                            record["channel"] = "note"
+                            record["text"] = payload_raw
+                    else:
+                        record["channel"] = _journal_channel_from_payload(prefix, parsed)
+                        if isinstance(parsed, (dict, list)):
+                            record["payload"] = parsed
+                        else:
+                            record["text"] = str(parsed)
+                        if prefix == CLAUDE_CODE_EXECUTIVE_JOURNAL_CODE_PREFIX and "code" not in record:
+                            if isinstance(parsed, Mapping) and isinstance(parsed.get("code"), str):
+                                record["code"] = parsed.get("code")
+                            elif not isinstance(parsed, (Mapping, list)):
+                                record["code"] = str(parsed)
+                    _record_executive_journal(record)
+                    if prefix not in structured_prefixes:
+                        return
+                    if "payload" not in record:
+                        return
+                    await _emit_structured_event(
+                        {
+                            "prefix": prefix,
+                            "payload": record["payload"],
+                            "raw_line": stripped,
+                        }
+                    )
                     return
                 try:
                     payload = json.loads(payload_raw)
@@ -280,18 +372,17 @@ class ClaudeCodeAgent:
                         stripped,
                     )
                     return
-                await _emit_structured_event(
-                    {
-                        "prefix": prefix,
-                        "payload": payload,
-                        "raw_line": stripped,
-                    }
-                )
+                record = {
+                    "prefix": prefix,
+                    "payload": payload,
+                    "raw_line": stripped,
+                }
+                await _emit_structured_event(record)
                 return
 
         async def _ingest_structured_chunk(chunk: str) -> None:
             nonlocal structured_buffer
-            if not chunk or not self.config.structured_output_prefixes:
+            if not chunk or not _structured_prefixes():
                 return
             structured_buffer += chunk
             while True:
@@ -431,6 +522,9 @@ class ClaudeCodeAgent:
         await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         if structured_buffer.strip():
             await _ingest_structured_line(structured_buffer)
+        wall_duration_ms = int((time.monotonic() - started_at) * 1000)
+        if duration_ms is None:
+            duration_ms = wall_duration_ms
 
         status = "completed" if exit_code == 0 and not timed_out else "failed"
         usage_payload = dict(usage_totals or {}) or None
@@ -497,6 +591,7 @@ class ClaudeCodeAgent:
             timed_out=timed_out,
             timeout_seconds=self.config.timeout_seconds,
             structured_events=structured_events,
+            executive_journal=executive_journal,
         )
 
     async def run_turn(
@@ -572,6 +667,7 @@ class ClaudeCodeAgent:
                     "cost_usd": result.cost_usd,
                     "usage": dict(result.usage or {}),
                     "structured_events": list(result.structured_events),
+                    "executive_journal": list(result.executive_journal),
                 },
             )
         else:

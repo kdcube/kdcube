@@ -118,6 +118,11 @@ ai:
   react:
     react_agent_version: "v2"       # AI_REACT_AGENT_VERSION: v2 | v3
     react_agent_multiaction: "off"  # AI_REACT_AGENT_MULTI_ACTION: on | off
+    context_max_tokens: 80000       # AI_REACT_CONTEXT_MAX_TOKENS: hard render budget before compaction
+    cache_keep_recent_turns: 6      # AI_REACT_CACHE_KEEP_RECENT_TURNS: recent turns kept visible after TTL pruning
+    cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: newest turns kept untrimmed
+    working_summary_enabled: true   # AI_REACT_WORKING_SUMMARY_ENABLED: emit/embed channel:summary as conv.working.summary timeline events
+    pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE: collapse pruned old turns to conv.working.summary when available
 
 # ---------------------------------------------------------------------------
 # Services (LLM provider config, non-secret)

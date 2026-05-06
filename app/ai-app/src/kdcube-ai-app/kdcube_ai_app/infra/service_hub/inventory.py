@@ -1960,6 +1960,8 @@ class ModelServiceBase:
             current_tool_use = None
 
             def _debug_anthropic_payload(final_system: Any, convo: Any) -> None:
+                payload_log = logging.getLogger("agent.anthropic.payload")
+
                 def _block_preview(block: Any) -> str:
                     if not isinstance(block, dict):
                         text = str(block)
@@ -1979,40 +1981,42 @@ class ModelServiceBase:
                         return f"<{btype} {media}>"
                     return f"<{btype}>"
 
-                def _summarize_blocks(blocks: Any, label: str) -> List[str]:
+                def _summarize_blocks(blocks: Any) -> Dict[str, Any]:
                     if not isinstance(blocks, list) or not blocks:
-                        return [f"  ({label}) none"]
+                        return {"block_count": 0, "cache_idxs": [], "first": ""}
                     cached_idxs = []
                     for i, b in enumerate(blocks):
                         if isinstance(b, dict) and b.get("cache_control"):
                             cached_idxs.append(i)
-                    lines: List[str] = []
-                    if not (cached_idxs and cached_idxs[0] == 0):
-                        lines.append(f"  [{label}.0] 0 {_block_preview(blocks[0])}")
-                    for n, idx in enumerate(cached_idxs):
-                        lines.append(f"  [{label}.cp.{n}] {idx} {_block_preview(blocks[idx])}")
-                    return lines
+                    return {
+                        "block_count": len(blocks),
+                        "first": _block_preview(blocks[0]),
+                        "cache_idxs": cached_idxs,
+                        "cache_previews": [
+                            {"idx": idx, "preview": _block_preview(blocks[idx])}
+                            for idx in cached_idxs[:3]
+                        ],
+                        "omitted_cache_previews": max(0, len(cached_idxs) - 3),
+                    }
 
-                def _summarize_user_message(msg: Dict[str, Any]) -> List[str]:
+                def _summarize_user_message(msg: Dict[str, Any]) -> Dict[str, Any]:
                     content = msg.get("content")
                     if isinstance(content, list):
-                        return _summarize_blocks(content, "hum")
+                        return _summarize_blocks(content)
                     if content is None:
-                        return ["  (hum) none"]
-                    return [f"  [hum.0] 0 {_block_preview({'type': 'text', 'text': str(content)})}"]
+                        return {"block_count": 0, "cache_idxs": [], "first": ""}
+                    return {
+                        "block_count": 1,
+                        "cache_idxs": [],
+                        "first": _block_preview({"type": "text", "text": str(content)}),
+                    }
 
-                print("=== ANTHROPIC PAYLOAD DEBUG ===")
-                print("SYSTEM:")
-                for line in _summarize_blocks(final_system or [], "sys"):
-                    print(line)
-                print("MESSAGES:")
                 user_msg = next((m for m in (convo or []) if isinstance(m, dict) and m.get("role") == "user"), None)
-                if not user_msg:
-                    print("  (no user messages)")
-                else:
-                    for line in _summarize_user_message(user_msg):
-                        print(line)
-                print("================================")
+                payload = {
+                    "system": _summarize_blocks(final_system or []),
+                    "user": _summarize_user_message(user_msg) if isinstance(user_msg, dict) else None,
+                }
+                payload_log.info("[anthropic.payload.cache] %s", json.dumps(payload, ensure_ascii=False, default=str))
 
             _debug_anthropic_payload(final_system, convo)
             async with async_client.messages.stream(**stream_kwargs) as stream:

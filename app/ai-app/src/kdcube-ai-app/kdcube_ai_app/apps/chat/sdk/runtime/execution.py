@@ -32,6 +32,52 @@ def _safe_exec_id(val: Optional[str]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", (val or "")).strip("_")
     return safe or uuid.uuid4().hex[:12]
 
+def _log_exec_payload(
+    *,
+    logger: Optional[AgentLogger],
+    runtime_ctx: RuntimeCtx,
+    tool_id: str,
+    tool_call_id: Optional[str],
+    exec_id: Optional[str],
+    timeout_s: Any,
+    workdir: pathlib.Path,
+    outdir: pathlib.Path,
+    contract: Any,
+    code: str,
+) -> None:
+    """Log the exact exec contract and generated code used for execution."""
+    if logger is None:
+        return
+    try:
+        contract_text = json.dumps(contract or {}, ensure_ascii=False, indent=2, sort_keys=True)
+    except Exception:
+        contract_text = str(contract)
+    try:
+        logger.log(
+            "[react.exec.prepare] "
+            f"tool_id={tool_id} tool_call_id={tool_call_id or ''} exec_id={exec_id or ''} "
+            f"turn_id={runtime_ctx.turn_id or ''} conversation_id={runtime_ctx.conversation_id or ''} "
+            f"timeout_s={timeout_s} workdir={workdir} outdir={outdir}",
+            level="INFO",
+        )
+        logger.log(
+            "[react.exec.contract]\n"
+            f"{contract_text}\n"
+            "[/react.exec.contract]",
+            level="INFO",
+        )
+        logger.log(
+            "[react.exec.code]\n"
+            f"{code or ''}\n"
+            "[/react.exec.code]",
+            level="INFO",
+        )
+    except Exception:
+        try:
+            logger.log("[react.exec] failed to log generated exec payload", level="WARNING")
+        except Exception:
+            pass
+
 def _build_exec_context(
     *,
     runtime_ctx: RuntimeCtx,
@@ -279,6 +325,18 @@ async def _execute_exec_tool(
         }
         summary = "Exec tool missing code from decision stream"
         return await _emit_exec_error(summary, error_obj)
+    _log_exec_payload(
+        logger=logger,
+        runtime_ctx=runtime_ctx,
+        tool_id=tool_id,
+        tool_call_id=tool_call_id,
+        exec_id=exec_id,
+        timeout_s=timeout_s,
+        workdir=workdir,
+        outdir=outdir,
+        contract=contract,
+        code=code,
+    )
     bundle_storage_dir = _resolve_and_log_bundle_storage_dir(
         runtime_ctx=runtime_ctx,
         tool_manager=tool_manager,

@@ -68,6 +68,48 @@ def _react_agent_version() -> str:
     return version if version in {"v2", "v3"} else "v2"
 
 
+def _positive_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _nonnegative_int(value: Any) -> Optional[int]:
+    try:
+        parsed = int(value)
+    except Exception:
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _react_context_max_tokens(config: Any, settings: Any) -> Optional[int]:
+    configured = _positive_int(getattr(config, "max_tokens", None))
+    if configured is not None:
+        return configured
+    return _positive_int(getattr(settings, "AI_REACT_CONTEXT_MAX_TOKENS", None))
+
+
+def _apply_react_session_settings(runtime_ctx: Any, settings: Any) -> None:
+    session = getattr(runtime_ctx, "session", None)
+    if session is None:
+        return
+    keep_recent = _nonnegative_int(getattr(settings, "AI_REACT_CACHE_KEEP_RECENT_TURNS", None))
+    if keep_recent is not None:
+        session.keep_recent_turns = keep_recent
+    keep_intact = _nonnegative_int(getattr(settings, "AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS", None))
+    if keep_intact is not None:
+        session.keep_recent_intact_turns = keep_intact
+    try:
+        session.working_summary_enabled = bool(getattr(settings, "AI_REACT_WORKING_SUMMARY_ENABLED", True))
+    except Exception:
+        session.working_summary_enabled = True
+    mode = str(getattr(settings, "AI_REACT_PRUNED_TURN_SUMMARY_MODE", "working_summary") or "working_summary").strip()
+    if mode:
+        session.pruned_turn_summary_mode = mode
+
+
 def _react_module(module_suffix: str):
     version = _react_agent_version()
     return import_module(
@@ -203,6 +245,7 @@ class BaseWorkflow():
         self.answer_system_prompt = answer_system_prompt
         # Runtime context + context browser are constructed once per workflow instance
         settings = get_settings()
+        runtime_max_tokens = _react_context_max_tokens(self.config, settings)
         try:
             self.runtime_ctx = RuntimeCtx(
                 tenant=self.comm_context.actor.tenant_id,
@@ -213,7 +256,7 @@ class BaseWorkflow():
                 conversation_id=self.comm_context.routing.conversation_id,
                 turn_id=self.comm_context.routing.turn_id,
                 bundle_id=self.config.ai_bundle_spec.id,
-                max_tokens=getattr(self.config, "max_tokens", None),
+                max_tokens=runtime_max_tokens,
                 bundle_storage=self._resolve_runtime_ctx_bundle_storage(),
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
@@ -221,6 +264,7 @@ class BaseWorkflow():
                 external_event_source=self._external_event_source_for_runtime(),
                 multi_action_mode=settings.AI_REACT_AGENT_MULTI_ACTION,
             )
+            _apply_react_session_settings(self.runtime_ctx, settings)
             self.ctx_browser = ContextBrowser(
                 ctx_client=self.ctx_client,
                 logger=self.logger,
@@ -230,10 +274,12 @@ class BaseWorkflow():
             self._sync_runtime_ctx_bundle_props()
         except Exception:
             self.runtime_ctx = RuntimeCtx(
+                max_tokens=runtime_max_tokens,
                 workspace_implementation=settings.REACT_WORKSPACE_IMPLEMENTATION,
                 workspace_git_repo=settings.REACT_WORKSPACE_GIT_REPO,
                 multi_action_mode=settings.AI_REACT_AGENT_MULTI_ACTION,
             )
+            _apply_react_session_settings(self.runtime_ctx, settings)
             self.runtime_ctx.continuation_source = self.continuation_source
             self.runtime_ctx.external_event_source = self._external_event_source_for_runtime()
             self.ctx_browser = ContextBrowser(
@@ -791,6 +837,25 @@ class BaseWorkflow():
             })
         return entries
 
+    def _iter_turn_working_summary_entries(self, *, turn_id: str) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        for blk in self._current_turn_blocks(turn_id=turn_id):
+            if str(blk.get("type") or "").strip() != "conv.working.summary":
+                continue
+            text = str(blk.get("text") or "").strip()
+            path = str(blk.get("path") or "").strip()
+            ts = str(blk.get("ts") or "").strip()
+            if not text or not path:
+                continue
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            entries.append({
+                "text": text,
+                "ts": ts,
+                "path": path,
+                "meta": meta,
+            })
+        return entries
+
     async def _persist_user_conversation_entry(
         self,
         *,
@@ -876,6 +941,8 @@ class BaseWorkflow():
             }]
 
         persisted = 0
+        persisted_completions = 0
+        persisted_summaries = 0
         t14, ms14 = _tstart()
         for entry in entries:
             path = str(entry.get("path") or "").strip()
@@ -906,13 +973,61 @@ class BaseWorkflow():
             )
             scratchpad.persisted_turn_entry_paths.add(path)
             persisted += 1
+            persisted_completions += 1
+        summary_entries = self._iter_turn_working_summary_entries(turn_id=turn_id)
+        for entry in summary_entries:
+            path = str(entry.get("path") or "").strip()
+            if not path or path in scratchpad.persisted_turn_entry_paths:
+                continue
+            text = str(entry.get("text") or "").strip()
+            if not text:
+                continue
+            [avec] = await self.model_service.embed_texts([text])
+            scratchpad.avec = avec
+            msg_ts = time.strftime("%Y-%m-%dT%H-%M-%S", time.gmtime())
+            safe_path = re.sub(r"[^a-zA-Z0-9._-]+", "_", path).strip("_") or "working_summary"
+            msgid_a = f"{_mid('assistant', msg_ts)}-{safe_path}"
+            meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+            tags = [
+                "chat:assistant",
+                "chat:summary",
+                "kind:working.summary",
+                f"turn:{turn_id}",
+            ] + [f"topic:{t}" for t in scratchpad.turn_topics_plain or []]
+            scope = str(meta.get("summary_scope") or "").strip()
+            if scope:
+                tags.append(f"summary_scope:{scope}")
+            if meta.get("assistant_completion_attempt_index") is not None:
+                tags.append(f"summary_attempt:{meta.get('assistant_completion_attempt_index')}")
+            await self.conv_idx.add_message(
+                user_id=user,
+                conversation_id=conversation_id,
+                bundle_id=self.config.ai_bundle_spec.id,
+                turn_id=turn_id,
+                role="assistant",
+                text=text,
+                hosted_uri="index_only",
+                ts=str(entry.get("ts") or datetime.datetime.utcnow().isoformat() + "Z"),
+                tags=tags,
+                ttl_days=_ttl_for(user_type, 365),
+                user_type=user_type,
+                embedding=avec,
+                message_id=msgid_a,
+            )
+            scratchpad.persisted_turn_entry_paths.add(path)
+            persisted += 1
+            persisted_summaries += 1
         if persisted <= 0:
             return
         timing_assist_persist = _tend(t14, ms14)
         step_title = "Assistant Messages Persisted"
         await self._emit({"type": "chat.step", "agent": "store", "step": "conversation.persist.assistant_message",
                           "status": "completed", "title": step_title,
-                          "data": {"count": persisted},
+                          "data": {
+                              "count": persisted,
+                              "assistant_completion_count": persisted_completions,
+                              "working_summary_count": persisted_summaries,
+                          },
                           "timing": timing_assist_persist})
         scratchpad.timings.append({
             "title": step_title,

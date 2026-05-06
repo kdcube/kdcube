@@ -872,7 +872,7 @@ async def handle_external_tool(*,
 
         raw_val = artifact_view.raw or {}
         raw_value = raw_val.get("value") if isinstance(raw_val.get("value"), dict) else {}
-        meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id}
+        meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id, "visibility": visibility}
         try:
             meta_text = meta_block.get("text") if isinstance(meta_block, dict) else None
             if isinstance(meta_text, str) and meta_text.strip():
@@ -1038,12 +1038,13 @@ async def handle_external_tool(*,
                         message="Declared file path contained a turn/files prefix; rewritten to current-turn relative path.",
                         extra={"original": original_path, "normalized": phys_path},
                     )
+            expose_file_path = bool(phys_path and visibility in {"external", "internal"})
             artifact_path = (
                 physical_path_to_logical_path(phys_path)
-                if phys_path and visibility == "external"
+                if expose_file_path
                 else tc_result_path(turn_id=turn_id, call_id=tool_call_id)
             )
-            physical_path = phys_path if phys_path and visibility == "external" else ""
+            physical_path = phys_path if expose_file_path else ""
         edited = detect_edit(
             timeline=getattr(ctx_browser, "timeline", None),
             artifact_path=artifact_path if artifact_path.startswith("fi:") else "",
@@ -1077,7 +1078,7 @@ async def handle_external_tool(*,
 
         raw_val = artifact_view.raw or {}
         raw_value = raw_val.get("value") if isinstance(raw_val.get("value"), dict) else {}
-        meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id}
+        meta_extra = {"tool_call_id": tool_call_id, "turn_id": turn_id, "visibility": visibility}
         try:
             meta_text = meta_block.get("text") if isinstance(meta_block, dict) else None
             if isinstance(meta_text, str) and meta_text.strip():
@@ -1106,7 +1107,9 @@ async def handle_external_tool(*,
             )
             if bin_block:
                 add_block(ctx_browser, bin_block)
-        if visibility == "external" and meta_extra and artifact_path:
+        if meta_extra and artifact_path and (
+            visibility == "external" or (visibility == "internal" and physical_path)
+        ):
             add_block(ctx_browser, {
                 "turn": turn_id,
                 "type": "react.tool.result",

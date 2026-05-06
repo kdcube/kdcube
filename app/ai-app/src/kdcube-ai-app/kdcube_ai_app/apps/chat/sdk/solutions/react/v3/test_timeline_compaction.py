@@ -12,7 +12,11 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.timeline import (
     resolve_artifact_from_timeline,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
-from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.session import apply_cache_ttl_pruning
+from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.session import (
+    TruncationConfig,
+    _bound_ttl_replacement,
+    apply_cache_ttl_pruning,
+)
 
 
 def _blk(*, btype: str, text: str, turn_id: str) -> dict:
@@ -107,6 +111,86 @@ async def test_split_turn_prefix_summary(monkeypatch):
     assert summary_blocks, "summary block not inserted"
     summary_text = summary_blocks[0].get("text") or ""
     assert "Turn Context (split turn)" in summary_text
+
+
+@pytest.mark.asyncio
+async def test_empty_split_turn_prefix_summary_compacts_prior_history_only(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "HISTORY SUMMARY"
+
+    async def _empty_prefix(*args, **kwargs):
+        return None
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _empty_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_2", max_tokens=120)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = [
+        _blk(btype="turn.header", text="[TURN turn_1]", turn_id="turn_1"),
+        _blk(btype="user.prompt", text="old ask" * 30, turn_id="turn_1"),
+        _blk(btype="assistant.completion", text="old reply" * 30, turn_id="turn_1"),
+        _blk(btype="turn.header", text="[TURN turn_2]", turn_id="turn_2"),
+        _blk(btype="user.prompt", text="current ask" * 30, turn_id="turn_2"),
+        _blk(btype="assistant.completion", text="current reply" * 30, turn_id="turn_2"),
+    ]
+    monkeypatch.setattr(tl, "_find_compaction_cut_point", lambda *args, **kwargs: (5, 3, True))
+
+    updated = await tl.sanitize_context_blocks(
+        system_text="sys",
+        blocks=blocks,
+        max_tokens=80,
+        force=True,
+    )
+
+    summary_idx = next(i for i, b in enumerate(updated) if b.get("type") == "conv.range.summary")
+    summary_text = updated[summary_idx].get("text") or ""
+    assert "HISTORY SUMMARY" in summary_text
+    assert "Turn Context (split turn)" not in summary_text
+    assert updated[summary_idx + 1].get("turn_id") == "turn_2"
+    assert updated[summary_idx + 1].get("type") == "turn.header"
+
+
+@pytest.mark.asyncio
+async def test_split_inside_non_current_turn_compacts_full_turn_without_prefix_summary(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "HISTORY SUMMARY"
+
+    async def _prefix_should_not_run(*args, **kwargs):
+        raise AssertionError("turn-prefix summary should only run for the current turn")
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _prefix_should_not_run)
+
+    runtime = RuntimeCtx(turn_id="turn_3", max_tokens=120)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = [
+        _blk(btype="turn.header", text="[TURN turn_1]", turn_id="turn_1"),
+        _blk(btype="user.prompt", text="old ask" * 30, turn_id="turn_1"),
+        _blk(btype="assistant.completion", text="old reply" * 30, turn_id="turn_1"),
+        _blk(btype="turn.header", text="[TURN turn_2]", turn_id="turn_2"),
+        _blk(btype="user.prompt", text="middle ask" * 30, turn_id="turn_2"),
+        _blk(btype="assistant.completion", text="middle reply" * 30, turn_id="turn_2"),
+        _blk(btype="turn.header", text="[TURN turn_3]", turn_id="turn_3"),
+        _blk(btype="user.prompt", text="current ask" * 10, turn_id="turn_3"),
+    ]
+    monkeypatch.setattr(tl, "_find_compaction_cut_point", lambda *args, **kwargs: (5, 3, True))
+
+    updated = await tl.sanitize_context_blocks(
+        system_text="sys",
+        blocks=blocks,
+        max_tokens=80,
+        force=True,
+    )
+
+    summary_idx = next(i for i, b in enumerate(updated) if b.get("type") == "conv.range.summary")
+    assert "HISTORY SUMMARY" in (updated[summary_idx].get("text") or "")
+    assert updated[summary_idx + 1].get("turn_id") == "turn_3"
+    assert updated[summary_idx + 1].get("type") == "turn.header"
 
 
 def test_blocks_for_persist_trims_before_summary():
@@ -654,12 +738,67 @@ def test_cache_ttl_pruning_keeps_internal_notes_visible():
         ttl_seconds=1,
         buffer_seconds=0,
         keep_recent_turns=0,
+        keep_recent_intact_turns=0,
     )
 
     assert res.get("status") in {"pruned", "pruned_light", "no_effect"}
     note_block = next(b for b in tl.blocks if b.get("type") == "react.note")
     assert not note_block.get("hidden")
     assert "fi:turn_old.files/memory/key-artifacts.md" not in (res.get("hidden_paths") or [])
+
+
+def test_cache_ttl_pruning_keeps_working_summary_visible():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    tl.blocks = [
+        {
+            "type": "turn.header",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "text": "[TURN turn_old]",
+        },
+        {
+            "type": "conv.working.summary",
+            "author": "assistant",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:02:00Z",
+            "path": "ws:turn_old.conv.working.summary.attempt.1",
+            "text": "Goal: old task\nOutcome: first useful result",
+            "meta": {"kind": "working_summary", "summary_scope": "completion_attempt"},
+        },
+        {
+            "type": "conv.working.summary",
+            "author": "assistant",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:02:30Z",
+            "path": "ws:turn_old.conv.working.summary",
+            "text": "Goal: old task\nOutcome: final useful result",
+            "meta": {"kind": "working_summary"},
+        },
+        {
+            "type": "assistant.completion",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:03:00Z",
+            "path": "ar:turn_old.assistant.completion",
+            "text": "done",
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+
+    assert res.get("status") in {"pruned", "pruned_light", "no_effect"}
+    summary_blocks = [b for b in tl.blocks if b.get("type") == "conv.working.summary"]
+    assert len(summary_blocks) == 2
+    assert all(not b.get("hidden") for b in summary_blocks)
+    assert "ws:turn_old.conv.working.summary.attempt.1" not in (res.get("hidden_paths") or [])
+    assert "ws:turn_old.conv.working.summary" not in (res.get("hidden_paths") or [])
 
 
 def test_cache_ttl_pruning_keeps_external_turn_events_visible():
@@ -717,6 +856,373 @@ def test_cache_ttl_pruning_keeps_external_turn_events_visible():
     assert "ar:turn_old.external.steer.evt_2" not in hidden_paths
 
 
+@pytest.mark.asyncio
+async def test_render_compacts_when_pruned_skeleton_has_too_many_message_blocks(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    async def _fake_summary(*args, **kwargs):
+        return "compacted rendered skeleton"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "compacted turn prefix"
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_cur", max_tokens=80000)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = []
+    for idx in range(760):
+        tid = f"turn_{idx}"
+        blocks.append({
+            "type": "turn.header",
+            "turn_id": tid,
+            "text": f"TURN {tid}",
+        })
+        blocks.append({
+            "type": "user.prompt",
+            "author": "user",
+            "turn_id": tid,
+            "path": f"ar:{tid}.user.prompt",
+            "text": "x",
+            "hidden": True,
+            "replacement_text": f"[pruned user] path=ar:{tid}.user.prompt hint=\"x\"",
+        })
+    tl.blocks = blocks
+
+    rendered = await tl.render(cache_last=False, include_sources=False, include_announce=False)
+
+    assert any(b.get("type") == "conv.range.summary" for b in tl.blocks)
+    assert len(rendered) < 760
+    assert "compacted rendered skeleton" in rendered[0]["text"]
+
+
+def test_cache_ttl_pruning_collapses_old_prune_notices():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    tl.blocks = [
+        {
+            "type": "system.message",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "path": "ar:turn_old.system.message.cache_pruned",
+            "text": "Context was pruned because the session TTL was exceeded. " * 20,
+            "meta": {"kind": "cache_ttl_pruned"},
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+
+    assert res.get("status") in {"pruned", "pruned_light"}
+    block = tl.blocks[0]
+    assert block.get("hidden") is True
+    assert "cache prune notice hidden" in block.get("replacement_text", "")
+    assert "session TTL was exceeded" not in block.get("replacement_text", "")
+
+
+def test_hide_paths_preserves_explicit_replacement_text():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    path = "tc:turn_old.tc_large.result"
+    tl.blocks = [
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_old",
+            "path": path,
+            "text": '{"ok": true, "messages": []}',
+            "meta": {"tool_call_id": "tc_large", "tool_id": "email.process_user_emails"},
+        },
+    ]
+    replacement = "very verbose replacement " * 1000
+
+    res = tl.hide_paths([path], replacement)
+
+    assert res["status"] == "ok"
+    stored = tl.blocks[0].get("replacement_text", "")
+    assert stored == replacement
+
+
+def test_ttl_replacement_bound_caps_automatic_prune_replacement():
+    path = "tc:turn_old.tc_large.result"
+    block = {
+        "type": "react.tool.result",
+        "turn_id": "turn_old",
+        "path": path,
+        "text": '{"ok": true, "messages": []}',
+        "meta": {"tool_call_id": "tc_large", "tool_id": "email.process_user_emails"},
+    }
+    replacement = "\n".join(
+        [
+            "[TRUNCATED]",
+            f"path={path}",
+            "tool_id=email.process_user_emails",
+            "payload=" + ("very verbose replacement " * 1000),
+        ]
+    )
+
+    stored = _bound_ttl_replacement(
+        block=block,
+        replacement=replacement,
+        cfg=TruncationConfig(replacement_max_tokens=40),
+    )
+
+    assert len(stored) < len(replacement)
+    assert path in stored
+    assert "email.process_user_emails" in stored
+
+
+def test_ttl_replacement_bound_caps_material_growth_below_absolute_cap():
+    path = "tc:turn_old.tc_small.result"
+    block = {
+        "type": "react.tool.result",
+        "turn_id": "turn_old",
+        "path": path,
+        "text": '{"ok": true}',
+        "meta": {"tool_call_id": "tc_small", "tool_id": "email.process_user_emails"},
+    }
+    replacement = "\n".join(
+        [
+            "[TRUNCATED]",
+            f"path={path}",
+            "tool_id=email.process_user_emails",
+            "payload=" + ("growth " * 240),
+        ]
+    )
+
+    stored = _bound_ttl_replacement(
+        block=block,
+        replacement=replacement,
+        cfg=TruncationConfig(replacement_max_tokens=240),
+    )
+
+    assert len(stored) < len(replacement)
+    assert path in stored
+    assert "email.process_user_emails" in stored
+
+
+@pytest.mark.asyncio
+async def test_cache_ttl_pruning_renders_compact_turn_status_for_old_internal_blocks():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    finalize_text = """
+╔═══════════════════════════════════╗
+║  Turn completed with these stats  ║
+╚═══════════════════════════════════╝
+
+[BUDGET]
+  iterations  ██░░░░░░░░  9 remaining
+  time_elapsed_in_turn   23s
+
+[OPEN PLANS]
+  - plans: none
+
+[WORKSPACE]
+  implementation: git
+  current_turn_root: turn_old/
+  current_turn_publish: pending
+  last_published_turn: turn_prev (succeeded)
+"""
+    tl.blocks = [
+        {
+            "type": "turn.header",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "text": "TURN turn_old",
+        },
+        {
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:20Z",
+            "text": finalize_text,
+        },
+        {
+            "type": "react.state",
+            "author": "react",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.react.state",
+            "mime": "application/json",
+            "text": '{"iteration": 2, "max_iterations": 12, "exit_reason": "complete", "error": null}',
+        },
+        {
+            "type": "react.exit",
+            "author": "react",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.react.exit",
+            "mime": "application/json",
+            "text": '{"reason": "complete"}',
+        },
+        {
+            "type": "react.workspace.publish",
+            "author": "react.workspace",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.react.workspace.publish",
+            "mime": "application/json",
+            "text": '{"status": "succeeded", "turn_id": "turn_old", "workspace_implementation": "git"}',
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+    rendered = await tl.render(cache_last=False, include_sources=False, include_announce=False)
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert res.get("status") in {"pruned", "pruned_light"}
+    assert "[TURN STATUS]" in text
+    assert "rounds: 3/12" in text
+    assert "exit_reason: complete" in text
+    assert "time_elapsed_in_turn: 23s" in text
+    assert "current_turn_root: turn_old/" in text
+    assert "last_published_turn: turn_prev (succeeded)" in text
+    assert "Turn completed with these stats" not in text
+    assert "[pruned react state]" not in text
+    assert "[pruned react workspace publish]" not in text
+    assert "refs:" not in text
+    assert "ar:turn_old.react.turn.finalize" not in text
+    assert "ar:turn_old.react.state" not in text
+    assert "ar:turn_old.react.exit" not in text
+    assert "ar:turn_old.react.workspace.publish" not in text
+
+
+@pytest.mark.asyncio
+async def test_cache_ttl_pruning_suppresses_old_round_scaffolding_and_duplicate_assistant_path():
+    runtime = RuntimeCtx(turn_id="turn_cur")
+    tl = Timeline(runtime=runtime, svc=None)
+    assistant_path = "ar:turn_old.assistant.completion"
+    tl.blocks = [
+        {
+            "type": "turn.header",
+            "turn_id": "turn_old",
+            "ts": "2026-02-09T00:00:00Z",
+            "text": "TURN turn_old",
+        },
+        {
+            "type": "react.round.start",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.react.round.start.tc_1",
+            "text": "thinking",
+            "meta": {"tool_call_id": "tc_1"},
+        },
+        {
+            "type": "react.notes",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.react.notes.tc_1",
+            "text": "Retrying email tool after user applied fixes.",
+            "meta": {"tool_call_id": "tc_1"},
+        },
+        {
+            "type": "react.thinking",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.react.thinking.1",
+            "text": "The tool now returns 403, which means runtime binding is fixed.",
+        },
+        {
+            "type": "react.notice",
+            "turn_id": "turn_old",
+            "path": "tc:turn_old.tc_1.notice",
+            "mime": "application/json",
+            "text": '{"code": "tool_result_error", "message": "HTTP Error 403: Forbidden"}',
+            "meta": {"tool_call_id": "tc_1"},
+        },
+        {
+            "type": "react.tool.call",
+            "turn_id": "turn_old",
+            "path": "tc:turn_old.tc_1.call",
+            "text": '{"tool_id": "email.process_user_emails", "tool_call_id": "tc_1", "params": {"mailbox": "INBOX"}}',
+            "meta": {"tool_call_id": "tc_1"},
+        },
+        {
+            "type": "react.tool.result",
+            "turn_id": "turn_old",
+            "path": "tc:turn_old.tc_1.result",
+            "text": '{"tool_id": "email.process_user_emails", "tool_call_id": "tc_1", "error": "HTTP Error 403: Forbidden"}',
+            "meta": {"tool_call_id": "tc_1"},
+        },
+        {
+            "type": "assistant.completion",
+            "turn_id": "turn_old",
+            "path": assistant_path,
+            "text": "Progress: HTTP 403 means the tool is now reaching Gmail but lacks authorization.",
+        },
+        {
+            "type": "stage.suggested_followups",
+            "turn_id": "turn_old",
+            "path": "ar:turn_old.stage.suggested_followups",
+            "text": "[STAGE: SUGGESTED FOLLOW-UPS]\nitems: Reauthorize Gmail",
+        },
+    ]
+    tl.cache_last_touch_at = 0
+
+    res = apply_cache_ttl_pruning(
+        timeline=tl,
+        ttl_seconds=1,
+        buffer_seconds=0,
+        keep_recent_turns=0,
+        keep_recent_intact_turns=0,
+    )
+    rendered = await tl.render(cache_last=False, include_sources=False, include_announce=False)
+    text = "\n".join(str(block.get("text") or "") for block in rendered if isinstance(block, dict))
+
+    assert res.get("status") in {"pruned", "pruned_light"}
+    assert "ROUND 1" not in text
+    assert "[AI Agent say]" not in text
+    assert "[AI Agent thinking...]" not in text
+    assert "[pruned react thinking]" not in text
+    assert "[pruned react notice]" not in text
+    assert "[pruned stage suggested_followups]" not in text
+    assert "[pruned " not in text
+    assert "[PRUNED TURN DATA]" in text
+    assert text.count("[PRUNED TURN DATA]") == 1
+    assert "tool_call:" in text
+    assert "tool_result:" in text
+    assert f"assistant: path={assistant_path}" in text
+    assert "[ASSISTANT MESSAGE]" not in text
+    assert text.count(assistant_path) == 1
+
+
+@pytest.mark.asyncio
+async def test_turn_prefix_summary_empty_model_output_returns_none(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.streaming.streaming as streaming_mod
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    class _NoopAccounting:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def _blank_stream(*args, **kwargs):
+        return {
+            "agent_response": "",
+            "log": {"raw_data": "", "error": None, "service_error": None},
+        }
+
+    monkeypatch.setattr(summary_mod, "with_accounting", lambda *args, **kwargs: _NoopAccounting())
+    monkeypatch.setattr(streaming_mod, "stream_agent_to_json", _blank_stream)
+
+    summary = await summary_mod.summarize_turn_prefix_progressive(
+        svc=object(),
+        blocks=[
+            _blk(btype="user.prompt", text="please create the invoice zip", turn_id="turn_1"),
+            _blk(btype="assistant.completion", text="started by loading the email skill", turn_id="turn_1"),
+        ],
+    )
+
+    assert summary is None
+
+
 def test_compaction_serializer_marks_external_turn_events():
     from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
         _serialize_context_blocks_for_compaction,
@@ -743,3 +1249,106 @@ def test_compaction_serializer_marks_external_turn_events():
     assert "also include the quantum angle" in text
     assert "[User Steer During Turn]:" in text
     assert "stop and summarize" in text
+
+
+def test_compaction_serializer_marks_working_summary_not_assistant():
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
+        _serialize_context_blocks_for_compaction,
+    )
+
+    text = _serialize_context_blocks_for_compaction(
+        [
+            {
+                "type": "conv.working.summary",
+                "author": "assistant",
+                "turn_id": "turn_old",
+                "path": "ws:turn_old.conv.working.summary.attempt.1",
+                "text": "Goal: create invoice ZIP\nOutcome: materialized files but ZIP failed",
+                "meta": {
+                    "kind": "working_summary",
+                    "summary_scope": "completion_attempt",
+                    "assistant_completion_path": "ar:turn_old.assistant.completion",
+                },
+            },
+        ]
+    )
+
+    assert "[Working Summary]:" in text
+    assert "ws:turn_old.conv.working.summary.attempt.1" in text
+    assert "assistant_completion_path" in text
+    assert "[Assistant]:" not in text
+
+
+def test_compaction_serializer_accepts_numeric_metadata_fields():
+    from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import (
+        _serialize_context_blocks_for_compaction,
+    )
+
+    text = _serialize_context_blocks_for_compaction(
+        [
+            {
+                "type": "react.tool.result",
+                "turn_id": "turn_old",
+                "ts": 1778032340.800,
+                "path": "tc:turn_old.tc_result.result",
+                "call_id": 12345,
+                "tool_id": "email.process_user_emails",
+                "text": "",
+            },
+        ]
+    )
+
+    assert "[Tool result]:" in text
+    assert "ts=1778032340.8" in text
+    assert "call_id=12345" in text
+    assert "path=tc:turn_old.tc_result.result" in text
+
+
+@pytest.mark.asyncio
+async def test_context_compaction_prompt_injects_relevant_working_summaries(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.streaming.streaming as streaming_mod
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    class _NoopAccounting:
+        async def __aenter__(self):
+            return None
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    captured = {}
+
+    async def _capture_stream(*args, **kwargs):
+        messages = kwargs.get("messages") or []
+        captured["prompt"] = messages[0].content if messages else ""
+        return {
+            "agent_response": "SUMMARY",
+            "log": {"raw_data": "SUMMARY", "error": None, "service_error": None},
+        }
+
+    monkeypatch.setattr(summary_mod, "with_accounting", lambda *args, **kwargs: _NoopAccounting())
+    monkeypatch.setattr(streaming_mod, "stream_agent_to_json", _capture_stream)
+
+    summary = await summary_mod.summarize_context_blocks_progressive(
+        svc=object(),
+        blocks=[
+            _blk(btype="user.prompt", text="please send all April invoices", turn_id="turn_old"),
+        ],
+        working_summary_blocks=[
+            {
+                "type": "conv.working.summary",
+                "author": "assistant",
+                "turn_id": "turn_old",
+                "path": "ws:turn_old.conv.working.summary.attempt.1",
+                "text": "Goal: invoice retrieval\nOutcome: found 20 Anthropic PDFs",
+                "meta": {"summary_scope": "completion_attempt"},
+            },
+        ],
+    )
+
+    prompt = captured.get("prompt") or ""
+    assert summary == "SUMMARY"
+    assert "<working-summaries>" in prompt
+    assert "[Working Summary]:" in prompt
+    assert "found 20 Anthropic PDFs" in prompt
+    assert "[Assistant]: Goal: invoice retrieval" not in prompt

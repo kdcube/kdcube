@@ -672,6 +672,11 @@ class Settings(PLATFORM_CONFIG):
     REACT_WORKSPACE_GIT_REPO: str | None = None
     AI_REACT_AGENT_VERSION: str = Field(default="v2")
     AI_REACT_AGENT_MULTI_ACTION: str = Field(default="off")
+    AI_REACT_CONTEXT_MAX_TOKENS: int | None = Field(default=80000)
+    AI_REACT_CACHE_KEEP_RECENT_TURNS: int = Field(default=6)
+    AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS: int = Field(default=1)
+    AI_REACT_WORKING_SUMMARY_ENABLED: bool = Field(default=True)
+    AI_REACT_PRUNED_TURN_SUMMARY_MODE: str = Field(default="working_summary")
     CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION: str = Field(default="local")
     CLAUDE_CODE_SESSION_GIT_REPO: str | None = None
 
@@ -1097,6 +1102,34 @@ class Settings(PLATFORM_CONFIG):
             self.AI_REACT_AGENT_VERSION = "v2"
         self.AI_REACT_AGENT_MULTI_ACTION = (
             self._resolve_str("AI_REACT_AGENT_MULTI_ACTION", "ai.react.react_agent_multiaction", "off") or "off"
+        )
+        self.AI_REACT_CONTEXT_MAX_TOKENS = self._resolve_int(
+            "AI_REACT_CONTEXT_MAX_TOKENS",
+            "ai.react.context_max_tokens",
+            self.AI_REACT_CONTEXT_MAX_TOKENS,
+        )
+        self.AI_REACT_CACHE_KEEP_RECENT_TURNS = self._resolve_int(
+            "AI_REACT_CACHE_KEEP_RECENT_TURNS",
+            "ai.react.cache_keep_recent_turns",
+            self.AI_REACT_CACHE_KEEP_RECENT_TURNS,
+        )
+        self.AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS = self._resolve_int(
+            "AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS",
+            "ai.react.cache_keep_recent_intact_turns",
+            self.AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS,
+        )
+        self.AI_REACT_WORKING_SUMMARY_ENABLED = self._resolve_bool(
+            "AI_REACT_WORKING_SUMMARY_ENABLED",
+            "ai.react.working_summary_enabled",
+            self.AI_REACT_WORKING_SUMMARY_ENABLED,
+        )
+        self.AI_REACT_PRUNED_TURN_SUMMARY_MODE = (
+            self._resolve_str(
+                "AI_REACT_PRUNED_TURN_SUMMARY_MODE",
+                "ai.react.pruned_turn_summary_mode",
+                self.AI_REACT_PRUNED_TURN_SUMMARY_MODE,
+            )
+            or "working_summary"
         )
         if not self._env_present("REACT_WORKSPACE_GIT_REPO") and not self.REACT_WORKSPACE_GIT_REPO:
             self.REACT_WORKSPACE_GIT_REPO = self._assembly_str("storage.workspace.repo")
