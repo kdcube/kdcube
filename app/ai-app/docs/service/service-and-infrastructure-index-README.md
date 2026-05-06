@@ -6,6 +6,7 @@ tags: ["service", "index", "infrastructure"]
 keywords: ["service docs index", "runtime infrastructure docs", "gateway and auth guides", "monitoring and scaling docs", "environment setup docs", "descriptor and secrets wiring", "service operations"]
 see_also:
   - ks:docs/service/auth/auth-README.md
+  - ks:docs/service/servicing-interfaces-README.md
   - ks:docs/service/README-monitoring-observability.md
   - ks:docs/service/gateway-README.md
   - ks:docs/service/environment/README.md
@@ -15,6 +16,7 @@ see_also:
 
 Core entry points:
 - Auth overview: [auth-README.md](auth/auth-README.md)
+- Service-facing chat interfaces: [servicing-interfaces-README.md](servicing-interfaces-README.md)
 - Gateway architecture: [gateway-README.md](gateway-README.md)
 - Monitoring & observability: [README-monitoring-observability.md](README-monitoring-observability.md)
 - Control plane configuration: [instance-config-README.md](maintenance/instance-config-README.md)

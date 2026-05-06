@@ -17,8 +17,33 @@ from kdcube_ai_app.apps.chat.ingress.chat_core import (
     process_chat_message,
     run_gateway_checks,
 )
+from kdcube_ai_app.apps.chat.ingress.signed_links import (
+    SignedLink,
+    SignedLinkToken,
+    SignedLinkTokenError,
+    SignedLinkTokenExpired,
+    SignedLinkTokenInvalid,
+    append_signed_link_token,
+    make_signed_link,
+    make_signed_link_token,
+    verify_signed_link_token,
+)
 
 logger = logging.getLogger(__name__)
+
+
+__all__ = [
+    "ChatIngressSubmitter",
+    "SignedLink",
+    "SignedLinkToken",
+    "SignedLinkTokenError",
+    "SignedLinkTokenExpired",
+    "SignedLinkTokenInvalid",
+    "append_signed_link_token",
+    "make_signed_link",
+    "make_signed_link_token",
+    "verify_signed_link_token",
+]
 
 
 @dataclass
