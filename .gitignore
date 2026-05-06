@@ -210,12 +210,6 @@ articles/
 /app/ai-app/deployment/docker/all_in_one_kdcube/data/
 /app/ai-app/deployment/docker/local-infra-stack/issues/
 /app/ai-app/deployment/docker/all_in_one/
-/app/ai-app/deployment/docker/custom-ui-managed-infra/data/
-
-/idp_users.json
-/app/ai-app/src/kdcube-ai-app/idp_users.json
-/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/proc/idp_users.json
-/app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/tools/tests/_out/
 
 app/ai-app/ui/chat-web-app/src/**/*.js
 /app/ai-app/src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/examples/prototyping/
