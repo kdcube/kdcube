@@ -1126,6 +1126,210 @@ class ConvIndex:
                 r["ts"] = ts.isoformat()
         return rows
 
+    async def fetch_turn_catalog(
+            self,
+            *,
+            user_id: Optional[str] = None,
+            conversation_id: Optional[str] = None,
+            scope: str = "conversation",
+            top_k: int = 20,
+            days: int = 3650,
+            order: str = "asc",
+            ordinal: Optional[int] = None,
+            from_ts: Optional[Union[str, datetime]] = None,
+            to_ts: Optional[Union[str, datetime]] = None,
+            bundle_id: Optional[str] = None,
+            ctx: Optional[dict] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return a deterministic catalog of conversation turns backed by persisted turn logs.
+
+        This is the retrieval substrate for ordinal and temporal memory questions such as
+        "what was the second turn about?" or "what did we discuss around March?".
+        Ordinals are computed with a Postgres window over the filtered turn-log set.
+        """
+        user_id, conversation_id, bundle_id = self._scope_from_ctx(
+            self._load_ctx(ctx),
+            user_id=user_id,
+            conversation_id=conversation_id,
+            bundle_id=bundle_id,
+        )
+        if not user_id:
+            return []
+
+        args: List[Any] = [user_id, str(days)]
+        where = [
+            "m.user_id = $1",
+            "m.role = 'artifact'",
+            "m.tags @> ARRAY['kind:turn.log']::text[]",
+            "m.ts >= now() - ($2::text || ' days')::interval",
+            "m.ts + (m.ttl_days || ' days')::interval >= now()",
+        ]
+        if scope == "conversation" and conversation_id:
+            args.append(conversation_id)
+            where.append(f"m.conversation_id = ${len(args)}")
+        if bundle_id:
+            args.append(bundle_id)
+            where.append(f"m.bundle_id = ${len(args)}")
+        if from_ts is not None:
+            args.append(_coerce_ts(from_ts))
+            where.append(f"m.ts >= ${len(args)}::timestamptz")
+        if to_ts is not None:
+            args.append(_coerce_ts(to_ts))
+            where.append(f"m.ts < ${len(args)}::timestamptz")
+
+        outer_where: List[str] = []
+        if ordinal is not None:
+            try:
+                ord_val = int(ordinal)
+            except Exception:
+                ord_val = 0
+            if ord_val > 0:
+                args.append(ord_val)
+                outer_where.append(f"o.ordinal = ${len(args)}")
+
+        sort_dir = "DESC" if str(order or "").strip().lower() == "desc" else "ASC"
+        outer_filter = f"WHERE {' AND '.join(outer_where)}" if outer_where else ""
+        limit = max(1, min(200, int(top_k or 20)))
+
+        q = f"""
+        WITH cand AS (
+          SELECT
+            m.id,
+            m.message_id,
+            m.role,
+            m.text,
+            m.hosted_uri,
+            m.ts,
+            m.tags,
+            m.turn_id,
+            m.bundle_id,
+            m.conversation_id,
+            COALESCE(
+              m.turn_id,
+              (
+                SELECT substring(tag FROM '^turn:(.+)$')
+                FROM unnest(m.tags) AS tag
+                WHERE tag LIKE 'turn:%'
+                LIMIT 1
+              )
+            ) AS turn_key
+          FROM {self.schema}.conv_messages m
+          WHERE {' AND '.join(where)}
+        ),
+        latest_logs AS (
+          SELECT *
+          FROM (
+            SELECT
+              c.*,
+              row_number() OVER (PARTITION BY c.turn_key ORDER BY c.ts DESC, c.id DESC) AS rn
+            FROM cand c
+            WHERE c.turn_key IS NOT NULL
+          ) ranked
+          WHERE rn = 1
+        ),
+        ordered AS (
+          SELECT
+            row_number() OVER (ORDER BY ts ASC, id ASC) AS ordinal,
+            count(*) OVER () AS total_turns,
+            *
+          FROM latest_logs
+        )
+        SELECT
+          o.ordinal,
+          o.total_turns,
+          o.id,
+          o.message_id,
+          o.role,
+          o.text,
+          o.hosted_uri,
+          o.ts,
+          o.tags,
+          o.turn_key AS turn_id,
+          o.bundle_id,
+          o.conversation_id,
+          ws.text AS working_summary_text,
+          ws.ts AS working_summary_ts,
+          u.text AS first_user_text,
+          u.ts AS first_user_ts,
+          a.text AS last_assistant_text,
+          a.ts AS last_assistant_ts
+        FROM ordered o
+        LEFT JOIN LATERAL (
+          SELECT s.text, s.ts
+          FROM {self.schema}.conv_messages s
+          WHERE s.user_id = $1
+            AND s.conversation_id = o.conversation_id
+            AND (s.turn_id = o.turn_key OR s.tags @> ARRAY[('turn:' || o.turn_key)]::text[])
+            AND s.role = 'assistant'
+            AND s.tags @> ARRAY['kind:working.summary']::text[]
+            AND s.ts + (s.ttl_days || ' days')::interval >= now()
+          ORDER BY s.ts DESC, s.id DESC
+          LIMIT 1
+        ) ws ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT s.text, s.ts
+          FROM {self.schema}.conv_messages s
+          WHERE s.user_id = $1
+            AND s.conversation_id = o.conversation_id
+            AND (s.turn_id = o.turn_key OR s.tags @> ARRAY[('turn:' || o.turn_key)]::text[])
+            AND s.role = 'user'
+            AND s.ts + (s.ttl_days || ' days')::interval >= now()
+          ORDER BY s.ts ASC, s.id ASC
+          LIMIT 1
+        ) u ON TRUE
+        LEFT JOIN LATERAL (
+          SELECT s.text, s.ts
+          FROM {self.schema}.conv_messages s
+          WHERE s.user_id = $1
+            AND s.conversation_id = o.conversation_id
+            AND (s.turn_id = o.turn_key OR s.tags @> ARRAY[('turn:' || o.turn_key)]::text[])
+            AND s.role = 'assistant'
+            AND NOT (s.tags && ARRAY['kind:working.summary', 'chat:summary']::text[])
+            AND s.ts + (s.ttl_days || ' days')::interval >= now()
+          ORDER BY s.ts DESC, s.id DESC
+          LIMIT 1
+        ) a ON TRUE
+        {outer_filter}
+        ORDER BY o.ordinal {sort_dir}
+        LIMIT {limit}
+        """
+        async with self._pool.acquire() as con:
+            rows = await con.fetch(q, *args)
+
+        out: List[Dict[str, Any]] = []
+        for raw in rows:
+            r = dict(raw)
+            for key in ("ts", "working_summary_ts", "first_user_ts", "last_assistant_ts"):
+                ts = r.get(key)
+                if hasattr(ts, "isoformat"):
+                    r[key] = ts.isoformat()
+            turn_id = str(r.get("turn_id") or "").strip()
+            index_meta = _safe_json_loads(r.get("text"))
+            if isinstance(index_meta, dict):
+                if index_meta.get("end_ts"):
+                    r["ended_at"] = index_meta.get("end_ts")
+                if index_meta.get("tokens") is not None:
+                    r["tokens"] = index_meta.get("tokens")
+                if index_meta.get("blocks_count") is not None:
+                    r["blocks_count"] = index_meta.get("blocks_count")
+            if turn_id:
+                r["turn_index_path"] = f"ar:{turn_id}.react.turn.index"
+                r["working_summary_path"] = f"ws:{turn_id}.conv.working.summary"
+                r["user_path"] = f"ar:{turn_id}.user.prompt"
+                r["assistant_path"] = f"ar:{turn_id}.assistant.completion"
+            r["started_at"] = r.get("ts")
+            about = (
+                r.get("working_summary_text")
+                or r.get("first_user_text")
+                or r.get("last_assistant_text")
+                or r.get("text")
+                or ""
+            )
+            r["about"] = str(about).strip()[:800]
+            out.append(r)
+        return out
+
     async def insert_turn_prefs(
             self, *, user_id: str, conversation_id: str, turn_id: str,
             assertions: List[Dict[str, Any]], exceptions: List[Dict[str, Any]]
@@ -1608,6 +1812,7 @@ class ConvIndex:
             scope: str = "conversation",
             bundle_id: Optional[str] = None,
             half_life_days: float = 7.0,
+            timestamp_filters: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Two-stage search optimized for finding turn logs:
@@ -1679,7 +1884,16 @@ class ConvIndex:
             args.append(f"%{query_text}%")
             where.append(f"m.text ILIKE ${len(args)}")
 
-        # alf_life_days parameter for recency calculation
+        valid_ops = {"<", "<=", "=", ">=", ">", "<>"}
+        for tf in (timestamp_filters or []):
+            op = str(tf.get("op", "")).strip()
+            if op not in valid_ops:
+                continue
+            val = _coerce_ts(tf.get("value") or datetime.utcnow())
+            args.append(val)
+            where.append(f"m.ts {op} ${len(args)}::timestamptz")
+
+        # half_life_days parameter for recency calculation
         args.append(max(0.1, float(half_life_days)))
         half_life_days_param = f"${len(args)}::float"
 

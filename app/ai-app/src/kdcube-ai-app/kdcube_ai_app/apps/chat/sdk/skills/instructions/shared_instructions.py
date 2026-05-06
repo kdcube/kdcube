@@ -399,6 +399,12 @@ Physical → Logical mapping:
   physical: (none)
   logical : ar:plan.latest:<plan_id>
   meaning : stable alias for the latest snapshot of a plan lineage; use it with react.read or fetch_ctx
+- Turn index:
+  physical: (none)
+  logical : ar:<turn_id>.react.turn.index
+  meaning : on-demand, system-reconstructed compact inventory for a prior turn; use it when a working summary identifies the turn but lacks the exact artifact/tool/message refs
+  note    : not a stored block in the turn; react.read reconstructs it from the persisted turn log and artifact metadata
+  note    : rows must include semantic labels/hints, not just bare paths
 - User attachment:
   physical: turn_<id>/attachments/<name>
   logical : fi:<turn_id>.user.attachments/<name>
@@ -439,6 +445,7 @@ Skills (react.read only):
 
 HARD:
 - `react.read` expects LOGICAL paths.
+- If you need several exact objects, pass all known paths in one react.read call instead of spending one round per path.
 - `ctx_tools.fetch_ctx` expects LOGICAL paths, but only supports `ar:`, `tc:`, `so:` namespaces. `fi:`, `ks:`, `sk:`, or `su:` are not supported.
 - Tools that take paths (`react.patch`, `rendering_tools.write_*`) expect PHYSICAL paths.
 - Exec code reads and writes PHYSICAL OUTPUT_DIR-relative paths.
@@ -461,6 +468,9 @@ PATHS_EXTENDED_GUIDE = """
     - `ar:<turn_id>.assistant.completion` (brings full text content of the latest assistant completion in that turn)
     - `ar:<turn_id>.assistant.completion.<n>` (brings full text content of an earlier visible assistant completion in that same turn)
     - `ar:plan.latest:<plan_id>` (brings the latest snapshot of that plan lineage into visible context)
+    - `ar:<turn_id>.react.turn.index` (reconstructs a compact turn inventory from persisted turn log/artifact metadata; use when you know the turn but need to discover exact refs)
+      Typical shape: summaries, messages, events, tools, artifacts, and sources. Rows should include semantic labels/hints, not just bare paths.
+      Some turns may have multiple assistant completions, multiple user-like entries (`user.prompt`, `user.followup`, `user.steer`), or no ordinary user prompt if triggered by reactive/external events.
 - User attachments:
     - `fi:<turn_id>.user.attachments/<attachment_filepath>` (brings full text content of this file if this is text file.
       For pdf/image files, they will be attached as multimodal attachments. Filepath can be / and . delimited. relative path)
@@ -543,6 +553,43 @@ Using unsupported logical namespaces with fetch_ctx returns an error rather than
 - If `react.search_files` returns `logical_path`, prefer that for react.read.
 
 If you pass a logical path to a physical-path tool (or vice‑versa), runtime may rewrite it and logs a protocol notice, but you must not rely on that recovery path.
+"""
+
+MEMORY_RECOVERY_GUIDE = """
+[MEMORY RECOVERY SCHEMA]
+When older turns are pruned/compacted, recover only what is needed:
+
+visible exact path
+  -> react.read([path]) or react.pull([fi_path]) when exec needs a file
+
+visible summary path (ws:/su:)
+  -> react.read([summary_path])
+  -> if refs are incomplete: react.read(["ar:<turn_id>.react.turn.index"])
+  -> batch exact refs: react.read([ar_or_tc_or_so_path, ...]) / react.pull([fi_path, ...])
+
+no exact path: choose react.memsearch by clue
+
+  broad conversation overview ("what have we talked about so far?")
+    -> react.memsearch(mode="timeline", targets=["summary"], order="asc", top_k=<enough>)
+    -> no query; do not use generic query text like "conversation topics discussed"
+
+  topic clue
+    -> react.memsearch(query="<topic>", targets=["summary", "user", "assistant", "attachment"])
+
+  ordinal clue ("second turn", "first time we...")
+    -> react.memsearch(mode="ordinal", ordinal=<n>, targets=["summary", "user", "assistant"])
+
+  date/time clue, no topic
+    -> react.memsearch(mode="temporal", from="<iso>", to="<iso>", targets=["summary", "user", "assistant"])
+
+  topic + date/time clue
+    -> react.memsearch(query="<topic>", from="<iso>", to="<iso>", targets=["summary", "user", "assistant", "attachment"])
+    -> omit mode so semantic search is narrowed by the temporal window
+
+  -> read the returned ws:/ar:/fi:/tc:/so: refs, or read ar:<turn_id>.react.turn.index for that turn
+
+Turn index is reconstructed on demand from the persisted turn log and artifact metadata.
+It is a semantic inventory: summaries, messages, events, tools, artifacts, sources.
 """
 
 ISO_TOOL_EXECUTION_INSTRUCTION = """

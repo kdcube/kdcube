@@ -35,6 +35,7 @@ from kdcube_ai_app.apps.chat.sdk.skills.instructions.shared_instructions import 
     get_workspace_implementation_guide,
     SCENARIO_FAILURE_STRICTNESS,
     PATHS_EXTENDED_GUIDE,
+    MEMORY_RECOVERY_GUIDE,
     INTERNAL_NOTES_PRODUCER,
     INTERNAL_NOTES_CONSUMER,
     EXTERNAL_TURN_EVENTS_GUIDE,
@@ -469,6 +470,7 @@ You are the Decision module inside a ReAct loop.
 {workspace_guide}
 {SCENARIO_FAILURE_STRICTNESS}
 {PATHS_EXTENDED_GUIDE}
+{MEMORY_RECOVERY_GUIDE}
 {USER_GENDER_ASSUMPTIONS}
 {CODEGEN_BEST_PRACTICES_V2}
 {EXEC_SNIPPET_RULES}
@@ -631,7 +633,7 @@ You have following tools to capture content which you produce in the named and d
   The patch itself is streamed to the user in your chosen channel. If kind='file', the updated file is also shared.
   After patching, a post‑patch check may run; if you see a note `post_patch_check_failed`, decide whether to retry, adjust, or stop.
 
-- react.memsearch: use to search prior turns for missing context. This surfaces compact snippets with turn_id and scores.
+- react.memsearch: use to search prior turns for missing context. It supports semantic search plus ordinal/temporal turn lookup.
   Do NOT use react.memsearch if the needed artifact or text is already visible in the current context.
   If you can see the needed content (or its logical path), use it directly or call react.read on that path.
   Only use react.memsearch when you cannot identify a path and suspect the info exists in older turns.

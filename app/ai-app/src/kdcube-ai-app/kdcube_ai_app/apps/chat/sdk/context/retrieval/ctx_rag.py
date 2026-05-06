@@ -2837,6 +2837,7 @@ async def search_context(
         rec_weight: float = 0.2,
         custom_score_fn: Optional[Callable] = None,
         with_payload: bool = False,
+        timestamp_filters: Optional[List[Dict[str, Any]]] = None,
         logger = None,
 ) -> tuple[str | None, list[dict]]:
     """
@@ -2875,6 +2876,7 @@ async def search_context(
                 days=days,
                 scope="conversation",
                 half_life_days=half_life_days,
+                timestamp_filters=timestamp_filters,
             )
             return res or []
         except Exception as e:

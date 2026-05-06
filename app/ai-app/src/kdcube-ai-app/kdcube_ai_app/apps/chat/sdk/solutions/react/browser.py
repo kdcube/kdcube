@@ -1067,6 +1067,7 @@ class ContextBrowser:
             rec_weight: float = 0.2,
             custom_score_fn: Optional[Any] = None,
             with_payload: bool = False,
+            timestamp_filters: Optional[List[Dict[str, Any]]] = None,
             conv_idx: Optional[Any] = None,
             ctx_client: Optional[ContextRAGClient] = None,
             model_service: Optional[Any] = None,
@@ -1094,7 +1095,46 @@ class ContextBrowser:
             rec_weight=rec_weight,
             custom_score_fn=custom_score_fn,
             with_payload=with_payload,
+            timestamp_filters=timestamp_filters,
             logger=self.log,
+        )
+
+    async def search_turn_catalog(
+            self,
+            *,
+            user: str,
+            conv: Optional[str],
+            scope: str = "conversation",
+            top_k: int = 20,
+            days: int = 3650,
+            order: str = "asc",
+            ordinal: Optional[int] = None,
+            from_ts: Optional[Any] = None,
+            to_ts: Optional[Any] = None,
+            conv_idx: Optional[Any] = None,
+            ctx_client: Optional[ContextRAGClient] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Deterministic turn catalog lookup for temporal and ordinal memory queries.
+        """
+        ctx_client = ctx_client or self.ctx_client
+        conv_idx = conv_idx or (getattr(ctx_client, "idx", None) if ctx_client else None)
+        if not conv_idx:
+            raise ValueError("ContextBrowser.search_turn_catalog requires conv_idx.")
+        return await conv_idx.fetch_turn_catalog(
+            user_id=user,
+            conversation_id=conv,
+            scope=scope,
+            top_k=top_k,
+            days=days,
+            order=order,
+            ordinal=ordinal,
+            from_ts=from_ts,
+            to_ts=to_ts,
+            ctx={
+                "user_id": user,
+                "conversation_id": conv,
+            },
         )
 
     async def save_artifact(
