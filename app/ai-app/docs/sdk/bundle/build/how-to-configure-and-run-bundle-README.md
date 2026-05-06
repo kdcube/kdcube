@@ -42,14 +42,13 @@ Use it when you need to answer questions like:
 - how do I avoid overwriting live bundle props/secrets with stale descriptor copies
 
 This page is not the primary source for bundle design or test strategy.
-It also documents the CLI/runtime model that exists now, not the planned
-deployment-first CLI redesign.
+It documents the supported local CLI/runtime workflow for descriptor-backed
+bundle development.
 
 Important:
 
 - `tenant/project` isolation already exists in the current model
-- the planned CLI redesign does not introduce that isolation
-- the redesign changes how the operator targets and manages deployments
+- the CLI uses that namespace to target one concrete runtime workdir
 - one machine may hold many local deployment snapshots on disk
 - one machine should not be treated as supporting many concurrently running
   local compose-backed KDCube stacks by default
@@ -152,9 +151,9 @@ The local runtime is not only a CLI command. It is a concrete workspace that con
 
 Those files under `workdir/config/` are the active runtime inputs.
 
-### 2. `--descriptors-location` stages the descriptor set into the runtime
+### 2. `kdcube init --descriptors-location` stages the descriptor set into the runtime
 
-When you run `kdcube` with `--descriptors-location`, the CLI copies the canonical descriptor set into:
+When you run `kdcube init --descriptors-location`, the CLI copies the canonical descriptor set into:
 
 ```text
 <runtime>/config/
@@ -277,7 +276,7 @@ isolated from each other.
 This is intentional today because it lets bundle developers keep one known-good
 runtime snapshot while testing another one with a newer platform version.
 
-For the planned deployment-first CLI model, use:
+For broader deployment-first CLI design context, use:
 
 - [how-to-configure-and-run-bundle-new-cli-README.md](how-to-configure-and-run-bundle-new-cli-README.md)
 - [cli--as-control-plane-README.md](../../../service/cicd/design/cli--as-control-plane-README.md)
@@ -355,9 +354,9 @@ The desired local behavior is:
    - per-deployment published port ranges
    - explicit runtime discovery and stop semantics
 
-### 5. Local vs remote meaning in the future CLI
+### 5. Local vs remote deployment targeting
 
-The planned CLI should still let one machine manage many deployments.
+The CLI should still let one machine manage many deployments.
 
 That means:
 
@@ -534,7 +533,7 @@ For non-interactive local install, the descriptor set should be complete and int
 
 ## Recommended Local Workflow
 
-Use a canonical descriptor directory and let `kdcube` stage it into the runtime.
+Use a canonical descriptor directory and let `kdcube init` stage it into the runtime.
 
 Before running bundle tests or interpreting failures, use the working
 environment checklist in
@@ -848,7 +847,15 @@ This is required because `kdcube reload` does not read arbitrary external descri
 
 ### If you changed `bundles.yaml` or `bundles.secrets.yaml` inside the active runtime
 
-Use `kdcube bundle` to patch specific keys:
+You can edit the staged files directly:
+
+```text
+<runtime>/config/bundles.yaml
+<runtime>/config/bundles.secrets.yaml
+```
+
+For targeted config or secret changes, use `kdcube bundle` instead of editing
+YAML by hand:
 
 ```bash
 kdcube bundle <bundle_id> \
@@ -864,7 +871,7 @@ kdcube bundle <bundle_id> \
   --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
-Apply the change with:
+Apply either kind of change with:
 
 ```bash
 kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
@@ -991,7 +998,7 @@ bundles:
           shared_token: "replace-me"
 ```
 
-To patch a config or secret key without editing the files by hand, use `kdcube bundle`:
+To patch a config or secret key without editing the files by hand, use `kdcube bundle` against the staged runtime descriptors:
 
 ```bash
 # Set a config value
@@ -1011,7 +1018,8 @@ kdcube bundle <bundle_id> --del-secret key.path \
   --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
-`kdcube bundle` only patches the staged files. Run `kdcube reload` afterward to apply the change.
+`kdcube bundle` only patches the staged files. It does not edit the original
+source descriptor directory. Run `kdcube reload` afterward to apply the change.
 
 `enabled_config` values belong in bundle props, not in secrets.
 
@@ -1175,7 +1183,7 @@ If you only remember the essentials, remember these:
 - file-producing tools use the React/tool runtime file contract, not a
   `bundles.yaml` switch
 - rerun install when you changed the canonical source descriptor set or runtime topology
-- use `kdcube bundle <bundle_id> --set-config / --set-secret / --del-config / --del-secret` to patch staged config or secrets without editing YAML by hand
+- use `kdcube bundle <bundle_id> --set-config / --set-secret / --del-config / --del-secret` for targeted staged config or secret patches
 - use `kdcube reload <bundle_id>` when you changed active runtime bundle descriptors or need proc cache eviction
 - use `kdcube --info --workdir <path>` to inspect the runtime you are actually using
 - use `kdcube export` before overwriting runtime bundle state with older descriptor copies
