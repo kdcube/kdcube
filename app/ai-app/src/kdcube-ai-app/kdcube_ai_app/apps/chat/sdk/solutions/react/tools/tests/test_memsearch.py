@@ -35,6 +35,9 @@ class FakeBrowser:
     async def get_turn_log(self, turn_id: str):
         return self._turn_logs.get(turn_id, {})
 
+    async def search_turn_catalog(self, **kwargs):
+        raise AssertionError(f"unexpected search_turn_catalog call: {kwargs!r}")
+
 
 def _latest_summary_payload(ctx: FakeBrowser) -> dict:
     blocks = [
@@ -214,3 +217,194 @@ async def test_memsearch_summary_target_includes_working_summary_blocks(tmp_path
         "role": "summary",
         "ts": "2026-05-05T19:37:00Z",
     }]
+
+
+@pytest.mark.asyncio
+async def test_memsearch_ordinal_mode_uses_turn_catalog_without_query(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_current",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+        user_id="user_1",
+    )
+    ctx = FakeBrowser(runtime)
+    captured_catalog = {}
+
+    async def _search_turn_catalog(**kwargs):
+        captured_catalog.update(kwargs)
+        return [{
+            "turn_id": "turn_second",
+            "turn_index_path": "ar:turn_second.react.turn.index",
+            "working_summary_path": "ws:turn_second.conv.working.summary",
+            "user_path": "ar:turn_second.user.prompt",
+            "assistant_path": "ar:turn_second.assistant.completion",
+            "ordinal": 2,
+            "total_turns": 8,
+            "started_at": "2026-05-03T01:17:11Z",
+            "ended_at": "2026-05-03T01:18:30Z",
+            "working_summary_text": "Goal: Find two exciting recent medicine stories. Outcome: Answered with sources.",
+            "working_summary_ts": "2026-05-03T01:18:30Z",
+            "first_user_text": "le'ts then check the 2 most exciting news in medicine for last 2 weeks",
+            "first_user_ts": "2026-05-03T01:17:11Z",
+            "about": "Goal: Find two exciting recent medicine stories.",
+        }]
+
+    ctx.search_turn_catalog = _search_turn_catalog
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "query": "",
+                    "targets": ["summary", "user"],
+                    "mode": "ordinal",
+                    "ordinal": 2,
+                }
+            }
+        }
+    }
+
+    out = await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms3")
+
+    assert captured_catalog["ordinal"] == 2
+    assert captured_catalog["scope"] == "conversation"
+    assert captured_catalog["days"] == 3650
+    hits = out["last_tool_result"]
+    assert len(hits) == 1
+    assert hits[0]["turn_id"] == "turn_second"
+    assert hits[0]["ordinal"] == 2
+    assert hits[0]["total_turns"] == 8
+    assert hits[0]["turn_index_path"] == "ar:turn_second.react.turn.index"
+    assert [sn["role"] for sn in hits[0]["snippets"]] == ["summary", "user"]
+
+    summary = _latest_summary_payload(ctx)
+    assert summary["mode"] == "ordinal"
+    assert summary["hits"][0]["ordinal"] == 2
+    assert summary["hits"][0]["snippets"] == [
+        {
+            "path": "ws:turn_second.conv.working.summary",
+            "role": "summary",
+            "ts": "2026-05-03T01:18:30Z",
+        },
+        {
+            "path": "ar:turn_second.user.prompt",
+            "role": "user",
+            "ts": "2026-05-03T01:17:11Z",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_memsearch_semantic_with_temporal_bounds_passes_timestamp_filters(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_current",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+        user_id="user_1",
+    )
+    ctx = FakeBrowser(runtime)
+    captured_search = {}
+
+    async def _search(**kwargs):
+        captured_search.update(kwargs)
+        return "turn_prev", [{
+            "turn_id": "turn_prev",
+            "score": 0.8,
+            "sim": 0.75,
+            "rec": 0.9,
+            "matched_via_role": "assistant",
+            "source_query": "invoice",
+            "ts": "2026-03-12T10:00:00Z",
+        }]
+
+    ctx.search = _search
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "conv.working.summary",
+                "author": "assistant",
+                "turn_id": "turn_prev",
+                "ts": "2026-03-12T10:00:00Z",
+                "path": "ws:turn_prev.conv.working.summary.attempt.1",
+                "text": "Goal: retrieve March invoices.",
+                "meta": {},
+            }
+        ],
+        "sources_pool": [],
+    }
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "query": "invoice",
+                    "targets": ["summary"],
+                    "from": "2026-03-01T00:00:00Z",
+                    "to": "2026-04-01T00:00:00Z",
+                    "top_k": 2,
+                }
+            }
+        }
+    }
+
+    out = await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms4")
+
+    assert captured_search["days"] == 3650
+    assert captured_search["timestamp_filters"] == [
+        {"op": ">=", "value": "2026-03-01T00:00:00Z"},
+        {"op": "<", "value": "2026-04-01T00:00:00Z"},
+    ]
+    assert out["last_tool_result"][0]["turn_id"] == "turn_prev"
+
+
+@pytest.mark.asyncio
+async def test_memsearch_timeline_mode_reports_ignored_generic_query(tmp_path):
+    runtime = RuntimeCtx(
+        turn_id="turn_current",
+        outdir=str(tmp_path / "out"),
+        workdir=str(tmp_path / "work"),
+        conversation_id="conv_1",
+        user_id="user_1",
+    )
+    ctx = FakeBrowser(runtime)
+    captured_catalog = {}
+
+    async def _search_turn_catalog(**kwargs):
+        captured_catalog.update(kwargs)
+        return [{
+            "turn_id": "turn_1",
+            "turn_index_path": "ar:turn_1.react.turn.index",
+            "working_summary_path": "ws:turn_1.conv.working.summary",
+            "ordinal": 1,
+            "total_turns": 1,
+            "started_at": "2026-05-06T10:00:00Z",
+            "working_summary_text": "Goal: discuss memory recovery. Outcome: designed memsearch timeline lookup.",
+            "working_summary_ts": "2026-05-06T10:05:00Z",
+        }]
+
+    ctx.search_turn_catalog = _search_turn_catalog
+
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "params": {
+                    "query": "conversation topics discussed",
+                    "targets": ["summary"],
+                    "mode": "timeline",
+                    "order": "asc",
+                    "top_k": 10,
+                }
+            }
+        }
+    }
+
+    out = await handle_react_memsearch(ctx_browser=ctx, state=state, tool_call_id="ms5")
+
+    assert captured_catalog["order"] == "asc"
+    assert out["last_tool_result"][0]["ignored_query"] == "conversation topics discussed"
+    assert out["last_tool_result"][0]["source_query"] == ""
+    summary = _latest_summary_payload(ctx)
+    assert summary["mode"] == "timeline"
+    assert "query ignored in timeline catalog mode" in summary["warnings"][0]

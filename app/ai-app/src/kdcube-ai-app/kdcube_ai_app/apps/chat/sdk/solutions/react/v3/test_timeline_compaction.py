@@ -19,12 +19,12 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.session import (
 )
 
 
-def _blk(*, btype: str, text: str, turn_id: str) -> dict:
+def _blk(*, btype: str, text: str, turn_id: str, ts: str = "2026-02-09T00:00:00Z") -> dict:
     return {
         "type": btype,
         "text": text,
         "turn_id": turn_id,
-        "ts": "2026-02-09T00:00:00Z",
+        "ts": ts,
     }
 
 
@@ -73,6 +73,134 @@ async def test_compaction_inserts_summary_and_keeps_cut_block(monkeypatch):
         "assistant.completion",
         "react.tool.call",
     }
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_renders_as_prior_memory_checkpoint():
+    runtime = RuntimeCtx(turn_id="turn_current", max_tokens=1000)
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        {
+            "type": "conv.range.summary",
+            "author": "system",
+            "turn_id": "turn_old",
+            "path": "su:turn_old.conv.range.summary",
+            "text": "Goal: old work\nOutcome: old result",
+            "meta": {
+                "covered_turn_ids": ["turn_a", "turn_b"],
+                "compacted_range_start_ts": "2026-02-01T10:00:00Z",
+                "compacted_range_end_ts": "2026-02-02T11:00:00Z",
+                "conversation_first_message_ts": "2026-02-01T10:00:00Z",
+                "split_turn_id": "turn_b",
+            },
+        },
+        _blk(btype="turn.header", text="[TURN turn_current]", turn_id="turn_current"),
+        _blk(btype="user.prompt", text="continue", turn_id="turn_current"),
+    ]
+
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[COMPACTED PRIOR CONVERSATION MEMORY]" in text
+    assert "[path: su:turn_old.conv.range.summary]" in text
+    assert "covered_turns: turn_a, turn_b" in text
+    assert "compacted_time_range: 2026-02-01T10:00:00Z -> 2026-02-02T11:00:00Z" in text
+    assert "conversation_first_message_ts: 2026-02-01T10:00:00Z" in text
+    assert "split_turn_id: turn_b" in text
+    assert "origin: model-generated compaction of older timeline blocks removed from the visible stream" in text
+    assert "use: treat this as prior conversation state" in text
+    assert "Goal: old work" in text
+    assert "[END COMPACTED PRIOR CONVERSATION MEMORY]" in text
+    assert "TURN turn_current" in text
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_caps_covered_turns_list():
+    runtime = RuntimeCtx(turn_id="turn_current", max_tokens=1000)
+    tl = Timeline(runtime=runtime, svc=object())
+    tl.blocks = [
+        {
+            "type": "conv.range.summary",
+            "author": "system",
+            "turn_id": "turn_old",
+            "path": "su:turn_old.conv.range.summary",
+            "text": "Goal: old work",
+            "meta": {
+                "covered_turn_ids": [f"turn_{idx}" for idx in range(12)],
+            },
+        },
+        _blk(btype="turn.header", text="[TURN turn_current]", turn_id="turn_current"),
+        _blk(btype="user.prompt", text="continue", turn_id="turn_current"),
+    ]
+
+    rendered = await tl.render(cache_last=False, system_text="sys", include_sources=False)
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "covered_turns: turn_0, turn_1, ... turn_10, turn_11 (count=12)" in text
+    assert "turn_2, turn_3, turn_4" not in text
+
+
+@pytest.mark.asyncio
+async def test_compaction_summary_metadata_keeps_temporal_bounds(monkeypatch):
+    async def _fake_summary(*args, **kwargs):
+        return "SUMMARY"
+
+    async def _fake_prefix(*args, **kwargs):
+        return "PREFIX"
+
+    import kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary as summary_mod
+
+    monkeypatch.setattr(summary_mod, "summarize_context_blocks_progressive", _fake_summary)
+    monkeypatch.setattr(summary_mod, "summarize_turn_prefix_progressive", _fake_prefix)
+
+    runtime = RuntimeCtx(turn_id="turn_current", max_tokens=200)
+    tl = Timeline(runtime=runtime, svc=object())
+    blocks = [
+        _blk(
+            btype="turn.header",
+            text="[TURN turn_old]",
+            turn_id="turn_old",
+            ts="2026-02-01T09:59:00Z",
+        ),
+        _blk(
+            btype="user.prompt",
+            text="first user message",
+            turn_id="turn_old",
+            ts="2026-02-01T10:00:00Z",
+        ),
+        _blk(
+            btype="assistant.completion",
+            text="old reply" * 30,
+            turn_id="turn_old",
+            ts="2026-02-01T10:01:00Z",
+        ),
+        _blk(
+            btype="turn.header",
+            text="[TURN turn_current]",
+            turn_id="turn_current",
+            ts="2026-02-03T12:00:00Z",
+        ),
+        _blk(
+            btype="user.prompt",
+            text="current ask",
+            turn_id="turn_current",
+            ts="2026-02-03T12:01:00Z",
+        ),
+    ]
+
+    updated = await tl.sanitize_context_blocks(
+        system_text="sys",
+        blocks=blocks,
+        max_tokens=40,
+        keep_recent_turns=0,
+        force=True,
+    )
+
+    summary_block = next(b for b in updated if b.get("type") == "conv.range.summary")
+    meta = summary_block.get("meta") or {}
+    assert meta.get("compacted_range_start_ts") == "2026-02-01T09:59:00Z"
+    assert meta.get("compacted_range_end_ts") == "2026-02-01T10:01:00Z"
+    assert meta.get("conversation_first_message_ts") == "2026-02-01T10:00:00Z"
 
 
 @pytest.mark.asyncio

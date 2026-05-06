@@ -19,6 +19,10 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.solution_workspace import (
     _guess_mime_from_path,
     _read_local_file,
 )
+from kdcube_ai_app.apps.chat.sdk.solutions.react.timeline import (
+    build_turn_index_text,
+    parse_turn_index_path,
+)
 from kdcube_ai_app.apps.chat.sdk.solutions.react.tools.common import (
     tool_call_block,
     notice_block,
@@ -31,6 +35,9 @@ TOOL_SPEC = {
     "purpose": (
         "Read artifacts or skills into the visible context so you can use them. "
         "Paths must be context paths (fi:/ar:/so:/sk:/ks:), not physical paths. "
+        "For old-turn recovery, ar:<turn_id>.react.turn.index reconstructs a compact semantic inventory; "
+        "use it with react.memsearch hits when the summary does not name enough refs. "
+        "Batch multiple known paths in one read call. "
         "search_files results are directly readable here only when they include logical_path. "
         "Each path you read becomes visible in the timeline; skills are shown with ACTIVE 💡 banner. "
         "Use ks:<relpath> to read files from the knowledge space (read-only reference files prepared by the system). "
@@ -44,6 +51,7 @@ TOOL_SPEC = {
     "args": {
         "paths": (
             "list[str] context paths to read: "
+            "turn indexes via ar:<turn_id>.react.turn.index, "
             "files via fi:<turn_id>.files/<filepath>, "
             "sources via so:sources_pool[...], "
             "skills via sk:<skill_id or num>, "
@@ -86,6 +94,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     ks_paths = [p for p in artifact_paths if isinstance(p, str) and p.startswith("ks:")]
     if ks_paths:
         artifact_paths = [p for p in artifact_paths if p not in ks_paths]
+    turn_index_paths = [p for p in artifact_paths if parse_turn_index_path(p)]
+    if turn_index_paths:
+        artifact_paths = [p for p in artifact_paths if p not in turn_index_paths]
     pending_blocks: List[Dict[str, Any]] = []
     missing_skills: List[str] = []
     exists_paths: List[str] = []
@@ -586,6 +597,78 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         else:
             exists_paths.append(ctx_path)
             per_path.append({"path": ctx_path, "status": "exists_in_visible_context"})
+
+    async def _emit_turn_index_path(ctx_path: str) -> None:
+        nonlocal total_tokens
+        source_turn_id = parse_turn_index_path(ctx_path)
+        if not source_turn_id:
+            missing_artifacts.append(ctx_path)
+            per_path.append({"path": ctx_path, "missing": True, "status": "invalid_turn_index_path"})
+            return
+
+        blocks: List[Dict[str, Any]] = []
+        sources_pool: List[Dict[str, Any]] = []
+        current_turn_id = str(getattr(getattr(ctx_browser, "runtime_ctx", None), "turn_id", "") or "").strip()
+        if source_turn_id == current_turn_id:
+            try:
+                blocks = list(ctx_browser.timeline._collect_blocks())  # type: ignore[attr-defined]
+                sources_pool = list(getattr(ctx_browser.timeline, "sources_pool", []) or [])  # type: ignore[attr-defined]
+            except Exception:
+                blocks = []
+                sources_pool = []
+
+        if not blocks:
+            try:
+                turn_log = await ctx_browser.get_turn_log(turn_id=source_turn_id)
+            except Exception:
+                turn_log = {}
+            if isinstance(turn_log, dict):
+                blocks = [b for b in (turn_log.get("blocks") or []) if isinstance(b, dict)]
+                sources_pool = [r for r in (turn_log.get("sources_pool") or []) if isinstance(r, dict)]
+
+        if not blocks:
+            missing_artifacts.append(ctx_path)
+            per_path.append({"path": ctx_path, "missing": True, "status": "turn_log_missing"})
+            return
+
+        text = build_turn_index_text(
+            turn_id=source_turn_id,
+            blocks=blocks,
+            sources_pool=sources_pool,
+        )
+        tokens = 0
+        try:
+            from kdcube_ai_app.apps.chat.sdk.util import token_count
+            tokens = token_count(text)
+            total_tokens += tokens
+        except Exception:
+            tokens = 0
+
+        blk = {
+            "turn": turn_id,
+            "type": "react.tool.result",
+            "call_id": tool_call_id,
+            "mime": "text/markdown",
+            "path": ctx_path,
+            "text": text,
+            "meta": {
+                "tool_call_id": tool_call_id,
+                "tool_id": tool_id,
+                "source_turn_id": source_turn_id,
+                "artifact_kind": "react.turn.index",
+                "generated": "on_demand",
+            },
+        }
+        _maybe_add_block(blk)
+        entry = {"path": ctx_path, "source_turn_id": source_turn_id}
+        if tokens:
+            entry["tokens"] = tokens
+        per_path.append(entry)
+
+    if turn_index_paths:
+        for turn_index_path in turn_index_paths:
+            await _emit_turn_index_path(turn_index_path)
+
     if ks_paths:
         for ks_path in ks_paths:
             await _emit_ks_path(ks_path)
@@ -743,7 +826,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             per_path_entry["tokens"] = tokens
         per_path.append(per_path_entry)
 
-    if artifact_paths or skill_paths:
+    if artifact_paths or skill_paths or ks_paths or turn_index_paths:
         summary = {"paths": per_path, "total_tokens": total_tokens}
         if missing_artifacts:
             summary["missing"] = missing_artifacts

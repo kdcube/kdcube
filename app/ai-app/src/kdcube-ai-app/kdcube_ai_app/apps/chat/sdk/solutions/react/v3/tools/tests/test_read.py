@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import pytest
+import json
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.read import handle_react_read
@@ -115,3 +116,109 @@ async def test_read_tc_result_prefers_inline_payload_over_meta(tmp_path):
         for b in ctx.timeline.blocks
         if b.get("type") == "react.tool.result"
     )
+
+
+@pytest.mark.asyncio
+async def test_read_turn_index_reconstructs_semantic_inventory_from_turn_log(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_current", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    ctx._turn_logs["turn_prev"] = {
+        "blocks": [
+            {
+                "type": "conv.working.summary",
+                "author": "assistant",
+                "turn_id": "turn_prev",
+                "ts": "2026-05-05T19:37:00Z",
+                "path": "ws:turn_prev.conv.working.summary.attempt.1",
+                "text": "Goal: Create ZIP with Anthropic April invoices.\nOutcome: ZIP failed at hosted artifact boundary.",
+                "mime": "text/markdown",
+                "meta": {"kind": "working_summary", "summary_scope": "completion_attempt"},
+            },
+            {
+                "type": "user.followup",
+                "author": "user",
+                "turn_id": "turn_prev",
+                "ts": "2026-05-05T19:27:38Z",
+                "path": "ar:turn_prev.external.followup.msg_1",
+                "text": "Retry the Anthropic April invoice ZIP workflow.",
+                "meta": {"event_kind": "followup", "message_id": "msg_1", "sequence": 12, "source": "telegram"},
+            },
+            {
+                "type": "react.tool.call",
+                "turn_id": "turn_prev",
+                "call_id": "tc_scan",
+                "path": "tc:turn_prev.tc_scan.call",
+                "mime": "application/json",
+                "text": json.dumps({"tool_id": "email.process_user_emails", "params": {"query": "Anthropic April invoices"}}),
+            },
+            {
+                "type": "react.tool.result",
+                "turn_id": "turn_prev",
+                "call_id": "tc_scan",
+                "path": "tc:turn_prev.tc_scan.result",
+                "mime": "application/json",
+                "text": json.dumps({"ok": True, "message": "found 10 Anthropic April emails and current attachment IDs"}),
+            },
+            {
+                "type": "react.tool.result",
+                "turn_id": "turn_prev",
+                "call_id": "tc_mat",
+                "path": "tc:turn_prev.tc_mat.result",
+                "mime": "application/json",
+                "text": json.dumps({
+                    "artifact_path": "fi:turn_prev.outputs/email-attachments/Invoice_1.pdf",
+                    "mime": "application/pdf",
+                    "kind": "file",
+                    "description": "Anthropic invoice PDF materialized from Gmail",
+                }),
+                "meta": {"tool_call_id": "tc_mat", "tool_id": "email.materialize_email_attachments"},
+            },
+            {
+                "type": "react.tool.result",
+                "turn_id": "turn_prev",
+                "call_id": "tc_mat",
+                "path": "fi:turn_prev.outputs/email-attachments/Invoice_1.pdf",
+                "mime": "application/pdf",
+                "meta": {"tool_call_id": "tc_mat", "tool_id": "email.materialize_email_attachments"},
+            },
+            {
+                "type": "assistant.completion",
+                "author": "assistant",
+                "turn_id": "turn_prev",
+                "ts": "2026-05-05T19:37:19Z",
+                "path": "ar:turn_prev.assistant.completion",
+                "text": "All 20 Anthropic invoice PDFs were materialized, but ZIP failed. [[S:1]]",
+                "meta": {"sources_used": [1]},
+            },
+        ],
+        "sources_pool": [
+            {"sid": 1, "title": "Anthropic invoice source", "url": "https://example.test/invoice", "text": "invoice source row"}
+        ],
+    }
+
+    index_path = "ar:turn_prev.react.turn.index"
+    state = {"last_decision": {"tool_call": {"params": {"paths": [index_path]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_index")
+
+    index_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("path") == index_path
+    )
+    text = index_block.get("text") or ""
+    assert "[TURN INDEX]" in text
+    assert "latest working summary: ws:turn_prev.conv.working.summary" in text
+    assert "user followup: ar:turn_prev.external.followup.msg_1" in text
+    assert "Retry the Anthropic April invoice ZIP workflow" in text
+    assert "tool: email.process_user_emails" in text
+    assert "found 10 Anthropic April emails" in text
+    assert "fi:turn_prev.outputs/email-attachments/Invoice_1.pdf" in text
+    assert "Anthropic invoice PDF materialized from Gmail" in text
+    assert "source: so:sources_pool[1]" in text
+
+    status_block = next(
+        b for b in ctx.timeline.blocks
+        if b.get("type") == "react.tool.result" and b.get("path") == "tc:turn_current.r_index.result"
+    )
+    status = json.loads(status_block["text"])
+    assert status["paths"][0]["path"] == index_path
+    assert status["paths"][0]["source_turn_id"] == "turn_prev"

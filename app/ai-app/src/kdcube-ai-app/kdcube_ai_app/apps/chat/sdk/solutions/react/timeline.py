@@ -79,6 +79,20 @@ def extract_turn_ids_from_blocks(blocks: List[Dict[str, Any]]) -> List[str]:
     return out
 
 
+def _merge_turn_ids(*groups: Any) -> List[str]:
+    out: List[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        if not isinstance(group, list):
+            continue
+        for item in group:
+            tid = str(item or "").strip()
+            if tid and tid not in seen:
+                seen.add(tid)
+                out.append(tid)
+    return out
+
+
 def build_timeline_payload(
     *,
     blocks: List[Dict[str, Any]],
@@ -179,6 +193,46 @@ def _tail_ts(blocks: List[Dict[str, Any]]) -> str:
     if isinstance(ts, str):
         return isoz(ts)
     return ""
+
+
+def _block_ts(block: Dict[str, Any]) -> str:
+    if not isinstance(block, dict):
+        return ""
+    ts = block.get("ts")
+    if isinstance(ts, (int, float)):
+        return _dt.datetime.fromtimestamp(float(ts), tz=_dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(ts, str) and ts.strip():
+        return isoz(ts)
+    return ""
+
+
+def _first_block_ts(blocks: List[Dict[str, Any]]) -> str:
+    for blk in blocks or []:
+        ts = _block_ts(blk)
+        if ts:
+            return ts
+    return ""
+
+
+def _last_block_ts(blocks: List[Dict[str, Any]]) -> str:
+    for blk in reversed(blocks or []):
+        ts = _block_ts(blk)
+        if ts:
+            return ts
+    return ""
+
+
+def _first_user_message_ts(blocks: List[Dict[str, Any]]) -> str:
+    for blk in blocks or []:
+        if not isinstance(blk, dict):
+            continue
+        btype = (blk.get("type") or "").strip()
+        author = (blk.get("author") or blk.get("role") or "").strip().lower()
+        if btype == "user.prompt" or author == "user":
+            ts = _block_ts(blk)
+            if ts:
+                return ts
+    return _first_block_ts(blocks)
 
 
 def _compact_source_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -344,6 +398,356 @@ def extract_assistant_completion_blocks(blocks: List[Dict[str, Any]]) -> List[Di
         if (b.get("type") or "") == "assistant.completion":
             items.append(b)
     return items
+
+
+TURN_INDEX_SUFFIX = ".react.turn.index"
+
+
+def parse_turn_index_path(path: str) -> Optional[str]:
+    p = str(path or "").strip()
+    if not p.startswith("ar:") or not p.endswith(TURN_INDEX_SUFFIX):
+        return None
+    tid = p[len("ar:") : -len(TURN_INDEX_SUFFIX)].strip()
+    return tid or None
+
+
+def _compact_hint(value: Any, *, max_chars: int = 180) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        try:
+            value = json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except Exception:
+            value = str(value)
+    text = " ".join(str(value or "").replace("\n", " ").split())
+    if len(text) <= max_chars:
+        return text
+    return text[: max(0, max_chars - 1)].rstrip() + "…"
+
+
+def _block_turn_id(block: Dict[str, Any], fallback: str = "") -> str:
+    if not isinstance(block, dict):
+        return fallback
+    meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+    return str(block.get("turn_id") or block.get("turn") or meta.get("turn_id") or fallback or "").strip()
+
+
+def _block_call_id(block: Dict[str, Any]) -> str:
+    if not isinstance(block, dict):
+        return ""
+    meta = block.get("meta") if isinstance(block.get("meta"), dict) else {}
+    return str(block.get("call_id") or meta.get("tool_call_id") or meta.get("call_id") or "").strip()
+
+
+def _tool_call_payload(block: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(block, dict):
+        return {}
+    txt = block.get("text")
+    if isinstance(txt, str) and txt.strip():
+        obj = _maybe_parse_json(txt)
+        if isinstance(obj, dict):
+            return obj
+    return {}
+
+
+def _tool_id_from_call_or_result(block: Dict[str, Any], call_block: Optional[Dict[str, Any]] = None) -> str:
+    for candidate in (block, call_block):
+        if not isinstance(candidate, dict):
+            continue
+        meta = candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+        val = str(candidate.get("tool_id") or meta.get("tool_id") or "").strip()
+        if val:
+            return val
+        payload = _tool_call_payload(candidate)
+        val = str(payload.get("tool_id") or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _tool_status_and_hint(result_block: Optional[Dict[str, Any]]) -> tuple[str, str]:
+    if not isinstance(result_block, dict):
+        return "", ""
+    meta = result_block.get("meta") if isinstance(result_block.get("meta"), dict) else {}
+    status = str(meta.get("status") or "").strip()
+    hint = str(meta.get("summary") or meta.get("description") or "").strip()
+    txt = result_block.get("text")
+    parsed = _maybe_parse_json(txt) if isinstance(txt, str) else None
+    if isinstance(parsed, dict):
+        if not status:
+            raw_status = parsed.get("status")
+            if raw_status:
+                status = str(raw_status).strip()
+            elif parsed.get("ok") is True:
+                status = "success"
+            elif parsed.get("ok") is False or parsed.get("error") or parsed.get("code"):
+                status = "error"
+        if not hint:
+            for key in ("message", "summary", "error", "code"):
+                val = parsed.get(key)
+                if val:
+                    hint = _compact_hint(val)
+                    break
+            if not hint and parsed.get("artifact_path"):
+                hint = f"artifact metadata for {parsed.get('artifact_path')}"
+    if not hint and isinstance(txt, str):
+        hint = _compact_hint(txt)
+    return status, hint
+
+
+def _default_message_path(turn_id: str, btype: str, index: int = 1, total: int = 1) -> str:
+    if btype == "user.prompt":
+        return f"ar:{turn_id}.user.prompt"
+    if btype == "assistant.completion":
+        return f"ar:{turn_id}.assistant.completion" if index == total else f"ar:{turn_id}.assistant.completion.{index}"
+    return ""
+
+
+def _format_index_row(label: str, path: str = "", *, attrs: Optional[Dict[str, Any]] = None, hint: str = "") -> List[str]:
+    label = str(label or "item").strip()
+    path = str(path or "").strip()
+    first = f"- {label}: {path}" if path else f"- {label}"
+    lines = [first]
+    attrs = attrs if isinstance(attrs, dict) else {}
+    for key, val in attrs.items():
+        if val is None:
+            continue
+        sval = str(val).strip()
+        if not sval:
+            continue
+        lines.append(f"  {key}: {sval}")
+    hint = _compact_hint(hint, max_chars=220)
+    if hint:
+        lines.append(f"  hint: {hint}")
+    return lines
+
+
+def build_turn_index_text(
+    *,
+    turn_id: str,
+    blocks: List[Dict[str, Any]],
+    sources_pool: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    tid = str(turn_id or "").strip()
+    filtered = [
+        b for b in (blocks or [])
+        if isinstance(b, dict) and (not tid or _block_turn_id(b, tid) == tid)
+    ]
+    if not tid:
+        tids = extract_turn_ids_from_blocks(filtered)
+        tid = tids[0] if tids else ""
+    path = f"ar:{tid}.react.turn.index" if tid else "ar:<turn_id>.react.turn.index"
+    ts_vals = [_block_ts(b) for b in filtered if _block_ts(b)]
+    started_at = ts_vals[0] if ts_vals else ""
+    ended_at = ts_vals[-1] if ts_vals else ""
+
+    lines: List[str] = [
+        "[TURN INDEX]",
+        f"[path: {path}]",
+        f"turn_id: {tid}",
+    ]
+    if started_at:
+        lines.append(f"started_at: {started_at}")
+    if ended_at and ended_at != started_at:
+        lines.append(f"ended_at: {ended_at}")
+    lines.append("")
+
+    summary_blocks = [
+        b for b in filtered
+        if (b.get("type") or "").strip() == "conv.working.summary"
+        and isinstance(b.get("text"), str)
+        and str(b.get("text") or "").strip()
+    ]
+    if summary_blocks:
+        lines.append("summaries:")
+        latest = summary_blocks[-1]
+        latest_path = (latest.get("path") or "").strip()
+        if tid:
+            lines.extend(_format_index_row(
+                "latest working summary",
+                f"ws:{tid}.conv.working.summary",
+                attrs={"source": latest_path} if latest_path else {},
+                hint=latest.get("text") or "",
+            ))
+        for idx, blk in enumerate(summary_blocks, start=1):
+            bpath = (blk.get("path") or "").strip()
+            if not bpath:
+                continue
+            lines.extend(_format_index_row(
+                f"working summary attempt {idx}",
+                bpath,
+                hint=blk.get("text") or "",
+            ))
+        lines.append("")
+
+    user_like_types = {
+        "user.prompt": "user prompt",
+        "user.followup": "user followup",
+        "user.followup.preserved": "preserved user followup",
+        "user.steer": "user steer",
+        "user.steer.preserved": "preserved user steer",
+    }
+    user_like_blocks = [
+        b for b in filtered
+        if (b.get("type") or "").strip() in user_like_types
+    ]
+    assistant_blocks = [
+        b for b in filtered
+        if (b.get("type") or "").strip() == "assistant.completion"
+    ]
+    if user_like_blocks or assistant_blocks:
+        lines.append("messages:")
+        prompt_seen = 0
+        for blk in user_like_blocks:
+            btype = (blk.get("type") or "").strip()
+            if btype == "user.prompt":
+                prompt_seen += 1
+            label = user_like_types.get(btype, btype)
+            bpath = (blk.get("path") or "").strip()
+            if not bpath and btype == "user.prompt":
+                bpath = _default_message_path(tid, btype)
+            attrs = {"ts": blk.get("ts")} if blk.get("ts") else {}
+            lines.extend(_format_index_row(label, bpath, attrs=attrs, hint=blk.get("text") or ""))
+        total_assistants = len(assistant_blocks)
+        for idx, blk in enumerate(assistant_blocks, start=1):
+            bpath = (blk.get("path") or "").strip() or _default_message_path(tid, "assistant.completion", idx, total_assistants)
+            attrs = {"ts": blk.get("ts")} if blk.get("ts") else {}
+            label = "assistant completion" if total_assistants == 1 else f"assistant completion {idx}/{total_assistants}"
+            lines.extend(_format_index_row(label, bpath, attrs=attrs, hint=blk.get("text") or ""))
+        lines.append("")
+
+    event_blocks = [
+        b for b in filtered
+        if (b.get("type") or "").strip().startswith("external.")
+        or (isinstance(b.get("meta"), dict) and b.get("meta", {}).get("event_kind"))
+    ]
+    if event_blocks:
+        lines.append("events:")
+        for blk in event_blocks:
+            btype = (blk.get("type") or "").strip()
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            kind = str(meta.get("event_kind") or btype or "event").strip()
+            bpath = (blk.get("path") or "").strip()
+            attrs = {}
+            for key in ("message_id", "sequence", "source"):
+                if meta.get(key) is not None and str(meta.get(key)).strip():
+                    attrs[key] = meta.get(key)
+            lines.extend(_format_index_row(kind, bpath, attrs=attrs, hint=blk.get("text") or meta.get("payload") or ""))
+        lines.append("")
+
+    call_blocks: Dict[str, Dict[str, Any]] = {}
+    result_blocks: Dict[str, List[Dict[str, Any]]] = {}
+    for blk in filtered:
+        btype = (blk.get("type") or "").strip()
+        call_id = _block_call_id(blk)
+        if not call_id:
+            continue
+        if btype == "react.tool.call":
+            call_blocks[call_id] = blk
+        elif btype == "react.tool.result":
+            result_blocks.setdefault(call_id, []).append(blk)
+    call_ids = []
+    for blk in filtered:
+        call_id = _block_call_id(blk)
+        if call_id and call_id not in call_ids and (call_id in call_blocks or call_id in result_blocks):
+            call_ids.append(call_id)
+    if call_ids:
+        lines.append("tools:")
+        for call_id in call_ids:
+            call_blk = call_blocks.get(call_id)
+            results = result_blocks.get(call_id) or []
+            result_blk = next(
+                (b for b in reversed(results) if str(b.get("path") or "").strip().startswith("tc:")),
+                None,
+            ) or (results[-1] if results else None)
+            tool_id = _tool_id_from_call_or_result(result_blk or {}, call_blk)
+            call_path = (call_blk.get("path") or "").strip() if isinstance(call_blk, dict) else ""
+            result_path = (result_blk.get("path") or "").strip() if isinstance(result_blk, dict) else ""
+            if not call_path:
+                call_path = f"tc:{tid}.{call_id}.call"
+            if not result_path:
+                result_path = f"tc:{tid}.{call_id}.result"
+            status, hint = _tool_status_and_hint(result_blk)
+            label = tool_id or "tool"
+            attrs = {
+                "tool": tool_id,
+                "status": status,
+                "call": call_path,
+                "result": result_path,
+            }
+            lines.extend(_format_index_row(label, "", attrs=attrs, hint=hint))
+        lines.append("")
+
+    artifacts: Dict[str, Dict[str, Any]] = {}
+    for blk in filtered:
+        bpath = (blk.get("path") or "").strip()
+        if bpath.startswith("fi:"):
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            entry = artifacts.setdefault(bpath, {"path": bpath})
+            if blk.get("mime"):
+                entry["mime"] = blk.get("mime")
+            for key in ("tool_call_id", "tool_id", "kind", "visibility", "summary", "description", "filename"):
+                if meta.get(key) and not entry.get(key):
+                    entry[key] = meta.get(key)
+            if blk.get("text") and not entry.get("hint"):
+                entry["hint"] = blk.get("text")
+        if (blk.get("type") or "").strip() == "react.tool.result" and (blk.get("mime") or "").strip() == "application/json":
+            parsed = _maybe_parse_json(blk.get("text") or "") if isinstance(blk.get("text"), str) else None
+            if not isinstance(parsed, dict):
+                continue
+            apath = str(parsed.get("artifact_path") or "").strip()
+            if not apath or not apath.startswith("fi:"):
+                continue
+            meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
+            entry = artifacts.setdefault(apath, {"path": apath})
+            for key in ("mime", "kind", "visibility", "summary", "description", "filename"):
+                if parsed.get(key) and not entry.get(key):
+                    entry[key] = parsed.get(key)
+            for key in ("tool_call_id", "tool_id"):
+                if meta.get(key) and not entry.get(key):
+                    entry[key] = meta.get(key)
+                elif parsed.get(key) and not entry.get(key):
+                    entry[key] = parsed.get(key)
+    if artifacts:
+        lines.append("artifacts:")
+        for apath, meta in artifacts.items():
+            label = str(meta.get("filename") or "").strip()
+            if not label:
+                try:
+                    label = pathlib.Path(apath).name
+                except Exception:
+                    label = ""
+            label = label or "artifact"
+            attrs = {
+                "mime": meta.get("mime"),
+                "kind": meta.get("kind"),
+                "source_tool": meta.get("tool_call_id") or meta.get("tool_id"),
+                "visibility": meta.get("visibility"),
+            }
+            hint = meta.get("summary") or meta.get("description") or meta.get("hint") or label
+            lines.extend(_format_index_row(label, apath, attrs=attrs, hint=hint))
+        lines.append("")
+
+    used_sids = extract_sources_used_from_blocks(filtered)
+    if sources_pool and used_sids:
+        lines.append("sources:")
+        for row in materialize_sources_by_sids(sources_pool or [], used_sids):
+            if not isinstance(row, dict):
+                continue
+            sid = row.get("sid")
+            if sid is None:
+                continue
+            selector = f"so:sources_pool[{int(sid)}]" if isinstance(sid, (int, float)) else f"so:sources_pool[{sid}]"
+            attrs = {
+                "title": row.get("title"),
+                "url": row.get("url"),
+            }
+            lines.extend(_format_index_row("source", selector, attrs=attrs, hint=row.get("text") or row.get("content") or ""))
+        lines.append("")
+
+    if lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def extract_followups_from_blocks(blocks: List[Dict[str, Any]]) -> List[str]:
@@ -2642,6 +3046,7 @@ class Timeline:
         )
 
         previous_summary: Optional[str] = None
+        previous_summary_meta: Dict[str, Any] = {}
         for idx in range(boundary_start - 1, -1, -1):
             blk = blocks[idx]
             if not isinstance(blk, dict):
@@ -2651,6 +3056,8 @@ class Timeline:
             text = blk.get("text")
             if isinstance(text, str) and text.strip():
                 previous_summary = text.strip()
+            if isinstance(blk.get("meta"), dict):
+                previous_summary_meta = dict(blk.get("meta") or {})
             break
 
         history_end = turn_start_index if is_split_turn else cut_index
@@ -2739,7 +3146,19 @@ class Timeline:
 
         from kdcube_ai_app.apps.chat.sdk.tools.backends.summary.conv_progressive_summary import build_compaction_digest
         digest = build_compaction_digest(compacted_blocks)
-        covered_turn_ids = extract_turn_ids_from_blocks(compacted_blocks)
+        previous_covered_turn_ids = previous_summary_meta.get("covered_turn_ids")
+        covered_turn_ids = _merge_turn_ids(previous_covered_turn_ids, extract_turn_ids_from_blocks(compacted_blocks))
+        compacted_range_start_ts = (
+            str(previous_summary_meta.get("compacted_range_start_ts") or "").strip()
+            or _first_block_ts(compacted_blocks)
+        )
+        compacted_range_end_ts = _last_block_ts(compacted_blocks) or str(
+            previous_summary_meta.get("compacted_range_end_ts") or ""
+        ).strip()
+        conversation_first_message_ts = (
+            str(previous_summary_meta.get("conversation_first_message_ts") or "").strip()
+            or _first_user_message_ts(blocks)
+        )
         split_turn_id = ""
         if is_split_turn and turn_start_index != -1:
             split_turn_id = (blocks[turn_start_index].get("turn_id") or blocks[turn_start_index].get("turn") or "").strip()
@@ -2754,6 +3173,12 @@ class Timeline:
             "covered_turn_ids": covered_turn_ids,
             "compaction_digest": digest,
         }
+        if compacted_range_start_ts:
+            meta["compacted_range_start_ts"] = compacted_range_start_ts
+        if compacted_range_end_ts:
+            meta["compacted_range_end_ts"] = compacted_range_end_ts
+        if conversation_first_message_ts:
+            meta["conversation_first_message_ts"] = conversation_first_message_ts
         if is_split_turn and split_turn_id:
             meta["split_turn_id"] = split_turn_id
 
@@ -2859,6 +3284,9 @@ class Timeline:
                     "blocks_count": len(compacted_blocks),
                     "split_turn": bool(is_split_turn),
                     "split_turn_id": split_turn_id,
+                    "compacted_range_start_ts": compacted_range_start_ts,
+                    "compacted_range_end_ts": compacted_range_end_ts,
+                    "conversation_first_message_ts": conversation_first_message_ts,
                     "compaction_digest": digest,
                 })
             except Exception:
@@ -3348,6 +3776,19 @@ class Timeline:
                 return val
             return "\n".join(("  " + line) if line else "  " for line in val.splitlines())
 
+        def _format_compacted_turns(value: Any) -> str:
+            if not isinstance(value, list):
+                return ""
+            turn_ids = [str(t).strip() for t in value if str(t or "").strip()]
+            if not turn_ids:
+                return ""
+            if len(turn_ids) <= 8:
+                return ", ".join(turn_ids)
+            return (
+                f"{turn_ids[0]}, {turn_ids[1]}, ... "
+                f"{turn_ids[-2]}, {turn_ids[-1]} (count={len(turn_ids)})"
+            )
+
         def _append_base64_model_block(
             emitted: List[Dict[str, Any]],
             *,
@@ -3553,6 +3994,35 @@ class Timeline:
                     lines.append(f"[path: {path}]")
                 if text:
                     lines.append(text)
+                text = "\n".join(lines).strip()
+            elif btype == "conv.range.summary":
+                lines = ["[COMPACTED PRIOR CONVERSATION MEMORY]"]
+                if path:
+                    lines.append(f"[path: {path}]")
+                covered_turns = meta.get("covered_turn_ids") if isinstance(meta, dict) else None
+                covered_turns_text = _format_compacted_turns(covered_turns)
+                if covered_turns_text:
+                    lines.append("covered_turns: " + covered_turns_text)
+                range_start = str(meta.get("compacted_range_start_ts") or "").strip() if isinstance(meta, dict) else ""
+                range_end = str(meta.get("compacted_range_end_ts") or "").strip() if isinstance(meta, dict) else ""
+                if range_start and range_end:
+                    lines.append(f"compacted_time_range: {range_start} -> {range_end}")
+                elif range_start:
+                    lines.append(f"compacted_time_range_start: {range_start}")
+                elif range_end:
+                    lines.append(f"compacted_time_range_end: {range_end}")
+                first_message_ts = str(meta.get("conversation_first_message_ts") or "").strip() if isinstance(meta, dict) else ""
+                if first_message_ts:
+                    lines.append(f"conversation_first_message_ts: {first_message_ts}")
+                split_turn_id = (meta.get("split_turn_id") or "").strip() if isinstance(meta, dict) else ""
+                if split_turn_id:
+                    lines.append(f"split_turn_id: {split_turn_id}")
+                lines.append("origin: model-generated compaction of older timeline blocks removed from the visible stream")
+                lines.append("use: treat this as prior conversation state; newer visible turns below may supersede it")
+                lines.append("recovery: use logical paths from the summary or react.memsearch/react.read when exact old content is needed")
+                if text:
+                    lines.append(str(text).strip())
+                lines.append("[END COMPACTED PRIOR CONVERSATION MEMORY]")
                 text = "\n".join(lines).strip()
             elif btype == "turn.feedback":
                 lines = []
