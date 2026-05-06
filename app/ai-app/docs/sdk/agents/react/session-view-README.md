@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/agents/react/context-browser-README.md
   - ks:docs/sdk/agents/react/context-layout.md
   - ks:docs/sdk/agents/react/context-progression.md
+  - ks:docs/sdk/agents/react/memory-recovery-path-README.md
 ---
 # Session View (Cache TTL)
 
@@ -34,19 +35,21 @@ This document describes how the session view is derived from the timeline when c
 - If `keep_recent_turns` covers all turns, turn-window pruning is skipped, but lightweight artifact pruning still applies inside the recent window.
 - The most recent M turns are guaranteed intact (no pruning).
 - Hidden blocks keep a TTL-generated `replacement_text` for token estimates, compaction serializers, and retrieval metadata. This replacement is bounded by `cache_truncation_replacement_max_tokens` and by material growth over the original block.
-- Rendered hidden history uses:
-  - the turn's `conv.working.summary` blocks, when present; or
-  - compact retrieval-index stubs with logical paths and small hints.
-- React finalization internals render as one `[TURN STATUS]` card. Individual
-  `react.state`, `react.exit`, `react.workspace.publish`, and final stats
-  blocks are suppressed in the pruned model view.
+- Rendered hidden completed React turns use the turn's
+  `conv.working.summary` blocks as their primary model-facing representation.
+  Non-turn, imported, or diagnostic blocks that have no working summary may
+  still expose compact retrieval-index stubs with logical paths and small
+  hints.
+- In the normal new-timeline case, every completed React turn has a
+  `conv.working.summary`, so the pruned historical turn renders as that summary
+  card and not as a wall of individual hidden refs. React finalization internals
+  are suppressed once the working summary covers the turn.
 - Round scaffolding and transient chatter are suppressed in the pruned model
   view. This includes `react.round.start`,
   `react.thinking`, `react.notes`, `react.notice`, and
   `stage.suggested_followups`.
-- Fallback retrieval rows are grouped under one `[PRUNED TURN DATA]` marker per
-  turn and use neutral row labels such as `user:`, `assistant:`, `tool_call:`,
-  and `tool_result:`.
+- Retrieval rows are implementation fallback rows for data without a working
+  summary, not the old-turn representation for new completed React turns.
 - User/assistant blocks are eligible for pruning when they are older than `keep_recent_turns` (they remain intact in the recent windows). This applies per block, so multiple prompt-like user entries or assistant completions from one older turn can be pruned independently.
 - Internal Memory Beacons (`react.note`, `react.note.preserved`) and `conv.working.summary` blocks are not hidden by TTL pruning.
 - External `user.followup`, `user.steer`, and their preserved copies are also not hidden by TTL pruning.
@@ -59,7 +62,112 @@ This document describes how the session view is derived from the timeline when c
   - Hidden blocks stay in the timeline with `hidden=true` and optional `replacement_text`.
   - `Timeline.render()` prefers working-summary cards for hidden turns. Without a working summary, it renders compact retrieval stubs derived from the block metadata.
   - Stored `replacement_text` is not guaranteed to be rendered verbatim.
-  - If multiple blocks share the same path, only one carries the replacement text; the rest render empty.
+- If multiple blocks share the same path, only one carries the replacement text; the rest render empty.
+
+## Model-Facing Generations (new timelines)
+
+New timelines should be read as three model-facing generations. The debug files
+under `debug/rendering/rendered-...txt` show this rendered message stream.
+
+### G0: Hot/full view
+
+No TTL pruning has fired for the current render. The visible stream is the
+post-compaction timeline window plus the current turn.
+
+```text
+[COMPACTED PRIOR CONVERSATION MEMORY]    # only if hard compaction already happened
+  ... prior compacted memory checkpoint ...
+
+TURN previous_visible_turn
+  [USER MESSAGE]
+  [AI Agent thinking...]
+  [TOOL CALL ...]
+  [TOOL RESULT ...]
+  [WORKING SUMMARY]                      # durable turn summary, if already emitted
+  [ASSISTANT MESSAGE]
+
+TURN current_turn
+  ... current active work ...
+
+SOURCES POOL / ANNOUNCE                  # appended when render requested them
+```
+
+### G1: TTL-pruned session view
+
+After prompt-cache TTL expiry, old turns outside the recent window are hidden.
+For new React turns, the working summary is the historical turn's primary
+model-facing representation.
+
+```text
+[COMPACTED PRIOR CONVERSATION MEMORY]    # still visible if already present
+  ... prior compacted memory checkpoint ...
+
+[WORKING SUMMARY]
+[path: ws:turn_old.conv.working.summary.attempt.N]
+Goal: ...
+Outcome: ...
+Key facts:
+- ...
+Refs:
+- user: ar:turn_old.user.prompt
+- decisive result: tc:turn_old.tc_x.result
+- artifact: fi:turn_old.outputs/report.xlsx
+
+[WORKING SUMMARY]
+[path: ws:turn_other.conv.working.summary.attempt.N]
+Goal: ...
+Outcome: ...
+
+TURN recent_visible_turn                 # within keep_recent_turns
+  ... renders normally, except oversized files may be hidden ...
+
+TURN current_turn                         # within keep_recent_intact_turns
+  ... renders normally ...
+
+[SYSTEM MESSAGE]
+Context was pruned because the session TTL (...) was exceeded.
+Logical paths still exist. Use currently visible summaries/checkpoints first; call
+react.read(path) only when hidden content is actually needed.
+```
+
+### G2: Post-compaction view
+
+When the TTL-pruned view is still too large, hard compaction replaces the older
+visible prefix with a compacted prior-memory checkpoint. The retained suffix
+starts at the selected cut point.
+
+```text
+[COMPACTED PRIOR CONVERSATION MEMORY]
+[path: su:turn_cut.conv.range.summary]
+covered_turns: first_turn, second_turn, ... penultimate_turn, last_turn (count=N)
+compacted_time_range: 2026-05-03T01:15:31Z -> 2026-05-05T23:42:47Z
+conversation_first_message_ts: 2026-05-03T01:15:31Z
+origin: model-generated compaction of older timeline blocks removed from the visible stream
+use: treat this as prior conversation state; newer visible turns below may supersede it
+recovery: use logical paths from the summary or react.memsearch/react.read when exact old content is needed
+Goal: ...
+Outcome: ...
+Key facts:
+- ...
+Key artifacts:
+- fi:...
+[END COMPACTED PRIOR CONVERSATION MEMORY]
+
+[ACTIVE/CARRIED PLAN]                    # only if needed
+[PLAN HISTORY]                           # only if older plans were compacted
+[FOLLOWUP DURING TURN preserved]         # only if user control input fell behind the cut
+
+TURN retained_suffix_turn
+  ... renders normally from the cut point onward ...
+
+TURN current_turn
+  ... renders normally ...
+```
+
+After persistence / next load, blocks before the latest
+`conv.range.summary` are not part of the visible timeline payload. Their
+artifacts and logical paths are still recoverable through stored artifacts,
+`react.read`, `react.memsearch`, and refs carried in the summary/digest.
 
 ## Tool Call Truncation (hidden blocks)
 
@@ -74,6 +182,37 @@ Default replacement behavior:
 - Any string value starting with `ref:` is preserved verbatim.
 - Search results are reduced to `sid`, `url`, `title`, `text`.
 - Fetch results are reduced to `url`, `title`, `content`.
+
+## Presentation Policy By Block Class
+
+Current implemented policy is hard-coded in the timeline/session renderer. This
+table is the contract a future per-tool/per-event policy registry should
+preserve.
+
+| Block class | G0 full view | G1 TTL-pruned view | G2 compaction input / output |
+|---|---|---|---|
+| `conv.working.summary` | Visible durable turn summary | Not hidden; used as the primary old-turn representation | Injected into the compaction prompt for covered turns; visible if retained |
+| User/assistant messages | Render normally | Hidden outside recent window; represented through the turn working summary | Serialized into compaction prompt if covered; exact content recoverable by path |
+| Tool calls/results | Render as compact call/result view | Hidden outside recent window; per-tool replacement text is stored for estimates/retrieval, but working summary suppresses row spam | Serialized for compaction; digest carries tool/artifact facts |
+| Files/artifacts (`fi:`) | Metadata plus supported inline media | Oversized image/PDF base64 may be hidden even in recent window; old files are named through summary refs | Digest carries produced artifact refs; files remain recoverable by logical path |
+| Sources (`so:`) | Sources pool or source rows when rendered | Old source rows may become compact source refs; no per-row timestamp in the pruned skeleton | Compaction may include source/tool facts if in covered blocks |
+| Skills (`sk:`) / skill reads | Render where the read/materialized block is visible | Current behavior uses ordinary path visibility plus `react.read` result hints such as `exists_in_visible_context`; no generic singleton registry yet | Treat as context facts if covered; future singleton policy should avoid duplicate visible skill bodies |
+| `react.note` / preserved notes | Visible internal memory beacons | Not hidden by TTL pruning | Preserved after compaction when needed |
+| `user.followup` / `user.steer` | Visible in timeline order as user control input | Not hidden by TTL pruning | If behind the cut, copied forward as `.preserved` blocks |
+| React round scaffolding/chatter | Visible while hot | Suppressed when hidden | Not promoted unless summarized |
+| React finalization internals | Visible as final stats while hot | Suppressed when a working summary covers the turn | Summarized/digested if covered |
+
+Per-tool replacement policy currently lives in
+`apps/chat/sdk/solutions/react/session.py` (`ToolCallView` and
+`VIEW_REGISTRY`). This is where a web-search-specific pruned result shape belongs
+today. A future generalized event/tool policy should define, per block/event
+type:
+
+- G0 full-view rendering
+- G1 TTL-pruned rendering or suppression
+- G2 compaction serialization and whether to promote facts into the summary
+- recovery refs and logical paths
+- singleton/dedupe key, if the event should appear only once in visible context
 
 ## File and Artifact Pruning
 
@@ -101,7 +240,7 @@ Default replacement behavior:
 | User/assistant blocks | Eligible for hiding only when older than `keep_recent_turns` | Same |
 | Tool calls/results | Summarized via tool views and hidden by `path` | Same |
 | Files/artifacts | Image/PDF budget enforced; oversized base64 hidden | Same |
-| Turn finalization internals | Render as one compact `[TURN STATUS]` card after pruning | Same |
+| Turn finalization internals | Suppressed after pruning when a working summary covers the turn | Same |
 | Round scaffolding/chatter | Suppressed after pruning | Same |
 | Recovery | `react.read(path)` can unhide originals | Same |
 | Replacement text format | TTL tool views emit bounded JSON summaries with `tool_id`, `tool_call_id`, truncated `params`/`result`; files use `[TRUNCATED FILE] …`; generic uses `[TRUNCATED] …` | Same; keep `ref:` values unmodified |
@@ -154,27 +293,13 @@ Runtime session fields:
 - `keep_recent_turns`: number of most recent turns to keep visible.
 - `keep_recent_intact_turns`: number of most recent turns to keep intact (no pruning).
 
-## Example (schematic)
+## Recovery Rule
 
-After TTL pruning, the session view looks like this (system message appended at the end):
-
-```
-[TURN turn_...]
-  [TRUNCATED] user prompt snippet...
-  [TRUNCATED FILE] path=fi:turn_... mime=image/png size=...
-  [TRUNCATED] tool call summary...
-
-[TURN turn_...]
-  user.prompt
-  react.tool.call
-  react.tool.result
-  assistant.completion
-
-[SYSTEM MESSAGE] Context was pruned because the session TTL (300s) was exceeded.
-Logical paths still exist. Use currently visible summaries/stubs first; call react.read(path) only when the hidden content is actually needed.
-```
-
-When plan-history refs are present after compaction, those `ar:` refs are usually the smoothest way to reopen an older compacted plan in the same turn.
+When the model needs exact old content, it should first use the visible
+working-summary/checkpoint facts. It should call `react.read(path)` only when
+the exact hidden artifact/message/tool result is needed. When plan-history refs
+are present after compaction, those `ar:` refs are usually the smoothest way to
+reopen an older compacted plan in the same turn.
 
 ## Timeline Persistence (what is stored)
 

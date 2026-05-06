@@ -489,13 +489,14 @@ This is the most direct path-based memory retrieval tool.
 
 ### `react.memsearch`
 
-Use when the agent does **not** know the exact turn/path but remembers the topic.
+Use when the agent does **not** know the exact turn/path but remembers the topic, ordinal, or time window.
 
-`react.memsearch` searches the semantic conversation index and then resolves hits back into concrete turn snippets from turn-log/timeline blocks.
+`react.memsearch` searches the semantic conversation index by default and then resolves hits back into concrete turn snippets from turn-log/timeline blocks. It also supports deterministic turn-catalog lookup for ordinal and temporal questions.
 
 So memsearch is:
 
 - indexed semantic memory lookup first
+- Postgres-backed temporal / ordinal turn lookup when requested
 - exact turn-snippet reconstruction second
 - assistant hits can return multiple visible `assistant.completion` snippets from one matched turn
 - attachment hits can return both original turn attachments and external followup attachment paths

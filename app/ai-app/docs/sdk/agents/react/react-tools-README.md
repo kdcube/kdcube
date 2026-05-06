@@ -27,6 +27,7 @@ These tools are injected into the React decision runtime. They are not the same 
 - If decision `notes` are present, the runtime emits a user-visible notes block before the tool call.
 - React tools work with logical paths and current-turn workspace paths, not arbitrary host paths.
 - Built-in React tools do not accept exec-only `physical_path` values returned from other tool results unless explicitly documented.
+- Each tool section below defines its accepted inputs, timeline effects, and normal use case.
 
 ## Path Contracts
 
@@ -54,12 +55,14 @@ Do not pass logical `fi:` paths to `react.write` or `react.patch`.
 
 ### `react.read`
 
-Reopens existing artifacts into the visible timeline.
+Reads existing logical artifacts back into the visible timeline.
 
-- accepts logical paths only
-- emits a status/result record first, then the reopened blocks
-- deduplicates blocks already visible in the current context
-- can reopen hidden blocks
+- input: `paths: list[str]`
+- accepted paths: `ar:`, `tc:`, `fi:`, `so:`, `su:`, `ws:`, `ks:`, `sk:`
+- emits: one JSON status/result block plus one visible content block per reopened path
+- deduplication: visible blocks are not duplicated
+- hidden data: hidden/pruned blocks can be reopened by exact path
+- generated views: `ar:<turn_id>.react.turn.index` is reconstructed on demand from the persisted turn log
 
 Use it when the path already exists and React needs to inspect the content again.
 
@@ -67,11 +70,13 @@ Use it when the path already exists and React needs to inspect the content again
 
 Materializes historical `fi:` refs locally so code or later tools can use them by local path.
 
-- accepts only `fi:<turn>.files/...` and exact attachment refs
-- keeps historical material under its historical turn root
-- does not seed the active current-turn workspace
-- in `git` mode, hydrates text workspace slices from the git-backed lineage snapshot
-- exact binary refs remain hosting-backed in both workspace modes
+- input: `paths: list[str]`
+- accepted paths: exact `fi:` refs
+- output: local files plus a result block listing pulled paths
+- workspace effect: does not define or replace the active current-turn workspace
+- historical layout: keeps historical material under its historical turn root
+- `git` workspace mode: hydrates text workspace slices from git-backed lineage snapshots
+- binary refs: exact binary refs may remain hosting-backed if the execution sandbox cannot materialize them locally
 
 Use it for historical/reference material, not for defining what the current editable workspace should contain.
 
@@ -79,9 +84,12 @@ Use it for historical/reference material, not for defining what the current edit
 
 Builds the active current-turn workspace from ordered historical `fi:<turn>.files/...` refs.
 
-- `mode=replace` clears and rebuilds the current-turn workspace
-- `mode=overlay` applies refs on top of what already exists
-- later refs override earlier refs if they overlap
+- input: `paths: list[str]`, `mode: replace|overlay`
+- accepted paths: workspace `fi:<turn>.files/...` refs
+- output: current-turn workspace files plus a checkout result block
+- `mode=replace`: clears and rebuilds the current-turn workspace
+- `mode=overlay`: applies refs on top of the existing current-turn workspace
+- conflict rule: later refs override earlier refs if they overlap
 
 Use it when React needs a runnable/searchable/testable project tree in the current turn.
 
@@ -89,12 +97,13 @@ Use it when React needs a runnable/searchable/testable project tree in the curre
 
 Creates a new text artifact.
 
-- accepts a current-turn relative `path`
-- `channel=canvas|timeline_text|internal`
-- `kind=display|file`
-- always materializes the text artifact locally
-- hosts and emits a downloadable file only when the artifact is external and `kind=file`
-- `channel=internal` writes Internal Memory Beacons as `react.note`
+- input: `path`, `content`, optional `channel`, optional `kind`
+- accepted paths: current-turn relative paths, not logical `fi:` paths
+- channels: `canvas`, `timeline_text`, `internal`
+- kinds: `display`, `file`
+- output: local text artifact plus timeline/result blocks
+- external file behavior: hosts and emits a downloadable file only when external and `kind=file`
+- internal behavior: `channel=internal` writes Internal Memory Beacons as `react.note`
 
 Use it for text artifacts only. For PDFs, PPTX, DOCX, PNG, and other binary deliverables, use `rendering_tools.write_*` or exec tools.
 
@@ -102,30 +111,95 @@ Use it for text artifacts only. For PDFs, PPTX, DOCX, PNG, and other binary deli
 
 Updates an existing current-turn file.
 
-- accepts a current-turn relative `path`
-- patch may be unified diff or full replacement text
-- emits normal tool call/result blocks
+- input: `path`, `patch`
+- accepted paths: current-turn relative paths, not logical `fi:` paths
+- patch format: unified diff or full replacement text
+- output: updated local file plus normal tool call/result blocks
 
 Use it when the file already exists in the current-turn workspace and React wants an edit instead of a full rewrite.
 
 ### `react.memsearch`
 
-Searches prior conversation history semantically.
+Searches prior conversation memory and returns turn-level recovery handles.
 
-- returns compact snippets and metadata
-- `targets=["assistant"]` returns all visible `assistant.completion` blocks from a matched turn
-- `targets=["summary"]` returns `conv.working.summary` blocks from a matched turn
-- `targets=["attachment"]` covers both original turn attachments and event-scoped followup attachments
-- event-scoped attachment paths use `fi:<turn>.external.<kind>.attachments/<message_id>/<filename>`
-- use when relevant prior detail likely exists but is no longer visible
+Inputs:
+
+- `query`: natural-language query. Required for semantic search. Optional for ordinal/temporal/timeline lookup.
+- `targets`: list of snippet families to return. Supported values: `summary`, `user`, `assistant`, `attachment`.
+- `mode`: `semantic`, `ordinal`, `temporal`, or `timeline`. Default: `semantic`.
+- `scope`: `conversation` or `user`. Default: `conversation`.
+- `ordinal`: 1-based turn number in the selected scope/window. Used by `mode="ordinal"`.
+- `from` / `to`: ISO timestamps. `to` is exclusive.
+- `top_k`: maximum turn hits.
+- `days`: lookback limit. Defaults wider for catalog modes than for semantic mode.
+
+Output per hit:
+
+- `turn_id`
+- `turn_index_path`, usually `ar:<turn_id>.react.turn.index`
+- `working_summary_path`, usually `ws:<turn_id>.conv.working.summary`
+- `ordinal` and `total_turns` when the hit came from the turn catalog
+- `started_at` / `ended_at` when known
+- `snippets`: compact readable rows with `role`, `path`, `ts`
+- semantic scores when the hit came from vector/text search
+
+Targets:
+
+- `summary`: working-summary snippets, best first target for recovery.
+- `user`: user prompt/followup/steer snippets.
+- `assistant`: assistant completion snippets.
+- `attachment`: user attachments, including event-scoped followup attachments.
+
+Event-scoped attachment paths use:
+
+```text
+fi:<turn>.external.<kind>.attachments/<message_id>/<filename>
+```
+
+Scenarios:
+
+| User intent | Tool params | Next step |
+|---|---|---|
+| "What have we talked about so far?" | `mode="timeline"`, `targets=["summary"]`, `order="asc"`, high enough `top_k`, no `query` | summarize returned turn summaries |
+| "Find the Anthropic invoice ZIP attempt" | `query`, `targets=["summary"]` | read returned `ws:` summary, then exact refs |
+| "What was the second turn about?" | `mode="ordinal"`, `ordinal=2`, `targets=["summary","user","assistant"]` | answer from snippets or read `turn_index_path` |
+| "What did we discuss in March?" | `mode="temporal"`, `from`, `to`, `targets=["summary","user"]` | scan returned turns, then read exact refs |
+| "Find invoice discussion from March" | `query`, `from`, `to`, `targets=["summary","user","assistant"]`, no `mode` | semantic search narrowed to the time window |
+| "I need the old file but only remember the topic" | `query`, `targets=["summary","attachment"]` | read/pull returned `fi:` refs or read the turn index |
+
+Examples:
+
+```json
+{"query": "Anthropic invoice ZIP", "targets": ["summary"], "top_k": 5}
+```
+
+```json
+{"mode": "ordinal", "ordinal": 2, "targets": ["summary", "user", "assistant"]}
+```
+
+```json
+{"mode": "temporal", "from": "2026-03-01T00:00:00Z", "to": "2026-04-01T00:00:00Z", "targets": ["summary", "user"]}
+```
+
+Rules:
+
+- Do not use memsearch when the exact needed path is already visible; call `react.read` or `react.pull`.
+- Prefer `targets=["summary"]` first for broad recovery because summaries carry goal/outcome/refs.
+- For broad overview questions, use `mode="timeline"` with `targets=["summary"]` and no query. Generic query strings such as `"conversation topics discussed"` do not help.
+- For `mode="ordinal"`, `mode="temporal"`, and `mode="timeline"`, omit `query`. These modes use the turn catalog, not semantic matching.
+- For topic plus date range, omit `mode`; pass `query`, `from`, and `to` so semantic search is narrowed by time.
+- Read `turn_index_path` when the returned snippets identify the turn but do not name the needed exact `ar:`, `tc:`, `fi:`, or `so:` path.
+- Batch-read exact refs after discovery; avoid one round per path.
 
 ### `react.hide`
 
 Replaces a visible tail block with a short placeholder.
 
-- accepts logical paths such as `ar:`, `fi:`, `tc:`, `so:`, `ks:`
-- original content remains recoverable with `react.read(path)`
-- restricted to the editable tail window and cache checkpoint rules
+- input: `paths: list[str]`, optional replacement text
+- accepted paths: logical paths such as `ar:`, `fi:`, `tc:`, `so:`, `ks:`
+- output: hidden replacement blocks; original content remains stored
+- restriction: only the editable tail window can be hidden
+- cache safety: runtime enforces checkpoint rules before hiding
 
 Use it to shrink still-visible bulky material that is no longer needed in the active prompt.
 
@@ -133,16 +207,19 @@ Use it to shrink still-visible bulky material that is no longer needed in the ac
 
 Searches safely under `outdir` or `workdir` without shell execution.
 
-- rooted search only
-- OUT_DIR hits include logical paths suitable for `react.read`
-- workdir hits do not automatically become logical artifact paths
+- input: search pattern / path filters
+- scope: rooted search only, under runtime-managed directories
+- OUT_DIR hits: include logical paths suitable for `react.read`
+- workdir hits: filesystem hits only; they do not automatically become logical artifacts
 
 ### `react.plan`
 
 Creates or updates the plan tracked inside the same React loop.
 
+- input: create/update/close operation plus plan step data
+- output: `react.plan` timeline blocks and ANNOUNCE updates
 - plan is a tool, not a separate planner component
-- plan snapshots become timeline blocks and later rounds can update step state
+- later rounds can update step state
 
 ## Bundle-Provided React-Style Tools
 

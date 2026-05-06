@@ -8,6 +8,7 @@ see_also:
   - ks:docs/sdk/agents/react/context-layout.md
   - ks:docs/sdk/agents/react/react-context-README.md
   - ks:docs/sdk/agents/react/turn-log-README.md
+  - ks:docs/sdk/agents/react/session-view-README.md
 ---
 # Context Progression & Compaction
 

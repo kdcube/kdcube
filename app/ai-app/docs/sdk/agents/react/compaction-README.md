@@ -8,6 +8,8 @@ see_also:
   - ks:docs/sdk/agents/react/feedback-README.md
   - ks:docs/sdk/agents/react/context-caching-README.md
   - ks:docs/sdk/agents/react/context-layout.md
+  - ks:docs/sdk/agents/react/session-view-README.md
+  - ks:docs/sdk/agents/react/memory-recovery-path-README.md
 ---
 # Context Compaction (v2)
 
@@ -128,6 +130,40 @@ Compaction inserts a **summary block**:
 - `meta.covered_turn_ids` lists turns compacted into the summary
 - `meta.split_turn_id` exists if compaction cut a turn in half
 
+The model-facing renderer wraps this block as a prior-conversation checkpoint:
+
+```text
+[COMPACTED PRIOR CONVERSATION MEMORY]
+[path: su:<turn_id>.conv.range.summary]
+covered_turns: first_turn, second_turn, ... penultimate_turn, last_turn (count=N)
+compacted_time_range: 2026-02-01T10:00:00Z -> 2026-02-03T12:30:00Z
+conversation_first_message_ts: 2026-02-01T10:00:00Z
+split_turn_id: turn_b
+origin: model-generated compaction of older timeline blocks removed from the visible stream
+use: treat this as prior conversation state; newer visible turns below may supersede it
+recovery: use logical paths from the summary or react.memsearch/react.read when exact old content is needed
+<model-generated summary text>
+[END COMPACTED PRIOR CONVERSATION MEMORY]
+```
+
+The debug files under `debug/rendering/rendered-...txt` are written from the
+same model message blocks sent to the decision agent, so they are the right
+place to inspect whether the model-facing shape is clear.
+
+`covered_turns` is capped in the rendered checkpoint. Small lists may render in
+full; large lists render as:
+
+```text
+covered_turns: first_turn, second_turn, ... penultimate_turn, last_turn (count=N)
+```
+
+This keeps provenance visible without spending tokens on hundreds of turn ids.
+The compacted checkpoint also carries temporal orientation:
+
+- `compacted_time_range` is the first and last timestamp found in the summarized range
+- `conversation_first_message_ts` is the timestamp of the first user message in
+  the conversation, propagated across repeated compactions
+
 Compaction may also insert plan-carry blocks immediately after the summary:
 
 - a carried latest active `react.plan` snapshot if the active plan would otherwise fall behind the summary boundary
@@ -166,6 +202,83 @@ summary, visible copies are preserved after the summary boundary as:
 - `user.steer.preserved`
 
 That keeps same-turn followup/stop intent visible even after compaction.
+
+---
+
+## Model-Facing Shape After Compaction
+
+Schematic visible stream after historical compaction:
+
+```text
+[COMPACTED PRIOR CONVERSATION MEMORY]
+path: su:turn_13083713.conv.range.summary
+covered_turns: telegram_turn_13083619, ..., turn_13083708
+compacted_time_range: 2026-05-03T01:15:31Z -> 2026-05-05T23:42:47Z
+conversation_first_message_ts: 2026-05-03T01:15:31Z
+origin: model-generated compaction of older timeline blocks removed from the visible stream
+use: prior conversation state; newer visible turns below may supersede it
+recovery: use logical paths from the summary or react.memsearch/react.read for exact content
+
+Goal: ...
+Outcome: ...
+Key facts:
+- ...
+Key artifacts:
+- fi:...
+[END COMPACTED PRIOR CONVERSATION MEMORY]
+
+[ACTIVE/CARRIED PLAN]             # only if an active plan would otherwise be lost
+[PLAN HISTORY]                    # only if older plans were compacted
+[FOLLOWUP DURING TURN preserved]  # only if user followup/steer fell behind the cut
+
+TURN <cut_or_next_turn> (started at ...)
+  ... retained suffix renders normally ...
+
+TURN <current_turn> (started at ...)
+  ... current turn renders normally ...
+
+SOURCES POOL / ANNOUNCE           # appended tail blocks when requested
+```
+
+Schematic visible stream when the current turn itself is too large:
+
+```text
+[COMPACTED PRIOR CONVERSATION MEMORY]
+path: su:<current_turn>.conv.range.summary
+covered_turns: previous turns and the current-turn prefix
+split_turn_id: <current_turn>
+
+<summary of prior history>
+
+---
+
+Turn Context (split turn):
+<summary of current-turn prefix>
+[END COMPACTED PRIOR CONVERSATION MEMORY]
+
+TURN <current_turn> (started at ...)
+  ... retained current-turn suffix from the cut point onward ...
+```
+
+What remains visible after compaction:
+
+- the latest `conv.range.summary` memory checkpoint
+- plan carry/history blocks needed to preserve active plan state
+- preserved user followup/steer blocks whose originals fell behind the cut
+- the retained suffix from the selected cut point onward
+- user/assistant messages, tool calls/results, files, source-pool rows, and
+  attachment blocks that belong to the retained suffix
+- appended sources/announce blocks when render requested them
+
+What does not remain visible:
+
+- blocks before the latest summary, except through the summary/checkpoint text
+- older raw turns that were summarized into the checkpoint
+- older hidden TTL-pruning skeleton rows that fell before the compaction cut
+
+The old artifacts are not deleted by compaction. Their logical paths remain
+recoverable through `react.read`, `react.memsearch`, and refs carried in the
+summary/digest.
 
 ---
 
