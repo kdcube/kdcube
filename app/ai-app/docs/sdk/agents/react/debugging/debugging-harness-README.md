@@ -273,6 +273,70 @@ If `host.error` appears but the tool result still has local file rows, inspect
 the file path and current `OUT_DIR`; the most common issue is that the declared
 file does not exist where the harness expects it.
 
+## Exec Tool Debug Markers
+
+React decisions are logged with the same payload that is also rendered as the
+console decision table:
+
+```text
+[agent.packet] agent=<solver-id> phase=react.decision.v2
+[agent.packet] agent=<solver-id> phase=react.decision.v3
+Internal thinking:
+User-facing:
+Structured response:
+```
+
+The Rich table in the terminal is for operator readability. The `[agent.packet]`
+record is the file-log version to grep in `chat-proc.log`.
+
+Tool timeline blocks are also mirrored into the file log:
+
+```text
+[react.tool.call] turn_id=<turn> call_id=<tc> tool_id=<tool>
+[react.tool.result] turn_id=<turn> call_id=<tc>
+```
+
+The call/result log body is the same JSON/text stored in the timeline block.
+Binary blocks log metadata only and omit base64, so PDFs/images remain
+traceable without flooding the log.
+
+Before executing generated code, the React exec path logs the exact payload that
+will be run:
+
+```text
+[react.exec.prepare]
+[react.exec.contract]
+[/react.exec.contract]
+[react.exec.code]
+[/react.exec.code]
+```
+
+Use these markers when a generated script produced the wrong output, wrote to
+the wrong path, or created a corrupt artifact.
+
+| Marker | Meaning |
+| --- | --- |
+| `react.tool.call` | exact model-selected tool id and parameters contributed to the timeline |
+| `react.tool.result` | exact tool result or file metadata contributed to the timeline |
+| `react.exec.prepare` | tool id, tool call id, exec id, turn id, conversation id, timeout, workdir, and outdir |
+| `react.exec.contract` | normalized output contract passed to the exec runtime |
+| `react.exec.code` | exact generated code passed to the exec runtime after React path rewriting |
+
+The contract and code logs are emitted after React normalizes the contract and
+rewrites known current-turn file references. They are the authoritative input to
+the exec runtime for that attempt.
+
+Cache-point diagnostics are compact single-line records:
+
+```text
+[cache_points:attempt]
+[cache_points:retry]
+[anthropic.payload.cache]
+```
+
+They preserve cache indexes and previews without dumping the full Anthropic
+payload.
+
 ## Where To Look On Disk
 
 Local development paths vary, but these are the usual roots.
@@ -413,11 +477,19 @@ turn_id=
 conversation_id=
 [react.v
 phase=decision
+[agent.packet]
+[react.tool.call]
+[react.tool.result]
 [bundle.tool.
 tool_call_id=
 [bundle.tool.host_files
 [react.artifact.host
 [react.artifact.emit
+[react.exec.prepare]
+[react.exec.contract]
+[react.exec.code]
+[cache_points:
+[anthropic.payload.cache]
 chat.files
 hosted turn_log
 telegram.stream

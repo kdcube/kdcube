@@ -443,3 +443,175 @@ def test_timeline_renders_mid_round_followup_inside_active_round():
     assert "  [FOLLOWUP DURING TURN]" in text_dump
     assert "  sorry, pdf" in text_dump
     assert text_dump.index("[AI Agent thinking...]") < text_dump.index("[FOLLOWUP DURING TURN]") < text_dump.index("[AI Agent say]: Wrong round.")
+
+
+def test_read_result_says_requested_path_is_already_visible():
+    ctx = RuntimeCtx(turn_id="turn_read", started_at="2026-05-05T20:40:29Z")
+    tl = Timeline(runtime=ctx)
+
+    tl.blocks.extend([
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts="2026-05-05T20:40:55Z",
+            mime="application/json",
+            path="tc:turn_read.tc_read.call",
+            text=json.dumps(
+                {
+                    "tool_id": "react.read",
+                    "tool_call_id": "tc_read",
+                    "params": {"paths": ["sk:productivity.email"]},
+                },
+                ensure_ascii=False,
+            ),
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id=ctx.turn_id,
+            ts="2026-05-05T20:40:56Z",
+            mime="application/json",
+            path="tc:turn_read.tc_read.result",
+            text=json.dumps(
+                {
+                    "paths": [],
+                    "total_tokens": 0,
+                    "exists_in_visible_context": ["sk:productivity.email"],
+                    "visible_context_refs": {
+                        "sk:productivity.email": {
+                            "path": "sk:productivity.email",
+                            "tool_call_id": "tc_prev_read",
+                            "tool_result_path": "tc:turn_prev.tc_prev_read.result",
+                            "visible_at": "[TOOL RESULT tc_prev_read].artifact react.read",
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            meta={"tool_call_id": "tc_read", "tool_id": "react.read"},
+        ),
+    ])
+
+    rendered = _run(tl.render(cache_last=True))
+    text_dump = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[TOOL RESULT tc_read].result react.read" in text_dump
+    assert "Already visible in current context; no new content was loaded for these paths:" in text_dump
+    assert (
+        "- sk:productivity.email (already visible at [TOOL RESULT tc_prev_read].artifact react.read; "
+        "see tc:turn_prev.tc_prev_read.result)"
+    ) in text_dump
+
+
+def test_render_does_not_print_cache_trace_by_default(capsys):
+    ctx = RuntimeCtx(turn_id="turn_quiet", started_at="2026-05-05T20:40:29Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.append(
+        tl._block(
+            type="user.prompt",
+            author="user",
+            turn_id=ctx.turn_id,
+            ts=ctx.started_at,
+            path="ar:turn_quiet.user.prompt",
+            text="hello",
+        )
+    )
+
+    _run(tl.render(cache_last=True))
+    captured = capsys.readouterr()
+
+    assert "[cache_trace:" not in captured.out
+
+
+def test_hidden_old_blocks_render_as_minimal_retrieval_refs():
+    ctx = RuntimeCtx(turn_id="turn_current", started_at="2026-02-09T00:00:00Z")
+    tl = Timeline(runtime=ctx)
+    tl.blocks.extend([
+        tl._block(type="turn.header", author="system", turn_id="turn_old", ts="2026-02-08T00:00:00Z", text="[TURN turn_old]"),
+        tl._block(
+            type="user.prompt",
+            author="user",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:01Z",
+            path="ar:turn_old.user.prompt",
+            text="long old user request",
+        ),
+        tl._block(
+            type="react.tool.call",
+            author="agent",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:02Z",
+            mime="application/json",
+            path="tc:turn_old.tc_abc.call",
+            text='{"tool_id":"email.process_user_emails","tool_call_id":"tc_abc","params":{"mailbox":"INBOX"}}',
+        ),
+        tl._block(
+            type="react.tool.result",
+            author="agent",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:03Z",
+            mime="application/json",
+            path="tc:turn_old.tc_abc.result",
+            text='{"tool_id":"email.process_user_emails","tool_call_id":"tc_abc","result":{"messages":[]}}',
+        ),
+        tl._block(
+            type="assistant.completion",
+            author="assistant",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:04Z",
+            path="ar:turn_old.assistant.completion",
+            text="old answer",
+        ),
+        tl._block(
+            type="conv.working.summary",
+            author="assistant",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:04Z",
+            path="ws:turn_old.conv.working.summary",
+            text=(
+                "Goal: Fetch old email.\n"
+                "Outcome: Completed from cached data.\n"
+                "Key facts:\n"
+                "- Gmail scan returned no messages.\n"
+                "Refs:\n"
+                "- user: ar:turn_old.user.prompt\n"
+                "- result: tc:turn_old.tc_abc.result"
+            ),
+            meta={"kind": "working_summary"},
+        ),
+        tl._block(
+            type="system.message",
+            author="system",
+            turn_id="turn_old",
+            ts="2026-02-08T00:00:05Z",
+            path="ar:turn_old.system.message.cache_pruned",
+            text="Context was pruned because the session TTL was exceeded.",
+            meta={"kind": "cache_ttl_pruned"},
+        ),
+    ])
+    for path in [
+        "ar:turn_old.user.prompt",
+        "tc:turn_old.tc_abc.call",
+        "tc:turn_old.tc_abc.result",
+        "ar:turn_old.assistant.completion",
+        "ar:turn_old.system.message.cache_pruned",
+    ]:
+        tl.hide_paths([path], "[TRUNCATED] verbose replacement")
+
+    rendered = _run(tl.render(cache_last=False))
+    text = "\n".join(b.get("text", "") for b in rendered if b.get("type") == "text")
+
+    assert "[WORKING SUMMARY]" in text
+    assert "[path: ws:turn_old.conv.working.summary]" in text
+    assert "Goal: Fetch old email." in text
+    assert "Outcome: Completed from cached data." in text
+    assert "- result: tc:turn_old.tc_abc.result" in text
+    assert "[pruned user message]" not in text
+    assert "[pruned tool call]" not in text
+    assert "[pruned tool result]" not in text
+    assert "[ASSISTANT MESSAGE]" not in text
+    assert "read=react.read" not in text
+    assert "ROUND 1" not in text
+    assert "Params:" not in text
+    assert "cache_pruned" not in text

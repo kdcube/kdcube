@@ -142,6 +142,14 @@ def scope() -> Dict[str, Any]:
         pass
     outdir = outdir or os.environ.get("OUTPUT_DIR", "")
     workdir = workdir or os.environ.get("WORKDIR", "")
+    artifact_outdir = ""
+    if outdir:
+        try:
+            from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
+
+            artifact_outdir = str(artifact_outdir_for(pathlib.Path(outdir)))
+        except Exception:
+            artifact_outdir = outdir
     return {
         "tenant": tenant,
         "project": project,
@@ -152,6 +160,8 @@ def scope() -> Dict[str, Any]:
         "session_id": session_id,
         "turn_id": turn_id,
         "outdir": outdir,
+        "runtime_outdir": outdir,
+        "artifact_outdir": artifact_outdir,
         "workdir": workdir,
         "storage_root": storage_root,
         "bundle_props": bundle_props,

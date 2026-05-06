@@ -14,6 +14,7 @@ FINAL_ROUND_KEY = "__final__"
 FINAL_ROUND_TYPES = {
     "assistant.completion",
     "stage.suggested_followups",
+    "react.turn.finalize",
     "react.exit",
     "react.state",
 }

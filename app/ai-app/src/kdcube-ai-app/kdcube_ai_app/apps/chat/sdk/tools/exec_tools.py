@@ -181,11 +181,23 @@ def _archive_entry_violation(name: str) -> Optional[str]:
     return None
 
 
-def _validate_archive_egress(path: pathlib.Path) -> Optional[str]:
+def _validate_archive_egress(path: pathlib.Path, *, mime: str = "") -> Optional[str]:
+    mime_l = (mime or "").strip().lower()
+    suffixes = "".join(path.suffixes[-2:]).lower()
+    expects_zip = (
+        mime_l in {"application/zip", "application/x-zip-compressed"}
+        or path.suffix.lower() == ".zip"
+        or suffixes.endswith(".zip")
+    )
+    if expects_zip and not zipfile.is_zipfile(path):
+        return "archive validation failed: not a readable zip archive"
     try:
         if zipfile.is_zipfile(path):
             with zipfile.ZipFile(path) as archive:
-                for info in archive.infolist():
+                infos = archive.infolist()
+                if not infos:
+                    return "archive validation failed: zip archive has no files"
+                for info in infos:
                     violation = _archive_entry_violation(info.filename)
                     if violation:
                         return violation
@@ -240,7 +252,7 @@ def _validate_contract_artifact_egress(
         }
 
     if _is_archive_path(pathlib.Path(rel), mime):
-        violation = _validate_archive_egress(path)
+        violation = _validate_archive_egress(path, mime=mime)
         if violation:
             return {
                 "code": "artifact_internal_path_blocked",
@@ -531,8 +543,12 @@ def normalize_exec_contract_for_turn(
     return normalized, rewrites, None
 
 
-_QUALIFIED_PATH_RE = re.compile(r"[A-Za-z0-9_.:@-]+/(files|outputs|attachments)/[^\s'\"\)\];,]+")
-_UNQUALIFIED_PATH_RE = re.compile(r"(files|outputs|attachments)/[^\s'\"\)\];,]+")
+_PATH_TOKEN_RE = re.compile(r"[^\s'\"\)\];,]+")
+_UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "attachments/")
+
+
+def _is_unqualified_artifact_path_token(token: str) -> bool:
+    return any(str(token or "").startswith(prefix) for prefix in _UNQUALIFIED_ARTIFACT_PREFIXES)
 
 
 def rewrite_exec_code_paths(
@@ -547,23 +563,13 @@ def rewrite_exec_code_paths(
     """
     if not isinstance(code, str) or not code.strip() or not turn_id:
         return code or "", []
-    qualified_spans = [(m.start(), m.end()) for m in _QUALIFIED_PATH_RE.finditer(code)]
-
-    def _inside_qualified(idx: int) -> bool:
-        for s, e in qualified_spans:
-            if s <= idx < e:
-                return True
-        return False
-
     rewrites: List[Dict[str, str]] = []
     out_parts: List[str] = []
     last = 0
-    for m in _UNQUALIFIED_PATH_RE.finditer(code):
-        if _inside_qualified(m.start()):
-            continue
-        if m.start() > 0 and re.match(r"[A-Za-z0-9_]", code[m.start() - 1]):
-            continue
+    for m in _PATH_TOKEN_RE.finditer(code):
         orig = m.group(0)
+        if not _is_unqualified_artifact_path_token(orig):
+            continue
         repl = f"{turn_id}/{orig}"
         out_parts.append(code[last:m.start()] + repl)
         last = m.end()

@@ -18,6 +18,11 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
         "CB_BUNDLE_STORAGE_URL",
         "REACT_WORKSPACE_IMPLEMENTATION",
         "REACT_WORKSPACE_GIT_REPO",
+        "AI_REACT_CONTEXT_MAX_TOKENS",
+        "AI_REACT_CACHE_KEEP_RECENT_TURNS",
+        "AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS",
+        "AI_REACT_WORKING_SUMMARY_ENABLED",
+        "AI_REACT_PRUNED_TURN_SUMMARY_MODE",
         "CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION",
         "CLAUDE_CODE_SESSION_GIT_REPO",
     ):
@@ -34,6 +39,15 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
                     "bundles": "s3://example/bundles",
                     "workspace": {"type": "git", "repo": "https://example.com/workspace.git"},
                     "claude_code_session": {"type": "git", "repo": "https://example.com/sessions.git"},
+                },
+                "ai": {
+                    "react": {
+                        "context_max_tokens": 70000,
+                        "cache_keep_recent_turns": 4,
+                        "cache_keep_recent_intact_turns": 1,
+                        "working_summary_enabled": True,
+                        "pruned_turn_summary_mode": "working_summary",
+                    }
                 },
                 "frontend": {"routes_prefix": "/platform"},
             },
@@ -56,6 +70,11 @@ def test_get_plain_reads_assembly_by_default(monkeypatch, tmp_path):
     assert settings.REACT_WORKSPACE_IMPLEMENTATION == "git"
     assert settings.plain("storage.workspace.repo") == "https://example.com/workspace.git"
     assert settings.REACT_WORKSPACE_GIT_REPO == "https://example.com/workspace.git"
+    assert settings.AI_REACT_CONTEXT_MAX_TOKENS == 70000
+    assert settings.AI_REACT_CACHE_KEEP_RECENT_TURNS == 4
+    assert settings.AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS == 1
+    assert settings.AI_REACT_WORKING_SUMMARY_ENABLED is True
+    assert settings.AI_REACT_PRUNED_TURN_SUMMARY_MODE == "working_summary"
     assert settings.CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION == "git"
     assert settings.CLAUDE_CODE_SESSION_GIT_REPO == "https://example.com/sessions.git"
 

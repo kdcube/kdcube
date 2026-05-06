@@ -30,7 +30,7 @@ TOOL_SPEC = {
     ),
     "args": {
         "query": "str (FIRST FIELD). Natural-language query to search prior turns.",
-        "targets": "list[str] (SECOND FIELD). Any of: assistant|user|attachment. Defaults to all.",
+        "targets": "list[str] (SECOND FIELD). Any of: assistant|user|attachment|summary. Defaults to all.",
         "top_k": "int (optional). Max hits to return (default 5).",
         "days": "int (optional). Lookback window in days (default 365).",
     },
@@ -50,7 +50,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
     query = (params.get("query") or "").strip()
     raw_targets = params.get("targets")
     if raw_targets is None:
-        raw_targets = ["assistant", "user", "attachment"]
+        raw_targets = ["assistant", "user", "attachment", "summary"]
     targets = [t for t in (raw_targets or []) if isinstance(t, str) and t.strip()]
     top_k = int(params.get("top_k") or 5)
     days = int(params.get("days") or 365)
@@ -84,7 +84,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
         search_targets: List[Dict[str, Any]] = []
         seen_where = set()
         for t in targets:
-            where = "user" if t == "attachment" else t
+            where = "user" if t == "attachment" else "assistant" if t == "summary" else t
             if not where or where in seen_where:
                 continue
             search_targets.append({"where": where, "query": query})
@@ -121,6 +121,7 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
             want_user = "user" in targets
             want_assistant = "assistant" in targets
             want_attachment = "attachment" in targets
+            want_summary = "summary" in targets
 
             if want_user:
                 for blk in blocks:
@@ -152,6 +153,25 @@ async def handle_react_memsearch(*, ctx_browser: Any, state: Dict[str, Any], too
                         total_tokens += token_count(text)
                     snippets.append({
                         "role": "assistant",
+                        "path": path,
+                        "text": text,
+                        "ts": blk.get("ts") or "",
+                        "meta": blk.get("meta") if isinstance(blk.get("meta"), dict) else {},
+                    })
+            if want_summary:
+                for blk in blocks:
+                    if not isinstance(blk, dict):
+                        continue
+                    if (blk.get("turn_id") or "") != tid:
+                        continue
+                    if (blk.get("type") or "").strip() != "conv.working.summary":
+                        continue
+                    path = (blk.get("path") or "").strip()
+                    text = (blk.get("text") or "").strip()
+                    if text:
+                        total_tokens += token_count(text)
+                    snippets.append({
+                        "role": "summary",
                         "path": path,
                         "text": text,
                         "ts": blk.get("ts") or "",

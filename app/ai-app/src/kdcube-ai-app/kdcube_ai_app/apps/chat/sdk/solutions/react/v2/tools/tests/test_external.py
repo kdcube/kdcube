@@ -273,6 +273,68 @@ async def test_external_tool_declared_files_are_hosted_and_emitted(monkeypatch, 
 
 
 @pytest.mark.asyncio
+async def test_external_tool_internal_declared_files_keep_paths_without_hosting(monkeypatch, tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
+    ctx = FakeBrowser(runtime)
+    state = {
+        "last_decision": {
+            "tool_call": {
+                "tool_id": "email.materialize_email_attachments",
+                "params": {"message_ids_json": "[\"m1\"]", "visibility": "internal"},
+            }
+        },
+        "outdir": str(tmp_path),
+        "workdir": str(tmp_path),
+    }
+    target = tmp_path / "turn_exec" / "outputs" / "email-attachments" / "acct" / "m1" / "invoice.pdf"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"%PDF-1.4\n")
+
+    async def _fake_execute_tool(**kwargs):
+        return {
+            "output": {
+                "ok": True,
+                "artifact_type": "files",
+                "files": [{
+                    "artifact_path": "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf",
+                    "logical_path": "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf",
+                    "physical_path": "turn_exec/outputs/email-attachments/acct/m1/invoice.pdf",
+                    "filename": "invoice.pdf",
+                    "mime_type": "application/pdf",
+                    "size_bytes": target.stat().st_size,
+                    "visibility": "internal",
+                }],
+            },
+            "summary": "",
+        }
+
+    monkeypatch.setattr("kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.external.execute_tool", _fake_execute_tool)
+
+    hosting = _HostingRecorder()
+    react = FakeReact(hosting_service=hosting)
+    react.tools_subsystem = None
+
+    out = await handle_external_tool(react=react, ctx_browser=ctx, state=state, tool_call_id="email_internal_files")
+
+    assert hosting.host_calls == []
+    assert hosting.emit_calls == []
+    assert len(out["last_tool_result"]) == 2
+    assert any(
+        b.get("type") == "react.tool.result"
+        and b.get("path") == "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf"
+        and (b.get("meta") or {}).get("physical_path") == "turn_exec/outputs/email-attachments/acct/m1/invoice.pdf"
+        and (b.get("meta") or {}).get("visibility") == "internal"
+        for b in ctx.timeline.blocks
+    )
+    assert any(
+        b.get("type") == "react.tool.result"
+        and (b.get("text") or "").find('"artifact_path": "fi:turn_exec.outputs/email-attachments/acct/m1/invoice.pdf"') >= 0
+        and (b.get("text") or "").find('"physical_path": "turn_exec/outputs/email-attachments/acct/m1/invoice.pdf"') >= 0
+        for b in ctx.timeline.blocks
+    )
+
+
+@pytest.mark.asyncio
 async def test_external_tool_self_hosted_declared_files_are_not_rehosted(monkeypatch, tmp_path):
     runtime = RuntimeCtx(turn_id="turn_exec", outdir=str(tmp_path), workdir=str(tmp_path), conversation_id="conv1")
     ctx = FakeBrowser(runtime)

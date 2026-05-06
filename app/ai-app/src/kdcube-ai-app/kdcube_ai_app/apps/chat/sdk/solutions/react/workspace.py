@@ -34,9 +34,8 @@ _TEXT_MIMES = {
 }
 
 _CODE_PATH_RE = re.compile(r"(turn_[A-Za-z0-9_]+/(files|outputs|attachments)/[^\s'\"\)\];,]+)")
-_REL_FILES_RE = re.compile(r"(?<![A-Za-z0-9_])files/[^\s'\"\)\];,]+")
-_REL_OUTPUTS_RE = re.compile(r"(?<![A-Za-z0-9_])outputs/[^\s'\"\)\];,]+")
-_REL_ATTACHMENTS_RE = re.compile(r"(?<![A-Za-z0-9_])attachments/[^\s'\"\)\];,]+")
+_PATH_TOKEN_RE = re.compile(r"[^\s'\"\)\];,]+")
+_UNQUALIFIED_ARTIFACT_PREFIXES = ("files/", "outputs/", "attachments/")
 _FETCH_CTX_PATH_RE = re.compile(r"([a-z]{2}:[A-Za-z0-9_./\\-]+)")
 _TURN_ROOT_RE = re.compile(r"\b(turn_[A-Za-z0-9_]+)\b")
 
@@ -62,27 +61,10 @@ def extract_code_file_paths(code: str, *, turn_id: str = "") -> tuple[List[str],
     found = [m.group(1) for m in _CODE_PATH_RE.finditer(code)]
     rewritten: List[str] = []
 
-    def _has_turn_prefix(start_idx: int) -> bool:
-        if start_idx <= 0:
-            return False
-        prefix = code[max(0, start_idx - 64):start_idx]
-        return bool(re.search(r"turn_[A-Za-z0-9_]+/$", prefix))
-
-    for m in _REL_FILES_RE.finditer(code):
+    for m in _PATH_TOKEN_RE.finditer(code):
         raw = m.group(0)
-        if _has_turn_prefix(m.start()):
-            continue
-        rewritten.append(f"{turn_id}/{raw}" if turn_id else raw)
-    for m in _REL_OUTPUTS_RE.finditer(code):
-        raw = m.group(0)
-        if _has_turn_prefix(m.start()):
-            continue
-        rewritten.append(f"{turn_id}/{raw}" if turn_id else raw)
-    for m in _REL_ATTACHMENTS_RE.finditer(code):
-        raw = m.group(0)
-        if _has_turn_prefix(m.start()):
-            continue
-        rewritten.append(f"{turn_id}/{raw}" if turn_id else raw)
+        if any(raw.startswith(prefix) for prefix in _UNQUALIFIED_ARTIFACT_PREFIXES):
+            rewritten.append(f"{turn_id}/{raw}" if turn_id else raw)
 
     cleaned: List[str] = []
     for p in found + rewritten:
@@ -156,6 +138,10 @@ def _infer_physical_from_fi(path: str) -> str:
         physical = build_physical_artifact_path(turn_id=tid, namespace=namespace, relpath=rel)
         if physical:
             return physical
+    if p.startswith("fi:"):
+        rel = p[len("fi:"):].strip().lstrip("/")
+        if rel and _safe_relpath(rel):
+            return rel
     if p and _safe_relpath(p):
         return p
     return ""

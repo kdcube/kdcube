@@ -29,7 +29,7 @@ def test_get_workspace_implementation_guide_git_mentions_git_backed_mode():
     assert 'react.checkout(mode="replace", paths=[...])' in guide or 'react.checkout(mode="replace", paths=["fi:' in guide
     assert "runnable/searchable/testable project snapshot" in guide
     assert "mode=\"overlay\"" in guide
-    assert "turn_<current_turn>/files/..." in guide
+    assert "<current_turn_id>/files/..." in guide
     assert "ls workspace" in guide
     assert "existing top-level scope" in guide
 
@@ -49,7 +49,7 @@ def test_build_decision_system_text_uses_selected_workspace_implementation():
     assert 'react.checkout(mode="replace", paths=[fi:...])' in text or 'react.checkout(mode="replace", paths=["fi:' in text
     assert "runnable/searchable/testable project snapshot" in text
     assert "mode=\"overlay\"" in text
-    assert "turn_<current_turn>/files/..." in text
+    assert "<current_turn_id>/files/..." in text
     assert "existing top-level scope" in text
     assert "ls workspace" in text
 
@@ -74,7 +74,14 @@ def test_build_decision_system_text_explains_one_response_is_one_round():
         workspace_implementation="custom",
     )
     assert "Output protocol (strict): you must produce content which represents one round" in text
-    assert "In a single round, only one occurrence of each channel can be included in your response." in text
-    assert "DO NOT DO THIS: Your typical error is that you make sequence of triplets" in text
-    assert "Generating the second instance of any channel in the same response means you do not understand the contract and violate it." in text
+    assert "In a single round, include exactly one <channel:thinking>, one <channel:code>, and one or more <channel:ReactDecisionOutV2> channel instances." in text
+    assert "The optional <channel:summary> may appear exactly once, and only when the response contains a single complete/exit action and no tool-call actions." in text
+    assert "Do NOT emit <channel:summary> in code execution rounds." in text
+    assert "For call_tool-only rounds, omit <channel:summary> entirely" in text
+    assert "For complete/exit rounds, include exactly one <channel:summary>" in text
+    assert "If you need multiple actions in one round, repeat only <channel:ReactDecisionOutV2>." in text
+    assert "Never put > 1 JSON objects, > 1 fenced JSON blocks, or prose after the JSON inside one <channel:ReactDecisionOutV2> instance." in text
+    assert "Final answer shape only when action is complete or exit" in text
+    assert "Goal, Outcome, Key facts, Refs" in text
+    assert "If you emit multiple tool-call actions, each action must be in its own separate <channel:ReactDecisionOutV2>...</channel:ReactDecisionOutV2> instance." in text
     assert "Use <channel:code> only when the single action is exec_tools.execute_code_python" in text

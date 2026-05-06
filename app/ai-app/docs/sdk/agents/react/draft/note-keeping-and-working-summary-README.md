@@ -5,7 +5,7 @@ summary: "Draft design for transient note keeping and durable working summaries 
 draft: true
 status: draft
 tags: ["sdk", "agents", "react", "design", "summary", "announce", "timeline"]
-keywords: ["working summary", "summary notes", "announce", "channel:work-summary", "cold start", "context continuity"]
+keywords: ["working summary", "summary notes", "announce", "channel:summary", "cold start", "context continuity"]
 see_also:
   - ks:docs/sdk/agents/react/react-announce-README.md
   - ks:docs/sdk/agents/react/react-context-README.md
@@ -23,7 +23,7 @@ The key decision in this draft is:
 
 - **React itself writes the working summary**
 - **ANNOUNCE is the transient input surface for summary-specific notes**
-- **`channel:work-summary` is the output surface for the durable summary**
+- **`channel:summary` is the output surface for the durable summary**
 
 This design is intentionally aligned with the current ANNOUNCE contract instead
 of inventing a second transient context surface.
@@ -67,12 +67,12 @@ This draft extends that model:
 - if React decides a durable summary is needed, it calls `get_summary_notes`
 - runtime injects the returned notes into a dedicated section of ANNOUNCE:
   - `INSIGHTS FOR SUMMARY`
-- React then writes the summary to `channel:work-summary`
+- React then writes the summary to `channel:summary`
 - runtime captures that channel and persists a durable summary block on timeline
 
 So the agent experience remains coherent:
 - ANNOUNCE = transient working board
-- `channel:work-summary` = structured output surface for durable summary
+- `channel:summary` = structured output surface for durable summary
 
 ---
 
@@ -164,7 +164,7 @@ So the correct lifecycle is:
 1. React is working on the turn
 2. React decides a summary refresh is needed
 3. React fetches summary notes
-4. React emits `channel:work-summary`
+4. React emits `channel:summary`
 5. runtime persists the durable working summary
 6. turn continues or exits normally
 
@@ -237,11 +237,11 @@ So this design uses the existing ANNOUNCE mental model.
 
 ---
 
-## 7) `channel:work-summary`
+## 7) `channel:summary`
 
 ### 7.1 Purpose
 
-`channel:work-summary` is the dedicated output channel React uses when it wants
+`channel:summary` is the dedicated output channel React uses when it wants
 to produce a durable working summary.
 
 This is analogous to how React already understands other dedicated channels
@@ -251,12 +251,21 @@ such as:
 
 ### 7.2 Runtime behavior
 
-When runtime sees `channel:work-summary`, it should:
+When runtime sees `channel:summary`, it should:
 - capture the content
 - validate it is non-empty
-- persist it as a `conv.working.summary` block
+- contribute it immediately as a `conv.working.summary` timeline block
+- persist/embed the block in the conversation index with summary-specific tags
 
 The summary should not be treated as ordinary assistant completion text.
+For call-tool rounds the channel may be empty; for complete/exit rounds React
+should fill it with a compact `Goal / Outcome / Key facts / Refs` summary.
+
+Important: summary blocks are timeline events. Runtime must not reconstruct a
+list of summaries later from `assistant_completion_attempts` at turn finish.
+If multiple followups arrive during one long turn and React emits multiple
+final/exit answers, each answer can have its own `channel:summary`; each
+summary is stored as its own block at the moment it is produced.
 
 ### 7.3 Summary block shape
 
@@ -273,6 +282,7 @@ Proposed durable block:
     "kind": "working_summary",
     "supersedes": "ws:<previous_turn>.conv.working.summary",
     "created_by": "react",
+    "source_channel": "summary",
     "covered_turn_ids": ["turn_a", "turn_b"],
     "covered_until_turn_id": "turn_b",
     "summary_notes_digest": "<optional digest>"
@@ -280,10 +290,45 @@ Proposed durable block:
 }
 ```
 
-### 7.4 Visibility rules
+For a summary associated with a particular visible completion attempt, runtime
+uses a stable attempt path:
 
-Only the **latest active** working summary should be included automatically in
-cold-start visible context.
+```text
+ws:<turn_id>.conv.working.summary.attempt.<n>
+```
+
+The final accepted turn state may also have a canonical latest alias:
+
+```text
+ws:<turn_id>.conv.working.summary
+```
+
+Both forms are first-class timeline blocks.
+
+### 7.4 Indexing and retrieval
+
+Working summaries are embedded and stored in the same conversation memory
+backend as user and assistant messages.
+
+Recommended index shape:
+- `role = assistant`
+- tags include:
+  - `chat:assistant`
+  - `chat:summary`
+  - `kind:working.summary`
+  - `turn:<turn_id>`
+  - `summary_scope:<scope>` when present
+
+`react.memsearch` can search these rows via the `summary` target and should
+return snippets from `conv.working.summary` blocks, not just ordinary
+assistant completions.
+
+### 7.5 Visibility rules
+
+Cold-start and TTL-pruned context should prefer working summaries over verbose
+historical blocks. If a turn has multiple summaries, pruning must preserve all
+summary blocks for that turn because same-turn followups may represent distinct
+work portions.
 
 Older working summaries should remain readable history but should not all stay
 always visible.
@@ -357,7 +402,7 @@ React should be taught something like:
 - Before writing a working summary, call `get_summary_notes` if you need
   high-signal historical notes that may not currently be visible.
 - The notes will appear in ANNOUNCE under `INSIGHTS FOR SUMMARY`.
-- Then write the summary to `channel:work-summary`.
+- Then write the summary to `channel:summary`.
 - Do not emit the working summary as normal assistant text.
 
 This keeps the behavior explicit and teachable.
@@ -400,7 +445,7 @@ This draft leaves open:
 - text-only ANNOUNCE payload
 - or structured payload rendered into ANNOUNCE
 
-2. Validation of `channel:work-summary`
+2. Validation of `channel:summary`
 - minimum format requirements
 - markdown vs structured sections
 
@@ -421,7 +466,7 @@ This draft leaves open:
 Document and teach:
 - `get_summary_notes`
 - `INSIGHTS FOR SUMMARY`
-- `channel:work-summary`
+- `channel:summary`
 
 Primary files:
 - [decision.py](../../../../../src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/v2/agents/decision.py)
@@ -456,7 +501,7 @@ The proposed note-keeping model for React v2 is:
 - **ANNOUNCE remains the transient working board**
 - **summary-specific hints appear there in `INSIGHTS FOR SUMMARY`**
 - **React writes the durable summary itself**
-- **runtime captures it from `channel:work-summary`**
+- **runtime captures it from `channel:summary`**
 - **the durable result is stored as `conv.working.summary`**
 
 This preserves the existing React mental model while adding a reliable

@@ -253,6 +253,42 @@ def test_runtime_ctx_carries_workspace_git_repo(monkeypatch, tmp_path):
         workflow_mod.get_settings.cache_clear()
 
 
+def test_runtime_ctx_uses_default_react_context_budget(monkeypatch, tmp_path):
+    resolved_storage = tmp_path / "bundle-storage" / "tenant-a" / "project-a" / "bundle.test"
+
+    def _fake_storage_for_spec(*, spec, tenant=None, project=None, ensure=True):
+        if ensure:
+            resolved_storage.mkdir(parents=True, exist_ok=True)
+        return resolved_storage
+
+    monkeypatch.setenv("AI_REACT_CONTEXT_MAX_TOKENS", "64000")
+    monkeypatch.setenv("AI_REACT_CACHE_KEEP_RECENT_TURNS", "5")
+    monkeypatch.setenv("AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS", "1")
+    monkeypatch.setattr(
+        "kdcube_ai_app.infra.plugin.bundle_storage.storage_for_spec",
+        _fake_storage_for_spec,
+    )
+    workflow_mod.get_settings.cache_clear()
+    try:
+        wf = BaseWorkflow(
+            conv_idx=SimpleNamespace(),
+            kb=SimpleNamespace(),
+            store=SimpleNamespace(),
+            comm=SimpleNamespace(delta=lambda *a, **k: None),
+            model_service=SimpleNamespace(),
+            conv_ticket_store=SimpleNamespace(),
+            config=SimpleNamespace(ai_bundle_spec=SimpleNamespace(id="bundle.test")),
+            comm_context=_payload(tenant="tenant-a", project="project-a", turn_id="turn-budget"),
+            ctx_client=SimpleNamespace(),
+        )
+
+        assert wf.runtime_ctx.max_tokens == 64000
+        assert wf.runtime_ctx.session.keep_recent_turns == 5
+        assert wf.runtime_ctx.session.keep_recent_intact_turns == 1
+    finally:
+        workflow_mod.get_settings.cache_clear()
+
+
 def test_base_workflow_constructor_binds_external_event_source_when_redis_present(monkeypatch):
     sentinel = object()
     monkeypatch.setattr(
@@ -593,6 +629,18 @@ async def test_persist_turn_entries_store_multiple_user_and_assistant_rows():
                     "path": "ar:turn-1.assistant.completion",
                     "text": "Final completion",
                 },
+                {
+                    "type": "conv.working.summary",
+                    "turn_id": "turn-1",
+                    "ts": "2026-04-26T10:00:05Z",
+                    "path": "ws:turn-1.conv.working.summary.attempt.2",
+                    "text": "Goal: finish the task\nOutcome: final completion persisted",
+                    "meta": {
+                        "kind": "working_summary",
+                        "summary_scope": "completion_attempt",
+                        "assistant_completion_attempt_index": 2,
+                    },
+                },
             ]
         )
     )
@@ -614,22 +662,30 @@ async def test_persist_turn_entries_store_multiple_user_and_assistant_rows():
     await wf.persist_assistant(scratchpad)
 
     assert prompt_count == 2
-    assert [m["role"] for m in saved_messages] == ["user", "user", "assistant", "assistant"]
+    assert [m["role"] for m in saved_messages] == ["user", "user", "assistant", "assistant", "assistant"]
     assert [m["text"] for m in saved_messages] == [
         "Original prompt",
         "Additional requirement",
         "First visible completion",
         "Final completion",
+        "Goal: finish the task\nOutcome: final completion persisted",
     ]
     assert saved_messages[1]["tags"][-1] == "continuation:followup"
+    assert "chat:summary" in saved_messages[4]["tags"]
+    assert "kind:working.summary" in saved_messages[4]["tags"]
+    assert "summary_scope:completion_attempt" in saved_messages[4]["tags"]
+    assert "summary_attempt:2" in saved_messages[4]["tags"]
     assert {
         "ar:turn-1.user.prompt",
         "ar:turn-1.user.followup.1",
         "ar:turn-1.assistant.completion.1",
         "ar:turn-1.assistant.completion",
+        "ws:turn-1.conv.working.summary.attempt.2",
     }.issubset(scratchpad.persisted_turn_entry_paths)
     assert any(
-        payload.get("data", {}).get("count") == 2
+        payload.get("data", {}).get("count") == 3
+        and payload.get("data", {}).get("assistant_completion_count") == 2
+        and payload.get("data", {}).get("working_summary_count") == 1
         for payload in emitted
         if isinstance(payload, dict) and payload.get("step") == "conversation.persist.assistant_message"
     )

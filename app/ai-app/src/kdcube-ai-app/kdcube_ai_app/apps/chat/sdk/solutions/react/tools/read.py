@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pathlib
 
@@ -89,6 +89,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
     pending_blocks: List[Dict[str, Any]] = []
     missing_skills: List[str] = []
     exists_paths: List[str] = []
+    visible_context_refs: Dict[str, Dict[str, Any]] = {}
     def _normalize_block_for_hash(block: Dict[str, Any]) -> Dict[str, Any]:
         data = dict(block or {})
         data.pop("replacement_text", None)
@@ -115,25 +116,76 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
         except Exception:
             return ""
 
-    def _block_exists_in_timeline(block: Dict[str, Any]) -> bool:
+    def _find_existing_block(block: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         path = (block.get("path") or "").strip()
         if not path:
-            return False
+            return None
         target_hash = _block_hash(block)
         if not target_hash:
-            return False
+            return None
         try:
             blocks = ctx_browser.timeline._collect_blocks()  # type: ignore[attr-defined]
         except Exception:
             blocks = []
-        for existing in blocks:
+        for existing in reversed(blocks):
             if not isinstance(existing, dict):
                 continue
             if (existing.get("path") or "").strip() != path:
                 continue
             if _block_hash(existing) == target_hash:
-                return True
-        return False
+                return existing
+        return None
+
+    def _visible_ref_for_block(existing: Dict[str, Any]) -> Dict[str, Any]:
+        path = (existing.get("path") or "").strip()
+        meta = existing.get("meta") if isinstance(existing.get("meta"), dict) else {}
+        call_id = str(existing.get("call_id") or meta.get("tool_call_id") or "").strip()
+        turn = str(existing.get("turn") or existing.get("turn_id") or meta.get("turn_id") or "").strip()
+        tool_id_existing = str(existing.get("tool_id") or meta.get("tool_id") or "").strip()
+        if not tool_id_existing and call_id:
+            try:
+                blocks = ctx_browser.timeline._collect_blocks()  # type: ignore[attr-defined]
+            except Exception:
+                blocks = []
+            for candidate in blocks:
+                if not isinstance(candidate, dict):
+                    continue
+                if (candidate.get("type") or "").strip() != "react.tool.call":
+                    continue
+                cand_call_id = str(candidate.get("call_id") or "").strip()
+                if not cand_call_id:
+                    cand_meta = candidate.get("meta") if isinstance(candidate.get("meta"), dict) else {}
+                    cand_call_id = str(cand_meta.get("tool_call_id") or "").strip()
+                if cand_call_id != call_id:
+                    continue
+                payload = None
+                if isinstance(candidate.get("text"), str):
+                    try:
+                        payload = json.loads(candidate.get("text") or "{}")
+                    except Exception:
+                        payload = None
+                if isinstance(payload, dict):
+                    tool_id_existing = str(payload.get("tool_id") or "").strip()
+                if tool_id_existing:
+                    break
+        ref: Dict[str, Any] = {"path": path}
+        if call_id:
+            ref["tool_call_id"] = call_id
+        if turn and call_id:
+            ref["tool_result_path"] = tc_result_path(turn_id=turn, call_id=call_id)
+        render_role = "artifact" if path.startswith(("fi:", "ar:", "sk:", "so:")) else "result"
+        if call_id:
+            label = f"[TOOL RESULT {call_id}].{render_role}"
+            if tool_id_existing:
+                label += f" {tool_id_existing}"
+            ref["visible_at"] = label
+        return ref
+
+    def _remember_visible_ref(path: str, existing: Optional[Dict[str, Any]]) -> None:
+        path = (path or "").strip()
+        if not path or not existing:
+            return
+        visible_context_refs[path] = _visible_ref_for_block(existing)
 
     def _maybe_add_block(block: Dict[str, Any]) -> bool:
         # Ensure read output is visible even if the source was hidden.
@@ -143,7 +195,9 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             block["meta"].pop("replacement_text", None)
         block.pop("replacement_text", None)
         path = (block.get("path") or "").strip()
-        if path.startswith(("fi:", "so:", "sk:")) and _block_exists_in_timeline(block):
+        existing = _find_existing_block(block) if path.startswith(("fi:", "so:", "sk:")) else None
+        if existing:
+            _remember_visible_ref(path, existing)
             return False
         pending_blocks.append(block)
         return True
@@ -697,6 +751,8 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             summary["missing_skills"] = missing_skills
         if exists_paths:
             summary["exists_in_visible_context"] = sorted(set(exists_paths))
+        if visible_context_refs:
+            summary["visible_context_refs"] = visible_context_refs
         add_block(ctx_browser, {
             "turn": turn_id,
             "type": "react.tool.result",
@@ -706,6 +762,7 @@ async def handle_react_read(*, ctx_browser: Any, state: Dict[str, Any], tool_cal
             "text": json.dumps(summary, ensure_ascii=False),
             "meta": {
                 "tool_call_id": tool_call_id,
+                "tool_id": tool_id,
             },
         })
     # Emit results after the status block.

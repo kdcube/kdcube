@@ -71,6 +71,11 @@ These env vars are the direct runtime surface for assembly-backed settings.
 | `KDCUBE_PROXY_HTTPS_PORT` | `ports.proxy_https` | `get_settings()` | CLI local compose |
 | `REACT_WORKSPACE_IMPLEMENTATION` | `storage.workspace.type` | `get_settings()` | CLI local compose, direct local service run |
 | `REACT_WORKSPACE_GIT_REPO` | `storage.workspace.repo` | `get_settings()` | CLI local compose, direct local service run |
+| `AI_REACT_AGENT_VERSION` | `ai.react.react_agent_version` | `get_settings()` | all modes |
+| `AI_REACT_AGENT_MULTI_ACTION` | `ai.react.react_agent_multiaction` | `get_settings()` | all modes |
+| `AI_REACT_CONTEXT_MAX_TOKENS` | `ai.react.context_max_tokens` | `get_settings()` | all modes |
+| `AI_REACT_CACHE_KEEP_RECENT_TURNS` | `ai.react.cache_keep_recent_turns` | `get_settings()` | all modes |
+| `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | `ai.react.cache_keep_recent_intact_turns` | `get_settings()` | all modes |
 | `CLAUDE_CODE_SESSION_STORE_IMPLEMENTATION` | `storage.claude_code_session.type` | `get_settings()` | CLI local compose, direct local service run |
 | `CLAUDE_CODE_SESSION_GIT_REPO` | `storage.claude_code_session.repo` | `get_settings()` | CLI local compose, direct local service run |
 
@@ -146,6 +151,42 @@ cognito` emits `authType: cognito`, and `auth.type: delegated` emits
 `authType: delegated`. The older browser value `hardcoded` is a legacy alias
 for `simple`; new descriptors should use `simple`. `oauth` is not a deployment
 auth mode; use `cognito` for the OSS browser Cognito/OIDC flow.
+
+### `ai.react`
+
+`ai.react` controls React-agent runtime behavior that is safe to keep in the
+non-secret assembly descriptor.
+
+Example:
+
+```yaml
+ai:
+  react:
+    react_agent_version: "v3"          # AI_REACT_AGENT_VERSION
+    react_agent_multiaction: "off"     # AI_REACT_AGENT_MULTI_ACTION
+    context_max_tokens: 80000          # AI_REACT_CONTEXT_MAX_TOKENS
+    cache_keep_recent_turns: 6         # AI_REACT_CACHE_KEEP_RECENT_TURNS
+    cache_keep_recent_intact_turns: 1  # AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS
+    working_summary_enabled: true      # AI_REACT_WORKING_SUMMARY_ENABLED
+    pruned_turn_summary_mode: "working_summary"  # AI_REACT_PRUNED_TURN_SUMMARY_MODE
+```
+
+| Field | Env var | Meaning |
+|---|---|---|
+| `react_agent_version` | `AI_REACT_AGENT_VERSION` | React decision runtime version (`v2` or `v3`) |
+| `react_agent_multiaction` | `AI_REACT_AGENT_MULTI_ACTION` | Experimental multi-action decision mode (`on` or `off`) |
+| `context_max_tokens` | `AI_REACT_CONTEXT_MAX_TOKENS` | Default hard render budget before compaction when a bundle does not set `max_tokens`; default `80000` |
+| `cache_keep_recent_turns` | `AI_REACT_CACHE_KEEP_RECENT_TURNS` | Recent turns kept visible after TTL pruning; default `6` |
+| `cache_keep_recent_intact_turns` | `AI_REACT_CACHE_KEEP_RECENT_INTACT_TURNS` | Newest turns kept untrimmed during TTL pruning; default `1` |
+| `working_summary_enabled` | `AI_REACT_WORKING_SUMMARY_ENABLED` | Capture React `channel:summary` on complete/exit, emit it as `conv.working.summary`, and embed it for memory search; default `true` |
+| `pruned_turn_summary_mode` | `AI_REACT_PRUNED_TURN_SUMMARY_MODE` | Prefer working-summary cards when rendering pruned historical turns; multiple same-turn summaries are preserved; set to `working_summary` by default |
+
+These settings are part of the cold-cache cost control path. A long persisted
+timeline should render as compact working-summary cards plus recent tail, not
+as the full historical conversation. Retrieval-index rows remain the fallback
+for historical turns without a working summary. Each retrieval row keeps the
+logical path and a small hint; the path is enough to retrieve the full block with
+`react.read([path])` when needed.
 
 ### `platform.services.<component>.exec`
 

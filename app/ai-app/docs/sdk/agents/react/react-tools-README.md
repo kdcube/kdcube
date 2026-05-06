@@ -114,6 +114,7 @@ Searches prior conversation history semantically.
 
 - returns compact snippets and metadata
 - `targets=["assistant"]` returns all visible `assistant.completion` blocks from a matched turn
+- `targets=["summary"]` returns `conv.working.summary` blocks from a matched turn
 - `targets=["attachment"]` covers both original turn attachments and event-scoped followup attachments
 - event-scoped attachment paths use `fi:<turn>.external.<kind>.attachments/<message_id>/<filename>`
 - use when relevant prior detail likely exists but is no longer visible

@@ -16,14 +16,25 @@ The **timeline** is the single source of truth for turn context. It stores:
 - live-folded external user event blocks (`user.followup`, `user.steer`)
 - live-folded attachment blocks for busy-turn followups that carry attachments
 - Internal Memory Beacons (`react.note`) and preserved beacons (`react.note.preserved`)
+- working summary blocks (`conv.working.summary`) emitted from React's
+  `summary` channel
 - conversation metadata (title, started_at, last_activity_at)
 - the persisted external-event replay cursor (`last_external_event_id`, `last_external_event_seq`)
 - transient **announce** blocks (in‑memory only, not persisted)
- - **plan history blocks** (`react.plan` / `react.plan.ack`) persisted in the block stream
+- **plan history blocks** (`react.plan` / `react.plan.ack`) persisted in the block stream
 
 One turn may contain:
 - multiple prompt-like user blocks (`user.prompt`, `user.followup`, `user.steer`)
 - multiple `assistant.completion` blocks if the user saw more than one completion before the turn closed
+- multiple `conv.working.summary` blocks if multiple final/exit answer attempts
+  were produced in the same long turn
+
+Working summaries are first-class timeline blocks. They are not synthetic
+post-processing at persistence time: when React emits `channel:summary` together
+with a final/exit answer attempt, the summary is contributed into the same turn.
+If a later followup causes another answer attempt, that attempt can contribute a
+new summary with its own path. The unsuffixed `ws:<turn_id>.conv.working.summary`
+handle resolves to the latest summary for that turn.
 
 It is persisted as a single artifact: `artifact:conv.timeline.v1`.
 The sources pool is persisted separately as `artifact:conv:sources_pool`.
@@ -100,7 +111,10 @@ When the visible window exceeds the model budget, the timeline compacts earlier 
   react.notice [optional]
   react.tool.call / react.tool.result / ...
   react.note [optional]
+  conv.working.summary [0..n, emitted with final/exit answer attempts]
   assistant.completion [0..n]
+  react.turn.finalize [optional compact final stats block]
+  react.state / react.exit [internal]
 
 [TURN <id> header]
   ...
@@ -128,29 +142,80 @@ When `RuntimeCtx.session.cache_ttl_seconds` is set, the timeline applies TTL-bas
 - On the **first render** after loading a timeline, the stored TTL is used if present.
 - Subsequent renders use the runtime session settings.
 - A prune buffer (`cache_ttl_prune_buffer_seconds`) can force pruning *before* the TTL expires.
-- When pruning occurs, a one-time announce block is injected (after budget), and a
-  persistent `system.message` block is appended to the timeline to explain how to
-  restore paths via `react.read(path)`. Hidden replacement blocks do **not**
-  include per-block hints.
+- When pruning occurs, a persistent `system.message` block is appended to the
+  timeline to explain that logical paths still exist. Prune notices whose own
+  blocks are hidden are omitted from the rendered model view.
+- If a pruned historical turn has `conv.working.summary` blocks, that turn
+  renders as working-summary card(s). Multiple summaries for the same turn are
+  preserved because same-turn followups may represent separate work portions.
+- Hidden historical blocks without a working summary render as compact
+  retrieval-index rows. Each row includes the logical path plus a tiny semantic
+  hint so the model can decide whether the full block is worth reading.
+- The pruned retrieval skeleton consists of tool calls/results and
+  assistant/user messages as recoverable facts. Round scaffolding and transient
+  chatter are suppressed: `react.round.start`, `react.thinking`,
+  `react.notes`, `react.notice`, and `stage.suggested_followups`.
+- Pruned historical turns render one `[PRUNED TURN DATA]` marker before their
+  fallback retrieval rows. The rows use neutral labels (`user:`, `assistant:`,
+  `tool_call:`, `tool_result:`, `file:`, `skill:`, `source:`). User and
+  assistant rows use the same retrieval-row style as the other hidden blocks.
+- Turn-finalization internals render as a single compact
+  `[TURN STATUS]` card. This card carries useful operational facts such as
+  rounds used, exit reason, error if any, elapsed time, plan status, and selected
+  workspace/publish fields.
+- Each retrieval row exposes a logical path as the recovery handle. Use
+  `react.read([path])` when the row's hint indicates that hidden content is
+  needed.
+- Timestamps appear on pruned turn headers.
+  Hidden tool calls/results, files, skills, sources, and user prompts render
+  without timestamps in the pruned skeleton.
 - Internal Memory Beacons (`react.note`, `react.note.preserved`) are exempt from TTL hiding and remain visible.
 - External `user.followup` / `user.steer` are treated as primary user control input and remain visible through TTL pruning.
 - If compaction later hides their original region, preserved copies remain visible as `user.followup.preserved` / `user.steer.preserved`.
+- Automatic TTL pruning bounds the stored `replacement_text` before hiding a
+  block. The bound is controlled by `cache_truncation_replacement_max_tokens`.
+  This guard is only for TTL-generated replacements; explicit `react.hide`
+  stores the replacement text exactly as requested. TTL also compacts material
+  replacement growth even when the replacement is below the absolute token cap.
+- Tiny replacement expansions on already-small blocks are debug-level noise, not
+  warning-worthy. Large expansions still indicate a bad TTL replacement shape.
 
 ### Pruned view (schematic)
 ```
-[TURN turn_...]
-  [TRUNCATED] user prompt snippet...
-  [TRUNCATED FILE] path=fi:turn_... mime=image/png size=...
-  [TRUNCATED] tool result summary...
+TURN turn_13083620 (started at 2026-05-03T01:17:11Z)
+[WORKING SUMMARY]
+[path: ws:turn_13083620.conv.working.summary]
+Goal: Find the 2 most exciting medical news stories from the last two weeks.
+Outcome: Answered with two MedicalNewsToday-backed stories and direct links.
+Key facts:
+- Initial web searches returned empty, direct source fetch succeeded.
+- Selected stories: oral GLP-1 pill approval and stroke-risk reduction drug.
+Refs:
+- user: ar:turn_13083620.user.prompt
+- source fetch: tc:turn_13083620.tc_530c5199feb6.result
+- assistant final: ar:turn_13083620.assistant.completion
 
-[TURN turn_...]
-  user.prompt
-  react.tool.call
-  react.tool.result
-  assistant.completion
+TURN turn_without_summary (started at 2026-05-03T01:19:24Z)
+[PRUNED TURN DATA]
+turn_id: turn_without_summary
+retrieval_rows: logical paths and hints for hidden historical blocks
+user: path=ar:turn_without_summary.user.prompt hint="great, but by some reason i do not see the actual links..."
+assistant: path=ar:turn_without_summary.assistant.completion hint="Provided direct URLs for raw citation tokens."
+[TURN STATUS]
+turn_id: turn_without_summary
+rounds: 3/12
+exit_reason: complete
+time_elapsed_in_turn: 23s
+plans:
+  - plans: none
+workspace:
+  - implementation: git
+  - current_turn_root: turn_without_summary/
+  - current_turn_publish: succeeded
 
-[SYSTEM MESSAGE] Context was pruned because the session TTL (300s) was exceeded.
-Use react.read(path) to restore a logical path (fi:/ar:/so:/sk:).
+
+TURN turn_13083707 (started at 2026-05-05T21:28:15Z)
+... recent intact turn renders normally ...
 ```
 
 ## Concurrency / locking
@@ -207,6 +272,9 @@ Path convention:
 Debugging:
 - `timeline.render(..., debug_print=True)` prints the rendered message stream,
   with cache points marked (e.g., `=>[1]`).
+- When inspecting `react.read` results, `exists_in_visible_context` means the
+  requested logical path is already visible in the current model view. A good
+  rendered result should identify that visible location, not force another read.
 
 ## Storage location
 Timeline is stored as:

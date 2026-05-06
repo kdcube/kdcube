@@ -243,6 +243,33 @@ Parsed records are returned in `ClaudeCodeRunResult.structured_events` as:
 This is meant for workflows that need semantic progress while the turn is still
 running, while still ending with one final result payload in `final_text`.
 
+## Executive Journal
+
+The runner also has a standard structured-output checkpoint channel named
+`executive_journal`. It uses the reserved prefix:
+
+```text
+EXECUTIVE_JOURNAL Searched scoped emails and found 3 candidates.
+EXECUTIVE_JOURNAL {"channel":"struct","candidate_count":3,"note":"Scoped search completed"}
+EXECUTIVE_JOURNAL_CODE print("small recoverable snippet")
+```
+
+Claude Code callers can instruct the subprocess to emit these one-line JSON
+or text checkpoints after substantial progress. The SDK captures them into
+`ClaudeCodeRunResult.executive_journal` even if the Claude process later fails
+or times out. Entries are intentionally loose: plain text is captured as
+`channel="note"`, JSON as `channel="struct"` unless it declares a different
+`channel`, and `EXECUTIVE_JOURNAL_CODE` as `channel="code"`.
+
+Configure:
+
+- `ClaudeCodeAgentConfig.executive_journal_prefixes`
+- `ClaudeCodeAgentConfig.executive_journal_max_entries`
+
+The default prefix is `EXECUTIVE_JOURNAL` and the default retained entry count
+is 100. These entries are intended for compact recoverable progress, not full
+transcripts or large artifacts.
+
 ## Result object
 
 `ClaudeCodeRunResult` returns:
@@ -268,6 +295,7 @@ running, while still ending with one final result payload in `final_text`.
 - `timed_out`
 - `timeout_seconds`
 - `structured_events`
+- `executive_journal`
 
 This is meant for bundle logic and diagnostics, not only UI streaming.
 

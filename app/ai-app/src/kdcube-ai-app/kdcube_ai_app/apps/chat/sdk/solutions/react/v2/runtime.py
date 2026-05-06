@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.solutions.react.live_events import (
     sync_reactive_iteration_budget,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.layout import (
+    build_working_summary_attempt_blocks,
     record_assistant_completion_attempt,
 )
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import ReactResult
@@ -1269,6 +1270,18 @@ class ReactSolverV2:
                     return "kind_not_fourth"
         return None
 
+    @staticmethod
+    def _working_summary_from_decision_packet(packet: Dict[str, Any]) -> str:
+        if not isinstance(packet, dict):
+            return ""
+        channels = packet.get("channels") if isinstance(packet.get("channels"), dict) else {}
+        summary_channel = channels.get("summary") if isinstance(channels, dict) else {}
+        if isinstance(summary_channel, dict):
+            text = str(summary_channel.get("text") or "").strip()
+            if text:
+                return text
+        return str(packet.get("working_summary") or "").strip()
+
     def _validate_tool_call_protocol(
         self,
         *,
@@ -1851,7 +1864,15 @@ class ReactSolverV2:
         state["last_decision_raw"] = decision
         elapsed_ms = int((time.perf_counter() - t0) * 1000)
         self._append_react_timing(round_idx=iteration, stage="decision", elapsed_ms=elapsed_ms)
+        logging_helpers.log_raw_channel_output(
+            role,
+            "react.decision.v2",
+            decision.get("raw") if isinstance(decision, dict) else None,
+            channels=decision.get("channels") if isinstance(decision, dict) else None,
+        )
         logging_helpers.log_agent_packet(role, "react.decision.v2", decision)
+        decision_packet = decision if isinstance(decision, dict) else {}
+        working_summary_text = self._working_summary_from_decision_packet(decision_packet)
         error = (decision.get("log") or {}).get("error")
 
         try:
@@ -1912,7 +1933,7 @@ class ReactSolverV2:
                 tool_id = ""
         else:
 
-            decision = decision.get("agent_response") or {}
+            decision = decision_packet.get("agent_response") or {}
             if not isinstance(decision, dict):
                 decision = {}
 
@@ -2299,12 +2320,28 @@ class ReactSolverV2:
                     except Exception:
                         answer_started_at = None
                 if answer_started_at:
-                    record_assistant_completion_attempt(
+                    entry = record_assistant_completion_attempt(
                         scratchpad=self.scratchpad,
                         answer_text=(decision.get("final_answer") or ""),
                         ts=answer_started_at,
                         iteration=iteration,
+                        working_summary_text=working_summary_text,
                     )
+                    session_cfg = getattr(getattr(self.ctx_browser, "runtime_ctx", None), "session", None)
+                    working_summary_enabled = bool(getattr(session_cfg, "working_summary_enabled", True))
+                    if entry and working_summary_enabled and str(working_summary_text or "").strip():
+                        entries = getattr(self.scratchpad, "assistant_completion_attempts", []) or []
+                        summary_blocks = build_working_summary_attempt_blocks(
+                            runtime=self.ctx_browser.runtime_ctx,
+                            summary_text=working_summary_text,
+                            attempt_index=len(entries),
+                            attempt_count=len(entries),
+                            iteration=iteration,
+                            ts=answer_started_at,
+                            block_factory=self.ctx_browser.timeline.block,
+                        )
+                        if summary_blocks:
+                            self.ctx_browser.contribute(blocks=summary_blocks)
             except Exception:
                 self.log.log(traceback.format_exc(), level="ERROR")
 
@@ -2338,6 +2375,12 @@ class ReactSolverV2:
                 state["exit_reason"] = "steer" if bool(state.get("steer_finalize_mode")) else action
                 state["final_answer"] = final_answer_text
                 state["suggested_followups"] = decision.get("suggested_followups") or []
+                if working_summary_text:
+                    state["working_summary"] = working_summary_text
+                    try:
+                        self.scratchpad.react_working_summary = working_summary_text
+                    except Exception:
+                        pass
                 try:
                     sf = state.get("suggested_followups") or []
                     self.log.log(
@@ -2486,7 +2529,16 @@ class ReactSolverV2:
             except Exception:
                 final_text = ""
             if final_text:
-                post_blocks.append({"text": final_text})
+                turn_id = self.scratchpad.turn_id or getattr(runtime_ctx, "turn_id", "") or ""
+                post_blocks.append({
+                    "type": "react.turn.finalize",
+                    "author": "react",
+                    "turn_id": turn_id,
+                    "ts": time.time(),
+                    "mime": "text/plain",
+                    "path": f"ar:{turn_id}.react.turn.finalize" if turn_id else "",
+                    "text": final_text,
+                })
             if self.ctx_browser:
                 self.ctx_browser.announce(blocks=None)
         except Exception:

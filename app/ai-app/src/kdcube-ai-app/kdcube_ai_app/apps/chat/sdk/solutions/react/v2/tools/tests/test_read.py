@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 
 import pytest
+import json
 
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.solutions.react.v2.tools.read import handle_react_read
@@ -70,6 +71,37 @@ async def test_read_supports_outdir_relative_fi_paths(tmp_path):
         for b in ctx.timeline.blocks
         if b.get("type") == "react.tool.result"
     )
+
+
+@pytest.mark.asyncio
+async def test_read_duplicate_visible_content_returns_visible_ref(tmp_path):
+    runtime = RuntimeCtx(turn_id="turn_read", outdir=str(tmp_path), workdir=str(tmp_path))
+    ctx = FakeBrowser(runtime)
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    (logs_dir / "note.md").write_text("already visible", encoding="utf-8")
+
+    state = {"last_decision": {"tool_call": {"params": {"paths": ["fi:logs/note.md"]}}}}
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_visible_1")
+    await handle_react_read(ctx_browser=ctx, state=state, tool_call_id="r_visible_2")
+
+    summaries = []
+    for b in ctx.timeline.blocks:
+        if (
+            b.get("type") != "react.tool.result"
+            or b.get("path") != "tc:turn_read.r_visible_2.result"
+            or b.get("mime") != "application/json"
+        ):
+            continue
+        payload = json.loads(b.get("text") or "{}")
+        if "paths" in payload:
+            summaries.append(payload)
+
+    assert summaries
+    assert summaries[-1]["exists_in_visible_context"] == ["fi:logs/note.md"]
+    ref = summaries[-1]["visible_context_refs"]["fi:logs/note.md"]
+    assert ref["path"] == "fi:logs/note.md"
+    assert ref["tool_result_path"] == "tc:turn_read.r_visible_1.result"
 
 
 @pytest.mark.asyncio

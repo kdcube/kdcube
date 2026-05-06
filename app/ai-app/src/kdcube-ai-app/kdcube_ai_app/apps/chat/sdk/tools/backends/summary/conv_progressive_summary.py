@@ -187,20 +187,32 @@ def _parse_json(text: str) -> Dict[str, Any]:
         return {}
 
 
+def _format_header(parts: List[str]) -> str:
+    return " | ".join(p for p in parts if str(p or "").strip())
+
+
+def _textish(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    return str(value).strip()
+
+
 def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
     parts: List[str] = []
     for blk in blocks or []:
         if not isinstance(blk, dict):
             continue
-        btype = (blk.get("type") or "").strip() or "block"
-        author = (blk.get("author") or blk.get("role") or "").strip()
-        turn_id = (blk.get("turn_id") or blk.get("turn") or "").strip()
-        ts = (blk.get("ts") or "").strip()
-        path = (blk.get("path") or "").strip()
-        mime = (blk.get("mime") or "").strip()
-        call_id = (blk.get("call_id") or "").strip()
-        tool_id = (blk.get("tool_id") or "").strip()
-        tool_call_id = (blk.get("tool_call_id") or "").strip()
+        btype = _textish(blk.get("type")) or "block"
+        author = _textish(blk.get("author") or blk.get("role"))
+        turn_id = _textish(blk.get("turn_id") or blk.get("turn"))
+        ts = _textish(blk.get("ts"))
+        path = _textish(blk.get("path"))
+        mime = _textish(blk.get("mime"))
+        call_id = _textish(blk.get("call_id"))
+        tool_id = _textish(blk.get("tool_id"))
+        tool_call_id = _textish(blk.get("tool_call_id"))
         text = blk.get("text")
         meta = blk.get("meta") if isinstance(blk.get("meta"), dict) else {}
         hidden = bool(blk.get("hidden") or meta.get("hidden"))
@@ -222,7 +234,7 @@ def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
         if ts:
             header_parts.append(f"ts={ts}")
         if not path:
-            path = str(meta.get("artifact_path") or meta.get("physical_path") or "")
+            path = _textish(meta.get("artifact_path") or meta.get("physical_path"))
         if path:
             header_parts.append(f"path={path}")
         if mime:
@@ -234,36 +246,55 @@ def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
         if tool_call_id:
             header_parts.append(f"tool_call_id={tool_call_id}")
 
+        if btype == "conv.working.summary":
+            for key in (
+                "summary_scope",
+                "assistant_completion_attempt_index",
+                "assistant_completion_attempt_count",
+                "assistant_completion_path",
+                "iteration",
+                "source_channel",
+            ):
+                val = meta.get(key)
+                if val not in (None, ""):
+                    header_parts.append(f"{key}={json.dumps(val, ensure_ascii=False)}")
+            header = _format_header(header_parts)
+            if isinstance(text, str) and text.strip():
+                parts.append(f"[Working Summary]: ({header})\n{text.strip()}")
+            else:
+                parts.append(f"[Working Summary]: ({header})")
+            continue
+
         if btype in {"user.followup", "user.followup.preserved"}:
             if isinstance(text, str) and text.strip():
                 parts.append(f"[User Followup During Turn]: {text.strip()}")
             else:
-                parts.append(f"[User Followup During Turn]: ({' | '.join(header_parts)})")
+                parts.append(f"[User Followup During Turn]: ({_format_header(header_parts)})")
             continue
         if btype in {"user.steer", "user.steer.preserved"}:
             if isinstance(text, str) and text.strip():
                 parts.append(f"[User Steer During Turn]: {text.strip()}")
             else:
-                parts.append(f"[User Steer During Turn]: ({' | '.join(header_parts)})")
+                parts.append(f"[User Steer During Turn]: ({_format_header(header_parts)})")
             continue
         if btype == "user.prompt" or author == "user":
             if isinstance(text, str) and text.strip():
                 parts.append(f"[User]: {text.strip()}")
             else:
-                parts.append(f"[User]: ({' | '.join(header_parts)})")
+                parts.append(f"[User]: ({_format_header(header_parts)})")
             continue
         if btype in {"react.note", "react.note.preserved"}:
             if isinstance(text, str) and text.strip():
                 parts.append(f"[Internal Note]: {text.strip()}")
             else:
-                parts.append(f"[Internal Note]: ({' | '.join(header_parts)})")
+                parts.append(f"[Internal Note]: ({_format_header(header_parts)})")
             continue
 
         if btype == "assistant.completion" or author == "assistant":
             if isinstance(text, str) and text.strip():
                 parts.append(f"[Assistant]: {text.strip()}")
             else:
-                parts.append(f"[Assistant]: ({' | '.join(header_parts)})")
+                parts.append(f"[Assistant]: ({_format_header(header_parts)})")
             continue
 
         if btype == "react.tool.call":
@@ -282,10 +313,10 @@ def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
             if isinstance(text, str) and text.strip():
                 parts.append(f"[Tool result]: {text.strip()}")
             else:
-                parts.append(f"[Tool result]: ({' | '.join(header_parts)})")
+                parts.append(f"[Tool result]: ({_format_header(header_parts)})")
             continue
 
-        header = "[Block] " + " | ".join(header_parts)
+        header = "[Block] " + _format_header(header_parts)
         if isinstance(text, str) and text.strip():
             parts.append(f"{header}\n{text.strip()}")
         else:
@@ -296,12 +327,16 @@ def _serialize_context_blocks_for_compaction(blocks: List[dict]) -> str:
             if mime:
                 binary += f" mime={mime}"
             if not path:
-                path = str(meta.get("artifact_path") or meta.get("physical_path") or "")
+                path = _textish(meta.get("artifact_path") or meta.get("physical_path"))
             if path:
                 binary += f" path={path}"
             parts.append(binary)
 
     return "\n\n".join(parts).strip()
+
+
+def _approx_tokens(text: str) -> int:
+    return max(0, int(len(text or "") / 4))
 
 
 def _extract_file_ops_from_blocks(blocks: List[dict]) -> Tuple[Set[str], Set[str]]:
@@ -510,13 +545,22 @@ def _build_compaction_prompt_text(
     *,
     conversation_text: str,
     previous_summary: Optional[str],
+    working_summaries_text: Optional[str],
     custom_instructions: Optional[str],
 ) -> str:
     base_prompt = UPDATE_SUMMARIZATION_PROMPT if previous_summary else SUMMARIZATION_PROMPT
     if custom_instructions:
         base_prompt = f"{base_prompt}\n\nAdditional focus: {custom_instructions}"
 
-    prompt_text = f"<conversation>\n{conversation_text}\n</conversation>\n\n"
+    prompt_text = ""
+    if working_summaries_text:
+        prompt_text += (
+            "<working-summaries>\n"
+            f"{working_summaries_text.strip()}\n"
+            "</working-summaries>\n\n"
+            "The working summaries above are durable, high-signal summaries previously produced by the ReAct agent for turns covered by the conversation slice. Use them as retrieval anchors and continuity context; do not treat them as user-facing messages.\n\n"
+        )
+    prompt_text += f"<conversation>\n{conversation_text}\n</conversation>\n\n"
     if previous_summary:
         prompt_text += f"<previous-summary>\n{previous_summary}\n</previous-summary>\n\n"
     prompt_text += base_prompt
@@ -526,9 +570,18 @@ def _build_compaction_prompt_text(
 def _build_turn_prefix_prompt_text(
     *,
     conversation_text: str,
+    working_summaries_text: Optional[str],
     custom_instructions: Optional[str],
 ) -> str:
-    prompt_text = f"<conversation>\n{conversation_text}\n</conversation>\n\n"
+    prompt_text = ""
+    if working_summaries_text:
+        prompt_text += (
+            "<working-summaries>\n"
+            f"{working_summaries_text.strip()}\n"
+            "</working-summaries>\n\n"
+            "The working summaries above are durable, high-signal summaries previously produced by the ReAct agent for this turn. Use them to decide what prefix context matters for the retained suffix.\n\n"
+        )
+    prompt_text += f"<conversation>\n{conversation_text}\n</conversation>\n\n"
     base = TURN_PREFIX_SUMMARIZATION_PROMPT
     if custom_instructions:
         base = f"{base}\n\nAdditional focus: {custom_instructions}"
@@ -542,6 +595,7 @@ async def summarize_context_blocks_progressive(
     blocks: List[dict],
     max_tokens: int = 800,
     previous_summary: Optional[str] = None,
+    working_summary_blocks: Optional[List[dict]] = None,
     custom_instructions: Optional[str] = None,
 ) -> Optional[str]:
     if svc is None:
@@ -552,10 +606,21 @@ async def summarize_context_blocks_progressive(
         conversation_text = _serialize_context_blocks_for_compaction(blocks)
         if not conversation_text:
             return None
+        working_summaries_text = _serialize_context_blocks_for_compaction(working_summary_blocks or [])
+        log.info(
+            "[context.compaction.summary:start] role=context.compaction.summary blocks=%s chars=%s approx_tokens=%s previous_summary=%s working_summaries=%s max_tokens=%s",
+            len(blocks or []),
+            len(conversation_text),
+            _approx_tokens(conversation_text),
+            bool((previous_summary or "").strip()),
+            len(working_summary_blocks or []),
+            max_tokens,
+        )
 
         prompt_text = _build_compaction_prompt_text(
             conversation_text=conversation_text,
             previous_summary=(previous_summary or "").strip() or None,
+            working_summaries_text=working_summaries_text,
             custom_instructions=(custom_instructions or "").strip() or None,
         )
         system_msg = create_cached_system_message(SUMMARIZATION_SYSTEM_PROMPT, cache_last=True)
@@ -576,11 +641,29 @@ async def summarize_context_blocks_progressive(
         logging_helpers.log_agent_packet(role, "summary", result)
         summary = (result.get("agent_response") or "").strip()
         if not summary:
+            log.warning(
+                "[context.compaction.summary:empty] role=%s blocks=%s prompt_chars=%s raw_chars=%s error=%s service_error=%s",
+                role,
+                len(blocks or []),
+                len(prompt_text),
+                len(str((result.get("log") or {}).get("raw_data") or "")),
+                (result.get("log") or {}).get("error"),
+                (result.get("log") or {}).get("service_error"),
+            )
             return None
+        else:
+            log.info(
+                "[context.compaction.summary:result] role=%s blocks=%s output_chars=%s approx_output_tokens=%s",
+                role,
+                len(blocks or []),
+                len(summary),
+                _approx_tokens(summary),
+            )
         read_files, modified_files = _extract_file_ops_from_blocks(blocks)
         summary += _format_file_ops_summary(read_files, modified_files)
         return summary
     except Exception:
+        log.exception("[context.compaction.summary:error] blocks=%s", len(blocks or []))
         return None
 
 
@@ -589,6 +672,7 @@ async def summarize_turn_prefix_progressive(
     svc: Any,
     blocks: List[dict],
     max_tokens: int = 500,
+    working_summary_blocks: Optional[List[dict]] = None,
     custom_instructions: Optional[str] = None,
 ) -> Optional[str]:
     if svc is None:
@@ -599,9 +683,19 @@ async def summarize_turn_prefix_progressive(
         conversation_text = _serialize_context_blocks_for_compaction(blocks)
         if not conversation_text:
             return None
+        working_summaries_text = _serialize_context_blocks_for_compaction(working_summary_blocks or [])
+        log.info(
+            "[context.compaction.turn_prefix:start] role=context.compaction.turn_prefix blocks=%s chars=%s approx_tokens=%s working_summaries=%s max_tokens=%s",
+            len(blocks or []),
+            len(conversation_text),
+            _approx_tokens(conversation_text),
+            len(working_summary_blocks or []),
+            max_tokens,
+        )
 
         prompt_text = _build_turn_prefix_prompt_text(
             conversation_text=conversation_text,
+            working_summaries_text=working_summaries_text,
             custom_instructions=(custom_instructions or "").strip() or None,
         )
         system_msg = create_cached_system_message(SUMMARIZATION_SYSTEM_PROMPT, cache_last=True)
@@ -621,6 +715,25 @@ async def summarize_turn_prefix_progressive(
             )
         logging_helpers.log_agent_packet(role, "summary", result)
         summary = (result.get("agent_response") or "").strip()
-        return summary or None
+        if not summary:
+            log.warning(
+                "[context.compaction.turn_prefix:empty] role=%s blocks=%s prompt_chars=%s raw_chars=%s error=%s service_error=%s",
+                role,
+                len(blocks or []),
+                len(prompt_text),
+                len(str((result.get("log") or {}).get("raw_data") or "")),
+                (result.get("log") or {}).get("error"),
+                (result.get("log") or {}).get("service_error"),
+            )
+            return None
+        log.info(
+            "[context.compaction.turn_prefix:result] role=%s blocks=%s output_chars=%s approx_output_tokens=%s",
+            role,
+            len(blocks or []),
+            len(summary),
+            _approx_tokens(summary),
+        )
+        return summary
     except Exception:
+        log.exception("[context.compaction.turn_prefix:error] blocks=%s", len(blocks or []))
         return None

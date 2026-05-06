@@ -29,13 +29,26 @@ This document describes how the session view is derived from the timeline when c
 - If `cache_last_touch_at` is missing, it is set and no pruning happens (the cache is “armed”).
 - If TTL has not expired, the timestamp is refreshed and no pruning happens.
 - If TTL has expired, pruning is applied before rendering:
-- Blocks older than the last N turns are hidden by path with a replacement text.
+- Blocks older than the last N turns are hidden by path.
 - Blocks inside the last N turns remain visible, except oversized binary artifacts (images/PDFs) which may be hidden unless in the intact window.
-- If `keep_recent_turns` covers all turns, old-turn pruning is skipped, but lightweight artifact pruning still applies inside the recent window.
+- If `keep_recent_turns` covers all turns, turn-window pruning is skipped, but lightweight artifact pruning still applies inside the recent window.
 - The most recent M turns are guaranteed intact (no pruning).
-- Hidden blocks keep a short replacement text (no per-block `react.read` hint).
+- Hidden blocks keep a TTL-generated `replacement_text` for token estimates, compaction serializers, and retrieval metadata. This replacement is bounded by `cache_truncation_replacement_max_tokens` and by material growth over the original block.
+- Rendered hidden history uses:
+  - the turn's `conv.working.summary` blocks, when present; or
+  - compact retrieval-index stubs with logical paths and small hints.
+- React finalization internals render as one `[TURN STATUS]` card. Individual
+  `react.state`, `react.exit`, `react.workspace.publish`, and final stats
+  blocks are suppressed in the pruned model view.
+- Round scaffolding and transient chatter are suppressed in the pruned model
+  view. This includes `react.round.start`,
+  `react.thinking`, `react.notes`, `react.notice`, and
+  `stage.suggested_followups`.
+- Fallback retrieval rows are grouped under one `[PRUNED TURN DATA]` marker per
+  turn and use neutral row labels such as `user:`, `assistant:`, `tool_call:`,
+  and `tool_result:`.
 - User/assistant blocks are eligible for pruning when they are older than `keep_recent_turns` (they remain intact in the recent windows). This applies per block, so multiple prompt-like user entries or assistant completions from one older turn can be pruned independently.
-- Internal Memory Beacons (`react.note`, `react.note.preserved`) are not hidden by TTL pruning.
+- Internal Memory Beacons (`react.note`, `react.note.preserved`) and `conv.working.summary` blocks are not hidden by TTL pruning.
 - External `user.followup`, `user.steer`, and their preserved copies are also not hidden by TTL pruning.
 - If compaction also ran, older plan history may still remain directly reopenable through stable `ar:plan.latest:<plan_id>` refs that sit behind the visible history summaries.
 - A system notice is appended when pruning runs:
@@ -44,7 +57,8 @@ This document describes how the session view is derived from the timeline when c
 - Pruning is idempotent in practice: already-hidden blocks are skipped, so repeated TTL passes only hide additional eligible blocks.
 - Rendering behavior for hidden blocks:
   - Hidden blocks stay in the timeline with `hidden=true` and optional `replacement_text`.
-  - `Timeline.render()` replaces their visible content with `replacement_text` (or `meta.replacement_text`) in the output stream.
+  - `Timeline.render()` prefers working-summary cards for hidden turns. Without a working summary, it renders compact retrieval stubs derived from the block metadata.
+  - Stored `replacement_text` is not guaranteed to be rendered verbatim.
   - If multiple blocks share the same path, only one carries the replacement text; the rest render empty.
 
 ## Tool Call Truncation (hidden blocks)
@@ -65,7 +79,9 @@ Default replacement behavior:
 
 - Image and PDF blocks keep only the most recent items within a total base64 budget.
 - Oversized base64 artifacts are hidden and replaced.
-- Replacement text is capped to the maximum text size.
+- TTL-generated replacement text is separately bounded by `cache_truncation_replacement_max_tokens`.
+- Explicit `react.hide` stores its replacement exactly as supplied. The
+  replacement bound applies only to automatic TTL pruning.
 
 ## Turn Windows (configurable)
 
@@ -85,14 +101,16 @@ Default replacement behavior:
 | User/assistant blocks | Eligible for hiding only when older than `keep_recent_turns` | Same |
 | Tool calls/results | Summarized via tool views and hidden by `path` | Same |
 | Files/artifacts | Image/PDF budget enforced; oversized base64 hidden | Same |
+| Turn finalization internals | Render as one compact `[TURN STATUS]` card after pruning | Same |
+| Round scaffolding/chatter | Suppressed after pruning | Same |
 | Recovery | `react.read(path)` can unhide originals | Same |
-| Replacement text format | Tool views emit JSON summaries with `tool_id`, `tool_call_id`, truncated `params`/`result`; files use `[TRUNCATED FILE] …`; generic uses `[TRUNCATED] …` | Same; keep `ref:` values unmodified |
+| Replacement text format | TTL tool views emit bounded JSON summaries with `tool_id`, `tool_call_id`, truncated `params`/`result`; files use `[TRUNCATED FILE] …`; generic uses `[TRUNCATED] …` | Same; keep `ref:` values unmodified |
 | Announce/system messages | On prune: add announce entry and a persistent `system.message` (`meta.kind=cache_ttl_pruned`) | Same |
-| Hidden vs visible semantics | Hidden blocks render `replacement_text` only; originals are kept on the timeline | Same |
+| Hidden vs visible semantics | Originals remain on the timeline as hidden blocks; render uses working summaries or retrieval stubs | Same |
 | Image/PDF budget rules | `cache_truncation_keep_recent_images` + `cache_truncation_max_image_pdf_b64_sum` enforce caps | Same; configurable via `RuntimeCtx.session` |
-| Skip rules | Always skip `turn.header`, `conv.range.summary`, `react.note`, `react.note.preserved`, `user.followup`, `user.steer`, `user.followup.preserved`, `user.steer.preserved`; others follow window rules | Same |
+| Skip rules | Always skip `turn.header`, `conv.range.summary`, `conv.working.summary`, `react.note`, `react.note.preserved`, `user.followup`, `user.steer`, `user.followup.preserved`, `user.steer.preserved`; others follow window rules | Same |
 | TTL bootstrap | First render uses stored `cache_last_ttl_seconds`, then sync to runtime | Same |
-| Size thresholds | Configurable: `cache_truncation_max_text_chars`, `cache_truncation_max_field_chars`, `cache_truncation_max_list_items`, `cache_truncation_max_dict_keys`, `cache_truncation_max_base64_chars` | Same |
+| Size thresholds | Configurable: `cache_truncation_max_text_chars`, `cache_truncation_max_field_chars`, `cache_truncation_max_list_items`, `cache_truncation_max_dict_keys`, `cache_truncation_max_base64_chars`, `cache_truncation_replacement_max_tokens` | Same |
 | Extensibility | Per-tool truncation views in `src/kdcube-ai-app/kdcube_ai_app/apps/chat/sdk/solutions/react/session.py` | Same |
 
 ## Runtime Configuration
@@ -132,6 +150,7 @@ Runtime session fields:
 - `cache_truncation_max_base64_chars`: max base64 length before hiding.
 - `cache_truncation_keep_recent_images`: number of image/PDF base64 artifacts to keep.
 - `cache_truncation_max_image_pdf_b64_sum`: total base64 budget for kept image/PDF artifacts.
+- `cache_truncation_replacement_max_tokens`: max tokens for automatic TTL-generated replacement text. Explicit `react.hide` stores its replacement exactly.
 - `keep_recent_turns`: number of most recent turns to keep visible.
 - `keep_recent_intact_turns`: number of most recent turns to keep intact (no pruning).
 
@@ -152,7 +171,7 @@ After TTL pruning, the session view looks like this (system message appended at 
   assistant.completion
 
 [SYSTEM MESSAGE] Context was pruned because the session TTL (300s) was exceeded.
-Use react.read(path) to restore a logical path (fi:/ar:/so:/sk:), including plan aliases like ar:plan.latest:<plan_id>.
+Logical paths still exist. Use currently visible summaries/stubs first; call react.read(path) only when the hidden content is actually needed.
 ```
 
 When plan-history refs are present after compaction, those `ar:` refs are usually the smoothest way to reopen an older compacted plan in the same turn.
