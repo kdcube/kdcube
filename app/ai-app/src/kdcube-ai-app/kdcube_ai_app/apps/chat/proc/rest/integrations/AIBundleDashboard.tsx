@@ -29,6 +29,33 @@ interface TenantProjectItem {
     source?: string;
 }
 
+interface BundleAPIEndpoint {
+    alias: string;
+    http_method: string;
+    route: string;
+    user_types: string[];
+    roles: string[];
+    enabled_config?: string | null;
+}
+
+interface BundleMCPEndpoint {
+    alias: string;
+    route: string;
+    transport: string;
+    enabled_config?: string | null;
+}
+
+interface BundleScheduledJob {
+    method_name: string;
+    alias?: string | null;
+    cron_expression?: string | null;
+    expr_config?: string | null;
+    timezone?: string | null;
+    tz_config?: string | null;
+    span?: string | null;
+    enabled_config?: string | null;
+}
+
 interface BundleEntry {
     id: string;
     name?: string | null;
@@ -41,6 +68,12 @@ interface BundleEntry {
     ref?: string | null;
     subdir?: string | null;
     git_commit?: string | null;
+    apis?: BundleAPIEndpoint[] | null;
+    mcp_endpoints?: BundleMCPEndpoint[] | null;
+    scheduled_jobs?: BundleScheduledJob[] | null;
+    on_message?: string | null;
+    on_job?: string | null;
+    enabled_config?: string | null;
 }
 
 interface BundlesResponse {
@@ -680,6 +713,7 @@ const AIBundleDashboard: React.FC = () => {
     const [secretsLoading, setSecretsLoading] = useState<boolean>(false);
     const [secretsKeyPath, setSecretsKeyPath] = useState<string>('');
     const [secretsValue, setSecretsValue] = useState<string>('');
+    const [interfaceBundleId, setInterfaceBundleId] = useState<string>('');
     const registryScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const propsScope = useMemo(() => normalizeScope(scopeTenant, scopeProject), [scopeTenant, scopeProject]);
     const draftScope = useMemo(() => parseScopeValue(scopeInput), [scopeInput]);
@@ -796,6 +830,9 @@ const AIBundleDashboard: React.FC = () => {
             }
             if (!secretsBundleId || !(secretsBundleId in (data.available_bundles || {}))) {
                 setSecretsBundleId(data.default_bundle_id || '');
+            }
+            if (!interfaceBundleId || !(interfaceBundleId in (data.available_bundles || {}))) {
+                setInterfaceBundleId(data.default_bundle_id || '');
             }
             setError(null);
         } catch (e: any) {
@@ -1566,6 +1603,166 @@ const AIBundleDashboard: React.FC = () => {
                         <div className="text-xs text-gray-500">
                             Secrets are stored under <code>bundles.&lt;bundle_id&gt;.secrets.*</code> and are write-only.
                         </div>
+                    </CardBody>
+                </Card>
+
+                <Card>
+                    <CardHeader
+                        title="Bundle interface"
+                        subtitle="Declared APIs, MCP endpoints, and scheduled jobs (cron) for the selected bundle."
+                    />
+                    <CardBody className="space-y-5">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-800 mb-2">Bundle ID</label>
+                            <select
+                                className="w-full px-4 py-2.5 border border-gray-200/80 rounded-xl bg-white text-sm"
+                                value={interfaceBundleId}
+                                onChange={e => setInterfaceBundleId(e.target.value)}
+                            >
+                                <option value="">—</option>
+                                {bundleList.map(b => (
+                                    <option key={b.id} value={b.id}>{b.id}</option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {(() => {
+                            const b = interfaceBundleId ? bundles[interfaceBundleId] : null;
+                            if (!b) return (
+                                <div className="text-sm text-gray-500">Select a bundle to view its interface.</div>
+                            );
+
+                            const apis = b.apis || [];
+                            const mcp = b.mcp_endpoints || [];
+                            const jobs = b.scheduled_jobs || [];
+                            const hasAny = apis.length > 0 || mcp.length > 0 || jobs.length > 0 || b.on_message || b.on_job;
+
+                            if (!hasAny) return (
+                                <div className="text-sm text-gray-500">No interface declared for this bundle.</div>
+                            );
+
+                            return (
+                                <div className="space-y-5">
+                                    {(b.on_message || b.on_job) && (
+                                        <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+                                            {b.on_message && (
+                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200">
+                                                    <span className="font-semibold text-gray-800">on_message</span>
+                                                    <code>{b.on_message}</code>
+                                                </span>
+                                            )}
+                                            {b.on_job && (
+                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gray-100 border border-gray-200">
+                                                    <span className="font-semibold text-gray-800">on_job</span>
+                                                    <code>{b.on_job}</code>
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {apis.length > 0 && (
+                                        <div>
+                                            <div className="text-sm font-semibold text-gray-800 mb-2">
+                                                API Endpoints
+                                                <span className="ml-2 text-xs font-normal text-gray-500">({apis.length})</span>
+                                            </div>
+                                            <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                                <table className="w-full text-xs">
+                                                    <thead className="bg-gray-50 border-b border-gray-200">
+                                                        <tr className="text-gray-600">
+                                                            <th className="px-3 py-2 text-left font-semibold">Alias</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Method</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Route</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">User types</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Roles</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Enabled config</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-100">
+                                                        {apis.map((ep, i) => (
+                                                            <tr key={i} className="hover:bg-gray-50/70">
+                                                                <td className="px-3 py-2 font-mono font-semibold text-gray-900">{ep.alias}</td>
+                                                                <td className="px-3 py-2 font-mono uppercase text-blue-700">{ep.http_method}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-700">{ep.route}</td>
+                                                                <td className="px-3 py-2 text-gray-600">{ep.user_types?.join(', ') || '—'}</td>
+                                                                <td className="px-3 py-2 text-gray-600">{ep.roles?.join(', ') || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_config || '—'}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {mcp.length > 0 && (
+                                        <div>
+                                            <div className="text-sm font-semibold text-gray-800 mb-2">
+                                                MCP Endpoints
+                                                <span className="ml-2 text-xs font-normal text-gray-500">({mcp.length})</span>
+                                            </div>
+                                            <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                                <table className="w-full text-xs">
+                                                    <thead className="bg-gray-50 border-b border-gray-200">
+                                                        <tr className="text-gray-600">
+                                                            <th className="px-3 py-2 text-left font-semibold">Alias</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Route</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Transport</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Enabled config</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-100">
+                                                        {mcp.map((ep, i) => (
+                                                            <tr key={i} className="hover:bg-gray-50/70">
+                                                                <td className="px-3 py-2 font-mono font-semibold text-gray-900">{ep.alias}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-700">{ep.route}</td>
+                                                                <td className="px-3 py-2 text-gray-600">{ep.transport}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{ep.enabled_config || '—'}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {jobs.length > 0 && (
+                                        <div>
+                                            <div className="text-sm font-semibold text-gray-800 mb-2">
+                                                Scheduled Jobs (Cron)
+                                                <span className="ml-2 text-xs font-normal text-gray-500">({jobs.length})</span>
+                                            </div>
+                                            <div className="overflow-x-auto rounded-xl border border-gray-200">
+                                                <table className="w-full text-xs">
+                                                    <thead className="bg-gray-50 border-b border-gray-200">
+                                                        <tr className="text-gray-600">
+                                                            <th className="px-3 py-2 text-left font-semibold">Alias</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Method</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Cron</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Timezone</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Span</th>
+                                                            <th className="px-3 py-2 text-left font-semibold">Enabled config</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-gray-100">
+                                                        {jobs.map((job, i) => (
+                                                            <tr key={i} className="hover:bg-gray-50/70">
+                                                                <td className="px-3 py-2 font-mono font-semibold text-gray-900">{job.alias || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-700">{job.method_name}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-700">{job.cron_expression || job.expr_config || '—'}</td>
+                                                                <td className="px-3 py-2 text-gray-600">{job.timezone || job.tz_config || '—'}</td>
+                                                                <td className="px-3 py-2 text-gray-600">{job.span || '—'}</td>
+                                                                <td className="px-3 py-2 font-mono text-gray-500">{job.enabled_config || '—'}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        })()}
                     </CardBody>
                 </Card>
 
