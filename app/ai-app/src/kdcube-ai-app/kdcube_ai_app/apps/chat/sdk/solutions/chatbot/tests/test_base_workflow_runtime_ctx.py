@@ -34,7 +34,7 @@ def _payload(*, tenant: str, project: str, user_id: str = "u1", turn_id: str = "
 
 
 def test_cleanup_turn_workspace_removes_git_cache_and_empty_ctx_root(tmp_path):
-    parent = tmp_path / "ctx_v2_cleanup"
+    parent = tmp_path / "exec_20260506125243_ab12"
     workdir = parent / "work"
     outdir = parent / "out"
     cache = parent / ".react_workspace_git" / "tenant__project__user__conversation"

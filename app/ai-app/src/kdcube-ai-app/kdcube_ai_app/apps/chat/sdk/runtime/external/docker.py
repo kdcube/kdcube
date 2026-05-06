@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 
 from dotenv import find_dotenv, load_dotenv
 
+from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.runtime.external.detect_aws_env import check_and_apply_cloud_environment
 from kdcube_ai_app.apps.chat.sdk.runtime.external.base import build_external_exec_env
 from kdcube_ai_app.apps.chat.sdk.runtime.external.service_discovery import CONTAINER_BUNDLES_ROOT, _path, \
@@ -1025,7 +1026,7 @@ async def run_py_in_docker(
 
     exec_id = (extra_env or {}).get("EXECUTION_ID") or runtime_globals.get("EXECUTION_ID") or runtime_globals.get("RESULT_FILENAME")
     if not exec_id:
-        exec_id = f"run-{int(time.time() * 1000)}"
+        exec_id = new_exec_id()
     base_env["EXECUTION_ID"] = exec_id
 
     # This will be the *directory name* under /bundles in the container

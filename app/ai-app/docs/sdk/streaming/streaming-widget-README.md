@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/streaming/streaming-widget-README.md
 title: "Streaming Widget"
-summary: "Live exec streaming widget used by ReAct v2 for code execution status and output."
+summary: "Live exec streaming widget used by ReAct for code execution status and output."
 tags: ["sdk", "streaming", "widgets", "exec", "react"]
-keywords: ["live exec widget", "code execution status", "react v2", "streamer channels", "status events"]
+keywords: ["live exec widget", "code execution status", "react", "streamer channels", "status events"]
 see_also:
   - ks:docs/sdk/streaming/channeled-streamer-README.md
   - ks:docs/README.md
@@ -11,7 +11,7 @@ see_also:
 ---
 # Streaming Exec Widget (Live Code + Execution Status)
 
-This document describes the **live exec streaming widget** used by the ReAct v2 decision loop. It supersedes the older code‑exec widget notes and reflects the current runtime wiring.
+This document describes the **live exec streaming widget** used by the ReAct decision loop. It supersedes the older code-exec widget notes and reflects the current runtime wiring.
 
 ## What It Is
 
@@ -66,7 +66,7 @@ The `thinking` channel is not used by the widget directly.
 
 Each exec streaming session is tagged with an `execution_id` created in the ReAct runtime:
 
-- `exec_id = "exec_" + <tool_call_id>`
+- `exec_id = exec_YYYYMMDDHHMMSS_ab12` using a UTC timestamp plus a short random suffix.
 
 This id is attached to every `code_exec.*` event so the UI can group related deltas.
 
@@ -120,7 +120,7 @@ Payload shape:
 
 ```json
 {
-  "execution_id": "exec_tc_xxx",
+  "execution_id": "exec_20260506125243_ab12",
   "contract": [
     {
       "artifact_name": "report",

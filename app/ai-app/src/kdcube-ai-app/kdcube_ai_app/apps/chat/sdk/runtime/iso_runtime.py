@@ -17,6 +17,7 @@ import platform
 import ctypes
 from typing import Dict, Any, List, Tuple, Optional, Literal, Mapping
 
+from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.config import get_settings
 from kdcube_ai_app.apps.chat.sdk.runtime.exec_runtime_config import resolve_exec_runtime_profile
 from kdcube_ai_app.apps.chat.sdk.util import strip_lone_surrogates
@@ -2257,7 +2258,7 @@ class _InProcessRuntime:
         g = dict(globals or {})
         exec_id = (extra_env or {}).get("EXECUTION_ID") or g.get("EXECUTION_ID") or g.get("RESULT_FILENAME")
         if not exec_id:
-            exec_id = f"run-{int(time.time() * 1000)}"
+            exec_id = new_exec_id()
         if extra_env is None:
             extra_env = {}
         extra_env.setdefault("EXECUTION_ID", exec_id)

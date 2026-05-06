@@ -25,6 +25,7 @@ from kdcube_ai_app.auth.sessions import UserSession, UserType
 from kdcube_ai_app.infra.namespaces import REDIS, ns_key
 
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+from kdcube_ai_app.apps.chat.ids import new_turn_id
 from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
 )
@@ -67,7 +68,7 @@ async def _reject_anonymous(
     conv = ConversationCtx(
         session_id=session.session_id,
         conversation_id=session.session_id,
-        turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+        turn_id=new_turn_id(),
     )
     err_detail = f"Anonymous sessions are not allowed for {endpoint}"
 
@@ -506,7 +507,7 @@ def create_sse_router(
         #     conv = ConversationCtx(
         #         session_id=session.session_id,
         #         conversation_id=session.session_id,
-        #         turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+        #         turn_id=new_turn_id(),
         #     )
         #     await chat_comm.emit_error(
         #         svc,
@@ -679,7 +680,7 @@ def create_sse_router(
             conv = ConversationCtx(
                 session_id=session.session_id,
                 conversation_id=session.session_id,
-                turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+                turn_id=new_turn_id(),
             )
             # 1) New chat_service event
             env = {
@@ -763,7 +764,7 @@ def create_sse_router(
 
         base_text = str(base_text).strip()
 
-        turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
+        turn_id = message_data.get("turn_id") or new_turn_id()
         message_data["turn_id"] = turn_id
         conversation_id, conversation_created = await resolve_ingress_conversation_id(
             app=app,

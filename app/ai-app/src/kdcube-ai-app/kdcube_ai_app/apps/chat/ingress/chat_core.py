@@ -32,6 +32,7 @@ from kdcube_ai_app.apps.middleware.token_extract import (
     resolve_auth_from_headers_and_cookies,
     resolve_socket_auth_tokens,
 )
+from kdcube_ai_app.apps.chat.ids import new_turn_id
 from kdcube_ai_app.apps.chat.ingress.resolvers import get_auth_manager
 from kdcube_ai_app.infra.plugin.bundle_registry import load_persisted_registry_from_runtime_ctx
 
@@ -294,7 +295,7 @@ async def process_chat_message(
     )
     target_turn_id = _resolve_target_turn_id(message_data)
     task_id = str(uuid.uuid4())
-    turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
+    turn_id = message_data.get("turn_id") or new_turn_id()
     conversation_id = str(message_data.get("conversation_id") or "").strip()
     if not conversation_id:
         return IngressResult(
@@ -1366,7 +1367,7 @@ async def upgrade_session_from_tokens(
         conv = ConversationCtx(
             session_id=session.session_id,
             conversation_id=session.session_id,
-            turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+            turn_id=new_turn_id(),
         )
         # This won't work if this is the connection flow because the relay is not connected.
         await chat_comm.emit_error(

@@ -10,9 +10,9 @@ import pathlib
 import re
 import shutil
 import traceback
-import uuid
 from typing import Any, Dict, Optional, Tuple
 
+from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.solutions.react.proto import RuntimeCtx
 from kdcube_ai_app.apps.chat.sdk.runtime.tool_subsystem import ToolSubsystem
 
@@ -30,7 +30,7 @@ def _safe_label(s: str, *, maxlen: int = 96) -> str:
 
 def _safe_exec_id(val: Optional[str]) -> str:
     safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", (val or "")).strip("_")
-    return safe or uuid.uuid4().hex[:12]
+    return safe or new_exec_id()
 
 def _log_exec_payload(
     *,
@@ -269,7 +269,7 @@ async def _execute_exec_tool(
     code = ""
     timeout_s = params.get("timeout_s") or 600
     exec_id = exec_streamer.execution_id if exec_streamer else None
-    # exec_id = _safe_exec_id(tool_execution_context.get("exec_id") or tool_call_id)
+    exec_id = exec_id or _safe_exec_id(tool_execution_context.get("exec_id"))
 
     base_error = {
         "status": "error",

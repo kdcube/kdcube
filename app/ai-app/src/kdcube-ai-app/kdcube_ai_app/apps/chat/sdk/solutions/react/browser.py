@@ -15,11 +15,11 @@ import base64
 
 import time
 from datetime import datetime, timezone
-import tempfile
 import os
 
 from typing import Any, Dict, List, Optional
 
+from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.infra.service_hub.inventory import AgentLogger, ModelServiceBase
 from kdcube_ai_app.apps.chat.sdk.context.retrieval.ctx_rag import search_context, ContextRAGClient, unwrap_payload
 from kdcube_ai_app.apps.chat.sdk.solutions.infra import get_exec_workspace_root
@@ -767,7 +767,17 @@ class ContextBrowser:
             # Let caller decide whether to abort the request; do not hide workspace errors.
             raise
         try:
-            tmp = pathlib.Path(tempfile.mkdtemp(prefix="ctx_v2_", dir=str(root)))
+            tmp: Optional[pathlib.Path] = None
+            for _ in range(8):
+                candidate = pathlib.Path(root) / new_exec_id()
+                try:
+                    candidate.mkdir(parents=True, exist_ok=False)
+                    tmp = candidate
+                    break
+                except FileExistsError:
+                    continue
+            if tmp is None:
+                raise FileExistsError(f"could not allocate unique exec workspace under {root}")
         except Exception as e:
             try:
                 self.log.log(f"[workspace] Failed to create exec workspace under {root}: {type(e).__name__}: {e}", level="ERROR")

@@ -144,7 +144,7 @@ def _cleanup_turn_workspace(runtime_ctx: Any, logger: Any) -> None:
             parents.setdefault(p.parent, []).append(p)
 
     for parent, paths in parents.items():
-        if not parent.name.startswith("ctx_v2_"):
+        if not parent.name.startswith(("ctx_v2_", "exec_")):
             continue
         cache = parent / ".react_workspace_git"
         if cache.exists():

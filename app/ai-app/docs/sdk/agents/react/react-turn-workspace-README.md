@@ -3,7 +3,7 @@ id: ks:docs/sdk/agents/react/react-turn-workspace-README.md
 title: "ReAct Turn Workspace"
 summary: "Filesystem contract and lifecycle of the per-turn ReAct workspace (work/out), including local origin, runtime population, persistence, and Fargate/distributed snapshot transport."
 tags: ["sdk", "agents", "react", "workspace", "execution", "snapshot", "fargate", "distributed"]
-keywords: ["ctx_v2", "exec-workspace", "workdir", "outdir", "timeline.json", "tool_calls_index.json", "user.log", "infra.log", "EXEC_SNAPSHOT", "build_exec_snapshot_workspace", "snapshot_exec_input", "py_code_exec_entry.py"]
+keywords: ["exec-workspace", "exec_YYYYMMDDHHMMSS", "workdir", "outdir", "timeline.json", "tool_calls_index.json", "user.log", "infra.log", "EXEC_SNAPSHOT", "build_exec_snapshot_workspace", "snapshot_exec_input", "py_code_exec_entry.py"]
 see_also:
   - ks:docs/sdk/agents/react/agent-workspace-collboration-README.md
   - ks:docs/sdk/agents/react/timeline-README.md
@@ -16,7 +16,7 @@ see_also:
 # ReAct Turn Workspace
 
 This document defines the **actual workspace structure** used by ReAct and how it evolves across phases:
-- local turn start (`exec-workspace/ctx_v2_*`)
+- local turn start (`exec-workspace/exec_<UTC timestamp>_<suffix>`)
 - tool execution and artifact population
 - optional turn snapshot persistence
 - distributed/Fargate serialization, restore, and merge-back
@@ -110,7 +110,7 @@ If the bundle does **not** expose a resolver for directory-style browsing, then 
 
 ## Lifecycle at a glance
 
-1. ReAct creates a fresh per-turn workspace directory (`ctx_v2_*`) with `work/` and `out/`.
+1. ReAct creates a fresh per-turn workspace directory (`exec_YYYYMMDDHHMMSS_ab12`, timestamped in UTC) with `work/` and `out/`.
 2. During the turn, tools and runtime write files into `out/` (and sometimes `work/`).
 3. Optionally, `react.persist_workspace()` stores zipped `out`/`work` for diagnostics.
 4. For distributed/Fargate exec, a lightweight snapshot is built, uploaded, restored remotely, then outputs are merged back.
@@ -129,7 +129,7 @@ Directory creation pattern:
 
 ```text
 <exec_workspace_root>/
-  ctx_v2_<random>/
+  exec_20260506125243_ab12/
     work/
     out/
 ```
@@ -153,7 +153,7 @@ When `workspace_implementation=git`:
 `out/` is the main execution surface. Typical content:
 
 ```text
-ctx_v2_<id>/
+exec_20260506125243_ab12/
   work/
     main.py                                # stable loader executed by isolated runtime
     user_code.py                           # verbatim agent-generated program body/snippet

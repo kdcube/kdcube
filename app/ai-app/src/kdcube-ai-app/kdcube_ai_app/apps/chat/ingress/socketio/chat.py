@@ -29,6 +29,7 @@ from kdcube_ai_app.apps.chat.sdk.protocol import (
     ServiceCtx, ConversationCtx,
 )
 from kdcube_ai_app.apps.chat.emitters import ChatRelayCommunicator
+from kdcube_ai_app.apps.chat.ids import new_turn_id
 
 from kdcube_ai_app.apps.chat.ingress.chat_core import (
     IngressConfig,
@@ -66,7 +67,7 @@ async def _reject_anonymous(
     conv = ConversationCtx(
         session_id=session.session_id,
         conversation_id=session.session_id,
-        turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+        turn_id=new_turn_id(),
     )
     err_detail = f"Anonymous sessions are not allowed for {endpoint}"
 
@@ -418,7 +419,7 @@ class SocketIOChatHandler:
                 conv = ConversationCtx(
                     session_id=session.session_id,
                     conversation_id=message_data.get("conversation_id") or session.session_id,
-                    turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+                    turn_id=new_turn_id(),
                 )
                 await self._comm.emit_error(
                     svc,
@@ -455,7 +456,7 @@ class SocketIOChatHandler:
                         )
                     )
 
-            turn_id = message_data.get("turn_id") or f"turn_{uuid.uuid4().hex[:8]}"
+            turn_id = message_data.get("turn_id") or new_turn_id()
             message_data["turn_id"] = turn_id
             try:
                 conversation_id, conversation_created = await resolve_ingress_conversation_id(
@@ -559,7 +560,7 @@ class SocketIOChatHandler:
                 conv = ConversationCtx(
                     session_id="unknown",
                     conversation_id="unknown",
-                    turn_id=f"turn_{uuid.uuid4().hex[:8]}",
+                    turn_id=new_turn_id(),
                 )
                 await self._comm.emit_error(
                     svc,

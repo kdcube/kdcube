@@ -657,11 +657,11 @@ The path /exec-workspace/codegen_xxx is not shared from the host
 
 ---
 
-### Issue: `mounts denied` for `/tmp/ctx_*` when running chat service locally
+### Issue: `mounts denied` for `/tmp/exec_*` when running chat service locally
 
 **Symptom:**
 ```
-The path /tmp/ctx_v2_xxx/work is not shared from the host
+The path /tmp/exec_20260506125243_ab12/work is not shared from the host
 ```
 
 **Cause:**
@@ -687,7 +687,7 @@ mkdir -p /Users/<you>/kdcube/exec-workspace
 3. **Verify paths in logs**
    - Look for:
 ```
-[solver.codegen] workdir=/Users/<you>/kdcube/exec-workspace/ctx_v2_xxx/work
+[solver.codegen] workdir=/Users/<you>/kdcube/exec-workspace/exec_20260506125243_ab12/work
 ```
 
 ---

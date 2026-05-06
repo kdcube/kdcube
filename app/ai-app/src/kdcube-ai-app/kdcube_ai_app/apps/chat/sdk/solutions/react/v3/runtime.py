@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Callable, Awaitable, Type
 from langgraph.graph import StateGraph, END
 
 from kdcube_ai_app.apps.chat.emitters import ChatCommunicator
+from kdcube_ai_app.apps.chat.ids import new_exec_id
 from kdcube_ai_app.apps.chat.sdk.protocol import ChatTaskPayload
 from kdcube_ai_app.apps.chat.sdk.solutions.react.browser import ContextBrowser
 from kdcube_ai_app.apps.chat.sdk.solutions.infra import emit_event
@@ -1842,7 +1843,7 @@ class ReactSolverV2:
         ):
             mainstream = self._mk_mainstream(f"decision ({iteration})")
             pending_tool_call_id = f"tc_{uuid.uuid4().hex[:12]}"
-            exec_id = f"exec_{pending_tool_call_id}"
+            exec_id = new_exec_id()
             exec_streamer_idx = self._next_tool_streamer_idx(
                 pathlib.Path(state["outdir"]),
                 "exec_tools.execute_code_python",
