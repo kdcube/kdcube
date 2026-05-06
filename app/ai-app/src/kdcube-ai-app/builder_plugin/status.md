@@ -130,6 +130,17 @@ Early work happened on `feat/claude-kdcube-cli-plugin` (now deleted); later work
 - Fixed URL path for descriptor docs in builder_plugin skills: `docs/service/configuration/` → `docs/configuration/`
 - Removed `service-config-README.md` from descriptor doc list (no longer exists at that path)
 
+**2026-05-07** — CLI doc cache + CLI mandatory in Tier 1 bundle-builder (builder + codex)
+- Added **Doc cache** section to `kdcube-cli` skill (both plugins): agent checks
+  `cache/cli-docs.md` age before any WebFetch — reads local file if < 24h, fetches and
+  writes cache if stale/missing. Builder cache: `${CLAUDE_PLUGIN_ROOT}/cache/cli-docs.md`;
+  Codex cache: `${KDCUBE_BUILDER_ROOT:-$HOME/.codex/kdcube-builder}/cache/cli-docs.md`
+- Added `Write, WebFetch` to `allowed-tools` in `kdcube-cli/SKILL.md` (required for cache write)
+- Added **KDCube CLI** as mandatory Tier 1 item in `bundle-builder` (both plugins): agent reads
+  `kdcube_cli/README.md` + `kdcube_cli/additional_README.md` before any CLI op or descriptor
+  mutation; checks CLI cache first
+- Added both CLI URLs to the Read order URL list in `bundle-builder` (both plugins)
+
 **2026-05-06** — Tier 1 update: `bundle-agent-integration` + CLI URLs to main (builder + codex)
 - Added `bundle-agent-integration-README.md` to Tier 1 in both `bundle-builder/SKILL.md` and
   `kdcube-bundle-builder.md` — conditional fetch: React agents with tools, file-producing tools,

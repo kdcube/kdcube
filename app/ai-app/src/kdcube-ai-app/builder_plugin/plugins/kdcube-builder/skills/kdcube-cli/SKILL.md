@@ -5,7 +5,7 @@ description: >
   to init/start/stop KDCube, inject API keys/secrets, reload a bundle via CLI, clean Docker,
   export bundles from AWS, set operator defaults, or asks about kdcube CLI flags.
   SKIP: bundle authoring or the full edit→reload→verify development loop (use kdcube-dev).
-allowed-tools: Bash, Read
+allowed-tools: Bash, Read, Write, WebFetch
 ---
 
 # KDCube CLI
@@ -22,6 +22,23 @@ Direct wrapper around the `kdcube` CLI.
 | Bundle configure & run workflow | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md |
 | CLI as control plane design (reload, init, defaults) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md |
 | PyPI package reference | https://pypi.org/project/kdcube-cli/ |
+
+## Doc cache
+
+CLI reference docs are cached locally to avoid repeated fetches. Cache TTL: 24 hours.
+
+**Before fetching any Reference doc:**
+
+```bash
+CACHE="${CLAUDE_PLUGIN_ROOT}/cache/cli-docs.md"
+python3 -c "import os,time; exit(0 if os.path.isfile('$CACHE') and time.time()-os.path.getmtime('$CACHE')<86400 else 1)"
+```
+
+- Exit 0 → cache is fresh. Use `Read` on `${CLAUDE_PLUGIN_ROOT}/cache/cli-docs.md` instead of WebFetch.
+- Exit 1 → cache is stale or missing. Fetch the relevant docs via WebFetch, then write the full
+  result to the cache file using the `Write` tool:
+  `${CLAUDE_PLUGIN_ROOT}/cache/cli-docs.md`
+  Include `<!-- cached: <ISO timestamp> -->` as the first line.
 
 Fetch the relevant doc(s) via WebFetch when the user asks about a specific command or flag
 not covered by the quick-reference below.

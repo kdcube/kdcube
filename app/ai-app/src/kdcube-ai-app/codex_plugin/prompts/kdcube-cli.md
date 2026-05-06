@@ -16,6 +16,21 @@ Take the intent from the text after `/kdcube-cli` and map it to the right comman
 | CLI as control plane design (reload, init, defaults) | https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/service/cicd/design/cli--as-control-plane-README.md |
 | PyPI package reference | https://pypi.org/project/kdcube-cli/ |
 
+## Doc cache
+
+CLI reference docs are cached locally to avoid repeated fetches. Cache TTL: 24 hours.
+
+**Before fetching any Reference doc:**
+
+```bash
+CACHE="${KDCUBE_BUILDER_ROOT:-$HOME/.codex/kdcube-builder}/cache/cli-docs.md"
+python3 -c "import os,time; exit(0 if os.path.isfile('$CACHE') and time.time()-os.path.getmtime('$CACHE')<86400 else 1)"
+```
+
+- Exit 0 → cache is fresh. Read `$CACHE` instead of fetching from the web.
+- Exit 1 → cache is stale or missing. Fetch the relevant docs via WebFetch, then write the full
+  result to `$CACHE`. Include `<!-- cached: <ISO timestamp> -->` as the first line.
+
 Fetch the relevant doc(s) via WebFetch when the user asks about a specific command or flag
 not covered by the quick-reference below.
 

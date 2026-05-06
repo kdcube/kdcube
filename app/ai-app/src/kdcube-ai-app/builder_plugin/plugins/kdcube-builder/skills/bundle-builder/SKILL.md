@@ -94,6 +94,10 @@ specific thing you are about to do.
      or `assembly.yaml`.** Only source of truth for the host-path / container-path /
      mount-root split.
    - versatile reference bundle — read end-to-end (structure + `entrypoint.py`)
+   - **KDCube CLI** — `kdcube_cli/README.md` (quickstart + command table) and
+     `kdcube_cli/additional_README.md` (`kdcube bundle` reference); read before any
+     CLI operation or descriptor mutation. Check the `kdcube-cli` skill cache first
+     (`${CLAUDE_PLUGIN_ROOT}/cache/cli-docs.md`) — fetch only if cache is stale or missing.
 2. **Tier 2 — only when Tier 1 is not enough.** See the Tier 2 section below for the
    trigger list. Do not preload Tier 2 "just in case" — it is large and mostly irrelevant
    to any single task.
@@ -159,6 +163,8 @@ Fetch each with `WebFetch` **in this order** (navigate first, then the rest):
 - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/configuration/bundle-runtime-configuration-and-secrets-README.md` — configuration ownership model (props, secrets, runtime config)
 - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-configure-and-run-bundle-README.md` — configuration + runtime (`assembly.yaml`, `bundles.yaml`, `bundles.secrets.yaml`, props/secrets, reload)
 - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/build/how-to-release-bundle-content-README.md` — optional Tier 1 lifecycle procedure: align bundle docs/config templates/release.yaml, validate, commit/tag/push, update descriptor ref
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/README.md` — KDCube CLI quickstart & full command table
+- `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/src/kdcube-ai-app/kdcube_cli/additional_README.md` — `kdcube bundle` reference (source, identity, config/secrets patch, delete)
 - `https://raw.githubusercontent.com/kdcube/kdcube-ai-app/main/app/ai-app/docs/sdk/bundle/bundle-agent-integration-README.md` — **fetch when the task involves React agents with local tools, file-producing tools, MCP endpoints or client config, or Claude Code subprocess agents;** covers agent runtime comparison (React vs Claude Code), tool descriptors, skill descriptors, `@mcp(...)` endpoints, `ClaudeCodeAgentConfig`, SDK-managed skill materialization
 
 Reference bundle `versatile@2026-03-31-13-36` — read end-to-end. Directories are not
