@@ -4,6 +4,7 @@
 # logging_config.py
 import logging
 import os
+import errno
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,28 @@ def _env_int(name: str) -> int | None:
         return None
 
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler variant that tolerates concurrent rollover races."""
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except OSError as exc:
+            if getattr(exc, "errno", None) != errno.ENOENT:
+                raise
+            # Another worker rotated or removed the file between exists() and
+            # rename(). Keep logging alive; losing one rollover race is better
+            # than emitting logging tracebacks into the service log stream.
+            if self.stream:
+                try:
+                    self.stream.close()
+                except Exception:
+                    pass
+                self.stream = None
+            if not self.delay:
+                self.stream = self._open()
+
+
 def configure_logging():
     # --- Global settings from config ---
     _log = get_settings().PLATFORM.LOG
@@ -54,7 +77,7 @@ def configure_logging():
     max_mb = _env_int("LOG_MAX_MB") or _log.LOG_MAX_MB
     backup_count = _env_int("LOG_BACKUP_COUNT") or _log.LOG_BACKUP_COUNT
 
-    file_handler = RotatingFileHandler(
+    file_handler = SafeRotatingFileHandler(
         base_log_path,
         maxBytes=max_mb * 1024 * 1024,
         backupCount=backup_count,
@@ -62,25 +85,6 @@ def configure_logging():
     )
     file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter(log_format))
-
-    # Rename rotated files to include timestamp instead of ".1", ".2", ...
-    def _namer(default_name: str) -> str:
-        """
-        default_name is like '/path/to/chat.log.1'
-        We want '/path/to/chat-YYYYMMDD-HHMMSS.log'
-        """
-        p = Path(default_name)
-
-        # Strip the trailing numeric suffix (.1, .2, ...) first
-        # p.name == 'chat.log.1'
-        root, _idx = p.name.rsplit(".", 1)        # 'chat.log', '1'
-        root_base, root_ext = os.path.splitext(root)  # 'chat', '.log'
-
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        new_name = f"{root_base}-{ts}{root_ext}"
-        return str(p.with_name(new_name))
-
-    file_handler.namer = _namer  # let RotatingFileHandler call this on rollover
 
     # ---- Root logger as single source of truth ----
     root = logging.getLogger()
