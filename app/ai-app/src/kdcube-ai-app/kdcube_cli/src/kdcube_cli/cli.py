@@ -397,7 +397,7 @@ def _resolve_cli_workdir(
 
 
 def _is_git_repo(path: Path) -> bool:
-    return path.exists() and (path / ".git").is_dir()
+    return installer_mod.is_git_repo(path)
 
 
 def _is_platform_source_tree(path: Path) -> bool:
@@ -1057,6 +1057,26 @@ def _get_nested(data: dict | None, *keys: str):
     return cur
 
 
+def _parse_yaml_scalar(raw: str) -> object:
+    """Parse a CLI string value into a typed YAML scalar (bool, int, float, str, None)."""
+    try:
+        val = yaml.safe_load(raw)
+        if isinstance(val, (bool, int, float, str)) or val is None:
+            return val
+    except Exception:
+        pass
+    return raw
+
+
+def _nested_key_exists(dct: dict, keys: list) -> bool:
+    cur: object = dct
+    for key in keys:
+        if not isinstance(cur, dict) or key not in cur:
+            return False
+        cur = cur[key]
+    return True
+
+
 def _has_value(value: object | None) -> bool:
     if value is None:
         return False
@@ -1244,8 +1264,12 @@ def _copy_dirty_local_source(console: Console, *, source_repo: Path, workdir: Pa
 
 
 def ensure_repo(console: Console, repo: str, target: Path) -> None:
-    if target.exists() and (target / ".git").is_dir():
+    if _is_git_repo(target):
         console.print(f"Repo already exists at {target}")
+        return
+
+    if _is_platform_source_tree(target):
+        console.print(f"[dim]Using local platform source at:[/dim] {target}")
         return
 
     normalized_repo = installer_mod.normalize_git_repo_source(repo)
@@ -1748,6 +1772,100 @@ def main() -> None:
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
 
+    _sp = subparsers.add_parser("bundle", help="Create, update, or delete a staged bundle entry")
+    _sp.add_argument("bundle_id", help="Bundle ID to patch")
+    _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
+    # Source mode (mutually exclusive)
+    _src_grp = _sp.add_mutually_exclusive_group()
+    _src_grp.add_argument(
+        "--local-path",
+        metavar="PATH",
+        default=None,
+        dest="local_path",
+        help="Set bundle source to a local/container-visible path (clears git fields)",
+    )
+    _src_grp.add_argument(
+        "--git-repo",
+        metavar="REPO",
+        default=None,
+        dest="git_repo",
+        help="Set bundle source to a git repo URL (clears path field)",
+    )
+    _sp.add_argument(
+        "--git-ref",
+        metavar="REF",
+        default=None,
+        dest="git_ref",
+        help="Git ref/tag (required with --git-repo)",
+    )
+    _sp.add_argument(
+        "--git-subdir",
+        metavar="SUBDIR",
+        default=None,
+        dest="git_subdir",
+        help="Subdirectory within the git repo that contains the bundle",
+    )
+    # Identity fields
+    _sp.add_argument("--name", default=None, help="Display name for the bundle")
+    _sp.add_argument("--module", default=None, help="Python module name (default: entrypoint)")
+    _sg = _sp.add_mutually_exclusive_group()
+    _sg.add_argument(
+        "--singleton",
+        dest="singleton",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Mark bundle as singleton",
+    )
+    _sg.add_argument(
+        "--no-singleton",
+        dest="singleton",
+        action="store_const",
+        const=False,
+        help="Mark bundle as non-singleton",
+    )
+    # Config / secrets patch ops
+    _sp.add_argument(
+        "--set-config",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        action="append",
+        default=[],
+        dest="set_config",
+        help="Set a config value by dotted key path",
+    )
+    _sp.add_argument(
+        "--set-secret",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        action="append",
+        default=[],
+        dest="set_secret",
+        help="Set a secret value by dotted key path",
+    )
+    _sp.add_argument(
+        "--del-config",
+        metavar="KEY",
+        action="append",
+        default=[],
+        dest="del_config",
+        help="Delete a config key by dotted path",
+    )
+    _sp.add_argument(
+        "--del-secret",
+        metavar="KEY",
+        action="append",
+        default=[],
+        dest="del_secret",
+        help="Delete a secret key by dotted path",
+    )
+    _sp.add_argument(
+        "--delete",
+        action="store_true",
+        default=False,
+        help="Remove this bundle entry from bundles.yaml (and its secrets entry if present)",
+    )
+
     _sp = subparsers.add_parser("export", help="Export live bundle descriptors")
     _sp.add_argument("--workdir", default=None, help="Namespaced runtime workdir")
     _sp.add_argument("--path", default=str(DEFAULT_DIR), help="Platform repo path")
@@ -1875,6 +1993,192 @@ def main() -> None:
                 bundle_id=str(args.bundle_id).strip(),
             )
             return
+        if args.command == "bundle":
+            _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
+            _resolved = _resolve_cli_workdir(_workdir)
+            _config_dir = _resolved / "config"
+            _bundles_path = _config_dir / "bundles.yaml"
+            _bundles_secrets_path = _config_dir / "bundles.secrets.yaml"
+
+            if not _bundles_path.exists():
+                raise SystemExit(
+                    f"bundles.yaml not found at {_bundles_path}.\n"
+                    "Initialize the workdir first."
+                )
+
+            _bundle_id = str(args.bundle_id).strip()
+            _local_path: str | None = args.local_path
+            _git_repo: str | None = args.git_repo
+            _git_ref: str | None = args.git_ref
+            _git_subdir: str | None = args.git_subdir
+            _b_name: str | None = args.name
+            _b_module: str | None = args.module
+            _b_singleton: bool | None = args.singleton
+            _set_config_ops: list[list[str]] = args.set_config or []
+            _set_secret_ops: list[list[str]] = args.set_secret or []
+            _del_config_ops: list[str] = args.del_config or []
+            _del_secret_ops: list[str] = args.del_secret or []
+            _delete: bool = args.delete
+
+            _has_source_op = _local_path is not None or _git_repo is not None
+            _has_identity_op = _b_name is not None or _b_module is not None or _b_singleton is not None
+            _has_config_op = bool(_set_config_ops or _del_config_ops)
+            _has_secret_op = bool(_set_secret_ops or _del_secret_ops)
+
+            if _git_subdir is not None and _git_repo is None:
+                raise SystemExit("--git-subdir can only be used together with --git-repo.")
+
+            if _delete and any([_has_source_op, _has_identity_op, _has_config_op, _has_secret_op]):
+                raise SystemExit("--delete cannot be combined with other flags.")
+
+            if not any([_delete, _has_source_op, _has_identity_op, _has_config_op, _has_secret_op]):
+                raise SystemExit(
+                    "No operations specified. Use --local-path, --git-repo, --name, --module, "
+                    "--singleton/--no-singleton, --set-config, --set-secret, --del-config, --del-secret, or --delete."
+                )
+
+            if _git_repo is not None and not _git_ref:
+                raise SystemExit("--git-ref is required when --git-repo is specified.")
+
+            if _delete:
+                _bundles_data = installer_mod.load_release_descriptor(_bundles_path)
+                _b_block = _bundles_data.get("bundles") if isinstance(_bundles_data, dict) else None
+                _b_items = _b_block.get("items", []) if isinstance(_b_block, dict) else []
+                _b_idx = next(
+                    (i for i, it in enumerate(_b_items) if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
+                    None,
+                )
+                if _b_idx is None:
+                    raise SystemExit(f"Bundle '{_bundle_id}' not found in {_bundles_path}")
+                del _b_items[_b_idx]
+                installer_mod.save_release_descriptor(_bundles_path, _bundles_data)
+                console.print(f"[green]Removed from bundles.yaml:[/green] {_bundle_id!r}")
+                if _bundles_secrets_path.exists():
+                    _bs_data = installer_mod.load_release_descriptor(_bundles_secrets_path)
+                    _bs_block = _bs_data.get("bundles") if isinstance(_bs_data, dict) else None
+                    _bs_items = _bs_block.get("items", []) if isinstance(_bs_block, dict) else []
+                    _bs_idx = next(
+                        (i for i, it in enumerate(_bs_items) if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
+                        None,
+                    )
+                    if _bs_idx is not None:
+                        del _bs_items[_bs_idx]
+                        installer_mod.save_release_descriptor(_bundles_secrets_path, _bs_data)
+                        console.print(f"[green]Removed from bundles.secrets.yaml:[/green] {_bundle_id!r}")
+                return
+
+            # --- bundles.yaml operations (source mode + identity + config) ---
+            if _has_source_op or _has_identity_op or _has_config_op:
+                _bundles_data = installer_mod.load_release_descriptor(_bundles_path)
+                _b_block = _bundles_data.get("bundles") if isinstance(_bundles_data, dict) else None
+                _b_items = _b_block.get("items", []) if isinstance(_b_block, dict) else []
+                _b_item = next(
+                    (it for it in _b_items if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
+                    None,
+                )
+                if _b_item is None:
+                    if not _has_source_op:
+                        raise SystemExit(
+                            f"Bundle '{_bundle_id}' not found in {_bundles_path}. "
+                            "Provide --local-path or --git-repo to create a new entry."
+                        )
+                    _b_item = {"id": _bundle_id}
+                    if isinstance(_b_block, dict):
+                        _b_block.setdefault("items", []).append(_b_item)
+                    console.print(f"[dim]creating new bundle entry[/dim] {_bundle_id!r}")
+
+                if _local_path is not None:
+                    _b_item["path"] = _local_path
+                    for _stale in ("repo", "ref", "subdir"):
+                        _b_item.pop(_stale, None)
+                    console.print(f"[dim]set source[/dim] local-path = {_local_path!r}")
+
+                if _git_repo is not None:
+                    _b_item["repo"] = _git_repo
+                    _b_item["ref"] = _git_ref
+                    if _git_subdir is not None:
+                        _b_item["subdir"] = _git_subdir
+                    else:
+                        _b_item.pop("subdir", None)
+                    _b_item.pop("path", None)
+                    console.print(f"[dim]set source[/dim] git-repo = {_git_repo!r} ref = {_git_ref!r}")
+                    if _git_subdir:
+                        console.print(f"[dim]set source[/dim] git-subdir = {_git_subdir!r}")
+
+                if _b_name is not None:
+                    _b_item["name"] = _b_name
+                    console.print(f"[dim]set name[/dim] {_b_name!r}")
+
+                if _b_module is not None:
+                    _b_item["module"] = _b_module
+                    console.print(f"[dim]set module[/dim] {_b_module!r}")
+                elif "module" not in _b_item:
+                    _b_item["module"] = "entrypoint"
+
+                if _b_singleton is not None:
+                    _b_item["singleton"] = _b_singleton
+                    console.print(f"[dim]set singleton[/dim] {_b_singleton!r}")
+                elif "singleton" not in _b_item:
+                    _b_item["singleton"] = False
+
+                if _has_config_op:
+                    _cfg = _b_item.setdefault("config", {})
+                    if not isinstance(_cfg, dict):
+                        _cfg = {}
+                        _b_item["config"] = _cfg
+                    for _key, _raw in _set_config_ops:
+                        _val = _parse_yaml_scalar(_raw)
+                        installer_mod._set_nested(_cfg, _key.split("."), _val)
+                        console.print(f"[dim]set config[/dim] {_key} = {_val!r}")
+                    for _key in _del_config_ops:
+                        _parts = _key.split(".")
+                        if not _nested_key_exists(_cfg, _parts):
+                            raise SystemExit(f"Config key '{_key}' not found in bundle '{_bundle_id}'")
+                        installer_mod._delete_nested(_cfg, _parts)
+                        console.print(f"[dim]del config[/dim] {_key}")
+
+                installer_mod.save_release_descriptor(_bundles_path, _bundles_data)
+                console.print(f"[green]Updated:[/green] {_bundles_path}")
+
+            if _set_secret_ops or _del_secret_ops:
+                _bs_data = (
+                    installer_mod.load_release_descriptor(_bundles_secrets_path)
+                    if _bundles_secrets_path.exists()
+                    else {"bundles": {"version": "1", "items": []}}
+                )
+                _bs_block = _bs_data.setdefault("bundles", {})
+                if not isinstance(_bs_block, dict):
+                    _bs_block = {}
+                    _bs_data["bundles"] = _bs_block
+                _bs_items = _bs_block.setdefault("items", [])
+                if not isinstance(_bs_items, list):
+                    _bs_items = []
+                    _bs_block["items"] = _bs_items
+                _bs_item = next(
+                    (it for it in _bs_items if isinstance(it, dict) and str(it.get("id", "")) == _bundle_id),
+                    None,
+                )
+                if _bs_item is None:
+                    _bs_item = {"id": _bundle_id, "secrets": {}}
+                    _bs_items.append(_bs_item)
+                _sec = _bs_item.setdefault("secrets", {})
+                if not isinstance(_sec, dict):
+                    _sec = {}
+                    _bs_item["secrets"] = _sec
+                for _key, _raw in _set_secret_ops:
+                    _val = _parse_yaml_scalar(_raw)
+                    installer_mod._set_nested(_sec, _key.split("."), _val)
+                    console.print(f"[dim]set secret[/dim] {_key}")
+                for _key in _del_secret_ops:
+                    _parts = _key.split(".")
+                    if not _nested_key_exists(_sec, _parts):
+                        raise SystemExit(f"Secret key '{_key}' not found in bundle '{_bundle_id}'")
+                    installer_mod._delete_nested(_sec, _parts)
+                    console.print(f"[dim]del secret[/dim] {_key}")
+                installer_mod.save_release_descriptor(_bundles_secrets_path, _bs_data)
+                console.print(f"[green]Updated:[/green] {_bundles_secrets_path}")
+
+            return
         if args.command == "export":
             _workdir = _resolve_subcommand_workdir(args.workdir, cli_defaults)
             _repo = _resolve_subcommand_repo(args.path, workdir=_workdir)
@@ -1923,53 +2227,89 @@ def main() -> None:
             _init_repo = Path(os.path.expanduser(args.path)).resolve()
             _init_descriptors_location: Path | None = None
             _init_version_selector = bool(args.upstream or args.latest or str(args.release or "").strip())
+            if sum([bool(args.latest), bool(args.upstream), bool(str(args.release or "").strip())]) > 1:
+                raise SystemExit("Choose only one of --latest, --upstream, or --release.")
             _init_local_source_copy = _init_path_provided and not _init_version_selector
+            # Pre-declare; may be set early in the no-descriptors path below.
+            _init_preset_tenant: str | None = None
+            _init_preset_project: str | None = None
+            _init_resolved: Path | None = None
             if str(args.descriptors_location or "").strip():
                 _init_descriptors_location = Path(
                     os.path.expanduser(args.descriptors_location)
                 ).resolve()
-            elif args.latest or args.upstream or str(args.release or "").strip() or args.build:
+            else:
+                # No --descriptors-location: determine tenant/project, create the
+                # scoped workdir, then clone the platform repo into <workdir>/repo
+                # and use its deployment/ directory as the descriptor source.
+                # Applies to plain init, --latest, --upstream, --release, and --build.
+                if "__" in _init_workdir.name:
+                    # --workdir already encodes tenant__project; use it directly
+                    # and derive the namespace from the directory name.
+                    _init_resolved = _init_workdir.resolve()
+                    _ns = _init_workdir.name.split("__", 1)
+                    _init_preset_tenant = _ns[0]
+                    _init_preset_project = _ns[1]
+                elif args.interactive:
+                    _init_preset_tenant = installer_mod.ask(
+                        console,
+                        "Tenant ID",
+                        default=str(args.tenant or "").strip() or "default",
+                    )
+                    _init_preset_project = installer_mod.ask(
+                        console,
+                        "Project name",
+                        default=str(args.project or "").strip() or "default",
+                    )
+                    _init_resolved = installer_mod.workspace_runtime_dir(
+                        _init_workdir, _init_preset_tenant, _init_preset_project
+                    ).resolve()
+                else:
+                    _init_preset_tenant = str(args.tenant or "").strip() or "default"
+                    _init_preset_project = str(args.project or "").strip() or "default"
+                    _init_resolved = installer_mod.workspace_runtime_dir(
+                        _init_workdir, _init_preset_tenant, _init_preset_project
+                    ).resolve()
+                _init_resolved.mkdir(parents=True, exist_ok=True)
+                _repo_target = _init_repo if _init_path_provided else _init_resolved / DEFAULT_REPO_DIRNAME
                 _init_repo, _init_descriptors_location = _bootstrap_repo_for_defaults(
                     console,
-                    repo=args.path,
-                    repo_path=_init_repo,
+                    repo=args.repo,
+                    repo_path=_repo_target,
                     path_provided=_init_path_provided,
                 )
                 console.print(
                     f"[dim]No --descriptors-location provided. "
                     f"Using repo defaults from:[/dim] {_init_descriptors_location}"
                 )
-            else:
-                raise SystemExit(
-                    "kdcube init requires a descriptor source.\n"
-                    "Pass --descriptors-location <dir>, or use --latest/--upstream/--release/--build "
-                    "to bootstrap from the platform repo."
-                )
+                if not _init_version_selector:
+                    # No explicit version selector: default to latest release.
+                    args.latest = True
 
             # For --interactive: prompt tenant/project BEFORE resolving/creating the workdir
             # so the directory is created with the correct namespace from the start.
-            _init_preset_tenant: str | None = None
-            _init_preset_project: str | None = None
-            if args.interactive:
+            # Skipped when tenant/project were already collected in the no-descriptors path above.
+            if args.interactive and _init_preset_tenant is None:
                 _src_assembly = installer_mod.load_release_descriptor_soft(
                     _init_descriptors_location / "assembly.yaml"
                 ) or {}
                 _t_default, _p_default = installer_mod.descriptor_context_from_assembly(_src_assembly)
                 _init_preset_tenant = installer_mod.ask(
-                    console, "Tenant ID", default=_t_default or "demo-tenant"
+                    console, "Tenant ID", default=_t_default or "default"
                 )
                 _init_preset_project = installer_mod.ask(
-                    console, "Project name", default=_p_default or "demo-project"
+                    console, "Project name", default=_p_default or "default"
                 )
 
-            if _init_preset_tenant and _init_preset_project:
-                _init_resolved = installer_mod.workspace_runtime_dir(
-                    _init_workdir, _init_preset_tenant, _init_preset_project
-                ).resolve()
-            else:
-                _init_resolved = _resolve_cli_workdir(
-                    _init_workdir, descriptors_location=_init_descriptors_location
-                )
+            if _init_resolved is None:
+                if _init_preset_tenant and _init_preset_project:
+                    _init_resolved = installer_mod.workspace_runtime_dir(
+                        _init_workdir, _init_preset_tenant, _init_preset_project
+                    ).resolve()
+                else:
+                    _init_resolved = _resolve_cli_workdir(
+                        _init_workdir, descriptors_location=_init_descriptors_location
+                    )
 
             if str(args.descriptors_location or "").strip():
                 _init_repo = _resolve_cli_repo_path(
@@ -2025,6 +2365,12 @@ def main() -> None:
                     path_provided=_init_path_provided,
                     assembly=_init_assembly,
                     fallback_repo=args.repo,
+                )
+
+            if _init_version_selector and not _is_git_repo(_init_repo):
+                raise SystemExit(
+                    f"Cannot use --upstream/--latest/--release with a local source tree at {_init_repo} (not a git repo root).\n"
+                    f"Remove {_init_repo} and re-run, or use --path to point to a git repo."
                 )
 
             _init_release_ref: str | None = None

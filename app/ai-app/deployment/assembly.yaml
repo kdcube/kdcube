@@ -2,8 +2,8 @@ domain: "" # required when proxy.ssl=true; used for proxylogin URLs and nginx SS
 company: "KDCube"
 
 context:
-  tenant: "demo-tenant"    # TENANT_ID
-  project: "demo-project"  # PROJECT_ID
+  tenant: "default"    # TENANT_ID
+  project: "default"   # PROJECT_ID
 
 # ---------------------------------------------------------------------------
 # Authentication

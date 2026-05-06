@@ -1,9 +1,9 @@
 ---
 id: ks:docs/service/cicd/cli-README.md
 title: "Current KDCube CLI"
-summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, and the practical rule that multiple namespaced runtime snapshots may exist on one machine while local compose-backed execution remains one active deployment at a time."
-tags: ["service", "cicd", "cli", "env", "deployment"]
-keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace"]
+summary: "Current implemented CLI surface for local environment bootstrapping, workdir preparation, Docker Compose startup, descriptor validation, bundle config and secret patching, and the practical rule that multiple namespaced runtime snapshots may exist on one machine while local compose-backed execution remains one active deployment at a time."
+tags: ["service", "cicd", "cli", "env", "deployment", "bundle"]
+keywords: ["kdcube cli", "local environment bootstrap", "workdir setup", "docker compose control", "descriptor validation", "current cli contract", "local deployment tooling", "multiple local runtime snapshots", "single active local deployment", "tenant project workdir namespace", "bundle config patch", "bundle secret patch", "kdcube bundle command"]
 see_also:
   - ks:docs/service/cicd/release-README.md
   - ks:docs/service/cicd/descriptors-README.md
@@ -80,10 +80,11 @@ Important local-runtime rule:
    - Create data folders
 
 2b) **Compose with custom UI (advanced)**
-   - Use an `assembly.yaml` that includes a `frontend` section
+   - Use an `assembly.yaml` that includes `frontend.build` or `frontend.image`
    - If `frontend.image` is set, the UI build is skipped
    - If `frontend.build` is set, the UI repo is cloned and built
    - Switches compose mode to `custom‑ui‑managed‑infra`
+   - `frontend.config` alone does **not** trigger this mode
 
 3) **Validate assembly descriptor**
    - Validate schema + refs
@@ -165,11 +166,14 @@ kdcube env init \
 
 ### 2.3 Custom UI via assembly descriptor (compose)
 
-When `assembly.yaml` contains a `frontend` section, the CLI uses
+When `assembly.yaml` contains `frontend.build` or `frontend.image`, the CLI uses
 **custom‑ui‑managed‑infra** compose mode:
 
 - `frontend.image` → use a prebuilt UI image (skip build)
 - `frontend.build` → clone repo and build UI
+
+`frontend.config` (auth type, routes prefix, debug flags) is runtime metadata consumed in
+both modes and does **not** trigger `custom‑ui‑managed‑infra` on its own.
 
 The CLI also generates runtime `config.json` from `frontend_config`.
 If `frontend_config` is omitted, it falls back to a built-in template based on auth mode:
@@ -224,9 +228,58 @@ Repo field contract:
   backward compatibility, but new descriptors should use one of the cloneable
   forms above
 
-### 2.3a Descriptor folder fast path
+### 2.3a Plain init (no descriptor source required)
 
-The CLI now supports a descriptor-folder driven install path:
+`kdcube init` can be run with no additional flags. The CLI clones the platform
+repo directly into the scoped runtime directory and uses its bundled
+`app/ai-app/deployment/` as the descriptor source:
+
+```bash
+kdcube init
+```
+
+This is equivalent to `kdcube init --latest`. The runtime is created under:
+
+```text
+~/.kdcube/kdcube-runtime/default__default/repo
+```
+
+Pass `--tenant` / `--project` (or `-i` for interactive prompts) to use a
+non-default namespace. Interactive prompts happen **before** cloning so the
+directory is created with the correct namespace from the start:
+
+```bash
+kdcube init -i
+kdcube init --tenant acme --project prod
+```
+
+`--workdir` sets the base directory. If the value already contains `__`
+(i.e. it is itself a namespaced runtime path), it is used directly without
+appending a tenant/project subdirectory:
+
+```bash
+# base dir → creates ~/.kdcube/kdcube-runtime/default__default/
+kdcube init --workdir ~/.kdcube/kdcube-runtime
+
+# namespaced dir → used as-is
+kdcube init --workdir ~/.kdcube/kdcube-runtime/acme__prod
+```
+
+All version selectors work the same way without `--descriptors-location`:
+
+```bash
+kdcube init --latest
+kdcube init --upstream
+kdcube init --release 2026.4.30.317
+kdcube init --build
+```
+
+`--latest`, `--upstream`, and `--release` are mutually exclusive — combining
+any two raises an error.
+
+### 2.3b Descriptor folder fast path
+
+The CLI also supports a descriptor-folder driven install path:
 
 ```bash
 kdcube init \
@@ -306,10 +359,12 @@ kdcube init \
   --release 2026.4.11.012
 ```
 
-Choose exactly one source selector:
+Choose at most one source selector (`--latest`, `--upstream`, `--release` are
+mutually exclusive — combining any two raises an error):
 
 - `--upstream` for the latest upstream repo state
-- `--latest` for the latest released platform ref
+- `--latest` for the latest released platform ref (also the default when no
+  `--descriptors-location` is provided and no selector is specified)
 - `--release <ref>` for a specific released ref
 - explicit `--path <repo>` without the selectors above for dirty local source
   staging
@@ -383,6 +438,159 @@ Operational rule for `aws-sm` deployments:
 
 If you skip that step, a later provision can replay stale `BUNDLES_YAML` or
 `BUNDLES_SECRETS_YAML` and overwrite runtime bundle changes.
+
+### 2.3c Manage staged bundle entries
+
+`kdcube bundle` creates, updates, or deletes entries in the staged descriptor
+files in the active runtime workdir without a full reinstall or manual YAML edit.
+All non-delete flag groups can be combined in one invocation — the command does a
+single atomic read-modify-write of `bundles.yaml` / `bundles.secrets.yaml`.
+
+When `--local-path` or `--git-repo` is provided and `<bundle_id>` does not yet
+exist in `bundles.yaml`, the command **creates** a new entry (upsert).
+For all other operations (identity, config, secrets) the bundle must already exist.
+
+#### Source mode
+
+Switch where proc loads the bundle from.
+
+**Local path** — proc reads from a host-mounted directory.
+The path must be the **container-visible** path (under `/bundles/`, not the host path):
+
+```bash
+kdcube bundle <bundle_id> \
+  --local-path /bundles/my.bundle \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Setting `--local-path` clears any `repo`/`ref`/`subdir` fields.
+
+**Git repo** — proc clones the repo into `/managed-bundles/` on first `kdcube reload`:
+
+```bash
+kdcube bundle <bundle_id> \
+  --git-repo git@github.com:org/my-bundle.git \
+  --git-ref 2026.4.30 \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+`--git-ref` is required with `--git-repo`.
+
+If the bundle root is a subdirectory of the repo:
+
+```bash
+kdcube bundle <bundle_id> \
+  --git-repo git@github.com:org/monorepo.git \
+  --git-ref main \
+  --git-subdir src/my.bundle \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+`--git-subdir` requires `--git-repo`.
+
+After proc resolves a git bundle it writes the concrete resolved path back into
+the descriptor (e.g. `/managed-bundles/org__my-bundle__2026.4.30`).
+This is expected — the source-of-truth for the next reload is the
+`repo`/`ref`/`subdir` fields.
+
+Setting `--git-repo` clears any `path` field.
+
+#### Identity fields
+
+```bash
+kdcube bundle <bundle_id> \
+  --name "My Bundle" \
+  --module entrypoint \
+  --singleton \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--name NAME` | bundle_id | Human-readable display name |
+| `--module MODULE` | `entrypoint` | Python module used as the bundle entry point |
+| `--singleton` | `false` | Only one instance may run at a time |
+| `--no-singleton` | — | Explicitly set `singleton: false` |
+
+#### Config and secrets patch
+
+**Set a config value by dotted key path:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-config key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+**Delete a config key:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --del-config key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+**Set a secret:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-secret key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+**Delete a secret key:**
+
+```bash
+kdcube bundle <bundle_id> \
+  --del-secret key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Multiple patch operations can be chained:
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-config model.name claude-opus-4-7 \
+  --set-config features.debug false \
+  --del-config features.legacy_mode \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Value coercion rules:
+
+| CLI value | Stored as |
+|---|---|
+| `true` / `false` | bool |
+| `42`, `3.14` | int / float |
+| `hello world` | string (no quotes needed) |
+| `'{"a": 1}'` (shell-quoted JSON) | string (the JSON literal) |
+
+`--del-config` and `--del-secret` raise an error if the key does not exist.
+
+#### Delete a bundle entry
+
+Remove a bundle from `bundles.yaml` (and its secrets entry from
+`bundles.secrets.yaml`, if present):
+
+```bash
+kdcube bundle <bundle_id> \
+  --delete \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+`--delete` cannot be combined with any other flag. Exits with an error if the
+bundle is not found.
+
+#### Apply changes
+
+After patching, apply the change with:
+
+```bash
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+`kdcube bundle` only patches the staged files under `workdir/config/`.
+It does not push the change live on its own — `kdcube reload` is still required.
 
 ### 2.4 Bundles descriptor (optional)
 
@@ -585,7 +793,6 @@ This is intended for **local development** only.
 ## 8) Future commands (next phase)
 
 - `kdcube doctor` (validate env + filesystem + runtime dependencies)
-- `kdcube compose up` (wrapper around docker compose)
 - `kdcube release tag` (tag + VERSION validation)
 
 ## 9) Operational commands
@@ -599,10 +806,18 @@ kdcube --info
 Inspect a specific workdir deployment:
 
 ```bash
-kdcube --info --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube --info --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
-Initialize a workdir without starting Docker:
+Initialize a workdir without starting Docker (clones platform repo automatically):
+
+```bash
+kdcube init
+kdcube init --latest
+kdcube init --tenant acme --project prod --latest
+```
+
+Initialize from a prepared descriptor folder:
 
 ```bash
 kdcube init \
@@ -637,19 +852,38 @@ Use this for uncommitted platform changes. Do not combine this flow with
 Start the stack for an already-initialized workdir:
 
 ```bash
-kdcube start --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube start --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
+
+Patch staged bundle config or secrets without editing YAML by hand:
+
+```bash
+kdcube bundle <bundle_id> \
+  --set-config key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+kdcube bundle <bundle_id> \
+  --set-secret key.path value \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+
+kdcube bundle <bundle_id> \
+  --del-config key.path \
+  --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
+```
+
+Multiple `--set-config`, `--set-secret`, `--del-config`, `--del-secret` flags can be combined in one call.
+After patching, reload the bundle to apply the change.
 
 Reload a bundle after descriptor changes:
 
 ```bash
-kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/acme__prod
+kdcube reload <bundle_id> --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id>
 ```
 
 Export live bundle descriptors:
 
 ```bash
-kdcube export --workdir ~/.kdcube/kdcube-runtime/acme__prod --out-dir /tmp/export
+kdcube export --workdir ~/.kdcube/kdcube-runtime/<tenant_id>__<project_id> --out-dir /tmp/export
 ```
 
 Stop the local workdir stack:

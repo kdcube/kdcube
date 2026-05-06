@@ -38,6 +38,11 @@ from kdcube_cli.installer import (
 )
 
 
+def _init_git_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True, text=True)
+
+
 def test_descriptor_fast_path_accepts_complete_release_descriptor():
     assembly = {
         "context": {"tenant": "acme", "project": "platform"},
@@ -161,7 +166,7 @@ def test_resolve_cli_repo_path_prefers_install_meta_repo_root(tmp_path: Path):
     config_dir.mkdir(parents=True)
     (config_dir / ".env").write_text("")
     repo_dir = runtime_dir / "checked-out-repo"
-    (repo_dir / ".git").mkdir(parents=True)
+    _init_git_repo(repo_dir)
     (config_dir / "install-meta.json").write_text(
         json.dumps({"repo_root": str(repo_dir.resolve())})
     )
@@ -206,8 +211,7 @@ def test_subcommand_repo_uses_install_meta_after_base_workdir_resolves_to_runtim
 
 def test_copy_dirty_local_source_copies_tracked_and_untracked_nonignored_files(tmp_path: Path):
     source_repo = tmp_path / "source"
-    source_repo.mkdir()
-    subprocess.run(["git", "init"], cwd=source_repo, check=True, capture_output=True, text=True)
+    _init_git_repo(source_repo)
     (source_repo / ".gitignore").write_text("ignored.txt\nignored-dir/\n", encoding="utf-8")
     tracked = source_repo / "app" / "ai-app" / "deployment" / "assembly.yaml"
     tracked.parent.mkdir(parents=True)
@@ -228,6 +232,62 @@ def test_copy_dirty_local_source_copies_tracked_and_untracked_nonignored_files(t
     assert not (copied_repo / ".git").exists()
     assert not (copied_repo / "ignored.txt").exists()
     assert not (copied_repo / "ignored-dir" / "data.txt").exists()
+
+
+def test_copy_dirty_local_source_accepts_git_worktree_with_git_file(tmp_path: Path):
+    source_repo = tmp_path / "source"
+    _init_git_repo(source_repo)
+    tracked = source_repo / "app" / "ai-app" / "deployment" / "assembly.yaml"
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("context: {}\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", str(tracked.relative_to(source_repo))],
+        cwd=source_repo,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=test@example.com",
+            "-c",
+            "user.name=Test User",
+            "commit",
+            "-m",
+            "init",
+        ],
+        cwd=source_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    linked_worktree = tmp_path / "linked-worktree"
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(linked_worktree), "HEAD"],
+        cwd=source_repo,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (linked_worktree / ".git").is_file()
+
+    untracked = linked_worktree / "app" / "ai-app" / "README.md"
+    untracked.write_text("local worktree change\n", encoding="utf-8")
+
+    copied_repo = _copy_dirty_local_source(
+        Console(file=None),
+        source_repo=linked_worktree,
+        workdir=tmp_path / "runtime",
+    )
+
+    assert (
+        copied_repo / "app" / "ai-app" / "deployment" / "assembly.yaml"
+    ).read_text(encoding="utf-8") == "context: {}\n"
+    assert (
+        copied_repo / "app" / "ai-app" / "README.md"
+    ).read_text(encoding="utf-8") == "local worktree change\n"
+    assert not (copied_repo / ".git").exists()
 
 
 def test_canonical_descriptor_dir_from_initialized_workdir_uses_runtime_config(tmp_path: Path):
@@ -2178,9 +2238,9 @@ def test_gather_configuration_default_bootstrap_prompts_only_minimal_inputs(monk
 # ---------------------------------------------------------------------------
 
 def _make_fake_repo_with_deployment(base: Path) -> Path:
-    """Create a minimal fake git repo that contains app/ai-app/deployment/assembly.yaml."""
+    """Create a minimal git repo that contains app/ai-app/deployment/assembly.yaml."""
     repo = base / "repo"
-    (repo / ".git").mkdir(parents=True)
+    _init_git_repo(repo)
     deployment = repo / "app" / "ai-app" / "deployment"
     deployment.mkdir(parents=True)
     (deployment / "assembly.yaml").write_text("context:\n  tenant: demo-tenant\n  project: demo-project\n")
@@ -2244,7 +2304,7 @@ def test_bootstrap_repo_for_defaults_clones_when_path_not_provided(monkeypatch, 
 
 def test_bootstrap_repo_for_defaults_raises_when_deployment_missing(tmp_path: Path):
     repo = tmp_path / "repo"
-    (repo / ".git").mkdir(parents=True)
+    _init_git_repo(repo)
     # No app/ai-app/deployment directory created
     console = Console(quiet=True)
 

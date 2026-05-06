@@ -116,7 +116,7 @@ def is_default_tenant_project(value: Optional[str]) -> bool:
     if value is None:
         return True
     stripped = value.strip().strip("'\"").lower()
-    return stripped in {"default", "demo-tenant", "demo-project"}
+    return stripped == "default"
 
 
 def safe_workspace_name(value: Optional[object], *, default: str) -> str:
@@ -599,7 +599,29 @@ def _has_nested(dct: Dict[str, object], *keys: str) -> bool:
 
 
 def is_git_repo(path: Path) -> bool:
-    return path.is_dir() and (path / ".git").is_dir()
+    """Return True when path is exactly a Git working tree root.
+
+    Git worktrees and submodules store .git as a pointer file, not a directory,
+    so filesystem checks on .git reject valid local checkouts. Ask Git for the
+    top-level worktree and require it to match the requested path so callers do
+    not accidentally accept arbitrary subdirectories inside a repo.
+    """
+    resolved = Path(path).expanduser().resolve()
+    if not resolved.is_dir():
+        return False
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(resolved), "rev-parse", "--show-toplevel"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return False
+    top = (proc.stdout or "").strip()
+    if not top:
+        return False
+    return Path(top).expanduser().resolve() == resolved
 
 
 def normalize_git_repo_source(repo: str) -> str:
@@ -1121,6 +1143,7 @@ def ensure_local_dirs(data_dir: Path, logs_dir: Path) -> None:
     for path in [
         data_dir / "kdcube-storage",
         data_dir / "exec-workspace",
+        data_dir / "managed-bundles",
         data_dir / "bundle-storage",
         data_dir / "bundles",
         data_dir / "postgres",
@@ -2156,8 +2179,8 @@ def gather_configuration(
 
     descriptor_tenant = _get_nested(assembly_data, "context", "tenant")
     descriptor_project = _get_nested(assembly_data, "context", "project")
-    tenant_default = str(descriptor_tenant) if descriptor_tenant else existing_tenant or "demo-tenant"
-    project_default = str(descriptor_project) if descriptor_project else existing_project or "demo-project"
+    tenant_default = str(descriptor_tenant) if descriptor_tenant else existing_tenant or "default"
+    project_default = str(descriptor_project) if descriptor_project else existing_project or "default"
     preset_tenant = os.getenv("KDCUBE_PRESET_TENANT", "").strip()
     preset_project = os.getenv("KDCUBE_PRESET_PROJECT", "").strip()
     if preset_tenant and preset_project and not force_prompt:
@@ -2170,9 +2193,9 @@ def gather_configuration(
         tenant = ask(console, "Tenant ID", default=tenant_default)
         project = ask(console, "Project name", default=project_default)
     if is_placeholder(tenant):
-        tenant = "demo-tenant"
+        tenant = "default"
     if is_placeholder(project):
-        project = "demo-project"
+        project = "default"
     _set_nested(assembly_data, ["context", "tenant"], tenant)
     _set_nested(assembly_data, ["context", "project"], project)
     for env in (env_ingress, env_proc, env_metrics):
@@ -3780,7 +3803,11 @@ def run_setup(
         env_bundles_secrets = str(staged_descriptors["bundles_secrets_path"] or "")
         env_gateway_descriptor = str(staged_descriptors["gateway_path"] or "")
         use_descriptor_bundles = bool(_get_nested(staged_assembly, "bundles"))
-        use_descriptor_frontend = bool(_get_nested(staged_assembly, "frontend"))
+        _staged_fd = _get_nested(staged_assembly, "frontend")
+        use_descriptor_frontend = bool(
+            isinstance(_staged_fd, dict)
+            and (_get_nested(_staged_fd, "build", "repo") or _staged_fd.get("image"))
+        )
         use_descriptor_platform = False
         use_bundles_descriptor = bool(staged_descriptors["bundles_path"])
         use_bundles_secrets = bool(staged_descriptors["bundles_secrets_path"])
@@ -3933,12 +3960,24 @@ def run_setup(
             elif use_descriptor_frontend is False:
                 if not compose_mode_env:
                     compose_mode = "all-in-one"
-            elif isinstance(release_descriptor, dict) and release_descriptor.get("frontend"):
-                compose_mode = "custom-ui-managed-infra"
+            elif isinstance(release_descriptor, dict):
+                _fd = release_descriptor.get("frontend")
+                _has_ui_source = isinstance(_fd, dict) and bool(
+                    _get_nested(_fd, "build", "repo") or _fd.get("image")
+                )
+                if _has_ui_source:
+                    compose_mode = "custom-ui-managed-infra"
+                elif not compose_mode_env:
+                    compose_mode = "all-in-one"
             elif not compose_mode_env:
                 compose_mode = "all-in-one"
-            if isinstance(release_descriptor, dict) and not release_descriptor.get("frontend") and use_descriptor_frontend is not True:
-                compose_mode = "all-in-one"
+            if isinstance(release_descriptor, dict) and use_descriptor_frontend is not True:
+                _fd = release_descriptor.get("frontend")
+                _has_ui_source = isinstance(_fd, dict) and bool(
+                    _get_nested(_fd, "build", "repo") or _fd.get("image")
+                )
+                if not _has_ui_source:
+                    compose_mode = "all-in-one"
     if env_use_frontend is False and not compose_mode_env:
         compose_mode = "all-in-one"
 

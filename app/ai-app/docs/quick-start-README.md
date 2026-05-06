@@ -101,8 +101,8 @@ Open the URL printed by the CLI.
 
 Default local context from the shipped descriptor set:
 
-- tenant: `demo-tenant`
-- project: `demo-project`
+- tenant: `default`
+- project: `default`
 
 From the admin UI you can:
 
