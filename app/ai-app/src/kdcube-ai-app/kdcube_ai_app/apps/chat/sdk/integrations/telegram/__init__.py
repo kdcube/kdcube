@@ -41,6 +41,7 @@ from .stream import (
     deliver_messages_preserving_progress_card,
     progress_final_card,
 )
+from .user_storage import TelegramUserAdminStorage
 from .webapp_auth import (
     INIT_DATA_HEADER,
     TelegramWebAppInitData,
@@ -58,6 +59,7 @@ __all__ = [
     "SignedLinkTokenInvalid",
     "TelegramActivityStreamer",
     "TelegramMessage",
+    "TelegramUserAdminStorage",
     "TelegramWebAppInitData",
     "decode_inline_attachment_bytes",
     "deliver_messages_preserving_progress_card",

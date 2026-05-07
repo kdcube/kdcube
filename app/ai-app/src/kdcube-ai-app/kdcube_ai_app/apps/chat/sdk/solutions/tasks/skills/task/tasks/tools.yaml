@@ -1,0 +1,40 @@
+tools:
+  - id: tasks.create_task
+    role: create executable task assets
+    why: Persist actionable or scheduled work for the current user.
+  - id: tasks.list_tasks
+    role: list and search task assets
+    why: Find existing tasks and avoid duplicates.
+  - id: tasks.search_tasks
+    role: SQLite-indexed task search
+    why: Find the exact existing task before editing, deleting, or linking it.
+  - id: tasks.get_task
+    role: load one task with recent execution history
+    why: Inspect the exact definition and latest runs before acting on a task.
+  - id: tasks.update_task
+    role: update task definitions
+    why: Change title, instructions, schedule, labels, or status after the exact task is identified.
+  - id: tasks.delete_task
+    role: delete task definitions
+    why: Soft-delete by default when the user asks to remove a task.
+  - id: tasks.set_task_status
+    role: update task lifecycle
+    why: Enable, disable, archive, delete, or restore task assets without changing the task definition.
+  - id: tasks.link_task
+    role: connect task assets
+    why: Represent follow-up, dependency, blocker, parent-child, and related-task links.
+  - id: tasks.list_task_executions
+    role: read execution history
+    why: Answer questions about recent runs and inspect status/history for the UI.
+  - id: tasks.search_task_executions
+    role: search execution history and artifacts
+    why: Find prior run output, failures, log excerpts, and generated files.
+  - id: tasks.search_recent_outputs
+    role: search delivered outputs and generated artifacts
+    why: Resolve follow-up references such as "it", "that report", "the spreadsheet", or "the file you sent".
+  - id: tasks.get_task_execution
+    role: load one execution result
+    why: Inspect exact execution result, job conversation id, turn id, and artifact metadata after search/list returns an execution id.
+  - id: tasks.materialize_execution_artifact
+    role: copy prior job artifact into the current React turn
+    why: "Make a selected external job output available as a current-turn fi: output before reading, editing, or regenerating from it. Pass only the returned artifact_ref."

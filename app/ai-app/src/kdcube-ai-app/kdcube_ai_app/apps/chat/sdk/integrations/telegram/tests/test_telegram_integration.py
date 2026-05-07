@@ -39,6 +39,48 @@ def test_telegram_update_summary_reports_attachment_shape():
     ]
 
 
+def test_telegram_user_admin_storage_maps_roles_and_conversations(tmp_path):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram import TelegramUserAdminStorage
+
+    storage = TelegramUserAdminStorage(tmp_path)
+    anonymous = storage.resolve_telegram_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elena",
+    )
+
+    assert anonymous["role"] == "anonymous"
+    assert anonymous["conversation_id"] == "telegram_chat_1001"
+
+    registered = storage.upsert_user(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        telegram_username="elena",
+        kdcube_user_id="user-a",
+        role="registered",
+        conversation_id="conv-main",
+    )
+
+    assert registered["role"] == "registered"
+    assert registered["conversation_id"] == "conv-main"
+
+    conversations = storage.create_conversation(
+        telegram_user_id="2002",
+        telegram_chat_id="1001",
+        title="Side thread",
+    )
+    assert conversations["active_conversation_id"].startswith("telegram_chat_1001_")
+    conversation_ids = {item["conversation_id"] for item in conversations["conversations"]}
+    assert "telegram_chat_1001" in conversation_ids
+    assert "conv-main" in conversation_ids
+
+    claim = storage.claim_telegram_update(update_id="42")
+    assert claim["claimed"] is True
+    completed = storage.complete_telegram_update(update_id="42", result={"stage": "done"})
+    assert completed["status"] == "completed"
+    assert storage.claim_telegram_update(update_id="42")["claimed"] is False
+
+
 @pytest.mark.asyncio
 async def test_hydrate_telegram_attachments_downloads_file(monkeypatch):
     import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram

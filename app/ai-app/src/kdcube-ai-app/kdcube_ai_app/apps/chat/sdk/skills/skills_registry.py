@@ -20,6 +20,10 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any
 log = logging.getLogger("skills_registry")
 
 BUILTIN_SKILLS_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parent
+SDK_ROOT: pathlib.Path = BUILTIN_SKILLS_ROOT.parent
+SOLUTION_SKILLS_ROOTS: List[pathlib.Path] = [
+    SDK_ROOT / "solutions" / "tasks" / "skills",
+]
 try:
     from kdcube_ai_app.apps.chat.sdk.tools.backends.web.ranking import estimate_tokens  # type: ignore
 except Exception:
@@ -451,7 +455,7 @@ class SkillsSubsystem:
         # Load built-in SDK skills first, then bundle skills.
         # Registry uses last-one-wins, so bundle skills override SDK skills
         # with the same id. Processing order (not alphabetical sort) determines priority.
-        roots: List[pathlib.Path] = [BUILTIN_SKILLS_ROOT / "skills"]
+        roots: List[pathlib.Path] = [BUILTIN_SKILLS_ROOT / "skills", *SOLUTION_SKILLS_ROOTS]
         if self.custom_skills_root:
             roots.append(self.custom_skills_root)
         files: List[pathlib.Path] = []

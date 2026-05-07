@@ -27,6 +27,14 @@ from .accounts import (
 )
 from .attachments import materialize_email_attachments_for_current_turn
 from .claude import claude_code_enabled, configure_email_claude, run_email_processor_with_claude_code
+from .delivery import (
+    build_email_message,
+    email_html_to_text,
+    inline_markdown_to_email_html,
+    markdown_to_email_html,
+    safe_email_filename,
+    split_email_addresses,
+)
 from .icloud import (
     default_icloud_account_settings,
     ensure_icloud_credentials,
@@ -59,6 +67,7 @@ __all__ = [
     "GOOGLE_GMAIL_API",
     "ProviderHttpError",
     "build_email_mcp_app",
+    "build_email_message",
     "build_google_authorize_url",
     "callback_url",
     "claude_code_enabled",
@@ -68,6 +77,7 @@ __all__ = [
     "email_mcp_auth_secret",
     "email_mcp_token_header",
     "email_mcp_token_ttl_seconds",
+    "email_html_to_text",
     "ensure_email_account_access",
     "ensure_google_access_token",
     "ensure_icloud_credentials",
@@ -86,12 +96,16 @@ __all__ = [
     "google_client_secret",
     "google_client_secret_async",
     "google_scopes",
+    "inline_markdown_to_email_html",
+    "markdown_to_email_html",
     "materialize_email_attachments_for_current_turn",
     "oauth_state_secret",
     "process_user_emails",
     "refresh_google_token",
     "run_email_processor_with_claude_code",
+    "safe_email_filename",
     "send_icloud_message",
     "sign_email_mcp_payload",
+    "split_email_addresses",
     "verify_email_mcp_token",
 ]

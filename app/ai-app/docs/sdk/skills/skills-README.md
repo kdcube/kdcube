@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/skills/skills-README.md
 title: "Skills"
-summary: "Skills subsystem reference: format, discovery, per-consumer visibility filtering, and exact runtime enforcement paths."
-tags: ["sdk", "skills", "subsystem", "runtime", "descriptor", "agents_config", "react", "codegen", "citations"]
-keywords: ["skills_registry.py", "skills_descriptor.py", "AGENTS_CONFIG", "consumer id", "skills_for_consumer", "build_skill_short_id_map", "import_skillset", "build_skills_instruction_block", "react.read", "llm_generator.py", "codegen_tools.py"]
+summary: "Skills subsystem reference: format, discovery roots, per-consumer visibility filtering, and exact runtime enforcement paths."
+tags: ["sdk", "skills", "subsystem", "runtime", "descriptor", "agents_config", "react", "codegen", "citations", "solutions"]
+keywords: ["skills_registry.py", "skills_descriptor.py", "AGENTS_CONFIG", "consumer id", "solution skills", "skills_for_consumer", "build_skill_short_id_map", "import_skillset", "build_skills_instruction_block", "react.read", "llm_generator.py", "codegen_tools.py"]
 see_also:
   - ks:docs/sdk/skills/custom-skills-README.md
   - ks:docs/sdk/skills/skills-infra-README.md
@@ -32,10 +32,17 @@ Examples:
 Skills are only applied to generators (react decision, codegen, or llm content generation). They do not change tool behavior.
 
 
-## Skill storage layout
+## Skill Storage Layout
 
-Skills live under:
+Core SDK skills live under:
   kdcube_ai_app/apps/chat/sdk/skills/skills/
+
+SDK solution packages may also publish built-in skills under their own package
+tree. Example:
+  kdcube_ai_app/apps/chat/sdk/solutions/tasks/skills/
+
+Bundle-local skills live under the bundle custom root, usually:
+  <bundle_root>/skills/
 
 Folder structure:
   skills/
@@ -51,12 +58,22 @@ Folder structure:
         compact.md
         tools.yaml
         sources.yaml
-    custom/
+  solutions/tasks/skills/
+    task/
+      tasks/
+        SKILL.md
+        tools.yaml
+      job/
+        SKILL.md
+        tools.yaml
+
+  <bundle_root>/skills/
+    <namespace>/
       <skill_id>/
         SKILL.md
-        compact.md
-        tools.yaml
-        sources.yaml
+        compact.md            (optional)
+        tools.yaml            (optional)
+        sources.yaml          (optional)
 
 Each skill folder contains:
 - SKILL.md: metadata + full instruction body
@@ -157,7 +174,8 @@ Notes:
 Namespaces control discoverability:
 - public: visible in skill catalogs
 - internal: not discoverable (used for internal behaviors)
-- custom: loaded from a bundle-defined root (see SkillsSubsystem descriptor)
+- task: SDK tasks solution skills
+- custom/product/etc.: loaded from a bundle-defined root (see SkillsSubsystem descriptor)
 
 Skills are referenced by fully qualified id:
   <namespace>.<skill_id>
@@ -173,7 +191,7 @@ For convenience, callers may also use:
 
 Each bundle can provide a skills descriptor (analogous to tools_descriptor for tools).
 It defines:
-- custom_skills_root: optional path for custom namespace skills
+- custom_skills_root: optional path for bundle-local skills
 - agents_config: per-consumer filtering (enabled/disabled lists)
 
 Example:
@@ -181,7 +199,7 @@ Example:
 custom_skills_root = "/opt/custom_skills"
 
 agents_config = {
-  "solver.react.decision": {
+  "solver.react.v2.decision.v2.strong": {
     "enabled": ["public.url-gen"]
   },
   "answer.generator.strong": {
@@ -205,7 +223,7 @@ Filtering logic:
 Resolution example:
 
 agents_config = {
-  "solver.react.decision.v2": {"disabled": ["public.*"]},
+  "solver.react.v2.decision.v2.strong": {"disabled": ["public.*"]},
   "answer.generator.strong": {"enabled": ["product.kdcube", "public.docx-press"]}
 }
 
@@ -216,7 +234,7 @@ If registry contains:
 - custom.ops-runbook
 
 Then:
-- consumer=solver.react.decision.v2 -> product.kdcube, custom.ops-runbook
+- consumer=solver.react.v2.decision.v2.strong -> product.kdcube, custom.ops-runbook
 - consumer=answer.generator.strong -> product.kdcube, public.docx-press
 - consumer=answer.generator.regular -> all skills (no matching entry)
 
@@ -226,8 +244,8 @@ What this configuration achieves:
 - Per-agent instruction injection control: hidden skills for a consumer are not injected into that consumer's generator prompt.
 
 SDK mechanisms using this:
-- ReAct decision catalog: `consumer="solver.react.decision.v2"` (planning catalog visibility).
-- `react.read` short-id resolution: `consumer="solver.react.decision.v2"` (which SKx ids can be loaded).
+- ReAct decision catalog: `consumer="solver.react.v2.decision.v2.strong"` (planning catalog visibility).
+- `react.read` short-id resolution: `consumer="solver.react.v2.decision.v2.strong"` (which SKx ids can be loaded).
 - Generator role-based resolution/injection: `consumer=<role>` such as `answer.generator.strong`.
 
 For authoring examples, see [docs/sdk/skills/custom-skills-README.md](custom-skills-README.md).
@@ -237,8 +255,12 @@ For runtime wiring, see [docs/sdk/skills/skills-infra-README.md](skills-infra-RE
 ## Skill discovery and selection
 
 1) Skills are loaded from:
-   - built-in skills directory
-   - optional CUSTOM_SKILLS_ROOT (for custom namespace)
+   - core SDK skills directory: `sdk/skills/skills`
+   - SDK solution skill roots, for example `sdk/solutions/tasks/skills`
+   - optional bundle `CUSTOM_SKILLS_ROOT`
+
+   Load order matters. Bundle-local skills are loaded last, so a bundle can
+   override an SDK skill by publishing the same fully qualified skill id.
 
 2) Skill catalogs are shown to decision and generator flows in system instruction.
 
@@ -262,6 +284,14 @@ The final answer generator is a generator and can receive skills (e.g., formatti
 Consumer filtering core (`kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`):
 
 ```python
+roots = [
+    BUILTIN_SKILLS_ROOT / "skills",
+    *SOLUTION_SKILLS_ROOTS,
+    custom_skills_root,
+]
+```
+
+```python
 cfg = agents_config.get(consumer) or {}
 enabled = cfg.get("enabled")
 disabled = cfg.get("disabled")
@@ -280,13 +310,13 @@ ReAct decision catalog usage:
 ```python
 # kdcube_ai_app/apps/chat/sdk/solutions/react/v2/agents/decision.py
 tool_block = build_instruction_catalog_block(
-    consumer="solver.react.decision.v2",
+    consumer="solver.react.v2.decision.v2.strong",
     tool_catalog=tool_catalog,
     react_tools=get_react_tools_catalog(),
     include_skill_gallery=True,
 )
 
-# kdcube_ai_app/apps/chat/sdk/solutions/react/v2/layout.py
+# kdcube_ai_app/apps/chat/sdk/solutions/react/layout.py
 skill_block = skills_gallery_text(
     consumer=consumer,
     tool_catalog=tools_list,
@@ -296,8 +326,8 @@ skill_block = skills_gallery_text(
 `react.read` resolution usage:
 
 ```python
-# kdcube_ai_app/apps/chat/sdk/solutions/react/v2/tools/read.py
-short_map = build_skill_short_id_map(consumer="solver.react.decision.v2")
+# kdcube_ai_app/apps/chat/sdk/solutions/react/tools/read.py
+short_map = build_skill_short_id_map(consumer="solver.react.v2.decision.v2.strong")
 skill_ids = import_skillset(normalized_skills, short_id_map=short_map)
 ```
 

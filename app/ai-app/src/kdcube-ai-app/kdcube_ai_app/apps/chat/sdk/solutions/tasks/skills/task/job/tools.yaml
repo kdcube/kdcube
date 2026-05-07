@@ -1,0 +1,13 @@
+tools:
+  - id: task_job.get_current_task
+    role: read current task definition
+    why: Load the exact task and explicitly linked tasks from injected job context for bounded execution context.
+  - id: task_job.search_task_executions
+    role: read prior execution history
+    why: Inspect prior outcomes, failures, logs, or artifacts for the injected current task, and linked tasks when requested.
+  - id: task_job.update_execution_journal
+    role: persist progress and final job outcome
+    why: Keep substantial progress, result data, errors, and generated artifact metadata durable using injected task/execution ids.
+  - id: job_memory.search_memo
+    role: read durable user context
+    why: Use only when existing memory materially changes how the job should run.

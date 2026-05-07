@@ -9,6 +9,7 @@ import pytest
 from kdcube_ai_app.apps.chat.sdk.integrations.email import accounts as email_accounts
 from kdcube_ai_app.apps.chat.sdk.integrations.email import attachments as email_attachments
 from kdcube_ai_app.apps.chat.sdk.integrations.email import claude as email_claude
+from kdcube_ai_app.apps.chat.sdk.integrations.email import delivery as email_delivery
 from kdcube_ai_app.apps.chat.sdk.integrations.email import icloud as email_icloud
 from kdcube_ai_app.apps.chat.sdk.integrations.email import mcp as email_mcp
 
@@ -17,6 +18,31 @@ def test_email_claude_session_id_for_run_is_valid_uuid():
     session_id = email_claude._claude_session_id_for_run("email_mcp_f8f4f14dd02046c19819160d3b9d52b9")
 
     assert str(uuid.UUID(session_id)) == session_id
+
+
+def test_email_delivery_builds_html_and_text_parts():
+    msg = email_delivery.build_email_message(
+        sender_email="reports@example.test",
+        recipients=email_delivery.split_email_addresses("a@example.test; a@example.test, b@example.test"),
+        subject="Report",
+        body_text="# Title\n\n- **Item** with `code`\n\n| A | B |\n|---|---|\n| 1 | 2 |",
+        attachments=[
+            {
+                "filename": "report.txt",
+                "mime_type": "text/plain",
+                "data": b"report",
+            }
+        ],
+    )
+
+    assert msg["To"] == "a@example.test, b@example.test"
+    html_part = msg.get_body(preferencelist=("html",))
+    assert html_part is not None
+    rendered = html_part.get_content()
+    assert "<h1>Title</h1>" in rendered
+    assert "<strong>Item</strong>" in rendered
+    assert '<table class="kdcube-table">' in rendered
+    assert any(part.get_filename() == "report.txt" for part in msg.iter_attachments())
 
 
 @pytest.mark.asyncio

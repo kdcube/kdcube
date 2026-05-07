@@ -369,28 +369,33 @@ intentionally mirrors the dotted package path.
 So bundle-local imports must not assume that only the bundle root is on
 `sys.path`.
 
-In `entrypoint.py`, use package-relative imports with a bundle-root fallback:
+In `entrypoint.py`, use package-relative imports for bundle-local modules and
+import reusable SDK components from their SDK package:
 
 ```python
+from kdcube_ai_app.apps.chat.sdk.solutions.tasks import AsyncTaskStorage
+
 try:
-    from .services.storage import TaskStorage
+    from .subsystems.common import storage_root_or_error
 except ImportError:
-    from services.storage import TaskStorage
+    from subsystems.common import storage_root_or_error
 ```
 
-In a nested module such as `tools/task_tools.py`, use the matching relative
-form:
+In a nested bundle module, use the matching relative form for bundle-local code
+and SDK imports for shared pieces:
 
 ```python
+from kdcube_ai_app.apps.chat.sdk.solutions.tasks import TaskStorage
+
 try:
-    from ..services.storage import TaskStorage
+    from ..services.storage import UserMemoryStorage
 except ImportError:
-    from services.storage import TaskStorage
+    from services.storage import UserMemoryStorage
 ```
 
 Do not write imports that only work from the processor cwd or only work when the
 bundle root itself is on `sys.path`, such as unconditional
-`from services.storage import TaskStorage`.
+`from services.storage import UserMemoryStorage`.
 
 ## 1C. Bundle Design Decision Matrix
 
@@ -754,7 +759,7 @@ Example split:
 
 ```python
 TOOLS_SPECS = [
-    {"ref": "tools/task_tools.py", "alias": "tasks", "use_sk": True},
+    {"module": "kdcube_ai_app.apps.chat.sdk.solutions.tasks.tools", "alias": "tasks", "use_sk": True},
     {"ref": "tools/user_memory_tools.py", "alias": "user_memory", "use_sk": True},
 ]
 ```

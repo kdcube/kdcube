@@ -1,9 +1,9 @@
 ---
 id: ks:docs/sdk/skills/skills-infra-README.md
 title: "Skills Infra"
-summary: "Infrastructure wiring for skills across React runtime and isolated execution."
-tags: ["sdk", "skills", "infra", "runtime", "react", "isolated"]
-keywords: ["skills registry", "skill descriptors", "react instructions", "iso runtime", "skills loader"]
+summary: "Infrastructure wiring for core SDK skills, SDK solution skills, and bundle-local skills across React runtime and isolated execution."
+tags: ["sdk", "skills", "infra", "runtime", "react", "isolated", "solutions"]
+keywords: ["skills registry", "skill descriptors", "solution skills", "react instructions", "iso runtime", "skills loader"]
 see_also:
   - ks:docs/sdk/skills/custom-skills-README.md
   - ks:docs/sdk/skills/skills-README.md
@@ -23,11 +23,17 @@ Scope:
 
 - `SkillsSubsystem` (`kdcube_ai_app/apps/chat/sdk/skills/skills_registry.py`)
   - Owns the skills descriptor and resolves skills from:
-    - built-in skills root: `kdcube_ai_app/apps/chat/sdk/skills/skills/`
-    - optional custom skills root from the descriptor
+    - core SDK skills root: `kdcube_ai_app/apps/chat/sdk/skills/skills/`
+    - SDK solution skills roots, currently including
+      `kdcube_ai_app/apps/chat/sdk/solutions/tasks/skills/`
+    - optional bundle-local custom skills root from the descriptor
   - Provides runtime helpers (gallery text, short ids, instruction blocks)
   - Loads per-skill metadata from `tools.yaml` and `sources.yaml`
   - Exports a portable descriptor for isolated runtimes
+
+Discovery order is core SDK skills, SDK solution skills, then bundle-local
+skills. The registry is last-one-wins by fully qualified skill id, so a bundle
+can intentionally override an SDK skill by publishing the same id.
 
 ## Skills descriptor
 
@@ -37,7 +43,7 @@ The descriptor is a JSON-serializable dict with:
 {
   "custom_skills_root": "/abs/or/bundle/relative/path",
   "agents_config": {
-    "solver.react.decision": { "enabled": ["public.pptx-press"] },
+    "solver.react.v2.decision.v2.strong": { "enabled": ["public.pptx-press"] },
     "answer.generator.strong": { "disabled": ["public.pdf-press"] }
   }
 }
@@ -45,6 +51,9 @@ The descriptor is a JSON-serializable dict with:
 
 If `custom_skills_root` is relative, it is resolved against the bundle root.
 If omitted and the bundle has `skills/` under its root, the bundle can pass that path.
+SDK solution skill roots are not configured by the bundle descriptor; they are
+part of the SDK registry wiring and are filtered with the same `agents_config`
+rules as other skills.
 
 ## How it is wired
 
@@ -55,6 +64,8 @@ If omitted and the bundle has `skills/` under its root, the bundle can pass that
 2) SolverSystem owns a `SkillsSubsystem`
    - `SolverSystem.__init__` builds `SkillsSubsystem(descriptor=..., bundle_root=...)`
    - The subsystem is stored on the solver instance and set active via context var.
+   - The subsystem discovers core SDK skills, SDK solution skills, and the
+     bundle custom root.
 
 3) ReAct session activation
    - In `ReactSolver.prepare_session`, the skills subsystem is set as the active
@@ -85,4 +96,7 @@ If omitted and the bundle has `skills/` under its root, the bundle can pass that
 ## Notes
 
 - Skills are injected into generators; they do not modify tool behavior.
-- Filtering by `agents_config` is applied per consumer (e.g. `solver.react.decision`).
+- Filtering by `agents_config` is applied per consumer (e.g. `solver.react.v2.decision.v2.strong`).
+- SDK solution skills behave like built-in skills for discovery and short-id
+  mapping, but bundles must still enable the corresponding tools if the skill
+  instructs the agent to call them.
