@@ -15,12 +15,10 @@ from kdcube_ai_app.apps.chat.sdk.config import get_secret, get_settings
 from kdcube_ai_app.apps.chat.sdk.storage.conversation_store import ConversationStore
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
     TelegramActivityStreamer,
-    edit_telegram_text_message,
+    deliver_react_turn_to_telegram,
     hydrate_telegram_attachments,
     raw_attachments_from_telegram as sdk_raw_attachments_from_telegram,
-    render_telegram_messages_from_timeline,
     role_to_user_type as sdk_role_to_user_type,
-    send_telegram_messages,
     summarize_telegram_update,
     telegram_command_kind_and_text as sdk_telegram_command_kind_and_text,
 )
@@ -181,43 +179,6 @@ async def _host_telegram_attachments(
         _attachment_log_items(hosted),
     )
     return hosted
-
-
-def _message_log_items(messages: list[Any] | None) -> list[Dict[str, Any]]:
-    items: list[Dict[str, Any]] = []
-    for message in messages or []:
-        files = list(getattr(message, "files", ()) or ())
-        items.append(
-            {
-                "kind": getattr(message, "kind", None),
-                "text_chars": len(str(getattr(message, "text", "") or "")),
-                "files": [
-                    {
-                        "filename": file_item.get("filename"),
-                        "mime_type": file_item.get("mime_type") or file_item.get("mime"),
-                        "size_bytes": file_item.get("size_bytes"),
-                        "logical_path": file_item.get("logical_path"),
-                        "hosted_uri": file_item.get("hosted_uri"),
-                        "url": file_item.get("url"),
-                        "key": file_item.get("key"),
-                    }
-                    for file_item in files
-                    if isinstance(file_item, dict)
-                ],
-            }
-        )
-    return items
-
-
-def _progress_done_text(*, has_messages: bool) -> str:
-    return "Done. Sending the final response." if has_messages else "Done."
-
-
-def _telegram_edit_not_modified(result: Dict[str, Any] | None) -> bool:
-    if not isinstance(result, dict):
-        return False
-    description = str(result.get("description") or result.get("error") or "").lower()
-    return "message is not modified" in description
 
 
 def storage(entrypoint: Any) -> Any:
@@ -627,76 +588,6 @@ def _queued_telegram_meta(entrypoint: Any) -> Dict[str, Any]:
     return telegram
 
 
-async def _deliver_react_turn_to_telegram(
-    entrypoint: Any,
-    *,
-    chat_id: str,
-    update_id: str = "",
-    react_turn: Dict[str, Any],
-    delivered_file_keys: set[str] | None = None,
-    progress_message_id: str | int | None = None,
-    progress_summary: str = "",
-) -> Dict[str, Any]:
-    telegram_messages = render_telegram_messages_from_timeline(
-        timeline=(
-            react_turn.get("turn_log")
-            if isinstance(react_turn, dict) and isinstance(react_turn.get("turn_log"), dict) and react_turn.get("turn_log")
-            else react_turn.get("timeline") if isinstance(react_turn, dict) else None
-        ),
-        react_turn=react_turn,
-        exclude_file_keys=delivered_file_keys or set(),
-        prefer_react_turn_answer=True,
-    )
-    log.info(
-        "[%s] telegram queued response rendered | update_id=%s messages=%s files=%s details=%s",
-        BUNDLE_ID,
-        update_id or "",
-        len(telegram_messages),
-        sum(1 for message in telegram_messages if message.files),
-        _message_log_items(telegram_messages),
-    )
-    telegram_delivery = None
-    if telegram_messages and entrypoint.bundle_prop("integrations.telegram.send_responses", True):
-        if progress_message_id:
-            edit_text = _progress_done_text(has_messages=bool(telegram_messages))
-            edit_result = await edit_telegram_text_message(
-                bot_token=bot_token(),
-                chat_id=chat_id,
-                message_id=progress_message_id,
-                text=edit_text,
-                parse_mode="",
-            )
-            if edit_result.get("ok") or _telegram_edit_not_modified(edit_result):
-                log.info(
-                    "[%s] telegram queued progress finalized | update_id=%s message_id=%s chars=%s",
-                    BUNDLE_ID,
-                    update_id or "",
-                    progress_message_id,
-                    len(edit_text),
-                )
-            else:
-                log.warning(
-                    "[%s] telegram queued progress final edit failed | update_id=%s message_id=%s response=%s",
-                    BUNDLE_ID,
-                    update_id or "",
-                    progress_message_id,
-                    edit_result,
-                )
-        telegram_delivery = (
-            await send_telegram_messages(
-                bot_token=bot_token(),
-                chat_id=chat_id,
-                messages=telegram_messages,
-            )
-            if telegram_messages
-            else {"ok": True, "sent": 0, "responses": []}
-        )
-    return {
-        "messages": [message.as_dict() for message in telegram_messages],
-        "telegram_delivery": telegram_delivery,
-    }
-
-
 async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> Dict[str, Any]:
     telegram_meta = _queued_telegram_meta(entrypoint)
     if not telegram_meta:
@@ -717,14 +608,16 @@ async def run_with_queued_telegram_delivery(entrypoint: Any, *, runner: Any) -> 
         result = await runner()
     if not isinstance(result, dict):
         result = {}
-    delivery = await _deliver_react_turn_to_telegram(
-        entrypoint,
+    delivery = await deliver_react_turn_to_telegram(
+        bundle_id=BUNDLE_ID,
+        bot_token=bot_token(),
         chat_id=chat_id,
         update_id=update_id,
         react_turn=result,
         delivered_file_keys=telegram_streamer.delivered_file_keys() if telegram_streamer else set(),
         progress_message_id=telegram_streamer.progress_message_id() if telegram_streamer else None,
         progress_summary=telegram_streamer.progress_summary() if telegram_streamer else "",
+        send_responses=bool(_bundle_prop(entrypoint, "integrations.telegram.send_responses", True)),
     )
     result["telegram"] = {
         "queued_delivery": True,
@@ -809,92 +702,22 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
             await asyncio.to_thread(telegram_store.complete_telegram_update, update_id=update_id, result=result_payload)
             return result_payload
         react_turn = await run_react_turn(entrypoint, summary=summary)
-        telegram_messages = (
-            render_telegram_messages_from_timeline(
-                timeline=(
-                    react_turn.get("turn_log")
-                    if isinstance(react_turn, dict) and isinstance(react_turn.get("turn_log"), dict) and react_turn.get("turn_log")
-                    else react_turn.get("timeline") if isinstance(react_turn, dict) else None
-                ),
-                react_turn=react_turn,
-                exclude_file_keys=set(react_turn.get("telegram_delivered_file_keys") or []) if isinstance(react_turn, dict) else set(),
-                prefer_react_turn_answer=True,
-            )
-            if react_turn
-            else []
-        )
-        log.info(
-            "[%s] telegram response rendered | update_id=%s source=%s messages=%s files=%s details=%s",
-            BUNDLE_ID,
-            update_id,
-            (
-                "turn_log"
-                if isinstance(react_turn, dict) and isinstance(react_turn.get("turn_log"), dict) and react_turn.get("turn_log")
-                else "timeline"
-            ),
-            len(telegram_messages),
-            sum(1 for message in telegram_messages if message.files),
-            _message_log_items(telegram_messages),
-        )
         telegram_delivery = None
-        if telegram_messages and entrypoint.bundle_prop("integrations.telegram.send_responses", True):
-            progress_message_id = (
-                react_turn.get("telegram_progress_message_id")
-                if isinstance(react_turn, dict)
-                else None
+        telegram_messages: list[Dict[str, Any]] = []
+        if react_turn:
+            delivery_result = await deliver_react_turn_to_telegram(
+                bundle_id=BUNDLE_ID,
+                bot_token=bot_token(),
+                chat_id=summary.get("chat_id") or "",
+                update_id=update_id,
+                react_turn=react_turn,
+                delivered_file_keys=set(react_turn.get("telegram_delivered_file_keys") or []) if isinstance(react_turn, dict) else set(),
+                progress_message_id=react_turn.get("telegram_progress_message_id") if isinstance(react_turn, dict) else None,
+                progress_summary=react_turn.get("telegram_progress_summary") if isinstance(react_turn, dict) else "",
+                send_responses=bool(entrypoint.bundle_prop("integrations.telegram.send_responses", True)),
             )
-            if progress_message_id:
-                edit_text = _progress_done_text(has_messages=bool(telegram_messages))
-                edit_result = await edit_telegram_text_message(
-                    bot_token=bot_token(),
-                    chat_id=summary.get("chat_id") or "",
-                    message_id=progress_message_id,
-                    text=edit_text,
-                    parse_mode="",
-                )
-                if edit_result.get("ok") or _telegram_edit_not_modified(edit_result):
-                    log.info(
-                        "[%s] telegram progress message finalized | update_id=%s message_id=%s chars=%s",
-                        BUNDLE_ID,
-                        summary.get("update_id"),
-                        progress_message_id,
-                        len(edit_text),
-                    )
-                else:
-                    log.warning(
-                        "[%s] telegram progress message final edit failed | update_id=%s message_id=%s response=%s",
-                        BUNDLE_ID,
-                        summary.get("update_id"),
-                        progress_message_id,
-                        edit_result,
-                    )
-            telegram_delivery = (
-                await send_telegram_messages(
-                    bot_token=bot_token(),
-                    chat_id=summary.get("chat_id") or "",
-                    messages=telegram_messages,
-                )
-                if telegram_messages
-                else {"ok": True, "sent": 0, "responses": []}
-            )
-            log.info(
-                "[%s] telegram delivery finished | update_id=%s messages=%s files=%s ok=%s sent=%s error=%s",
-                BUNDLE_ID,
-                summary.get("update_id"),
-                len(telegram_messages),
-                sum(1 for message in telegram_messages if message.files),
-                (telegram_delivery or {}).get("ok") if isinstance(telegram_delivery, dict) else None,
-                (telegram_delivery or {}).get("sent") if isinstance(telegram_delivery, dict) else None,
-                (telegram_delivery or {}).get("error") if isinstance(telegram_delivery, dict) else None,
-            )
-        elif telegram_messages:
-            log.info(
-                "[%s] telegram delivery skipped by config | update_id=%s messages=%s files=%s",
-                BUNDLE_ID,
-                summary.get("update_id"),
-                len(telegram_messages),
-                sum(1 for message in telegram_messages if message.files),
-            )
+            telegram_delivery = delivery_result.get("telegram_delivery")
+            telegram_messages = list(delivery_result.get("messages") or [])
     except Exception as exc:
         await asyncio.to_thread(telegram_store.fail_telegram_update, update_id=update_id, error=str(exc))
         raise
@@ -919,12 +742,12 @@ async def handle_webhook(entrypoint: Any, **update) -> Dict[str, Any]:
         "react_turn": react_turn,
         "telegram_response": (
             {
-                "text": telegram_messages[0].text if telegram_messages else "",
-                "messages": [message.as_dict() for message in telegram_messages],
+                "text": telegram_messages[0].get("text") if telegram_messages else "",
+                "messages": telegram_messages,
                 "files": [
                     file_item
                     for message in telegram_messages
-                    for file_item in (message.files or ())
+                    for file_item in (message.get("files") or [])
                 ],
             }
             if react_turn

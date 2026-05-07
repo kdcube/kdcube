@@ -35,7 +35,12 @@ from .signed_downloads import (
     make_signed_link_token,
     verify_signed_link_token,
 )
-from .stream import TelegramActivityStreamer
+from .router import deliver_react_turn_to_telegram, message_log_items, render_react_turn_messages
+from .stream import (
+    TelegramActivityStreamer,
+    deliver_messages_preserving_progress_card,
+    progress_final_card,
+)
 from .webapp_auth import (
     INIT_DATA_HEADER,
     TelegramWebAppInitData,
@@ -55,12 +60,17 @@ __all__ = [
     "TelegramMessage",
     "TelegramWebAppInitData",
     "decode_inline_attachment_bytes",
+    "deliver_messages_preserving_progress_card",
+    "deliver_react_turn_to_telegram",
     "edit_telegram_text_message",
     "extract_telegram_init_data_from_request",
     "hydrate_telegram_attachments",
     "append_signed_link_token",
+    "message_log_items",
     "parse_telegram_init_user",
+    "progress_final_card",
     "raw_attachments_from_telegram",
+    "render_react_turn_messages",
     "render_telegram_messages_from_timeline",
     "make_signed_link",
     "make_signed_link_token",

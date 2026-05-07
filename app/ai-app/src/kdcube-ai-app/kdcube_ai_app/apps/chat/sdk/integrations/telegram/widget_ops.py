@@ -58,6 +58,17 @@ def _profile_identity(entrypoint: Any, *, request: Any = None, telegram_init_dat
     )
 
 
+def _admin_identity(entrypoint: Any, *, request: Any = None, telegram_init_data: str = ""):
+    _require_configured()
+    return telegram_widget_auth.resolve_identity(
+        entrypoint,
+        request=request,
+        telegram_init_data=telegram_init_data,
+        allowed_roles=("admin",),
+        create_if_missing=False,
+    )
+
+
 def _tenant_project(entrypoint: Any) -> tuple[str, str]:
     ctx = getattr(entrypoint, "comm_context", None)
     actor = getattr(ctx, "actor", None)
@@ -254,6 +265,65 @@ async def webapp_data(
         include_admin=False,
     )
     payload["auth_surface"] = "telegram_webapp"
+    return payload
+
+
+async def admin_payload(
+    entrypoint: Any,
+    *,
+    request: Any = None,
+    telegram_init_data: str = "",
+) -> Dict[str, Any]:
+    identity = _admin_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    payload = telegram_user_admin.payload(entrypoint)
+    payload["auth_surface"] = "telegram_webapp"
+    payload["telegram_user_id"] = identity.telegram_user_id
+    payload["kdcube_user_id"] = identity.user_id
+    return payload
+
+
+async def admin_upsert(
+    entrypoint: Any,
+    *,
+    telegram_user_id: str,
+    request: Any = None,
+    telegram_init_data: str = "",
+    telegram_chat_id: str = "",
+    telegram_username: str = "",
+    kdcube_user_id: str = "",
+    role: str = "anonymous",
+    conversation_id: str = "",
+    notes: str = "",
+) -> Dict[str, Any]:
+    identity = _admin_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    payload = telegram_user_admin.upsert(
+        entrypoint,
+        telegram_user_id=telegram_user_id,
+        telegram_chat_id=telegram_chat_id,
+        telegram_username=telegram_username,
+        kdcube_user_id=kdcube_user_id,
+        role=role,
+        conversation_id=conversation_id,
+        notes=notes,
+    )
+    payload["auth_surface"] = "telegram_webapp"
+    payload["telegram_user_id"] = identity.telegram_user_id
+    payload["kdcube_user_id"] = identity.user_id
+    return payload
+
+
+async def admin_delete(
+    entrypoint: Any,
+    *,
+    telegram_user_id: str,
+    request: Any = None,
+    telegram_init_data: str = "",
+) -> Dict[str, Any]:
+    identity = _admin_identity(entrypoint, request=request, telegram_init_data=telegram_init_data)
+    payload = telegram_user_admin.delete(entrypoint, telegram_user_id=telegram_user_id)
+    payload["auth_surface"] = "telegram_webapp"
+    payload["telegram_user_id"] = identity.telegram_user_id
+    payload["kdcube_user_id"] = identity.user_id
     return payload
 
 

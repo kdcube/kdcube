@@ -48,6 +48,12 @@ EMAIL_CLAUDE_SKILLS_DESCRIPTOR: Any = None
 EMAIL_CLAUDE_BUNDLE_ROOT: Path | None = None
 
 
+def configure_email_claude(*, skills_descriptor: Any = None, bundle_root: str | Path | None = None) -> None:
+    global EMAIL_CLAUDE_SKILLS_DESCRIPTOR, EMAIL_CLAUDE_BUNDLE_ROOT
+    EMAIL_CLAUDE_SKILLS_DESCRIPTOR = skills_descriptor
+    EMAIL_CLAUDE_BUNDLE_ROOT = Path(bundle_root).resolve() if bundle_root is not None else None
+
+
 def claude_code_enabled(entrypoint: Any) -> bool:
     return bool(entrypoint.bundle_prop("integrations.email.claude_code.enabled", True))
 

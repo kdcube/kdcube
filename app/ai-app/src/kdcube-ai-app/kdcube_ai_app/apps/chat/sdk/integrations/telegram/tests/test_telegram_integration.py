@@ -1,0 +1,1205 @@
+from __future__ import annotations
+
+import base64
+import json
+import os
+from pathlib import Path
+
+import pytest
+
+
+def test_telegram_update_summary_reports_attachment_shape():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import summarize_telegram_update
+
+    summary = summarize_telegram_update(
+        {
+            "update_id": 43,
+            "message": {
+                "message_id": 8,
+                "caption": "context file",
+                "chat": {"id": 1001, "type": "private"},
+                "from": {"id": 2002},
+                "document": {
+                    "file_id": "doc-file-id",
+                    "file_name": "brief.pdf",
+                    "mime_type": "application/pdf",
+                },
+            },
+        }
+    )
+
+    assert summary["text"] == "context file"
+    assert summary["attachments"] == [
+        {
+            "type": "document",
+            "file_id": "doc-file-id",
+            "file_name": "brief.pdf",
+            "mime_type": "application/pdf",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hydrate_telegram_attachments_downloads_file(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    def _fake_api_json(**kwargs):
+        assert kwargs["method"] == "getFile"
+        assert kwargs["data"] == {"file_id": "photo-file-id"}
+        return {"ok": True, "result": {"file_path": "photos/file_1.jpg", "file_size": 8}}
+
+    def _fake_download(**kwargs):
+        assert kwargs["file_path"] == "photos/file_1.jpg"
+        return b"JPEGDATA"
+
+    monkeypatch.setattr(telegram, "_telegram_api_json", _fake_api_json)
+    monkeypatch.setattr(telegram, "_download_telegram_file", _fake_download)
+
+    result = await telegram.hydrate_telegram_attachments(
+        attachments=[{"type": "photo", "file_id": "photo-file-id", "mime_type": "image/jpeg"}],
+        bot_token="bot-token",
+        message_id=8,
+    )
+
+    assert result[0]["filename"] == "file_1.jpg"
+    assert result[0]["mime"] == "image/jpeg"
+    assert result[0]["size_bytes"] == 8
+    assert base64.b64decode(result[0]["base64"]) == b"JPEGDATA"
+
+
+def test_telegram_renderer_prefers_timeline_final_answer():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "blocks": [
+                {"path": "tc:turn_1.notes", "text": "internal note"},
+                {"path": "tc:turn_1.react.final_answer.0", "text": "Task created."},
+            ]
+        },
+        react_turn={"answer": "fallback"},
+    )
+
+    assert [item.as_dict() for item in messages] == [
+        {"kind": "text", "text": "Task created.", "files": [], "parse_mode": "HTML"}
+    ]
+
+
+def test_telegram_renderer_preserves_multiple_timeline_answers():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "blocks": [
+                {"path": "tc:turn_1.react.final_answer.0", "text": "First response."},
+                {"path": "tc:turn_1.notes", "text": "internal note"},
+                {"path": "tc:turn_1.react.final_answer.1", "text": "Follow-up response."},
+            ]
+        },
+    )
+
+    assert [item.text for item in messages] == ["First response.", "Follow-up response."]
+
+
+def test_telegram_renderer_ignores_memsearch_answer_snippets_when_react_answer_is_available():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "turn_id": "turn_current",
+            "blocks": [
+                {
+                    "type": "react.tool.result",
+                    "turn_id": "turn_current",
+                    "path": "ar:turn_old.assistant.completion",
+                    "text": "Old answer returned by react.memsearch.",
+                    "meta": {"turn_id": "turn_current"},
+                },
+                {
+                    "type": "assistant.completion",
+                    "turn_id": "turn_current",
+                    "path": "ar:turn_current.assistant.completion",
+                    "text": "Current final answer.",
+                },
+            ],
+        },
+        react_turn={"answer": "Current final answer."},
+        prefer_react_turn_answer=True,
+    )
+
+    assert [item.text for item in messages] == ["Current final answer."]
+    assert "Old answer" not in "\n".join(item.text for item in messages)
+
+
+def test_telegram_renderer_splits_long_final_answers_in_order():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    first = "A" * 3200
+    second = "B" * 3200
+    messages = render_telegram_messages_from_timeline(
+        timeline={"turn_id": "turn_current", "blocks": []},
+        react_turn={"answer": f"{first}\n\n{second}"},
+        prefer_react_turn_answer=True,
+    )
+
+    assert len(messages) == 2
+    assert messages[0].text == first
+    assert messages[1].text == second
+
+
+def test_telegram_progress_final_card_appends_final_text_and_keeps_files():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import TelegramMessage
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import progress_final_card
+
+    edit_text, parse_mode, remaining = progress_final_card(
+        progress_summary="<b>Thinking</b>\n<blockquote>Loaded skill.</blockquote>",
+        telegram_messages=[
+            TelegramMessage(kind="text", text="Final answer.", parse_mode="HTML"),
+            TelegramMessage(
+                kind="document",
+                text="report.pdf",
+                files=({"filename": "report.pdf", "url": "https://example.test/report.pdf"},),
+            ),
+        ],
+    )
+
+    assert edit_text == (
+        "<b>Thinking</b>\n<blockquote>Loaded skill.</blockquote>\n\n"
+        "<b>Final response</b>\nFinal answer."
+    )
+    assert parse_mode == "HTML"
+    assert len(remaining) == 1
+    assert remaining[0].kind == "document"
+
+
+def test_telegram_renderer_includes_sources_and_hosted_artifacts():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "blocks": [
+                {"path": "tc:turn_1.react.final_answer.0", "text": "Found the report [1]."},
+                {
+                    "path": "fi:turn_1.outputs/report.pdf",
+                    "text": (
+                        '{"artifact_path":"fi:turn_1.outputs/report.pdf",'
+                        '"hosted_uri":"https://example.test/report.pdf",'
+                        '"mime":"application/pdf","filename":"report.pdf",'
+                        '"visibility":"external","description":"Generated report"}'
+                    ),
+                },
+            ],
+            "sources_pool": [
+                {"sid": 1, "title": "Science News", "url": "https://example.test/science"},
+                {
+                    "source_type": "file",
+                    "artifact_path": "fi:turn_1.outputs/report.pdf",
+                    "hosted_uri": "https://example.test/report.pdf",
+                    "mime": "application/pdf",
+                    "filename": "report.pdf",
+                },
+            ],
+        },
+    )
+
+    assert messages[0].text == "Found the report [1]."
+    assert messages[1].text == "Sources:\n1. Science News - https://example.test/science"
+    assert messages[2].kind == "document"
+    assert messages[2].files[0]["filename"] == "report.pdf"
+    assert messages[2].files[0]["url"] == "https://example.test/report.pdf"
+
+
+def test_telegram_renderer_skips_already_delivered_artifacts():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "blocks": [
+                {"path": "tc:turn_1.react.final_answer.0", "text": "Found the report."},
+                {
+                    "path": "fi:turn_1.outputs/report.pdf",
+                    "text": (
+                        '{"artifact_path":"fi:turn_1.outputs/report.pdf",'
+                        '"hosted_uri":"https://example.test/report.pdf",'
+                        '"mime":"application/pdf","filename":"report.pdf",'
+                        '"visibility":"external","description":"Generated report"}'
+                    ),
+                },
+            ],
+            "sources_pool": [],
+        },
+        exclude_file_keys={"https://example.test/report.pdf"},
+    )
+
+    assert [message.kind for message in messages] == ["text"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_sends_timeline_notes():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        quiet_seconds=0.01,
+        min_send_interval_seconds=0.01,
+    ):
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "timeline_text", "text": "checking inbox", "index": 0, "completed": False},
+                    "extra": {"artifact_name": "react.notes", "format": "markdown"},
+                },
+            }
+        )
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "timeline_text", "text": "", "index": 1, "completed": True},
+                    "extra": {"artifact_name": "react.notes", "format": "markdown"},
+                },
+            }
+        )
+
+    assert [message.text for message in sent] == ["<b>Notes</b>\n<blockquote>checking inbox</blockquote>"]
+    assert sent[0].parse_mode == "HTML"
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_ignores_answer_deltas():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(comm=comm, bot_token="token", chat_id="chat", send_messages=_send):
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "answer", "text": "final answer", "index": 0, "completed": False},
+                    "extra": {"artifact_name": "react.final_answer", "format": "markdown"},
+                },
+            }
+        )
+
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_subscribes_to_relay_and_dedupes_local_echo():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeRelay:
+        def __init__(self):
+            self.callback = None
+            self.released = False
+
+        async def acquire_session_channel(self, session_id, tenant, project, *, callback=None):
+            assert (session_id, tenant, project) == ("session-1", "tenant-1", "project-1")
+            self.callback = callback
+
+        def remove_listener(self, cb):
+            if self.callback is cb:
+                self.callback = None
+
+        async def release_session_channel(self, session_id, tenant, project):
+            assert (session_id, tenant, project) == ("session-1", "tenant-1", "project-1")
+            self.released = True
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+            self.emitter = _FakeRelay()
+            self.conversation = {"session_id": "session-1", "conversation_id": "conv-1", "turn_id": "turn-1"}
+            self.service = {"tenant": "tenant-1", "project": "project-1"}
+            self.tenant = "tenant-1"
+            self.project = "project-1"
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit_local(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    envelope = {
+        "type": "chat.delta",
+        "conversation": {"session_id": "session-1", "conversation_id": "conv-1", "turn_id": "turn-1"},
+        "event": {"agent": "react.decision"},
+        "delta": {"marker": "timeline_text", "text": "same note", "index": 0, "completed": True},
+        "extra": {"artifact_name": "react.notes", "format": "markdown"},
+    }
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        quiet_seconds=0.01,
+        min_send_interval_seconds=0.01,
+    ):
+        await comm.emit_local({"event": "chat_delta", "data": envelope})
+        await comm.emitter.callback({"event": "chat_delta", "data": envelope, "target_sid": None})
+
+    assert [message.text for message in sent] == ["<b>Notes</b>\n<blockquote>same note</blockquote>"]
+    assert sent[0].parse_mode == "HTML"
+    assert comm.emitter.released is True
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_sends_files_event_immediately():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(comm=comm, bot_token="token", chat_id="chat", send_messages=_send) as streamer:
+        await comm.emit(
+            {
+                "event": "chat_step",
+                "data": {
+                    "type": "chat.files",
+                    "event": {"step": "files", "status": "completed", "title": "Files Ready (1)"},
+                    "data": {
+                        "count": 1,
+                        "items": [
+                            {
+                                "filename": "report.pdf",
+                                "mime": "application/pdf",
+                                "description": "Generated report",
+                                "hosted_uri": "https://example.test/report.pdf",
+                                "physical_path": "turn_1/outputs/report.pdf",
+                                "artifact_path": "fi:turn_1.outputs/report.pdf",
+                            }
+                        ],
+                    },
+                },
+            }
+        )
+
+    assert len(sent) == 1
+    assert sent[0].kind == "document"
+    assert sent[0].files[0]["filename"] == "report.pdf"
+    assert streamer.delivered_file_keys() == {"https://example.test/report.pdf"}
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_does_not_dedupe_different_file_events():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, filename, hosted_uri):
+            for cb in list(self.listeners):
+                await cb(
+                    {
+                        "event": "chat_step",
+                        "data": {
+                            "type": "chat.files",
+                            "event": {"step": "files", "status": "completed", "title": "Files Ready (1)"},
+                            "data": {
+                                "count": 1,
+                                "items": [
+                                    {
+                                        "filename": filename,
+                                        "mime": "application/pdf",
+                                        "hosted_uri": hosted_uri,
+                                        "artifact_path": f"fi:turn_1.outputs/{filename}",
+                                    }
+                                ],
+                            },
+                        },
+                    }
+                )
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(comm=comm, bot_token="token", chat_id="chat", send_messages=_send):
+        await comm.emit("one.pdf", "https://example.test/one.pdf")
+        await comm.emit("two.pdf", "https://example.test/two.pdf")
+
+    assert [message.files[0]["filename"] for message in sent] == ["one.pdf", "two.pdf"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_sends_citations_event():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(comm=comm, bot_token="token", chat_id="chat", send_messages=_send):
+        await comm.emit(
+            {
+                "event": "chat_step",
+                "data": {
+                    "type": "chat.citations",
+                    "event": {"step": "citations", "status": "completed", "title": "Citations (1)"},
+                    "data": {"count": 1, "items": [{"sid": 3, "title": "Example source", "url": "https://example.test/src"}]},
+                },
+            }
+        )
+
+    assert [message.text for message in sent] == ["Sources ready:\n3. Example source - https://example.test/src"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_edits_one_progress_message():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+    edits = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 77}}]}
+
+    async def _edit(message_id, text, parse_mode=""):
+        edits.append({"message_id": message_id, "text": text, "parse_mode": parse_mode})
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        edit_text_message=_edit,
+    ) as streamer:
+        await comm.emit(
+            {
+                "event": "chat_step",
+                "data": {
+                    "type": "chat.step",
+                    "event": {"step": "web_search", "status": "started", "title": "Web Search"},
+                    "data": {},
+                },
+            }
+        )
+        await comm.emit(
+            {
+                "event": "chat_step",
+                "data": {
+                    "type": "chat.citations",
+                    "event": {"step": "citations", "status": "completed", "title": "Citations (1)"},
+                    "data": {"count": 1, "items": [{"sid": 3, "title": "Example source", "url": "https://example.test/src"}]},
+                },
+            }
+        )
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "thinking", "text": "checking source quality", "index": 0, "completed": True},
+                    "extra": {"artifact_name": "react.thinking", "format": "markdown"},
+                },
+            }
+        )
+
+    assert [message.text for message in sent] == ["Web Search: started"]
+    assert sent[0].parse_mode == "HTML"
+    assert edits == [
+        {
+            "message_id": 77,
+            "text": "Web Search: started\n\nSources ready:\n3. Example source - https://example.test/src",
+            "parse_mode": "HTML",
+        },
+        {
+            "message_id": 77,
+            "text": (
+                "Web Search: started\n\nSources ready:\n3. Example source - https://example.test/src\n\n"
+                "<b>Thinking</b>\n<blockquote>checking source quality</blockquote>"
+            ),
+            "parse_mode": "HTML",
+        }
+    ]
+    assert streamer.progress_message_id() == 77
+    assert streamer.progress_summary() == (
+        "Web Search: started\n\nSources ready:\n3. Example source - https://example.test/src\n\n"
+        "<b>Thinking</b>\n<blockquote>checking source quality</blockquote>"
+    )
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_ignores_trivial_thinking_completion_delta():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 77}}]}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        quiet_seconds=0.01,
+        min_send_interval_seconds=0.01,
+    ):
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "thinking", "text": "meaningful thinking", "index": 0, "completed": False},
+                    "extra": {"artifact_name": "react.thinking.0", "format": "markdown"},
+                },
+            }
+        )
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "thinking", "text": ".", "index": 1, "completed": True},
+                    "extra": {"artifact_name": "react.thinking.1", "format": "markdown"},
+                },
+            }
+        )
+
+    assert [message.text for message in sent] == ["<b>Thinking</b>\n<blockquote>meaningful thinking</blockquote>"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_ignores_quoted_punctuation_only_thinking_delta():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit(self, activity):
+            for cb in list(self.listeners):
+                await cb(activity)
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 77}}]}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        quiet_seconds=0.01,
+        min_send_interval_seconds=0.01,
+    ):
+        await comm.emit(
+            {
+                "event": "chat_delta",
+                "data": {
+                    "type": "chat.delta",
+                    "event": {"agent": "react.decision"},
+                    "delta": {"marker": "thinking", "text": "> .", "index": 0, "completed": True},
+                    "extra": {"artifact_name": "react.thinking.0", "format": "markdown"},
+                },
+            }
+        )
+
+    assert sent == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_suppresses_internal_status_noise():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit_status(self, *, step, title, status="completed"):
+            for cb in list(self.listeners):
+                await cb(
+                    {
+                        "event": "chat_step",
+                        "data": {
+                            "type": "chat.step",
+                            "event": {"step": step, "status": status, "title": title},
+                            "data": {},
+                        },
+                    }
+                )
+
+    sent = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 77}}]}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(comm=comm, bot_token="token", chat_id="chat", send_messages=_send):
+        await comm.emit_status(step="user_context", title="User↔Conversation Linked")
+        await comm.emit_status(step="prepare", title="Prepare")
+        await comm.emit_status(step="event", title="Assistant Delta")
+        await comm.emit_status(step="persist", title="Assistant Messages Persisted")
+        await comm.emit_status(step="web_search", title="Web Search", status="started")
+
+    assert [message.text for message in sent] == ["Web Search: started"]
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_dedupes_repeated_running_code_status():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit_code_status(self, artifact_name):
+            for cb in list(self.listeners):
+                await cb(
+                    {
+                        "event": "chat_delta",
+                        "data": {
+                            "type": "chat.delta",
+                            "event": {"agent": "react.tooling"},
+                            "delta": {"marker": "subsystem", "text": "", "index": 0, "completed": False},
+                            "extra": {
+                                "artifact_name": artifact_name,
+                                "sub_type": "code_exec.run",
+                            },
+                        },
+                    }
+                )
+
+    sent = []
+    edits = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 77}}]}
+
+    async def _edit(message_id, text, parse_mode=""):
+        edits.append({"message_id": message_id, "text": text, "parse_mode": parse_mode})
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        edit_text_message=_edit,
+    ):
+        await comm.emit_code_status("exec.one")
+        await comm.emit_code_status("exec.two")
+        await comm.emit_code_status("exec.three")
+
+    assert [message.text for message in sent] == ["Running code..."]
+    assert sent[0].parse_mode == "HTML"
+    assert edits == []
+
+
+@pytest.mark.asyncio
+async def test_telegram_activity_streamer_describes_web_and_code_payloads():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.stream import TelegramActivityStreamer
+
+    class _FakeComm:
+        def __init__(self):
+            self.listeners = []
+
+        def add_activity_listener(self, cb):
+            self.listeners.append(cb)
+
+        def remove_activity_listener(self, cb):
+            self.listeners.remove(cb)
+
+        async def emit_subsystem(self, *, sub_type, text, title="Tool"):
+            for cb in list(self.listeners):
+                await cb(
+                    {
+                        "event": "chat_delta",
+                        "data": {
+                            "type": "chat.delta",
+                            "event": {"agent": "react.tooling", "title": title},
+                            "delta": {"marker": "subsystem", "text": text, "index": 0, "completed": True},
+                            "extra": {
+                                "artifact_name": f"artifact.{sub_type.replace('.', '_')}",
+                                "sub_type": sub_type,
+                            },
+                        },
+                    }
+                )
+
+    sent = []
+    edits = []
+
+    async def _send(messages):
+        sent.extend(messages)
+        return {"ok": True, "responses": [{"ok": True, "result": {"message_id": 77}}]}
+
+    async def _edit(message_id, text, parse_mode=""):
+        edits.append({"message_id": message_id, "text": text, "parse_mode": parse_mode})
+        return {"ok": True}
+
+    comm = _FakeComm()
+    async with TelegramActivityStreamer(
+        comm=comm,
+        bot_token="token",
+        chat_id="chat",
+        send_messages=_send,
+        edit_text_message=_edit,
+    ):
+        await comm.emit_subsystem(
+            sub_type="web_search.filtered_results",
+            text='{"queries":["reinforcement learning concepts"],"results":[{"url":"https://example.test/a"},{"url":"https://example.test/b"}]}',
+        )
+        await comm.emit_subsystem(
+            sub_type="web_fetch.results",
+            text='{"url":"https://example.test/rl/tutorial","title":"RL Tutorial"}',
+        )
+        await comm.emit_subsystem(
+            sub_type="code_exec.program.name",
+            text="rl_dashboard.py",
+        )
+
+    assert sent[0].text == "Web search: reinforcement learning concepts (2 results)"
+    assert edits[-1]["text"] == (
+        "Web search: reinforcement learning concepts (2 results)\n\n"
+        "Fetched: example.test/rl/tutorial\n\n"
+        "Code program: rl_dashboard.py"
+    )
+
+
+def test_telegram_renderer_reads_file_metadata_from_block_meta(tmp_path):
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import render_telegram_messages_from_timeline
+
+    report = tmp_path / "tech_news.xlsx"
+    report.write_bytes(b"xlsx")
+
+    messages = render_telegram_messages_from_timeline(
+        timeline={
+            "blocks": [
+                {"path": "tc:turn_1.react.final_answer.0", "text": "Generated the file."},
+                {
+                    "path": "fi:turn_1.outputs/tech_news.xlsx",
+                    "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "meta": {
+                        "artifact_path": "fi:turn_1.outputs/tech_news.xlsx",
+                        "hosted_uri": report.as_uri(),
+                        "physical_path": "turn_1/outputs/tech_news.xlsx",
+                        "filename": "tech_news.xlsx",
+                        "visibility": "external",
+                    },
+                },
+            ],
+            "sources_pool": [],
+        },
+    )
+
+    assert messages[1].kind == "document"
+    assert messages[1].files[0]["hosted_uri"] == report.as_uri()
+    assert messages[1].files[0]["physical_path"] == "turn_1/outputs/tech_news.xlsx"
+
+
+@pytest.mark.asyncio
+async def test_telegram_renderer_unwraps_stored_timeline_and_uploads_current_turn_file(tmp_path):
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    report = tmp_path / "tech_news.xlsx"
+    report.write_bytes(b"excel-bytes")
+    malformed_file_uri = "file://" + str(report).lstrip("/")
+
+    stored_timeline_record = {
+        "turn_id": "turn_current",
+        "payload": {
+            "turn_id": "turn_current",
+            "blocks": [
+                {
+                    "type": "assistant.completion",
+                    "turn_id": "turn_old",
+                    "path": "ar:turn_old.assistant.completion",
+                    "text": "Old answer.",
+                },
+                {
+                    "type": "react.tool.result",
+                    "turn_id": "turn_old",
+                    "path": "fi:turn_old.outputs/old.xlsx",
+                    "meta": {
+                        "hosted_uri": "file:///does/not/exist/old.xlsx",
+                        "physical_path": "turn_old/outputs/old.xlsx",
+                    },
+                },
+                {
+                    "type": "assistant.completion",
+                    "turn_id": "turn_current",
+                    "path": "ar:turn_current.assistant.completion",
+                    "text": "Here is the spreadsheet.",
+                },
+                {
+                    "type": "react.tool.result",
+                    "turn_id": "turn_current",
+                    "path": "fi:turn_current.outputs/tech_news.xlsx",
+                    "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    "meta": {
+                        "digest": json.dumps(
+                            {
+                                "artifact_path": "fi:turn_current.outputs/tech_news.xlsx",
+                                "physical_path": "turn_current/outputs/tech_news.xlsx",
+                                "mime": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "description": "Excel report",
+                                "visibility": "external",
+                                "size_bytes": len(b"excel-bytes"),
+                            }
+                        ),
+                        "hosted_uri": malformed_file_uri,
+                    },
+                },
+            ],
+            "sources_pool": [],
+        },
+    }
+
+    messages = telegram.render_telegram_messages_from_timeline(timeline=stored_timeline_record)
+
+    assert [message.kind for message in messages] == ["text", "document"]
+    assert messages[0].text == "Here is the spreadsheet."
+    assert messages[1].text == "Excel report"
+    assert messages[1].files[0]["logical_path"] == "fi:turn_current.outputs/tech_news.xlsx"
+    assert await telegram._file_item_bytes(messages[1].files[0]) == b"excel-bytes"
+
+
+def test_telegram_text_normalizes_markdown_for_plain_bot_messages():
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    text = """### Gmail status
+
+**Gmail access:** Working
+**MCP sub-processor:** Failed with `claude_code_mcp_result_not_recorded`
+
+| # | Sender | Subject |
+|---|---|---|
+| 1 | Fireworks AI | April Recap |
+| 2 | Lovable | Payments |
+
+See [the report](https://example.test/report).
+"""
+
+    rendered = telegram._telegram_text(text)
+
+    assert "###" not in rendered
+    assert "**" not in rendered
+    assert "`" not in rendered
+    assert "|---" not in rendered
+    assert "Gmail status" in rendered
+    assert "Gmail access: Working" in rendered
+    assert "MCP sub-processor: Failed with claude_code_mcp_result_not_recorded" in rendered
+    assert "1. Fireworks AI - April Recap" in rendered
+    assert "2. Lovable - Payments" in rendered
+    assert "the report (https://example.test/report)" in rendered
+
+
+def test_telegram_html_preserves_inline_code_with_underscores():
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    rendered = telegram._markdown_to_telegram_html(
+        "Task ID: `task_email-inbox-summary-every-4-hours_22bdc854`\n"
+        "Identifier: task_email-inbox-summary-every-4-hours_22bdc854\n"
+        "Style: _italic_"
+    )
+
+    assert "<code>task_email-inbox-summary-every-4-hours_22bdc854</code>" in rendered
+    assert "Identifier: task_email-inbox-summary-every-4-hours_22bdc854" in rendered
+    assert "<i>email-inbox-summary-every-4-hours</i>" not in rendered
+    assert "Style: <i>italic</i>" in rendered
+
+
+@pytest.mark.asyncio
+async def test_live_telegram_timeline_delivery_probe():
+    timeline_path = (
+        os.environ.get("TASK_MEMO_TELEGRAM_TURN_LOG_JSON", "").strip()
+        or os.environ.get("TASK_MEMO_TELEGRAM_TIMELINE_JSON", "").strip()
+    )
+    if not timeline_path:
+        pytest.skip("set TASK_MEMO_TELEGRAM_TURN_LOG_JSON to probe a stored Telegram turn log")
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    timeline = json.loads(Path(timeline_path).read_text(encoding="utf-8"))
+    messages = telegram.render_telegram_messages_from_timeline(timeline=timeline)
+    file_messages = [message for message in messages if message.files]
+
+    assert messages, "timeline should render at least one Telegram message"
+    assert file_messages, "timeline should render at least one Telegram file message"
+    for message in file_messages:
+        assert await telegram._file_item_bytes(message.files[0]), message.files[0]
+
+    if os.environ.get("TASK_MEMO_TELEGRAM_SEND") == "1":
+        bot_token = os.environ["TELEGRAM_BOT_TOKEN"]
+        chat_id = os.environ["TASK_MEMO_TELEGRAM_CHAT_ID"]
+        result = await telegram.send_telegram_messages(bot_token=bot_token, chat_id=chat_id, messages=messages)
+        assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_telegram_delivery_without_token_is_explicit():
+    from kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot import TelegramMessage, send_telegram_messages
+
+    result = await send_telegram_messages(
+        bot_token="",
+        chat_id=1001,
+        messages=[TelegramMessage(kind="text", text="Task created.")],
+    )
+
+    assert result == {
+        "ok": False,
+        "error": "telegram bot token is not configured",
+        "sent": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_telegram_delivery_sends_hosted_document(monkeypatch):
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    calls = []
+
+    def fake_post(*, bot_token, method, data):
+        calls.append({"bot_token": bot_token, "method": method, "data": data})
+        return {"ok": True, "result": {"message_id": len(calls)}}
+
+    monkeypatch.setattr(telegram, "_post_telegram_form", fake_post)
+
+    result = await telegram.send_telegram_messages(
+        bot_token="token",
+        chat_id=1001,
+        messages=[
+            telegram.TelegramMessage(
+                kind="document",
+                text="Generated report",
+                files=({"url": "https://example.test/report.pdf", "filename": "report.pdf"},),
+            )
+        ],
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "bot_token": "token",
+            "method": "sendDocument",
+            "data": {
+                "chat_id": "1001",
+                "caption": "Generated report",
+                "document": "https://example.test/report.pdf",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_telegram_delivery_uploads_local_document(monkeypatch, tmp_path):
+    import kdcube_ai_app.apps.chat.sdk.integrations.telegram.bot as telegram
+
+    report = tmp_path / "tech_news.xlsx"
+    report.write_bytes(b"excel-bytes")
+    calls = []
+
+    def fake_multipart(*, bot_token, method, data, file_field, filename, file_data, mime_type):
+        calls.append(
+            {
+                "bot_token": bot_token,
+                "method": method,
+                "data": data,
+                "file_field": file_field,
+                "filename": filename,
+                "file_data": file_data,
+                "mime_type": mime_type,
+            }
+        )
+        return {"ok": True, "result": {"message_id": 1}}
+
+    monkeypatch.setattr(telegram, "_post_telegram_multipart", fake_multipart)
+
+    result = await telegram.send_telegram_messages(
+        bot_token="token",
+        chat_id=1001,
+        messages=[
+            telegram.TelegramMessage(
+                kind="document",
+                text="Generated report",
+                files=(
+                    {
+                        "hosted_uri": report.as_uri(),
+                        "filename": "tech_news.xlsx",
+                        "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    },
+                ),
+            )
+        ],
+    )
+
+    assert result["ok"] is True
+    assert calls == [
+        {
+            "bot_token": "token",
+            "method": "sendDocument",
+            "data": {"chat_id": "1001", "caption": "Generated report"},
+            "file_field": "document",
+            "filename": "tech_news.xlsx",
+            "file_data": b"excel-bytes",
+            "mime_type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        }
+    ]

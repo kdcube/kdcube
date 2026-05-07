@@ -94,8 +94,8 @@ class TelegramActivityStreamer:
     def progress_message_id(self) -> str | int | None:
         return self._progress_message_id
 
-    def progress_summary(self, *, max_chars: int = 1200) -> str:
-        return self._progress_body(limit=max(300, int(max_chars or 1200))).strip()
+    def progress_summary(self, *, max_chars: int = 3900) -> str:
+        return self._progress_body(limit=max(300, int(max_chars or 3900))).strip()
 
     async def __aenter__(self) -> "TelegramActivityStreamer":
         add_listener = getattr(self.comm, "add_activity_listener", None)
@@ -479,7 +479,7 @@ class TelegramActivityStreamer:
                     self._buffers.pop(key, None)
                 continue
             clipped = unsent[: self.max_message_chars].rstrip()
-            await self._send_text(_progress_note_text(buf.label, clipped), reason=f"delta:{key}")
+            await self._send_text(_progress_note_html(buf.label, clipped), reason=f"delta:{key}", parse_mode="HTML")
             buf.sent_chars += len(unsent) if force or buf.completed else len(clipped)
             if buf.completed or force:
                 self._buffers.pop(key, None)
@@ -493,17 +493,23 @@ class TelegramActivityStreamer:
 
     async def _send_text(self, text: str, *, reason: str, parse_mode: str = "") -> None:
         raw_value = str(text or "")
-        value = _telegram_text(raw_value)
-        if not value:
+        parse_mode = str(parse_mode or "").strip()
+        plain_value = _telegram_text(_html_to_plain(raw_value) if parse_mode.upper() == "HTML" else raw_value)
+        if not plain_value:
             return
-        if _is_internal_progress_text(value):
+        if _is_internal_progress_text(plain_value):
             return
-        text_key = _normalize_progress_text(value)
+        text_key = _normalize_progress_text(plain_value)
         if text_key and text_key in self._seen_progress_texts:
             return
         if text_key:
             self._seen_progress_texts.add(text_key)
-        chunk = value
+        if parse_mode.upper() == "HTML":
+            chunk = raw_value.strip()
+            parse_mode = "HTML"
+        else:
+            chunk = _progress_plain_html(plain_value)
+            parse_mode = "HTML"
         self._progress_chunks.append(chunk)
         body = self._progress_body()
         self._last_send_at = time.monotonic()
@@ -515,14 +521,14 @@ class TelegramActivityStreamer:
         )
         if self._progress_message_id:
             if self._edit_text_message is not None:
-                result = await self._edit_text_message(self._progress_message_id, body, "")
+                result = await self._edit_text_message(self._progress_message_id, body, parse_mode)
             else:
                 result = await edit_telegram_text_message(
                     bot_token=self.bot_token,
                     chat_id=self.chat_id,
                     message_id=self._progress_message_id,
                     text=body,
-                    parse_mode="",
+                    parse_mode=parse_mode,
                 )
             if result.get("ok"):
                 return
@@ -535,21 +541,33 @@ class TelegramActivityStreamer:
             )
             return
         if self._send_messages is not None:
-            result = await self._send_messages([TelegramMessage(kind="text", text=body, parse_mode="")])
+            result = await self._send_messages([TelegramMessage(kind="text", text=body, parse_mode=parse_mode)])
         else:
             result = await send_telegram_messages(
                 bot_token=self.bot_token,
                 chat_id=self.chat_id,
-                messages=[TelegramMessage(kind="text", text=body, parse_mode="")],
+                messages=[TelegramMessage(kind="text", text=body, parse_mode=parse_mode)],
             )
         self._remember_progress_message_id(result)
 
     def _progress_body(self, *, limit: int | None = None) -> str:
-        body = "\n\n".join(chunk for chunk in self._progress_chunks if chunk).strip()
         limit = min(3900, int(limit or self.max_message_chars * 3))
+        chunks = [chunk for chunk in self._progress_chunks if chunk]
+        body = "\n\n".join(chunks).strip()
         if len(body) <= limit:
             return body
-        return body[-limit:].lstrip()
+        selected: list[str] = []
+        total = 0
+        for chunk in reversed(chunks):
+            extra = len(chunk) + (2 if selected else 0)
+            if selected and total + extra > limit:
+                break
+            if not selected and extra > limit:
+                selected.append(_fit_progress_chunk_html(chunk, limit))
+                break
+            selected.append(chunk)
+            total += extra
+        return "\n\n".join(reversed(selected)).strip()
 
     def _remember_progress_message_id(self, result: Mapping[str, Any] | None) -> None:
         if self._progress_message_id or not isinstance(result, Mapping):
@@ -606,6 +624,141 @@ def _telegram_edit_not_modified(result: Mapping[str, Any] | None) -> bool:
         return False
     description = str(result.get("description") or result.get("error") or "").lower()
     return "message is not modified" in description
+
+
+async def deliver_messages_preserving_progress_card(
+    *,
+    bot_token: str,
+    chat_id: str | int,
+    telegram_messages: list[TelegramMessage],
+    progress_message_id: str | int | None = None,
+    progress_summary: str = "",
+) -> dict[str, Any]:
+    """Append final text to the progress card; send files or overflow normally."""
+    messages_to_send = list(telegram_messages or [])
+    edit_result: dict[str, Any] | None = None
+    edit_text = ""
+    edit_parse_mode = ""
+    final_appended = False
+
+    if progress_message_id and messages_to_send:
+        edit_text, edit_parse_mode, remaining_after_edit = progress_final_card(
+            progress_summary=progress_summary,
+            telegram_messages=messages_to_send,
+        )
+        if edit_text:
+            edit_result = await edit_telegram_text_message(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                message_id=progress_message_id,
+                text=edit_text,
+                parse_mode=edit_parse_mode,
+            )
+            if edit_result.get("ok") or _telegram_edit_not_modified(edit_result):
+                messages_to_send = remaining_after_edit
+                final_appended = len(remaining_after_edit) < len(telegram_messages)
+                log.info(
+                    "[telegram.stream] progress finalized message_id=%s appended_final=%s chars=%s",
+                    progress_message_id,
+                    final_appended,
+                    len(edit_text),
+                )
+            else:
+                log.warning(
+                    "[telegram.stream] progress final edit failed message_id=%s response=%s",
+                    progress_message_id,
+                    edit_result,
+                )
+
+    delivery = (
+        await send_telegram_messages(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            messages=messages_to_send,
+        )
+        if messages_to_send
+        else {"ok": True, "sent": 0, "responses": []}
+    )
+    return {
+        "messages_to_send": messages_to_send,
+        "telegram_delivery": delivery,
+        "progress_edit": edit_result,
+        "progress_edit_text": edit_text,
+        "progress_edit_parse_mode": edit_parse_mode,
+        "progress_final_appended": final_appended,
+    }
+
+
+def progress_final_card(
+    *,
+    progress_summary: str,
+    telegram_messages: list[TelegramMessage],
+    limit: int = 3900,
+) -> tuple[str, str, list[TelegramMessage]]:
+    text_messages: list[TelegramMessage] = []
+    remaining: list[TelegramMessage] = []
+    for message in telegram_messages:
+        if getattr(message, "kind", "") == "text" and not getattr(message, "files", ()):
+            text_messages.append(message)
+        else:
+            remaining.append(message)
+    if not text_messages:
+        return "", "", telegram_messages
+
+    progress_html = _existing_progress_html(progress_summary)
+    final_html = "\n\n".join(
+        _existing_message_html(message)
+        for message in text_messages
+        if str(getattr(message, "text", "") or "").strip()
+    ).strip()
+    if not final_html:
+        return "", "", telegram_messages
+
+    edit_text = "\n\n".join(
+        part
+        for part in (
+            progress_html,
+            f"<b>Final response</b>\n{final_html}",
+        )
+        if part
+    ).strip()
+    if len(edit_text) <= limit:
+        return edit_text, "HTML", remaining
+
+    fallback_text = "\n\n".join(
+        part
+        for part in (
+            progress_html,
+            "<b>Final response</b>\nThe final response follows below.",
+        )
+        if part
+    ).strip()
+    if len(fallback_text) <= limit:
+        return fallback_text, "HTML", telegram_messages
+
+    return _fit_progress_chunk_html(progress_html or fallback_text, limit), "HTML", telegram_messages
+
+
+def _existing_progress_html(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if _looks_like_telegram_html(text):
+        return text
+    return html.escape(text, quote=False)
+
+
+def _existing_message_html(message: TelegramMessage) -> str:
+    value = str(getattr(message, "text", "") or "").strip()
+    if not value:
+        return ""
+    if str(getattr(message, "parse_mode", "") or "").strip().upper() == "HTML":
+        return value
+    return html.escape(value, quote=False)
+
+
+def _looks_like_telegram_html(value: str) -> bool:
+    return bool(re.search(r"</?(?:a|b|blockquote|code|i|pre)\b", str(value or ""), flags=re.IGNORECASE))
 
 
 def _normalize_status_token(value: str) -> str:
@@ -750,7 +903,7 @@ def _clip_text(value: str, limit: int) -> str:
     return text[: max(0, limit - 1)].rstrip() + "…"
 
 
-def _progress_note_text(label: str, text: str) -> str:
+def _progress_note_html(label: str, text: str) -> str:
     label_key = str(label or "").strip().lower()
     title = "Thinking" if label_key == "thinking" else "Notes"
     raw_text = str(text or "").strip()
@@ -759,4 +912,32 @@ def _progress_note_text(label: str, text: str) -> str:
     body = _telegram_text(raw_text)
     if not body:
         return ""
-    return f"{title}\n{body}"
+    return f"<b>{html.escape(title, quote=False)}</b>\n<blockquote>{html.escape(body, quote=False)}</blockquote>"
+
+
+def _progress_plain_html(text: str) -> str:
+    return html.escape(str(text or "").strip(), quote=False)
+
+
+def _html_to_plain(value: str) -> str:
+    without_tags = re.sub(r"<[^>]+>", "", str(value or ""))
+    return html.unescape(without_tags)
+
+
+def _fit_progress_chunk_html(chunk: str, limit: int) -> str:
+    limit = max(20, int(limit or 3900))
+    value = str(chunk or "").strip()
+    if len(value) <= limit:
+        return value
+    match = re.match(r"^(<b>[^<]+</b>\n<blockquote>)(.*)(</blockquote>)$", value, flags=re.DOTALL)
+    if match:
+        prefix, inner_html, suffix = match.groups()
+        max_inner = max(1, limit - len(prefix) - len(suffix) - 1)
+        inner = html.unescape(inner_html)
+        if len(inner) > max_inner:
+            inner = inner[:max_inner].rstrip() + "…"
+        return f"{prefix}{html.escape(inner, quote=False)}{suffix}"
+    plain = _html_to_plain(value)
+    if len(plain) > limit:
+        plain = plain[: max(0, limit - 1)].rstrip() + "…"
+    return html.escape(plain, quote=False)

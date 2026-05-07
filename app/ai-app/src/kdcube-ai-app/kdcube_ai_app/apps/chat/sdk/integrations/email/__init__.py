@@ -26,7 +26,7 @@ from .accounts import (
     refresh_google_token,
 )
 from .attachments import materialize_email_attachments_for_current_turn
-from .claude import claude_code_enabled, run_email_processor_with_claude_code
+from .claude import claude_code_enabled, configure_email_claude, run_email_processor_with_claude_code
 from .icloud import (
     default_icloud_account_settings,
     ensure_icloud_credentials,
@@ -62,6 +62,7 @@ __all__ = [
     "build_google_authorize_url",
     "callback_url",
     "claude_code_enabled",
+    "configure_email_claude",
     "create_email_mcp_run",
     "default_icloud_account_settings",
     "email_mcp_auth_secret",
@@ -94,4 +95,3 @@ __all__ = [
     "sign_email_mcp_payload",
     "verify_email_mcp_token",
 ]
-

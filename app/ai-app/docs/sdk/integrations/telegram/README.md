@@ -29,16 +29,28 @@ kdcube_ai_app.apps.chat.sdk.integrations.telegram
   bot.py              Telegram Bot API calls, update summaries, attachment hydration,
                       timeline rendering, Markdown/HTML normalization, file sends
   stream.py           TelegramActivityStreamer for live ReAct progress updates
+                      and progress-card finalization
+  router.py           generic React-turn-to-Telegram rendering and delivery
   webapp_auth.py      Telegram Mini App initData extraction and signature validation
   chat_submit.py      helpers for /steer, /followup, RawAttachment, UserSession,
                       RequestContext, and IngressConfig
   signed_downloads.py short-lived signed link helpers re-exported for Telegram clients
-  user_admin.py       configurable Telegram user registry, webhook submitter,
-                      queued response delivery, attachment hosting
+  user_admin.py       configurable Telegram user registry/admin, webhook
+                      authorization and submitter orchestration, attachment hosting
   widget_auth.py      configurable Mini App identity resolver backed by a bundle registry
   widget_ops.py       configurable Mini App operations for conversations, tasks,
                       executions, and artifact downloads
   webapp.py           configurable payload composer for task/memory/settings/chat widgets
+```
+
+Keep these concerns separate when reusing the SDK:
+
+```text
+bot.py      Telegram protocol primitives
+stream.py   live progress message/card mechanics
+router.py   final React-turn delivery to Telegram
+user_admin  user allow-list, role, conversation binding, webhook orchestration
+widget_*    Telegram Mini App identity and operations
 ```
 
 The lower-level modules are pure protocol helpers. The higher-level modules
@@ -68,8 +80,9 @@ Telegram update
   -> ChatIngressSubmitter.submit(...)
   -> shared chat_core processing
   -> ReAct workflow
-  -> render_telegram_messages_from_timeline(...)
-  -> send_telegram_messages(...)
+  -> deliver_react_turn_to_telegram(...)
+       -> render_react_turn_messages(...)
+       -> deliver_messages_preserving_progress_card(...)
 ```
 
 `ChatIngressSubmitter` is provided by the chat service layer. Telegram helpers
@@ -162,25 +175,32 @@ storage, choose a conversation, authorize a user, or enqueue a workflow.
 
 ```python
 from kdcube_ai_app.apps.chat.sdk.integrations.telegram import (
-    render_telegram_messages_from_timeline,
-    send_telegram_messages,
+    deliver_react_turn_to_telegram,
 )
 
-messages = render_telegram_messages_from_timeline(
-    timeline=timeline,
-    exclude_file_keys=already_streamed_file_keys,
-)
-
-result = await send_telegram_messages(
+delivery = await deliver_react_turn_to_telegram(
+    bundle_id="my.bundle@1-0",
     bot_token=bot_token,
     chat_id=chat_id,
-    messages=messages,
+    update_id=update_id,
+    react_turn=react_turn,
+    delivered_file_keys=already_streamed_file_keys,
+    progress_message_id=progress_message_id,
+    progress_summary=progress_summary,
+    send_responses=True,
 )
 ```
 
-The renderer converts a stored timeline or turn log into Telegram-safe
-`TelegramMessage` values. It emits text chunks, sources text, and visible file
-artifacts that can be sent through the Bot API.
+The router converts a React turn log or timeline into Telegram-safe
+`TelegramMessage` values, then sends them through the Bot API. It emits text
+chunks, sources text, and visible file artifacts.
+
+Use the lower-level calls only when a bundle needs custom delivery:
+
+```python
+messages = render_telegram_messages_from_timeline(...)
+result = await send_telegram_messages(bot_token=bot_token, chat_id=chat_id, messages=messages)
+```
 
 The sender handles:
 
@@ -189,6 +209,34 @@ The sender handles:
 - URL-based document/photo sends
 - local or hosted file uploads
 - Telegram-safe response logging
+
+## Progress Card Finalization
+
+Long ReAct turns can stream into a single Telegram progress card. The final
+answer must not replace that card. The stream module owns this behavior:
+
+```text
+while turn runs:
+  TelegramActivityStreamer edits one progress message
+  progress card contains status, notes, thinking, sources, file notifications
+
+when turn completes:
+  deliver_react_turn_to_telegram(...)
+    -> if final text fits:
+         edit same progress message:
+           <existing progress>
+           <Final response>
+           <answer>
+         send only remaining file messages
+    -> if final text does not fit:
+         keep progress card with a short handoff note
+         send full final text as normal follow-up messages
+```
+
+`progress_message_id` and `progress_summary` come from
+`TelegramActivityStreamer.progress_message_id()` and
+`TelegramActivityStreamer.progress_summary()`. File messages that were already
+streamed are excluded by passing `delivered_file_keys`.
 
 ## Activity Streaming
 
@@ -210,6 +258,10 @@ progress_summary = streamer.progress_summary()
 `TelegramActivityStreamer` listens to chat communicator activity and updates a
 single Telegram progress message while the turn runs. It is useful for long
 ReAct turns where the final answer may take minutes.
+
+Thinking and note deltas are rendered as Telegram HTML blockquotes. The streamer
+tracks already-sent file keys so final delivery does not duplicate files that
+were emitted during the turn.
 
 ## Mini App Auth
 
@@ -327,6 +379,10 @@ for consistent Telegram Web App behavior on web clients, and
 the filename header when it needs to. If more Telegram origins are supported
 later, the backend should return the matched Telegram origin and include
 `Vary: Origin`.
+
+`widget_ops.py` adds the Telegram Web origin/exposed-header behavior around
+bundle binary artifact responses. The endpoint that serves the bytes remains
+responsible for `Content-Disposition`.
 
 ## Bundle Boundary
 

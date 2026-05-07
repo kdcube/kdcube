@@ -42,6 +42,12 @@ kdcube_ai_app.apps.chat.sdk.integrations.email
 
 `__init__.py` re-exports the stable bundle-facing symbols for normal imports.
 
+The SDK store is the canonical reusable account store. Bundles should not keep
+their own parallel `EmailAccountStore` wrapper unless they are only providing a
+backward-compatible import shim. Product-specific behavior belongs in policy
+hooks, task code, or UI handlers, not in duplicated provider/account storage
+code.
+
 ## Account Store
 
 ```python
@@ -95,6 +101,19 @@ The operations cover:
 - `disconnect(...)`
 - `connect_app_password(...)`
 - Telegram Web App variants that first resolve Telegram `initData`
+
+Typical bundle shape:
+
+```text
+bundle endpoint / widget action
+  -> email_settings.<operation>(entrypoint, ...)
+       -> target_user_id hook supplied by bundle
+       -> EmailAccountStore from SDK
+       -> Gmail OAuth or iCloud account operation from SDK
+```
+
+This keeps UI routing and role policy in the bundle while the account mechanics
+stay in the SDK.
 
 ## Gmail OAuth
 
@@ -238,6 +257,15 @@ The MCP app exposes email tools for the processor and writes the processor
 result back to `EmailMCPRunStore`. The bundle can mount the app as a public or
 internal route, but the SDK owns token verification and run lookup.
 
+The reusable MCP pieces are:
+
+```text
+EmailMCPRunStore       run metadata and result storage
+create_email_mcp_run   scoped run document + signed token
+build_email_mcp_app    FastAPI MCP server bound to that run store
+verify_email_mcp_token token verification for the scoped run
+```
+
 ## Claude Code Processor
 
 `claude.py` wires the Email MCP run into a Claude Code execution:
@@ -270,11 +298,13 @@ The SDK owns:
 
 - Gmail OAuth and Gmail API request mechanics
 - iCloud IMAP/SMTP mechanics
-- account metadata and user-secret token storage helpers
+- account metadata and user-secret token storage helpers through
+  `EmailAccountStore`
 - provider error normalization
 - attachment fetch and ReAct artifact materialization
 - Email MCP run/token/service mechanics
 - Claude Code email processing mechanics
+- reusable account settings operations
 
 The bundle owns:
 
