@@ -467,7 +467,9 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
     # Parse spec
     spec = PortableSpec.from_json(spec_json)
 
-    # 1) ENV first (so downstream fallbacks can read OUTPUT_DIR/WORKDIR/REDIS_URL, etc.)
+    # 1) ENV first for child-runtime bootstrap only. OUTPUT_DIR/WORKDIR are
+    # copied into run_ctx below; SDK code should read OUTDIR_CV/WORKDIR_CV, not
+    # process-global env, after bootstrap completes.
     if bootstrap_env:
         try:
             apply_env(spec.env_passthrough)
@@ -479,7 +481,7 @@ def bootstrap_from_spec(spec_json: str, *, tool_module, bootstrap_env: bool = Fa
     #    2.1 run_ctx: fallback from env → OUTDIR_CV/WORKDIR_CV, then restore snapshot
     try:
         from kdcube_ai_app.apps.chat.sdk.runtime import run_ctx as _run_ctx
-        # ensure env fallbacks (OUTPUT_DIR / WORKDIR) populate CVs if they were empty
+        # at child-runtime bootstrap, copy OUTPUT_DIR / WORKDIR into CVs if empty
         if hasattr(_run_ctx, "restore_ctxvars_from_env"):
             _run_ctx.restore_ctxvars_from_env()
         # then restore the parent snapshot (OUTDIR_CV/WORKDIR_CV/SOURCE_ID_CV)

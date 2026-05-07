@@ -15,7 +15,6 @@ import base64
 
 import time
 from datetime import datetime, timezone
-import os
 
 from typing import Any, Dict, List, Optional
 
@@ -756,8 +755,6 @@ class ContextBrowser:
                 WORKDIR_CV.set(str(workdir))
             except Exception:
                 pass
-            os.environ["OUTPUT_DIR"] = str(outdir)
-            os.environ["WORKDIR"] = str(workdir)
             _bootstrap_git_workspace_if_needed()
             return workdir, outdir
 
@@ -797,8 +794,6 @@ class ContextBrowser:
         except Exception:
             pass
 
-        os.environ["OUTPUT_DIR"] = str(outdir)
-        os.environ["WORKDIR"] = str(workdir)
         _bootstrap_git_workspace_if_needed()
         return workdir, outdir
 

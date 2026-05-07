@@ -46,6 +46,58 @@ def test_email_delivery_builds_html_and_text_parts():
 
 
 @pytest.mark.asyncio
+async def test_delivery_resolves_turn_relative_attachment_from_outdir_contextvar(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations import delivery as delivery_mod
+    from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV
+    from kdcube_ai_app.apps.chat.sdk.runtime.workspace import artifact_outdir_for
+
+    monkeypatch.delenv("OUTPUT_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+    outdir = tmp_path / "out"
+    rel_path = "turn_exec_email-monitor_abc123/outputs/new_emails.pdf"
+    target = artifact_outdir_for(outdir) / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"PDF")
+
+    token = OUTDIR_CV.set(str(outdir))
+    try:
+        resolved = await delivery_mod._resolved_attachments(
+            attachment_paths=rel_path,
+            attachments_json="",
+        )
+    finally:
+        OUTDIR_CV.reset(token)
+
+    assert resolved[0]["filename"] == "new_emails.pdf"
+    assert resolved[0]["data"] == b"PDF"
+    assert resolved[0]["file_item"]["logical_path"] == rel_path
+    assert resolved[0]["file_item"]["physical_path"] == str(target)
+
+
+@pytest.mark.asyncio
+async def test_delivery_ignores_process_global_output_dir_without_contextvar(tmp_path, monkeypatch):
+    from kdcube_ai_app.apps.chat.sdk.integrations import delivery as delivery_mod
+    from kdcube_ai_app.apps.chat.sdk.runtime.run_ctx import OUTDIR_CV
+
+    stale_outdir = tmp_path / "stale-out"
+    rel_path = "turn_exec_email-monitor_abc123/outputs/new_emails.pdf"
+    target = stale_outdir / rel_path
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"PDF")
+
+    monkeypatch.setenv("OUTPUT_DIR", str(stale_outdir))
+    token = OUTDIR_CV.set("")
+    try:
+        with pytest.raises(FileNotFoundError):
+            await delivery_mod._resolved_attachments(
+                attachment_paths=rel_path,
+                attachments_json="",
+            )
+    finally:
+        OUTDIR_CV.reset(token)
+
+
+@pytest.mark.asyncio
 async def test_email_claude_accepts_recorded_result_when_process_times_out(tmp_path, monkeypatch):
     class _Entry:
         def bundle_prop(self, path, default=None):

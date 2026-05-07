@@ -19,12 +19,11 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime
-from pathlib import Path
 from typing import Annotated, Dict, Any
 
 import semantic_kernel as sk
+from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
 
 try:
     from semantic_kernel.functions import kernel_function
@@ -43,9 +42,10 @@ class LocalTools:
     ) -> Dict[str, Any]:
         """
         Example tool: writes a timestamped text note to the output directory.
-        The OUTPUT_DIR env var is injected by the iso-runtime sandbox.
+        The runtime binds OUTDIR_CV for this tool call; resolve_output_dir()
+        reads that per-call context instead of process-global environment.
         """
-        out_dir = Path(os.environ.get("OUTPUT_DIR", "."))
+        out_dir = resolve_output_dir()
         notes_dir = out_dir / "notes"
         notes_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")

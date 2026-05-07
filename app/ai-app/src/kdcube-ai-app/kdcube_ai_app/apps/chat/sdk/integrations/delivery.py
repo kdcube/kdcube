@@ -4,7 +4,6 @@ import base64
 import json
 import logging
 import mimetypes
-import os
 import pathlib
 import urllib.parse
 from typing import Any, Dict, Iterable, Mapping
@@ -144,6 +143,34 @@ def _attachment_items(*, attachment_paths: str, attachments_json: str) -> list[d
     return normalized
 
 
+def _attachment_resolution_roots() -> list[pathlib.Path]:
+    roots: list[pathlib.Path] = []
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.workdir_discovery import resolve_output_dir
+
+        roots.append(resolve_output_dir())
+    except Exception:
+        pass
+    return roots
+
+
+def _resolve_relative_attachment_path(path_value: str) -> str:
+    try:
+        from kdcube_ai_app.apps.chat.sdk.runtime.workspace import resolve_artifact_path
+    except Exception:
+        resolve_artifact_path = None
+
+    for root in _attachment_resolution_roots():
+        if resolve_artifact_path is not None:
+            candidate = resolve_artifact_path(root, path_value, create_root=False)
+            if candidate.is_file():
+                return str(candidate)
+        candidate = root / path_value
+        if candidate.is_file():
+            return str(candidate)
+    return ""
+
+
 def _normalize_attachment_item(item: Mapping[str, Any], *, index: int) -> dict[str, Any]:
     out = dict(item)
     path_value = str(
@@ -158,14 +185,10 @@ def _normalize_attachment_item(item: Mapping[str, Any], *, index: int) -> dict[s
     if path_value:
         parsed = urllib.parse.urlparse(path_value)
         if not parsed.scheme and not pathlib.Path(path_value).is_absolute():
-            for root in (os.environ.get("OUTPUT_DIR"), os.getcwd()):
-                if not root:
-                    continue
-                candidate = pathlib.Path(root) / path_value
-                if candidate.is_file():
-                    out["physical_path"] = str(candidate)
-                    out.setdefault("logical_path", path_value)
-                    break
+            physical_path = _resolve_relative_attachment_path(path_value)
+            if physical_path:
+                out["physical_path"] = physical_path
+                out.setdefault("logical_path", path_value)
             else:
                 out.setdefault("physical_path", path_value)
         else:

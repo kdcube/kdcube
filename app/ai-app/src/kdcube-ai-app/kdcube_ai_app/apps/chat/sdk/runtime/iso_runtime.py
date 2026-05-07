@@ -827,16 +827,8 @@ import kdcube_ai_app.apps.utils.logging_config as logging_config
 logging_config.configure_logging()
 logger = logging.getLogger("agent.runtime")
 
-# --- Directories / CV fallbacks ---
-OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
-if not OUTPUT_DIR:
-    raise RuntimeError("OUTPUT_DIR missing in run context")
-OUT_DIR = Path(OUTPUT_DIR)
-OUT = OUT_DIR
-_EXEC_ID = os.environ.get("EXECUTION_ID") or "unknown"
-logger.info(f"===== EXECUTION {_EXEC_ID} START =====")
-
-# Ensure ContextVars are set even if only env was provided
+# --- Directories / CV bootstrap ---
+# Env is valid only at this isolated child-runtime boundary; hydrate CVs first.
 try:
     if not OUTDIR_CV.get(""):
         od = os.environ.get("OUTPUT_DIR")
@@ -848,6 +840,14 @@ try:
             WORKDIR_CV.set(wd)
 except Exception:
     pass
+
+OUTPUT_DIR = OUTDIR_CV.get()
+if not OUTPUT_DIR:
+    raise RuntimeError("OUTDIR_CV missing in run context")
+OUT_DIR = Path(OUTPUT_DIR)
+OUT = OUT_DIR
+_EXEC_ID = os.environ.get("EXECUTION_ID") or "unknown"
+logger.info(f"===== EXECUTION {_EXEC_ID} START =====")
 
 # --- Redirect user stdout/stderr to dedicated logs ---
 _user_log_dir = Path(os.environ.get("LOG_DIR") or (OUT_DIR / "logs"))
@@ -1414,14 +1414,8 @@ import kdcube_ai_app.apps.utils.logging_config as logging_config
 logging_config.configure_logging()
 logger = logging.getLogger("agent.runtime")
 
-# --- Directories / CV fallbacks ---
-OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
-if not OUTPUT_DIR:
-    raise RuntimeError("OUTPUT_DIR missing in run context")
-OUT_DIR = Path(OUTPUT_DIR)
-OUT = OUT_DIR
-
-# Ensure ContextVars are set even if only env was provided
+# --- Directories / CV bootstrap ---
+# Env is valid only at this isolated child-runtime boundary; hydrate CVs first.
 try:
     if not OUTDIR_CV.get(""):
         od = os.environ.get("OUTPUT_DIR")
@@ -1433,6 +1427,12 @@ try:
             WORKDIR_CV.set(wd)
 except Exception:
     pass
+
+OUTPUT_DIR = OUTDIR_CV.get()
+if not OUTPUT_DIR:
+    raise RuntimeError("OUTDIR_CV missing in run context")
+OUT_DIR = Path(OUTPUT_DIR)
+OUT = OUT_DIR
 
 # --- Globals provided by parent (must come before alias imports) ---
 <GLOBALS_SRC>
@@ -1770,14 +1770,8 @@ import kdcube_ai_app.apps.utils.logging_config as logging_config
 logging_config.configure_logging()
 logger = logging.getLogger("agent.runtime")
 
-# --- Directories / CV fallbacks ---
-OUTPUT_DIR = OUTDIR_CV.get() or os.environ.get("OUTPUT_DIR")
-if not OUTPUT_DIR:
-    raise RuntimeError("OUTPUT_DIR missing in run context")
-OUT_DIR = Path(OUTPUT_DIR)
-OUT = OUT_DIR
-
-# Ensure ContextVars are set even if only env was provided
+# --- Directories / CV bootstrap ---
+# Env is valid only at this isolated child-runtime boundary; hydrate CVs first.
 try:
     if not OUTDIR_CV.get(""):
         od = os.environ.get("OUTPUT_DIR")
@@ -1789,6 +1783,12 @@ try:
             WORKDIR_CV.set(wd)
 except Exception:
     pass
+
+OUTPUT_DIR = OUTDIR_CV.get()
+if not OUTPUT_DIR:
+    raise RuntimeError("OUTDIR_CV missing in run context")
+OUT_DIR = Path(OUTPUT_DIR)
+OUT = OUT_DIR
 
 # --- Globals provided by parent (must come before alias imports) ---
 <GLOBALS_SRC>

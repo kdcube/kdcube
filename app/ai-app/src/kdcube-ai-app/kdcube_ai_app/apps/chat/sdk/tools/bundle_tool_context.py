@@ -140,8 +140,6 @@ def scope() -> Dict[str, Any]:
         workdir = str(WORKDIR_CV.get("") or "").strip()
     except Exception:
         pass
-    outdir = outdir or os.environ.get("OUTPUT_DIR", "")
-    workdir = workdir or os.environ.get("WORKDIR", "")
     artifact_outdir = ""
     if outdir:
         try:

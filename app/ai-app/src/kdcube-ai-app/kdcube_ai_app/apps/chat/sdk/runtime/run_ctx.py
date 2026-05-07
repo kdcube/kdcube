@@ -45,8 +45,11 @@ def restore_ctxvars(payload: dict) -> None:
 
 def restore_ctxvars_from_env() -> None:
     """
-    Idempotent: if CVs are empty, take them from env.
-    Useful when only OUTPUT_DIR/WORKDIR are provided via env.
+    Idempotent child-runtime bootstrap helper.
+
+    If CVs are empty, copy OUTPUT_DIR/WORKDIR from the isolated process env
+    into OUTDIR_CV/WORKDIR_CV. Long-lived proc code must not use this as a
+    general path resolver because env is process-global.
     """
     try:
         if not OUTDIR_CV.get(""):

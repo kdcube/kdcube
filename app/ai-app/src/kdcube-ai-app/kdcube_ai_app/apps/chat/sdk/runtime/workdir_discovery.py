@@ -9,27 +9,41 @@ from kdcube_ai_app.apps.chat.sdk.tools.citations import normalize_sources_any
 from kdcube_ai_app.apps.chat.sdk.runtime.workspace import RUNTIME_OUTPUT_ENV
 
 
-def _from_cv_or_env(cv, env_key: str) -> str:
+def _from_cv(cv) -> str:
     """
-    Try ContextVar first; if empty, fall back to environment variable.
-    Returns '' if neither is available.
+    Resolve the current runtime path from ContextVar state.
+
+    Long-lived proc processes can run multiple turns/jobs concurrently, so
+    per-turn path resolution must not read process-global OUTPUT_DIR/WORKDIR.
+    Isolated child runtimes may receive those env vars, but bootstrap copies
+    them into OUTDIR_CV/WORKDIR_CV before SDK tools use this module.
     """
     try:
-        v = cv.get("")
+        return cv.get("") or ""
     except Exception:
-        v = ""
-    return v or os.environ.get(env_key, "")
+        return ""
+
+
+def _isolated_runtime_env_is_trusted() -> bool:
+    return bool(
+        os.environ.get("EXEC_CONTAINER_ROLE")
+        or os.environ.get("AGENT_IO_CONTEXT")
+        or os.environ.get("RUNTIME_GLOBALS_JSON")
+    )
 
 def resolve_output_dir() -> pathlib.Path:
     """
-    Resolve the solver's OUTPUT_DIR (data/artifact root):
-      1) OUTDIR_CV ContextVar
-      2) os.environ['OUTPUT_DIR']
+    Resolve the solver's output/data root from OUTDIR_CV.
+
+    OUTPUT_DIR is accepted only at runtime bootstrap boundaries where it is
+    copied into OUTDIR_CV. Reading it here would be process-global and can race
+    between concurrent in-process tool calls.
+
     Ensures the directory exists.
     """
-    raw = _from_cv_or_env(OUTDIR_CV, "OUTPUT_DIR")
+    raw = _from_cv(OUTDIR_CV)
     if not raw:
-        raise RuntimeError("OUTPUT_DIR not set in run context")
+        raise RuntimeError("OUTDIR_CV not set in run context")
     p = pathlib.Path(raw).resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -43,13 +57,9 @@ def resolve_runtime_output_dir() -> pathlib.Path:
     KDCUBE_RUNTIME_OUTPUT_DIR points to the internal root containing
     timeline/sources/log metadata. In legacy/local paths they may be the same.
     """
-    raw = os.environ.get(RUNTIME_OUTPUT_ENV, "")
+    raw = os.environ.get(RUNTIME_OUTPUT_ENV, "") if _isolated_runtime_env_is_trusted() else ""
     if not raw:
-        try:
-            outdir_raw = OUTDIR_CV.get("")
-        except Exception:
-            outdir_raw = ""
-        raw = outdir_raw or os.environ.get("OUTPUT_DIR", "")
+        raw = _from_cv(OUTDIR_CV)
     if not raw:
         raise RuntimeError("runtime output directory not set in run context")
     p = pathlib.Path(raw).resolve()
@@ -58,14 +68,16 @@ def resolve_runtime_output_dir() -> pathlib.Path:
 
 def resolve_workdir() -> pathlib.Path:
     """
-    Resolve the solver's WORKDIR:
-      1) WORKDIR_CV ContextVar
-      2) os.environ['WORKDIR']
+    Resolve the solver's workdir from WORKDIR_CV.
+
+    WORKDIR env is accepted only at runtime bootstrap boundaries where it is
+    copied into WORKDIR_CV.
+
     Ensures the directory exists.
     """
-    raw = _from_cv_or_env(WORKDIR_CV, "WORKDIR")
+    raw = _from_cv(WORKDIR_CV)
     if not raw:
-        raise RuntimeError("WORKDIR not set in run context")
+        raise RuntimeError("WORKDIR_CV not set in run context")
     p = pathlib.Path(raw).resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
